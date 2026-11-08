@@ -159,7 +159,7 @@ runtime; users can declare their meeting languages and force a route; users may 
 endpoint, local or remote, with their own key. Every model size and quality figure stays unverified until M0
 reports.
 
-**M0. Real-meeting evaluation** (3 days; **running since 2026-11-08**, first lane of Phase 2b)
+**M0. Real-meeting evaluation** (3 days; **public-clip results done 2026-11-09**, see ADR 0009 (b); real Hindi meeting audio still needed, first lane of Phase 2b)
 - **Owner audio:** timings and error rates only.
 - **Deps:** none. **Files:** `docs/architecture/spikes/pipeline-baseline.md`, `tools/pipeline_timings.ps1`. It also fills the `cpu_rtf`, `wer_hi_en` and `measured_on` fields for each tested model in the catalog.
 - **Accept:**
@@ -200,16 +200,16 @@ reports.
 
 **M5. Language detection stage** (3 days)
 - **Owner audio:** for the mixed-language accuracy check.
-- **Deps:** H3, H7. **Files:** `src/core/jobs/stages/language_detect.rs`, `src/core/lid/{mod,whisper}.rs`.
+- **Deps:** H3, H7. **Files:** `src/core/jobs/stages/language_detect.rs`, `src/core/lid/{mod,anuvani}.rs`.
 - **Accept:**
   - Each chunk gets a language, a confidence and the top two languages.
   - Detection is limited to the meeting languages, and the user can turn it off or force a route.
   - Labels are per-chunk guesses: the confidence and margin thresholds come from the mixed-speech benchmark, not from assumption.
   - A chunk under 2 seconds inherits the previous label.
   - Results are cached.
-  - In CI: 95% or more correct on single-language clips of 3 seconds or more, and 60 s or less per audio hour on the CPU runner.
+  - In CI: 95% or more correct on single-language clips of 3 seconds or more. Cost: Anuvani measured 12.2 s of one CPU thread per audio minute (about 730 s per audio hour); the earlier 60 s per hour target assumed Whisper tiny and was never measured. The lane measures multithreaded cost and keeps it under 15 s per audio minute.
   - On owner audio: a labelled sample of 100 chunks reports accuracy on mixed Hindi and English.
-  - The lane decides whether VoxLingua107 ECAPA replaces Whisper.
+  - Detector decided 2026-11-09: Anuvani INT8 (ADR 0009 (b)). VoxLingua107 ECAPA is rejected (74% of Indian English sent to Hindi).
 
 **M6. Routed recognition** (3 days)
 - **Owner audio:** to choose the Hindi route.

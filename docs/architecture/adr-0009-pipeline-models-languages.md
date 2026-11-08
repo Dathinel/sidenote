@@ -79,23 +79,40 @@ Status: proposed, 2026-11-08; amended the same day with the owner's decisions an
 | Tier | Hardware | Default behaviour |
 | --- | --- | --- |
 | Light | CPU only, under 16 GB RAM | No language detection; Hex's meeting transcript as is; agents do the text steps. For non-English languages the app offers an explicit compact route (see (c)) and never skips Indic recognition silently. |
-| Standard | 16 GB RAM or more, or a GPU under 6 GB | Whisper tiny language detection; one routed recognition pass. |
-| GPU | 6 GB VRAM or more | Whisper base language detection; a second reading for low-confidence chunks; endpoints offered. |
+| Standard | 16 GB RAM or more, or a GPU under 6 GB | Anuvani language detection when a second language is declared; one routed recognition pass. |
+| GPU | 6 GB VRAM or more | As Standard; endpoints offered. A second reading for unclear chunks is unmeasured and off. |
 
 ### (b) Language handling
 
-1. **Declare the meeting's languages,** for example Hindi and English. Detection is restricted to that list (2-way, not 99-way). The user can also **force a route** (`language_mode`) or turn detection off. A forced "Hindi + English mixed" route sends every chunk to the mixed-speech model and skips the detector.
-2. **Detect per chunk** on the existing VAD chunks, which are 24 seconds or less.
-   - **Default detector:** Whisper language identification through sherpa-onnx (tiny, base, small and medium models). The tiny model ran at real-time factor 0.043 in sherpa's example.
-   - **Why per chunk:** `whisper.transcribe()` detects once, from the first 30 seconds, and fixes the language for the file. That fails on code-switched meetings.
-   - **Short chunks:** a chunk under 2 seconds inherits the language of the same speaker's previous chunk.
-   - **A label is not proof.** The detector labels a whole chunk. A chunk labelled Hindi can hold English words, and a confident label does not show one language. The thresholds in item 3 are uncalibrated for mixed speech; lane M5 benchmarks detection and mixed-language recognition separately.
-3. **Route each chunk** by its label to that language's model. The `*` route (a multilingual model) takes other languages, chunks with confidence below 0.6, and chunks where the top two languages are within 0.2 of each other (the mixed case).
-   - **English chunks** reuse Hex's reading when Hex's meeting model is English: no new call.
-   - **GPU tier only:** low-confidence chunks get a second reading, and translation receives both.
-4. **Skip translation for English.** Chunks labelled English with confidence of 0.8 or more skip translation and go straight into the English transcript. An all-English meeting runs no translate step.
-5. **Keep the original.** The transcript is one blob, `transcript.segments.v1.json`; each segment holds times, track, speaker, `lang`, `lang_conf`, `text_original`, `text_en` and the provider and model per step. The UI offers an English view and an Original view.
-6. **Cache every result** in `local/cache/<step>/<key>.json` (device-local, 500 MB cap, least recently used first). The key is `sha256(input, provider, model id or checksum, language, prompt template version)`, so re-running notes re-reads nothing and changing the Hindi route re-reads only Hindi chunks.
+Updated 2026-11-09 from measurements. Sources: `reviews/hex-meetings-2026-11-08/m0b-hindi-quality.md` (7 model setups, 50 public clips per class) and `language-routing.md` (6 detectors, 100 clips per class). Numbers are word error rates (WER) in points, on CPU, under load.
+
+**Why routing decides accuracy.** Every model is good on one class and unusable on the others:
+
+| Model | Indian English | Hindi | Hindi-English mixed |
+|---|---:|---:|---:|
+| Parakeet English (Hex default) | 7.2 | 99.1 | 78.2 |
+| IndicConformer Hindi (198 MB, sherpa-onnx) | 107.2 | 12.8 | 47.4 |
+| Nemotron 3.5 (in Hex) | 105.9 | 18.0 | 43.8 |
+
+Routing each chunk with the Anuvani detector between Parakeet and Nemotron gave 23.8 pooled WER, against 56.0 for always Parakeet and 59.9 for always Nemotron. Mixed-speech WER is scored across scripts and is approximate: English words written in Devanagari count as errors.
+
+1. **Declare the meeting's languages,** for example English, or English and Hindi. The default is English only, which runs no detector and no Indic model, so English-only users pay nothing. The user can **force a route** (`language_mode` = `forced:en`, `forced:hi`, `forced:mixed`) for a meeting, which skips the detector.
+2. **Every chunk gets the English reading first.** Parakeet runs on the whole meeting as today (real-time factor 0.069). Routing only replaces chunks, so a detector failure or a missing model leaves the English transcript, marked "language not checked".
+3. **Detect per chunk** when more than one language is declared.
+   - **Detector: Anuvani INT8** (CIIL, Apache-2.0, 169 MB, lists Indian English and Hindi). Measured: 8% of English clips sent to Hindi, 1% of Hindi and 5% of mixed clips missed. The next best, Whisper base, missed 17% of Hindi and 11% of mixed clips. Whisper tiny, the old default here, missed 18% and 26%. SpeechBrain sent 74% of Indian English to Hindi and is rejected.
+   - **Cost:** 12.2 seconds of one CPU thread per audio minute, about 12 minutes for a one-hour meeting, after the meeting. It runs only on speech chunks and only for users who declare a second language. Multithreading is unmeasured.
+   - **Decision rule (provisional):** Hindi when Anuvani's Hindi score, restricted to the declared pair, is above 0.9. On the test clips this gave 1% false Hindi, 5% Hindi miss and 18% mixed miss, but it was chosen on those same clips, so it is not validated. The threshold lives in one constant.
+   - **Units:** VAD chunks of 24 seconds or less, pooled within a speaker turn when speaker labels exist. A chunk under 2 seconds takes the decision of the same speaker's neighbouring chunks; never across speakers. Smoothing is unmeasured.
+   - **A label is not proof.** The detector separates English from Hindi; it does not detect mixed speech. Low margins are not a mixed-speech signal.
+4. **Route non-English chunks to the declared Hindi model.**
+   - **"Hindi" declared:** IndicConformer Hindi (198 MB download, real-time factor 0.17 on CPU): 12.8 WER on Hindi, 5.2 points better than Nemotron.
+   - **"Hindi and English mixed" declared:** Nemotron through Hex (`hex model transcribe --model`, never `hex use`): 43.8 on mixed, 3.6 points better than IndicConformer. If Nemotron is not installed in Hex, IndicConformer takes the chunk.
+   - **Batch per route.** Chunks for one model are joined into one WAV with an offsets table, and each model loads once per meeting. Loading per chunk cost about 80 seconds per call in M0b.
+5. **Show and override.** Each segment shows its route. The user can change a speaker turn's route and rerun only that turn.
+6. **Skip translation for English.** Chunks routed English skip translation. An all-English meeting runs no translate step.
+7. **Default status.** Automatic routing ships as "experimental" until it is checked on held-out real meeting audio with Hindi in it (the owner's meetings so far were all English). Hex does not expose a Parakeet confidence score, and a text-based proxy failed (47% false Hindi), so confidence-based routing is not used.
+8. **Keep the original.** The transcript is one blob, `transcript.segments.v1.json`; each segment holds times, track, speaker, `lang`, `lang_conf`, `text_original`, `text_en` and the provider and model per step. The UI offers an English view and an Original view.
+9. **Cache every result** in `local/cache/<step>/<key>.json` (device-local, 500 MB cap, least recently used first). The key is `sha256(input, provider, model id or checksum, language, prompt template version)`, so re-running notes re-reads nothing and changing the Hindi route re-reads only Hindi chunks.
 
 ### (c) The model directory
 
@@ -111,12 +128,12 @@ Status: proposed, 2026-11-08; amended the same day with the owner's decisions an
 - **"Add your own"** takes a GGUF model (`hex model import`), an OpenAI-compatible URL and key, an ACP command or a CLI agent. Entries sit in the device-local `models.user[]` list, labelled "Added by you, licence not checked".
 
 **Seed entries:**
-- **Language detection:** sherpa-onnx Whisper tiny and base. SpeechBrain VoxLingua107 ECAPA (86.4 MB, Apache-2.0, 107 languages) enters only if lane M5 shows it beats Whisper on short chunks.
+- **Language detection:** Anuvani INT8 (169 MB, Apache-2.0), measured best in (b). Whisper tiny and base stay as smaller fallbacks. SpeechBrain VoxLingua107 is rejected: it sent 74% of Indian English to Hindi.
 - **Speech:** Hex's catalog mirrored, plus the candidates below. IndicConformer 600M (MIT, 22 languages, gated) is listed but not a small default.
 - **Translation:** IndicTrans2 Indic to English (MIT) and MADLAD-400 3B (Apache-2.0).
 - **Rejected as defaults:** Shuka-1 (9B); NLLB-200 and MMS-LID (CC-BY-NC-4.0); Parakeet v3 and Canary v2 (no Hindi).
 
-**Provisional model tiers.** Sizes are downloads, not RAM. **Every size, speed and quality figure is unverified** until lane M0 measures CPU real-time factor and mixed-script WER on consented audio. No source shows any candidate matching Parakeet's speed. The two Hex-native candidates (Nemotron, Parakeet) exceed 300 MB and are listed because Hex loads them today.
+**Provisional model tiers.** Sizes are downloads, not RAM. Hindi, mixed and Indian English WER for Parakeet, Nemotron, IndicConformer Hindi, Whisper turbo and Swift is now measured on public clips (see (b)); real meeting audio and the other languages are still unmeasured. Measured Hindi defaults: IndicConformer Hindi for Hindi, Nemotron for mixed; Swift scored 58.4 on mixed and 91.6 on Hindi and is opt-in only. No source shows any candidate matching Parakeet's speed. The two Hex-native candidates (Nemotron, Parakeet) exceed 300 MB and are listed because Hex loads them today.
 
 | Language group | Small default candidate | Medium, opt-in | Large, opt-in |
 | --- | --- | --- | --- |
