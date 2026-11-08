@@ -1099,6 +1099,7 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
+    MeetingModels,
     Model,
     Vocabulary,
     General,
@@ -1110,8 +1111,9 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 8] = [
+const SECTIONS: [Section; 9] = [
     Section::Features,
+    Section::MeetingModels,
     Section::Model,
     Section::Vocabulary,
     Section::General,
@@ -1123,10 +1125,11 @@ const SECTIONS: [Section; 8] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 8] = SECTIONS;
+    pub const ALL: [Section; 9] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::MeetingModels => "Meeting models",
             Self::Features => "Features",
             Self::Model => "Model",
             Self::Vocabulary => "Vocabulary",
@@ -1140,6 +1143,7 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::MeetingModels => "Choose spoken languages and download meeting models.",
             Self::Features => "Choose what appears on this device. Changes apply right away.",
             Self::Model => "The speech model Hex uses to write down what it hears.",
             Self::Vocabulary => "Names and terms Hex should spell the way you do.",
@@ -1453,6 +1457,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
 /// The page for one section.
 fn section_body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, section: Section) -> El {
     match section {
+        Section::MeetingModels => super::models::view(s, p),
         Section::Features => features_section(s, k, p),
         Section::Model => model_section(s, p),
         Section::Vocabulary => vocabulary_section(s, k, p),

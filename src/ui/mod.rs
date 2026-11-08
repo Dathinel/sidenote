@@ -10,6 +10,7 @@ mod list;
 mod live;
 mod meeting;
 mod memory;
+mod models;
 mod more;
 mod nav;
 mod project;
@@ -78,6 +79,7 @@ pub enum Event {
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
+    Models(models::Msg),
     /// The scan, its errors, and the pipeline's `tasks.json` of each meeting.
     Meetings(Vec<Meeting>, Vec<String>, core::Pipeline),
     Progress {
@@ -140,6 +142,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub models: models::Models,
     pub config: core::Config,
     pub feature_error: Option<String>,
     pub meetings: Vec<Meeting>,
@@ -318,6 +321,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let prefs = core::UiPrefs::load(&store.root);
         let mut s = Self {
+            models: models::Models::load(&store.root),
             config,
             feature_error,
             selected: None,
@@ -923,6 +927,7 @@ impl State {
     fn apply_event(&mut self, event: Event) {
         match event {
             Event::Hex(msg) => self.hex_apply(msg),
+            Event::Models(msg) => self.models.apply(msg),
             Event::MigrationPrepared(result) => {
                 self.memory.preview_running = false;
                 if self.config.features.memory {
@@ -1659,6 +1664,12 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("models-empty", |s| models::scene(s, "empty")),
+            ("models-downloading", |s| models::scene(s, "downloading")),
+            ("models-installed", |s| models::scene(s, "installed")),
+            ("models-checksum-error", |s| {
+                models::scene(s, "checksum-error")
+            }),
             ("features-off-sidebar", |s| {
                 hex::scene(s, false);
                 scene_filters(s);
