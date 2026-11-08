@@ -9,12 +9,12 @@ use super::{
     theme::Palette,
     widgets::{label, pressable},
 };
-use hex_meetings::{
+use rune::{El, Tx};
+use rune_kit::{Kit, Menu, MenuItem, Placement};
+use sidenote::{
     core::{Meeting, export},
     platform,
 };
-use rune::{El, Tx};
-use rune_kit::{Kit, Menu, MenuItem, Placement};
 use std::time::{Duration, Instant};
 
 /// How long "Copied notes" stays on screen.

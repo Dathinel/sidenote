@@ -1,4 +1,4 @@
-param([switch]$Unregister)
+param([switch]$Unregister, [string]$Exe = "")
 $ErrorActionPreference = 'Stop'
 $taskName = 'Hex meetings daily check'
 if ($Unregister) {
@@ -6,8 +6,13 @@ if ($Unregister) {
     Write-Output 'Daily check task unregistered. Reports and memory were kept.'
     return
 }
-$exe = Join-Path $env:LOCALAPPDATA 'Programs/hex-meetings/hex-meetings.exe'
-if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Meetings executable is missing: $exe" }
+if (-not $Exe) {
+    $Exe = Join-Path $env:LOCALAPPDATA 'Programs/sidenote/sidenote.exe'
+    if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
+        $Exe = Join-Path $env:LOCALAPPDATA 'Programs/hex-meetings/hex-meetings.exe'
+    }
+}
+if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Sidenote executable is missing: $exe" }
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action = New-ScheduledTaskAction -Execute $exe -Argument '--daily-check'
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At '08:30'

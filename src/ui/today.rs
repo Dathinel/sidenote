@@ -12,8 +12,8 @@ use super::{
     theme::Palette,
     widgets::{dot, hairline, label, pressable, spaced_caps},
 };
-use hex_meetings::core::{self, DueBucket};
 use rune::{Color, El, col, row};
+use sidenote::core::{self, DueBucket};
 
 /// One line of the strip: a coloured dot, the words, and where pressing it goes.
 struct Item {

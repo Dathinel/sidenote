@@ -95,7 +95,7 @@ def copy_meeting(name, dest):
 temp = Path(tempfile.mkdtemp(prefix="meetings-verify-"))
 meetings = temp / "appdata" / "hex" / "meetings"
 copy_meeting(FIRST, meetings)
-env = dict(os.environ, APPDATA=str(temp / "appdata"), HEX_MEETINGS_STATE_DIR=str(temp / "state"))
+env = dict(os.environ, APPDATA=str(temp / "appdata"), SIDENOTE_STATE_DIR=str(temp / "state"))
 process = subprocess.Popen([str(exe)], env=env, creationflags=subprocess.CREATE_NO_WINDOW)
 windows = []
 
@@ -119,7 +119,7 @@ try:
         assert process.poll() is None, "The window process exited early"
         user32.EnumWindows(collect, 0)
         time.sleep(0.2)
-    assert windows, "No visible Meetings window"
+    assert windows, "No visible Sidenote window"
     time.sleep(3)
     before = capture(windows[0], out / "native-before.png")
     time.sleep(2)

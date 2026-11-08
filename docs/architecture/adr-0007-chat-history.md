@@ -50,7 +50,7 @@ immutable except for `status`. Nothing here depends on the engine.
 
 **Export.**
 - Per thread or all threads, as JSON (schema `meetings.chat.v1`, provenance included) or Markdown (front matter with provenance).
-- Available from the UI and from `hex-meetings.exe --export-chats <folder>`.
+- Available from the UI and from `sidenote.exe --export-chats <folder>`.
 - The app can import its own JSON to restore.
 
 **MCP tool `propose_chat_summary`** (local and remote, ADR 0005):
@@ -61,7 +61,7 @@ related_meeting_ids[], source: { client_name, model?, conversation_ref? }
 ```
 
 - **The tool creates a pending Proposal** of kind `chat_summary`. A repeat with the same content hash within 7 days returns the existing proposal id.
-- **The user reviews it in Meetings:**
+- **The user reviews it in Sidenote:**
   - Edit, then Accept: creates a ChatThread with one `external_summary` message carrying the client's provenance.
   - Reject: drops it.
 - **Remote proposals** land in that workspace's queue, visible per the ACL.

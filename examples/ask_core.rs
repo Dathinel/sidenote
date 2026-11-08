@@ -1,4 +1,4 @@
-use hex_meetings::core::{self, AskProgress, Message};
+use sidenote::core::{self, AskProgress, Message};
 fn main() {
     let runners = core::list_runners().expect("Runner configuration");
     println!("Configured {} verified runners", runners.len());

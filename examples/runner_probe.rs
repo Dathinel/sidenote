@@ -1,4 +1,4 @@
-use hex_meetings::core::{self, AskProgress, Runner};
+use sidenote::core::{self, AskProgress, Runner};
 use std::{cell::RefCell, path::PathBuf, time::Instant};
 fn main() {
     let candidates: Vec<Runner> = serde_json::from_str(include_str!("../default-runners.json"))

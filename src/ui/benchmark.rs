@@ -6,14 +6,14 @@ use std::{path::PathBuf, time::Duration};
 struct HeadlessMemory(PathBuf);
 
 pub(super) fn configure(mut app: rune::App<State>) -> rune::App<State> {
-    if let Some(path) = std::env::var_os("HEX_MEETINGS_BENCH_HEADLESS_READY") {
+    if let Some(path) = sidenote::env_var("SIDENOTE_BENCH_HEADLESS_READY") {
         assert!(
             std::env::args().any(|a| a == "--snap"),
             "memory probe requires --snap"
         );
         app = app.compositor(HeadlessMemory(PathBuf::from(path)));
     }
-    if std::env::var_os("HEX_MEETINGS_BENCH_OFFSCREEN").is_some() {
+    if sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_some() {
         app = app.window_options(rune::WindowOptions {
             visible: false,
             position: Some((-32000, -32000)),
@@ -25,7 +25,7 @@ pub(super) fn configure(mut app: rune::App<State>) -> rune::App<State> {
 }
 
 pub(super) fn show_offscreen(win: &rune::WindowHandle, hwnd: isize) -> bool {
-    if std::env::var_os("HEX_MEETINGS_BENCH_OFFSCREEN").is_none() {
+    if sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_none() {
         return false;
     }
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -65,7 +65,7 @@ pub(super) fn show_offscreen(win: &rune::WindowHandle, hwnd: isize) -> bool {
         assert!(rect.bottom <= GetSystemMetrics(SM_YVIRTUALSCREEN));
         ShowWindow(handle, SW_SHOWNOACTIVATE);
         assert_ne!(GetForegroundWindow(), handle);
-        if let Some(path) = std::env::var_os("HEX_MEETINGS_BENCH_WINDOW_READY") {
+        if let Some(path) = sidenote::env_var("SIDENOTE_BENCH_WINDOW_READY") {
             let _ = std::fs::write(path, "offscreen-noactivate");
         }
     }
@@ -89,7 +89,7 @@ impl rune::Compositor<State> for HeadlessMemory {
 }
 
 pub(super) fn start(app: AppHandle<State>) {
-    let Some(path) = std::env::var_os("HEX_MEETINGS_BENCH_COMMAND").map(PathBuf::from) else {
+    let Some(path) = sidenote::env_var("SIDENOTE_BENCH_COMMAND").map(PathBuf::from) else {
         return;
     };
     std::thread::spawn(move || {

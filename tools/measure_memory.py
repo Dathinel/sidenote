@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--scroll", action="store_true")
     args = parser.parse_args()
     binary = args.exe.read_bytes()
-    assert all(name in binary for name in (b"HEX_MEETINGS_BENCH_OFFSCREEN", b"HEX_MEETINGS_BENCH_NO_WARM")), "Executable lacks the isolated off-screen mode"
+    assert all(name in binary for name in (b"SIDENOTE_BENCH_OFFSCREEN", b"SIDENOTE_BENCH_NO_WARM")), "Executable lacks the isolated off-screen mode"
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     results = []
@@ -52,11 +52,11 @@ def main():
         trace.unlink(missing_ok=True)
         command.unlink(missing_ok=True)
         command.with_suffix(".done").unlink(missing_ok=True)
-        env = dict(os.environ, HEX_MEETINGS_STATE_DIR=str(state),
-                   HEX_MEETINGS_TRACE_FIRST_FRAME=str(trace), RUNE_GPU_LOG="1",
-                   HEX_MEETINGS_BENCH_OFFSCREEN="1", HEX_MEETINGS_BENCH_WINDOW_READY=str(ready))
+        env = dict(os.environ, SIDENOTE_STATE_DIR=str(state),
+                   SIDENOTE_TRACE_FIRST_FRAME=str(trace), RUNE_GPU_LOG="1",
+                   SIDENOTE_BENCH_OFFSCREEN="1", SIDENOTE_BENCH_WINDOW_READY=str(ready))
         if args.scroll:
-            env["HEX_MEETINGS_BENCH_COMMAND"] = str(command)
+            env["SIDENOTE_BENCH_COMMAND"] = str(command)
         with (out / f"run-{n}.log").open("w") as log:
             epoch = time.time_ns() / 1e6
             started = time.perf_counter()

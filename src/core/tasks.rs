@@ -76,7 +76,7 @@ pub fn load_pipeline_in(root: &Path, meetings: &[Meeting]) -> Pipeline {
 
 // ---- projects.json -------------------------------------------------------------------------
 
-/// `%APPDATA%/hex-meetings/projects.json`. Unknown keys survive a write.
+/// `projects.json` in the selected state folder. Unknown keys survive a write.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Projects {
@@ -216,7 +216,7 @@ impl Overrides {
 
 // ---- tasks-settings.json -------------------------------------------------------------------
 
-/// `%APPDATA%/hex-meetings/tasks-settings.json`. A missing file means no cutoff.
+/// `tasks-settings.json` in the selected state folder. A missing file means no cutoff.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TasksSettings {
@@ -236,7 +236,7 @@ impl TasksSettings {
     }
 }
 
-/// Reads and writes the app's own task files in one folder (`%APPDATA%/hex-meetings`).
+/// Reads and writes the app's own task files in one folder (the selected state folder).
 #[derive(Clone, Debug)]
 pub struct TaskStore {
     pub root: PathBuf,

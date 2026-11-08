@@ -1,5 +1,5 @@
 ﻿"""Assert-based engine smoke checks with a native fixture runner, no model calls or windows.
-Build hex-meetings and examples/daily_check_verify first. All writes stay in artifacts.
+Build sidenote and examples/daily_check_verify first. All writes stay in artifacts.
 """
 import datetime
 import json
@@ -9,14 +9,14 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-EXE = ROOT / 'target/x86_64-pc-windows-gnu/debug/hex-meetings.exe'
+EXE = ROOT / 'target/x86_64-pc-windows-gnu/debug/sidenote.exe'
 FIXTURE = ROOT / 'target/x86_64-pc-windows-gnu/debug/examples/daily_check_verify.exe'
 
 
 def main():
     base = ROOT / 'artifacts/daily-check-verification' / datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')
     appdata = base / 'daily-check-selfcheck'
-    state = appdata / 'hex-meetings'
+    state = appdata / 'sidenote'
     meeting = appdata / 'hex/meetings/123-456'
     meeting.mkdir(parents=True)
     state.mkdir(parents=True)

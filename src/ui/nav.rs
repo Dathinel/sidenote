@@ -11,8 +11,8 @@ use super::{
     theme::Palette,
     widgets::{dot, hairline, label, line, pressable, scroll, sidebar_icon},
 };
-use hex_meetings::core::{self, UiPrefs};
 use rune::{Color, El, TextStyle, col, el, row, text};
+use sidenote::core::{self, UiPrefs};
 use std::collections::HashMap;
 
 /// The open sidebar, and the rail it folds to, in points.
@@ -549,7 +549,9 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
 
     let mut header = row().w_full().h(52.0).items_center().child(toggle(s, p));
     header = if wide {
-        header.px(6.0)
+        header.px(6.0).child(
+            label("Sidenote", 16.0, 600.0, p.ink).help("Local-first meeting notes on top of Hex"),
+        )
     } else {
         header.justify_center()
     };

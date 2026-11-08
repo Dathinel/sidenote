@@ -1,6 +1,6 @@
-# Local Meetings MCP server
+# Local Sidenote MCP server
 
-Run `hex-meetings.exe --mcp` from an MCP client. This is local-only and read-mostly.
+Run `sidenote.exe --mcp` from an MCP client. This is local-only and read-mostly.
 It starts before Rune, the GPU, the window single-instance guard and the listener.
 The window and listener may remain open. It does not call Hex's local API, read its
 discovery credential, run Ask, start a daily check or access the network.
@@ -12,21 +12,21 @@ you trust with that content. Meeting text is data, not tool instructions.
 
 ## Setup
 
-Replace `C:\Apps\Meetings\hex-meetings.exe` with your built executable. The GNU debug
-build is at `target\x86_64-pc-windows-gnu\debug\hex-meetings.exe` in the worktree.
+Replace `C:\Apps\Sidenote\sidenote.exe` with your built executable. The GNU debug
+build is at `target\x86_64-pc-windows-gnu\debug\sidenote.exe` in the worktree.
 Keep the executable available at the configured path after rebuilding.
 
 Claude Code:
 
 ```powershell
-claude mcp add meetings -- "C:\Apps\Meetings\hex-meetings.exe" --mcp
+claude mcp add sidenote -- "C:\Apps\Sidenote\sidenote.exe" --mcp
 ```
 
 Codex, in `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.meetings]
-command = 'C:\Apps\Meetings\hex-meetings.exe'
+[mcp_servers.sidenote]
+command = 'C:\Apps\Sidenote\sidenote.exe'
 args = ["--mcp"]
 ```
 
@@ -35,8 +35,8 @@ Cursor, in `.cursor/mcp.json` or the global MCP configuration:
 ```json
 {
   "mcpServers": {
-    "meetings": {
-      "command": "C:\\Apps\\Meetings\\hex-meetings.exe",
+    "sidenote": {
+      "command": "C:\\Apps\\Sidenote\\sidenote.exe",
       "args": ["--mcp"]
     }
   }
@@ -49,9 +49,9 @@ OpenCode, in `opencode.json`:
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "meetings": {
+    "sidenote": {
       "type": "local",
-      "command": ["C:\\Apps\\Meetings\\hex-meetings.exe", "--mcp"],
+      "command": ["C:\\Apps\\Sidenote\\sidenote.exe", "--mcp"],
       "enabled": true
     }
   }
@@ -59,7 +59,7 @@ OpenCode, in `opencode.json`:
 ```
 
 Restart or reconnect the client's MCP session after changing configuration. Start by
-asking it to search Meetings for a topic, then read one result's summary or transcript.
+asking it to search Sidenote for a topic, then read one result's summary or transcript.
 
 ## Data folders
 
@@ -69,17 +69,31 @@ environment variables. Empty environment values are ignored.
 
 | Folder | Flag | Environment | Default |
 | --- | --- | --- | --- |
-| App state and device journals | `--data-dir` | `HEX_MEETINGS_DATA_DIR` | `%APPDATA%\hex-meetings` |
-| Local Hex meeting text | `--meetings-dir` | `HEX_MEETINGS_HEX_DIR` | `%APPDATA%\hex\meetings` |
-| Peer meeting folders | `--peers-dir` | `HEX_MEETINGS_PEERS_DIR` | `%APPDATA%\hex-meetings-peers` |
+| App state and device journals | `--data-dir` | `SIDENOTE_DATA_DIR` | `%APPDATA%\sidenote` |
+| Local Hex meeting text | `--meetings-dir` | `SIDENOTE_HEX_DIR` | `%APPDATA%\hex\meetings` |
+| Peer meeting folders | `--peers-dir` | `SIDENOTE_PEERS_DIR` | `%APPDATA%\sidenote-peers` |
 
-`HEX_MEETINGS_STATE_DIR` remains a fallback alias for the data folder. With an explicit
-data folder and no peer override, peers default to `<data-dir>\peers` to keep an isolated
+`SIDENOTE_STATE_DIR` remains a fallback alias for the data folder. Every
+`SIDENOTE_*` environment name accepts its old `HEX_MEETINGS_*` name too. For each
+suffix, a nonempty Sidenote value wins over its old alias. DATA_DIR wins over
+STATE_DIR. Flags win over both. Benchmark and render controls accept the aliases too.
+
+For state and peers independently, if the new folder does not exist and the old
+`%APPDATA%\hex-meetings` or `%APPDATA%\hex-meetings-peers` exists, Sidenote uses
+that old folder in place. It never moves or copies it. If both exist, the Sidenote
+folder wins; use `--data-dir` or `--peers-dir` to keep selecting the legacy folder.
+Exports follow the selected state root. Background logs use `<state-root>\sidenote.log`
+unless the old `%LOCALAPPDATA%\hex-meeting-watch.log` exists and the new log does
+not. Explicit data overrides also isolate logs under that root. Existing client registration names
+such as `meetings` still work when their command points at an available executable.
+See [rename-migration.md](rename-migration.md) before updating a live install.
+
+With an explicit data folder and no peer override, peers default to `<data-dir>\peers` to keep an isolated
 instance from reading the owner's normal peer data. The meetings folder is independent;
 set both flags to isolate an instance completely. A directory need not exist yet.
 
 ```powershell
-hex-meetings.exe --mcp --data-dir "D:\Meetings\state" --meetings-dir "D:\Meetings\recordings" --peers-dir "D:\Meetings\peers"
+sidenote.exe --mcp --data-dir "D:\Meetings\state" --meetings-dir "D:\Meetings\recordings" --peers-dir "D:\Meetings\peers"
 ```
 
 Use these same flags on the window if you want it to review proposals in a custom
@@ -163,7 +177,7 @@ sources; only an explicit owner acceptance can confirm an uncited claim. The exi
 proposal format stays readable by older app builds, although accepting an uncited
 proposal needs the updated app. Forgotten-source rules
 still apply, and a previously rejected proposal is not reopened by retrying it.
-The user can reject a pending proposal in Meetings. Legacy migration may run as part
+The user can reject a pending proposal in Sidenote. Legacy migration may run as part
 of this explicit write, using the existing backup-before-import path.
 
 Writer-lock contention returns an error; retry after the window's edit completes.
@@ -201,7 +215,7 @@ tests against those products.
 - [OpenMemory](https://mem0.ai/blog/introducing-openmemory-mcp) and
   [Mem0's tool reference](https://github.com/mem0ai/mem0/blob/main/docs/platform/mem0-mcp.mdx)
   informed shared memory across clients, stable identities and filtered retrieval.
-  Meetings adds a proposal review boundary instead of exposing their direct memory
+  Sidenote adds a proposal review boundary instead of exposing their direct memory
   update/delete operations. No vector store, embedding model or external key is needed.
 - The community [Obsidian MCP server](https://github.com/MarkusPfundstein/mcp-obsidian)
   and [Notion's search/read tools](https://developers.notion.com/guides/mcp/mcp-supported-tools)
@@ -235,7 +249,7 @@ is written to `artifacts/mcp-smoke.json`, outside version control.
 
 ## Optional features
 
-Open Settings > Features in Meetings to choose the tools available on this device.
+Open Settings > Features in Sidenote to choose the tools available on this device.
 Meetings, notes and Ask stay available. A fresh install starts with all optional features
 off. An existing install enables matching features once from its saved data when
 `config.json` does not exist yet.

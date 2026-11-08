@@ -1,7 +1,13 @@
-# Meetings on multiple Windows devices
+# Sidenote on multiple Windows devices
 
-Syncthing moves files. Meetings reads peer text and merges immutable state journals in
+Syncthing moves files. Sidenote reads peer text and merges immutable state journals in
 memory. The app does not install Syncthing or configure shares or scheduled tasks.
+
+New installs use `%APPDATA%\sidenote` for state and `%APPDATA%\sidenote-peers`
+for peers. Each falls back to its old `hex-meetings` or `hex-meetings-peers` folder
+when the new folder does not exist. Existing shares stay in place. The examples
+below show legacy installs; replace those roots with the selected Sidenote roots
+only on new installs. See [rename-migration.md](rename-migration.md).
 
 ## Folders and device ownership
 

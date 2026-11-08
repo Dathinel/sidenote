@@ -8,7 +8,7 @@
 
 Decisions needed: none. This is the Rust data contract for the next UI lane.
 
-All paths below are relative to `core::state_dir()`. `HEX_MEETINGS_STATE_DIR` redirects that root. Meeting input still comes from `core::meetings_dir()` under APPDATA. Constructors taking a root are useful for previews and isolated copies; the UI normally uses `Default`.
+All paths below are relative to `core::state_dir()`. `SIDENOTE_STATE_DIR` redirects that root. Meeting input still comes from `core::meetings_dir()` under APPDATA. Constructors taking a root are useful for previews and isolated copies; the UI normally uses `Default`.
 
 ## Files and write boundaries
 
@@ -81,7 +81,7 @@ Report `memory_proposals` contain the proposal portion, without queue status or 
 
 ## Core API for the UI
 
-Import `hex_meetings::core::memory::*`. All operations return `std::io::Result` and should run off the render path.
+Import `sidenote::core::memory::*`. All operations return `std::io::Result` and should run off the render path.
 
 | Signature on `MemoryStore` | Behaviour |
 | --- | --- |
@@ -167,4 +167,4 @@ Validation establishes source membership, structural coverage and literal names/
 
 Required gates: `cargo clippy --locked --all-targets -- -D warnings` and `cargo build`, from this worktree with the supplied GNU tools first on PATH. No tests or GUI launches. Model validation is authorized only on an isolated temporary copy, never real memory or the KB repository.
 
-`examples/memory_migration.rs` refuses any root outside a `hex-memory2-...` directory under the OS temp folder and requires `HEX_MEETINGS_STATE_DIR`. Copy company.md and runners.json there, build the example, then execute it directly. `--model` explicitly prepares a fresh model preview; without it the example makes no model call and reuses the cached or deterministic preview. `--preview-only` writes the inspection artifact and stops before acceptance. It reports type counts, fallback/unplaced details and model runtime, and verifies cached reproduction. Acceptance operates only on the copy, re-fetches every imported record, compares every candidate field except the expected acceptance status/timestamp changes, and the exact backup bytes, and reports copied old-report load counts. Its inspection artifact is migration-preview.json at the temporary root; the internal response cache is memory/migration-preview.json.
+`examples/memory_migration.rs` refuses any root outside a `hex-memory2-...` directory under the OS temp folder and requires `SIDENOTE_STATE_DIR`. Copy company.md and runners.json there, build the example, then execute it directly. `--model` explicitly prepares a fresh model preview; without it the example makes no model call and reuses the cached or deterministic preview. `--preview-only` writes the inspection artifact and stops before acceptance. It reports type counts, fallback/unplaced details and model runtime, and verifies cached reproduction. Acceptance operates only on the copy, re-fetches every imported record, compares every candidate field except the expected acceptance status/timestamp changes, and the exact backup bytes, and reports copied old-report load counts. Its inspection artifact is migration-preview.json at the temporary root; the internal response cache is memory/migration-preview.json.

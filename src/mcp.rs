@@ -114,7 +114,7 @@ pub fn tools() -> Vec<Tool> {
         definition(
             "propose_memory",
             "Propose memory for review",
-            "Queue a memory addition for the user to review in Meetings. Never changes accepted records. Cite a source meeting when available; otherwise it is labelled an uncited MCP submission. Repeating the same content and source returns the same proposal, even after review.",
+            "Queue a memory addition for the user to review in Sidenote. Never changes accepted records. Cite a source meeting when available; otherwise it is labelled an uncited MCP submission. Repeating the same content and source returns the same proposal, even after review.",
             object(
                 json!({"text":{"type":"string","minLength":1,"maxLength":8000,"description":"Proposed claim, at most 8000 UTF-8 bytes."},
                 "source_meeting_id":string("Optional meeting id obtained from search/list."),
@@ -142,7 +142,7 @@ impl ServerHandler for Meetings {
             .enable_resources()
             .build();
         ServerConfig::new(capabilities)
-            .with_server_info(Implementation::new("meetings", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("sidenote", env!("CARGO_PKG_VERSION")))
             .with_instructions(agent_tools::INSTRUCTIONS)
     }
     async fn list_tools(

@@ -1,4 +1,4 @@
-//! The Hex engine in the Meetings window: the status the sidebar and the top right show, and a
+//! The Hex engine in the Sidenote window: the status the sidebar and the top right show, and a
 //! Hex page with the model, the vocabulary and the settings in sections. Starting and stopping a
 //! recording is the New meeting flow in `nav` and `live`.
 //!
@@ -10,13 +10,13 @@ use super::{
     theme::Palette,
     widgets::{badge, hairline, label, line, link, pressable, scroll},
 };
-use hex_meetings::hex_engine::{
-    Capabilities, EngineState, Feature, HexEngine, HexError, ModelInfo, ModelState, Recording,
-    Setting, Support, VocabularyEntry,
-};
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
+use sidenote::hex_engine::{
+    Capabilities, EngineState, Feature, HexEngine, HexError, ModelInfo, ModelState, Recording,
+    Setting, Support, VocabularyEntry,
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -1772,7 +1772,7 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
     if let Some(error) = &s.feature_error {
         body = body.child(label(error.clone(), 13.0, 500.0, p.warn).role("alert"));
     }
-    for feature in hex_meetings::core::Feature::ALL {
+    for feature in sidenote::core::Feature::ALL {
         body = body
             .child(
                 row()
@@ -1868,7 +1868,7 @@ struct Fixture {
 /// `tools/render_ui.ps1` copies from `tools/ui-fixtures/hex.json`. A headless render starts no
 /// watcher, and nothing here calls Hex, so the shot is the same every time.
 pub fn scene(s: &mut State, recording: bool) {
-    let Some(dir) = std::env::var_os("HEX_MEETINGS_STATE_DIR") else {
+    let Some(dir) = sidenote::env_var("SIDENOTE_STATE_DIR") else {
         return;
     };
     let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("hex-fixture.json"))

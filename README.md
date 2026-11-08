@@ -1,6 +1,6 @@
-# Meetings
+# Sidenote: local-first meeting notes on top of Hex
 
-Meetings is a local Windows desktop companion to [Hex](https://github.com/anomalyco/hex).
+Sidenote is a local Windows desktop companion to [Hex](https://github.com/anomalyco/hex).
 Browse meeting summaries and transcripts, ask questions with your own agent CLI,
 and review optional tasks, projects, memory and daily alignment reports.
 
@@ -19,13 +19,17 @@ toolchain including `as.exe` and `dlltool.exe`. Put its bin folder on PATH or se
 ./build.ps1 -Release
 ```
 
-The executable is under `target/x86_64-pc-windows-gnu/debug/` or `release/`.
+The executable is `sidenote.exe`, under `target/x86_64-pc-windows-gnu/debug/` or `release/`.
 The checked-in Cargo configuration selects Windows GNU, rust-lld and static CRT.
 
 ## Use and configuration
 
 The default meeting folder is `%APPDATA%/hex/meetings`; local state and
-`config.json` live in `%APPDATA%/hex-meetings`. See [MCP setup](docs/mcp.md)
+`config.json` live in `%APPDATA%/sidenote` on new installs. If only the legacy
+`%APPDATA%/hex-meetings` folder exists, Sidenote keeps using it in place. Exports
+stay under that selected root. New logs use `<state-root>/sidenote.log`; an existing
+`%LOCALAPPDATA%/hex-meeting-watch.log` stays in place. Nothing is moved or copied. See the
+[owner migration checklist](docs/rename-migration.md) and [MCP setup](docs/mcp.md)
 for stdio integration, tools, trust boundaries and directory overrides.
 See [private configuration](docs/configuration.md) for optional KB context.
 Features are opt-in in Settings. Existing feature choices migrate on first use.
@@ -52,6 +56,6 @@ reading AppData or calling a model. Render output stays under ignored `artifacts
 
 ## Licence
 
-Meetings is licensed under [AGPL-3.0-or-later](LICENSE).
+Sidenote is licensed under [AGPL-3.0-or-later](LICENSE).
 [Third-party notices and dependency licences](THIRD_PARTY.md) cover Hex, Rune,
 bundled fonts and the locked Cargo dependency inventory.

@@ -1,5 +1,5 @@
 param(
-    [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/hex-meetings.exe",
+    [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/sidenote.exe",
     # Another output folder (for example a before set), and an optional list of shot names.
     [string]$Out = "",
     [string[]]$Only = @(),
@@ -231,7 +231,7 @@ foreach ($theme in $Themes) {
         if ($scene -like 'tasks-cleared*') { Set-Content -Encoding utf8 "$state/tasks-settings.json" '{"cleared_before": "2026-10-31"}' }
         Copy-Item "$root/tools/ui-fixtures/hex.json" "$state/hex-fixture.json"
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
-        $env:HEX_MEETINGS_STATE_DIR = $state
+        $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
         $fixtureMeetings = if ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
@@ -243,4 +243,4 @@ foreach ($theme in $Themes) {
         Write-Output "$out/$name-$theme.png"
     }
 }
-Remove-Item Env:HEX_MEETINGS_STATE_DIR -ErrorAction SilentlyContinue
+Remove-Item Env:SIDENOTE_STATE_DIR -ErrorAction SilentlyContinue

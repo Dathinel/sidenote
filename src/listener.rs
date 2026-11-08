@@ -46,8 +46,10 @@ impl Problem {
     }
 }
 fn log(message: &str) {
-    let path = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-        .join("hex-meeting-watch.log");
+    let path = crate::core::log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             file,

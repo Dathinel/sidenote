@@ -12,10 +12,10 @@ use super::{
     theme::{BODY_LH, Palette},
     widgets::{hairline, label, link, pressable, quiet_button, spaced_caps},
 };
-use hex_meetings::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, TextStyle, Transition, Tx, col, el, row, text};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, Spinner, TextInput};
+use sidenote::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
 use std::{f32::consts::FRAC_PI_2, sync::LazyLock};
 
 static STAMP: LazyLock<Regex> =
@@ -512,7 +512,7 @@ fn no_agent(s: &State, p: Palette) -> El {
     ));
     if s.agents_rechecked {
         note = note.child(label(
-            "Still not found. If you just installed one, restart Meetings.",
+            "Still not found. If you just installed one, restart Sidenote.",
             12.5,
             400.0,
             p.faint,

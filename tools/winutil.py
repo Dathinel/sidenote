@@ -33,7 +33,7 @@ PROCESS_QUERY_LIMITED = 0x1000
 
 
 def meetings_window(pid, require_painted=True):
-    """The visible Meetings window of `pid`. Rune keeps a new window cloaked until its first
+    """The visible Sidenote window of `pid`. Rune keeps a new window cloaked until its first
     frame has been presented, so an uncloaked window is one that has painted."""
     found = []
     errors = []
@@ -71,7 +71,7 @@ def wait_window(process, timeout=30, require_painted=True):
         if hwnd:
             return hwnd, time.perf_counter()
         time.sleep(0.002)
-    raise AssertionError("No Meetings window appeared")
+    raise AssertionError("No Sidenote window appeared")
 
 
 def close_window(hwnd):
@@ -193,13 +193,13 @@ def bring_to_front(hwnd, timeout=3.0):
         time.sleep(0.15)
         if _front(hwnd):
             return
-    raise NotInFront("could not bring the Meetings window to the front")
+    raise NotInFront("could not bring the Sidenote window to the front")
 
 
 def _send(hwnd, *items):
     # Every batch re-checks the foreground window: input never goes to another application.
     if not _front(hwnd):
-        raise NotInFront("the Meetings window lost the foreground; nothing was sent")
+        raise NotInFront("the Sidenote window lost the foreground; nothing was sent")
     array = (Input * len(items))(*items)
     user32.SendInput(len(items), array, ctypes.sizeof(Input))
 
@@ -209,7 +209,7 @@ def click(hwnd, x, y):
     ox, oy, *_ = client_origin(hwnd)
     point = wintypes.POINT(ox + x, oy + y)
     if user32.GetAncestor(user32.WindowFromPoint(point), 2) != hwnd:  # GA_ROOT
-        raise NotInFront("the click point is not over the Meetings window")
+        raise NotInFront("the click point is not over the Sidenote window")
     # Let the window see the pointer arrive before the press, as a hand would.
     user32.SetCursorPos(point.x - 6, point.y)
     time.sleep(0.12)

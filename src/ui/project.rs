@@ -6,9 +6,9 @@ use super::{
     theme::Palette,
     widgets::{label, pressable},
 };
-use hex_meetings::core::{self, TaskOverride, UNSORTED};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
+use sidenote::core::{self, TaskOverride, UNSORTED};
 
 /// What the chip shows.
 pub struct MeetingProject {

@@ -14,8 +14,8 @@ Status: proposed, 2026-11-08; amended the same day with the owner's decisions an
 
 **Owner decisions, 2026-11-08.**
 - **Everything builds on Hex.** Each language's default model is small and fast on CPU, ideally 100 to 300 MB like Parakeet. Bigger models are opt-in (more RAM or a GPU).
-- **Meetings uses its own model, separate from dictation.** Now: explicit `--model` plus GGUF import. Later: Hex alone, once #1351 and a non-selecting install ship.
-- **Small non-English models that Hex cannot load run through sherpa-onnx in Meetings** (provisional).
+- **Sidenote uses its own model, separate from dictation.** Now: explicit `--model` plus GGUF import. Later: Hex alone, once #1351 and a non-selecting install ship.
+- **Small non-English models that Hex cannot load run through sherpa-onnx in Sidenote** (provisional).
 - **Users declare their meeting languages and can force a route**, for example "Hindi + English mixed".
 
 ## Decision
@@ -102,12 +102,12 @@ Status: proposed, 2026-11-08; amended the same day with the owner's decisions an
 - **A curated file, changed only by pull request.** The catalog is `assets/catalog/models.toml`, one `[[model]]` per entry. Fields: `id`, `name`, `tasks`, `languages`, `size_mb`, `params`, `licence` (SPDX), `licence_url`, `commercial_use`, `gated`, `runtime` (hex, sherpa-onnx, ctranslate2, endpoint), `install` (a Hex id, or file URLs with a `sha256` each), `min_ram_mb`, `min_vram_mb`, `cpu_ok`, `source_url`, `verified_on`. Three more, `cpu_rtf`, `wer_hi_en` and `measured_on`, stay `null` (shown as "unverified") until M0 fills them.
 - **CI checks every pull request:** SPDX ids, a hash for every download, no duplicate ids (`docs/models/adding-a-model.md`). The catalog ships in each release; "Refresh list" fetches the latest file only on a click.
 - **Search and filter** by name, language, task, size, licence and "Fits this PC". Fit badges: "Fits GPU", "Runs on CPU, slower", "Too large".
-- **Meetings never changes the user's dictation model.**
+- **Sidenote never changes the user's dictation model.**
   - **Now:** `hex model transcribe --model <id>` on models already installed in Hex, and `hex model import` for new GGUF files (after an architecture and licence check). If a catalog model is not installed, the app tells the user to install it in Hex, because that call switches dictation.
   - **Never** `hex model install` followed by a restore: dictation changes in the gap, a user change can race the restore, and the restore can fail.
-  - **Later:** Hex alone, once #1351 and a non-selecting install land. Per-chunk routing stays in Meetings.
-- **Provisional runtime.** Models that Hex cannot load run through sherpa-onnx in Meetings, from tested ONNX packs only (lane M12). Lane M13 works upstream; Meetings removes the runtime when Hex loads the models.
-- **Downloads are checked and explicit.** Meetings checks each file's `sha256`, stores files in `local/models/` and never fetches gated models (the app shows "Open model page"). The install dialog shows the licence, a link, "Commercial use: yes or no" and the size. Install is the only button that downloads anything.
+  - **Later:** Hex alone, once #1351 and a non-selecting install land. Per-chunk routing stays in Sidenote.
+- **Provisional runtime.** Models that Hex cannot load run through sherpa-onnx in Sidenote, from tested ONNX packs only (lane M12). Lane M13 works upstream; Sidenote removes the runtime when Hex loads the models.
+- **Downloads are checked and explicit.** Sidenote checks each file's `sha256`, stores files in `local/models/` and never fetches gated models (the app shows "Open model page"). The install dialog shows the licence, a link, "Commercial use: yes or no" and the size. Install is the only button that downloads anything.
 - **"Add your own"** takes a GGUF model (`hex model import`), an OpenAI-compatible URL and key, an ACP command or a CLI agent. Entries sit in the device-local `models.user[]` list, labelled "Added by you, licence not checked".
 
 **Seed entries:**
@@ -148,7 +148,7 @@ Lane M0 measures the baseline plus WER (mixed-script normalization) and CPU real
 
 1. **No change until the user switches.** Lane M1 adds the `pipeline` section with a `compat` profile that matches today's scripts. Runs change only when the user picks "Use recommended".
 2. **Ride ADR 0006's runner.** Lane H3's runner calls the scripts as stages. Lane M5 adds `language_detect` (after H7's sherpa-onnx decision), lanes M6 and M7 replace the transcribe and translate scripts, and lane M12 adds the provisional runtime.
-3. **Retire the extra runtime only at parity.** Lane M13 (upstream Hex work) targets a meeting-model setting and a non-selecting install. Meetings removes `runtime:` speech entries only after Hex loads those models, and a migration moves the user's routes to `hex:` ids.
+3. **Retire the extra runtime only at parity.** Lane M13 (upstream Hex work) targets a meeting-model setting and a non-selecting install. Sidenote removes `runtime:` speech entries only after Hex loads those models, and a migration moves the user's routes to `hex:` ids.
 4. **LLM steps go through `Harness`.** `EndpointHarness` joins `AcpHarness` and `CliHarness`. Endpoints follow decision O1: any URL, keys in the keystore, a notice before the first send.
 5. **Storage stays behind ADR 0001's seam.** The segments blob (both texts, per-step Provenance) goes behind `Store::put_blob`. Config, user models, `local/models/` and `local/cache/` stay device-local.
 
@@ -161,7 +161,7 @@ Lane M0 measures the baseline plus WER (mixed-script normalization) and CPU real
 
 - **Fetching the catalog live from Hugging Face:** no licence review, no hashes, calls without a click.
 - **Install, then restore the dictation model:** see (c).
-- **A meeting-model setting in Hex as the whole answer:** per-chunk routing stays in Meetings; #1351 retires only the extra runtime.
+- **A meeting-model setting in Hex as the whole answer:** per-chunk routing stays in Sidenote; #1351 retires only the extra runtime.
 - **Treating a language label as proof of one language, claiming small means fast, assuming any GGUF model loads:** code switches occur inside chunks, no CPU measurement exists yet, and architecture must match.
 
 ## Sources

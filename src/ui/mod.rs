@@ -1,4 +1,4 @@
-//! The Meetings window: a sidebar that folds to a rail (the five places, the projects, the Hex
+//! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
 mod ask;
@@ -19,10 +19,10 @@ mod today;
 mod todo;
 mod widgets;
 
-use hex_meetings::core::{
+use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
+use sidenote::core::{
     self, AskProgress, DayGroup, Meeting, Message, Runner, Saved, SearchHit, StateStore,
 };
-use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -1347,7 +1347,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
 /// Scenes that tick or edit tasks write files, so they run only against the isolated state
 /// folder the render script sets.
 fn isolated() -> bool {
-    std::env::var_os("HEX_MEETINGS_STATE_DIR").is_some()
+    sidenote::env_var("SIDENOTE_STATE_DIR").is_some()
 }
 
 /// The sidebar open or folded, whatever the window's width would have chosen.
@@ -1361,7 +1361,7 @@ fn scene_sidebar(s: &mut State, open: bool) {
 /// state folder that has no `projects.json`.
 fn scene_projects(s: &mut State) {
     if s.tasks.names.is_empty() {
-        s.tasks.names = vec!["Northwind".into(), "Hex Meetings".into(), "Hiring".into()];
+        s.tasks.names = vec!["Northwind".into(), "Sidenote".into(), "Hiring".into()];
     }
 }
 
@@ -1897,10 +1897,7 @@ pub fn spec() -> AppSpec<State> {
                 scene_check(s);
                 if let Some(a) = s.check.report.as_ref().and_then(|r| {
                     r.content.story_alignment.iter().find(|a| {
-                        matches!(
-                            a.status,
-                            hex_meetings::core::check_v2::AlignmentStatus::Tension
-                        )
+                        matches!(a.status, sidenote::core::check_v2::AlignmentStatus::Tension)
                     })
                 }) {
                     let name = a.project.clone();
@@ -2233,7 +2230,7 @@ pub fn spec() -> AppSpec<State> {
                 s.tasks.inputs.owner.focused = true;
             }),
         ],
-        ..AppSpec::new("Meetings", DEFAULT_SIZE, State::new, view)
+        ..AppSpec::new("Sidenote", DEFAULT_SIZE, State::new, view)
     }
 }
 
@@ -2241,7 +2238,7 @@ pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
-    if let Some(path) = std::env::var_os("HEX_MEETINGS_TRACE_FIRST_FRAME") {
+    if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
         let mut done = false;
         app = app.on_frame_encoded(move |f| {
             if !done && f.outcome() == rune::FrameOutcome::Drawn {
@@ -2264,11 +2261,11 @@ pub fn run() {
             .unwrap_or(0);
         if hwnd != 0 {
             hex::remember_window(hwnd);
-            hex_meetings::platform::set_window_icon(hwnd);
+            sidenote::platform::set_window_icon(hwnd);
             if benchmark::show_offscreen(win, hwnd) {
                 return;
             }
-            win.resize_instant(hex_meetings::platform::fit_to_work_area(hwnd, DEFAULT_SIZE));
+            win.resize_instant(sidenote::platform::fit_to_work_area(hwnd, DEFAULT_SIZE));
         }
         win.center();
     });

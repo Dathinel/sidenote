@@ -11,7 +11,7 @@ pub fn peers_dir() -> PathBuf {
     if let Some(dir) = super::paths::peers() {
         return dir;
     }
-    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex-meetings-peers")
+    super::paths::appdata_dir("sidenote-peers", "hex-meetings-peers")
 }
 
 pub fn meetings_dir() -> PathBuf {
@@ -20,13 +20,25 @@ pub fn meetings_dir() -> PathBuf {
     }
     PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/meetings")
 }
-/// Where reports, ticks and task edits live. `HEX_MEETINGS_STATE_DIR` moves it, so renders and
+/// Where reports, ticks and task edits live. `SIDENOTE_STATE_DIR` moves it, so renders and
 /// checks that apply actions never touch the real files.
 pub fn state_dir() -> PathBuf {
     if let Some(dir) = super::paths::data() {
         return dir;
     }
-    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex-meetings")
+    super::paths::appdata_dir("sidenote", "hex-meetings")
+}
+
+/// Both background entry points use the same log without relocating an existing file.
+pub fn log_path() -> PathBuf {
+    let current = state_dir().join("sidenote.log");
+    // An explicit data override must also isolate logs from the owner's installation.
+    if super::paths::data().is_some() {
+        return current;
+    }
+    let old = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
+        .join("hex-meeting-watch.log");
+    super::paths::prefer_legacy_path(current, old)
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]

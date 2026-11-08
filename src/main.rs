@@ -1,24 +1,24 @@
 #![windows_subsystem = "windows"]
 mod hex_probe;
 mod ui;
-use hex_meetings::{listener, platform};
+use sidenote::{listener, platform};
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if let Err(error) = hex_meetings::core::configure_paths(&args) {
+    if let Err(error) = sidenote::core::configure_paths(&args) {
         eprintln!("{error}");
         std::process::exit(2);
     }
     if args.iter().any(|a| a == "--mcp") {
-        std::process::exit(hex_meetings::mcp::run());
+        std::process::exit(sidenote::mcp::run());
     }
     if std::env::args().any(|a| a == "--hex-engine-status") {
-        std::process::exit(hex_meetings::hex_engine::run_status());
+        std::process::exit(sidenote::hex_engine::run_status());
     }
     if std::env::args().any(|a| a == "--probe-hex") {
         std::process::exit(hex_probe::run());
     }
     if std::env::args().any(|a| a == "--daily-check") {
-        std::process::exit(hex_meetings::core::daily_check::run_cli());
+        std::process::exit(sidenote::core::daily_check::run_cli());
     }
     if std::env::args().any(|a| a == "--listen") {
         listener::run()
@@ -36,7 +36,7 @@ fn main() {
                 | "--help"
         )
     });
-    let offscreen_bench = std::env::var_os("HEX_MEETINGS_BENCH_OFFSCREEN").is_some();
+    let offscreen_bench = sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_some();
     let _instance = if headless || offscreen_bench {
         None
     } else {
@@ -46,12 +46,12 @@ fn main() {
             Err(_) => return,
         }
     };
-    if !headless && (!offscreen_bench || std::env::var_os("HEX_MEETINGS_BENCH_NO_WARM").is_none()) {
+    if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
         rune::warm_gpu(Default::default());
     }
     ui::run();
     // Closing the window ends the process. A running Ask is stopped first so its CLI, that CLI's
     // children and its temporary prompt file go with it. The question is already saved.
-    hex_meetings::core::ask::cancel_all(std::time::Duration::from_secs(3));
+    sidenote::core::ask::cancel_all(std::time::Duration::from_secs(3));
     std::process::exit(0);
 }

@@ -7,13 +7,13 @@ use super::{
     widgets::{hairline, label, pressable, scroll, spaced_caps},
 };
 use chrono::{Duration, Local, NaiveDate};
-use hex_meetings::core::{
+use rune::{El, Key, KeyEvent, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextInput};
+use sidenote::core::{
     self, DoneFilter, DueBucket, GroupKind, MANUAL, ManualTask, Meeting, Overrides, Pipeline,
     Projects, TaskCounts, TaskGroup, TaskGrouping, TaskItem, TaskOverride, TaskStore, TaskView,
     UNSORTED, Urgency, Who,
 };
-use rune::{El, Key, KeyEvent, TextEdit, TextStyle, Tx, col, el, row, text};
-use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextInput};
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,

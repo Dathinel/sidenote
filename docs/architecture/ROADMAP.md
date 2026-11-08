@@ -153,7 +153,7 @@ owner's machine; the results file holds only numbers and labels, never transcrip
 judged in CI on synthetic or openly licensed clips.
 
 Owner decisions of 2026-11-08 (see ADR 0009): everything builds on Hex; each language default is small
-(ideally 100 to 300 MB) and fast on CPU, with bigger models opt-in; Meetings uses a meeting model separate from
+(ideally 100 to 300 MB) and fast on CPU, with bigger models opt-in; Sidenote uses a meeting model separate from
 Hex's dictation model; small non-English models that Hex cannot load run through a provisional sherpa-onnx
 runtime; users can declare their meeting languages and force a route; users may connect any OpenAI-compatible
 endpoint, local or remote, with their own key. Every model size and quality figure stays unverified until M0

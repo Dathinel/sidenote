@@ -20,7 +20,7 @@ impl Scratch {
             .map_err(|_| "System clock is invalid")?
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "hex-meetings-{}-{nonce}-{}",
+            "sidenote-{}-{nonce}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

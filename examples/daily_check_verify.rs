@@ -1,7 +1,7 @@
 //! Assert-based storage/action smoke check. Run only with a private APPDATA directory.
 use chrono::NaiveDate;
-use hex_meetings::core::{self, daily_check::*};
 use serde_json::json;
+use sidenote::core::{self, daily_check::*};
 use std::{fs, path::PathBuf};
 
 fn main() {

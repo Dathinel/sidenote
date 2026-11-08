@@ -1,6 +1,6 @@
 # Architecture decisions
 
-Status as of 2026-11-08. These records set the shape of Meetings for the next phases:
+Status as of 2026-11-08. These records set the shape of Sidenote for the next phases:
 encrypted personal sync, then server-readable team workspaces with a remote MCP server,
 while the app stays open source, offline-first and usable with no account.
 

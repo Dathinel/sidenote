@@ -15,9 +15,9 @@ use super::{
         scroll, spaced_caps, split_geometry,
     },
 };
-use hex_meetings::core::{Meeting, Point, short};
 use rune::{El, Key, Span, TextEdit, TextStyle, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
+use sidenote::core::{Meeting, Point, short};
 use std::ops::Range;
 
 /// The main column's two tabs. The transcript has its own switch, `State::transcript_open`.

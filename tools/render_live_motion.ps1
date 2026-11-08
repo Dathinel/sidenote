@@ -1,5 +1,5 @@
 param(
-    [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/hex-meetings.exe",
+    [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/sidenote.exe",
     [string]$Out = "$PSScriptRoot/../artifacts/live-motion",
     [string]$Theme = 'dark',
     [string]$Size = '1320x800'
@@ -23,7 +23,7 @@ foreach ($clip in $clips) {
     New-Item -ItemType Directory -Force -Path $state | Out-Null
     Copy-Item "$root/tools/ui-fixtures/hex.json" "$state/hex-fixture.json"
     $meetings = "$root/tools/ui-fixtures/live-notes/meetings"
-    $env:HEX_MEETINGS_STATE_DIR = $state
+    $env:SIDENOTE_STATE_DIR = $state
     $dir = "$Out/$name-$Theme"
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -41,4 +41,4 @@ foreach ($clip in $clips) {
     }
     Write-Output "$Out/$name-$Theme-strip.png"
 }
-Remove-Item Env:HEX_MEETINGS_STATE_DIR -ErrorAction SilentlyContinue
+Remove-Item Env:SIDENOTE_STATE_DIR -ErrorAction SilentlyContinue

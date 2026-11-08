@@ -1,4 +1,4 @@
-param([string]$Exe = "$PSScriptRoot/../target/minimal-clean/x86_64-pc-windows-gnu/debug/hex-meetings.exe")
+param([string]$Exe = "$PSScriptRoot/../target/minimal-clean/x86_64-pc-windows-gnu/debug/sidenote.exe")
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/..").Path
 $artifacts = "$root/artifacts"

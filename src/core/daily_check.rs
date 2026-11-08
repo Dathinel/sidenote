@@ -833,8 +833,10 @@ fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> 
     Ok(runner)
 }
 fn log_line(message: &str) {
-    let path = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-        .join("hex-meeting-watch.log");
+    let path = super::log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             file,

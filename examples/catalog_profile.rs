@@ -1,7 +1,7 @@
 fn main() {
     for _ in 0..7 {
         let start = std::time::Instant::now();
-        let (meetings, errors) = hex_meetings::core::scan();
+        let (meetings, errors) = sidenote::core::scan();
         assert!(errors.is_empty(), "catalog scan errors");
         println!(
             "{} meetings, {} transcript bytes, {} index bytes, {:?}",

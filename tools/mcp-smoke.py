@@ -13,7 +13,7 @@ import threading
 def main():
     root = Path(__file__).resolve().parents[1]
     binary = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else (
-        root / "target/x86_64-pc-windows-gnu/debug/hex-meetings.exe"
+        root / "target/x86_64-pc-windows-gnu/debug/sidenote.exe"
     )
     transcript = []
     with tempfile.TemporaryDirectory(prefix="mcp-smoke-", dir=root / "target") as folder:
@@ -56,8 +56,8 @@ def main():
         environment = os.environ.copy()
         for name, value in {
             "APPDATA": fixture / "appdata", "LOCALAPPDATA": fixture / "localappdata",
-            "HEX_MEETINGS_DATA_DIR": state, "HEX_MEETINGS_STATE_DIR": state,
-            "HEX_MEETINGS_HEX_DIR": meetings, "HEX_MEETINGS_PEERS_DIR": peers,
+            "SIDENOTE_DATA_DIR": state, "SIDENOTE_STATE_DIR": state,
+            "SIDENOTE_HEX_DIR": meetings, "SIDENOTE_PEERS_DIR": peers,
             "COMPUTERNAME": "fixture-laptop",
         }.items():
             environment[name] = str(value)

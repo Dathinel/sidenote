@@ -2,7 +2,7 @@
 
 Decisions needed: none.
 
-`hex_meetings::hex_engine::HexEngine` is the core API for the Meetings UI. Clone the client to share its in-memory CLI path and capability cache. Hex remains a separate, unmodified process. The client never starts, quits, or restarts it.
+`sidenote::hex_engine::HexEngine` is the core API for the Sidenote UI. Clone the client to share its in-memory CLI path and capability cache. Hex remains a separate, unmodified process. The client never starts, quits, or restarts it.
 
 ## Calls
 
@@ -43,14 +43,14 @@ Errors are `HexNotRunning`, `Unsupported`, `Timeout`, or `Failed { code, stderr_
 
 Create one watcher for the window, then call `set_visible(true)` on show/restore and `set_visible(false)` on hide/minimize. It starts hidden. Read `updates` on a UI worker and forward results into the UI's normal update mechanism. The one-item channel bounds memory; if a result is pending, new samples are dropped until the UI drains it. Do not keep displaying an old state after an error. Dropping the watcher signals stop and joins the worker, with at most an in-flight 750 ms status request to finish.
 
-While visible, the worker waits on Windows events and polls after 1.5 seconds of silence. While hidden, it waits indefinitely for visibility or stop, and makes no Hex calls. The existing `/meetings/events` listener signals `Local\HexMeetingsEngineChanged` when it connects and after parsing an event. The watcher wakes and refreshes on that signal while visible. It never opens a competing SSE subscription. Polling still works if the listener is absent, old, or the Labs stream is unavailable. Using the event relay across processes requires the listener to run a binary containing this change; this task does not replace or restart the owner's existing listener. The event has no payload and uses the Windows default access control. One watcher is intended per Meetings window.
+While visible, the worker waits on Windows events and polls after 1.5 seconds of silence. While hidden, it waits indefinitely for visibility or stop, and makes no Hex calls. The existing `/meetings/events` listener signals `Local\HexMeetingsEngineChanged` when it connects and after parsing an event. The watcher wakes and refreshes on that signal while visible. It never opens a competing SSE subscription. Polling still works if the listener is absent, old, or the Labs stream is unavailable. Using the event relay across processes requires the listener to run a binary containing this change; this task does not replace or restart the owner's existing listener. The event has no payload and uses the Windows default access control. One watcher is intended per Sidenote window.
 
 ## Read-only development command
 
-Run `hex-meetings.exe --hex-engine-status` with hidden process creation and piped stdout. It exits before the single-instance, GPU and UI paths. It reads ten status samples, the capability inventory, settings list and meetings prefix, vocabulary list, model list, and runtime model status. It prints counts and redacted state only. `--watch-visible` or `--watch-hidden` adds a 20-second watcher sample without creating any window. These flags never call write methods.
+Run `sidenote.exe --hex-engine-status` with hidden process creation and piped stdout. It exits before the single-instance, GPU and UI paths. It reads ten status samples, the capability inventory, settings list and meetings prefix, vocabulary list, model list, and runtime model status. It prints counts and redacted state only. `--watch-visible` or `--watch-hidden` adds a 20-second watcher sample without creating any window. These flags never call write methods.
 
 Validation follows the owner's rule: no tests and no live write calls. Record, dictation, paste, settings set, and vocabulary mutations require a supervised session later. The wire mappings were reviewed against the [pinned upstream CLI protocol](https://github.com/anomalyco/hex/blob/f5681bcd4179b1d78484da00b96691b8a080d197/docs/cli.md) and the installed build's read-only help. They remain unverified in live use.
-## Meetings UI
+## Sidenote UI
 
 `src/ui/hex.rs` holds the engine client's state, status and Hex page; `src/ui/nav.rs` and `src/ui/live.rs` hold the recording flow. The sidebar's bottom line shows the status (Not running, Idle, Recording with elapsed time, Dictating). One "New meeting" button at the top right starts a recording through `record_start(None)` and opens the live page; while Hex records, the top right and the sidebar line show "Recording 12:34" with Stop, which calls `record_stop`. There are no separate Record and Stop pills. Disabled reasons (Hex not running, already recording, build cannot record) are tooltips.
 

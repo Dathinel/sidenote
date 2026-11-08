@@ -16,14 +16,14 @@ use super::{
     },
 };
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
-use hex_meetings::core::{
+use rune::{El, Key, KeyEvent, Span, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, TextInput};
+use sidenote::core::{
     self,
     check_state::{self, Mark, Status, TriageStatus, TriageStore},
     check_v2::{AlignmentStatus, FindingChange},
     daily_check::{ActionKind, CheckAction, DailyCheck, Finding, FindingKind, Severity},
 };
-use rune::{El, Key, KeyEvent, Span, TextEdit, TextStyle, Tx, col, el, row, text};
-use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, TextInput};
 use std::{
     collections::{BTreeSet, HashMap},
     fs,
@@ -2268,7 +2268,11 @@ fn hint_keys(keys: &[&str], what: &str, p: Palette) -> El {
 // ---- the page --------------------------------------------------------------------------------
 
 fn empty(s: &State, narrow: bool, p: Palette) -> El {
-    let cmd = "& \"$env:LOCALAPPDATA\\Programs\\hex-meetings\\hex-meetings.exe\" --daily-check";
+    let exe = std::env::current_exe().unwrap_or_else(|_| "sidenote.exe".into());
+    let cmd = format!(
+        "& '{}' --daily-check",
+        exe.display().to_string().replace('\'', "''")
+    );
     col()
         .w_full()
         .gap(12.0)
@@ -2288,7 +2292,7 @@ fn empty(s: &State, narrow: bool, p: Palette) -> El {
                 .py(10.0)
                 .radius(10.0)
                 .fill(p.side)
-                .child(copy_row(s, cmd, "copy-run".into(), p)),
+                .child(copy_row(s, &cmd, "copy-run".into(), p)),
         )
         .child(label("Then reopen this page.", 15.0, 400.0, p.soft))
 }

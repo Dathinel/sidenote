@@ -1,9 +1,9 @@
 //! Headless migration inspection, restricted to an explicitly redirected temporary state copy.
-use hex_meetings::core::{self, memory::MemoryStore};
 use serde_json::json;
+use sidenote::core::{self, memory::MemoryStore};
 use std::{fs, io, path::PathBuf};
 
-fn counts(preview: &hex_meetings::core::memory::MigrationPreview) -> serde_json::Value {
+fn counts(preview: &sidenote::core::memory::MigrationPreview) -> serde_json::Value {
     let mut counts = std::collections::BTreeMap::new();
     for kind in [
         "person",
@@ -24,8 +24,8 @@ fn counts(preview: &hex_meetings::core::memory::MigrationPreview) -> serde_json:
 
 fn main() -> io::Result<()> {
     let root = PathBuf::from(
-        std::env::var_os("HEX_MEETINGS_STATE_DIR")
-            .ok_or_else(|| io::Error::other("Set HEX_MEETINGS_STATE_DIR to a temp copy"))?,
+        sidenote::env_var("SIDENOTE_STATE_DIR")
+            .ok_or_else(|| io::Error::other("Set SIDENOTE_STATE_DIR to a temp copy"))?,
     );
     let root = root.canonicalize()?;
     if !root.starts_with(std::env::temp_dir().canonicalize()?)

@@ -1,7 +1,7 @@
 """Close the real window while an Ask is running and check that everything ends.
 
 Usage: python tools/verify_close.py <exe>
-Keys and clicks are sent only while the Meetings window is the foreground window; the script
+Keys and clicks are sent only while the Sidenote window is the foreground window; the script
 aborts without sending anything otherwise. It brings the window to the front for a few seconds.
 Starts the app against a synthetic copy of one meeting and a throwaway store, asks one question
 with the default runner (one real, short-lived runner call), waits for the runner process to
@@ -35,7 +35,7 @@ for name in ("english-summary.json", "manifest.json", "english-transcript.md"):
     if (real / name).exists():
         shutil.copy2(real / name, meetings / name)
 state = temp / "state"
-env = dict(os.environ, APPDATA=str(temp / "appdata"), HEX_MEETINGS_STATE_DIR=str(state))
+env = dict(os.environ, APPDATA=str(temp / "appdata"), SIDENOTE_STATE_DIR=str(state))
 before = {p.name for p in Path(tempfile.gettempdir()).iterdir()}
 process = subprocess.Popen([str(exe)], env=env, creationflags=subprocess.CREATE_NO_WINDOW)
 result = {}

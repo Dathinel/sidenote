@@ -13,12 +13,12 @@ use super::{
     },
 };
 use chrono::{DateTime, Local, NaiveDate};
-use hex_meetings::core::memory::{
+use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
+use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextArea, TextInput};
+use sidenote::core::memory::{
     Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview, PendingProposal,
     ProposalOp, RecordStatus, RecordType,
 };
-use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
-use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextArea, TextInput};
 use std::collections::HashMap;
 
 /// A claim not confirmed for this many days is suggested for review. Information only: age
@@ -253,7 +253,7 @@ impl MemState {
                 self.proposals = file
                     .proposals
                     .into_iter()
-                    .filter(|p| p.status == hex_meetings::core::memory::ProposalStatus::Pending)
+                    .filter(|p| p.status == sidenote::core::memory::ProposalStatus::Pending)
                     .collect();
             }
             Err(e) => {
@@ -762,7 +762,7 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
 
 fn candidate_row(
     s: &State,
-    c: &hex_meetings::core::memory::MigrationCandidate,
+    c: &sidenote::core::memory::MigrationCandidate,
     lay: Lay,
     p: Palette,
 ) -> El {
@@ -1211,8 +1211,7 @@ fn candidate_list(s: &State, lay: Lay, p: Palette) -> El {
         return empty_note("Nothing to import", "There is no legacy memory to move.", p);
     };
     let mut out = col().w_full();
-    let mut groups: Vec<(String, Vec<&hex_meetings::core::memory::MigrationCandidate>)> =
-        Vec::new();
+    let mut groups: Vec<(String, Vec<&sidenote::core::memory::MigrationCandidate>)> = Vec::new();
     for c in &v.candidates {
         let name = c.record.project.clone().unwrap_or_else(|| "Company".into());
         match groups.iter_mut().find(|(n, _)| *n == name) {
@@ -1854,7 +1853,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
 fn candidate_panel(
     s: &State,
     k: &Kit,
-    c: &hex_meetings::core::memory::MigrationCandidate,
+    c: &sidenote::core::memory::MigrationCandidate,
     overlay: bool,
     p: Palette,
 ) -> El {

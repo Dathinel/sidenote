@@ -1,8 +1,8 @@
 # Third-party notices
 
-Meetings is AGPL-3.0-or-later. Dependencies retain their own licences.
+Sidenote is AGPL-3.0-or-later. Dependencies retain their own licences.
 
-- [Hex](https://github.com/anomalyco/hex) is the companion application, MIT.
+- [Hex](https://github.com/anomalyco/hex) is the recording and dictation application Sidenote accompanies, MIT.
 - [Rune](https://github.com/anomalyco/rune) supplies the UI crates, MIT, pinned to
   a138b97e654b8299b2a4cb518b8476b2b528c2c4 in Cargo.lock.
 - Bundled Inter fonts use the SIL Open Font License 1.1. The original notice is

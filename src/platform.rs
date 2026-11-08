@@ -73,6 +73,7 @@ impl Drop for Instance {
     }
 }
 pub fn single_instance() -> io::Result<Option<Instance>> {
+    // Share the old mutex so an existing install and Sidenote cannot open competing windows.
     let name = wide(std::ffi::OsStr::new("Local\\HexMeetingsWindow"));
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     if handle.is_null() {
@@ -84,8 +85,12 @@ pub fn single_instance() -> io::Result<Option<Instance>> {
         }
         // The first window may still be starting when a second launch arrives.
         for _ in 0..40 {
-            let title = wide(std::ffi::OsStr::new("Meetings"));
-            let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+            let title = wide(std::ffi::OsStr::new("Sidenote"));
+            let mut hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+            if hwnd.is_null() {
+                let legacy = wide(std::ffi::OsStr::new("Meetings"));
+                hwnd = unsafe { FindWindowW(std::ptr::null(), legacy.as_ptr()) };
+            }
             if !hwnd.is_null() {
                 unsafe {
                     ShowWindow(hwnd, SW_RESTORE);

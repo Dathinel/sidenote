@@ -54,7 +54,7 @@ all need ids that every device and the server agree on.
    fails if any file outside `src/core/store/` names it.
 7. **Versioning.** Additive changes keep API 1. Each entity has upgrade functions that run on
    read; writers always write the newest schema; a reader that meets a newer major schema stops
-   with "Update Meetings on this device" instead of guessing.
+   with "Update Sidenote on this device" instead of guessing.
 8. **Shared crate.** `crates/meetings-domain` (MIT OR Apache-2.0, no IO) holds ids, entities,
    envelope, Proposal and Provenance. The desktop app and the server both use it.
 

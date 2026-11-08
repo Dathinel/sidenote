@@ -2,12 +2,12 @@
 
 Usage: python tools/measure_launch.py <exe> [--runs N]
 The app writes the Unix time of its first presented frame to the file named by
-HEX_MEETINGS_TRACE_FIRST_FRAME; this script subtracts its own launch time. "Window shown" is when
+SIDENOTE_TRACE_FIRST_FRAME; this script subtracts its own launch time. "Window shown" is when
 Windows reports the window visible and not cloaked. Each
 run starts a fresh process that reads the real meetings folder (read only) with a throwaway tick
 and chat store, closes it with WM_CLOSE, and checks that the process is gone and had no child
 processes. Launching here is a plain process start; a shortcut goes through Explorer, which adds
-about 0.35 s before the process exists. Other hex-meetings processes, such as --listen, are never
+about 0.35 s before the process exists. Other Sidenote or legacy hex-meetings processes, such as --listen, are never
 touched.
 """
 import json
@@ -22,13 +22,13 @@ from winutil import alive, close_window, descendants, wait_window
 
 exe = Path(sys.argv[1]).resolve()
 binary = exe.read_bytes()
-assert all(name in binary for name in (b"HEX_MEETINGS_BENCH_OFFSCREEN", b"HEX_MEETINGS_BENCH_NO_WARM")), "Executable lacks the isolated off-screen mode"
+assert all(name in binary for name in (b"SIDENOTE_BENCH_OFFSCREEN", b"SIDENOTE_BENCH_NO_WARM")), "Executable lacks the isolated off-screen mode"
 runs = int(sys.argv[sys.argv.index("--runs") + 1]) if "--runs" in sys.argv else 7
 state = Path(__file__).resolve().parents[1] / "artifacts/memory/launch" / str(time.time_ns())
 state.mkdir(parents=True)
 trace = state / "first-frame.txt"
-env = dict(os.environ, HEX_MEETINGS_STATE_DIR=str(state), HEX_MEETINGS_TRACE_FIRST_FRAME=str(trace),
-           HEX_MEETINGS_BENCH_OFFSCREEN="1", HEX_MEETINGS_BENCH_WINDOW_READY=str(state / "ready.txt"))
+env = dict(os.environ, SIDENOTE_STATE_DIR=str(state), SIDENOTE_TRACE_FIRST_FRAME=str(trace),
+           SIDENOTE_BENCH_OFFSCREEN="1", SIDENOTE_BENCH_WINDOW_READY=str(state / "ready.txt"))
 first_paint, close_exit, drawn = [], [], []
 process, hwnd = None, None
 try:

@@ -31,17 +31,16 @@ pub fn configure_paths(args: &[OsString]) -> Result<(), String> {
         *slot = Some(PathBuf::from(value));
     }
     if paths.data.is_none() {
-        paths.data =
-            env_path("HEX_MEETINGS_DATA_DIR").or_else(|| env_path("HEX_MEETINGS_STATE_DIR"));
+        paths.data = env_path("SIDENOTE_DATA_DIR").or_else(|| env_path("SIDENOTE_STATE_DIR"));
     }
-    paths.meetings = paths.meetings.or_else(|| env_path("HEX_MEETINGS_HEX_DIR"));
-    paths.peers = paths.peers.or_else(|| env_path("HEX_MEETINGS_PEERS_DIR"));
+    paths.meetings = paths.meetings.or_else(|| env_path("SIDENOTE_HEX_DIR"));
+    paths.peers = paths.peers.or_else(|| env_path("SIDENOTE_PEERS_DIR"));
     PATHS
         .set(paths)
         .map_err(|_| "Folder overrides were already configured".into())
 }
 fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
+    crate::env_var(name)
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
 }
@@ -52,20 +51,34 @@ pub(super) fn data() -> Option<PathBuf> {
     PATHS
         .get()
         .and_then(|p| p.data.clone())
-        .or_else(|| env_path("HEX_MEETINGS_DATA_DIR"))
-        .or_else(|| env_path("HEX_MEETINGS_STATE_DIR"))
+        .or_else(|| env_path("SIDENOTE_DATA_DIR"))
+        .or_else(|| env_path("SIDENOTE_STATE_DIR"))
 }
 pub(super) fn meetings() -> Option<PathBuf> {
     PATHS
         .get()
         .and_then(|p| p.meetings.clone())
-        .or_else(|| env_path("HEX_MEETINGS_HEX_DIR"))
+        .or_else(|| env_path("SIDENOTE_HEX_DIR"))
 }
 pub(super) fn peers() -> Option<PathBuf> {
     PATHS
         .get()
         .and_then(|p| p.peers.clone())
-        .or_else(|| env_path("HEX_MEETINGS_PEERS_DIR"))
+        .or_else(|| env_path("SIDENOTE_PEERS_DIR"))
         // An isolated data directory must never accidentally read the owner's peer meetings.
         .or_else(|| data().map(|p| p.join("peers")))
+}
+
+pub(super) fn appdata_dir(name: &str, legacy: &str) -> PathBuf {
+    let root = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default());
+    prefer_legacy_path(root.join(name), root.join(legacy))
+}
+
+/// Keep legacy paths in place: Syncthing shares and scheduled jobs may point at them.
+pub(super) fn prefer_legacy_path(current: PathBuf, old: PathBuf) -> PathBuf {
+    if !current.exists() && old.exists() {
+        old
+    } else {
+        current
+    }
 }

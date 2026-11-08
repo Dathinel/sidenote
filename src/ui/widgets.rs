@@ -3,8 +3,8 @@ use super::{
     State,
     theme::{BODY, BODY_LH, Palette},
 };
-use hex_meetings::core::{self, Point};
 use rune::{Color, Cursor, El, Link, LinkPaint, ScrollSpec, Span, TextStyle, col, el, row, text};
+use sidenote::core::{self, Point};
 
 pub fn label(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
     text(s)

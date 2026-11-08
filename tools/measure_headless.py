@@ -23,8 +23,8 @@ for n in range(args.runs):
     ready = state / "ready.txt"
     ready.unlink(missing_ok=True)
     ready.with_suffix(".release").unlink(missing_ok=True)
-    env = dict(os.environ, HEX_MEETINGS_STATE_DIR=str(state),
-               HEX_MEETINGS_BENCH_HEADLESS_READY=str(ready), RUNE_GPU_LOG="1")
+    env = dict(os.environ, SIDENOTE_STATE_DIR=str(state),
+               SIDENOTE_BENCH_HEADLESS_READY=str(ready), RUNE_GPU_LOG="1")
     with (out / f"run-{n}.log").open("w") as log:
         started = time.perf_counter()
         process = subprocess.Popen([str(args.exe.resolve()), "--snap", str(out / f"frame-{n}.png"),

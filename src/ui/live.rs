@@ -28,9 +28,9 @@ use super::{
     widgets::{dot, hairline, label, link, pressable, quiet_button, scroll, spaced_caps},
 };
 use chrono::{DateTime, Local, TimeZone};
-use hex_meetings::core::live::{self as feed_io, LiveLine, Read};
 use rune::{El, ScrollSpec, TextEdit, TextStyle, col, el, row};
 use rune_kit::Kit;
+use sidenote::core::live::{self as feed_io, LiveLine, Read};
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -369,13 +369,13 @@ impl State {
         let _ = thread::Builder::new()
             .name("live-title".into())
             .spawn(move || {
-                let root = hex_meetings::core::meetings_dir();
+                let root = sidenote::core::meetings_dir();
                 for _ in 0..(MAKING_SLOW.as_secs() / TITLE_EVERY.as_secs()) {
                     if title_cancel.load(Ordering::Relaxed) {
                         break;
                     }
                     if let Some(title) =
-                        hex_meetings::core::pending_quick_title(&root, since_ms, &known)
+                        sidenote::core::pending_quick_title(&root, since_ms, &known)
                     {
                         *quick.lock().unwrap_or_else(|e| e.into_inner()) = Some(title);
                         if let Some(w) = &waker {
@@ -430,7 +430,7 @@ impl State {
 
 /// Reads the live transcript while the page is shown. One `stat` per round when nothing changed.
 fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, waker: &rune::Waker) {
-    let root = hex_meetings::core::meetings_dir();
+    let root = sidenote::core::meetings_dir();
     let mut wait = Duration::from_millis(600);
     while !cancel.load(Ordering::Relaxed) {
         thread::sleep(wait);
@@ -589,7 +589,7 @@ impl State {
         };
         let folder = live.folder.clone().or_else(|| {
             feed_io::find_folder(
-                &hex_meetings::core::meetings_dir(),
+                &sidenote::core::meetings_dir(),
                 live.wall_start.timestamp_millis().saturating_sub(120_000),
                 hint.as_deref(),
             )
@@ -1015,7 +1015,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .child(
             label(
                 if slow {
-                    "They will appear in Meetings when they are ready. You do not need to wait here."
+                    "They will appear in Sidenote when they are ready. You do not need to wait here."
                 } else {
                     "This usually takes a minute or two. The notes open here when they are ready."
                 },

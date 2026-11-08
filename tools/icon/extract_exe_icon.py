@@ -1,6 +1,6 @@
 """Read the icon resources out of a built exe and save them as PNGs, to prove the icon is embedded.
 
-    uv run --with pillow python tools/icon/extract_exe_icon.py target/release/hex-meetings.exe artifacts/icon
+    uv run --with pillow python tools/icon/extract_exe_icon.py target/release/sidenote.exe artifacts/icon
 
 Parses the PE resource directory directly (RT_GROUP_ICON 14 and RT_ICON 3), so it needs no
 Windows API, window or focus. Writes from-exe.png (the 256 px image) and from-exe-<size>.png.

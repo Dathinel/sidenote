@@ -41,7 +41,7 @@ try:
         if windows:
             break
         time.sleep(0.1)
-    assert windows, "No visible Meetings window"
+    assert windows, "No visible Sidenote window"
     time.sleep(3)
     samples = []
     for _ in range(5):

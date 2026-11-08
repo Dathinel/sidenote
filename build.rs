@@ -1,4 +1,4 @@
-//! Embeds assets/icon/meetings.ico in hex-meetings.exe as its Windows icon (resource ID 1, the
+//! Embeds assets/icon/meetings.ico in sidenote.exe as its Windows icon (resource ID 1, the
 //! one Explorer, the taskbar and the Start menu use). Calls the GNU toolchain's windres, which
 //! build.ps1 puts on PATH next to `as` and `gcc`.
 use std::{env, path::PathBuf, process::Command};

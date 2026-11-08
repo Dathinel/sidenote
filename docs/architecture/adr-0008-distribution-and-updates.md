@@ -4,7 +4,7 @@ Status: accepted, 2026-11-08. Signing depends on a public repository and SignPat
 
 ## Context
 
-- **Current manual installs** copy a build into `%LOCALAPPDATA%\Programs\hex-meetings` by hand.
+- **Current manual installs** copy a build into `%LOCALAPPDATA%\Programs\hex-meetings` by hand. The rename keeps that live install untouched; see [the owner checklist](../rename-migration.md).
 - **Strangers need** an installer, safe updates and a signed binary.
 - Managed-device policies may block unsigned executables. Signing does not guarantee acceptance; the device administrator must allow the publisher.
 - **Constraints:** the app must work offline, and MCP clients and scheduled tasks need an executable path that does not change between versions.
@@ -14,7 +14,7 @@ Status: accepted, 2026-11-08. Signing depends on a public repository and SignPat
 **Installer and updates: Velopack (MIT).**
 - **Build:** a release workflow on `windows-latest` builds the exe, then runs `vpk pack`, which produces `Setup.exe`, full and delta packages and the release feed.
 - **Startup:** `main` calls `velopack::VelopackApp::build().run()` first. It returns at once unless Velopack passed a hook argument, so the `--mcp` path stays fast.
-- **Install:** per user, to `%LOCALAPPDATA%\hex-meetings\`. The stable path `%LOCALAPPDATA%\hex-meetings\current\hex-meetings.exe` is what MCP configs and scheduled tasks use.
+- **Install:** per user, to `%LOCALAPPDATA%\sidenote\`. The stable path `%LOCALAPPDATA%\sidenote\current\sidenote.exe` is what MCP configs and scheduled tasks use.
 - **Updates:**
   - The app checks GitHub Releases at startup and every 6 hours, on a stable or beta channel.
   - It downloads in the background and applies on the next restart, never while recording or while a job runs.
@@ -25,7 +25,7 @@ Status: accepted, 2026-11-08. Signing depends on a public repository and SignPat
 **Signing.**
 - **Default:** apply to SignPath Foundation once the repository is public under an OSI licence. It is free for qualifying open source projects, signs from hosted CI through its GitHub Action, and issues the certificate under SignPath Foundation with the project named.
 - **Fallback:** Azure Artifact Signing, a monthly fee with identity checks. Verify eligibility for an individual or company in the maintainer's region before relying on it.
-- **What gets signed:** `hex-meetings.exe`, `Setup.exe` and `Update.exe`, through `vpk`'s signing hook.
+- **What gets signed:** `sidenote.exe`, `Setup.exe` and `Update.exe`, through `vpk`'s signing hook.
 - **Until signing works,** builds stay private to the owner, with the Intune admin approving by hash.
 
 **Supply chain.**

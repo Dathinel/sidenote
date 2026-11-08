@@ -7,9 +7,9 @@ use super::{
     theme::{Palette, display},
     widgets::{highlighted, keycap, label, line, link, notice_bar, page_icon, pressable, scroll},
 };
-use hex_meetings::core::{Meeting, SearchHit, SearchSource};
 use rune::{El, Key, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
+use sidenote::core::{Meeting, SearchHit, SearchSource};
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })

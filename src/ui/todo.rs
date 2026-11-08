@@ -4,8 +4,8 @@ use super::{
     theme::{BODY, BODY_LH, Palette},
     widgets::{label, pressable, stamp},
 };
-use hex_meetings::core::{Meeting, Todo, nice_date};
 use rune::{El, TextStyle, col, el, row, text};
+use sidenote::core::{Meeting, Todo, nice_date};
 
 fn checkbox(task: &str, on: bool, index: usize, p: Palette) -> El {
     let task_owned = task.to_string();

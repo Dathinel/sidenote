@@ -11,9 +11,9 @@ use super::{
     theme::Palette,
     widgets::{hairline, keycap, label, line, pressable},
 };
-use hex_meetings::core::{self, SearchHit};
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, TextInput};
+use sidenote::core::{self, SearchHit};
 
 /// How many meetings a typed query lists.
 const MEETING_ROWS: usize = 6;
