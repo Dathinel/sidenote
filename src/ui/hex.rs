@@ -10,6 +10,7 @@ use super::{
     theme::Palette,
     widgets::{badge, hairline, label, line, link, pressable, scroll},
 };
+mod meeting_languages;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
@@ -1457,7 +1458,9 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
 /// The page for one section.
 fn section_body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, section: Section) -> El {
     match section {
-        Section::MeetingModels => super::models::view(s, p),
+        Section::MeetingModels => {
+            super::models::view(s, p, meeting_languages::section(s, k, p, layer))
+        }
         Section::Features => features_section(s, k, p),
         Section::Model => model_section(s, p),
         Section::Vocabulary => vocabulary_section(s, k, p),

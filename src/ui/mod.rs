@@ -157,6 +157,7 @@ pub struct State {
     pub notice: Option<String>,
     /// The transcript is showing: a side panel in a wide window, the whole page in a narrow one.
     pub transcript_open: bool,
+    pub transcript_original: bool,
     pub transcript_filter: TextEdit,
     /// The "Go to 14:22" box in the transcript panel.
     pub transcript_jump: TextEdit,
@@ -334,6 +335,7 @@ impl State {
             saved: Saved::default(),
             notice: None,
             transcript_open: false,
+            transcript_original: false,
             transcript_filter: TextEdit::new(""),
             transcript_jump: TextEdit::new(""),
             meeting_tab: meeting::Tab::Summary,
@@ -642,6 +644,7 @@ impl State {
             );
             return;
         };
+        self.transcript_original = false;
         self.transcript_open = true;
         self.transcript_filter = TextEdit::new("");
         self.highlight = Some(line);
@@ -1030,6 +1033,7 @@ fn same_catalog(a: &[Meeting], b: &[Meeting]) -> bool {
                 && x.minutes == y.minutes
                 && x.summary_raw == y.summary_raw
                 && x.transcript_raw == y.transcript_raw
+                && x.routed_revision == y.routed_revision
                 && x.notes == y.notes
         })
 }
@@ -1959,6 +1963,97 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("hex-meetings", |s| {
                 scene_hex(s, hex::Section::Meetings, false)
+            }),
+            ("routing-settings", |s| {
+                models::scene(s, "installed");
+                s.config.pipeline.profile = "experimental".into();
+                s.config.pipeline.meeting_languages = vec!["en".into(), "hi".into()];
+            }),
+            ("routing-original", |s| {
+                scene_meeting(s);
+                s.transcript_open = true;
+                s.transcript_original = true;
+                if let Some(m) = s.meetings.iter_mut().find(|m| m.id == REVIEW_MEETING) {
+                    use sidenote::core::meeting_router::{Chunk, Offset, Segment, Transcript};
+                    m.routed = Some(Transcript {
+                        schema: "transcript.segments.v1".into(),
+                        experimental: true,
+                        input_checksum: String::new(),
+                        config_checksum: String::new(),
+                        baseline: Vec::new(),
+                        mixed_calls: 0,
+                        mixed_seconds: 0.0,
+                        english_reading: m.transcript_raw.clone(),
+                        segments: m
+                            .lines
+                            .iter()
+                            .enumerate()
+                            .map(|(i, l)| Segment {
+                                start: l.seconds.unwrap_or(0) as f64,
+                                end: l.seconds.unwrap_or(0) as f64 + 3.0,
+                                track: "system".into(),
+                                route: if i == 2 { "hi" } else { "en" }.into(),
+                                lang: if i == 2 { "hi" } else { "en" }.into(),
+                                lang_conf: None,
+                                text_original: l.text.clone(),
+                                text_en: Some(l.text.clone()),
+                                english_reading: l.text.clone(),
+                                provider: if i == 2 { "runtime" } else { "hex" }.into(),
+                                model: if i == 2 {
+                                    "indicconformer-hi-ctc"
+                                } else {
+                                    "parakeet_unified_en"
+                                }
+                                .into(),
+                                status: if i == 1 {
+                                    "language not checked"
+                                } else {
+                                    "checked"
+                                }
+                                .into(),
+                                translate: false,
+                                sources: vec![Offset {
+                                    chunk: Chunk {
+                                        id: i.to_string(),
+                                        start: l.seconds.unwrap_or(0) as f64,
+                                        end: l.seconds.unwrap_or(0) as f64 + 3.0,
+                                        track: "system".into(),
+                                        speaker: Some(l.who.clone()),
+                                        turn: None,
+                                        english: l.text.clone(),
+                                        audio_start: None,
+                                    },
+                                    joined_start: 0.0,
+                                    joined_end: 3.0,
+                                    scores: None,
+                                }],
+                            })
+                            .collect(),
+                        wall_seconds: 0.0,
+                        lid_load_seconds: None,
+                        hi_load_seconds: None,
+                        warnings: Vec::new(),
+                    });
+                    m.routed_revision = m.routed.as_ref().map(|r| r.revision()).unwrap_or_default();
+                }
+                // Exercise an arriving artifact while this meeting is already open.
+                let mut published = s.meetings.clone();
+                if let Some(meeting) = published.iter_mut().find(|m| m.id == REVIEW_MEETING)
+                    && let Some(routed) = meeting.routed.as_mut()
+                {
+                    routed.segments[2].text_original = "Prepare the updated color samples.".into();
+                    meeting.routed_revision = routed.revision();
+                }
+                let (memory, check) = (s.config.features.memory, s.config.features.daily_check);
+                s.config.features.memory = false;
+                s.config.features.daily_check = false;
+                s.apply_event(Event::Meetings(
+                    published,
+                    Vec::new(),
+                    s.tasks.pipeline.clone(),
+                ));
+                s.config.features.memory = memory;
+                s.config.features.daily_check = check;
             }),
             ("hex-shortcuts", |s| {
                 scene_hex(s, hex::Section::Shortcuts, false)

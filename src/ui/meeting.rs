@@ -173,7 +173,21 @@ impl State {
         if typed.is_empty() {
             return;
         }
-        let Some(line) = self.current().and_then(|m| m.target(&typed)) else {
+        let Some(line) = self.current().and_then(|m| {
+            if self.transcript_original
+                && let Some(routed) = &m.routed
+            {
+                let target = sidenote::core::seconds(&typed)? as f64;
+                return routed.segments.iter().position(|segment| {
+                    (segment.end > segment.start && segment.start <= target && target < segment.end)
+                        || segment
+                            .sources
+                            .iter()
+                            .any(|source| source.chunk.start <= target && target < source.chunk.end)
+                });
+            }
+            m.target(&typed)
+        }) else {
             self.notice = Some("Try a time that is in the meeting, such as 14:22.".into());
             return;
         };
@@ -342,13 +356,19 @@ fn speaker_ink(m: &Meeting, who: &str, p: Palette) -> rune::Color {
 }
 
 fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
+    let originals = m.routed.as_ref().map(|r| r.original_lines());
+    let lines = if s.transcript_original {
+        originals.as_deref().unwrap_or(&m.lines)
+    } else {
+        &m.lines
+    };
     let filter = s.transcript_filter.text.trim().to_lowercase();
     // Imported meetings have no times and may name no speakers. Parts a meeting never uses are
     // left out, so its lines start at the left edge.
     let has_time = m.timed();
     let mut out = col().w_full().px(6.0).pb(16.0);
     let mut shown = 0;
-    for (i, line) in m.lines.iter().enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         if !filter.is_empty()
             && !format!("{} {}", line.who, line.text)
                 .to_lowercase()
@@ -360,7 +380,8 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         let hit = s.highlight == Some(i);
         let near = s.highlight.is_some_and(|h| h.abs_diff(i) == 1);
         let mut meta = row().gap(10.0).items_center();
-        if has_time {
+        let show_time = has_time && (!s.transcript_original || line.seconds.is_some());
+        if show_time {
             meta = meta.child(
                 text(short(&line.at).to_string())
                     .font(TextStyle::new(12.5, 400.0).mono())
@@ -400,8 +421,15 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
             } else {
                 p.card
             });
-        if has_time || !line.who.is_empty() {
+        if show_time || !line.who.is_empty() {
             item = item.child(meta);
+        }
+        if s.transcript_original && m.routed.is_some() && !line.language.is_empty() {
+            item = item.child(
+                label(&line.language, 12.0, 400.0, p.soft)
+                    .w_full()
+                    .min_w(0.0),
+            );
         }
         out = out.child(item.child(body));
     }
@@ -440,6 +468,24 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         .grow(1.0)
         .min_w(0.0);
     let mut tools = row().w_full().gap(8.0).px(14.0).pb(8.0).child(search);
+    if m.routed.is_some() {
+        tools = tools.child(
+            quiet_button(
+                if s.transcript_original {
+                    "English view"
+                } else {
+                    "Original view"
+                },
+                "transcript-language-view",
+                p,
+            )
+            .on_press(|s: &mut State| {
+                s.transcript_original = !s.transcript_original;
+                s.highlight = None;
+                s.pending_scroll = None;
+            }),
+        );
+    }
     if m.timed() {
         tools = tools.child(
             TextInput::new(&s.transcript_jump)
@@ -465,7 +511,13 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         );
     }
     let (lines, shown) = transcript_lines(s, m, p);
-    let total = m.lines.len();
+    let total = if s.transcript_original {
+        m.routed
+            .as_ref()
+            .map_or(m.lines.len(), |r| r.segments.len())
+    } else {
+        m.lines.len()
+    };
     let count = if s.transcript_filter.text.trim().is_empty() {
         format!("{total} lines")
     } else {

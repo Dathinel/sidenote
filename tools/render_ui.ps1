@@ -19,6 +19,10 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('routing-settings', 'routing-settings', '1320x1000', $null, @()),
+    @('routing-settings-narrow', 'routing-settings', '560x1100', $null, @()),
+    @('routing-original', 'routing-original', '1320x900', $null, @()),
+    @('routing-original-narrow', 'routing-original', '560x1100', $null, @()),
     @('audio-project-meeting', 'audio-project-meeting', '1320x900', $null, @()),
     @('audio-project-existing', 'audio-project-existing', '1320x800', $null, @()),
     @('audio-project-new', 'audio-project-new', '1320x800', $null, @()),

@@ -185,7 +185,7 @@ impl State {
         );
     }
 }
-pub fn view(s: &State, p: Palette) -> El {
+pub fn view(s: &State, p: Palette, routing: El) -> El {
     let models = &s.models;
     let mut body = col()
         .w_full()
@@ -226,7 +226,7 @@ pub fn view(s: &State, p: Palette) -> El {
             .on_press(move |s: &mut State| s.model_language(id)),
         );
     }
-    body = body.child(languages);
+    body = body.child(languages).child(routing);
     if let Some(e) = &models.preference_error {
         body = body.child(label(e, 13.0, 500.0, p.warn).role("alert"));
     }

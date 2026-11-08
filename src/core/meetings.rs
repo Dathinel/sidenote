@@ -195,6 +195,8 @@ pub struct Meeting {
     pub summary: Summary,
     pub summary_raw: String,
     pub transcript_raw: String,
+    pub routed: Option<super::meeting_router::Transcript>,
+    pub routed_revision: String,
     /// The user's own notes from `notes.md`, typed during the meeting (or imported). Empty when none.
     pub notes: String,
     pub lines: Vec<Line>,
@@ -342,6 +344,21 @@ impl Meeting {
             Err(e) => return Err(e.into()),
         };
         let lines = parse_transcript(&transcript_raw);
+        let routed: Option<super::meeting_router::Transcript> =
+            if folder.parent().is_some_and(|p| p == meetings_dir()) {
+                let path = state_dir()
+                    .join("local/transcripts")
+                    .join(&id)
+                    .join("transcript.segments.v1.json");
+                fs::metadata(&path)
+                    .ok()
+                    .filter(|m| m.len() <= 24 * 1024 * 1024)
+                    .and_then(|_| fs::read(path).ok())
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            } else {
+                None
+            };
+        let routed_revision = routed.as_ref().map(|r| r.revision()).unwrap_or_default();
         let mut minutes = manifest
             .duration_ms
             .filter(|n| *n > 0.0)
@@ -371,6 +388,8 @@ impl Meeting {
             summary,
             summary_raw,
             transcript_raw,
+            routed,
+            routed_revision,
             notes,
             lines,
             started,

@@ -670,7 +670,11 @@ impl Transcript {
             .map(|s| {
                 let first = s.sources.first();
                 let timed = s.sources.len() == 1;
-                let seconds = first.filter(|_| timed).map(|o| o.chunk.start as u64);
+                let seconds = if s.end > s.start {
+                    Some(s.start as u64)
+                } else {
+                    first.filter(|_| timed).map(|o| o.chunk.start as u64)
+                };
                 let route = match s.route.as_str() {
                     "en" => "English",
                     "hi" => "Hindi",
@@ -683,7 +687,18 @@ impl Transcript {
                     "nemotron_3_5_asr" => "Nemotron",
                     other => other,
                 };
-                let caption = if s.status == "checked" {
+                let marked = [
+                    "not checked",
+                    "unavailable",
+                    "failed",
+                    "fallback",
+                    "retained",
+                ]
+                .iter()
+                .any(|word| s.status.contains(word));
+                let caption = if s.route == "en" && !marked {
+                    String::new()
+                } else if s.status == "checked" {
                     format!("{route} ({model})")
                 } else {
                     format!("{route} ({model}) · {}", s.status)

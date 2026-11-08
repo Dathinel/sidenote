@@ -62,3 +62,5 @@ Queue supervision and UI are separate stacked changes. The existing notes script
 Per-turn override/rerun UI and word alignment are explicitly follow-ups, outside this review round. Release packaging, private or held-out meeting quality, cold-cache hour-long ASR and hour-long Nemotron RAM remain unverified. No installed app, listener or scheduled task was started or stopped. Evidence rung 4 applies to CLI execution, scoring and gates; renders only demonstrate their rendered UI.
 
 The stacked jobs branch records queue, crash, normalization, restart and invalidation evidence in [job supervision results](router-jobs-results.md).
+
+The stacked UI branch records routed-only refresh, clean English labels, Settings copy and dark/light renders in [UI evidence](router-ui-results.md).
