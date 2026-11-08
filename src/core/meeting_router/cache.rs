@@ -6,8 +6,9 @@ use std::io::Read;
 /// Identity of an installed catalogue model without re-reading it. `asr::model_path` only
 /// returns a pack whose receipt matches the catalogue and whose files are not newer than the
 /// receipt, and the receipt is written after each file's SHA-256 was verified at download. So
-/// the catalogue hashes identify the bytes on disk, and hashing 200 MB again on every run
-/// (about 2 to 8 CPU seconds per model) buys nothing.
+/// the catalogue hashes name the pack that was installed. This is an identity for cache keys,
+/// not an integrity proof: a same-size change that keeps old timestamps, or bit rot, is not
+/// caught here. Re-hashing 200 MB on every run cost several CPU seconds per model.
 pub fn installed_identity(root: &Path, id: &str) -> Result<String> {
     asr::model_path(root, id)?;
     let model = crate::core::model_catalog::catalog()
