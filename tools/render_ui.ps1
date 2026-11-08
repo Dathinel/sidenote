@@ -2,7 +2,9 @@ param(
     [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/hex-meetings.exe",
     # Another output folder (for example a before set), and an optional list of shot names.
     [string]$Out = "",
-    [string[]]$Only = @()
+    [string[]]$Only = @(),
+    # Themes to render; dark first is enough for a quick look.
+    [string[]]$Themes = @('dark', 'light')
 )
 # Renders the UI headlessly, dark and light, into artifacts/ui. Each scene gets its own empty
 # state folder, so ticks, task edits, project renames and Ask threads never touch the real
@@ -149,6 +151,27 @@ $shots = @(
     @('hex-strip',              'hex-list',           '560x900',  $null,   @()),
     @('hex-recording-strip',    'hex-list-recording', '560x900',  $null,   @())
 )
+# The screens from the Granola tour: meeting tabs, transcript panel, "..." menu, Today strip and
+# the Ctrl+K palette. They read the invented meetings in tools/ui-fixtures/screens. Each renders
+# wide, at 820 (the transcript covers the page) and at 560.
+$screensScenes = @(
+    'screens-summary', 'screens-notes', 'screens-transcript', 'screens-transcript-jump',
+    'screens-more-menu', 'screens-toast', 'screens-home-more', 'screens-today',
+    'screens-today-tasks', 'screens-today-quiet', 'screens-finder', 'screens-finder-query',
+    'screens-finder-none', 'screens-finder-off', 'screens-ask-focused'
+)
+foreach ($n in $screensScenes) {
+    $shots += ,@($n, $n, '1320x800', $null, @())
+    $shots += ,@("$n-820", $n, '820x800', $null, @())
+    $shots += ,@("$n-560", $n, '560x900', $null, @())
+}
+# Real keys and presses: Ctrl+K typing, Tab handing the query to Ask, T for the transcript, the
+# Go to box, and the "..." button.
+$shots += ,@('screens-finder-live', 'screens-finder-keys', '1320x800', 'screens-finder-live.json', @('--at', 'mark:end'))
+$shots += ,@('screens-finder-tab', 'screens-today-quiet', '1320x800', 'screens-finder-tab.json', @('--at', 'mark:end'))
+$shots += ,@('screens-transcript-key', 'screens-summary', '1320x800', 'screens-transcript-key.json', @('--at', 'mark:end'))
+$shots += ,@('screens-transcript-time', 'screens-summary', '1320x800', 'screens-transcript-time.json', @('--at', 'mark:end'))
+$shots += ,@('screens-more-open', 'screens-summary', '1320x800', 'screens-more-open.json', @('--at', 'mark:end'))
 # The sidebar, live meeting, Ask bar and Hex sections. Each scene renders at 1320x800 and at
 # 820x800 (where the sidebar starts folded unless the scene opens it), named sb-<scene> and
 # sb-<scene>-820. tools/ui-fixtures/hex.json stands in for the engine in the live and hex ones.
@@ -175,6 +198,7 @@ $shots += ,@('home-ask-running-narrow', 'home-ask-running', '560x900', $null, @(
 $v2 = @('--v2', '--triage', '--gaps', '--actions')
 $mem = @('--v2', '--memory', '--proposals')
 $checkFixture = @{
+    'screens-today' = $v2; 'screens-today-820' = $v2; 'screens-today-560' = $v2;
     'check' = $v2; 'check-panel' = $v2; 'check-applied' = $v2; 'check-snooze' = $v2; 'check-click' = $v2;
     'check-keys' = $v2; 'check-dismiss' = $v2; 'check-pick-date' = $v2; 'check-details' = $v2;
     'check-changed' = $v2; 'check-story' = $v2; 'check-history' = $v2; 'check-picker' = $v2;
@@ -187,7 +211,7 @@ $checkFixture = @{
     'memory-narrow' = $mem; 'memory-panel-narrow' = $mem; 'memory-review-narrow' = $mem;
     'memory-migration' = @(); 'memory-skim' = @(); 'memory-migrated' = @(); 'memory-migration-narrow' = @()
 }
-foreach ($theme in @('dark', 'light')) {
+foreach ($theme in $Themes) {
     foreach ($shot in $shots) {
         $name, $scene, $size, $script, $extra = $shot
         if ($Only.Count -gt 0 -and $Only -notcontains $name) { continue }
@@ -209,7 +233,7 @@ foreach ($theme in @('dark', 'light')) {
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
         $env:HEX_MEETINGS_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
-        $fixtureMeetings = if ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
+        $fixtureMeetings = if ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/render.log"

@@ -1109,7 +1109,9 @@ pub enum Section {
     Features,
 }
 
+/// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
 const SECTIONS: [Section; 8] = [
+    Section::Features,
     Section::Model,
     Section::Vocabulary,
     Section::General,
@@ -1117,11 +1119,13 @@ const SECTIONS: [Section; 8] = [
     Section::Meetings,
     Section::Shortcuts,
     Section::Advanced,
-    Section::Features,
 ];
 
 impl Section {
-    fn name(self) -> &'static str {
+    /// Every tab, in the order the page shows them.
+    pub const ALL: [Section; 8] = SECTIONS;
+
+    pub fn name(self) -> &'static str {
         match self {
             Self::Features => "Features",
             Self::Model => "Model",
@@ -1134,7 +1138,7 @@ impl Section {
         }
     }
 
-    fn blurb(self) -> &'static str {
+    pub fn blurb(self) -> &'static str {
         match self {
             Self::Features => "Choose what appears on this device. Changes apply right away.",
             Self::Model => "The speech model Hex uses to write down what it hears.",

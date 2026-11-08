@@ -4,15 +4,18 @@
 mod ask;
 mod benchmark;
 mod check;
+mod finder;
 mod hex;
 mod list;
 mod live;
 mod meeting;
 mod memory;
+mod more;
 mod nav;
 mod project;
 mod tasks;
 mod theme;
+mod today;
 mod todo;
 mod widgets;
 
@@ -149,8 +152,20 @@ pub struct State {
     pub store: StateStore,
     pub saved: Saved,
     pub notice: Option<String>,
+    /// The transcript is showing: a side panel in a wide window, the whole page in a narrow one.
     pub transcript_open: bool,
     pub transcript_filter: TextEdit,
+    /// The "Go to 14:22" box in the transcript panel.
+    pub transcript_jump: TextEdit,
+    /// Which of the meeting page's two main tabs shows: Summary or Your notes.
+    pub meeting_tab: meeting::Tab,
+    /// The key of the open "..." menu, so only one is ever open.
+    pub more_menu: Option<String>,
+    /// A confirmation such as "Copied notes", and when it goes away.
+    pub toast: Option<(String, Instant)>,
+    /// The Ctrl+K palette, and what is typed in its box.
+    pub finder: Option<finder::Finder>,
+    pub finder_query: TextEdit,
     pub highlight: Option<usize>,
     pub back: Option<String>,
     /// Set when the open meeting came from a citation in the home thread: the answer to go
@@ -316,6 +331,12 @@ impl State {
             notice: None,
             transcript_open: false,
             transcript_filter: TextEdit::new(""),
+            transcript_jump: TextEdit::new(""),
+            meeting_tab: meeting::Tab::Summary,
+            more_menu: None,
+            toast: None,
+            finder: None,
+            finder_query: TextEdit::new(""),
             highlight: None,
             back: None,
             cite_back: None,
@@ -507,8 +528,10 @@ impl State {
         self.memory_back = false;
         self.hex_open = false;
         self.live_open = false;
+        self.more_menu = None;
         if self.selected.take().is_some() {
             self.transcript_open = false;
+            self.meeting_tab = meeting::Tab::Summary;
             self.highlight = None;
             self.back = None;
             self.cite_back = None;
@@ -533,6 +556,9 @@ impl State {
         self.selected = Some(id.to_string());
         self.transcript_open = false;
         self.transcript_filter = TextEdit::new("");
+        self.transcript_jump = TextEdit::new("");
+        self.meeting_tab = meeting::Tab::Summary;
+        self.more_menu = None;
         self.highlight = None;
         self.back = None;
         self.cite_back = None;
@@ -621,7 +647,13 @@ impl State {
             center: true,
             left: 3,
         });
-        tx.scroll_key_to(format!("line-{line}"), self.jump_offset());
+        tx.scroll_key_to(format!("line-{line}"), self.panel_offset());
+    }
+
+    /// Where a transcript line sits below the top of the panel's scroll area when a jump lands:
+    /// about the middle of what the panel's search row and footer leave visible.
+    fn panel_offset(&self) -> f32 {
+        ((self.viewport_h.get() - 190.0) / 2.0).max(60.0)
     }
 
     /// Where a jump target sits below the top of the scroll area: about the middle of what
@@ -1060,13 +1092,14 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= s.live_tick();
+    changed |= s.expire_toast();
     if let Some(id) = s.live_ready.take() {
         s.select(&id, tx);
         changed = true;
     }
     if let Some(mut pending) = s.pending_scroll.take() {
         if pending.center {
-            tx.scroll_key_to(pending.key.clone(), s.jump_offset());
+            tx.scroll_key_to(pending.key.clone(), s.panel_offset());
         } else {
             tx.scroll_key_to(pending.key.clone(), 12.0);
         }
@@ -1099,7 +1132,16 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     } else {
         tx.focused().is_some()
     };
-    if e.is_command('k') || (!typing && matches!(&e.key, Key::Text(t) if t == "/")) {
+    // Ctrl+K opens the palette from any page, and again closes it. While it is open it owns
+    // Up, Down, Enter, Tab and Escape, even if a click took the focus from its box.
+    if e.is_command('k') {
+        s.toggle_finder();
+        return true;
+    }
+    if s.finder.is_some() {
+        return finder::key(s, e, tx);
+    }
+    if !typing && matches!(&e.key, Key::Text(t) if t == "/") {
         s.focus_search();
         return true;
     }
@@ -1143,6 +1185,20 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         Key::Escape if searching => {
             s.search = TextEdit::new("");
             s.on_search_changed();
+            true
+        }
+        // T shows or hides the transcript beside the summary.
+        Key::Text(ref t)
+            if !home
+                && t.eq_ignore_ascii_case("t")
+                && !(e.mods.cmd || e.mods.ctrl || e.mods.alt) =>
+        {
+            s.toggle_transcript();
+            true
+        }
+        // Escape closes the transcript first, and a second one leaves the meeting.
+        Key::Escape if !home && s.transcript_open => {
+            s.transcript_open = false;
             true
         }
         // Escape steps back from a meeting to the home list.
@@ -1278,6 +1334,12 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                     .pin(Some(0.0), Some(0.0), None, Some(0.0))
                     .shadow(0.0, 32.0, p.shadow),
             );
+    }
+    if let Some(finder) = finder::overlay(s, &k, p, window_narrow) {
+        app = app.child(finder);
+    }
+    if let Some((text, _)) = &s.toast {
+        app = app.child(widgets::toast(text, p));
     }
     rune_kit::root(app, layer)
 }
@@ -1536,6 +1598,59 @@ fn scene_scroll(s: &mut State, key: &str) {
     });
 }
 
+/// The invented meeting the screens scenes open. It lives in `tools/ui-fixtures/screens`, with
+/// four smaller ones, and every name in it is made up.
+const SCREENS_MEETING: &str = "1793955600000-1";
+
+/// The screens fixture's main meeting, open, with agents ready for the Ask bar.
+fn scene_screens(s: &mut State) {
+    hex::scene(s, false);
+    scene_agents(s, ALL_AGENTS);
+    if s.meetings.iter().any(|m| m.id == SCREENS_MEETING) {
+        s.selected = Some(SCREENS_MEETING.into());
+        s.load_saved();
+    }
+}
+
+/// Home for the screens fixture, with agents ready.
+fn scene_screens_home(s: &mut State) {
+    hex::scene(s, false);
+    scene_agents(s, ALL_AGENTS);
+}
+
+/// One late to-do, two due today and one due tomorrow, set through the real edit path, so the
+/// Today strip counts the same on any day. Only against the isolated state folder.
+fn scene_screens_due(s: &mut State) {
+    if !isolated() {
+        return;
+    }
+    let today = s.tasks.today;
+    let days = [-1_i64, 0, 0, 1];
+    for (index, offset) in days.into_iter().enumerate() {
+        if let Some(day) = today.checked_add_signed(chrono::Duration::days(offset)) {
+            s.set_task_due(SCREENS_MEETING, index, tasks::DueChoice::Date(day));
+        }
+    }
+}
+
+/// Home with all three Today lines: a meeting still being made into notes, to-dos due, and the
+/// newest daily check (tools/prepare_check_fixture.py writes a synthetic one).
+fn scene_screens_today(s: &mut State) {
+    scene_screens_home(s);
+    scene_screens_due(s);
+    s.live = Some(live::Live::scene(
+        live::Phase::Making,
+        Some("Pricing review with Maya"),
+    ));
+}
+
+/// Home with nothing to say: no meeting in progress, no to-do due and no check report, so the
+/// Today strip is gone.
+fn scene_screens_quiet(s: &mut State) {
+    scene_screens_home(s);
+    s.tasks.items.clear();
+}
+
 pub fn spec() -> AppSpec<State> {
     AppSpec {
         min_size: Some((360.0, 480.0)),
@@ -1568,6 +1683,85 @@ pub fn spec() -> AppSpec<State> {
             ("features-settings", |s| {
                 scene_hex(s, hex::Section::Features, false);
                 scene_sidebar(s, true);
+            }),
+            // The meeting page with each tab, the transcript panel with a search hit, and the
+            // "..." menu. All read the invented meetings in tools/ui-fixtures/screens.
+            ("screens-summary", scene_screens),
+            ("screens-notes", |s| {
+                scene_screens(s);
+                s.meeting_tab = meeting::Tab::Notes;
+            }),
+            ("screens-transcript", |s| {
+                scene_screens(s);
+                s.transcript_open = true;
+                s.transcript_filter = TextEdit::new("launch");
+            }),
+            ("screens-transcript-jump", |s| {
+                scene_screens(s);
+                s.transcript_open = true;
+                if let Some(line) = s.current().and_then(|m| m.target("11:30")) {
+                    s.highlight = Some(line);
+                    s.pending_scroll = Some(PendingScroll {
+                        key: format!("line-{line}"),
+                        center: true,
+                        left: 3,
+                    });
+                }
+            }),
+            ("screens-more-menu", |s| {
+                scene_screens(s);
+                s.more_menu = Some(format!("more-meeting-{SCREENS_MEETING}"));
+            }),
+            ("screens-toast", |s| {
+                scene_screens(s);
+                s.toast = Some((
+                    "Copied notes".into(),
+                    Instant::now() + Duration::from_secs(600),
+                ));
+            }),
+            // Home with a row's "..." menu open, the Today strip, and the strip hidden.
+            ("screens-home-more", |s| {
+                scene_screens_home(s);
+                s.more_menu = Some(format!("more-row-{SCREENS_MEETING}"));
+            }),
+            ("screens-today", scene_screens_today),
+            ("screens-today-tasks", |s| {
+                scene_screens_home(s);
+                scene_screens_due(s);
+            }),
+            ("screens-today-quiet", scene_screens_quiet),
+            // The Ctrl+K palette: empty, with a query, and the query handed to Ask with Tab.
+            ("screens-finder", |s| {
+                scene_screens_home(s);
+                s.open_finder();
+            }),
+            ("screens-finder-query", |s| {
+                scene_screens_home(s);
+                s.open_finder();
+                s.finder_query = TextEdit::new("launch");
+                s.finder_query.focused = true;
+                s.finder_changed();
+            }),
+            // The Ask bar focused over a list with text behind its chips.
+            ("screens-ask-focused", |s| {
+                scene_screens_home(s);
+                s.question.focused = true;
+                s.ask_open = true;
+            }),
+            ("screens-finder-keys", scene_screens_home),
+            ("screens-finder-none", |s| {
+                scene_screens_home(s);
+                s.open_finder();
+                s.finder_query = TextEdit::new("zebra");
+                s.finder_query.focused = true;
+                s.finder_changed();
+            }),
+            ("screens-finder-off", |s| {
+                scene_screens_home(s);
+                s.config.features.tasks = false;
+                s.config.features.memory = false;
+                s.config.features.daily_check = false;
+                s.open_finder();
             }),
             ("audio-project-meeting", |s| project::scene(s, "meeting")),
             ("audio-project-existing", |s| project::scene(s, "existing")),
@@ -1642,7 +1836,6 @@ pub fn spec() -> AppSpec<State> {
                     s.load_saved();
                 }
                 s.transcript_open = true;
-                scene_scroll(s, "sec-transcript");
             }),
             // The review meeting with nothing decided, nothing to do and nothing open.
             ("empty", |s| {

@@ -167,3 +167,35 @@ pub fn fit_to_work_area(hwnd: isize, want: (f32, f32)) -> (f32, f32) {
         )
     }
 }
+
+/// Opens `folder` in File Explorer. It must be an existing folder. The path goes to
+/// `explorer.exe` as one argument and never through a shell, so no name in it can run anything.
+pub fn open_folder(folder: &Path) -> io::Result<()> {
+    if !std::fs::metadata(folder)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "that is not a folder",
+        ));
+    }
+    std::process::Command::new("explorer.exe")
+        .arg(folder)
+        .spawn()
+        .map(|_| ())
+}
+
+/// Opens File Explorer on `file`'s folder with the file selected. It must be an existing file.
+pub fn reveal_file(file: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    if !std::fs::metadata(file)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "that is not a file",
+        ));
+    }
+    // A file name cannot hold a quote on Windows, so the quoted form below cannot be broken
+    // out of. `raw_arg` keeps the quotes explorer needs for a path with spaces.
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{}\"", file.display()))
+        .spawn()
+        .map(|_| ())
+}

@@ -209,7 +209,12 @@ impl Live {
         format!("Meeting at {}", self.wall_start.format("%H:%M"))
     }
 
-    fn quick_title(&self) -> Option<String> {
+    /// "14:30", when the meeting began.
+    pub(super) fn clock(&self) -> String {
+        self.wall_start.format("%H:%M").to_string()
+    }
+
+    pub(super) fn quick_title(&self) -> Option<String> {
         self.quick_title
             .lock()
             .unwrap_or_else(|e| e.into_inner())

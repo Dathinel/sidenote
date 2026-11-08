@@ -1,0 +1,7 @@
+{"events": [
+ {"t": 0.3, "type": "tap", "key": "tab-transcript"},
+ {"t": 0.9, "type": "tap", "key": "transcript-jump"},
+ {"t": 1.2, "type": "type", "text": "13:20"},
+ {"t": 1.7, "type": "key", "name": "Enter"},
+ {"t": 2.6, "type": "mark", "name": "end"}
+]}
