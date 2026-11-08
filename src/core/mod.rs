@@ -1,6 +1,7 @@
 //! Meeting data and background work, with no Rune or other UI dependencies.
 pub mod ask;
 pub mod ask_all;
+pub mod asr;
 pub mod check_state;
 pub mod config;
 pub mod export;

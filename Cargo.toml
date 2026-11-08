@@ -13,6 +13,9 @@ license = "AGPL-3.0-or-later"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 sha2 = "0.11"
 url = "2"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "load-dynamic"], optional = true }
+kaldi-fbank = { version = "=0.1.0", optional = true }
+hound = "3.5"
 blake3 = "1"
 rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["rt", "io-std"] }
@@ -28,6 +31,7 @@ regex = { version = "1", default-features = false, features = ["std", "perf", "u
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
 
 [features]
+asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
 default = ["ui-kit"]
 ui-kit = ["dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
 
