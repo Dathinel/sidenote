@@ -690,22 +690,28 @@ fn beside(stack: El, lead: Option<El>, pill: El, narrow: bool) -> El {
     )
 }
 
-/// The stack pinned to the bottom edge, centred, over a scrim that fades the page into its own
-/// colour so chips and pill never sit on top of loose text.
+/// The stack pinned to the bottom edge, centred. A short fade lifts the page out from under it,
+/// and from the fade down the ground is solid page colour, so the chips, the thread and the
+/// pill never have loose page text showing through them.
 fn dock(stack: El, narrow: bool, p: Palette) -> El {
     col()
         .key("ask-overlay")
         .pin(Some(0.0), None, Some(0.0), Some(0.0))
         .items_center()
-        .pt(32.0)
-        .pb(if narrow { 10.0 } else { 18.0 })
-        .linear_gradient(
+        .child(el().w_full().h(48.0).linear_gradient(
             std::f32::consts::PI,
             [
                 (0.0, p.bg.alpha(0.0)),
-                (0.45, p.bg.alpha(0.92)),
+                (0.55, p.bg.alpha(0.88)),
                 (1.0, p.bg),
             ],
+        ))
+        .child(
+            col()
+                .w_full()
+                .items_center()
+                .pb(if narrow { 10.0 } else { 18.0 })
+                .fill(p.bg)
+                .child(stack),
         )
-        .child(stack)
 }

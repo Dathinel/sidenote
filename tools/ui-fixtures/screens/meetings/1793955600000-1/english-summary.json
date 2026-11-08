@@ -1,0 +1,141 @@
+{
+  "kind": "Team meeting",
+  "people": [
+    "Maya",
+    "Priya",
+    "Tom"
+  ],
+  "context": [
+    "The team reviewed the new onboarding flow for the Northwind app.",
+    "The launch date and the pricing page copy were the two open questions."
+  ],
+  "topics": [
+    {
+      "title": "Launch date",
+      "points": [
+        {
+          "type": "decided",
+          "text": "Launch in the second week of December, if the pricing page copy is done by then.",
+          "who": "Maya",
+          "at": [
+            "02:10"
+          ]
+        },
+        {
+          "type": "fact",
+          "text": "The pricing page copy is still with Priya.",
+          "who": "Priya",
+          "at": [
+            "03:05"
+          ]
+        },
+        {
+          "type": "decided",
+          "text": "Hold the launch review on Monday 1 December.",
+          "who": "Maya",
+          "at": [
+            "06:40"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Onboarding flow",
+      "points": [
+        {
+          "type": "fact",
+          "text": "Step three loses the most people in the survey.",
+          "who": "Tom",
+          "at": [
+            "09:15"
+          ]
+        },
+        {
+          "type": "decided",
+          "text": "Cut step three down to one screen.",
+          "who": "Priya",
+          "at": [
+            "11:30"
+          ]
+        },
+        {
+          "type": "action",
+          "text": "Test the shorter step with five customers.",
+          "who": "Tom",
+          "at": [
+            "13:20"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Survey results",
+      "points": [
+        {
+          "type": "fact",
+          "text": "Four in ten people skip the account question.",
+          "who": "Tom",
+          "at": [
+            "16:45"
+          ]
+        },
+        {
+          "type": "open",
+          "text": "Whether to ask for the work email later.",
+          "who": "Priya",
+          "at": [
+            "18:10"
+          ]
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "task": "Send the survey results to the team",
+      "owner": "Maya",
+      "due": "Friday",
+      "due_default": false,
+      "at": [
+        "04:10"
+      ]
+    },
+    {
+      "task": "Share the pricing page copy",
+      "owner": "Priya",
+      "due": "Thursday",
+      "due_default": false,
+      "at": [
+        "03:30"
+      ]
+    },
+    {
+      "task": "Draft the shorter step three",
+      "owner": "Priya",
+      "due": "Monday",
+      "due_default": false,
+      "at": [
+        "11:50"
+      ]
+    },
+    {
+      "task": "Book five customer tests",
+      "owner": "Tom",
+      "due": null,
+      "due_default": false,
+      "at": [
+        "13:40"
+      ]
+    }
+  ],
+  "to_settle": [
+    {
+      "question": "Should the work email move to the end of sign-up?",
+      "waits_on": "Priya"
+    }
+  ],
+  "verify": [
+    "The survey sample is 48 people, so treat the percentages as rough."
+  ],
+  "title": "Northwind onboarding review"
+}

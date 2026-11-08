@@ -1,0 +1,52 @@
+{
+  "kind": "Team meeting",
+  "people": [
+    "Jordan",
+    "Priya"
+  ],
+  "context": [
+    "A short hiring plan check-in for the Northwind team."
+  ],
+  "topics": [
+    {
+      "title": "Main points",
+      "points": [
+        {
+          "type": "decided",
+          "text": "Open one design role first.",
+          "who": "Jordan",
+          "at": [
+            "00:06"
+          ]
+        },
+        {
+          "type": "decided",
+          "text": "Review the job post on Wednesday.",
+          "who": "Jordan",
+          "at": [
+            "00:06"
+          ]
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "task": "Review the job post",
+      "owner": "Jordan",
+      "due": null,
+      "due_default": false,
+      "at": []
+    },
+    {
+      "task": "Share the interview plan",
+      "owner": "Priya",
+      "due": null,
+      "due_default": false,
+      "at": []
+    }
+  ],
+  "to_settle": [],
+  "verify": [],
+  "title": "Hiring plan check-in"
+}

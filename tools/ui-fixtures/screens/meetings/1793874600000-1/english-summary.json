@@ -1,0 +1,37 @@
+{
+  "kind": "Team meeting",
+  "people": [
+    "Maya",
+    "Jordan"
+  ],
+  "context": [
+    "A short vendor pricing call for the Northwind team."
+  ],
+  "topics": [
+    {
+      "title": "Main points",
+      "points": [
+        {
+          "type": "decided",
+          "text": "Ask the vendor for a yearly price.",
+          "who": "Maya",
+          "at": [
+            "00:08"
+          ]
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "task": "Email the vendor about yearly pricing",
+      "owner": "Maya",
+      "due": null,
+      "due_default": false,
+      "at": []
+    }
+  ],
+  "to_settle": [],
+  "verify": [],
+  "title": "Vendor pricing call"
+}

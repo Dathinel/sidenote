@@ -2456,15 +2456,20 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 
 // ---- the top bar pill and the Home card ------------------------------------------------------
 
-/// One line at the top of Home when today's report exists.
-pub fn home_card(s: &State, p: Palette) -> Option<El> {
+/// The newest daily report in one line for Home's Today strip, and whether it has a high
+/// finding open: "Daily check today: 2 high, 1 medium. 1 new." None when Daily check is off or
+/// no report has been read yet.
+pub fn last_line(s: &State) -> Option<(String, bool)> {
     if !s.config.features.daily_check {
         return None;
     }
     let c = s.check.latest;
-    if c.date != Some(Local::now().date_naive()) {
-        return None;
-    }
+    let date = c.date?;
+    let when = if date == Local::now().date_naive() {
+        "today".to_string()
+    } else {
+        date.format("%a %-d %b").to_string()
+    };
     let mut parts = Vec::new();
     if c.high > 0 {
         parts.push(format!("{} high", c.high));
@@ -2476,32 +2481,12 @@ pub fn home_card(s: &State, p: Palette) -> Option<El> {
         parts.push(format!("{} low", c.low));
     }
     let mut said = if parts.is_empty() {
-        "nothing open.".to_string()
+        format!("Daily check {when}: nothing open.")
     } else {
-        format!("{}.", parts.join(", "))
+        format!("Daily check {when}: {}.", parts.join(", "))
     };
     if c.new > 0 {
         said.push_str(&format!(" {} new.", c.new));
     }
-    let tone = if c.high > 0 { p.warn } else { p.soft };
-    Some(
-        pressable(
-            row()
-                .w_full()
-                .gap(8.0)
-                .items_center()
-                .child(label("Today's check:", 14.5, 600.0, p.ink))
-                .child(label(said, 14.5, 500.0, tone).grow(1.0).min_w(0.0))
-                .child(label("Open \u{203a}", 14.0, 600.0, p.accent)),
-        )
-        .key("home-check")
-        .label("Open today's daily check")
-        .w_full()
-        .px(14.0)
-        .py(9.0)
-        .mb(14.0)
-        .radius(10.0)
-        .fill(if c.high > 0 { p.warnbg } else { p.chip })
-        .on_press(|s: &mut State| s.open_check()),
-    )
+    Some((said, c.high > 0))
 }

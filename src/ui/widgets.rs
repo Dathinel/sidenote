@@ -366,3 +366,35 @@ pub fn list_and_panel(list: El, panel: Option<El>, panel_w: f32, overlay: bool, 
             .child(panel.w(panel_w)),
     }
 }
+
+/// A key cap, as in "Ctrl K": a small outlined label for a shortcut.
+pub fn keycap(s: impl Into<String>, p: Palette) -> El {
+    label(s, 11.5, 600.0, p.faint)
+        .px(6.0)
+        .py(1.0)
+        .radius(5.0)
+        .border(1.0, p.line)
+}
+
+/// A short confirmation, pinned near the top of the window. It slides in and fades; Rune
+/// shortens that to a fade when the system asks for reduced motion.
+pub fn toast(text_: &str, p: Palette) -> El {
+    col()
+        .key("toast")
+        .pin(Some(0.0), Some(62.0), Some(0.0), None)
+        .items_center()
+        .child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .px(16.0)
+                .py(8.0)
+                .radius(999.0)
+                .fill(p.card)
+                .border(1.0, p.line)
+                .shadow(4.0, 16.0, p.shadow)
+                .transition(super::ask::rise(8.0))
+                .child(label("\u{2713}", 13.0, 700.0, p.ok))
+                .child(label(text_, 13.5, 500.0, p.ink)),
+        )
+}

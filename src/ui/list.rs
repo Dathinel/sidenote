@@ -5,7 +5,7 @@ use super::{
     nav::Filter,
     project,
     theme::{Palette, display},
-    widgets::{highlighted, label, line, link, notice_bar, page_icon, pressable, scroll},
+    widgets::{highlighted, keycap, label, line, link, notice_bar, page_icon, pressable, scroll},
 };
 use hex_meetings::core::{Meeting, SearchHit, SearchSource};
 use rune::{El, Key, TextEdit, col, row};
@@ -16,7 +16,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// Who was there, else what kind of meeting it was, then what came out of it.
-fn people_line(m: &Meeting) -> String {
+pub(super) fn people_line(m: &Meeting) -> String {
     let who = match m.summary.people.as_slice() {
         [] => m.summary.kind.clone(),
         [a] => a.clone(),
@@ -46,7 +46,7 @@ fn source_name(source: SearchSource) -> &'static str {
     }
 }
 
-fn snippet(hit: &SearchHit, p: Palette) -> El {
+pub(super) fn snippet(hit: &SearchHit, p: Palette) -> El {
     col()
         .mt(4.0)
         .gap(1.0)
@@ -83,6 +83,8 @@ fn search_box(s: &State, k: &Kit, height: f32, placeholder: &str, p: Palette) ->
         .on_change(|s: &mut State, _| s.on_search_changed())
         .on_key(search_key)
         .height(height)
+        // Ctrl+K opens the palette from anywhere; the cap tells people so (UX-12).
+        .trailing(keycap("Ctrl K", p))
         .build(k)
         .key("search")
         .border(1.0, if s.search.focused { p.accent } else { p.line })
@@ -158,6 +160,7 @@ fn home_row(
             .justify_end()
             .child(label(at, 13.0, 400.0, p.faint)),
     );
+    r = r.child(super::more::menu(s, k, m, "row", p, layer));
     let keyboard = (s.keyboard || !s.search.text.trim().is_empty()) && s.cursor == position;
     if keyboard {
         r = r.fill(p.chip);
@@ -219,7 +222,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .mb(10.0)
                 .on_press(|s: &mut State| s.go_meetings())
         }))
-        .children(super::check::home_card(s, p))
+        .children(super::today::strip(s, p))
         .child(search_box(
             s,
             k,

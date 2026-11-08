@@ -1,0 +1,52 @@
+{
+  "kind": "Team meeting",
+  "people": [
+    "Priya",
+    "Tom"
+  ],
+  "context": [
+    "A short weekly planning with priya for the Northwind team."
+  ],
+  "topics": [
+    {
+      "title": "Main points",
+      "points": [
+        {
+          "type": "decided",
+          "text": "Keep the sprint to three goals.",
+          "who": "Priya",
+          "at": [
+            "00:05"
+          ]
+        },
+        {
+          "type": "decided",
+          "text": "Move the pricing review to Thursday.",
+          "who": "Priya",
+          "at": [
+            "00:05"
+          ]
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "task": "Write the sprint goals",
+      "owner": "Priya",
+      "due": null,
+      "due_default": false,
+      "at": []
+    },
+    {
+      "task": "Move the pricing review invite",
+      "owner": "Tom",
+      "due": null,
+      "due_default": false,
+      "at": []
+    }
+  ],
+  "to_settle": [],
+  "verify": [],
+  "title": "Weekly planning with Priya"
+}
