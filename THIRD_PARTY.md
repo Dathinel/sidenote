@@ -36,9 +36,9 @@ SOFTWARE.
 
 ## Locked Cargo inventory
 
-Generated with `cargo metadata --format-version 1 --locked`, including optional,
-build, development and other-platform packages. This lists all 435 dependency
-package versions, not just the Windows runtime subset. No incompatible licence
+Checked against `Cargo.lock` and the cached package manifests, including optional,
+build, development and other-platform packages. This lists all 453 dependency
+package versions, excluding workspace packages, not just the Windows runtime subset. No incompatible licence
 was identified in their declared expressions. For OR expressions, use MIT,
 Apache-2.0 or another compatible permissive option; in particular r-efi does not
 require its LGPL alternative. Legacy slash expressions denote alternative licences.
@@ -90,6 +90,7 @@ below are an inference from those terms and the package declarations.
 | atspi-common | 0.13.0 | Apache-2.0 OR MIT | Compatible permissive option |
 | atspi-proxies | 0.13.0 | Apache-2.0 OR MIT | Compatible permissive option |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT | Compatible permissive option |
+| base64 | 0.23.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | bit-set | 0.10.0 | Apache-2.0 OR MIT | Compatible permissive option |
 | bit-vec | 0.9.1 | Apache-2.0 OR MIT | Compatible permissive option |
 | bitflags | 1.3.2 | MIT/Apache-2.0 | Compatible permissive option |
@@ -159,6 +160,7 @@ below are an inference from those terms and the package declarations.
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | Compatible permissive option |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 | Compatible permissive option |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | Compatible permissive option |
+| form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | Compatible permissive option |
 | futures | 0.3.34 | MIT OR Apache-2.0 | Compatible permissive option |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 | Compatible permissive option |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -170,6 +172,7 @@ below are an inference from those terms and the package declarations.
 | futures-task | 0.3.34 | MIT OR Apache-2.0 | Compatible permissive option |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 | Compatible permissive option |
 | gethostname | 1.1.0 | Apache-2.0 | Compatible permissive option |
+| getrandom | 0.2.17 | MIT OR Apache-2.0 | Compatible permissive option |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | Compatible permissive option |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | Compatible permissive option |
 | gpu-allocator | 0.28.0 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -180,6 +183,8 @@ below are an inference from those terms and the package declarations.
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | hermit-abi | 0.5.3 | MIT OR Apache-2.0 | Compatible permissive option |
 | hex | 0.4.3 | MIT OR Apache-2.0 | Compatible permissive option |
+| http | 1.5.0 | MIT OR Apache-2.0 | Compatible permissive option |
+| httparse | 1.10.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | hybrid-array | 0.4.15 | MIT OR Apache-2.0 | Compatible permissive option |
 | iana-time-zone | 0.1.65 | MIT OR Apache-2.0 | Compatible permissive option |
 | iana-time-zone-haiku | 0.1.2 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -194,6 +199,8 @@ below are an inference from those terms and the package declarations.
 | icu_provider | 2.4.0 | Unicode-3.0 | Compatible permissive option |
 | icu_segmenter | 2.4.0 | Unicode-3.0 | Compatible permissive option |
 | icu_segmenter_data | 2.4.0 | Unicode-3.0 | Compatible permissive option |
+| idna | 1.1.0 | MIT OR Apache-2.0 | Compatible permissive option |
+| idna_adapter | 1.2.2 | Apache-2.0 OR MIT | Compatible permissive option |
 | image | 0.25.10 | MIT OR Apache-2.0 | Compatible permissive option |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | Compatible permissive option |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -209,8 +216,8 @@ below are an inference from those terms and the package declarations.
 | libm | 0.2.16 | MIT | Compatible permissive option |
 | libredox | 0.1.25 | MIT | Compatible permissive option |
 | linebender_resource_handle | 0.1.1 | Apache-2.0 OR MIT | Compatible permissive option |
-| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Compatible permissive option |
 | linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Compatible permissive option |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Compatible permissive option |
 | litemap | 0.8.3 | Unicode-3.0 | Compatible permissive option |
 | litrs | 1.0.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -321,6 +328,7 @@ below are an inference from those terms and the package declarations.
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | Compatible permissive option |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | Compatible permissive option |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 | Compatible permissive option |
+| ring | 0.17.14 | Apache-2.0 AND ISC | Compatible, retain both notices |
 | rmcp | 3.9.0 | Apache-2.0 | Compatible permissive option |
 | rune | 0.0.1 | MIT | Compatible permissive option |
 | rune-kit | 0.0.1 | MIT | Compatible permissive option |
@@ -334,6 +342,9 @@ below are an inference from those terms and the package declarations.
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Compatible permissive option |
 | rustix | 1.1.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Compatible permissive option |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | Compatible permissive option |
+| rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | Compatible permissive option |
+| rustls-webpki | 0.103.16 | ISC | Compatible permissive option |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 | Compatible permissive option |
 | same-file | 1.0.6 | Unlicense/MIT | Compatible permissive option |
 | schemars | 1.2.3 | MIT | Compatible permissive option |
@@ -367,6 +378,7 @@ below are an inference from those terms and the package declarations.
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | strict-num | 0.1.1 | MIT | Compatible permissive option |
+| subtle | 2.6.1 | BSD-3-Clause | Compatible permissive option |
 | swash | 0.2.10 | Apache-2.0 OR MIT | Compatible permissive option |
 | syn | 2.0.119 | MIT OR Apache-2.0 | Compatible permissive option |
 | syn | 3.0.9 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -399,6 +411,11 @@ below are an inference from those terms and the package declarations.
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | Compatible permissive option |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | Compatible permissive option |
 | unicode-width | 0.2.3 | MIT OR Apache-2.0 | Compatible permissive option |
+| untrusted | 0.9.0 | ISC | Compatible permissive option |
+| ureq | 3.5.1 | MIT OR Apache-2.0 | Compatible permissive option |
+| ureq-proto | 0.7.1 | MIT OR Apache-2.0 | Compatible permissive option |
+| url | 2.5.8 | MIT OR Apache-2.0 | Compatible permissive option |
+| utf8-zero | 0.8.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | utf8_iter | 1.1.0 | Apache-2.0 OR MIT | Compatible permissive option |
 | utf_types | 1.0.0 | Apache-2.0 OR MIT | Compatible permissive option |
 | uuid | 1.29.0 | Apache-2.0 OR MIT | Compatible permissive option |
@@ -422,6 +439,7 @@ below are an inference from those terms and the package declarations.
 | wayland-sys | 0.31.11 | MIT | Compatible permissive option |
 | web-sys | 0.3.107 | MIT OR Apache-2.0 | Compatible permissive option |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | Compatible permissive option |
+| webpki-roots | 1.0.11 | CDLA-Permissive-2.0 | Certificate data, retain licence notice |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | Compatible permissive option |
 | wgpu | 30.0.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | wgpu-core | 30.0.1 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -492,3 +510,11 @@ below are an inference from those terms and the package declarations.
 | zvariant | 5.15.1 | MIT | Compatible permissive option |
 | zvariant_derive | 5.15.1 | MIT | Compatible permissive option |
 | zvariant_utils | 4.2.0 | MIT | Compatible permissive option |
+
+## Model download dependencies
+
+- [ureq](https://docs.rs/ureq/), MIT OR Apache-2.0, supplies blocking HTTP on a worker with rustls. It provides streaming bodies, Range headers, explicit redirect control and bounded network reads without an async runtime. Default features are disabled; only rustls is enabled, with no cookies, compression, archive extraction or remote code. Keep the locked version and its Mozilla root bundle current.
+- [sha2](https://docs.rs/sha2/), MIT OR Apache-2.0, verifies catalogue SHA-256 before files become installable. [url](https://docs.rs/url/), MIT OR Apache-2.0, parses and resolves redirects before enforcing the HTTPS host allowlist. sha2 was already in the dependency tree; url is added explicitly for redirect validation.
+- Models are downloaded only on request. IndicConformer exports retain AI4Bharat's MIT terms; Oriserve Swift and CIIL Anuvani retain Apache-2.0. Source pages are pinned in the catalogue. Nemotron is a Hex-managed reference under OpenMDW-1.1; Sidenote does not redistribute its weights.
+
+The Mozilla certificate data in webpki-roots uses [CDLA-Permissive-2.0](https://cdla.dev/permissive-2-0/). The full text is retained in [assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt](assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt) and must accompany distributed certificate data. It is separate from the software licences above.

@@ -35,3 +35,6 @@ pub use runners::{AskProgress, Runner, last_used_runner, list_runners};
 pub use search::*;
 pub use tasks::*;
 pub use ui_prefs::UiPrefs;
+
+pub mod model_catalog;
+mod model_catalog_data;

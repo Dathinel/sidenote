@@ -10,6 +10,9 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+sha2 = "0.11"
+url = "2"
 blake3 = "1"
 rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["rt", "io-std"] }
