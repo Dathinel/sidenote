@@ -58,7 +58,16 @@ fn log(message: &str) {
         );
     }
 }
-fn pipeline() -> io::Result<()> {
+fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
+    if let Some(id) = meeting_id
+        && crate::core::meeting_router::jobs::configured()
+    {
+        if crate::core::meeting_router::jobs::enqueue(id).is_err() {
+            log("could not queue meeting routing; existing pipeline continues");
+        } else if crate::core::meeting_router::jobs::start_worker().is_err() {
+            log("routing remains queued for the next drain");
+        }
+    }
     let script = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
         .join(".config/hex/scripts/hex-meeting-watch.ps1");
     Command::new("powershell.exe")
@@ -157,7 +166,7 @@ fn listen() -> Result<(), Problem> {
     }
     log("connected");
     crate::hex_engine::meeting_event();
-    pipeline()?;
+    pipeline(None)?;
     let mut body = BufReader::new(Body {
         stream,
         chunked,
@@ -184,12 +193,21 @@ fn listen() -> Result<(), Problem> {
             } else {
                 log("meeting finished None");
             }
-            pipeline()?;
+            let valid = !id.is_empty()
+                && id.bytes().any(|c| c.is_ascii_digit())
+                && id.bytes().all(|c| c.is_ascii_digit() || c == b'-');
+            pipeline(valid.then_some(id))?;
         }
     }
     Ok(())
 }
 pub fn run() -> ! {
+    std::thread::spawn(|| {
+        loop {
+            let _ = crate::core::meeting_router::jobs::start_worker();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    });
     let mut last = String::new();
     loop {
         let problem = match listen() {

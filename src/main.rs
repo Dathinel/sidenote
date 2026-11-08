@@ -14,6 +14,30 @@ fn main() {
     if args.iter().any(|a| a == "--transcribe-file") {
         std::process::exit(sidenote::core::meeting_router::run_cli(&args));
     }
+    if args.iter().any(|a| a == "--route-one") {
+        let result = sidenote::core::meeting_router::jobs::run_one();
+        if let Err(error) = &result
+            && let Some(path) = args
+                .windows(2)
+                .find(|a| a[0] == "--router-request")
+                .map(|a| std::path::PathBuf::from(&a[1]))
+            && let Some(parent) = path.parent()
+        {
+            let _ = std::fs::write(
+                parent.join("failure.json"),
+                serde_json::json!({"error": error.to_string()}).to_string(),
+            );
+        }
+        std::process::exit(i32::from(result.is_err()));
+    }
+    if let Some(id) = args.windows(2).find(|a| a[0] == "--enqueue-meeting") {
+        let result = sidenote::core::meeting_router::jobs::enqueue(&id[1].to_string_lossy());
+        std::process::exit(i32::from(result.is_err()));
+    }
+    if args.iter().any(|a| a == "--route-pending") {
+        let result = sidenote::core::meeting_router::jobs::run_pending();
+        std::process::exit(i32::from(result.is_err()));
+    }
     if std::env::args().any(|a| a == "--hex-engine-status") {
         std::process::exit(sidenote::hex_engine::run_status());
     }

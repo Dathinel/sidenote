@@ -60,3 +60,5 @@ Stable fmt, locked clippy with all targets and warnings denied, and locked build
 Queue supervision and UI are separate stacked changes. The existing notes script remains active and may repeat ASR/translation work; stage timings above do not measure that full legacy workflow. This core marks English `translate: false`, but does not replace the legacy translation runner. The provisional 0.9 detector threshold, energy-VAD fallback, speaker pooling and real-meeting boundary quality remain unvalidated on held-out meeting audio.
 
 Per-turn override/rerun UI and word alignment are explicitly follow-ups, outside this review round. Release packaging, private or held-out meeting quality, cold-cache hour-long ASR and hour-long Nemotron RAM remain unverified. No installed app, listener or scheduled task was started or stopped. Evidence rung 4 applies to CLI execution, scoring and gates; renders only demonstrate their rendered UI.
+
+The stacked jobs branch records queue, crash, normalization, restart and invalidation evidence in [job supervision results](router-jobs-results.md).
