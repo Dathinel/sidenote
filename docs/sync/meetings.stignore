@@ -1,0 +1,14 @@
+// Only known meeting text travels. New files and all audio stay on the recording device.
+/*/*/*
+!/*/manifest.json
+!/*/english-summary.json
+!/*/english-summary.md
+!/*/english-transcript.md
+!/*/transcript.md
+!/*/transcript.ndjson
+!/*/tasks.json
+!/*/quick-title.json
+!/*/notes.md
+!/*/attendees.txt
+!/*/granola-transcript.txt
+*

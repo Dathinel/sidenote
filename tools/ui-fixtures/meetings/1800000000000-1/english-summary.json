@@ -1,0 +1,100 @@
+{
+  "title": "Northwind Atlas design review",
+  "kind": "Synthetic team meeting",
+  "people": [
+    "Alex",
+    "Morgan",
+    "Jordan"
+  ],
+  "context": [
+    "Invented Northwind design workshop.",
+    "No real meeting content is used."
+  ],
+  "topics": [
+    {
+      "title": "Paper prototype",
+      "points": [
+        {
+          "type": "decided",
+          "text": "Use a paper prototype for the Atlas workshop.",
+          "who": "Alex",
+          "at": [
+            "00:24"
+          ]
+        },
+        {
+          "type": "fact",
+          "text": "The landing card uses three color samples.",
+          "who": "Morgan",
+          "at": [
+            "14:22"
+          ]
+        },
+        {
+          "type": "action",
+          "text": "Jordan will prepare the workshop checklist.",
+          "who": "Jordan",
+          "at": [
+            "25:14"
+          ]
+        }
+      ]
+    }
+  ],
+  "todo": [
+    {
+      "task": "Sketch the welcome card",
+      "owner": "Alex",
+      "due": null,
+      "due_default": false,
+      "at": [
+        "00:24"
+      ]
+    },
+    {
+      "task": "Review the paper prototype",
+      "owner": null,
+      "due": null,
+      "due_default": false,
+      "at": [
+        "00:47"
+      ]
+    },
+    {
+      "task": "Prepare the color samples",
+      "owner": "Jordan",
+      "due": "2026-11-12",
+      "due_default": false,
+      "at": [
+        "14:22"
+      ]
+    },
+    {
+      "task": "Record the workshop outcome",
+      "owner": "Alex",
+      "due": null,
+      "due_default": false,
+      "at": [
+        "21:10"
+      ]
+    },
+    {
+      "task": "Send the sample checklist",
+      "owner": "Morgan",
+      "due": null,
+      "due_default": false,
+      "at": [
+        "25:14"
+      ]
+    }
+  ],
+  "to_settle": [
+    {
+      "question": "Should the sample demo be on Thursday or Friday?",
+      "waits_on": "Morgan"
+    }
+  ],
+  "verify": [
+    "Confirm the sample date before printing."
+  ]
+}

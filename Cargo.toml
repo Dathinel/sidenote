@@ -1,0 +1,40 @@
+[package]
+name = "hex-meetings"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+blake3 = "1"
+rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt", "io-std"] }
+wgpu = { version = "~30.0.1", default-features = false, features = ["std", "dx12", "vulkan"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", default-features = false, features = ["accessibility"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true, features = ["markdown"] }
+rune-motion = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
+
+[features]
+default = ["ui-kit"]
+ui-kit = ["dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+pollster = "1"

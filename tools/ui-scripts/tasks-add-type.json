@@ -1,0 +1,5 @@
+{"events": [
+ {"t": 0.3, "type": "type", "text": "Send Morgan the paper prototype notes"},
+ {"t": 2.0, "type": "tap", "key": "add-due-tomorrow"},
+ {"t": 2.6, "type": "mark", "name": "end"}
+]}

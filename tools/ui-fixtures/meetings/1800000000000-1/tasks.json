@@ -1,0 +1,35 @@
+{
+  "meeting_project": "Northwind Atlas",
+  "tasks": [
+    {
+      "i": 0,
+      "project": "Northwind Atlas",
+      "new": false,
+      "mine": true
+    },
+    {
+      "i": 1,
+      "project": "Northwind Atlas",
+      "new": false,
+      "mine": false
+    },
+    {
+      "i": 2,
+      "project": "Northwind Atlas",
+      "new": false,
+      "mine": false
+    },
+    {
+      "i": 3,
+      "project": "Northwind Atlas",
+      "new": false,
+      "mine": false
+    },
+    {
+      "i": 4,
+      "project": "Northwind Atlas",
+      "new": false,
+      "mine": false
+    }
+  ]
+}

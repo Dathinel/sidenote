@@ -1,0 +1,541 @@
+use chrono::{DateTime, Local, NaiveDate};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+pub fn peers_dir() -> PathBuf {
+    if let Some(dir) = super::paths::peers() {
+        return dir;
+    }
+    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex-meetings-peers")
+}
+
+pub fn meetings_dir() -> PathBuf {
+    if let Some(dir) = super::paths::meetings() {
+        return dir;
+    }
+    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/meetings")
+}
+/// Where reports, ticks and task edits live. `HEX_MEETINGS_STATE_DIR` moves it, so renders and
+/// checks that apply actions never touch the real files.
+pub fn state_dir() -> PathBuf {
+    if let Some(dir) = super::paths::data() {
+        return dir;
+    }
+    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex-meetings")
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Summary {
+    pub title: String,
+    pub kind: String,
+    pub people: Vec<String>,
+    pub context: Vec<String>,
+    pub topics: Vec<Topic>,
+    pub todo: Vec<Todo>,
+    pub to_settle: Vec<Unsettled>,
+    pub verify: Vec<String>,
+}
+impl Summary {
+    pub(super) fn texts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.title.as_str())
+            .chain(std::iter::once(self.kind.as_str()))
+            .chain(self.people.iter().map(String::as_str))
+            .chain(self.context.iter().map(String::as_str))
+            .chain(self.topics.iter().flat_map(|t| {
+                std::iter::once(t.title.as_str()).chain(
+                    t.points
+                        .iter()
+                        .flat_map(|p| std::iter::once(p.text.as_str()).chain(p.who.as_deref())),
+                )
+            }))
+            .chain(self.todo.iter().flat_map(|t| {
+                std::iter::once(t.task.as_str())
+                    .chain(t.owner.as_deref())
+                    .chain(t.due.as_deref())
+            }))
+            .chain(
+                self.to_settle.iter().flat_map(|q| {
+                    std::iter::once(q.question.as_str()).chain(q.waits_on.as_deref())
+                }),
+            )
+            .chain(self.verify.iter().map(String::as_str))
+    }
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Topic {
+    pub title: String,
+    pub points: Vec<Point>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Point {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub text: String,
+    pub who: Option<String>,
+    pub at: Vec<String>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Todo {
+    pub task: String,
+    pub owner: Option<String>,
+    pub due: Option<String>,
+    pub due_default: bool,
+    pub at: Vec<String>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Unsettled {
+    pub question: String,
+    pub waits_on: Option<String>,
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct Manifest {
+    pub title: Option<String>,
+    pub title_source: Option<String>,
+    pub created_at_ms: Option<i64>,
+    pub duration_ms: Option<f64>,
+    pub export_path: Option<String>,
+}
+/// quick-title.json, written seconds after Stop by hex-meeting-quick-title.ps1 while the notes are
+/// still being made. The notes' own title replaces it once english-summary.json lands.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct QuickTitle {
+    title: String,
+}
+/// The file is a few dozen bytes; a larger one is not ours.
+const QUICK_TITLE_MAX_BYTES: u64 = 4096;
+const QUICK_TITLE_MAX_CHARS: usize = 100;
+
+/// The quick title in a meeting folder, if there is a usable one. A missing, oversized,
+/// half-written or malformed file is just no title. Peer folders are only ever read.
+pub fn read_quick_title(folder: &Path) -> Option<String> {
+    let path = folder.join("quick-title.json");
+    if fs::metadata(&path).ok()?.len() > QUICK_TITLE_MAX_BYTES {
+        return None;
+    }
+    let parsed: QuickTitle = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    let one_line = parsed
+        .title
+        .chars()
+        .filter(|c| !c.is_control() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title: String = one_line.chars().take(QUICK_TITLE_MAX_CHARS).collect();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
+/// The quick title of the meeting that was just recorded: a folder in `local` made at or after
+/// `since_ms` (Unix milliseconds; folder ids start with the creation time) that is not yet a
+/// known summarised meeting. When several match, the newest wins.
+pub fn pending_quick_title(
+    local: &Path,
+    since_ms: i64,
+    known: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let mut best: Option<(i64, String)> = None;
+    for entry in fs::read_dir(local).ok()?.flatten() {
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let Some(made) = id.split('-').next().and_then(|n| n.parse::<i64>().ok()) else {
+            continue;
+        };
+        if made < since_ms || known.contains(&id) || best.as_ref().is_some_and(|(b, _)| *b >= made)
+        {
+            continue;
+        }
+        if let Some(title) = read_quick_title(&entry.path()) {
+            best = Some((made, title));
+        }
+    }
+    best.map(|(_, title)| title)
+}
+
+/// One transcript line. Imported transcripts carry no times: `at` is empty and `seconds` is
+/// `None`, and `who` is empty when the source names no speaker.
+#[derive(Clone)]
+pub struct Line {
+    pub at: String,
+    pub seconds: Option<u64>,
+    pub who: String,
+    pub language: String,
+    pub text: String,
+}
+#[derive(Clone)]
+pub struct Meeting {
+    /// Actual text source. Peer folders are only ever opened for reading.
+    pub folder: PathBuf,
+    pub device: Option<String>,
+    pub id: String,
+    pub title: String,
+    pub summary: Summary,
+    pub summary_raw: String,
+    pub transcript_raw: String,
+    /// The user's own notes from `notes.md`, typed during the meeting (or imported). Empty when none.
+    pub notes: String,
+    pub lines: Vec<Line>,
+    pub started: Option<DateTime<Local>>,
+    pub minutes: Option<u64>,
+    pub export_path: Option<String>,
+    pub search: String,
+}
+static LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\] (\S+) \(([^)]*)\): ?(.*)$").unwrap()
+});
+pub fn seconds(stamp: &str) -> Option<u64> {
+    let parts: Vec<u64> = stamp
+        .split(':')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    match parts.as_slice() {
+        [m, s] if *s < 60 => m.checked_mul(60)?.checked_add(*s),
+        [h, m, s] if *m < 60 && *s < 60 => {
+            h.checked_mul(3600)?.checked_add(m * 60)?.checked_add(*s)
+        }
+        _ => None,
+    }
+}
+pub fn short(stamp: &str) -> &str {
+    stamp.strip_prefix("00:").unwrap_or(stamp)
+}
+/// "Speaker A: text" or "(English): text", the labels an imported transcript can start with.
+static UNTIMED_LABEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:(Speaker [A-Za-z0-9]+)|\(([^)]{1,30})\)):(?: (.*))?$").unwrap()
+});
+/// A trailing language tag such as "(Hindi+English)".
+static LANGUAGE_TAIL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*\(([A-Za-z]+(?:\+[A-Za-z]+)*)\)$").unwrap());
+
+pub fn parse_transcript(raw: &str) -> Vec<Line> {
+    let mut lines: Vec<Line> = Vec::new();
+    for raw in raw.lines() {
+        if let Some(c) = LINE.captures(raw.trim()) {
+            let at = format!(
+                "{:02}:{:02}:{:02}",
+                c[1].parse::<u64>().unwrap_or(0),
+                c[2].parse::<u64>().unwrap_or(0),
+                c[3].parse::<u64>().unwrap_or(0)
+            );
+            lines.push(Line {
+                seconds: Some(seconds(&at).unwrap_or(0)),
+                at,
+                who: c[5].into(),
+                language: c[6].into(),
+                text: c[7].trim().into(),
+            });
+        } else if !raw.trim().is_empty()
+            && !raw.starts_with('#')
+            && let Some(last) = lines.last_mut()
+        {
+            last.text.push(' ');
+            last.text.push_str(raw.trim());
+        }
+    }
+    if lines.is_empty() {
+        return parse_untimed(raw);
+    }
+    lines
+}
+
+/// A transcript with no times. When any line names a speaker, an unlabelled line continues the
+/// one before it; when none does, every non-empty line is its own.
+fn parse_untimed(raw: &str) -> Vec<Line> {
+    let body: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let labelled = body.iter().any(|l| UNTIMED_LABEL.is_match(l));
+    let mut lines: Vec<Line> = Vec::new();
+    for l in body {
+        let (who, mut language, text) = match UNTIMED_LABEL.captures(l) {
+            Some(c) => (
+                c.get(1).map_or("", |m| m.as_str()).to_string(),
+                c.get(2).map_or("", |m| m.as_str()).to_string(),
+                c.get(3).map_or("", |m| m.as_str()).trim().to_string(),
+            ),
+            None if labelled => {
+                if let Some(last) = lines.last_mut() {
+                    last.text.push(' ');
+                    last.text.push_str(l);
+                    continue;
+                }
+                (String::new(), String::new(), l.to_string())
+            }
+            None => (String::new(), String::new(), l.to_string()),
+        };
+        let mut text = text;
+        if let Some(c) = LANGUAGE_TAIL.captures(&text) {
+            language = c[1].to_string();
+            text.truncate(c.get(0).map_or(text.len(), |m| m.start()));
+        }
+        if text.is_empty() {
+            continue;
+        }
+        lines.push(Line {
+            at: String::new(),
+            seconds: None,
+            who,
+            language,
+            text,
+        });
+    }
+    lines
+}
+impl Meeting {
+    pub fn load(folder: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let id = folder
+            .file_name()
+            .ok_or("Missing meeting id")?
+            .to_string_lossy()
+            .into_owned();
+        let summary_raw = fs::read_to_string(folder.join("english-summary.json"))?;
+        let summary: Summary = serde_json::from_str(&summary_raw)?;
+        let manifest: Manifest = match fs::read_to_string(folder.join("manifest.json")) {
+            Ok(raw) => serde_json::from_str(&raw)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Manifest::default(),
+            Err(e) => return Err(e.into()),
+        };
+        let title = if matches!(
+            manifest.title_source.as_deref(),
+            Some("call" | "calendar" | "user")
+        ) {
+            manifest.title.filter(|s| !s.is_empty())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            if summary.title.is_empty() {
+                id.clone()
+            } else {
+                summary.title.clone()
+            }
+        });
+        let transcript_raw = match fs::read_to_string(folder.join("english-transcript.md")) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let lines = parse_transcript(&transcript_raw);
+        let mut minutes = manifest
+            .duration_ms
+            .filter(|n| *n > 0.0)
+            .map(|n| (n / 60000.0).round_ties_even() as u64);
+        if let Some(secs) = lines.iter().rev().find_map(|l| l.seconds) {
+            let spoken = (secs as f64 / 60.0).round_ties_even() as u64 + 1;
+            if minutes.is_none_or(|m| m > spoken + 30) {
+                minutes = Some(spoken);
+            }
+        }
+        let started = manifest
+            .created_at_ms
+            .filter(|n| *n != 0)
+            .and_then(DateTime::from_timestamp_millis)
+            .map(|t| t.with_timezone(&Local));
+        let notes = super::live::read_notes(folder);
+        let search = format!(
+            "{title}\n{}\n{notes}\n{transcript_raw}",
+            summary.texts().collect::<Vec<_>>().join("\n")
+        )
+        .to_lowercase();
+        Ok(Self {
+            folder: folder.to_owned(),
+            device: None,
+            id,
+            title,
+            summary,
+            summary_raw,
+            transcript_raw,
+            notes,
+            lines,
+            started,
+            minutes,
+            export_path: manifest.export_path,
+            search,
+        })
+    }
+    pub fn points(&self) -> impl Iterator<Item = &Point> {
+        self.summary.topics.iter().flat_map(|t| &t.points)
+    }
+    pub fn target(&self, stamp: &str) -> Option<usize> {
+        let target = seconds(stamp)?.saturating_add(1);
+        self.lines
+            .iter()
+            .rposition(|l| l.seconds.is_some_and(|s| s <= target))
+    }
+    /// Whether the transcript lines carry times. Imported meetings have text only.
+    pub fn timed(&self) -> bool {
+        self.lines.iter().any(|l| l.seconds.is_some())
+    }
+    pub fn day_label(&self) -> String {
+        super::day_label(
+            self.started.map(|s| s.date_naive()),
+            Local::now().date_naive(),
+        )
+    }
+    pub fn snippet(&self, query: &str) -> String {
+        self.search_hit(query)
+            .map(|hit| hit.snippet.text)
+            .unwrap_or_default()
+    }
+}
+pub fn scan() -> (Vec<Meeting>, Vec<String>) {
+    let (meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
+    errors.extend(super::sync_state::reconcile(&state_dir()));
+    (meetings, errors)
+}
+
+/// Local ids reserve their place even while a summary is arriving or cannot be read.
+pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
+    let (mut meetings, mut errors) = scan_in(local);
+    let mut ids: std::collections::BTreeSet<String> =
+        meetings.iter().map(|m| m.id.clone()).collect();
+    if let Ok(entries) = fs::read_dir(local) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                ids.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    match fs::read_dir(peers) {
+        Ok(entries) => {
+            let mut devices = Vec::new();
+            for entry in entries {
+                match entry {
+                    Ok(e) if e.path().is_dir() => devices.push(e.path()),
+                    Ok(_) => {}
+                    Err(_) => errors.push("Could not read a peer device folder".into()),
+                }
+            }
+            devices.sort();
+            for folder in devices {
+                let device = folder
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let (peer_meetings, peer_errors) = scan_in(&folder);
+                errors.extend(
+                    peer_errors
+                        .into_iter()
+                        .map(|e| format!("from {device}: {e}")),
+                );
+                for mut meeting in peer_meetings {
+                    if ids.insert(meeting.id.clone()) {
+                        meeting.device = Some(device.clone());
+                        meetings.push(meeting);
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => errors.push("Could not read peer meetings".into()),
+    }
+    meetings.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
+    (meetings, errors)
+}
+/// Returns every summarised meeting, newest first, plus per-folder read errors.
+pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
+    let mut meetings = Vec::new();
+    let mut errors = Vec::new();
+    match fs::read_dir(root) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        errors.push("Could not read a meeting folder entry".into());
+                        continue;
+                    }
+                };
+                if entry.path().join("english-summary.json").is_file() {
+                    match Meeting::load(&entry.path()) {
+                        Ok(m) => meetings.push(m),
+                        Err(_) => errors.push(format!(
+                            "Could not read meeting {}",
+                            entry.file_name().to_string_lossy()
+                        )),
+                    }
+                }
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => errors.push("Could not read the meetings folder".into()),
+    }
+    meetings.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
+    (meetings, errors)
+}
+pub fn nice_date(date: &str) -> String {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|d| d.format("%-d %b").to_string())
+        .unwrap_or_else(|_| date.into())
+}
+
+#[cfg(test)]
+mod quick_title_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("quick-title-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reads_and_cleans_a_title() {
+        let dir = folder("clean");
+        let file = dir.join("quick-title.json");
+        fs::write(
+            &file,
+            r#"{"title":"  Website  launch\nand pre-orders ","model":"m","created":"c"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_quick_title(&dir).as_deref(),
+            Some("Website launch and pre-orders")
+        );
+        fs::write(&file, r#"{"title":"   "}"#).unwrap();
+        assert_eq!(read_quick_title(&dir), None);
+        fs::write(&file, "{not json").unwrap();
+        assert_eq!(read_quick_title(&dir), None);
+        fs::write(&file, format!(r#"{{"title":"{}"}}"#, "x".repeat(9000))).unwrap();
+        assert_eq!(read_quick_title(&dir), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_the_newest_new_meeting() {
+        let root = folder("pending");
+        for (id, title) in [("1000-1", "Old"), ("2000-2", "Newer"), ("3000-3", "Known")] {
+            let d = root.join(id);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("quick-title.json"),
+                format!(r#"{{"title":"{title}"}}"#),
+            )
+            .unwrap();
+        }
+        let known: HashSet<String> = ["3000-3".to_string()].into();
+        assert_eq!(
+            pending_quick_title(&root, 1500, &known).as_deref(),
+            Some("Newer")
+        );
+        assert_eq!(pending_quick_title(&root, 2500, &known), None);
+        let _ = fs::remove_dir_all(root);
+    }
+}

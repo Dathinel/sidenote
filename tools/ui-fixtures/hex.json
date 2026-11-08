@@ -1,0 +1,283 @@
+{
+  "version": "2.4.1",
+  "model": {
+    "id": "parakeet-v3",
+    "name": "Parakeet v3",
+    "language": "en",
+    "installed": true
+  },
+  "models": [
+    {
+      "id": "parakeet-v3",
+      "name": "Parakeet v3",
+      "languages": [
+        "25 languages"
+      ],
+      "size": "640 MB",
+      "installed": true,
+      "selected": true,
+      "streams": true
+    },
+    {
+      "id": "whisper-small",
+      "name": "Whisper Small",
+      "languages": [
+        "99 languages"
+      ],
+      "size": "466 MB",
+      "installed": true,
+      "selected": false
+    },
+    {
+      "id": "whisper-large-v3",
+      "name": "Whisper Large v3",
+      "languages": [
+        "99 languages"
+      ],
+      "size": "2.9 GB",
+      "installed": false,
+      "selected": false
+    }
+  ],
+  "vocabulary": [
+    {
+      "term": "Kubernetes",
+      "sounds_like": [
+        "cooper netties",
+        "kuber nettys"
+      ]
+    },
+    {
+      "term": "Postgres",
+      "sounds_like": [
+        "post gress"
+      ]
+    },
+    {
+      "term": "Northwind",
+      "sounds_like": [
+        "north wind"
+      ]
+    },
+    {
+      "term": "OAuth",
+      "sounds_like": []
+    },
+    {
+      "term": "Tesseract",
+      "sounds_like": [
+        "tess a ract"
+      ]
+    },
+    {
+      "term": "Quarterly planning review",
+      "sounds_like": []
+    }
+  ],
+  "settings": [
+    {
+      "key": "meetings.audio_retention",
+      "value": "week",
+      "kind": "choice",
+      "choices": [
+        "day",
+        "week",
+        "month",
+        "forever"
+      ],
+      "writable": true,
+      "available": true,
+      "about": "How long finished meetings keep their audio."
+    },
+    {
+      "key": "labs.expire_meeting_audio",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true,
+      "about": "Expire meeting audio separately."
+    },
+    {
+      "key": "meetings.retention",
+      "value": "forever",
+      "kind": "choice",
+      "choices": [
+        "day",
+        "week",
+        "month",
+        "forever"
+      ],
+      "writable": true,
+      "about": "How long finished meetings stay before moving to the Trash."
+    },
+    {
+      "key": "general.launch_at_login",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "about": "Start Hex when you sign in to Windows."
+    },
+    {
+      "key": "general.sound_effects",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "about": "Play a short sound when dictation starts and stops."
+    },
+    {
+      "key": "dictation.shortcut",
+      "value": "Ctrl+Alt+D",
+      "kind": "text",
+      "writable": true,
+      "about": "Hold this shortcut to dictate into any app."
+    },
+    {
+      "key": "dictation.language",
+      "value": "English",
+      "kind": "choice",
+      "writable": true,
+      "choices": [
+        "Automatic",
+        "English",
+        "Spanish",
+        "German",
+        "French"
+      ],
+      "about": "The language Hex listens for."
+    },
+    {
+      "key": "dictation.max_seconds",
+      "value": 120,
+      "kind": "integer",
+      "writable": true,
+      "about": "Longest single dictation, in seconds."
+    },
+    {
+      "key": "meetings.silence_threshold",
+      "value": 0.35,
+      "kind": "number",
+      "writable": true,
+      "about": "How quiet counts as silence when a meeting is recording."
+    },
+    {
+      "key": "meetings.output_folder",
+      "value": "C:\\Users\\demo\\Documents\\Hex\\Meetings",
+      "kind": "path",
+      "writable": true,
+      "about": "Where finished meeting recordings are saved."
+    },
+    {
+      "key": "cloud.api_key",
+      "value": "redacted-by-hex",
+      "kind": "text",
+      "writable": true,
+      "secret": true,
+      "about": "Key for the optional cloud model."
+    },
+    {
+      "key": "about.build",
+      "value": "2.4.1 (build 812)",
+      "kind": "text",
+      "writable": false,
+      "about": "The installed Hex build."
+    },
+    {
+      "key": "general.theme",
+      "value": "System",
+      "kind": "choice",
+      "choices": [
+        "System",
+        "Light",
+        "Dark"
+      ],
+      "writable": true,
+      "about": "Light, dark, or follow Windows. Takes effect right away."
+    },
+    {
+      "key": "dictation.paste_method",
+      "value": "Clipboard",
+      "kind": "choice",
+      "choices": [
+        "Clipboard",
+        "Typing"
+      ],
+      "writable": true,
+      "about": "How dictated text gets into the app you are using. Typing is slower but leaves the clipboard alone."
+    },
+    {
+      "key": "dictation.remove_filler_words",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "about": "Drop words like um and uh from what you dictate."
+    },
+    {
+      "key": "meetings.auto_start",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "about": "Start recording when a call begins in a supported app."
+    },
+    {
+      "key": "meetings.record_my_microphone",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "about": "Include your own voice, not just the other people on the call."
+    },
+    {
+      "key": "shortcuts.paste_last",
+      "value": "Ctrl+Alt+V",
+      "kind": "text",
+      "writable": true,
+      "about": "Paste the last dictation again."
+    },
+    {
+      "key": "shortcuts.toggle_meeting",
+      "value": "Ctrl+Alt+M",
+      "kind": "text",
+      "writable": true,
+      "about": "Start or stop a meeting recording from anywhere."
+    },
+    {
+      "key": "labs.meeting_finished_event",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "about": "Tell other apps, such as Meetings, the moment a recording ends. Needed for automatic notes."
+    },
+    {
+      "key": "labs.live_captions",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "about": "Show captions while a meeting records. Uses more processor time."
+    },
+    {
+      "key": "labs.gpu_overlay",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "about": "Draw the recording indicator on the graphics card."
+    },
+    {
+      "key": "network.proxy",
+      "value": "",
+      "kind": "text",
+      "writable": true,
+      "about": "Send downloads through this proxy address. Leave empty for none."
+    },
+    {
+      "key": "diagnostics.log_level",
+      "value": "info",
+      "kind": "choice",
+      "choices": [
+        "error",
+        "info",
+        "debug"
+      ],
+      "writable": true,
+      "about": "How much Hex writes to its log file. Debug is only for tracking down a problem."
+    }
+  ]
+}

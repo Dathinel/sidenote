@@ -1,0 +1,32 @@
+// Local inputs, caches, settings and backups never travel between devices.
+/backups
+/local
+/task-verify
+/kb-snapshot
+(?i)probe-*
+(?i)*.lock
+(?i)*.tmp
+(?i)runner-state.json*
+(?i)runner-state.sync-conflict-*
+(?i)runners.json*
+(?i)runners.sync-conflict-*
+(?i)device.json*
+(?i)device.sync-conflict-*
+(?i).env
+(?i).env.*
+(?i)*.env
+(?i)*.env.*
+(?i)*secret*
+(?i)*credential*
+(?i)*token*
+(?i)*password*
+(?i)*.pem
+(?i)*.key
+(?i)*.pfx
+(?i)*.p12
+(?i)id_rsa*
+(?i)id_ed25519*
+// Only immutable device journals sync. Earlier exclusions still take precedence.
+!/state
+!/state/**
+*

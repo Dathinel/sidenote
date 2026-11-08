@@ -1,0 +1,268 @@
+# Roadmap: build order
+
+Each lane is 1 to 3 days, runs in its own worktree, and is tested only in hosted CI. Foundation
+lanes come first. Lanes with the same dependencies can run in parallel; keep 2 to 3 running at
+once. The safety work in Wave 1 of `PLAN.md` (S03, S08, S09, S13, S04) runs alongside and is not
+repeated here. UI lanes that show this work (Background tab, thread list, pairing screens) are
+planned separately and start once their core lane lands.
+
+Notation: **Deps** = lanes that must merge first. **Files** = the main files touched.
+**Accept** = what CI or the reviewer must see before merge.
+
+## Phase 0: foundation
+
+**F0. Hosted CI** (1 day)
+- **Deps:** the owner's remote choice (see the summary). **Files:** `.github/workflows/ci.yml`, `build.ps1` (find the GNU toolchain without a fixed path).
+- **Accept:** each push runs `cargo fmt --check`, `clippy -D warnings`, `build --locked` and `cargo test` on `windows-latest`. The check is green on main and required for merges.
+
+**F1. Domain crate** (2 days)
+- **Deps:** none. **Files:** root `Cargo.toml` (workspace), `crates/meetings-domain/` (`ids.rs`, `entity.rs`, `provenance.rs`, `proposal.rs`, licence files).
+- **Accept:**
+  - `Id<T>` with v7 and v5 constructors.
+  - The meeting id function matches golden vectors.
+  - Every entity round-trips through serde.
+  - No IO dependencies.
+
+**F2. Store API v1 and JournalEngine** (3 days)
+- **Deps:** F1. **Files:** `src/core/store/{mod,api,journal}.rs`, `sync_state.rs` moved under `store/`, `src/core/mod.rs`.
+- **Accept:**
+  - The `Store` trait and its adapter tests exist.
+  - The journal format is unchanged (a golden file test).
+  - Existing tests pass.
+
+**F3. Ticks and chat messages on Store** (1 day)
+- **Deps:** F2. **Files:** `src/core/persistence.rs`.
+- **Accept:** it writes the same journal keys as before (golden test), and the UI is unchanged.
+
+**F4. MeetingSource seam** (2 days)
+- **Deps:** F1, F2. **Files:** `src/core/meetings.rs`, `src/core/agent_tools.rs`, `src/core/store/meetings.rs`.
+- **Accept:**
+  - The UI list and MCP use one catalog.
+  - Each meeting has a UUID and its legacy id, and MCP accepts both.
+  - The MCP output snapshot is unchanged apart from the new `uuid` field.
+
+**F5. Tasks, memory and checks on Store** (3 days)
+- **Deps:** F2. **Files:** `src/core/{tasks,memory,check_state,daily_check,config}.rs`.
+- **Accept:** no file outside `src/core/store/` names `sync_state`, and a CI grep check enforces it.
+
+**F6. Status files v1** (1 day)
+- **Deps:** none. **Files:** `src/core/status.rs`, `src/listener.rs`.
+- **Accept:**
+  - The listener writes `local/status/listener.json` with a heartbeat.
+  - Unit tests cover atomic writes and the 60-second stale rule.
+  - This unblocks the Background UI lane.
+
+## Phase 1: sync engine (ADR 0002, 0003)
+
+**S1. Conformance suite and synthetic corpus** (3 days)
+- **Deps:** F2. **Files:** `tests/sync_conformance.rs`, `tests/support/corpus.rs`, `docs/architecture/spikes/pilot-thresholds.json`.
+- **Accept:**
+  - Scenarios 1 to 12 and the property test run against `JournalEngine`.
+  - The metrics JSON is uploaded as an artifact.
+  - Scenarios 9 and 10 may be marked expected-fail until S2 lands.
+
+**S2. Journal v3, part 1** (2 days)
+- **Deps:** S1. **Files:** `src/core/store/journal.rs`.
+- **Accept:**
+  - Clock bound, change and size caps, and field-level keys for new kinds.
+  - Scenarios 9 and 10 pass, and v2 is still read.
+
+**S3. Automerge pilot** (3 days)
+- **Deps:** S1. **Spec:** [spikes/automerge-pilot-spec.md](spikes/automerge-pilot-spec.md).
+- **Accept:** `automerge-pilot-results.md` has M1 to M7 for both engines and a verdict, and ADR 0002's status is updated.
+
+**S4. Own-journal compaction** (2 days)
+- **Deps:** S2, and the S3 verdict keeping journals. **Files:** `src/core/store/journal.rs`.
+- **Accept:** scenario 7 passes; compaction runs under the writer lock and writes backups first.
+
+**S5. Keystore and device keys** (2 days)
+- **Deps:** F1. **Files:** `crates/meetings-sync/src/keys.rs`, `src/core/keystore.rs`, `Cargo.toml` (`keyring`, `age`, `ed25519-dalek`).
+- **Accept:**
+  - Device keys are created and loaded from Windows Credential Manager.
+  - CI uses the in-memory store.
+  - A test finds no key material in the data folder.
+
+**S6. Signed journals v3 and device roster** (3 days)
+- **Deps:** S2, S5. **Files:** `src/core/store/journal.rs`, `crates/meetings-sync/src/roster.rs`.
+- **Accept:**
+  - Unsigned or forged journals after enrollment are rejected.
+  - Roster add and revoke are verified.
+  - The v2 acceptance rule from ADR 0002 holds.
+
+## Phase 2: agents and pipeline (ADR 0006)
+
+**H1. Harness trait and CliHarness** (3 days)
+- **Deps:** none. **Files:** `src/core/harness/{mod,cli}.rs`, `src/core/{ask,ask_all,runner_process,runners}.rs`, `src/platform.rs`.
+- **Accept:**
+  - Ask and Ask All run through the trait.
+  - Children start suspended and are attached to the job before resume (S11).
+  - The child environment is cleaned (S05).
+  - Provenance is returned.
+  - The current policy is unchanged: OpenCode is still refused for Ask.
+
+**H2. AcpHarness** (3 days)
+- **Deps:** H1. **Files:** `src/core/harness/acp.rs`, `examples/fake_acp_agent.rs`, `Cargo.toml` (`agent-client-protocol`).
+- **Accept:** CI tests against the fake agent cover:
+  - session start and streaming;
+  - a denied write permission;
+  - a refused read outside the grant;
+  - cancel and timeout.
+
+**H3. Rust job runner with script stages** (3 days)
+- **Deps:** F6. **Files:** `src/core/jobs/{mod,runner,stages}.rs`, `src/listener.rs`.
+- **Accept:**
+  - With `pipeline: "rust"` in config, the listener runs jobs in Rust in place of `hex-meeting-watch.ps1`.
+  - Status is written per stage.
+  - A job killed mid-stage resumes at that stage.
+  - The 3-attempt retry rule holds.
+  - CI uses fake scripts.
+
+**H4. Quick title, notes and task classification on Harness** (3 days)
+- **Deps:** H1, H3. **Files:** `src/core/jobs/stages/{quick_title,notes,tasks}.rs`, `assets/prompts/*.md.j2`.
+- **Accept:**
+  - A fake harness produces the expected files.
+  - JSON outputs validate against schemas.
+  - A CI grep finds no owner or company names in prompts.
+
+**H5. Tool-free translation** (2 days)
+- **Deps:** H4. **Files:** `src/core/jobs/stages/translate.rs`.
+- **Accept:** `ToolPolicy::None` is enforced, a harness that cannot enforce it is refused, and S01 is closed.
+
+**H6. Render and publish in Rust** (3 days)
+- **Deps:** H3. **Files:** `src/core/jobs/stages/{render,publish}.rs`, `assets/templates/*.j2`.
+- **Accept:**
+  - Output matches the Python renderer on a synthetic meeting.
+  - Publish is opt-in and backs up Hex originals.
+  - Export paths stay inside configured roots (S10).
+
+**H7. Audio preparation decision** (2 days, spike)
+- **Deps:** H3. **Files:** `docs/architecture/spikes/audio-prep.md`.
+- **Accept:** sherpa-onnx Rust bindings are compared with the uv Python path on synthetic audio in CI (time, memory, packaging size), and a recommendation is written.
+
+**H8. Config v2: agents section** (2 days)
+- **Deps:** H1. **Files:** `src/core/{config,runners}.rs`.
+- **Accept:**
+  - `runners.json` migrates with a backup first.
+  - Migration is idempotent.
+  - Uninstalled agents are marked "Not installed".
+
+## Phase 3: chat history (ADR 0007)
+
+**C1. Thread model and migration** (2 days)
+- **Deps:** F3. **Files:** `crates/meetings-domain/src/chat.rs`, `src/core/chat.rs`.
+- **Accept:** legacy messages become threads with deterministic ids, identical on two simulated devices, and migration is idempotent.
+
+**C2. Provenance capture** (1 day)
+- **Deps:** H1, C1. **Accept:** a reported model is stored as reported, otherwise as requested, otherwise unknown.
+
+**C3. Export and import** (1 day)
+- **Deps:** C1. **Accept:** JSON and Markdown export per thread and for all threads, `--export-chats`, and a JSON round trip.
+
+**C4. Local FTS5 index** (3 days)
+- **Deps:** C1, F4. **Files:** `src/core/index.rs`, `Cargo.toml` (`rusqlite`, bundled).
+- **Accept:**
+  - The index rebuilds from the Store.
+  - Search covers meetings, tasks and chat.
+  - Deleting `index.sqlite` loses nothing.
+
+**C5. `propose_chat_summary`, local** (2 days)
+- **Deps:** C1. **Files:** `src/core/agent_tools.rs`, `src/mcp.rs`, `src/core/config.rs`.
+- **Accept:**
+  - The tool creates a pending proposal and deduplicates by hash.
+  - It is gated by `chat_summaries`.
+  - Accepting it creates a thread with provenance.
+
+## Phase 4: server, sync relay and remote MCP (ADR 0003, 0004, 0005)
+
+**T1. `meetings-tools` crate** (3 days)
+- **Deps:** F4, F5. **Files:** `crates/meetings-tools/`, `src/mcp.rs`, `src/core/agent_tools.rs`.
+- **Accept:** the local tool list JSON snapshot is identical before and after the change, through `LocalBackend`.
+
+**V1. Server skeleton** (3 days)
+- **Deps:** F1. **Files:** `server/` (AGPL licence, `main.rs`, `config.rs`, `migrations/0001_init.sql`), `deploy/{compose.yaml,Caddyfile,.env.example}`.
+- **Accept:**
+  - Compose starts on an Ubuntu CI runner.
+  - Health, migrations and JWT checks against a test JWKS all pass.
+
+**V2. Auth interop spike** (2 days)
+- **Deps:** V1, plus a staging domain and test accounts from the owner. **Files:** `docs/architecture/spikes/auth-interop.md`.
+- **Accept:**
+  - Claude.ai and ChatGPT both finish OAuth through Better Auth and call a stub `search`.
+  - The results are recorded.
+  - ADR 0004 is confirmed, or switched to Ory Hydra.
+
+**V3. Relay API** (3 days)
+- **Deps:** V1. **Files:** `server/src/relay.rs`.
+- **Accept:**
+  - Put and get by opaque id, list by cursor, idempotent puts and per-account quota.
+  - The server never parses payloads.
+
+**V4. Encrypted relay transport** (3 days)
+- **Deps:** S6, V3. **Files:** `crates/meetings-sync/src/{envelope,relay}.rs`, `src/core/store/transport.rs`.
+- **Accept:**
+  - Two simulated devices sync through the relay in CI.
+  - A test searches server storage for corpus strings and finds none.
+
+**V5. Pairing and recovery** (3 days)
+- **Deps:** V4. **Accept:** pairing with the 6-digit check number works, and a fresh device restores from the recovery key in CI.
+
+**V6. Revocation and epoch rotation** (2 days)
+- **Deps:** V5. **Accept:**
+  - After revoke, the removed device cannot read new batches.
+  - Old-epoch blobs are deleted from the relay.
+
+**V7. Workspace ACL and authorization** (3 days)
+- **Deps:** V1. **Files:** `server/src/authz.rs`, `migrations/0002_acl.sql`.
+- **Accept:**
+  - In the cross-tenant matrix, guessed ids, pagination and search all deny.
+  - Row-level security blocks a query that skips the module.
+
+**V8. Copy to team** (3 days)
+- **Deps:** V7, F4, C1. **Files:** `server/src/workspace.rs`, `src/core/team.rs`.
+- **Accept:**
+  - The dialog content matches ADR 0003.
+  - The transcript is off by default.
+  - `copied_from` is set and both labels show.
+
+**V9. Remote MCP** (3 days)
+- **Deps:** T1, V7, V2. **Files:** `server/src/mcp.rs`.
+- **Accept:**
+  - `/mcp` answers 401 with resource metadata and checks the token audience.
+  - Results are scoped to the workspace.
+  - `search` and `fetch` work.
+  - Schemas match the local snapshot.
+
+**V10. Billing** (3 days)
+- **Deps:** V3, plus a cost check against the $3 price (owner decision D1) and Paddle eligibility for India. **Files:** `server/src/billing.rs`.
+- **Accept:** with `BILLING=off`, there are no limits. Webhooks update quota.
+
+**Gate before paid launch:**
+- independent cryptography and security review of V4 to V9;
+- privacy statement and SECURITY.md.
+
+## Phase 5: distribution (ADR 0008)
+
+**D1. Velopack release** (2 days)
+- **Deps:** F0. **Files:** `src/main.rs`, `.github/workflows/release.yml`, `Cargo.toml` (`velopack`).
+- **Accept:**
+  - A tag produces `Setup.exe` and delta packages.
+  - CI installs N and updates to N+1 on a clean runner.
+
+**D2. Supply chain** (1 day)
+- **Deps:** F0. **Files:** `deny.toml`, `.github/workflows/ci.yml`.
+- **Accept:** `cargo-deny` checks licences and advisories, an SBOM is uploaded, and attestations are on.
+
+**D3. Signing** (1 day, plus approval time)
+- **Deps:** D1, the privacy gate (S04) and a public repository.
+- **Accept:** a signed `Setup.exe` and exe, with the publisher shown in Windows.
+
+**D4. macOS discovery** (2 days, spike, later)
+- **Deps:** D1. **Accept:** a written check of Rune, Hex and the platform adapters on macOS, with a port estimate.
+
+## Suggested first three parallel lanes
+
+1. F0 + F1 (CI and the domain crate). F0 is short, so one builder can do both.
+2. F6 status files (unblocks the Background UI).
+3. H1 harness trait (closes S05 and S11 early).
+
+Then F2, F3 and F4, then S1 and C1 in parallel.

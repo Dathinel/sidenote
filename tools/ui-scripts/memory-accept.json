@@ -1,0 +1,4 @@
+{"events": [
+ {"t": 0.3, "type": "tap", "key": "mig-accept"},
+ {"t": 1.2, "type": "mark", "name": "end"}
+]}

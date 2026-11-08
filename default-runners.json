@@ -1,0 +1,165 @@
+[
+  {
+    "name": "Claude Sonnet",
+    "program": "claude",
+    "model": "claude-sonnet-5-5",
+    "args": [
+      "-p",
+      "--model",
+      "{model}",
+      "--permission-mode",
+      "default",
+      "--disallowedTools",
+      "Edit,Write,MultiEdit,NotebookEdit,Bash,PowerShell",
+      "--allowedTools",
+      "*",
+      "--permission-prompts",
+      "none",
+      "--no-session-persistence",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "Claude Opus",
+    "program": "claude",
+    "model": "claude-opus-5-5",
+    "args": [
+      "-p",
+      "--model",
+      "{model}",
+      "--permission-mode",
+      "default",
+      "--disallowedTools",
+      "Edit,Write,MultiEdit,NotebookEdit,Bash,PowerShell",
+      "--allowedTools",
+      "*",
+      "--permission-prompts",
+      "none",
+      "--no-session-persistence",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "Codex",
+    "program": "codex",
+    "model": "gpt-6.1-terra",
+    "args": [
+      "exec",
+      "--model",
+      "{model}",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "approval_policy=\"never\"",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--json",
+      "-"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "Codex Sol",
+    "program": "codex",
+    "model": "gpt-6.1-sol",
+    "args": [
+      "exec",
+      "--model",
+      "{model}",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "approval_policy=\"never\"",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--json",
+      "-"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "OpenCode",
+    "program": "opencode",
+    "model": "openai/gpt-6.1-terra-fast",
+    "args": [
+      "run",
+      "--model",
+      "{model}",
+      "--format",
+      "json",
+      "--agent",
+      "plan"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "Claude Sonnet (answer only)",
+    "program": "claude",
+    "model": "claude-sonnet-5-5",
+    "args": [
+      "-p",
+      "--model",
+      "{model}",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--no-session-persistence",
+      "--output-format",
+      "text"
+    ],
+    "stdin": true,
+    "tools": false
+  },
+  {
+    "name": "Daily check (Opus)",
+    "program": "claude",
+    "model": "claude-opus-5-5",
+    "args": [
+      "-p",
+      "--model",
+      "{model}",
+      "--tools",
+      "Read,Grep,Glob",
+      "--allowedTools",
+      "Read,Grep,Glob",
+      "--strict-mcp-config",
+      "--permission-prompts",
+      "none",
+      "--no-session-persistence",
+      "--output-format",
+      "stream-json",
+      "--verbose"
+    ],
+    "stdin": true,
+    "tools": true
+  },
+  {
+    "name": "Memory migration (answer only)",
+    "program": "claude",
+    "model": "claude-sonnet-5-5",
+    "args": [
+      "-p",
+      "--model",
+      "{model}",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--no-session-persistence",
+      "--output-format",
+      "text"
+    ],
+    "stdin": true,
+    "tools": false
+  }
+]
