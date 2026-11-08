@@ -14,6 +14,7 @@ while the app stays open source, offline-first and usable with no account.
 | [0006](adr-0006-agent-harness-layer.md) | One `Harness` trait over ACP with a CLI fallback; the notes pipeline becomes a resumable Rust job runner that writes status files. |
 | [0007](adr-0007-chat-history.md) | Named chat threads with per-answer provenance, local FTS5 search, JSON and Markdown export, and a `propose_chat_summary` tool. |
 | [0008](adr-0008-distribution-and-updates.md) | Velopack installer and updates from GitHub Releases, signed through SignPath Foundation, Azure Artifact Signing as fallback. |
+| [0009](adr-0009-pipeline-models-languages.md) | Eight pipeline steps, each with a chosen provider and a fallback; per-chunk language detection routes speech to the right model and skips translating English; a curated model directory with licence shown before any install. |
 
 Build order: [ROADMAP.md](ROADMAP.md). Pilot task: [spikes/automerge-pilot-spec.md](spikes/automerge-pilot-spec.md).
 

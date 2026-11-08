@@ -146,6 +146,114 @@ Notation: **Deps** = lanes that must merge first. **Files** = the main files tou
   - Migration is idempotent.
   - Uninstalled agents are marked "Not installed".
 
+## Phase 2b: models and languages (ADR 0009)
+
+Lanes marked **Owner audio** need the owner's real meetings to judge quality. Each of them runs once on the
+owner's machine; the results file holds only numbers and labels, never transcript text. Every other lane is
+judged in CI on synthetic or openly licensed clips.
+
+**M0. Baseline timing** (1 day)
+- **Owner audio:** timings only.
+- **Deps:** none. **Files:** `docs/architecture/spikes/pipeline-baseline.md`, `tools/pipeline_timings.ps1`.
+- **Accept:**
+  - Seconds per audio hour for prepare, each recognition pass, translation and notes, taken from the existing `audio-evidence.json` timing fields on at least 5 real meetings.
+  - Recognition calls per chunk are recorded.
+  - No transcript text leaves the machine.
+
+**M1. Pipeline config v1** (2 days)
+- **Deps:** H8. **Files:** `src/core/pipeline/{mod,config,provider}.rs`, `src/core/config.rs`.
+- **Accept:**
+  - The `pipeline` section round-trips through serde (golden JSON).
+  - Provider refs parse (`hex:`, `runtime:`, `endpoint:`, `acp:`, `cli:`, `off`).
+  - A provider kind that a step does not allow is rejected with a plain message.
+  - A config with no section loads as the `compat` profile, and migration is idempotent.
+
+**M2. Model catalog file and search** (2 days)
+- **Deps:** none. **Files:** `assets/catalog/models.toml`, `src/core/catalog.rs`, `docs/models/adding-a-model.md`, `.github/workflows/ci.yml` (catalog lint).
+- **Accept:**
+  - The CI lint checks the schema, SPDX ids, a `sha256` for each download URL and unique ids.
+  - At least 15 seed entries, each with `source_url` and `verified_on`.
+  - Unit tests cover search and the filters for task, language, size, licence and fit.
+
+**M3. Hex model bridge** (2 days)
+- **Deps:** M2. **Files:** `src/core/hex_models.rs`, `tests/support/fake_hex.rs`.
+- **Accept:** against a fake `hex` in CI:
+  - It parses `model list --json` v4 and `model devices`.
+  - Install restores the previous `transcription.model`, so dictation is unchanged.
+  - GGUF import returns the new id.
+  - One chunk is transcribed through the local API with an explicit model and language, and the token never appears in logs.
+
+**M4. Hardware tiers and fit badges** (1 day)
+- **Deps:** M3. **Files:** `src/core/hardware.rs`.
+- **Accept:** table tests map device lists to Light, Standard and GPU, and map catalog entries to "Fits GPU", "Runs on CPU, slower" or "Too large".
+
+**M5. Language detection stage** (3 days)
+- **Owner audio:** for the mixed-language accuracy check.
+- **Deps:** H3, H7. **Files:** `src/core/jobs/stages/language_detect.rs`, `src/core/lid/{mod,whisper}.rs`.
+- **Accept:**
+  - Each chunk gets a language, a confidence and the top two languages.
+  - Detection is limited to the meeting languages.
+  - A chunk under 2 seconds inherits the previous label.
+  - Results are cached.
+  - In CI: 95% or more correct on single-language clips of 3 seconds or more, and 60 s or less per audio hour on the CPU runner.
+  - On owner audio: a labelled sample of 100 chunks reports accuracy on mixed Hindi and English.
+  - The lane decides whether VoxLingua107 ECAPA replaces Whisper.
+
+**M6. Routed recognition** (3 days)
+- **Owner audio:** to choose the Hindi route.
+- **Deps:** M1, M3, M5. **Files:** `src/core/jobs/stages/transcribe.rs`, `src/core/transcript_segments.rs`.
+- **Accept:**
+  - Each chunk gets one call, chosen by its route.
+  - English chunks reuse Hex's reading.
+  - On the GPU tier only, a low-confidence chunk gets a second reading.
+  - It writes `transcript.segments.v1.json` with the original text.
+  - On a fake engine: 1.15 calls or fewer per chunk, and changing one route re-reads only those chunks.
+
+**M7. Translate with the English skip** (2 days)
+- **Deps:** H5, M6. **Files:** `src/core/jobs/stages/translate.rs`.
+- **Accept:**
+  - English chunks (confidence 0.8 or more) are never sent to translation.
+  - An all-English meeting skips the step.
+  - Translation is cached per chunk.
+  - `text_en` and `text_original` are both kept.
+  - The fake harness sees no English chunk.
+
+**M8. EndpointHarness** (2 days)
+- **Deps:** H1. **Files:** `src/core/harness/endpoint.rs`, `tests/support/fake_openai.rs`.
+- **Accept:** against a fake server in CI:
+  - It probes `/v1/models` and streams `/v1/chat/completions`.
+  - It sends `response_format` with a JSON schema; on rejection it falls back to JSON mode, and the output is validated either way.
+  - A non-loopback URL is refused unless owner choice O1 allows it.
+  - Timeout and cancel work.
+
+**M9. Local translator runtime** (3 days)
+- **Owner audio:** the quality verdict, decision O2.
+- **Deps:** M2, M7. **Files:** `src/core/translate/{mod,ctranslate2}.rs`, behind a `local-translate` cargo feature.
+- **Accept:**
+  - IndicTrans2 200M Indic to English runs as `runtime:indictrans2-indic-en-200m` after a user click installs it.
+  - The hash is checked.
+  - In CI: one sentence translates on the CPU runner.
+
+**M10. Settings > Pipeline** (3 days)
+- **Deps:** M1, M4. **Files:** `src/ui/settings_pipeline.rs`, a small entry in `src/ui/nav.rs`, `tools/render_ui.ps1` scenes.
+- **Accept:**
+  - Renders in dark and light at phone width.
+  - Eight step rows, the language chips and "Use recommended".
+  - The step sheet saves the provider, model and fallback.
+  - The routes show for Speech.
+
+**M11. Settings > Models and "Try on a meeting"** (3 days)
+- **Owner audio:** the comparison view replaces the scripts' side-by-side readings.
+- **Deps:** M2, M3, M4, M6. **Files:** `src/ui/settings_models.rs`, `src/core/jobs/compare.rs`.
+- **Accept:**
+  - Search and filter chips work.
+  - The licence dialog appears before any install, and a test shows that opening the screen makes no network call.
+  - "Add your own" covers GGUF, URL, ACP and CLI.
+  - "Try on a meeting" runs two providers on 10 chunks of a chosen meeting and shows them side by side, cached.
+
+Order: M0, M2 and M8 can start now. M1 waits for H8. M5 waits for H3 and H7. The UI lanes M10 and M11
+come last.
+
 ## Phase 3: chat history (ADR 0007)
 
 **C1. Thread model and migration** (2 days)
