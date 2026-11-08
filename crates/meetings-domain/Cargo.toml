@@ -1,0 +1,15 @@
+[package]
+name = "meetings-domain"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Shared, storage-independent types for Meetings"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v5", "v7", "serde"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
