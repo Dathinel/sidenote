@@ -1,19 +1,22 @@
 # ADR 0009: Configurable pipeline, language routing and model directory
 
-Status: proposed, 2026-11-08. Amends ADR 0006 (adds a provider per stage and an `EndpointHarness`).
+Status: proposed, 2026-11-08; amended the same day with the owner's decisions and the Indic ASR research (see Sources). Amends ADR 0006 (adds a provider per stage and an `EndpointHarness`). Every model size, speed and quality figure below is **unverified** until lane M0 measures it.
 
 ## Context
 
-- **Today's scripts read every chunk several times.** `meeting-audio.py` splits each track into speech chunks of 24 seconds or less (sherpa-onnx VAD and diarization), then sends every chunk to two language-specific Hex models through the Hex local API (`POST /transcriptions?model=&language=`). An LLM then merges those two readings with Hex's own English reading and translates in batches of about 18,000 characters. A one-language meeting pays for three readings and a full LLM pass.
-- **Models and agents are fixed in the scripts:** an OpenCode model for translation, Claude Code (Sonnet) for notes, Claude Code (Haiku) for the quick title and a Python call for tasks.
-- **What Hex offers** (read from `hex model list --json` v4, `model devices` and `settings list`):
-  - A speech catalog of 17 entries. Each has `languages`, `size`, `installed`, `streams`, `vocabulary` (bias, prompt or none) and `source` (hex, download or imported).
-  - `model import` copies a GGUF file into Hex, and `model transcribe --model --language` transcribes a WAV file.
-  - `model devices` lists the compute devices, for example a Vulkan GPU with 6 GB and the CPU with its RAM.
-- **Hex's limits:**
-  - Meetings and dictation share one model: there is only `transcription.model` and `transcription.language`, with no meeting-specific key.
-  - Hex does not detect the spoken language. The language is fixed per model choice; a Labs option switches it by keyboard layout, and Whisper-family models accept `auto`.
-  - `model install` downloads a model **and selects it**, which would change the user's dictation model.
+- **Today's scripts read every chunk three times.** `meeting-audio.py` splits each track into speech chunks of 24 seconds or less and sends each to two language-specific Hex models (`POST /transcriptions?model=&language=`). An LLM merges those readings with Hex's own English reading and translates in batches of about 18,000 characters.
+- **What Hex offers:** a 17-entry speech catalog, `model import` for GGUF files, `model transcribe --model --language` for WAV files, and `model devices`. **Its limits:**
+  - Meetings and dictation share one model (`transcription.model`). Upstream issue [anomalyco/hex#1351](https://github.com/anomalyco/hex/issues/1351) asks for a separate meeting model.
+  - No language detection; Whisper-family models accept `auto`.
+  - `model install` downloads a model **and selects it**, which changes the user's dictation model.
+  - `model transcribe --model <id>` loads an installed model for one call and saves no selection ([cli.rs:681-740](https://github.com/anomalyco/hex/blob/dev/src/control/cli.rs#L681-L740); `save_selection` is separate, at [cli.rs:643-658](https://github.com/anomalyco/hex/blob/dev/src/control/cli.rs#L643-L658)). This is source reading, not a live test.
+  - Upstream [Windows docs](https://github.com/anomalyco/hex/blob/dev/docs/windows.md) say the local transcription service is unavailable on Windows; the owner's build may differ, and M0 checks.
+
+**Owner decisions, 2026-11-08.**
+- **Everything builds on Hex.** Each language's default model is small and fast on CPU, ideally 100 to 300 MB like Parakeet. Bigger models are opt-in (more RAM or a GPU).
+- **Meetings uses its own model, separate from dictation.** Now: explicit `--model` plus GGUF import. Later: Hex alone, once #1351 and a non-selecting install ship.
+- **Small non-English models that Hex cannot load run through sherpa-onnx in Meetings** (provisional).
+- **Users declare their meeting languages and can force a route**, for example "Hindi + English mixed".
 
 ## Decision
 
@@ -34,115 +37,104 @@ Status: proposed, 2026-11-08. Amends ADR 0006 (adds a provider per stage and an 
 
 | Kind | Example | Runs through |
 | --- | --- | --- |
-| Hex model | `hex:<model-id>` | Hex local API or CLI |
-| Local model runtime | `runtime:<catalog-id>` | ONNX or CTranslate2 inside the job runner |
-| Local LLM endpoint | `endpoint:<name>` | OpenAI-compatible HTTP |
+| Hex model | `hex:<model-id>` | Hex local API or `hex model transcribe --model` |
+| Local model runtime | `runtime:<catalog-id>` | sherpa-onnx (provisional, see (c)) or CTranslate2 inside the job runner |
+| OpenAI-compatible endpoint | `endpoint:<name>` | HTTP; local or remote, the user's own key (see below) |
 | ACP agent | `acp:<agent-id>` | ADR 0006 `AcpHarness` |
 | CLI agent | `cli:<agent-id>` | ADR 0006 `CliHarness` |
 
 `hex:meeting-transcript` means Hex's own meeting transcript, used as is.
 
-**LLM steps use the `Harness` trait.** Translate, quick title, notes, tasks and memory all go through ADR 0006's `Harness`.
-- A third implementation, `EndpointHarness`, calls `/v1/chat/completions` and probes `/v1/models`.
-- Ollama, LM Studio and llama.cpp `llama-server` all expose these endpoints.
-- It offers no tools, so `ToolPolicy::None` always holds.
-- For JSON outputs it sends `response_format` with a JSON schema. When the server rejects that, it falls back to JSON mode, and validates the result either way.
+**LLM steps use the `Harness` trait.** Translate, quick title, notes, tasks and memory go through ADR 0006's `Harness`. A third implementation, `EndpointHarness`, calls `/v1/chat/completions` and probes `/v1/models` (Ollama, LM Studio and llama.cpp `llama-server` expose both). It offers no tools, so `ToolPolicy::None` always holds. For JSON outputs it sends `response_format` with a JSON schema, falls back to JSON mode when the server rejects it, and validates the result either way.
 
-**Audio steps use two small traits.** `LanguageId::identify(chunk) -> (lang, confidence, top2)` and `SpeechEngine::transcribe(chunk, lang) -> (text, confidence)`.
+**Endpoints (owner decision O1).** The user may connect any OpenAI-compatible endpoint, local or remote (their own server, a cloud GPU, or a provider with zero data retention), for any step, with their own API key. It is a feature for speed, or for a laptop that is too weak. The rules:
+- **Keys live in the OS keystore** (lane S5). `config.json` holds only the URL and key name. A key never appears in config, logs or synced files.
+- **A one-time notice per endpoint** names the host that will receive meeting text, and audio when a speech step is remote. The first send waits for the user's yes; a changed host asks again.
+- **Local is the default for new users.** Nothing is sent until the user picks an endpoint for a step, and "Use recommended" never picks a remote one.
+- **Remote URLs must use https.**
+- **ACP and CLI agents remain the official adapters;** the generic endpoint covers everything else. This amends ADR 0006's "no cloud APIs" rule for endpoints the user chooses.
 
-**Fallbacks.** Every step has one `fallback` provider. When the chosen provider fails probe or run, the job tries the fallback once, then follows ADR 0006's retry rule.
+**Audio steps use two traits:** `LanguageId::identify(chunk) -> (lang, confidence, top2)` and `SpeechEngine::transcribe(chunk, lang) -> (text, confidence)`.
 
-**Config lives in device-local `config.json`** (ADR 0001 class 4; it never syncs):
+**Fallbacks.** Every step has one `fallback` provider, tried once when the chosen one fails, then ADR 0006's retry rule applies.
+
+**Config lives in device-local `config.json`** (ADR 0001 class 4; it never syncs). Model ids below are examples, and every route is provisional until lane M0 picks it:
 
 ```json
 "pipeline": { "schema": 1, "profile": "recommended", "meeting_languages": ["hi", "en"],
+  "language_mode": "auto",
+  "endpoints": { "cloud-gpu": { "base_url": "https://llm.example.com/v1", "key": "keystore" } },
   "steps": {
     "language_detect": { "provider": "runtime:whisper-lid-base", "fallback": "off" },
     "speech": { "routes": { "en": "hex:parakeet_unified_en", "hi": "hex:nemotron_3_5_asr",
+                            "ta": "runtime:indicconformer-ta-ctc",
                             "*": "hex:whisper_large_v3_turbo" }, "fallback": "hex:meeting-transcript" },
-    "translate": { "provider": "acp:claude-code", "model": null, "fallback": "endpoint:ollama", "skip_english": true },
-    "notes": { "provider": "acp:claude-code", "fallback": "cli:codex" } } }
+    "translate": { "provider": "acp:claude-code", "fallback": "endpoint:ollama", "skip_english": true } } }
 ```
 
-**Hardware tiers.** Tiers come from `hex model devices`; "Use recommended" applies the tier's defaults.
+`language_mode` is `auto` (detect per chunk), `off` (first meeting language's route) or `forced:<route>` (every chunk takes one route, such as `forced:hi+en`).
+
+**Hardware tiers** come from `hex model devices`; "Use recommended" applies the tier's defaults. Bigger models are opt-in at every tier.
 
 | Tier | Hardware | Default behaviour |
 | --- | --- | --- |
-| Light | CPU only, under 16 GB RAM | No language detection; Hex's meeting transcript is used as is; agents do the text steps. |
-| Standard | CPU with 16 GB RAM or more, or a GPU under 6 GB | Whisper tiny language detection; one routed recognition pass. |
-| GPU | 6 GB VRAM or more | Whisper base language detection; a second reading for low-confidence chunks; local endpoints offered. |
+| Light | CPU only, under 16 GB RAM | No language detection; Hex's meeting transcript as is; agents do the text steps. For non-English languages the app offers an explicit compact route (see (c)) and never skips Indic recognition silently. |
+| Standard | 16 GB RAM or more, or a GPU under 6 GB | Whisper tiny language detection; one routed recognition pass. |
+| GPU | 6 GB VRAM or more | Whisper base language detection; a second reading for low-confidence chunks; endpoints offered. |
 
 ### (b) Language handling
 
-1. **Declare the meeting's languages.** The user lists the languages their meetings use, for example Hindi and English. Detection is restricted to that list, which turns a 99-way choice into a 2-way choice and cuts errors.
+1. **Declare the meeting's languages,** for example Hindi and English. Detection is restricted to that list (2-way, not 99-way). The user can also **force a route** (`language_mode`) or turn detection off. A forced "Hindi + English mixed" route sends every chunk to the mixed-speech model and skips the detector.
 2. **Detect per chunk** on the existing VAD chunks, which are 24 seconds or less.
-   - **Default detector:** Whisper language identification through sherpa-onnx. It ships tiny, base, small and medium models (no large). The tiny model ran at real-time factor 0.043 in sherpa's own example.
-   - **Why per chunk:** `whisper.transcribe()` detects once, from the first 30 seconds, then fixes the language for the whole file. That fails on code-switched meetings, so a per-chunk call is required.
+   - **Default detector:** Whisper language identification through sherpa-onnx (tiny, base, small and medium models). The tiny model ran at real-time factor 0.043 in sherpa's example.
+   - **Why per chunk:** `whisper.transcribe()` detects once, from the first 30 seconds, and fixes the language for the file. That fails on code-switched meetings.
    - **Short chunks:** a chunk under 2 seconds inherits the language of the same speaker's previous chunk.
-3. **Route each chunk** by its label to that language's model. The `*` route (a multilingual model) takes three cases: other languages, chunks with confidence below 0.6, and chunks where the top two languages are within 0.2 of each other (the mixed case, such as Hindi with English words).
-   - **Reuse Hex's reading for English chunks.** When the label is English and Hex's meeting model is an English model, the stage reuses Hex's own reading and makes no new call.
-   - **GPU tier only:** low-confidence chunks also get one reading from the language model, and translation receives both readings, as today.
-4. **Skip translation for English.** Chunks labelled English with confidence of 0.8 or more are not sent to translation; their text goes straight into the English transcript. An all-English meeting runs no translate step at all.
-5. **Keep the original.** The transcript becomes one content blob, `transcript.segments.v1.json`. Each segment holds `start`, `end`, `track`, `speaker`, `lang`, `lang_conf`, `text_original`, `text_en`, and the provider and model for each step. The UI offers an English view and an Original view.
-6. **Cache every result.** Results go in `local/cache/<step>/<key>.json`, which is device-local, never syncs, and is capped at 500 MB (least recently used goes first).
-   - **Cache key:** `sha256(input bytes or text, provider, model id or checksum, language, prompt template version)`.
-   - **Effect:** re-running notes re-reads nothing, and changing the Hindi route re-reads only the Hindi chunks.
+   - **A label is not proof.** The detector labels a whole chunk. A chunk labelled Hindi can hold English words, and a confident label does not show one language. The thresholds in item 3 are uncalibrated for mixed speech; lane M5 benchmarks detection and mixed-language recognition separately.
+3. **Route each chunk** by its label to that language's model. The `*` route (a multilingual model) takes other languages, chunks with confidence below 0.6, and chunks where the top two languages are within 0.2 of each other (the mixed case).
+   - **English chunks** reuse Hex's reading when Hex's meeting model is English: no new call.
+   - **GPU tier only:** low-confidence chunks get a second reading, and translation receives both.
+4. **Skip translation for English.** Chunks labelled English with confidence of 0.8 or more skip translation and go straight into the English transcript. An all-English meeting runs no translate step.
+5. **Keep the original.** The transcript is one blob, `transcript.segments.v1.json`; each segment holds times, track, speaker, `lang`, `lang_conf`, `text_original`, `text_en` and the provider and model per step. The UI offers an English view and an Original view.
+6. **Cache every result** in `local/cache/<step>/<key>.json` (device-local, 500 MB cap, least recently used first). The key is `sha256(input, provider, model id or checksum, language, prompt template version)`, so re-running notes re-reads nothing and changing the Hindi route re-reads only Hindi chunks.
 
 ### (c) The model directory
 
-- **A curated file, changed only by pull request.** The catalog is `assets/catalog/models.toml`, one `[[model]]` per entry. Each entry has these fields:
-  - identity and tasks: `id`, `name`, `tasks` (lid, asr, translate, llm), `languages`;
-  - size: `size_mb`, `params`;
-  - licence: `licence` (SPDX), `licence_url`, `commercial_use`, `gated`;
-  - install: `runtime` (hex, sherpa-onnx, ctranslate2, endpoint), `install` (a Hex id, or file URLs with a `sha256` each);
-  - hardware: `min_ram_mb`, `min_vram_mb`, `cpu_ok`;
-  - provenance: `source_url`, `verified_on`.
-- **CI checks every pull request** against the schema: SPDX licence ids, a hash for every download, and no duplicate ids. Community additions arrive as pull requests that follow `docs/models/adding-a-model.md`.
-- **The catalog ships inside each release.** "Refresh list" fetches the latest file only when the user clicks it.
-- **Search and filter.** Settings > Models searches name, language and task, and filters by task, language, size, licence and "Fits this PC". The fit badges follow LM Studio's pattern:
-  - "Fits GPU";
-  - "Runs on CPU, slower";
-  - "Too large".
-- **Install speech models through Hex.** Before calling `hex model install`, Meetings reads `transcription.model` and restores it with `hex model use` afterwards, so dictation never changes. An upstream `--keep-selection` flag would remove this step.
-- **Download other models with checks.** Meetings downloads the listed files, checks each `sha256`, and stores them in `local/models/`.
-- **Gated models are never fetched by the app.** Some models require accepting terms on Hugging Face first. For those the app shows "Open model page" instead of Install.
-- **Show the licence before install.** The install dialog always shows the licence name, a link, "Commercial use: yes or no" and the size. Install is the only button that downloads anything. Nothing downloads at startup, on search or on update.
-- **"Add your own" has four paths:**
-  1. A GGUF speech model, through `hex model import`. The user then picks which languages to route to it.
-  2. An OpenAI-compatible URL. It is probed with `/v1/models`, and its models are listed.
-  3. An ACP agent command.
-  4. A CLI agent.
-
-  These entries live in the device-local `models.user[]` list, labelled "Added by you, licence not checked".
+- **A curated file, changed only by pull request.** The catalog is `assets/catalog/models.toml`, one `[[model]]` per entry. Fields: `id`, `name`, `tasks`, `languages`, `size_mb`, `params`, `licence` (SPDX), `licence_url`, `commercial_use`, `gated`, `runtime` (hex, sherpa-onnx, ctranslate2, endpoint), `install` (a Hex id, or file URLs with a `sha256` each), `min_ram_mb`, `min_vram_mb`, `cpu_ok`, `source_url`, `verified_on`. Three more, `cpu_rtf`, `wer_hi_en` and `measured_on`, stay `null` (shown as "unverified") until M0 fills them.
+- **CI checks every pull request:** SPDX ids, a hash for every download, no duplicate ids (`docs/models/adding-a-model.md`). The catalog ships in each release; "Refresh list" fetches the latest file only on a click.
+- **Search and filter** by name, language, task, size, licence and "Fits this PC". Fit badges: "Fits GPU", "Runs on CPU, slower", "Too large".
+- **Meetings never changes the user's dictation model.**
+  - **Now:** `hex model transcribe --model <id>` on models already installed in Hex, and `hex model import` for new GGUF files (after an architecture and licence check). If a catalog model is not installed, the app tells the user to install it in Hex, because that call switches dictation.
+  - **Never** `hex model install` followed by a restore: dictation changes in the gap, a user change can race the restore, and the restore can fail.
+  - **Later:** Hex alone, once #1351 and a non-selecting install land. Per-chunk routing stays in Meetings.
+- **Provisional runtime.** Models that Hex cannot load run through sherpa-onnx in Meetings, from tested ONNX packs only (lane M12). Lane M13 works upstream; Meetings removes the runtime when Hex loads the models.
+- **Downloads are checked and explicit.** Meetings checks each file's `sha256`, stores files in `local/models/` and never fetches gated models (the app shows "Open model page"). The install dialog shows the licence, a link, "Commercial use: yes or no" and the size. Install is the only button that downloads anything.
+- **"Add your own"** takes a GGUF model (`hex model import`), an OpenAI-compatible URL and key, an ACP command or a CLI agent. Entries sit in the device-local `models.user[]` list, labelled "Added by you, licence not checked".
 
 **Seed entries:**
-- **Language detection:** sherpa-onnx Whisper tiny and base. The candidate SpeechBrain VoxLingua107 ECAPA (Apache-2.0, 6.7% error on its dev set, 107 languages) enters only if lane M5 shows that it beats Whisper on short chunks.
-- **Speech:** Hex's catalog mirrored, plus AI4Bharat IndicConformer 600M (MIT, 22 Indian languages, gated).
-- **Translation:** IndicTrans2 Indic to English, the 200M distilled and 1.1B versions (MIT), and MADLAD-400 3B (Apache-2.0).
-- **Rejected as defaults:** NLLB-200 and MMS-LID, both CC-BY-NC-4.0, so they would be listed with "Commercial use: no" at most. Parakeet v3 and Canary v2 cover 25 European languages and no Hindi.
+- **Language detection:** sherpa-onnx Whisper tiny and base. SpeechBrain VoxLingua107 ECAPA (86.4 MB, Apache-2.0, 107 languages) enters only if lane M5 shows it beats Whisper on short chunks.
+- **Speech:** Hex's catalog mirrored, plus the candidates below. IndicConformer 600M (MIT, 22 languages, gated) is listed but not a small default.
+- **Translation:** IndicTrans2 Indic to English (MIT) and MADLAD-400 3B (Apache-2.0).
+- **Rejected as defaults:** Shuka-1 (9B); NLLB-200 and MMS-LID (CC-BY-NC-4.0); Parakeet v3 and Canary v2 (no Hindi).
+
+**Provisional model tiers.** Sizes are downloads, not RAM. **Every size, speed and quality figure is unverified** until lane M0 measures CPU real-time factor and mixed-script WER on consented audio. No source shows any candidate matching Parakeet's speed. The two Hex-native candidates (Nemotron, Parakeet) exceed 300 MB and are listed because Hex loads them today.
+
+| Language group | Small default candidate | Medium, opt-in | Large, opt-in |
+| --- | --- | --- | --- |
+| Hindi / Hinglish | [Nemotron 3.5](https://huggingface.co/Litovation/nemotron-3.5-asr-streaming-0.6b-gguf) Q4, 496 MB, in Hex; or [Whisper Hindi2Hinglish Swift](https://huggingface.co/Oriserve/Whisper-Hindi2Hinglish-Swift) ONNX, about 150 MB, sherpa-onnx | [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) Q8, 850 MB | Nemotron 3.5 F16, 1.28 GB |
+| Other Indian languages | [IndicConformer](https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx) CTC ONNX, about 190 MB per language, sherpa-onnx | Whisper small ONNX, about 360 MB | [omniASR CTC 300M](https://huggingface.co/facebook/omniASR-CTC-300M/tree/main), 1.3 GB, runtime unverified |
+| English | Hex Parakeet unified Q4, about 477 MB ([listing](https://huggingface.co/cswk/sayit-asr-gguf)) | Nemotron Q4, 496 MB | Nemotron F16, 1.28 GB |
+
+- Language packs add up (3 at 190 MB is 570 MB); the app shows the total before download. The 150 MB and 190 MB figures are publisher claims.
+- Convert to GGUF only when frontend, tokenizer, tensor names and decoder match a family that Hex's engine supports ([conversion guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/tools/conversion.md)). A NeMo format or a GGUF header that loads does not show inference works.
+- M0 tests Nemotron first, and the other two only if Nemotron fails on CPU speed or Hinglish quality.
 
 ### (d) Settings UI (phone-width, one column)
 
-**Settings > Pipeline.**
-- At the top:
-  - "Meeting languages", as chips with "+ Add".
-  - "This PC: GPU 6 GB, Standard tier" with a "Use recommended" button.
-- Then eight rows, one per step. Each row shows the step name, "Uses: Claude Code" and a small "If it fails: Ollama".
-- Tapping a row opens a sheet with:
-  - one provider picker, grouped as Hex models, Local models, Local servers and Agents;
-  - a model field;
-  - a fallback picker;
-  - a Skip switch, where the step allows it.
-- The Speech sheet shows the routes as rows, for example "Hindi → Nemotron 3.5". The Language row shows "Detects: Hindi, English".
-
-**Settings > Models.**
-- A search box, one row of filter chips, then cards.
-- Each card shows the name, tasks, languages (first 3, then "+N"), size, a licence badge, a fit badge and one button: Install, Installed or Use.
-- Two tabs: Directory and Added by you. "Add your own" sits at the bottom of the second tab.
+**Settings > Pipeline:** meeting-language chips, a "Language handling" choice (detect per chunk, off, or a forced route such as "Hindi + English mixed"), "This PC: GPU 6 GB, Standard tier" with "Use recommended", then eight step rows. A tap opens a sheet with a provider picker, model field, fallback picker and Skip switch. "Add endpoint" takes a URL and key and shows the host notice. **Settings > Models:** search, filter chips and cards (name, tasks, languages, size, licence, fit badge, "unverified" or measured CPU speed, one Install, Installed or Use button), in tabs Directory and Added by you.
 
 ### (e) Efficiency targets
 
-Lane M0 measures the baseline, and lanes M5 to M7 must meet these targets:
+Lane M0 measures the baseline plus WER (mixed-script normalization) and CPU real-time factor per candidate. Lanes M5 to M7 must meet these targets, which stay provisional until M0 reports; M0 also sets the CPU real-time factor each language default must meet.
 
 | Measure | Target |
 | --- | --- |
@@ -150,61 +142,42 @@ Lane M0 measures the baseline, and lanes M5 to M7 must meet these targets:
 | Average recognition calls per chunk | 1.15 or fewer (today 2, plus Hex's own reading) |
 | LLM input for English chunks | 0 tokens |
 | Re-running notes only | no audio work; under 5 s before the agent call |
-| Quick title | within 30 s of the meeting's end, from Hex's live transcript |
 | Total audio stage on the GPU tier | under 0.15 × meeting length |
-
-**Steps are skipped in these cases:**
-- Meeting languages are English only: no detection, no new recognition (Hex's transcript is used) and no translation.
-- A chunk under 2 seconds: no detection (it inherits the previous label).
-- Memory is off by default.
 
 ### (f) Migration and fit
 
-1. **No change until the user switches.** Lane M1 adds the `pipeline` section with a `compat` profile that matches today's scripts. The owner's runs only change when they pick "Use recommended".
-2. **Ride ADR 0006's runner.** Lane H3's runner calls the scripts as stages. Lane M5 adds `language_detect` as a Rust stage and depends on lane H7's sherpa-onnx decision. Lanes M6 and M7 replace the transcribe and translate scripts.
-3. **LLM steps go through `Harness`.** `EndpointHarness` joins `AcpHarness` and `CliHarness`. Endpoints are loopback-only by default (see owner choice O1).
-4. **Storage stays behind ADR 0001's seam.** Segments, both texts and per-step Provenance are a Transcript content blob behind `Store::put_blob`. Config, user models, `local/models/` and `local/cache/` are device-local and never sync.
+1. **No change until the user switches.** Lane M1 adds the `pipeline` section with a `compat` profile that matches today's scripts. Runs change only when the user picks "Use recommended".
+2. **Ride ADR 0006's runner.** Lane H3's runner calls the scripts as stages. Lane M5 adds `language_detect` (after H7's sherpa-onnx decision), lanes M6 and M7 replace the transcribe and translate scripts, and lane M12 adds the provisional runtime.
+3. **Retire the extra runtime only at parity.** Lane M13 (upstream Hex work) targets a meeting-model setting and a non-selecting install. Meetings removes `runtime:` speech entries only after Hex loads those models, and a migration moves the user's routes to `hex:` ids.
+4. **LLM steps go through `Harness`.** `EndpointHarness` joins `AcpHarness` and `CliHarness`. Endpoints follow decision O1: any URL, keys in the keystore, a notice before the first send.
+5. **Storage stays behind ADR 0001's seam.** The segments blob (both texts, per-step Provenance) goes behind `Store::put_blob`. Config, user models, `local/models/` and `local/cache/` stay device-local.
 
-## Owner choices
+## Owner decisions on open choices
 
-- **O1. Endpoints off this machine.**
-  - (A) Loopback only. This is the default and keeps ADR 0006's "no cloud APIs" rule.
-  - (B) Any URL, after a warning naming the host that receives meeting text.
-- **O2. The translation default for Indian languages.**
-  - (A) The user's agent. This is the default: it handles mixed Hindi and English best and uses the glossary.
-  - (B) IndicTrans2, local and free, but trained on clean text.
-
-  Decide after lane M11 runs on real meetings.
+- **O1. Any OpenAI-compatible endpoint, local or remote. Decided.** Users connect their own server, a cloud GPU or a zero-retention provider, with their own key, per step. The rules are under "Endpoints" in (a).
+- **O2. Indian-language translation. Decided provisionally:** the user's own agent translates (best on mixed Hindi and English). IndicTrans2 stays the alternative. Revisit after M0.
 
 ## Options rejected
 
-- **One multilingual model for everything:** Whisper turbo misreads mixed speech and detects the language once per file. It stays as the `*` route.
-- **Running every model on every chunk (today's design):** it costs about 3 readings per chunk.
-- **MMS-LID:** CC-BY-NC, and a 1B-parameter model for a 2-way choice.
-- **Fetching the catalog live from Hugging Face:** it brings no licence review, no hashes and network calls without a click.
-- **A separate meeting model setting in Hex:** routing needs per-chunk choice, which the local API already allows.
+- **Fetching the catalog live from Hugging Face:** no licence review, no hashes, calls without a click.
+- **Install, then restore the dictation model:** see (c).
+- **A meeting-model setting in Hex as the whole answer:** per-chunk routing stays in Meetings; #1351 retires only the extra runtime.
+- **Treating a language label as proof of one language, claiming small means fast, assuming any GGUF model loads:** code switches occur inside chunks, no CPU measurement exists yet, and architecture must match.
 
 ## Sources
 
 - Whisper detects the language once per file: https://github.com/openai/whisper/blob/main/whisper/transcribe.py
 - sherpa-onnx language identification: https://k2-fsa.github.io/sherpa/onnx/spoken-language-identification/pretrained_models.html
 - SpeechBrain VoxLingua107 ECAPA: https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa
-- MMS-LID: https://huggingface.co/facebook/mms-lid-126
 - AI4Bharat IndicConformer: https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual
 - Parakeet v3: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
 - Canary v2 and Parakeet v3 report: https://arxiv.org/abs/2509.14128
 - IndicTrans2: https://arxiv.org/pdf/2305.16307
 - NLLB licence: https://github.com/facebookresearch/fairseq/blob/nllb/README.md
 - MADLAD-400: https://huggingface.co/google/madlad400-3b-mt
+- Indic ASR research, 2026-11-08 (source reading, no live measurement): `E:\Personal-Projects\reviews\hex-meetings-2026-11-08\indic-asr-research.md`
 - Ollama OpenAI compatibility: https://docs.ollama.com/api/openai-compatibility
 - llama.cpp server: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
-- ACP agent list: https://agentclientprotocol.com/get-started/agents
-- Ollama library: https://ollama.com/library
 - LM Studio staff picks: https://lmstudio.ai/changelog/lmstudio-v0.3.16
-- Jan model management: https://jan.ai/docs/manage-models
-- Hugging Face model cards: https://huggingface.co/docs/hub/model-cards
 
-**Verify in the lane that first depends on each claim:**
-- whether sherpa-onnx returns per-language probabilities (needed for the restriction and for the margin);
-- `json_schema` support in each endpoint;
-- the LM Studio port and its `/v1/models` behaviour.
+**Verify in the lane that first depends on each claim:** whether sherpa-onnx returns per-language probabilities; `json_schema` support in each endpoint; the LM Studio port; and, per ASR candidate, licence, gated access, Windows CPU speed and which runtime loads it.

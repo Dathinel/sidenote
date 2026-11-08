@@ -152,18 +152,28 @@ Lanes marked **Owner audio** need the owner's real meetings to judge quality. Ea
 owner's machine; the results file holds only numbers and labels, never transcript text. Every other lane is
 judged in CI on synthetic or openly licensed clips.
 
-**M0. Baseline timing** (1 day)
-- **Owner audio:** timings only.
-- **Deps:** none. **Files:** `docs/architecture/spikes/pipeline-baseline.md`, `tools/pipeline_timings.ps1`.
+Owner decisions of 2026-11-08 (see ADR 0009): everything builds on Hex; each language default is small
+(ideally 100 to 300 MB) and fast on CPU, with bigger models opt-in; Meetings uses a meeting model separate from
+Hex's dictation model; small non-English models that Hex cannot load run through a provisional sherpa-onnx
+runtime; users can declare their meeting languages and force a route; users may connect any OpenAI-compatible
+endpoint, local or remote, with their own key. Every model size and quality figure stays unverified until M0
+reports.
+
+**M0. Real-meeting evaluation** (3 days; **running since 2026-11-08**, first lane of Phase 2b)
+- **Owner audio:** timings and error rates only.
+- **Deps:** none. **Files:** `docs/architecture/spikes/pipeline-baseline.md`, `tools/pipeline_timings.ps1`. It also fills the `cpu_rtf`, `wer_hi_en` and `measured_on` fields for each tested model in the catalog.
 - **Accept:**
-  - Seconds per audio hour for prepare, each recognition pass, translation and notes, taken from the existing `audio-evidence.json` timing fields on at least 5 real meetings.
-  - Recognition calls per chunk are recorded.
-  - No transcript text leaves the machine.
+  - Baseline: seconds per audio hour for prepare, each recognition pass, translation and notes, from the `audio-evidence.json` timing fields on at least 5 real meetings. Recognition calls per chunk are recorded.
+  - Hex check: whether the local transcription service works on the owner's Windows build, and that `hex model transcribe --model <id>` leaves `transcription.model` unchanged.
+  - Model comparison on consented real or mixed Hindi and English samples: Hex's installed Nemotron first, then the 150 MB Hinglish Whisper ONNX and a 190 MB IndicConformer pack through sherpa-onnx only if Nemotron fails on CPU speed or Hinglish quality. Each reports download size, CPU real-time factor and mixed-script WER (one normalization rule, written down).
+  - Language ID is benchmarked separately from recognition, on mixed chunks.
+  - The results file picks one default per language, or says none qualifies.
+  - No transcript text leaves the machine, and no model is installed through `hex model install`.
 
 **M1. Pipeline config v1** (2 days)
 - **Deps:** H8. **Files:** `src/core/pipeline/{mod,config,provider}.rs`, `src/core/config.rs`.
 - **Accept:**
-  - The `pipeline` section round-trips through serde (golden JSON).
+  - The `pipeline` section, including `language_mode` (`auto`, `off` or `forced:<route>`) and the `endpoints` list (base URL and keystore key name, never the key), round-trips through serde (golden JSON).
   - Provider refs parse (`hex:`, `runtime:`, `endpoint:`, `acp:`, `cli:`, `off`).
   - A provider kind that a step does not allow is rejected with a plain message.
   - A config with no section loads as the `compat` profile, and migration is idempotent.
@@ -172,16 +182,17 @@ judged in CI on synthetic or openly licensed clips.
 - **Deps:** none. **Files:** `assets/catalog/models.toml`, `src/core/catalog.rs`, `docs/models/adding-a-model.md`, `.github/workflows/ci.yml` (catalog lint).
 - **Accept:**
   - The CI lint checks the schema, SPDX ids, a `sha256` for each download URL and unique ids.
-  - At least 15 seed entries, each with `source_url` and `verified_on`.
+  - At least 15 seed entries, each with `source_url` and `verified_on`; size and quality fields read "unverified" until M0 measures them.
   - Unit tests cover search and the filters for task, language, size, licence and fit.
 
 **M3. Hex model bridge** (2 days)
 - **Deps:** M2. **Files:** `src/core/hex_models.rs`, `tests/support/fake_hex.rs`.
 - **Accept:** against a fake `hex` in CI:
   - It parses `model list --json` v4 and `model devices`.
-  - Install restores the previous `transcription.model`, so dictation is unchanged.
+  - It never calls `hex model install`. A fake that records every call shows none, and `transcription.model` is unchanged after every operation.
   - GGUF import returns the new id.
-  - One chunk is transcribed through the local API with an explicit model and language, and the token never appears in logs.
+  - One chunk is transcribed with `hex model transcribe --model <id> --language <code>` (or the local API with an explicit model), and the token never appears in logs.
+  - A model that is not installed produces an "Install it in Hex" message, not an install.
 
 **M4. Hardware tiers and fit badges** (1 day)
 - **Deps:** M3. **Files:** `src/core/hardware.rs`.
@@ -192,7 +203,8 @@ judged in CI on synthetic or openly licensed clips.
 - **Deps:** H3, H7. **Files:** `src/core/jobs/stages/language_detect.rs`, `src/core/lid/{mod,whisper}.rs`.
 - **Accept:**
   - Each chunk gets a language, a confidence and the top two languages.
-  - Detection is limited to the meeting languages.
+  - Detection is limited to the meeting languages, and the user can turn it off or force a route.
+  - Labels are per-chunk guesses: the confidence and margin thresholds come from the mixed-speech benchmark, not from assumption.
   - A chunk under 2 seconds inherits the previous label.
   - Results are cached.
   - In CI: 95% or more correct on single-language clips of 3 seconds or more, and 60 s or less per audio hour on the CPU runner.
@@ -203,7 +215,7 @@ judged in CI on synthetic or openly licensed clips.
 - **Owner audio:** to choose the Hindi route.
 - **Deps:** M1, M3, M5. **Files:** `src/core/jobs/stages/transcribe.rs`, `src/core/transcript_segments.rs`.
 - **Accept:**
-  - Each chunk gets one call, chosen by its route.
+  - Each chunk gets one call, chosen by its route, or by the forced route (for example "Hindi + English mixed") when the user sets one.
   - English chunks reuse Hex's reading.
   - On the GPU tier only, a low-confidence chunk gets a second reading.
   - It writes `transcript.segments.v1.json` with the original text.
@@ -218,16 +230,20 @@ judged in CI on synthetic or openly licensed clips.
   - `text_en` and `text_original` are both kept.
   - The fake harness sees no English chunk.
 
-**M8. EndpointHarness** (2 days)
-- **Deps:** H1. **Files:** `src/core/harness/endpoint.rs`, `tests/support/fake_openai.rs`.
+**M8. EndpointHarness** (3 days)
+- **Deps:** H1, S5 (keystore). **Files:** `src/core/harness/endpoint.rs`, `src/core/endpoints.rs`, `tests/support/fake_openai.rs`.
 - **Accept:** against a fake server in CI:
   - It probes `/v1/models` and streams `/v1/chat/completions`.
   - It sends `response_format` with a JSON schema; on rejection it falls back to JSON mode, and the output is validated either way.
-  - A non-loopback URL is refused unless owner choice O1 allows it.
+  - Any OpenAI-compatible URL works, local or remote, per pipeline step (owner decision O1). A remote URL must use https.
+  - The API key is read from the OS keystore. A test finds the key in no config file, log line, journal or synced file.
+  - Nothing is sent until the user picks an endpoint for a step, and new users start with local providers.
+  - A one-time notice per endpoint names the host that receives meeting text, and audio when a speech step uses it. The send waits for the user's yes, and a changed host asks again.
+  - ACP and CLI agents stay as they are; the generic endpoint covers every other provider.
   - Timeout and cancel work.
 
 **M9. Local translator runtime** (3 days)
-- **Owner audio:** the quality verdict, decision O2.
+- **Owner audio:** the quality verdict. Owner decision O2 (the user's own agent translates Indian languages) is provisional and is revisited with the M0 results.
 - **Deps:** M2, M7. **Files:** `src/core/translate/{mod,ctranslate2}.rs`, behind a `local-translate` cargo feature.
 - **Accept:**
   - IndicTrans2 200M Indic to English runs as `runtime:indictrans2-indic-en-200m` after a user click installs it.
@@ -241,6 +257,8 @@ judged in CI on synthetic or openly licensed clips.
   - Eight step rows, the language chips and "Use recommended".
   - The step sheet saves the provider, model and fallback.
   - The routes show for Speech.
+  - The language handling choice (detect per chunk, off, forced route) saves to `language_mode`.
+  - "Add endpoint" takes a URL and an API key (stored in the keystore) and shows the host notice before first use.
 
 **M11. Settings > Models and "Try on a meeting"** (3 days)
 - **Owner audio:** the comparison view replaces the scripts' side-by-side readings.
@@ -251,8 +269,24 @@ judged in CI on synthetic or openly licensed clips.
   - "Add your own" covers GGUF, URL, ACP and CLI.
   - "Try on a meeting" runs two providers on 10 chunks of a chosen meeting and shows them side by side, cached.
 
-Order: M0, M2 and M8 can start now. M1 waits for H8. M5 waits for H3 and H7. The UI lanes M10 and M11
-come last.
+**M12. sherpa-onnx recognition runtime, provisional** (3 days)
+- **Deps:** M0 (a model that M0 selects but Hex cannot load), M2, H7. **Files:** `src/core/asr/{mod,sherpa}.rs`, `assets/catalog/models.toml`, packaging notes in `docs/architecture/spikes/`.
+- **Accept:**
+  - `runtime:<id>` speech providers run tested ONNX packs through sherpa-onnx, with each file's `sha256` checked and a download only after a user click.
+  - The first pack is the one M0 picks (for example the 150 MB Hinglish Whisper or a 190 MB IndicConformer pack).
+  - In CI, one clip transcribes on the CPU runner, and the Windows package size and memory are recorded.
+  - The code sits behind a cargo feature and one trait, so a later lane can remove it without touching the router.
+
+**M13. Upstream Hex contribution** (3 days; owner approval before any pull request)
+- **Deps:** M0. **Files:** a fork of Hex (not this repo), plus a short design note in `docs/architecture/spikes/hex-upstream.md`.
+- **Accept:**
+  - Support for [issue #1351](https://github.com/anomalyco/hex/issues/1351): a separate meeting-model setting, reviewed against `src/app_settings/meetings.rs`, `src/meeting/runtime.rs` and the settings UI.
+  - An install command that downloads a model without selecting it.
+  - Hex loads at least one compact model that M12 runs today, or the note states why it cannot.
+  - When these land in a Hex release, a follow-up lane removes M12's runtime for the models Hex now loads, with a migration that keeps the user's routes.
+
+Order: M0 is running now and gates every model choice. M2 and M8 can start now (M8 also needs S5). M1 waits
+for H8. M5 waits for H3 and H7. M12 and M13 wait for the M0 results. The UI lanes M10 and M11 come last.
 
 ## Phase 3: chat history (ADR 0007)
 
