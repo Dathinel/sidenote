@@ -3,6 +3,25 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
+/// Identity of an installed catalogue model without re-reading it. `asr::model_path` only
+/// returns a pack whose receipt matches the catalogue and whose files are not newer than the
+/// receipt, and the receipt is written after each file's SHA-256 was verified at download. So
+/// the catalogue hashes identify the bytes on disk, and hashing 200 MB again on every run
+/// (about 2 to 8 CPU seconds per model) buys nothing.
+pub fn installed_identity(root: &Path, id: &str) -> Result<String> {
+    asr::model_path(root, id)?;
+    let model = crate::core::model_catalog::catalog()
+        .iter()
+        .find(|m| m.id == id)
+        .ok_or("Unknown meeting model")?;
+    Ok(model
+        .files
+        .iter()
+        .map(|f| f.sha256)
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 pub fn model_checksum(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hash = Sha256::new();

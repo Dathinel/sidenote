@@ -230,8 +230,7 @@ pub fn route(request: Request<'_>) -> Result<Transcript> {
         && config.meeting_languages.iter().any(|l| l != "en");
     #[cfg(feature = "asr-runtime")]
     let lid_checksum = if detect {
-        asr::model_path(&config.model_state_dir, "anuvani-lid-int8")
-            .and_then(|p| cache::model_checksum(&p))
+        cache::installed_identity(&config.model_state_dir, "anuvani-lid-int8")
     } else {
         Err("Detector not required".into())
     };
@@ -498,11 +497,10 @@ pub fn route(request: Request<'_>) -> Result<Transcript> {
                 let result = (|| {
                     asr::initialize(&config.runtime_dll)?;
                     let model = asr::model_path(&config.model_state_dir, "indicconformer-hi-ctc")?;
-                    hindi_checksum = format!(
-                        "{}:{}",
-                        cache::model_checksum(&model)?,
-                        cache::model_checksum(&model.with_file_name("tokens.txt"))?
-                    );
+                    hindi_checksum = cache::installed_identity(
+                        &config.model_state_dir,
+                        "indicconformer-hi-ctc",
+                    )?;
                     asr::IndicConformer::load(&model, &model.with_file_name("tokens.txt"))
                 })();
                 match result {
@@ -596,18 +594,7 @@ pub fn configuration_key(config: &RoutingConfig) -> Result<String> {
             || matches!(config.language_mode.as_str(), "forced:hi" | "forced:mixed"))
     {
         for id in ["anuvani-lid-int8", "indicconformer-hi-ctc"] {
-            let checksum = asr::model_path(&config.model_state_dir, id)
-                .and_then(|path| {
-                    let graph = cache::model_checksum(&path)?;
-                    if id == "indicconformer-hi-ctc" {
-                        Ok(format!(
-                            "{graph}:{}",
-                            cache::model_checksum(&path.with_file_name("tokens.txt"))?
-                        ))
-                    } else {
-                        Ok(graph)
-                    }
-                })
+            let checksum = cache::installed_identity(&config.model_state_dir, id)
                 .unwrap_or_else(|_| "unavailable".into());
             resources.push((id.to_owned(), checksum));
         }
