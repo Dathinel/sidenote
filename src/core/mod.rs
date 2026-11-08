@@ -5,6 +5,7 @@ pub mod asr;
 pub mod check_state;
 pub mod config;
 pub mod export;
+pub mod meeting_router;
 pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;

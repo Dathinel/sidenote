@@ -107,6 +107,8 @@ pub struct Config {
     pub features: Features,
     #[serde(default)]
     pub knowledge_base: KnowledgeBase,
+    #[serde(default)]
+    pub pipeline: super::meeting_router::RoutingConfig,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -117,6 +119,7 @@ impl Default for Config {
             version: 1,
             features: Features::default(),
             knowledge_base: KnowledgeBase::default(),
+            pipeline: super::meeting_router::RoutingConfig::default(),
             extra: BTreeMap::new(),
         }
     }

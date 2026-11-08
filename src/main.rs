@@ -11,6 +11,9 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
     }
+    if args.iter().any(|a| a == "--transcribe-file") {
+        std::process::exit(sidenote::core::meeting_router::run_cli(&args));
+    }
     if std::env::args().any(|a| a == "--hex-engine-status") {
         std::process::exit(sidenote::hex_engine::run_status());
     }
