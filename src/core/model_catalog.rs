@@ -54,8 +54,15 @@ pub struct Model {
     pub runtime_note: &'static str,
 }
 
-// Provisional only. The language-routing evaluation owns the final defaults.
+/// Slowest sustained download accepted after the first minute (16 KB/s, about 128 kbit/s).
+const MIN_BYTES_PER_SEC: u64 = 16 * 1024;
+
+// Small defaults. Hindi IndicConformer and Anuvani are measured (ADR 0009 (b), 2026-11-09:
+// 12.8 WER on Hindi; 1% of Hindi and 5% of mixed clips missed). The other IndicConformer
+// languages are the only small option found and are unmeasured. Anuvani is recommended only
+// when more than one language is declared; the Settings screen applies that rule.
 pub const PROVISIONAL_DEFAULT_IDS: &[&str] = &[
+    "anuvani-lid-int8",
     "indicconformer-hi-ctc",
     "indicconformer-bn-ctc",
     "indicconformer-ta-ctc",
@@ -131,16 +138,25 @@ impl ModelStore {
             .iter()
             .map(|f| (f.name, f.sha256, f.bytes))
             .collect();
-        let Ok(bytes) = fs::read(receipt) else {
+        let Ok(bytes) = fs::read(&receipt) else {
             return Ok(None);
         };
         if bytes != serde_json::to_vec(&expected)? {
             return Ok(None);
         }
+        // The receipt is written after every file is verified and renamed, so a file changed
+        // later (same size or not) is newer than the receipt and no longer counts. This does not
+        // catch silent bit rot; a full re-hash is too slow for every lookup.
+        let Ok(receipt_time) = fs::metadata(&receipt).and_then(|m| m.modified()) else {
+            return Ok(None);
+        };
         let paths: Vec<_> = m.files.iter().map(|f| dir.join(f.name)).collect();
         if paths.iter().zip(m.files).all(|(p, f)| {
             fs::symlink_metadata(p).is_ok_and(|meta| {
-                meta.is_file() && !meta.file_type().is_symlink() && meta.len() == f.bytes
+                meta.is_file()
+                    && !meta.file_type().is_symlink()
+                    && meta.len() == f.bytes
+                    && meta.modified().is_ok_and(|t| t <= receipt_time)
             })
         }) {
             Ok(Some(paths))
@@ -205,7 +221,10 @@ impl ModelStore {
         if receipt.exists() {
             fs::remove_file(&receipt)?;
         }
+        // No proxy from the environment: an HTTPS_PROXY with a user and password would be sent
+        // as Proxy-Authorization, possibly over plain HTTP. Nothing secret leaves this request.
         let agent = ureq::Agent::config_builder()
+            .proxy(None)
             .https_only(true)
             .max_redirects(0)
             .timeout_resolve(Some(Duration::from_secs(3)))
@@ -272,6 +291,10 @@ impl ModelStore {
                 let mut reader = response.body_mut().as_reader();
                 let mut buffer = [0; 64 * 1024];
                 let mut last = Instant::now();
+                // The per-read timeout restarts on every byte, so a server trickling one byte at a
+                // time never trips it. After a minute, require a floor rate; the .part resumes.
+                let started = Instant::now();
+                let start_offset = offset;
                 progress(Progress {
                     downloaded: completed + offset,
                     total: m.bytes(),
@@ -290,6 +313,14 @@ impl ModelStore {
                     }
                     output.write_all(&buffer[..n])?;
                     offset += n as u64;
+                    let secs = started.elapsed().as_secs();
+                    if secs >= 60 && offset - start_offset < secs * MIN_BYTES_PER_SEC {
+                        output.sync_all()?;
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "The download is too slow. Try again later; it will resume.",
+                        ));
+                    }
                     if last.elapsed() >= Duration::from_millis(150) {
                         progress(Progress {
                             downloaded: completed + offset,
