@@ -203,18 +203,19 @@ pub fn view(s: &State, p: Palette) -> El {
         languages = languages.child(
             pressable(
                 label(
-                    if selected {
-                        format!("Selected: {name}")
-                    } else {
-                        name.into()
-                    },
+                    name,
                     13.0,
-                    500.0,
+                    if selected { 600.0 } else { 500.0 },
                     if selected { p.accent } else { p.soft },
                 )
                 .px(10.0)
                 .py(5.0)
                 .radius(8.0)
+                .fill(if selected {
+                    p.accent.alpha(0.14)
+                } else {
+                    p.accent.alpha(0.0)
+                })
                 .border(1.0, if selected { p.accent } else { p.line }),
             )
             .key(format!("meeting-language-{id}"))
@@ -229,14 +230,36 @@ pub fn view(s: &State, p: Palette) -> El {
     if let Some(e) = &models.preference_error {
         body = body.child(label(e, 13.0, 500.0, p.warn).role("alert"));
     }
+    // English is Hex's Parakeet: nothing to download. Speech models show for the other chosen
+    // languages; language detection shows once a second language is chosen (ADR 0009 (b)).
+    let others: Vec<&str> = models
+        .languages
+        .iter()
+        .map(String::as_str)
+        .filter(|l| *l != "en")
+        .collect();
     let visible: Vec<_> = model_catalog::catalog()
         .iter()
         .filter(|m| {
-            m.languages
-                .iter()
-                .any(|l| models.languages.iter().any(|chosen| chosen == l))
+            // Downloaded models stay listed so they can be removed after a language is dropped.
+            if models.installed.contains(m.id) || models.progress.contains_key(m.id) {
+                return true;
+            }
+            if m.role == model_catalog::Role::LanguageId {
+                models.languages.len() > 1
+            } else {
+                m.languages.iter().any(|l| others.contains(l))
+            }
         })
         .collect();
+    if visible.is_empty() {
+        return body.child(label(
+            "English uses Hex's own model. Nothing to download. Add another language to see its models.",
+            14.0,
+            400.0,
+            p.soft,
+        ));
+    }
     let total: u64 = visible
         .iter()
         .filter(|m| m.size_tier() == SizeTier::Default && !models.installed.contains(m.id))
@@ -244,16 +267,20 @@ pub fn view(s: &State, p: Palette) -> El {
         .sum();
     body = body
         .child(label(
-            format!(
-                "Provisional small recommendations: {:.1} MB to download",
-                total as f64 / 1_000_000.0
-            ),
+            if total == 0 {
+                "Everything recommended for these languages is downloaded.".to_string()
+            } else {
+                format!(
+                    "Recommended for these languages: {:.0} MB to download",
+                    total as f64 / 1_000_000.0
+                )
+            },
             14.0,
             600.0,
             p.ink,
         ))
         .child(label(
-            "Language evaluation will decide the defaults. Each download is your choice.",
+            "Models run on this computer. Each download is your choice.",
             13.0,
             400.0,
             p.soft,
@@ -275,16 +302,28 @@ pub fn view(s: &State, p: Palette) -> El {
             .child(hairline(p))
             .child(label(m.name, 16.0, 600.0, p.ink));
         let tier = if m.size_tier() == SizeTier::Default {
-            "Provisional small recommendation"
+            "Recommended"
         } else {
             "Optional"
         };
+        let langs = if m.languages.len() > 4 {
+            format!("{} languages", m.languages.len())
+        } else {
+            m.languages
+                .iter()
+                .map(|l| {
+                    LANGUAGES
+                        .iter()
+                        .find(|(id, _)| id == l)
+                        .map_or(*l, |(_, name)| *name)
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         card = card.child(label(
             format!(
-                "{} | {} | {} | {}",
-                m.languages.join(", "),
+                "{langs} · {} licence · {}",
                 m.licence,
-                m.runtime.name(),
                 if m.runtime == Runtime::Hex {
                     "Managed by Hex"
                 } else {
@@ -313,7 +352,12 @@ pub fn view(s: &State, p: Palette) -> El {
                 ));
             }
             if m.role == model_catalog::Role::LanguageId {
-                card = card.child(label(m.runtime_note, 12.5, 400.0, p.soft));
+                card = card.child(label(
+                    "Tells English from Hindi in each part of the meeting, so each part goes to the right model.",
+                    12.5,
+                    400.0,
+                    p.soft,
+                ));
             }
             if let Some(progress) = models.progress.get(id) {
                 if models.jobs.get(id).is_some_and(|job| job.removing) {

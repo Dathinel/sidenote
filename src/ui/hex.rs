@@ -1129,7 +1129,7 @@ impl Section {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::MeetingModels => "Meeting models",
+            Self::MeetingModels => "Languages",
             Self::Features => "Features",
             Self::Model => "Model",
             Self::Vocabulary => "Vocabulary",
