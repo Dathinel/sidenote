@@ -83,8 +83,9 @@ fn search_box(s: &State, k: &Kit, height: f32, placeholder: &str, p: Palette) ->
         .on_change(|s: &mut State, _| s.on_search_changed())
         .on_key(search_key)
         .height(height)
-        // Ctrl+K opens the palette from anywhere; the cap tells people so (UX-12).
-        .trailing(keycap("Ctrl K", p))
+        // "/" focuses this box from anywhere on the page. Ctrl+K opens the palette instead, so
+        // the cap names the key that actually lands here.
+        .trailing(keycap("/", p))
         .build(k)
         .key("search")
         .border(1.0, if s.search.focused { p.accent } else { p.line })

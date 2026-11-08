@@ -24,6 +24,8 @@ pub struct Palette {
     pub chip: Color,
     pub hit: Color,
     pub shadow: Color,
+    /// Dims the page under a modal, dark enough that page headings do not compete with it.
+    pub scrim: Color,
 }
 
 pub fn palette(dark: bool) -> Palette {
@@ -45,6 +47,7 @@ pub fn palette(dark: bool) -> Palette {
             "#2a2a27",
             "#3a3317",
             "#00000066",
+            "#000000b3",
         ]
     } else {
         [
@@ -64,6 +67,7 @@ pub fn palette(dark: bool) -> Palette {
             "#efede7",
             "#fff3c4",
             "#1e1e1c1f",
+            "#1e1e1c73",
         ]
     }
     .map(|s| rune::color::hex(s).expect("palette colours are valid hex"));
@@ -84,6 +88,7 @@ pub fn palette(dark: bool) -> Palette {
         chip: c[13],
         hit: c[14],
         shadow: c[15],
+        scrim: c[16],
     }
 }
 

@@ -503,12 +503,18 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
             p,
         ));
     }
-    frame
+    frame = frame
         .child(tools)
         .child(hairline(p))
         .child(scroll(lines, "transcript-scroll"))
         .child(hairline(p))
-        .child(foot)
+        .child(foot);
+    // Covering the page, the floating Ask bar sits over the panel's bottom edge. Keep the foot
+    // above it.
+    if overlay {
+        frame = frame.child(el().h(s.overlay_h.get()));
+    }
+    frame
 }
 
 // ---- the page ----------------------------------------------------------------------------
@@ -681,7 +687,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     }
     let panel_on = s.transcript_open && !m.lines.is_empty();
     let (_, panel_w, covers) = split_geometry(s, narrow, panel_on);
-    // No room beside the summary: the transcript is the page, and the Ask bar steps aside.
+    // No room beside the summary: the transcript is the page, and the Ask bar stays at the
+    // bottom so people can still ask about what they are reading.
     if panel_on && covers {
         return pane
             .child(
@@ -692,7 +699,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     .child(text_title(&m.title, 24.0, p).mb(12.0))
                     .child(tab_row(s, k, m, narrow, p, layer)),
             )
-            .child(transcript_panel(s, k, m, true, p).grow(1.0));
+            .child(transcript_panel(s, k, m, true, p).grow(1.0))
+            .child(ask::overlay(s, k, p, narrow, layer));
     }
     let doc = col()
         .w_full()

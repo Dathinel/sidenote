@@ -431,7 +431,7 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
             .child(
                 el().key("finder-scrim")
                     .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                    .fill(p.shadow)
+                    .fill(p.scrim)
                     .on_press(|s: &mut State| s.close_finder()),
             )
             .child(
