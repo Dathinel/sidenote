@@ -37,7 +37,7 @@ SOFTWARE.
 ## Locked Cargo inventory
 
 Generated with `cargo metadata --format-version 1 --locked`, including optional,
-build, development and other-platform packages. This lists all 427 dependency
+build, development and other-platform packages. This lists all 435 dependency
 package versions, not just the Windows runtime subset. No incompatible licence
 was identified in their declared expressions. For OR expressions, use MIT,
 Apache-2.0 or another compatible permissive option; in particular r-efi does not
@@ -109,6 +109,7 @@ below are an inference from those terms and the package declarations.
 | cc | 1.11.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | Compatible permissive option |
 | cfg_aliases | 0.2.2 | MIT | Compatible permissive option |
+| chacha20 | 0.10.2 | MIT OR Apache-2.0 | Compatible permissive option |
 | chrono | 0.4.45 | MIT OR Apache-2.0 | Compatible permissive option |
 | clipboard-win | 5.4.3 | BSL-1.0 | Compatible permissive option |
 | codespan-reporting | 0.13.1 | Apache-2.0 | Compatible permissive option |
@@ -121,6 +122,7 @@ below are an inference from those terms and the package declarations.
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 | Compatible permissive option |
 | core-graphics | 0.23.2 | MIT OR Apache-2.0 | Compatible permissive option |
 | core-graphics-types | 0.1.3 | MIT OR Apache-2.0 | Compatible permissive option |
+| core_detect | 1.0.0 | MIT/Apache-2.0 | Compatible permissive option |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | crc32fast | 1.5.4 | MIT OR Apache-2.0 | Compatible permissive option |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -295,6 +297,7 @@ below are an inference from those terms and the package declarations.
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | Compatible permissive option |
 | profiling | 1.0.18 | MIT OR Apache-2.0 | Compatible permissive option |
+| proptest | 1.12.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | pulldown-cmark | 0.13.6 | MIT | Compatible permissive option |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | Compatible permissive option |
 | quick-error | 2.0.1 | MIT/Apache-2.0 | Compatible permissive option |
@@ -302,6 +305,9 @@ below are an inference from those terms and the package declarations.
 | quote | 1.0.47 | MIT OR Apache-2.0 | Compatible permissive option |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | Compatible permissive option |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | Compatible permissive option |
+| rand | 0.10.3 | MIT OR Apache-2.0 | Compatible permissive option |
+| rand_core | 0.10.1 | MIT OR Apache-2.0 | Compatible permissive option |
+| rand_xorshift | 0.5.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | range-alloc | 0.1.5 | MIT OR Apache-2.0 | Compatible permissive option |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | Compatible permissive option |
 | raw-window-metal | 1.1.0 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -342,6 +348,7 @@ below are an inference from those terms and the package declarations.
 | serde_derive_internals | 0.30.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | Compatible permissive option |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 | Compatible permissive option |
+| sha1_smol | 1.0.1 | BSD-3-Clause | Compatible permissive option |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | shlex | 2.0.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 | Compatible permissive option |
@@ -387,6 +394,7 @@ below are an inference from those terms and the package declarations.
 | tree_magic_mini | 3.2.2 | MIT | Compatible permissive option |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | Compatible permissive option |
 | uds_windows | 1.2.1 | MIT | Compatible permissive option |
+| unarray | 0.1.4 | MIT OR Apache-2.0 | Compatible permissive option |
 | unicase | 2.10.0 | MIT OR Apache-2.0 | Compatible permissive option |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | Compatible permissive option |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | Compatible permissive option |

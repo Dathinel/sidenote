@@ -1,0 +1,5 @@
+[
+  { "device": "synthetic-device-a", "folder": "1800000000000-1", "uuid": "c659ae16-d081-5646-9124-07af8ec9b256" },
+  { "device": "synthetic-device-b", "folder": "1800000000000-1", "uuid": "6f405dea-ad66-5681-8b60-e18f7e6e8252" },
+  { "device": "synthetic-device-a", "folder": "1800000000001-1", "uuid": "79146e0f-a012-5a09-857e-3c27403bf8c4" }
+]

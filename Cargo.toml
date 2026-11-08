@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/meetings-domain"]
+default-members = [".", "crates/meetings-domain"]
+resolver = "3"
+
 [package]
 name = "hex-meetings"
 version = "0.1.0"
