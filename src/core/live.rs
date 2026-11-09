@@ -16,6 +16,25 @@ use std::{
 
 /// Where the user's own notes live, beside Hex's files. It syncs like other meeting text.
 pub const NOTES_FILE: &str = "notes.md";
+pub const NOTES_UNAVAILABLE: &str = "Meeting notes are not set up on this PC";
+pub const NOTES_FAILED: &str = "Meeting notes could not be created. Your recording is saved in Hex. Check the notes setup before trying again.";
+
+pub fn notes_pipeline() -> PathBuf {
+    PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
+        .join(".config/hex/scripts/hex-meeting-watch.ps1")
+}
+
+pub fn notes_problem(folder: &Path) -> Option<&'static str> {
+    if folder.join("english-summary.json").is_file() {
+        None
+    } else if folder.join("notes-failed").is_file() {
+        Some(NOTES_FAILED)
+    } else if !notes_pipeline().is_file() {
+        Some(NOTES_UNAVAILABLE)
+    } else {
+        None
+    }
+}
 const ROLLING_FILE: &str = "transcript.rolling.ndjson";
 /// A notes file larger than this is not read back into the editor or the meeting page.
 const NOTES_MAX_BYTES: u64 = 1024 * 1024;
@@ -155,6 +174,17 @@ pub fn write_notes(folder: &Path, text: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pipeline_failure_is_visible_until_a_summary_arrives() {
+        let folder = std::env::temp_dir().join(format!("notes-status-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("notes-failed"), b"failed").unwrap();
+        assert_eq!(notes_problem(&folder), Some(NOTES_FAILED));
+        fs::write(folder.join("english-summary.json"), b"{}").unwrap();
+        assert_eq!(notes_problem(&folder), None);
+        fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn rolling_lines_come_out_in_spoken_order() {

@@ -88,6 +88,7 @@ pub struct Feed {
     since_ms: i64,
     /// Counts every change, so the page knows to draw again.
     version: u64,
+    notes_problem: Option<&'static str>,
 }
 
 impl Feed {
@@ -137,6 +138,7 @@ pub struct Live {
     timer_armed: Arc<AtomicBool>,
     /// A render scene: nothing is read, and the bars hold still.
     scene: bool,
+    notes_unavailable: bool,
 }
 
 impl Drop for Live {
@@ -168,6 +170,7 @@ impl Live {
             saving: Saving::Quiet,
             timer_armed: Arc::new(AtomicBool::new(false)),
             scene: false,
+            notes_unavailable: !feed_io::notes_pipeline().is_file(),
         }
     }
 
@@ -182,6 +185,7 @@ impl Live {
             .unwrap_or(live.wall_start);
         live.exact = true;
         live.scene = true;
+        live.notes_unavailable = false;
         *live.quick_title.lock().unwrap_or_else(|e| e.into_inner()) = title.map(str::to_string);
         live
     }
@@ -413,7 +417,11 @@ impl State {
         let found = self
             .meetings
             .iter()
-            .find(|m| m.device.is_none() && !live.known.contains(&m.id))
+            .find(|m| {
+                m.device.is_none()
+                    && !live.known.contains(&m.id)
+                    && m.folder.join("english-summary.json").is_file()
+            })
             .map(|m| m.id.clone());
         if let Some(id) = found {
             let was_open = self.on_live();
@@ -453,8 +461,10 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
             continue;
         };
         let read = feed_io::read_rolling(&folder, last);
+        let notes_problem = feed_io::notes_problem(&folder);
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
-        let mut changed = f.folder.as_ref() != Some(&folder);
+        let mut changed = f.folder.as_ref() != Some(&folder) || f.notes_problem != notes_problem;
+        f.notes_problem = notes_problem;
         f.folder = Some(folder);
         match read {
             Ok(Read::Waiting | Read::Same) => {
@@ -518,8 +528,7 @@ impl State {
             return false;
         }
         let mut changed = false;
-        live.watching
-            .store(visible && live.phase != Phase::Making, Ordering::Relaxed);
+        live.watching.store(visible, Ordering::Relaxed);
         {
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if feed.hint.is_none() {
@@ -912,7 +921,9 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                 .pb(6.0),
         );
     }
-    let hint = if starting {
+    let hint = if s.live.as_ref().is_some_and(|l| l.notes_unavailable) {
+        feed_io::NOTES_UNAVAILABLE
+    } else if starting {
         "Starting the recording. You can start writing now."
     } else {
         "Notes save as you type. Hex writes the full notes after you stop."
@@ -959,6 +970,25 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .as_ref()
         .and_then(|l| l.stopped)
         .is_some_and(|t| t.elapsed() > MAKING_SLOW);
+    let problem = s.live.as_ref().and_then(|live| {
+        if live.notes_unavailable {
+            Some(feed_io::NOTES_UNAVAILABLE)
+        } else {
+            live.feed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .notes_problem
+                .or(slow.then_some(feed_io::NOTES_FAILED))
+        }
+    });
+    if let Some(problem) = problem {
+        return col().key("live-notes-problem").w_full().gap(16.0)
+            .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+            .child(roles::READ.wrap(problem, p.ink).role("status"))
+            .child(roles::SMALL.wrap("Your recording is saved in Hex. Your own notes appear in saved meetings once they are saved.", p.soft))
+            .children((!s.live_notes.text.trim().is_empty()).then(|| your_notes(s.live_notes.text.trim(), p)))
+            .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()));
+    }
     // The quick title as soon as it exists; until then the time heading, with a small note.
     let quick = s.live.as_ref().and_then(Live::quick_title);
     let step = |done: bool, text_: &str| {
