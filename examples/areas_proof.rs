@@ -12,6 +12,8 @@ use std::{
 };
 const SOURCE: &str = "Supply planning";
 const CHILD: &str = "Supplier selection";
+#[path = "support/areas_review_proof.rs"]
+mod review;
 fn write(path: &Path, value: &impl serde::Serialize) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
@@ -150,6 +152,7 @@ fn rows(store: &TaskStore, convert: bool) -> Vec<MigrationRow> {
             .into(),
             convert: convert && p.name == SOURCE,
             children: Default::default(),
+            assignments: Default::default(),
         })
         .collect()
 }
@@ -214,7 +217,10 @@ fn main() {
                 "legacy",
                 "child-move",
                 "raw-move",
-            ] {
+            ]
+            .into_iter()
+            .chain(review::CASES.iter().copied())
+            {
                 let data = root.join(scenario);
                 assert_eq!(child(&data, "prepare", None), 0);
                 assert_eq!(child(&data, scenario, None), 0, "{scenario}");
@@ -235,6 +241,20 @@ fn main() {
                     assert_eq!(child(&data, "batch", None), 0);
                 }
                 assert_eq!(child(&data, "undo", None), 0);
+                assert_eq!(child(&data, "bytes", None), 0);
+                evidence
+                    .push(json!({"scenario":format!("crash-{stage}"),"passed":true,"data":data}));
+            }
+            for stage in ["undo-staged", "undo-publication", "undo-published"] {
+                let data = root.join(format!("crash-{stage}"));
+                assert_eq!(child(&data, "prepare", None), 0);
+                assert_eq!(child(&data, "batch", None), 0);
+                assert_eq!(child(&data, "undo", Some(stage)), 86);
+                if stage != "undo-published" {
+                    assert_eq!(child(&data, "review-undo-check-old", None), 0);
+                    assert_eq!(child(&data, "undo", None), 0);
+                }
+                assert_eq!(child(&data, "review-undo-check-new", None), 0);
                 assert_eq!(child(&data, "bytes", None), 0);
                 evidence
                     .push(json!({"scenario":format!("crash-{stage}"),"passed":true,"data":data}));
@@ -418,17 +438,12 @@ fn main() {
             let id: String =
                 serde_json::from_slice(&fs::read(root.join("undo-id.json")).unwrap()).unwrap();
             store.undo_area(&id).unwrap();
-            let mut p = store.load_projects().unwrap();
+            let p = store.load_projects().unwrap();
             let before: core::Projects =
                 serde_json::from_slice(&fs::read(root.join("before.json")).unwrap()).unwrap();
-            p.other.retain(|k, _| !k.starts_with("area-operation:"));
-            let mut before = before;
-            before
-                .other
-                .retain(|k, _| !k.starts_with("area-operation:"));
             assert_eq!(
-                serde_json::to_value(&p).unwrap(),
-                serde_json::to_value(before).unwrap()
+                review::logical_projects(p),
+                review::logical_projects(before)
             );
             if root.join("peer-journals.json").exists() {
                 assert_eq!(
@@ -761,6 +776,7 @@ fn main() {
             assert_eq!(all.manual.len(), 2);
         }
         "bytes" => verify_bytes(&root),
+        mode if mode.starts_with("review-") => review::run(mode, &store),
         _ => panic!("Unknown proof mode"),
     }
 }
