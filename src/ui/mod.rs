@@ -2515,6 +2515,13 @@ pub fn spec() -> AppSpec<State> {
                 }
             }),
             // The live page while recording, while starting, and while the notes are made.
+            ("live-close-failure", |s| {
+                scene_live(s, SCENE_NOTES, &[], false);
+                if let Some(live) = &mut s.live {
+                    live.close_failed = true;
+                    live.saving = live::Saving::Failed("Could not save your notes or a recovery copy. Keep this text before closing Sidenote.".into());
+                }
+            }),
             ("live-recording", |s| scene_live(s, "", &[], false)),
             ("live-starting", |s| {
                 hex::scene(s, false);
@@ -2747,8 +2754,8 @@ pub fn spec() -> AppSpec<State> {
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
-    let mut app =
-        benchmark::configure(rune::App::new(spec())).on_close(|s: &mut State, _| s.live_close());
+    let mut app = benchmark::configure(rune::App::new(spec()));
+    let close_handle = app.handle();
     if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
         let mut done = false;
         app = app.on_frame_encoded(move |f| {
@@ -2763,7 +2770,7 @@ pub fn run() {
     }
     // The OS places a new window at a cascade offset, which at 125% scaling on a 1080p screen
     // pushes the bottom (and the Ask bar) off screen. Fit the size to the work area and centre.
-    app = app.on_window(|win| {
+    app = app.on_window(move |win| {
         let hwnd = win
             .with_raw_handle(|h| match h.as_raw() {
                 rune::raw_window_handle::RawWindowHandle::Win32(w) => w.hwnd.get(),
@@ -2771,6 +2778,20 @@ pub fn run() {
             })
             .unwrap_or(0);
         if hwnd != 0 {
+            let handle = close_handle.clone();
+            if let Err(error) = sidenote::platform::guard_window_close(hwnd, move || {
+                handle.update(|s, tx| {
+                    if s.live_close() {
+                        tx.quit();
+                    }
+                });
+            }) {
+                sidenote::platform::show_error(&format!(
+                    "Could not protect unsaved notes: {error}"
+                ));
+                close_handle.quit();
+                return;
+            }
             hex::remember_window(hwnd);
             sidenote::platform::set_window_icon(hwnd);
             if benchmark::show_offscreen(win, hwnd) {

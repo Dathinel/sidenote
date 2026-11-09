@@ -20,6 +20,8 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('live-close-failure', 'live-close-failure', '1320x900', $null, @()),
+    @('live-close-failure-narrow', 'live-close-failure', '560x1000', $null, @()),
     @('sync-memory-merged', 'sync-memory-merged', '1320x900', $null, @()),
     @('sync-task-merged', 'sync-task-merged', '1320x900', $null, @()),
     @('sync-task-kept', 'sync-task-kept', '1320x900', $null, @()),

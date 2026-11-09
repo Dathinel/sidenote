@@ -65,7 +65,7 @@ impl NoteWriter {
         let _ = self.thread.join();
     }
 }
-type SaveResult = (String, Result<PathBuf, String>);
+type SaveResult = (String, Result<Option<PathBuf>, String>);
 
 /// How long a start may take before the page gives up waiting for Hex to say it is recording.
 const START_WAIT: Duration = Duration::from_secs(25);
@@ -155,12 +155,14 @@ pub struct Live {
     /// The editor's text at the last look, and the text on disk. They differ while typing.
     seen: String,
     saved: String,
+    recovered: Option<String>,
     edited_at: Option<Instant>,
     pub saving: Saving,
     timer_armed: Arc<AtomicBool>,
     /// A render scene: nothing is read, and the bars hold still.
     scene: bool,
     notes_unavailable: bool,
+    pub close_failed: bool,
     saves: Arc<Mutex<Vec<SaveResult>>>,
     queued: Option<String>,
 }
@@ -172,6 +174,10 @@ impl Drop for Live {
 }
 
 impl Live {
+    fn can_close(&self, text: &str) -> bool {
+        self.queued.is_none() && (text == self.saved || self.recovered.as_deref() == Some(text))
+    }
+
     fn needs_save(&self, text: &str) -> bool {
         text != self.saved || self.queued.as_ref().is_some_and(|queued| queued != text)
     }
@@ -194,11 +200,13 @@ impl Live {
             notes_loaded: false,
             seen: String::new(),
             saved: String::new(),
+            recovered: None,
             edited_at: None,
             saving: Saving::Quiet,
             timer_armed: Arc::new(AtomicBool::new(false)),
             scene: false,
             notes_unavailable: !feed_io::notes_pipeline().is_file(),
+            close_failed: false,
             saves: Arc::new(Mutex::new(Vec::new())),
             queued: None,
         }
@@ -278,13 +286,21 @@ impl State {
                 live.queued = None;
             }
             match result {
-                Ok(folder) => {
+                Ok(Some(folder)) => {
+                    live.recovered = None;
                     live.folder = Some(folder);
                     live.saved = text;
                     if self.live_notes.text == live.saved {
                         live.edited_at = None;
                         live.saving = Saving::Saved;
                     }
+                }
+                Ok(None) => {
+                    live.recovered = Some(text);
+                    live.edited_at = Some(Instant::now());
+                    live.saving = Saving::Failed(
+                        "Notes are in a recovery copy. Trying the meeting folder again.".into(),
+                    );
                 }
                 Err(error) => {
                     live.edited_at = Some(Instant::now());
@@ -295,17 +311,24 @@ impl State {
         changed
     }
 
-    pub fn live_close(&mut self) {
+    pub fn live_close(&mut self) -> bool {
         self.live_flush();
         if let Some(writer) = self.live_writer.take() {
             writer.finish();
         }
         self.live_saved();
-        if let Some(live) = &self.live
-            && let Saving::Failed(error) = &live.saving
-        {
-            sidenote::platform::show_error(error);
+        let safe = self
+            .live
+            .as_ref()
+            .is_none_or(|live| live.can_close(&self.live_notes.text));
+        if !safe {
+            if let Some(live) = &mut self.live {
+                live.close_failed = true;
+            }
+            self.go_home();
+            self.live_open = true;
         }
+        safe
     }
 
     pub fn on_live(&self) -> bool {
@@ -409,6 +432,9 @@ impl State {
         let Some(live) = self.live.as_mut() else {
             return;
         };
+        if live.close_failed {
+            return;
+        }
         match live.phase {
             Phase::Starting if recording => live.phase = Phase::Recording,
             Phase::Starting if running && !busy && live.began.elapsed() > START_WAIT => {
@@ -491,7 +517,7 @@ impl State {
         let Some(live) = self.live.as_ref() else {
             return;
         };
-        if live.phase != Phase::Making {
+        if live.phase != Phase::Making || live.close_failed {
             return;
         }
         let found = self
@@ -1028,7 +1054,29 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .child(head)
         .child(roles::META.wrap(hint, p.faint));
     if let Some(Saving::Failed(why)) = saving {
-        c = c.child(roles::SMALL.medium().wrap(why, p.warn).role("alert"));
+        c = c.child(
+            col()
+                .gap(8.0)
+                .child(roles::SMALL.medium().wrap(why, p.warn).role("alert"))
+                .child(
+                    row()
+                        .gap(16.0)
+                        .child(
+                            link("Retry save and close", p)
+                                .key("live-close-retry")
+                                .on_press_tx(|s: &mut State, tx| {
+                                    if s.live_close() {
+                                        tx.quit();
+                                    }
+                                }),
+                        )
+                        .child(link("Copy notes", p).key("live-copy-notes").on_press_tx(
+                            |s: &mut State, tx| {
+                                tx.copy(s.live_notes.text.clone());
+                            },
+                        )),
+                ),
+        );
     }
     c.child(
         col()
@@ -1180,10 +1228,14 @@ pub fn your_notes(notes: &str, p: Palette) -> El {
 
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let phase = s.live.as_ref().map_or(Phase::Recording, |l| l.phase);
-    let body = match phase {
-        Phase::Making => making_view(s, p, narrow),
-        Phase::Starting => notes_view(s, k, p, narrow, true),
-        Phase::Recording => notes_view(s, k, p, narrow, false),
+    let body = if s.live.as_ref().is_some_and(|l| l.close_failed) {
+        notes_view(s, k, p, narrow, phase == Phase::Starting)
+    } else {
+        match phase {
+            Phase::Making => making_view(s, p, narrow),
+            Phase::Starting => notes_view(s, k, p, narrow, true),
+            Phase::Recording => notes_view(s, k, p, narrow, false),
+        }
     };
     let lost = phase == Phase::Recording && !s.hex_running();
     let mut doc = col()
@@ -1238,6 +1290,24 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn close_requires_the_latest_text_to_be_durable_and_the_queue_drained() {
+        let mut live = Live::scene(Phase::Starting, None);
+        assert!(live.can_close(""));
+        live.saving = Saving::Failed("disk full".into());
+        assert!(!live.can_close("draft"));
+        live.saved = "older notes".into();
+        assert!(!live.can_close(""));
+        live.recovered = Some("draft".into());
+        assert!(live.can_close("draft"));
+        assert!(!live.can_close("newer draft"));
+        live.saved = "newer draft".into();
+        live.queued = Some("old draft".into());
+        assert!(!live.can_close("newer draft"));
+        live.queued = None;
+        assert!(live.can_close("newer draft"));
+    }
 
     #[test]
     fn reverting_text_still_flushes_after_an_older_queued_save() {

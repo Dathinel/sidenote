@@ -154,21 +154,19 @@ pub fn preserve_notes(
     folder: Option<PathBuf>,
     text: &str,
     recovery: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<Option<PathBuf>, String> {
     if let Some(folder) = folder
         && write_notes(&folder, text).is_ok()
     {
         let _ = fs::remove_file(recovery);
-        return Ok(folder);
+        return Ok(Some(folder));
     }
     let backup = recovery
         .parent()
         .ok_or_else(|| io::Error::other("Missing recovery folder"))
         .and_then(fs::create_dir_all)
         .and_then(|()| super::store_io::atomic_write(recovery, text.as_bytes()));
-    Err(if backup.is_ok() {
-        "Could not save notes to the meeting yet. Trying again. A recovery copy is in the local state folder under unsaved-notes.".into()
-    } else {
+    backup.map(|()| None).map_err(|_| {
         "Could not save your notes or a recovery copy. Keep this text before closing Sidenote."
             .into()
     })
@@ -193,16 +191,39 @@ mod tests {
     fn missing_meeting_keeps_a_recovery_copy_until_the_save_succeeds() {
         let root = std::env::temp_dir().join(format!("notes-recovery-{}", std::process::id()));
         let recovery = root.join("recovery/notes.md");
-        assert!(preserve_notes(None, "unsaved text", &recovery).is_err());
+        assert!(
+            preserve_notes(None, "unsaved text", &recovery)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(fs::read_to_string(&recovery).unwrap(), "unsaved text");
         let folder = root.join("meeting");
         fs::create_dir_all(&folder).unwrap();
         assert_eq!(
             preserve_notes(Some(folder.clone()), "latest text", &recovery).unwrap(),
-            folder
+            Some(folder.clone())
         );
         assert_eq!(read_notes(&folder), "latest text");
         assert!(!recovery.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn both_save_failures_keep_the_draft_retryable() {
+        let root = std::env::temp_dir().join(format!("notes-close-failure-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let blocked = root.join("not-a-directory");
+        fs::write(&blocked, "block recovery").unwrap();
+        let recovery = blocked.join("draft.md");
+        let meeting = root.join("missing-meeting");
+        let draft = "editable draft";
+        assert!(preserve_notes(Some(meeting.clone()), draft, &recovery).is_err());
+        fs::create_dir_all(&meeting).unwrap();
+        assert_eq!(
+            preserve_notes(Some(meeting.clone()), draft, &recovery).unwrap(),
+            Some(meeting.clone())
+        );
+        assert_eq!(read_notes(&meeting), draft);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -258,7 +279,11 @@ mod tests {
         for hint in [None, Some("1800000060000-1"), Some("../1800000000000-1")] {
             let folder = find_folder(&root, hint);
             assert_eq!(folder, None);
-            assert!(preserve_notes(folder, "meeting B draft", &recovery).is_err());
+            assert!(
+                preserve_notes(folder, "meeting B draft", &recovery)
+                    .unwrap()
+                    .is_none()
+            );
             assert_eq!(read_notes(&previous), "meeting A notes");
             assert_eq!(fs::read_to_string(&recovery).unwrap(), "meeting B draft");
         }
@@ -267,7 +292,7 @@ mod tests {
         let folder = find_folder(&root, Some("1800000060000-1"));
         assert_eq!(
             preserve_notes(folder, "meeting B draft", &recovery).unwrap(),
-            current
+            Some(current.clone())
         );
         assert_eq!(read_notes(&previous), "meeting A notes");
         assert_eq!(read_notes(&current), "meeting B draft");

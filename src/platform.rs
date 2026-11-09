@@ -340,3 +340,107 @@ mod tests {
         result.unwrap();
     }
 }
+
+/// Rune's pinned close hook cannot veto a close. Catch WM_CLOSE before winit sees it,
+/// then queue the save decision on Rune's UI thread.
+pub fn guard_window_close(hwnd: isize, request: impl Fn() + 'static) -> io::Result<()> {
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        UI::{
+            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+            WindowsAndMessaging::{WM_CLOSE, WM_NCDESTROY},
+        },
+    };
+    type Request = Box<dyn Fn()>;
+    unsafe extern "system" fn procedure(
+        hwnd: HWND,
+        msg: u32,
+        wp: WPARAM,
+        lp: LPARAM,
+        id: usize,
+        data: usize,
+    ) -> LRESULT {
+        if msg == WM_CLOSE {
+            unsafe {
+                (&*(data as *const Request))();
+            }
+            return 0;
+        }
+        if msg == WM_NCDESTROY {
+            unsafe {
+                RemoveWindowSubclass(hwnd, Some(procedure), id);
+                drop(Box::from_raw(data as *mut Request));
+            }
+        }
+        unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
+    }
+    let request: Box<Request> = Box::new(Box::new(request));
+    let data = Box::into_raw(request);
+    if unsafe { SetWindowSubclass(hwnd as _, Some(procedure), 1, data as usize) } == 0 {
+        unsafe {
+            drop(Box::from_raw(data));
+        }
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+    #[test]
+    fn close_request_is_intercepted_before_windows_destroys_the_window() {
+        use std::{cell::Cell, rc::Rc};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, HWND_MESSAGE, IsWindow, SendMessageW, WM_CLOSE,
+        };
+        let requested = Rc::new(Cell::new(0));
+        let destroyed = Rc::new(Cell::new(false));
+        struct Request {
+            calls: Rc<Cell<u32>>,
+            destroyed: Rc<Cell<bool>>,
+        }
+        impl Drop for Request {
+            fn drop(&mut self) {
+                self.destroyed.set(true);
+            }
+        }
+        let request = Request {
+            calls: requested.clone(),
+            destroyed: destroyed.clone(),
+        };
+        let class = wide(std::ffi::OsStr::new("STATIC"));
+        // A message-only window has no visible UI and runs no application code.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        guard_window_close(hwnd as isize, move || {
+            request.calls.set(request.calls.get() + 1);
+            let _ = &request;
+        })
+        .unwrap();
+        for count in 1..=2 {
+            unsafe {
+                SendMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            assert_eq!(requested.get(), count);
+            assert_ne!(unsafe { IsWindow(hwnd) }, 0);
+        }
+        assert_ne!(unsafe { DestroyWindow(hwnd) }, 0);
+        assert!(destroyed.get());
+    }
+}
