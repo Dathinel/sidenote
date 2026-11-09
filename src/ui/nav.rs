@@ -842,7 +842,7 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
     .py(7.0)
     .radius(999.0)
     .fill(p.accent);
-    match blocked {
+    let action = match blocked {
         None => b
             .label("New meeting")
             .help("Start recording a meeting")
@@ -850,8 +850,13 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         Some(reason) => b
             .label(format!("New meeting ({reason})"))
             .help(reason)
-            .dim(0.5),
-    }
+            .fill(p.chip)
+            .color(p.soft)
+            .disabled(true),
+    };
+    col().items_end().gap(2.0).child(action).children(blocked.map(|reason| {
+        roles::META.wrap(reason, p.soft).max_w(if narrow { 300.0 } else { 440.0 }).role("status")
+    }))
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {

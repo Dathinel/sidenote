@@ -841,9 +841,11 @@ pub fn recording_start(s: &State) -> Option<(chrono::DateTime<chrono::Local>, bo
 pub fn start_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
     if !super::updates::listener_ready(s) {
-        Some("Meeting listener is not ready. Use Try again beside the recording controls")
+        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+    } else if h.status.is_none() || h.caps_loading {
+        Some("Checking for Hex. This takes a few seconds.")
     } else if !h.running() {
-        Some("Hex is not running")
+        Some("Open Hex, then try New meeting again.")
     } else if h.recording().is_some() {
         Some("Already recording")
     } else if h.record_busy {
@@ -851,7 +853,7 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
     } else if h.lacks(Feature::RecordStart) {
         Some("This Hex build cannot record")
     } else if !h.can(Feature::RecordStart) {
-        Some("Checking what Hex supports")
+        Some("Checking for Hex. This takes a few seconds.")
     } else {
         None
     }
