@@ -9,7 +9,7 @@ use sidenote::updates::{self, Phase, Status};
 
 pub struct Updates {
     pub status: Status,
-    service: Option<std::sync::mpsc::Sender<()>>,
+    service: Option<std::sync::mpsc::Sender<updates::CheckRequest>>,
     dismissed: bool,
     notes_open: bool,
     scene: bool,
@@ -90,18 +90,43 @@ impl State {
         }
     }
     fn check_updates(&mut self) {
-        if self.updates.scene || self.updates.applying || self.updates.status.phase == Phase::Manual
+        if self.updates.scene
+            || self.updates.applying
+            || self.updates.status.phase == Phase::Manual
+            || busy(&self.updates.status)
         {
             return;
         }
         if let Some(service) = &self.updates.service {
             self.updates.status.phase = Phase::Checking;
             self.updates.status.error = None;
-            if service.send(()).is_err() {
+            if service.send(updates::CheckRequest::Manual).is_err() {
                 self.updates.status.phase = Phase::Error;
                 self.updates.status.error =
                     Some("The update check stopped. Reopen Sidenote to try again.".into());
             }
+        }
+    }
+    pub fn updates_focus(&mut self) {
+        if !updates::installed()
+            || self.updates.scene
+            || self.updates.applying
+            || busy(&self.updates.status)
+            || !self
+                .updates
+                .status
+                .checked
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|checked| {
+                    chrono::Utc::now().signed_duration_since(checked)
+                        > chrono::Duration::seconds(updates::FOCUS_CHECK_AFTER.as_secs() as i64)
+                })
+        {
+            return;
+        }
+        if let Some(service) = &self.updates.service {
+            let _ = service.send(updates::CheckRequest::Focus);
         }
     }
     fn install_update(&mut self) {
@@ -384,7 +409,7 @@ pub fn section(s: &State, p: Palette) -> El {
                 .on_press(|s: &mut State| s.check_updates()),
         );
     }
-    body.child(roles::META.wrap("Checks run when Sidenote opens and every 6 hours. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
+    body.child(roles::META.wrap("Checks run when Sidenote opens, every 6 hours, and on focus if the last attempt was over 30 minutes ago. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
 }
 pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     let u = &s.updates;

@@ -123,22 +123,34 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 pub const PUBLIC_FEED: &str =
     "https://github.com/harshanandak/hex-meetings/releases/latest/download/";
 
-/// Dropping the sender stops the six-hour worker after its current local copy.
-pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<()>> {
+pub const FOCUS_CHECK_AFTER: Duration = Duration::from_secs(30 * 60);
+pub enum CheckRequest {
+    Manual,
+    Focus,
+}
+fn focus_check_due(last_attempt: Instant, now: Instant) -> bool {
+    now.duration_since(last_attempt) > FOCUS_CHECK_AFTER
+}
+/// Dropping the sender stops the six-hour worker after its current check/download.
+pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<CheckRequest>> {
     if !installed() {
         return None;
     }
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = write_report(&load());
+        let mut last_attempt = Instant::now();
+        let _ = check(&publish);
         loop {
-            let _ = check(&publish);
-            if matches!(
-                rx.recv_timeout(CHECK_EVERY),
-                Err(mpsc::RecvTimeoutError::Disconnected)
-            ) {
-                break;
+            match rx.recv_timeout(CHECK_EVERY) {
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(CheckRequest::Focus) if !focus_check_due(last_attempt, Instant::now()) => {
+                    continue;
+                }
+                _ => {}
             }
+            last_attempt = Instant::now();
+            let _ = check(&publish);
         }
     });
     Some(tx)
@@ -621,6 +633,20 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_checks_wait_more_than_thirty_minutes_since_the_attempt() {
+        let attempt = Instant::now();
+        assert!(!focus_check_due(attempt, attempt));
+        assert!(!focus_check_due(attempt, attempt + FOCUS_CHECK_AFTER));
+        assert!(focus_check_due(
+            attempt,
+            attempt + FOCUS_CHECK_AFTER + Duration::from_nanos(1)
+        ));
+        // A failed check also becomes the latest attempt.
+        let retry = attempt + FOCUS_CHECK_AFTER + Duration::from_secs(1);
+        assert!(!focus_check_due(retry, retry + Duration::from_secs(60)));
+    }
 
     #[test]
     fn rejects_untrusted_package_paths_before_cache_lookup() {

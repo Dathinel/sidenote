@@ -8,6 +8,9 @@ Installed copies check the public HTTPS feed at
 Velopack's built-in `HttpSource` reads `releases.win.json` from that base URL
 and downloads the named packages from the same base. No additional dependency
 or Velopack feature is required. Checks run at startup and every six hours.
+Window focus also wakes the existing update worker when it is idle; the worker
+checks only if its last attempt (including a failure) was over 30 minutes ago.
+Manual builds do not start the worker. Manual checks can retry sooner.
 
 For development, set `SIDENOTE_UPDATE_FEED` in the launching environment to an
 absolute local folder or UNC file share containing `releases.win.json` and its

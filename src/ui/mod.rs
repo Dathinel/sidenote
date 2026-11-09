@@ -1485,6 +1485,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .on_window_focus(|s: &mut State, focused, _| {
             if focused {
                 s.request_refresh();
+                s.updates_focus();
             }
             // A lost focus is not a hide: a window on another monitor still shows the indicator.
             s.hex_visibility(focused || hex::window_shown());
