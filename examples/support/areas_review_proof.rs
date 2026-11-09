@@ -174,6 +174,31 @@ pub fn run(mode: &str, store: &TaskStore) {
             let renamed = c.project(&p, "Supply outcome").unwrap();
             assert_eq!(renamed.id, source);
             assert_eq!(renamed.area_id, parent);
+            apply(
+                store,
+                Action::Convert {
+                    project_id: source.clone(),
+                    area_name: "Supply".into(),
+                    children: Default::default(),
+                },
+            );
+            store
+                .update_projects(|p| {
+                    for value in p.aliases.values_mut() {
+                        if value == "Supply outcome" {
+                            *value = "Supply domain".into();
+                        }
+                    }
+                    p.aliases
+                        .insert("Supply outcome".into(), "Supply domain".into());
+                    p.projects.push("Supply domain".into());
+                })
+                .unwrap();
+            let p = store.load_projects().unwrap();
+            let c = p.area_catalog().unwrap();
+            assert_eq!(c.project(&p, "Supply domain").unwrap().id, source);
+            assert!(p.is_area_alias("Supply domain"));
+            assert!(!core::project_names(&p, &[]).contains(&"Supply domain".to_string()));
         }
         "review-merge" => {
             apply(

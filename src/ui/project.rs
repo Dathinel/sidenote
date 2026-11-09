@@ -397,13 +397,21 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .fill(p.card)
         .grow(1.0)
         .min_w(0.0);
-    let matches = s.tasks.projects.matches(&s.project_input.text);
+    let area_alias = s.tasks.projects.is_area_alias(&s.project_input.text);
+    let matches = if area_alias {
+        Vec::new()
+    } else {
+        s.tasks.projects.matches(&s.project_input.text)
+    };
     let typed = s.project_input.text.trim().to_string();
     let mut choices = col()
         .w_full()
         .gap(6.0)
         .mt(8.0)
         .child(roles::GROUP.wrap("Use an existing project", p.soft));
+    if area_alias {
+        choices=choices.child(roles::SMALL.wrap("This name belongs to an area. Choose Area-only work in the meeting picker, or choose a project below.",p.soft));
+    }
     for name in if matches.is_empty() {
         &s.tasks.names
     } else {
@@ -419,7 +427,7 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
                 }),
         );
     }
-    if !typed.is_empty() && matches.is_empty() {
+    if !typed.is_empty() && matches.is_empty() && !area_alias {
         let id = id.to_string();
         choices = choices.child(
             pressable(

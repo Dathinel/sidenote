@@ -287,7 +287,7 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
             let project = if matches!(action.kind, ActionKind::SetProject) {
                 let projects = TaskStore::default().load_projects()?;
                 let matches = projects.matches(action.value.as_str().unwrap());
-                if matches.len() != 1 {
+                if matches.len() != 1 || projects.choose_existing(&matches[0]).is_none() {
                     return Err(invalid(
                         "Choose an existing project or explicitly Create it in Projects first",
                     ));
@@ -296,6 +296,17 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
             } else {
                 None
             };
+            let choice = project
+                .as_ref()
+                .map(|project| {
+                    super::areas::new_assignment_revision(&super::state_dir()).map(|revision| {
+                        super::areas::ProjectChoice {
+                            project: project.clone(),
+                            revision,
+                        }
+                    })
+                })
+                .transpose()?;
             TaskStore::default().update_override(
                 &action.meeting_id,
                 action.todo_index,
@@ -303,7 +314,10 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
                 |edit| {
                     let value = Some(action.value.as_str().unwrap().to_owned());
                     match action.kind {
-                        ActionKind::SetProject => edit.project = project,
+                        ActionKind::SetProject => {
+                            edit.project = project;
+                            edit.assignment = choice;
+                        }
                         ActionKind::SetOwner => edit.owner = value,
                         ActionKind::SetDue => edit.due = value,
                         _ => unreachable!(),
