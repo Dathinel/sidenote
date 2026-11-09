@@ -1,4 +1,8 @@
-use std::{io, os::windows::ffi::OsStrExt, path::Path};
+use std::{
+    io,
+    os::windows::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE},
     Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
@@ -88,7 +92,17 @@ pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
 pub fn publish_file(from: &Path, to: &Path) -> io::Result<()> {
     move_file(from, to, MOVEFILE_WRITE_THROUGH)
 }
+fn rename_path(path: &Path) -> io::Result<PathBuf> {
+    let path = std::path::absolute(path)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing file name"))?;
+    // Canonical parents give Win32 verbatim paths without requiring the destination to exist.
+    Ok(path.parent().unwrap().canonicalize()?.join(name))
+}
 fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
+    let from = rename_path(from)?;
+    let to = rename_path(to)?;
     crate::core::store_io::retry_sharing_violation(|| {
         if unsafe {
             MoveFileExW(
@@ -101,7 +115,7 @@ fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
             let error = io::Error::last_os_error();
             // MoveFileEx can report access denied for a locked destination. Confirm sharing before retrying.
             if error.raw_os_error() == Some(5) {
-                for path in [to, from] {
+                for path in [&to, &from] {
                     if let Err(sharing) = std::fs::File::open(path)
                         && matches!(sharing.raw_os_error(), Some(32 | 33))
                     {
@@ -289,4 +303,40 @@ pub fn reveal_file(file: &Path) -> io::Result<()> {
         .raw_arg(format!("/select,\"{}\"", file.display()))
         .spawn()
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn long_paths_keep_publication_and_replacement_semantics() {
+        let root = std::env::temp_dir().join(format!(
+            "sidenote-rename-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let folder = root.join("a".repeat(100)).join("b".repeat(100));
+        fs::create_dir_all(&folder).unwrap();
+        let from = folder.join("source.tmp");
+        let to = folder.join("target.json");
+        assert!(from.as_os_str().encode_wide().count() > 260);
+        fs::write(&from, b"first").unwrap();
+        let result = (|| -> io::Result<()> {
+            publish_file(&from, &to)?;
+            assert_eq!(fs::read(&to)?, b"first");
+            fs::write(&from, b"second")?;
+            assert!(publish_file(&from, &to).is_err());
+            assert_eq!(fs::read(&to)?, b"first");
+            assert_eq!(fs::read(&from)?, b"second");
+            replace_file(&from, &to)?;
+            assert_eq!(fs::read(&to)?, b"second");
+            assert!(!from.exists());
+            Ok(())
+        })();
+        assert!(root.starts_with(std::env::temp_dir()) && root != std::env::temp_dir());
+        fs::remove_dir_all(&root).unwrap();
+        result.unwrap();
+    }
 }
