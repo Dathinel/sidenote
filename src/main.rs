@@ -5,7 +5,12 @@ use sidenote::{listener, platform};
 fn main() {
     velopack::VelopackApp::build()
         .set_auto_apply_on_startup(false)
-        .on_after_update_fast_callback(|_| sidenote::updates::after_update())
+        .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
+        .on_first_run(|_| sidenote::updates::listener_installed())
+        .on_after_update_fast_callback(|_| {
+            sidenote::updates::after_update();
+            sidenote::updates::listener_installed();
+        })
         .on_restarted(|_| sidenote::updates::restarted())
         .run();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
