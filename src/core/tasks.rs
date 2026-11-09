@@ -100,8 +100,13 @@ impl Projects {
     }
     fn resolve_exact(&self, name: &str) -> String {
         let mut name = name.trim();
-        let mut seen = BTreeSet::new();
-        while seen.insert(name) {
+        let mut seen = Vec::new();
+        loop {
+            if let Some(start) = seen.iter().position(|n| *n == name) {
+                // Only cycle members vote, so an old alias leading into a peer cycle agrees.
+                return seen[start..].iter().min().unwrap_or(&name).to_string();
+            }
+            seen.push(name);
             let next = self
                 .merges
                 .get(name)
@@ -113,8 +118,6 @@ impl Projects {
                 _ => return name.to_string(),
             }
         }
-        // Concurrent peer merges can form a cycle. Keep every item in one stable folder.
-        seen.into_iter().min().unwrap_or(name).to_string()
     }
     pub fn matches(&self, name: &str) -> Vec<String> {
         let key = super::project_merge::normalized_name(name);
@@ -130,6 +133,21 @@ impl Projects {
             }
         }
         matches.into_iter().collect()
+    }
+    /// An explicit choice of an exact displayed name disambiguates a normalized collision.
+    pub fn choose_existing(&self, name: &str) -> Option<String> {
+        if self.projects.iter().any(|p| self.resolve_exact(p) == name) {
+            return Some(name.into());
+        }
+        let matches = self.matches(name);
+        (matches.len() == 1).then(|| matches[0].clone())
+    }
+    pub fn project_matches_query(&self, project: &str, query: &str) -> bool {
+        let project = self.resolve(project).to_lowercase();
+        project.contains(&query.to_lowercase())
+            || self
+                .choose_existing(query)
+                .is_some_and(|name| project == name.to_lowercase())
     }
     /// Points `old` at `new`, so every task of either name lands under `new`.
     fn rename(&mut self, old: &str, new: &str) {
@@ -332,7 +350,7 @@ impl TaskStore {
     /// Adds a project name to the list the pipeline reads.
     pub fn add_project(&self, name: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
-            if p.matches(name).len() > 1 {
+            if p.choose_existing(name).is_none() && p.matches(name).len() > 1 {
                 return Err(super::store_io::invalid("Choose an existing project"));
             }
             p.add(name.trim());
@@ -353,7 +371,7 @@ impl TaskStore {
     }
     pub fn assign_meeting(&self, id: &str, name: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
-            if name != UNSORTED && p.matches(name).len() != 1 {
+            if name != UNSORTED && p.choose_existing(name).is_none() {
                 return Err(super::store_io::invalid(
                     "Choose or explicitly create a project first",
                 ));

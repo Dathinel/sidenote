@@ -244,7 +244,7 @@ impl MemoryStore {
         Ok(())
     }
     fn export(&self, file: &MemoryFile) -> io::Result<()> {
-        let text = render(file);
+        let text = render(&self.resolve_projects(file.clone())?);
         match fs::read(self.path("company.md")) {
             Ok(bytes) if bytes == text.as_bytes() => return Ok(()),
             Ok(_) => {}

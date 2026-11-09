@@ -57,7 +57,7 @@ fn digest(value: &impl Serialize) -> io::Result<String> {
         .to_string())
 }
 fn scan() -> io::Result<Vec<Meeting>> {
-    let (meetings, errors) = super::scan();
+    let (meetings, errors) = super::scan_sources(&super::meetings_dir(), &super::peers_dir());
     if !errors.is_empty() {
         return Err(invalid(
             "Some meetings could not be read; merge was not applied",
@@ -182,6 +182,7 @@ impl TaskStore {
                 ));
             }
             let previous = p.merges.get(&preview.from).cloned().map(Box::new);
+            p.aliases.insert(preview.from.clone(), preview.into.clone());
             p.merges.insert(
                 preview.from.clone(),
                 ProjectMerge {
@@ -219,6 +220,19 @@ impl TaskStore {
             verify_backup(&backup, &snapshot)?;
             if snapshot.preview.from != from || snapshot.preview.into != merge.into {
                 return Err(invalid("Backup does not match this merge"));
+            }
+            if p.aliases.get(from) != Some(&merge.into) {
+                return Err(invalid(
+                    "Alias changed after this merge; undo was not applied",
+                ));
+            }
+            match snapshot.projects.aliases.get(from) {
+                Some(alias) => {
+                    p.aliases.insert(from.into(), alias.clone());
+                }
+                None => {
+                    p.aliases.remove(from);
+                }
             }
             match merge.previous {
                 Some(previous) => {
@@ -262,7 +276,16 @@ fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
         Ok(())
     }
     let mut out = BTreeMap::new();
-    visit(root, &root.join("state"), &mut out)?;
+    let state = root.join("state");
+    if state.try_exists()? {
+        let project_store = blake3::hash(b"projects.json").to_hex().to_string();
+        for owner in fs::read_dir(state)? {
+            let owner = owner?;
+            if owner.file_type()?.is_dir() {
+                visit(root, &owner.path().join(&project_store), &mut out)?;
+            }
+        }
+    }
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();

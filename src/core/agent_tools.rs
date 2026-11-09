@@ -177,6 +177,9 @@ impl Catalog {
         meeting.device.as_deref().unwrap_or(&self.local_device)
     }
     fn project(&self, meeting: &Meeting) -> Option<String> {
+        if let Some(name) = self.projects.meeting_projects.get(&meeting.id) {
+            return (name != super::UNSORTED).then(|| self.projects.resolve(name));
+        }
         dominant_project(self.all_tasks.iter().filter(|t| t.meeting_id == meeting.id)).or_else(
             || {
                 self.pipeline
@@ -388,11 +391,18 @@ pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
             let (file, company) = read(store.snapshot())?;
             warnings = super::sync_state::reconcile(&state_dir());
             let query = a.query.unwrap_or_default().to_lowercase();
+            let projects = read(super::TaskStore::default().load_projects())?;
+            let canonical_query = projects.choose_existing(&query).map(|n| n.to_lowercase());
             let mut rows: Vec<(String, Value)> = match a.scope.as_str() {
                 "company" => company
                     .split("\n\n")
                     .enumerate()
-                    .filter(|(_, text)| text.to_lowercase().contains(&query))
+                    .filter(|(_, text)| {
+                        text.to_lowercase().contains(&query)
+                            || canonical_query
+                                .as_ref()
+                                .is_some_and(|q| text.to_lowercase().contains(q))
+                    })
                     .flat_map(|(i, text)| {
                         // Long legacy paragraphs are paged too, without dropping their tail.
                         let mut chunks = Vec::new();
@@ -431,7 +441,12 @@ pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
                 _ => return Err("scope must be company, records or proposals.".into()),
             };
             if a.scope != "company" {
-                rows.retain(|(_, v)| v.to_string().to_lowercase().contains(&query));
+                rows.retain(|(_, v)| {
+                    v.to_string().to_lowercase().contains(&query)
+                        || v.get("project")
+                            .and_then(Value::as_str)
+                            .is_some_and(|p| projects.project_matches_query(p, &query))
+                });
             }
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             let mut value = page(rows, a.limit, a.cursor.as_deref(), &tag)?;
