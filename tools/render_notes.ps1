@@ -30,7 +30,8 @@ try {
         @('notes-click-reset', 'notes-settings-edited', 'notes-reset-confirm.json'),
         @('notes-click-type', 'notes-settings-edited', 'notes-type.json'),
         @('notes-click-fixed', 'notes-settings-tasks', 'notes-show-fixed.json'),
-        @('notes-click-privacy', 'notes-today-found', 'notes-privacy.json')
+        @('notes-click-privacy', 'notes-today-found', 'notes-privacy.json'),
+        @('notes-click-teams', 'notes-settings-tasks', 'notes-teams.json')
     )) { $shots += [PSCustomObject]@{ Name = $interaction[0]; Scene = $interaction[1]; Script = $interaction[2] } }
     foreach ($shot in $shots) {
         $name = $shot.Name
