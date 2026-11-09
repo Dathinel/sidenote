@@ -94,26 +94,41 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::Done { .. } => "Notes ready",
     }
 }
+fn after_setup(state: JobState, configured: bool) -> JobState {
+    if configured && state == JobState::NoHelper {
+        JobState::NeedsClick
+    } else {
+        state
+    }
+}
 pub fn job(s: &State, m: &Meeting) -> Option<Job> {
     if m.device.is_some() {
         return None;
     }
-    s.ai_notes.jobs.get(&m.id).cloned().or_else(|| {
-        (!m.has_summary()).then(|| Job {
-            state: if s
-                .ai_notes
-                .settings
-                .as_ref()
-                .is_some_and(|n| n.engine == "app" && n.helper.is_some())
-            {
-                JobState::NeedsClick
-            } else {
-                JobState::NoHelper
-            },
-            helper: None,
-            updated_at: 0,
+    let configured = s
+        .ai_notes
+        .settings
+        .as_ref()
+        .is_some_and(|n| n.engine == "app" && n.helper.is_some());
+    s.ai_notes
+        .jobs
+        .get(&m.id)
+        .cloned()
+        .or_else(|| {
+            (!m.has_summary()).then(|| Job {
+                state: if configured {
+                    JobState::NeedsClick
+                } else {
+                    JobState::NoHelper
+                },
+                helper: None,
+                updated_at: 0,
+            })
         })
-    })
+        .map(|mut job| {
+            job.state = after_setup(job.state, configured && !m.has_summary());
+            job
+        })
 }
 pub fn list_label(s: &State, m: &Meeting) -> Option<&'static str> {
     job(s, m).and_then(|j| {
@@ -324,6 +339,15 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn meetings_that_previously_needed_setup_offer_a_manual_request_after_setup() {
+        let job: Job = serde_json::from_str(r#"{"state":"no_helper","updated_at":1}"#).unwrap();
+        assert_eq!(after_setup(job.state.clone(), false), JobState::NoHelper);
+        assert_eq!(after_setup(job.state, true), JobState::NeedsClick);
+        assert_eq!(after_setup(JobState::Empty, true), JobState::Empty);
+        assert_eq!(after_setup(JobState::Running, true), JobState::Running);
+    }
+
     #[test]
     fn every_failure_has_plain_copy_without_raw_helper_output() {
         for (name, state) in [

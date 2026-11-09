@@ -1930,6 +1930,10 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("notes-meeting-after-setup", |s| {
+                notes_scene::meeting(s, "no-helper");
+                s.ai_notes.settings.as_mut().unwrap().helper = Some(core::notes::Helper::Claude);
+            }),
             ("notes-settings-last-error", |s| {
                 notes_scene::settings(s, "last-error")
             }),

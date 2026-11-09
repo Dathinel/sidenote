@@ -207,6 +207,8 @@ pub fn meeting(s: &mut State, name: &str) {
     );
     if name == "no-notes" {
         s.ai_notes.jobs.clear();
+    }
+    if matches!(name, "no-notes" | "no-helper") {
         s.ai_notes.settings.as_mut().unwrap().helper = None;
     }
     s.meetings = vec![m];
@@ -228,6 +230,7 @@ pub fn live(s: &mut State, name: &str) {
 }
 pub fn list(s: &mut State) {
     prepare(s);
+    s.ai_notes.settings.as_mut().unwrap().helper = None;
     let template = s.meetings.first().expect("Synthetic meeting").clone();
     let names = [
         "no-helper",
