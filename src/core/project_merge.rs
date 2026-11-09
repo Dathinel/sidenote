@@ -35,6 +35,8 @@ pub struct ProjectMerge {
     pub previous: Option<Box<ProjectMerge>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_baseline: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_version: Option<u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub area_changes: BTreeMap<String, (Option<Value>, Option<Value>)>,
 }
@@ -268,6 +270,7 @@ impl TaskStore {
                         backup,
                         previous,
                         assignment_baseline: Some(assignments),
+                        baseline_version: Some(2),
                         area_changes,
                     },
                 );
@@ -400,10 +403,20 @@ fn verify_assignments(merge: &ProjectMerge, current: &BTreeMap<String, Value>) -
         .assignment_baseline
         .as_ref()
         .ok_or_else(|| invalid(MOVED_AFTER_MERGE))?;
-    if baseline
-        .iter()
-        .any(|(key, value)| current.get(key) != Some(value))
-    {
+    if baseline.iter().any(|(key, value)| {
+        let Some(current) = current.get(key) else {
+            return true;
+        };
+        if merge.baseline_version.unwrap_or(1) == 1
+            && key.starts_with("[\"task\",")
+            && value.as_array().is_some_and(|v| v.len() == 3)
+        {
+            return current
+                .as_array()
+                .is_none_or(|v| v.len() < 3 || &v[..3] != value.as_array().unwrap().as_slice());
+        }
+        current != value
+    }) {
         return Err(invalid(MOVED_AFTER_MERGE));
     }
     Ok(())

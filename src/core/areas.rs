@@ -88,6 +88,10 @@ pub struct Catalog {
     pub links: BTreeMap<String, Link>,
     pub problems: Vec<String>,
     pub read_only: bool,
+    pub redirects: BTreeMap<String, String>,
+    pub name_conflicts: BTreeMap<String, BTreeSet<String>>,
+    pub quarantined: usize,
+    pub unreadable_receipts: usize,
 }
 fn read_catalog_entries<T: DeserializeOwned>(
     p: &Projects,
@@ -108,16 +112,16 @@ fn read_catalog_entries<T: DeserializeOwned>(
             *read_only = true;
             problems.push("Some area data uses a newer schema and is read-only.".into());
         }
+        if !valid_item(prefix, id, value) {
+            problems.push("Could not read an area item".into());
+            continue;
+        }
         match serde_json::from_value(value.clone()) {
             Ok(value) => {
                 entries.insert(id.into(), value);
             }
             Err(_) => {
-                *read_only = true;
-                problems.push(
-                    "An unreadable area item was retained. The remaining catalog is available."
-                        .into(),
-                );
+                problems.push("Could not read an area item".into());
             }
         }
     }
@@ -142,22 +146,69 @@ pub(super) fn put(
     }
     let mut next = serde_json::to_value(value)?;
     if let Some(old) = p.other.get(&key) {
-        retain_unknown(old, &mut next);
+        retain_unknown(prefix, old, &mut next)?;
     }
     p.other.insert(key, next);
     Ok(())
 }
-fn retain_unknown(old: &Value, new: &mut Value) {
+const EXTRA_CAP: usize = 64 * 1024;
+fn known_fields(prefix: &str) -> &'static [&'static str] {
+    match prefix {
+        "area:" => &["schema_version", "id", "name", "aliases", "status"],
+        "area-project:" => &[
+            "schema_version",
+            "id",
+            "name",
+            "area_id",
+            "status",
+            "converted_to",
+        ],
+        "area-link:" => &["schema_version", "target", "baseline"],
+        "area-alias:" => &["kind", "area_id"],
+        _ => &[],
+    }
+}
+fn valid_item(prefix: &str, id: &str, value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    if matches!(prefix, "area:" | "area-project:")
+        && (value["id"].as_str() != Some(id)
+            || value["name"]
+                .as_str()
+                .is_none_or(|n| n.trim().is_empty() || n.chars().count() > 80))
+    {
+        return false;
+    }
+    if prefix == "area-link:"
+        && value["target"]["area_id"]
+            .as_str()
+            .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+    let extra: BTreeMap<_, _> = obj
+        .iter()
+        .filter(|(k, _)| !known_fields(prefix).contains(&k.as_str()))
+        .collect();
+    serde_json::to_vec(&extra).is_ok_and(|b| b.len() <= EXTRA_CAP)
+}
+fn retain_unknown(prefix: &str, old: &Value, new: &mut Value) -> io::Result<()> {
     if let (Some(old), Some(new)) = (old.as_object(), new.as_object_mut()) {
         for (key, value) in old {
-            match new.get_mut(key) {
-                Some(next) => retain_unknown(value, next),
-                None => {
-                    new.insert(key.clone(), value.clone());
-                }
+            if !known_fields(prefix).contains(&key.as_str()) && !new.contains_key(key) {
+                new.insert(key.clone(), value.clone());
             }
         }
+        let extra: BTreeMap<_, _> = new
+            .iter()
+            .filter(|(k, _)| !known_fields(prefix).contains(&k.as_str()))
+            .collect();
+        if serde_json::to_vec(&extra)?.len() > EXTRA_CAP {
+            return Err(store_io::invalid("Extra area fields exceed 64 KB"));
+        }
     }
+    Ok(())
 }
 pub fn task_key(t: &TaskItem) -> String {
     if t.manual {
@@ -277,12 +328,33 @@ impl Projects {
             &mut catalog.read_only,
         );
         let identities = catalog.projects.clone();
-        let _: BTreeMap<String, super::area_ops::Receipt> = read_catalog_entries(
-            self,
-            "area-operation:",
-            &mut catalog.problems,
-            &mut catalog.read_only,
-        );
+        catalog.unreadable_receipts = self
+            .other
+            .iter()
+            .filter(|(k, v)| {
+                k.starts_with("area-operation:")
+                    && serde_json::from_value::<super::area_ops::Receipt>((*v).clone()).is_err()
+            })
+            .count();
+        catalog.quarantined = catalog
+            .problems
+            .iter()
+            .filter(|p| p.as_str() == "Could not read an area item")
+            .count();
+        catalog
+            .problems
+            .retain(|p| p != "Could not read an area item");
+        if catalog.quarantined > 0 {
+            catalog
+                .problems
+                .push(format!("Could not read {} items", catalog.quarantined));
+        }
+        if catalog.unreadable_receipts > 0 {
+            catalog.problems.push(format!(
+                "Could not read {} undo records",
+                catalog.unreadable_receipts
+            ));
+        }
         for p in catalog.projects.values_mut() {
             p.name = self.resolve(&p.name);
         }
@@ -292,7 +364,13 @@ impl Projects {
             };
             let Some(id) = value.as_str() else { continue };
             let name = self.resolve(name);
-            if !catalog.projects.values().any(|p| p.name == name) {
+            if let Some(project) = catalog.projects.get(id) {
+                if project.name != name {
+                    let choices = catalog.name_conflicts.entry(id.into()).or_default();
+                    choices.insert(project.name.clone());
+                    choices.insert(name.clone());
+                }
+            } else if !catalog.projects.values().any(|p| p.name == name) {
                 catalog.projects.insert(
                     id.into(),
                     Project {
@@ -394,6 +472,12 @@ impl Projects {
                 link.target.project_id = Some(project.id.clone());
             }
         }
+        catalog.redirects = redirects;
+        if !catalog.name_conflicts.is_empty() {
+            catalog
+                .problems
+                .push("Renamed on both laptops. Pick the project name to keep.".into());
+        }
         catalog.repair_missing();
         Ok(catalog)
     }
@@ -428,7 +512,7 @@ impl Catalog {
     pub fn ensure_writable(&self) -> io::Result<()> {
         if self.read_only {
             return Err(store_io::invalid(
-                "Area data from a newer or unreadable version is read-only. Update the app before changing it.",
+                "Area data from a newer version is read-only. Update the app before changing it.",
             ));
         }
         Ok(())
@@ -537,63 +621,66 @@ impl Catalog {
         }
         Ok(())
     }
-    pub fn target(
+    /// The only assignment precedence rule. Baselines include the complete retained intent.
+    pub fn resolve_target(
         &self,
         p: &Projects,
         key: &str,
         baseline: &Value,
+        retained: Option<Assignment<'_>>,
         raw_project: &str,
     ) -> Option<Target> {
-        if let Some(link) = self.links.get(key).filter(|l| &l.baseline == baseline) {
-            return self.current_target(&link.target);
-        }
+        let target = if let Some(link) = self.links.get(key).filter(|l| &l.baseline == baseline) {
+            Some(link.target.clone())
+        } else {
+            match retained {
+                Some(Assignment::Target(target)) => Some(target.clone()),
+                Some(Assignment::Project(name)) => self.named_target(p, name),
+                None => self.named_target(p, raw_project),
+            }
+        }?;
+        Some(self.current_target(&target))
+    }
+    fn named_target(&self, p: &Projects, name: &str) -> Option<Target> {
         if let Some(LegacyAlias::Area { area_id }) = self
             .legacy_aliases
             .iter()
-            .find(|(name, _)| normalized_name(name) == normalized_name(raw_project))
-            .map(|(_, alias)| alias)
+            .find(|(n, _)| normalized_name(n) == normalized_name(name))
+            .map(|(_, a)| a)
         {
             return Some(Target {
                 area_id: area_id.clone(),
                 project_id: None,
             });
         }
-        let project = self.project(p, raw_project)?;
-        if let Some(area_id) = &project.converted_to {
-            Some(Target {
-                area_id: area_id.clone(),
-                project_id: None,
-            })
-        } else {
-            project.area_id.as_ref().map(|a| Target {
-                area_id: a.clone(),
-                project_id: Some(project.id.clone()),
-            })
-        }
+        let project = self.project(p, name)?;
+        Some(Target {
+            area_id: project.area_id.clone().unwrap_or_default(),
+            project_id: Some(project.id.clone()),
+        })
     }
-    pub fn current_target(&self, target: &Target) -> Option<Target> {
-        if let Some(id) = &target.project_id {
-            let Some(project) = self.projects.get(id) else {
-                return Some(Target {
-                    area_id: target.area_id.clone(),
-                    project_id: None,
-                });
-            };
-            return if let Some(area) = &project.converted_to {
-                Some(Target {
-                    area_id: area.clone(),
-                    project_id: None,
-                })
-            } else {
-                Some(Target {
-                    area_id: project.area_id.as_ref().unwrap_or(&target.area_id).clone(),
-                    project_id: Some(id.clone()),
-                })
-            };
+    fn current_target(&self, target: &Target) -> Target {
+        let mut target = target.clone();
+        if let Some(mut id) = target.project_id.take() {
+            let mut seen = BTreeSet::new();
+            while seen.insert(id.clone()) {
+                let Some(next) = self.redirects.get(&id) else {
+                    break;
+                };
+                id = next.clone();
+            }
+            if let Some(project) = self.projects.get(&id) {
+                if let Some(area) = &project.converted_to {
+                    return Target {
+                        area_id: area.clone(),
+                        project_id: None,
+                    };
+                }
+                target.area_id = project.area_id.clone().unwrap_or_default();
+            }
+            target.project_id = Some(id);
         }
-        self.areas
-            .contains_key(&target.area_id)
-            .then(|| target.clone())
+        target
     }
     pub fn label(&self, target: &Target) -> String {
         let area = self
@@ -609,6 +696,10 @@ impl Catalog {
     }
 }
 
+pub enum Assignment<'a> {
+    Project(&'a str),
+    Target(&'a Target),
+}
 #[derive(Clone, Debug, Default)]
 pub struct Activity {
     pub projects: BTreeSet<String>,
@@ -654,10 +745,15 @@ pub fn activity(
             })
             .or_else(|| file.and_then(|f| f.meeting_project.clone()));
         let baseline = meeting_baseline(p, pipeline, &meeting.id);
-        if let Some(target) = catalog.target(
+        if let Some(target) = catalog.resolve_target(
             p,
             &meeting_key(&meeting.id),
             &baseline,
+            p.other
+                .get(&format!("assignment:{}", meeting_key(&meeting.id)))
+                .and_then(|v| v.get("project"))
+                .and_then(Value::as_str)
+                .map(Assignment::Project),
             raw.as_deref().unwrap_or(super::UNSORTED),
         ) {
             if meeting.started.is_some_and(|s| {
@@ -672,7 +768,9 @@ pub fn activity(
                     out.areas.insert(target.area_id.clone());
                 }
             }
-            out.meetings.insert(meeting.id.clone(), target);
+            if !target.area_id.is_empty() {
+                out.meetings.insert(meeting.id.clone(), target);
+            }
         } else if let Some(project) = raw.as_deref().and_then(|n| catalog.project(p, n))
             && (running_meetings.contains(&meeting.id)
                 || meeting.started.is_some_and(|s| {

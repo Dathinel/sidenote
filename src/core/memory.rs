@@ -217,14 +217,18 @@ impl MemoryStore {
     fn resolve_projects(&self, mut file: MemoryFile) -> io::Result<MemoryFile> {
         let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
         let catalog = projects.area_catalog()?;
-        let project = |kind: &str, id: &str, raw: &Option<String>| {
-            let target = catalog.target(
+        let project = |kind: &str,
+                       id: &str,
+                       raw: &Option<String>,
+                       retained: Option<&super::areas::Target>| {
+            let baseline = super::areas::assignment_baseline(serde_json::json!(raw), retained);
+            match catalog.resolve_target(
                 &projects,
                 &serde_json::json!([kind, id]).to_string(),
-                &serde_json::json!(raw),
+                &baseline,
+                retained.map(super::areas::Assignment::Target),
                 raw.as_deref().unwrap_or(super::UNSORTED),
-            );
-            match target {
+            ) {
                 Some(target) => target
                     .project_id
                     .and_then(|id| catalog.projects.get(&id))
@@ -233,19 +237,20 @@ impl MemoryStore {
             }
         };
         for record in &mut file.records {
-            record.project = if let Some(target) = &record.assignment {
-                catalog
-                    .current_target(target)
-                    .and_then(|t| t.project_id)
-                    .and_then(|id| catalog.projects.get(&id))
-                    .map(|p| p.name.clone())
-            } else {
-                project("memory", &record.id, &record.project)
-            };
+            record.project = project(
+                "memory",
+                &record.id,
+                &record.project,
+                record.assignment.as_ref(),
+            );
         }
         for pending in &mut file.proposals {
-            pending.proposal.project =
-                project("proposal", &pending.proposal.id, &pending.proposal.project);
+            pending.proposal.project = project(
+                "proposal",
+                &pending.proposal.id,
+                &pending.proposal.project,
+                None,
+            );
         }
         Ok(file)
     }
@@ -457,10 +462,11 @@ impl MemoryStore {
         let proposal = file.proposals[index].proposal.clone();
         let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
         let catalog = projects.area_catalog()?;
-        let assignment = catalog.target(
+        let assignment = catalog.resolve_target(
             &projects,
             &serde_json::json!(["proposal", proposal.id]).to_string(),
             &serde_json::json!(proposal.project),
+            None,
             proposal.project.as_deref().unwrap_or(super::UNSORTED),
         );
         if accept {

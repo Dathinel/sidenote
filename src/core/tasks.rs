@@ -310,6 +310,16 @@ impl TaskStore {
         self.root.join("task-overrides.json")
     }
     /// A missing file is empty. A malformed one is an error, so it is never overwritten.
+    pub fn unreadable_items(&self) -> io::Result<usize> {
+        Ok(
+            super::sync_state::diagnostics::<Projects>(&self.root, "projects.json")?
+                + super::sync_state::diagnostics::<Overrides>(&self.root, "task-overrides.json")?
+                + super::sync_state::diagnostics::<super::memory::MemoryFile>(
+                    &self.root,
+                    "memory/records.json",
+                )?,
+        )
+    }
     pub fn load_projects(&self) -> io::Result<Projects> {
         super::sync_state::load(&self.root, "projects.json")
     }
@@ -513,10 +523,8 @@ pub fn build_tasks(
     for m in &overrides.manual {
         let due = m.due.clone().filter(|d| !d.trim().is_empty());
         let project = m
-            .assignment
-            .as_ref()
-            .map(|a| a.project.as_str())
-            .or(m.project.as_deref())
+            .project
+            .as_deref()
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .unwrap_or(UNSORTED);
@@ -551,12 +559,7 @@ pub fn build_tasks(
                 .get(&m.id, index)
                 .filter(|o| o.task.as_deref().is_none_or(|t| t == todo.task));
             let project = edit
-                .and_then(|o| {
-                    o.assignment
-                        .as_ref()
-                        .map(|a| a.project.clone())
-                        .or(o.project.clone())
-                })
+                .and_then(|o| o.project.clone())
                 .or_else(|| tag.map(|t| t.project.clone()))
                 .or_else(|| file.and_then(|f| f.meeting_project.clone()))
                 .map(|p| p.trim().to_string())
@@ -617,8 +620,11 @@ pub fn build_tasks(
             .map(|m| {
                 (
                     format!("manual/{}", m.id),
-                    super::areas::assignment_baseline(
-                        serde_json::json!(m.project),
+                    (
+                        super::areas::assignment_baseline(
+                            serde_json::json!(m.project),
+                            m.assignment.as_ref(),
+                        ),
                         m.assignment.as_ref(),
                     ),
                 )
@@ -628,18 +634,27 @@ pub fn build_tasks(
             let baseline = if task.manual {
                 manual_baselines
                     .get(&task.meeting_id)
-                    .cloned()
+                    .map(|(b, _)| b.clone())
                     .unwrap_or(Value::Null)
             } else {
                 super::areas::task_baseline(task, pipeline, overrides)
             };
-            if let Some(target) = catalog.target(
+            let retained = if task.manual {
+                manual_baselines.get(&task.meeting_id).and_then(|(_, a)| *a)
+            } else {
+                overrides
+                    .get(&task.meeting_id, task.index)
+                    .filter(|o| o.task.as_deref().is_none_or(|t| t == task.task))
+                    .and_then(|o| o.assignment.as_ref())
+            };
+            if let Some(target) = catalog.resolve_target(
                 projects,
                 &super::areas::task_key(task),
                 &baseline,
+                retained.map(|a| super::areas::Assignment::Project(&a.project)),
                 &task.project,
             ) {
-                task.area_id = Some(target.area_id);
+                task.area_id = (!target.area_id.is_empty()).then_some(target.area_id);
                 task.project = target
                     .project_id
                     .and_then(|id| catalog.projects.get(&id))
