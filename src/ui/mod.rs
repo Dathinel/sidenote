@@ -233,6 +233,7 @@ pub struct State {
     pub live_open: bool,
     /// What the user types during the meeting. Saved to the meeting folder's `notes.md`.
     pub live_notes: TextEdit,
+    live_writer: Option<live::NoteWriter>,
     /// A finished meeting to open the next time the UI can scroll.
     live_ready: Option<String>,
     /// The home list's keyboard cursor is showing (arrow keys were used).
@@ -404,6 +405,7 @@ impl State {
             live: None,
             live_open: false,
             live_notes: TextEdit::new(""),
+            live_writer: None,
             live_ready: None,
             keyboard: false,
             project_menu: None,
@@ -2726,7 +2728,7 @@ pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
     let mut app =
-        benchmark::configure(rune::App::new(spec())).on_close(|s: &mut State, _| s.live_flush());
+        benchmark::configure(rune::App::new(spec())).on_close(|s: &mut State, _| s.live_close());
     if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
         let mut done = false;
         app = app.on_frame_encoded(move |f| {

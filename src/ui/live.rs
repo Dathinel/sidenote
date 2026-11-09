@@ -43,6 +43,30 @@ use std::{
     time::{Duration, Instant},
 };
 
+type Work = Box<dyn FnOnce() + Send>;
+pub(super) struct NoteWriter {
+    tx: std::sync::mpsc::Sender<Work>,
+    thread: thread::JoinHandle<()>,
+}
+impl NoteWriter {
+    fn new() -> std::io::Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<Work>();
+        let thread = thread::Builder::new()
+            .name("live-notes".into())
+            .spawn(move || {
+                for work in rx {
+                    work();
+                }
+            })?;
+        Ok(Self { tx, thread })
+    }
+    fn finish(self) {
+        drop(self.tx);
+        let _ = self.thread.join();
+    }
+}
+type SaveResult = (String, Result<PathBuf, String>);
+
 /// How long a start may take before the page gives up waiting for Hex to say it is recording.
 const START_WAIT: Duration = Duration::from_secs(25);
 /// After this long without a new meeting, the page says the notes are slow and lets go.
@@ -139,6 +163,8 @@ pub struct Live {
     /// A render scene: nothing is read, and the bars hold still.
     scene: bool,
     notes_unavailable: bool,
+    saves: Arc<Mutex<Vec<SaveResult>>>,
+    queued: Option<String>,
 }
 
 impl Drop for Live {
@@ -148,6 +174,10 @@ impl Drop for Live {
 }
 
 impl Live {
+    fn needs_save(&self, text: &str) -> bool {
+        text != self.saved || self.queued.as_ref().is_some_and(|queued| queued != text)
+    }
+
     fn new(phase: Phase, known: HashSet<String>) -> Self {
         Self {
             phase,
@@ -171,6 +201,8 @@ impl Live {
             timer_armed: Arc::new(AtomicBool::new(false)),
             scene: false,
             notes_unavailable: !feed_io::notes_pipeline().is_file(),
+            saves: Arc::new(Mutex::new(Vec::new())),
+            queued: None,
         }
     }
 
@@ -228,6 +260,56 @@ impl Live {
 }
 
 impl State {
+    pub(super) fn live_work(&mut self, work: impl FnOnce() + Send + 'static) -> bool {
+        if self.live_writer.is_none() {
+            self.live_writer = NoteWriter::new().ok();
+        }
+        self.live_writer
+            .as_ref()
+            .is_some_and(|writer| writer.tx.send(Box::new(work)).is_ok())
+    }
+
+    fn live_saved(&mut self) -> bool {
+        let Some(live) = self.live.as_mut() else {
+            return false;
+        };
+        let results = std::mem::take(&mut *live.saves.lock().unwrap_or_else(|e| e.into_inner()));
+        let changed = !results.is_empty();
+        for (text, result) in results {
+            if live.queued.as_ref() == Some(&text) {
+                live.queued = None;
+            }
+            match result {
+                Ok(folder) => {
+                    live.folder = Some(folder);
+                    live.saved = text;
+                    if self.live_notes.text == live.saved {
+                        live.edited_at = None;
+                        live.saving = Saving::Saved;
+                    }
+                }
+                Err(error) => {
+                    live.edited_at = Some(Instant::now());
+                    live.saving = Saving::Failed(error);
+                }
+            }
+        }
+        changed
+    }
+
+    pub fn live_close(&mut self) {
+        self.live_flush();
+        if let Some(writer) = self.live_writer.take() {
+            writer.finish();
+        }
+        self.live_saved();
+        if let Some(live) = &self.live
+            && let Saving::Failed(error) = &live.saving
+        {
+            sidenote::platform::show_error(error);
+        }
+    }
+
     pub fn on_live(&self) -> bool {
         self.live_open
             && self.live.is_some()
@@ -519,6 +601,7 @@ impl State {
     /// Called on every poll. Hands the reader thread its hint and whether to read, adopts the
     /// meeting folder, and saves the notes 2 s after the last key. True when the page changed.
     pub fn live_tick(&mut self) -> bool {
+        let saved = self.live_saved();
         let visible = self.on_live() && hex::window_shown();
         let hint = hex::recording_id(self);
         let Some(live) = self.live.as_mut() else {
@@ -527,7 +610,7 @@ impl State {
         if live.scene {
             return false;
         }
-        let mut changed = false;
+        let mut changed = saved;
         live.watching.store(visible, Ordering::Relaxed);
         {
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
@@ -561,7 +644,7 @@ impl State {
             live.saving = Saving::Pending;
             changed = true;
         }
-        if live.seen != live.saved {
+        if live.needs_save(&live.seen) {
             let due = live.edited_at.is_none_or(|t| t.elapsed() >= SAVE_AFTER);
             if due {
                 changed |= self.live_save();
@@ -597,34 +680,38 @@ impl State {
         let Some(live) = self.live.as_mut() else {
             return false;
         };
-        let folder = live.folder.clone().or_else(|| {
-            feed_io::find_folder(
-                &sidenote::core::meetings_dir(),
-                live.wall_start.timestamp_millis().saturating_sub(120_000),
-                hint.as_deref(),
-            )
-        });
-        let before = live.saving.clone();
-        match folder.map(|f| feed_io::write_notes(&f, &text).map(|()| f)) {
-            Some(Ok(folder)) => {
-                live.folder = Some(folder);
-                live.saved = text;
-                live.edited_at = None;
-                live.saving = Saving::Saved;
-            }
-            other => {
-                // Hex has not made the folder yet, or the write failed: try again in 2 s.
-                live.edited_at = Some(Instant::now());
-                live.saving = Saving::Failed(match other {
-                    Some(Err(e)) => {
-                        format!("Could not save your notes ({}). Trying again.", e.kind())
-                    }
-                    _ => "Waiting for Hex to start the meeting before saving. Trying again.".into(),
-                });
-                self.live_arm_save();
-            }
+        if live.queued.as_ref() == Some(&text) {
+            return false;
         }
-        self.live.as_ref().is_some_and(|l| l.saving != before)
+        let folder = live.folder.clone();
+        let since = live.wall_start.timestamp_millis().saturating_sub(120_000);
+        let recovery = sidenote::core::state_dir()
+            .join("unsaved-notes")
+            .join(format!("{}.md", live.wall_start.timestamp_millis()));
+        let results = live.saves.clone();
+        live.queued = Some(text.clone());
+        live.saving = Saving::Pending;
+        let wake = self.waker.clone();
+        let queued = self.live_work(move || {
+            let folder = folder.or_else(|| {
+                feed_io::find_folder(&sidenote::core::meetings_dir(), since, hint.as_deref())
+            });
+            let result = feed_io::preserve_notes(folder, &text, &recovery);
+            results
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((text, result));
+            if let Some(wake) = wake {
+                wake();
+            }
+        });
+        if !queued && let Some(live) = self.live.as_mut() {
+            live.queued = None;
+            live.saving = Saving::Failed(
+                "Could not start saving notes. Keep this text before closing Sidenote.".into(),
+            );
+        }
+        true
     }
 
     /// Saves any unsaved notes at once: before Stop, and when the recording ends in Hex.
@@ -632,11 +719,11 @@ impl State {
         let Some(live) = self.live.as_mut() else {
             return;
         };
-        if live.scene || live.phase == Phase::Making {
+        if live.scene {
             return;
         }
         live.seen = self.live_notes.text.clone();
-        if live.seen != live.saved {
+        if live.needs_save(&live.seen) {
             self.live_save();
         }
     }
@@ -1129,6 +1216,12 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .role("alert"),
         );
     }
+    if phase == Phase::Making
+        && let Some(live) = &s.live
+        && let Saving::Failed(error) = &live.saving
+    {
+        doc = doc.child(roles::SMALL.wrap(error, p.warn).role("alert"));
+    }
     doc = doc.child(body);
     let mut pane = col()
         .key("live-pane")
@@ -1145,4 +1238,39 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         pane = pane.child(bar(s, k, p, narrow, layer));
     }
     pane
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    #[test]
+    fn reverting_text_still_flushes_after_an_older_queued_save() {
+        let mut live = Live::scene(Phase::Recording, None);
+        live.saved = "original".into();
+        live.queued = Some("edited".into());
+        assert!(live.needs_save("original"));
+        live.queued = Some("original".into());
+        assert!(!live.needs_save("original"));
+    }
+
+    #[test]
+    fn close_drains_queued_saves_before_stop() {
+        let writer = NoteWriter::new().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for message in ["first save", "failed save", "last save", "stop"] {
+            let tx = tx.clone();
+            writer
+                .tx
+                .send(Box::new(move || {
+                    tx.send(message).unwrap();
+                }))
+                .unwrap();
+        }
+        writer.finish();
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            ["first save", "failed save", "last save", "stop"]
+        );
+    }
 }

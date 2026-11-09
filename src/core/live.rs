@@ -171,6 +171,31 @@ pub fn write_notes(folder: &Path, text: &str) -> io::Result<()> {
     super::store_io::atomic_write(&folder.join(NOTES_FILE), text.as_bytes())
 }
 
+/// Keep a recovery copy when Hex has not created the meeting folder or a save fails.
+pub fn preserve_notes(
+    folder: Option<PathBuf>,
+    text: &str,
+    recovery: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(folder) = folder
+        && write_notes(&folder, text).is_ok()
+    {
+        let _ = fs::remove_file(recovery);
+        return Ok(folder);
+    }
+    let backup = recovery
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing recovery folder"))
+        .and_then(fs::create_dir_all)
+        .and_then(|()| super::store_io::atomic_write(recovery, text.as_bytes()));
+    Err(if backup.is_ok() {
+        "Could not save notes to the meeting yet. Trying again. A recovery copy is in the local state folder under unsaved-notes.".into()
+    } else {
+        "Could not save your notes or a recovery copy. Keep this text before closing Sidenote."
+            .into()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +209,23 @@ mod tests {
         fs::write(folder.join("english-summary.json"), b"{}").unwrap();
         assert_eq!(notes_problem(&folder), None);
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn missing_meeting_keeps_a_recovery_copy_until_the_save_succeeds() {
+        let root = std::env::temp_dir().join(format!("notes-recovery-{}", std::process::id()));
+        let recovery = root.join("recovery/notes.md");
+        assert!(preserve_notes(None, "unsaved text", &recovery).is_err());
+        assert_eq!(fs::read_to_string(&recovery).unwrap(), "unsaved text");
+        let folder = root.join("meeting");
+        fs::create_dir_all(&folder).unwrap();
+        assert_eq!(
+            preserve_notes(Some(folder.clone()), "latest text", &recovery).unwrap(),
+            folder
+        );
+        assert_eq!(read_notes(&folder), "latest text");
+        assert!(!recovery.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

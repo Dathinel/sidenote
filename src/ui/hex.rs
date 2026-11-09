@@ -622,7 +622,18 @@ impl State {
         }
         self.hex.record_busy = true;
         self.hex.error = None;
-        self.hex_spawn(|e| Msg::Done(Action::Stop, e.record_stop()));
+        let engine = self.hex.engine.clone();
+        let events = self.events_tx.clone();
+        let wake = self.waker.clone();
+        if !self.live_work(move || {
+            let _ = events.send(Event::Hex(Msg::Done(Action::Stop, engine.record_stop())));
+            if let Some(wake) = wake {
+                wake();
+            }
+        }) {
+            self.hex.record_busy = false;
+            self.hex.error = Some("Could not stop recording. Try Stop again or stop it in Hex.");
+        }
     }
 
     /// Sends one setting, and only when the value differs from what Hex reports.
