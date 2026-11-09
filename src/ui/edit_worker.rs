@@ -71,10 +71,28 @@ impl Target {
     }
 }
 pub enum Job {
+    V2 {
+        store: TaskStore,
+        task: Box<core::TaskItem>,
+        source: PathBuf,
+        edit: core::TaskV2Edit,
+    },
+    Grouping {
+        store: TaskStore,
+        by: core::TaskGrouping,
+    },
+    Teams {
+        store: TaskStore,
+        teams: core::Teams,
+    },
+    Redo {
+        id: String,
+    },
     Tick {
         store: core::StateStore,
         id: String,
         task: String,
+        stable_id: String,
         on: bool,
     },
     ManualTick {
@@ -103,7 +121,12 @@ pub enum Job {
 impl Job {
     fn target(&self) -> Target {
         match self {
-            Self::Tick { .. } | Self::ManualTick { .. } => Target::Tick,
+            Self::Tick { .. }
+            | Self::ManualTick { .. }
+            | Self::V2 { .. }
+            | Self::Grouping { .. }
+            | Self::Teams { .. }
+            | Self::Redo { .. } => Target::Tick,
             Self::Task {
                 row,
                 index,
@@ -115,6 +138,14 @@ impl Job {
     }
 }
 pub enum Completion {
+    V2 {
+        result: Result<Box<core::EditView<core::Overrides>>, SaveError>,
+        added: Option<String>,
+    },
+    Preferences {
+        teams: Option<core::Teams>,
+        result: Result<(), SaveError>,
+    },
     Tick {
         id: String,
         result: Result<Box<core::EditView<core::Saved>>, SaveError>,
@@ -141,7 +172,10 @@ pub enum Completion {
 impl Completion {
     fn target(&self) -> Target {
         match self {
-            Self::Tick { .. } | Self::ManualTick(_) => Target::Tick,
+            Self::Tick { .. }
+            | Self::ManualTick(_)
+            | Self::Preferences { .. }
+            | Self::V2 { .. } => Target::Tick,
             Self::Task {
                 row,
                 index,
@@ -192,14 +226,47 @@ impl State {
             .name("save-edit".into())
             .spawn(move || {
                 let completion = match job {
+                    Job::V2 {
+                        store,
+                        task,
+                        source,
+                        edit,
+                    } => {
+                        let added = if let core::TaskV2Edit::AddSubtask(title) = &edit {
+                            Some(title.clone())
+                        } else {
+                            None
+                        };
+                        Completion::V2 {
+                            result: store
+                                .edit_v2(&task, &source, edit)
+                                .map(Box::new)
+                                .map_err(|e| SaveError::from(&e)),
+                            added,
+                        }
+                    }
+                    Job::Grouping { store, by } => Completion::Preferences {
+                        teams: None,
+                        result: store.save_grouping(by).map_err(|e| SaveError::from(&e)),
+                    },
+                    Job::Teams { store, teams } => Completion::Preferences {
+                        result: store.save_teams(&teams).map_err(|e| SaveError::from(&e)),
+                        teams: Some(teams),
+                    },
+                    Job::Redo { id } => Completion::Preferences {
+                        teams: None,
+                        result: core::notes::request(&id, core::notes::Request::RedoTasks)
+                            .map_err(|e| SaveError::from(&e)),
+                    },
                     Job::Tick {
                         store,
                         id,
                         task,
+                        stable_id,
                         on,
                     } => Completion::Tick {
                         result: store
-                            .set_tick_view(&id, &task, on)
+                            .set_task_tick_view(&id, &task, &stable_id, on)
                             .map(Box::new)
                             .map_err(|e| SaveError::from(&e)),
                         id,
@@ -265,6 +332,19 @@ impl State {
             return;
         }
         match completion {
+            Completion::Preferences { teams, result } => match result {
+                Ok(()) => {
+                    if let Some(teams) = teams {
+                        self.tasks.teams = teams;
+                        self.tasks.teams_notice = Some("Teams saved".into());
+                    }
+                    self.rebuild_tasks();
+                }
+                Err(e) => {
+                    self.tasks.teams_notice = Some(e.message().into());
+                    self.tasks.notice = Some(e.message().into());
+                }
+            },
             Completion::Tick { id, result } => match result {
                 Ok(view) => {
                     if view.generation == core::mutation_generation() {
@@ -278,6 +358,18 @@ impl State {
                     }
                 }
                 Err(e) => self.notice = Some(e.message().into()),
+            },
+            Completion::V2 { result, added } => match result {
+                Ok(view) => {
+                    if view.generation == core::mutation_generation() {
+                        self.tasks.overrides = view.value;
+                        self.rebuild_tasks();
+                    }
+                    if added.is_some_and(|title| self.tasks.subtask_input.text.trim() == title) {
+                        self.tasks.subtask_input = Default::default();
+                    }
+                }
+                Err(e) => self.tasks.notice = Some(e.message().into()),
             },
             Completion::ManualTick(result) => match result {
                 Ok(view) => {
@@ -302,7 +394,22 @@ impl State {
                 ..
             } => match result {
                 Ok(view) => {
-                    let saved = core::live_edit::task_value(&view.value, &row, index);
+                    let saved = if let Some(item) = self
+                        .tasks
+                        .all
+                        .iter()
+                        .find(|t| t.meeting_id == row && t.index == index && !t.manual)
+                    {
+                        serde_json::to_value(view.value.match_task(
+                            &row,
+                            &item.stable_id,
+                            &item.task,
+                            index,
+                        ))
+                        .unwrap_or_default()
+                    } else {
+                        core::live_edit::task_value(&view.value, &row, index)
+                    };
                     core::live_edit::advance_base(&mut self.tasks.edit_base, &mine, &saved);
                     let current = view.generation == core::mutation_generation();
                     if current {

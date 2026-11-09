@@ -31,7 +31,7 @@ fn checkbox(task: &str, on: bool, index: usize, p: Palette) -> El {
 }
 
 fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
-    let on = s.saved.checked.contains(&t.task);
+    let on = sidenote::core::todo_done(t, Some(&s.saved.checked));
     let owner = t
         .owner
         .as_deref()
@@ -61,14 +61,14 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
     if let Some(s) = stamp(&t.at, &key, p) {
         meta = meta.child(s);
     }
-    let task = t.task.clone();
+    let task = t.text().to_string();
     // Next steps read in bold, as the actions of the meeting; a finished one steps back.
-    let task_text = text(t.task.clone())
+    let task_text = text(t.title().to_string())
         .font(if on { roles::READ } else { roles::READ.bold() }.style())
         .color(if on { p.faint } else { p.ink })
         .wrap();
     let task_text = if on {
-        task_text.strike(0, t.task.len(), None)
+        task_text.strike(0, t.title().len(), None)
     } else {
         task_text
     };
@@ -83,7 +83,7 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
             col()
                 .w(22.0)
                 .items_center()
-                .child(checkbox(&t.task, on, index, p)),
+                .child(checkbox(t.text(), on, index, p)),
         )
         .child(
             col()

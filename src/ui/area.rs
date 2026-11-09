@@ -161,8 +161,9 @@ impl State {
                             .entry(m.id.clone())
                             .or_insert_with(|| store.load_ticks(&m.id));
                     }
-                    let tasks =
+                    let mut tasks =
                         core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
+                    store.load_teams().unwrap_or_default().apply(&mut tasks);
                     let kept = core::without_cleared(tasks.clone(), cutoff);
                     let task_counts = core::count_tasks(&kept);
                     let task_names = core::project_names(&projects, &tasks);
