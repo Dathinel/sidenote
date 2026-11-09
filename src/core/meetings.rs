@@ -104,11 +104,32 @@ pub struct Point {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Todo {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub waiting_on: Option<WaitingOn>,
+    pub subtasks: Vec<Subtask>,
+    pub team: Option<String>,
+    pub span: Vec<String>,
     pub task: String,
     pub owner: Option<String>,
     pub due: Option<String>,
     pub due_default: bool,
     pub at: Vec<String>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WaitingOn {
+    pub task_id: Option<String>,
+    pub text: Option<String>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Subtask {
+    pub id: String,
+    pub title: String,
+    pub done: bool,
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -610,6 +631,23 @@ pub fn nice_date(date: &str) -> String {
 mod quick_title_tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn old_and_v2_task_fields_remain_readable() {
+        let old: Todo = serde_json::from_str(r#"{"task":"Send the plan"}"#).unwrap();
+        assert_eq!(old.task, "Send the plan");
+        assert!(old.id.is_empty());
+        assert!(old.subtasks.is_empty());
+        let raw = r#"{"task":"Send the plan","id":"stable-id","title":"Send the plan","description":"Include the agreed date.","status":"waiting","waiting_on":{"task_id":"blocker"},"team":"Design","subtasks":[{"id":"child","title":"Check date","done":true}],"span":["00:00:01","00:00:10"]}"#;
+        let task: Todo = serde_json::from_str(raw).unwrap();
+        assert_eq!(task.id, "stable-id");
+        assert_eq!(task.waiting_on.as_ref().unwrap().task_id.as_deref(), Some("blocker"));
+        assert!(task.subtasks[0].done);
+        let roundtrip: Todo = serde_json::from_str(&serde_json::to_string(&task).unwrap()).unwrap();
+        assert_eq!(roundtrip.description, task.description);
+        assert_eq!(roundtrip.team.as_deref(), Some("Design"));
+        assert_eq!(roundtrip.span, task.span);
+    }
 
     #[test]
     fn personal_notes_without_a_summary_appear_in_saved_meetings() {
