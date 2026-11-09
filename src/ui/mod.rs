@@ -1236,7 +1236,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_)
                 if headless
                     && (s.asks.values().any(|r| r.live)
-                        || s.ai_notes.pending.is_some()
+                        || (s.ai_notes.pending.is_some() && !s.ai_notes.scene)
                         || s.edit_busy
                         || s.memory.refresh_pending
                         || s.areas.refresh_pending
