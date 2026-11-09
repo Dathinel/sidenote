@@ -1,4 +1,5 @@
 //! Meeting data and background work, with no Rune or other UI dependencies.
+pub mod agent_instructions;
 pub mod area_ops;
 pub mod area_version;
 pub mod areas;

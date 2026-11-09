@@ -1,0 +1,37 @@
+# Output format
+
+Reply with exactly one JSON object with these fields. All text values are plain sentences: no Markdown, no bullets, no timestamps inside text.
+
+{
+  "title": "At most 8 words naming what this meeting was about",
+  "kind": "A short phrase, for example Weekly team call, Customer call, Interview, Webinar",
+  "people": ["Names of people who clearly took part; [] when unknown"],
+  "context": ["2 to 4 short points: why the meeting happened and what it set out to settle"],
+  "topics": [
+    {"title": "A specific topic name, never just Discussion",
+     "points": [{"type": "fact", "text": "One short sentence", "who": "Name, or leave out", "at": ["00:12:30"]}]}
+  ],
+  "todo": [
+    {"ref": "t1",
+     "title": "Verb first, at most 8 words",
+     "description": "1 to 3 short sentences",
+     "status": "todo",
+     "waiting_on": null,
+     "subtasks": [{"title": "At most 8 words"}],
+     "owner": "A name, You, or null",
+     "team": "A name from the Teams list, or null",
+     "due": "YYYY-MM-DD or null",
+     "at": ["00:12:58"],
+     "span": ["00:11:40", "00:13:05"]}
+  ],
+  "to_settle": [{"question": "One sentence", "waits_on": "A name, You, or null"}],
+  "verify": ["One short line each"]
+}
+
+Field limits:
+- point type is one of: fact, decided, concern, response, open.
+- status is todo or waiting. waiting_on is null, {"ref": "<another item's ref>"} or {"text": "<a person or event>"}.
+- subtasks: 0 to 7, only when the to-do has real separate steps.
+- team: only a name from the Teams list, else null. Never invent a team.
+- at and span use timestamps that appear in the transcript: at most 2 per point, exactly 1 per to-do in at, and span is [start, end] around it. When the transcript has no timestamps, use [] everywhere.
+- refs are t1, t2, t3 and so on, unique in this reply.

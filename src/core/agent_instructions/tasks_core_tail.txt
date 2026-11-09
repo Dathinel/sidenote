@@ -1,0 +1,4 @@
+# Output format
+{"meeting_project": "A name or null", "tasks": [{"i": 0, "project": "A name", "new": false}]}
+- One entry per to-do, where i is the to-do's position in the list, starting at 0.
+- new is true only for a name that is not in the Known projects list.

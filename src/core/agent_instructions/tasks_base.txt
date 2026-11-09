@@ -1,0 +1,3 @@
+- Pick the project the work actually moves forward, judged from the meeting's context and discussion, not from keywords alone.
+- Prefer an existing project name. Suggest a new one only when none fits: 2 to 5 words, sentence case, and reuse it for related to-dos in this meeting.
+- meeting_project is the one project the meeting is mostly about, or null when it covers no single project.
