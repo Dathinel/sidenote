@@ -6,10 +6,10 @@
 //! while Hex records, so the owner can get back to the live page or stop from anywhere.
 //! All icons are drawn here from plain shapes.
 use super::{
-    State, hex,
+    State, hex, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, hairline, label, line, pressable, scroll, sidebar_icon},
+    widgets::{dot, hairline, pressable, scroll, sidebar_icon},
 };
 use rune::{Color, El, TextStyle, col, el, row, text};
 use sidenote::core::{self, UiPrefs};
@@ -301,7 +301,9 @@ pub fn icon_stop(size: f32, c: Color) -> El {
 // ---- the sidebar ------------------------------------------------------------------------------
 
 fn pill(n: usize, ink: Color, bg: Color) -> El {
-    label(n.to_string(), 12.0, 700.0, ink)
+    roles::META
+        .bold()
+        .wrap(n.to_string(), ink)
         .px(7.0)
         .radius(999.0)
         .fill(bg)
@@ -326,12 +328,11 @@ fn row_item(
         .radius(8.0)
         .child(icon)
         .child(
-            line(
-                name,
-                14.0,
-                if active { 600.0 } else { 500.0 },
-                if active { p.ink } else { p.soft },
-            )
+            if active {
+                roles::NAME.line(name, p.ink)
+            } else {
+                roles::CONTROL.line(name, p.soft)
+            }
             .grow(1.0),
         );
     if let Some(t) = tail {
@@ -401,8 +402,8 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
                 .px(10.0)
                 .py(8.0)
                 .child(dot(8.0, ink))
-                .child(label("Hex", 13.0, 500.0, p.faint))
-                .child(line(words, 13.0, 600.0, p.ink).grow(1.0)),
+                .child(roles::META.wrap("Hex", p.faint))
+                .child(roles::CONTROL.line(words, p.ink).grow(1.0)),
         )
         .key("hex-status")
         .label(help.clone())
@@ -422,7 +423,12 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
 }
 
 fn section_title(text_: &str, p: Palette) -> El {
-    label(text_, 12.0, 600.0, p.faint).px(10.0).mt(16.0).mb(4.0)
+    roles::META
+        .bold()
+        .wrap(text_, p.faint)
+        .px(10.0)
+        .mt(roles::GROUP_TOP)
+        .mb(4.0)
 }
 
 /// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
@@ -464,7 +470,7 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
             ),
             active: page == Page::Tasks,
             icon: |c, _| icon_tasks(c),
-            count: (open_tasks > 0).then(|| label(open_tasks.to_string(), 12.5, 500.0, p.faint)),
+            count: (open_tasks > 0).then(|| roles::META.wrap(open_tasks.to_string(), p.faint)),
             flag: None,
             press: |s| {
                 s.set_view(View::Tasks);
@@ -550,7 +556,9 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
     let mut header = row().w_full().h(52.0).items_center().child(toggle(s, p));
     header = if wide {
         header.px(6.0).child(
-            label("Sidenote", 16.0, 600.0, p.ink).help("Local-first meeting notes on top of Hex"),
+            roles::TITLE
+                .wrap("Sidenote", p.ink)
+                .help("Local-first meeting notes on top of Hex"),
         )
     } else {
         header.justify_center()
@@ -621,7 +629,7 @@ fn projects(s: &State, p: Palette) -> El {
                 "nav-peers".into(),
                 icon_device(if active { p.ink } else { p.soft }),
                 "From other devices",
-                Some(label(s.nav.peers.to_string(), 12.5, 400.0, p.faint)),
+                Some(roles::META.wrap(s.nav.peers.to_string(), p.faint)),
                 active,
                 "Show meetings recorded on another device".into(),
                 p,
@@ -633,13 +641,9 @@ fn projects(s: &State, p: Palette) -> El {
         list = list.child(section_title("Projects", p));
         if s.tasks.names.is_empty() {
             list = list.child(
-                label(
-                    "Projects you add meetings to appear here.",
-                    12.5,
-                    400.0,
-                    p.faint,
-                )
-                .px(10.0),
+                roles::META
+                    .wrap("Projects you add meetings to appear here.", p.faint)
+                    .px(10.0),
             );
         }
         for (i, name) in s.tasks.names.iter().enumerate() {
@@ -651,7 +655,7 @@ fn projects(s: &State, p: Palette) -> El {
                     format!("nav-project-{i}"),
                     icon_folder(if active { p.ink } else { p.soft }),
                     name,
-                    (n > 0).then(|| label(n.to_string(), 12.5, 400.0, p.faint)),
+                    (n > 0).then(|| roles::META.wrap(n.to_string(), p.faint)),
                     active,
                     format!("Show meetings in {name}"),
                     p,
@@ -677,16 +681,11 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
     let blocked = hex::start_blocked(s);
     let ink = p.card;
     let b = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(icon_plus(ink))
-            .child(label(
-                if narrow { "New" } else { "New meeting" },
-                13.5,
-                600.0,
-                ink,
-            )),
+        row().gap(8.0).items_center().child(icon_plus(ink)).child(
+            roles::CONTROL
+                .bold()
+                .wrap(if narrow { "New" } else { "New meeting" }, ink),
+        ),
     )
     .key("new-meeting")
     .px(if narrow { 12.0 } else { 16.0 })
@@ -717,7 +716,7 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
             .gap(8.0)
             .items_center()
             .child(dot(8.0, p.warn))
-            .child(label(words.clone(), 13.5, 600.0, p.ink)),
+            .child(roles::CONTROL.bold().wrap(words.clone(), p.ink)),
     )
     .key("recording-open")
     .label(format!("{words}. Open the live meeting"))
@@ -734,12 +733,11 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
             .gap(7.0)
             .items_center()
             .child(icon_stop(9.0, if why.is_some() { p.faint } else { p.ink }))
-            .child(label(
-                "Stop",
-                13.5,
-                600.0,
-                if why.is_some() { p.faint } else { p.ink },
-            )),
+            .child(
+                roles::CONTROL
+                    .bold()
+                    .wrap("Stop", if why.is_some() { p.faint } else { p.ink }),
+            ),
     )
     .key("hex-stop")
     .pl(12.0)

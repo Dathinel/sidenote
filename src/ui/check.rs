@@ -1231,7 +1231,7 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
         .on_press(move |s: &mut State| s.open_finding(&open_key));
     if selected {
         line = line
-            .fill(p.line)
+            .fill(p.sel)
             .child(el().w(2.0).h(18.0).radius(1.0).fill(p.accent).pin(
                 Some(0.0),
                 Some(10.0),

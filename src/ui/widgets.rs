@@ -6,6 +6,8 @@ use super::{
 use rune::{Color, Cursor, El, Link, LinkPaint, ScrollSpec, Span, TextStyle, col, el, row, text};
 use sidenote::core::{self, Point};
 
+/// A glyph or icon character (a tick, a chevron, a close cross) at its own size. Words use the
+/// roles in `roles.rs` instead.
 pub fn label(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
     text(s)
         .font(TextStyle::new(size, weight).lh((size * 1.55).round()))
@@ -28,17 +30,7 @@ pub fn spaced_caps(s: &str, p: Palette) -> El {
 
 /// A section heading in the reading column, with an optional count pill after it.
 pub fn heading(s: &str, count: Option<usize>, key: &str, p: Palette) -> El {
-    let mut r = row()
-        .key(key.to_string())
-        .items_center()
-        .gap(8.0)
-        .mt(32.0)
-        .mb(8.0)
-        .child(roles::SECTION.wrap(s, p.ink));
-    if let Some(n) = count {
-        r = r.child(roles::count(n, p));
-    }
-    r
+    roles::section(s, count, p).key(key.to_string())
 }
 
 /// A quiet outlined chip for facts about a meeting.
@@ -150,7 +142,7 @@ pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     Some(
         pressable(
             text(shown.clone())
-                .font(TextStyle::new(12.0, 500.0).mono())
+                .font(roles::META.medium().style().mono())
                 .color(p.faint),
         )
         .key(format!("stamp-{origin}"))
@@ -199,7 +191,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
             Span::new(range.start, range.end)
                 .mono()
                 .weight(400.0)
-                .size(12.0)
+                .size(roles::META.size)
                 .color(p.faint),
         );
         stamp_link = Some(
@@ -244,7 +236,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
 pub fn highlighted(
     text_: &str,
     ranges: &[std::ops::Range<usize>],
-    size: f32,
+    role: roles::Role,
     ink: Color,
     mark_bg: Color,
 ) -> El {
@@ -252,7 +244,7 @@ pub fn highlighted(
         .iter()
         .map(|r| Span::new(r.start, r.end).weight(600.0).bg(mark_bg, 1.5))
         .collect();
-    label(text_, size, 400.0, ink).spans(spans)
+    role.wrap(text_, ink).spans(spans)
 }
 
 /// A warning strip above a page, with a Dismiss link.
@@ -274,7 +266,7 @@ pub fn notice_bar(note: &str, p: Palette) -> El {
 /// A small rounded label on a tint: a status, a kind of change.
 pub fn badge(s: impl Into<String>, ink: Color, bg: Option<Color>) -> El {
     let b = text(s)
-        .font(TextStyle::new(12.0, 600.0).lh(18.0))
+        .font(roles::META.bold().style())
         .color(ink)
         .px(8.0)
         .py(1.0)
@@ -370,7 +362,8 @@ pub fn list_and_panel(list: El, panel: Option<El>, panel_w: f32, overlay: bool, 
 
 /// A key cap, as in "Ctrl K": a small outlined label for a shortcut.
 pub fn keycap(s: impl Into<String>, p: Palette) -> El {
-    label(s, 11.5, 600.0, p.faint)
+    roles::CAPTION
+        .wrap(s, p.faint)
         .px(6.0)
         .py(1.0)
         .radius(5.0)

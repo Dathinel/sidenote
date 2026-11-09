@@ -1,66 +1,85 @@
 # Typography and reading hierarchy
 
-Sidenote separates text by size, weight and colour, the way GitHub's Primer does: one
-semibold weight for titles, a small set of body sizes, and two greys for secondary text.
-We keep Sidenote's own look: Georgia page titles, Inter for everything else, and the warm
-palette in `src/ui/theme.rs`. The helpers live in `src/ui/roles.rs`.
+Sidenote separates text by size, weight and colour, the way GitHub's Primer does: names
+are heavier than body, body is regular, and facts about an item are smaller and greyer.
+Space groups things first; lines come second. We keep Sidenote's own look: Georgia page
+titles, Inter for everything else, and the warm palette in `src/ui/theme.rs`. The roles
+live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
 
 ## What we took from Primer
 
-- Few sizes. Primer reads at 14 px with 12 px for small text and 16 to 20 px for titles.
-  Sidenote reads at 16 px (it is a reading app) and uses 14, 13 and 12 below it.
-- One weight per job: 400 for reading, 500 for controls, 600 for titles and headings.
-- Colour roles, not colours: `fg.default` for content, `fg.muted` for supporting text. Meta
-  such as times and counts is smaller and greyer, never bolder.
-- Counts sit in a small pill after a heading, not as loose numbers.
-- A 4 px spacing grid; space separates groups before lines do.
+- Three clear steps, not five near ones. A name (600), its body (400), its facts (12 px,
+  grey). If two lines next to each other share size, weight and colour, merge them.
+- One weight per job: 400 for reading, 500 for controls, 600 for names and headings.
+- Colour roles, not colours: `ink` is `fg.default`, `soft` is `fg.muted` for text people
+  read, `faint` is the scanning grey for facts. Facts are smaller and greyer, never bolder.
+- Facts about one item sit on one line, joined by " · " (`roles::meta_line`).
+- Space between sections is about three times the space between items in a section.
 
 ## Text roles
 
 | Role | Size / line height | Weight | Colour | Use |
 |---|---|---|---|---|
 | Page title | Georgia 34/42 (28/35 at 560 px) | 400 | `ink` | One per page |
-| Section heading | 18/26 | 600 | `ink` | Decisions, To do, settings groups |
-| Title | 16/24 | 600 | `ink` | List row titles, topic titles, card titles |
-| Body | 16/27 | 400 | `ink` | Summary points, to-dos, answers |
-| Small | 14/21 | 400 | `ink` or `soft` | Transcript lines, form text, descriptions |
-| Control | 14/21 | 500 | `soft`, `ink` when active | Tabs, buttons, menu items |
-| Meta | 13/20 | 400 | `faint` | Times, people line, dates, sources, help text |
-| Group label | 13/20 | 600 | `soft` | Day groups (Today, Yesterday), field labels |
-| Caption | 12/18 | 600, uppercase | `faint` | Panel captions, "Discussion" |
+| `SECTION` | 20/28 | 600 | `ink` | Needs attention, Decisions, To do, a settings section, Memory and Tasks panels |
+| `TITLE` | 16/24 | 600 | `ink` | A meeting in the list, a topic, a model card, the Ask question |
+| `READ` | 16/27 | 400 | `ink` | Summary points, to-dos, Ask answers, live notes |
+| `SMALL` | 14/21 | 400 | `ink` or `soft` | Dense rows, descriptions, transcript lines |
+| `NAME` | 14/21 | 600 | `ink` | The name in a dense row: a setting, a finding, the active sidebar place |
+| `CONTROL` | 14/20 | 500 | `soft`, `ink` when active | Tabs, buttons, links, sidebar places |
+| `META` | 12/18 | 400 | `faint` | Times, people, dates, sizes, licences, sources, help text |
+| `GROUP` | 13/20 | 600 | `ink` or `soft` | Group labels inside a section (Yesterday, This week, Medium) and field labels |
+| `CAPTION` | 12/16 | 600, capitals | `faint` | Panel captions: FINDING, ASKED ABOUT THIS MEETING |
 | Count | 12/18 in a pill | 500 | `soft` on `chip` | The number after a heading or tab |
 
-Colour tokens: `ink` is Primer's `fg.default`. `soft` is the stronger muted grey for text
-people read (descriptions, empty states). `faint` is the meta grey for text people scan
-(times, counts, captions). Links and actions use `accent`; status uses `ok`, `warn`, `open`.
+Variants: `.bold()` (600), `.medium()` (500) and `.regular()` (400) keep the size.
+Warnings people must act on use `SMALL.medium()` in `warn`, not 12 px.
 
-## Contrast (WCAG, checked 2026-11-09)
+Glyphs (ticks, chevrons, the close cross) use `widgets::label` with their own size. Words
+never do.
 
-| Token | Light: page / card / sidebar | Dark: page / card / sidebar |
+## The Ask thread
+
+The answer reads at `READ` (16/27), the same as the summary under it. It used to be 15/25,
+a size used nowhere else, so it read as neither body nor small text. An answer is prose
+people read in full, so it gets the reading size; the question above it is `TITLE`.
+
+## Colour tokens and contrast (WCAG, checked 2026-11-09)
+
+| Token | Light: page / card / sidebar / chip / sel / hit | Dark: page / card / sidebar / chip / sel / hit |
 |---|---|---|
-| `ink` | 16.1 / 16.7 / 14.9 | 14.1 / 12.6 / 14.9 |
-| `soft` | 6.6 / 6.8 / 6.1 | 7.8 / 6.9 / 8.2 |
-| `faint` | 5.1 / 5.3 / 4.7 | 5.2 / 4.6 / 5.5 |
+| `ink` | 16.1 / 16.7 / 14.9 / 14.3 / 13.9 / 15.0 | 14.1 / 12.6 / 14.9 / 11.6 / 11.7 / 10.7 |
+| `soft` | 6.6 / 6.8 / 6.1 / 5.8 / 5.7 / 6.1 | 8.9 / 7.9 / 9.4 / 7.3 / 7.4 / 6.7 |
+| `faint` | 5.4 / 5.6 / 5.0 / 4.8 / 4.6 / 5.0 | 6.0 / 5.3 / 6.3 / 4.9 / 5.0 / 4.5 |
+| `warn` | 5.4 / 5.6 / 5.0 / 4.8 / 4.7 / 5.0 | 8.4 / 7.5 / 8.9 / 7.0 / 7.0 / 6.4 |
 
-`faint` keeps 4.5:1 on the page, on cards and in the sidebar in both themes. It drops to
-4.3:1 on the dark `chip` fill (hover and selected rows), so text that sits on a `chip` fill
-uses `soft`, and the count pill does too.
+Every text token keeps 4.5:1 on every fill text sits on: the page, cards, the sidebar,
+hover (`chip`), the selected row (`sel`) and the search highlight (`hit`).
+
+Round 2 changes: dark `faint` #8f8c83 to #9a978e (was 4.3:1 on `chip`, 3.75:1 on `hit`),
+dark `soft` #b0ada4 to #bcb9b0 to keep a clear step above `faint`, dark `hit` #3a3317 to
+#363019, light `faint` #6e6b64 to #6b6861 and light `warn` #a35d00 to #9a5800 (was
+4.35:1 on `chip`). Selected rows used the hairline colour, which left `faint` at 4.3:1;
+they now use `sel`, the accent at 10% over the page (#e8ebed light, #262a2c dark).
 
 ## Spacing (4 px grid)
 
 - Page title to the first content: 16. Page sides: 40 wide, 16 to 20 at 560 px.
-- Between sections: 32 above a section heading, 8 below it.
-- Between list rows: no gap; each row has 8 to 10 px of vertical padding and a hover fill.
-- Title to its meta line: 2. Meta to a snippet: 4.
-- Inside cards: 14 to 16 px padding; hairlines between rows, not around them.
+- `SECTION_TOP` 40 above a section heading, `SECTION_GAP` 12 below it.
+- `GROUP_TOP` 20 above a group label inside a section. Group labels are plain text, not
+  shaded bars.
+- `META_GAP` 2 between a name and its facts line.
+- Rows in a list: no gap; each row has its own height and a hover fill.
+- Hairlines only where rows hold controls that must line up (settings rows). Cards in a
+  list (model cards) are separated by space alone.
 
 ## When to use what
 
-- **Bold (600)** marks what you scan for: titles, headings, decisions, the speaker. Never
-  make meta or whole paragraphs bold.
-- **Smaller** text is for facts about an item (when, who, how many). Drop one step (16 to 14,
-  14 to 13), not two, so the pairing still reads as one item.
-- **Grey** text is for what you can skip on a first read. Use `soft` if people need to read
-  it, `faint` if they only glance at it. Do not combine grey and very small for anything
-  someone must act on.
-- Keep accent colour for things you can press.
+- **Bold (600)** marks what you scan for: headings, names, decisions, the speaker. Never
+  make facts or whole paragraphs bold.
+- **Smaller** text is for facts about an item (when, who, how big). Facts drop to 12 px
+  so a name and its facts read as two levels at a glance.
+- **Grey** text is for what you can skip on a first read: `soft` if people need to read it
+  (descriptions, empty states), `faint` if they only glance at it (facts, counts,
+  captions). Do not combine grey and 12 px for anything someone must act on.
+- Keep accent colour for things you can press, and the selected-row tint.

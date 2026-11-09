@@ -54,7 +54,7 @@ pub(super) fn snippet(hit: &SearchHit, p: Palette) -> El {
         .child(highlighted(
             &hit.snippet.text,
             &hit.snippet.matches,
-            roles::META.size,
+            roles::SMALL,
             p.soft,
             p.hit,
         ))

@@ -1,7 +1,7 @@
 //! Text roles: the few sizes, weights and greys the app reads in. See docs/design/typography.md.
-//! Prefer these over raw sizes so pages keep the same hierarchy.
+//! Pages use these instead of raw sizes, so every page keeps the same hierarchy.
 use super::theme::{BODY, BODY_LH, Palette};
-use rune::{Color, El, TextStyle, text};
+use rune::{Color, El, TextStyle, row, text};
 
 /// A size, weight and line height. The colour comes from the caller's palette.
 #[derive(Clone, Copy)]
@@ -12,7 +12,7 @@ pub struct Role {
 }
 
 impl Role {
-    /// The same size in the title weight, for a lead word or a name inside a line.
+    /// The same size in the title weight, for a name inside a dense row or a lead word.
     pub const fn bold(self) -> Role {
         Role {
             weight: 600.0,
@@ -20,7 +20,7 @@ impl Role {
         }
     }
 
-    /// The same size at 500, for controls and names that need a little weight.
+    /// The same size at 500, for controls and warnings that need a little weight.
     pub const fn medium(self) -> Role {
         Role {
             weight: 500.0,
@@ -43,43 +43,45 @@ impl Role {
     }
 }
 
-/// Decisions, To do, settings groups.
+/// Page sections: Decisions, To do, Needs attention, a settings group.
 pub const SECTION: Role = Role {
-    size: 18.0,
+    size: 20.0,
     weight: 600.0,
-    lh: 26.0,
+    lh: 28.0,
 };
-/// List row titles, topic titles and card titles.
+/// Item titles: a meeting in a list, a topic, a model card, a panel's subject.
 pub const TITLE: Role = Role {
     size: 16.0,
     weight: 600.0,
     lh: 24.0,
 };
-/// Reading text: summary points, to-dos and answers.
+/// Reading text: summary points, to-dos, answers and live notes.
 pub const READ: Role = Role {
     size: BODY,
     weight: 400.0,
     lh: BODY_LH,
 };
-/// Transcript lines, form text and descriptions.
+/// Dense rows and descriptions: tasks, findings, transcript lines, form text.
 pub const SMALL: Role = Role {
     size: 14.0,
     weight: 400.0,
     lh: 21.0,
 };
-/// Tabs, buttons and menu items.
+/// The name in a dense row: a setting, a finding, a memory claim, a sidebar place.
+pub const NAME: Role = SMALL.bold();
+/// Tabs, buttons, links and menu items.
 pub const CONTROL: Role = Role {
     size: 14.0,
     weight: 500.0,
-    lh: 21.0,
-};
-/// Times, people, dates, sources and help text.
-pub const META: Role = Role {
-    size: 13.0,
-    weight: 400.0,
     lh: 20.0,
 };
-/// Day groups and field labels.
+/// Facts about an item: times, people, dates, sizes, licences, sources and help text.
+pub const META: Role = Role {
+    size: 12.0,
+    weight: 400.0,
+    lh: 18.0,
+};
+/// Group labels inside a section (Today, This week, Medium) and field labels.
 pub const GROUP: Role = Role {
     size: 13.0,
     weight: 600.0,
@@ -89,19 +91,39 @@ pub const GROUP: Role = Role {
 pub const CAPTION: Role = Role {
     size: 12.0,
     weight: 600.0,
-    lh: 18.0,
+    lh: 16.0,
 };
+
+/// Space above a section heading. Sections are grouped by space first, lines second.
+pub const SECTION_TOP: f32 = 40.0;
+/// Space between a section heading and its first item.
+pub const SECTION_GAP: f32 = 12.0;
+/// Space above a group label inside a section.
+pub const GROUP_TOP: f32 = 20.0;
 
 /// Meta text in the scanning grey.
 pub fn meta(s: impl Into<String>, p: Palette) -> El {
     META.wrap(s, p.faint)
 }
 
-/// A number after a heading or tab, in a small pill. `soft` because `faint` loses contrast on
-/// the dark `chip` fill.
+/// A section heading: the role, the shared spacing and an optional count pill.
+pub fn section(s: impl Into<String>, count_: Option<usize>, p: Palette) -> El {
+    let mut r = row()
+        .items_center()
+        .gap(8.0)
+        .mt(SECTION_TOP)
+        .mb(SECTION_GAP)
+        .child(SECTION.wrap(s, p.ink));
+    if let Some(n) = count_ {
+        r = r.child(count(n, p));
+    }
+    r
+}
+
+/// A number after a heading or tab, in a small pill. `soft` keeps 4.5:1 on the `chip` fill.
 pub fn count(n: usize, p: Palette) -> El {
     text(n.to_string())
-        .font(TextStyle::new(CAPTION.size, 500.0).lh(CAPTION.lh))
+        .font(META.medium().style())
         .color(p.soft)
         .px(7.0)
         .radius(999.0)

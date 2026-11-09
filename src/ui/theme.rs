@@ -1,5 +1,6 @@
-//! Colours, fonts and the type scale. Light and dark follow the system setting. `faint` keeps
-//! 4.5:1 on the page and on raised surfaces in both modes.
+//! Colours, fonts and the type scale. Light and dark follow the system setting. `soft` and
+//! `faint` keep 4.5:1 on the page, raised surfaces, the sidebar and the hover, selected and
+//! highlight fills in both modes. docs/design/typography.md lists the ratios.
 use rune::{Color, Family, TextStyle};
 use rune_kit::{Kit, PaletteSeed};
 
@@ -21,7 +22,10 @@ pub struct Palette {
     pub warn: Color,
     pub warnbg: Color,
     pub open: Color,
+    /// Hover fills, count pills and quiet buttons.
     pub chip: Color,
+    /// The selected row in a list: the accent at 10% over the page.
+    pub sel: Color,
     pub hit: Color,
     pub shadow: Color,
     /// Dims the page under a modal, dark enough that page headings do not compete with it.
@@ -35,8 +39,8 @@ pub fn palette(dark: bool) -> Palette {
             "#242422",
             "#141413",
             "#e9e7e1",
-            "#b0ada4",
-            "#8f8c83",
+            "#bcb9b0",
+            "#9a978e",
             "#302f2c",
             "#8db5dc",
             "#69c995",
@@ -45,7 +49,8 @@ pub fn palette(dark: bool) -> Palette {
             "#33281a",
             "#b49ee3",
             "#2a2a27",
-            "#3a3317",
+            "#262a2c",
+            "#363019",
             "#00000066",
             "#000000b3",
         ]
@@ -56,15 +61,16 @@ pub fn palette(dark: bool) -> Palette {
             "#f3f2ed",
             "#1e1e1c",
             "#5d5b55",
-            "#6e6b64",
+            "#6b6861",
             "#e6e3db",
             "#2f5d8a",
             "#1d7a4c",
             "#e4f3eb",
-            "#a35d00",
+            "#9a5800",
             "#fcf0dc",
             "#6a4ea3",
             "#efede7",
+            "#e8ebed",
             "#fff3c4",
             "#1e1e1c1f",
             "#1e1e1c73",
@@ -86,9 +92,10 @@ pub fn palette(dark: bool) -> Palette {
         warnbg: c[11],
         open: c[12],
         chip: c[13],
-        hit: c[14],
-        shadow: c[15],
-        scrim: c[16],
+        sel: c[14],
+        hit: c[15],
+        shadow: c[16],
+        scrim: c[17],
     }
 }
 

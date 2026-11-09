@@ -49,6 +49,7 @@ $shots = @(
     @('models-empty', 'models-empty', '1320x1000', $null, @()),
     @('models-downloading', 'models-downloading', '1320x1000', $null, @()),
     @('models-installed', 'models-installed', '1320x1000', $null, @()),
+    @('models-installed-narrow', 'models-installed', '560x1100', $null, @()),
     @('models-checksum-error', 'models-checksum-error', '1320x1000', $null, @()),
     @('audio-settings', 'hex-meetings', '1320x900', $null, @()),
     @('features-off-sidebar', 'features-off-sidebar', '1320x800', $null, @()),
@@ -215,7 +216,7 @@ foreach ($n in $sidebarScenes) {
     $shots += ,@("sb-$n-820", $n, '820x800', $null, @())
 }
 # A phone-width window: the sidebar is a rail, and a drawer when opened.
-foreach ($n in 'home-open', 'live-recording', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-making-notes', 'meeting-your-notes', 'hex', 'ask-idle', 'ask-focused', 'ask-typed', 'ask-model-missing', 'ask-no-agent') { $shots += ,@("sb-$n-560", $n, '560x900', $null, @()) }
+foreach ($n in 'home-open', 'live-recording', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-making-notes', 'meeting-your-notes', 'hex', 'hex-general', 'hex-dictation', 'hex-meetings', 'hex-vocabulary', 'ask-idle', 'ask-focused', 'ask-typed', 'ask-model-missing', 'ask-no-agent') { $shots += ,@("sb-$n-560", $n, '560x900', $null, @()) }
 # The Ask bar on a meeting and across all meetings, answering, at phone width.
 $shots += ,@('ask-narrow',         'ask',              '560x900', $null, @())
 $shots += ,@('ask-running-narrow', 'ask-running',      '560x900', $null, @())

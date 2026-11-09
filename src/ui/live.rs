@@ -24,11 +24,12 @@ use super::{
     hex,
     list::text_title,
     nav::icon_stop,
-    theme::{BODY, BODY_LH, Palette},
+    roles,
+    theme::Palette,
     widgets::{dot, hairline, label, link, pressable, quiet_button, scroll, spaced_caps},
 };
 use chrono::{DateTime, Local, TimeZone};
-use rune::{El, ScrollSpec, TextEdit, TextStyle, col, el, row};
+use rune::{El, ScrollSpec, TextEdit, col, el, row};
 use rune_kit::Kit;
 use sidenote::core::live::{self as feed_io, LiveLine, Read};
 use std::{
@@ -652,7 +653,7 @@ fn stop_pill(s: &State, p: Palette, starting: bool) -> El {
             .gap(8.0)
             .items_center()
             .child(icon_stop(10.0, p.card))
-            .child(label("Stop", 14.0, 600.0, p.card)),
+            .child(roles::CONTROL.bold().wrap("Stop", p.card)),
     )
     .key("live-stop")
     .pl(14.0)
@@ -724,7 +725,7 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
                 .child(dot(9.0, if starting { p.faint } else { p.warn })),
         )
         .child(bars)
-        .child(label(clock, 14.5, 600.0, p.ink).key("live-timer"));
+        .child(roles::NAME.wrap(clock, p.ink).key("live-timer"));
     if !starting {
         group = group.child(rune::icon(chevron, 14.0).color(p.faint));
     }
@@ -797,7 +798,8 @@ fn transcript_panel(s: &State, p: Palette) -> El {
                 .on_press(|s: &mut State| s.live_toggle_panel()),
         );
     let note = |text: &str| {
-        label(text, 14.0, 400.0, p.soft)
+        roles::SMALL
+            .wrap(text, p.soft)
             .key("live-panel-note")
             .role("status")
             .px(16.0)
@@ -813,13 +815,12 @@ fn transcript_panel(s: &State, p: Palette) -> El {
         ));
         if live.began.elapsed() > NO_FEED_AFTER && !live.scene {
             c = c.child(
-                label(
-                    "Nothing has come from Hex yet. The full transcript still appears after you stop.",
-                    13.0,
-                    400.0,
-                    p.faint,
-                )
-                .px(16.0)
+                roles::META
+                    .wrap(
+                        "Nothing has come from Hex yet. The full transcript still appears after you stop.",
+                        p.faint,
+                    )
+                    .px(16.0)
                 .pb(16.0),
             );
         }
@@ -837,21 +838,21 @@ fn transcript_panel(s: &State, p: Palette) -> El {
                     .gap(10.0)
                     .items_start()
                     .py(3.0)
-                    .child(label(stamp(line.seconds), 12.5, 500.0, p.faint).w(46.0))
+                    .child(roles::META.wrap(stamp(line.seconds), p.faint).w(46.0))
                     .child(
-                        label(
-                            match who {
-                                Some(true) => "You",
-                                Some(false) => "Others",
-                                None => "",
-                            },
-                            12.5,
-                            600.0,
-                            if who == Some(true) { p.accent } else { p.soft },
-                        )
-                        .w(48.0),
+                        roles::META
+                            .bold()
+                            .wrap(
+                                match who {
+                                    Some(true) => "You",
+                                    Some(false) => "Others",
+                                    None => "",
+                                },
+                                if who == Some(true) { p.accent } else { p.soft },
+                            )
+                            .w(48.0),
                     )
-                    .child(label(&line.text, 14.5, 400.0, p.ink).grow(1.0).min_w(0.0)),
+                    .child(roles::SMALL.wrap(&line.text, p.ink).grow(1.0).min_w(0.0)),
             );
         }
         let max_h = (s.pane_h.get() * 0.45).clamp(150.0, 340.0);
@@ -904,7 +905,8 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p).key("live-title"));
     if let Some((words, ink)) = status {
         head = head.child(
-            label(words, 13.0, 500.0, ink)
+            roles::META
+                .wrap(words, ink)
                 .key("live-saved")
                 .role("status")
                 .pb(6.0),
@@ -915,10 +917,10 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     } else {
         "Notes save as you type. Hex writes the full notes after you stop."
     };
-    let field = rune::text_input(&s.live_notes, TextStyle::new(BODY, 400.0).lh(BODY_LH))
+    let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
         .w_full()
-        .min_h(if narrow { 8.0 } else { 12.0 } * BODY_LH)
+        .min_h(if narrow { 8.0 } else { 12.0 } * roles::READ.lh)
         .color(p.ink)
         .placeholder("Write notes\u{2026}", p.faint)
         .caret(p.ink, k.selection())
@@ -931,9 +933,9 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .items_start()
         .gap(if narrow { 10.0 } else { 12.0 })
         .child(head)
-        .child(label(hint, 13.5, 400.0, p.faint));
+        .child(roles::META.wrap(hint, p.faint));
     if let Some(Saving::Failed(why)) = saving {
-        c = c.child(label(why, 13.0, 500.0, p.warn).role("alert"));
+        c = c.child(roles::SMALL.medium().wrap(why, p.warn).role("alert"));
     }
     c.child(
         col()
@@ -968,12 +970,11 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             } else {
                 dot(8.0, p.accent).mx(3.0)
             })
-            .child(label(
-                text_,
-                15.0,
-                if done { 400.0 } else { 600.0 },
-                if done { p.soft } else { p.ink },
-            ))
+            .child(if done {
+                roles::READ.wrap(text_, p.soft)
+            } else {
+                roles::READ.bold().wrap(text_, p.ink)
+            })
     };
     let bar = row()
         .w(260.0)
@@ -997,10 +998,11 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .children(
             quick
                 .is_none()
-                .then(|| label("Naming\u{2026}", 13.0, 400.0, p.faint).key("live-naming").role("status")),
+                .then(|| roles::META.wrap("Naming\u{2026}", p.faint).key("live-naming").role("status")),
         )
         .child(
-            label(if slow { "Notes are taking a while" } else { "Making notes" }, 20.0, 600.0, p.ink)
+            roles::SECTION
+                .wrap(if slow { "Notes are taking a while" } else { "Making notes" }, p.ink)
                 .mt(if narrow { 6.0 } else { 18.0 })
                 .role("status"),
         )
@@ -1013,17 +1015,16 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                 .child(step(false, "Writing the notes")),
         )
         .child(
-            label(
-                if slow {
-                    "They will appear in Sidenote when they are ready. You do not need to wait here."
-                } else {
-                    "This usually takes a minute or two. The notes open here when they are ready."
-                },
-                14.0,
-                400.0,
-                p.soft,
-            )
-            .max_w(460.0)
+            roles::SMALL
+                .wrap(
+                    if slow {
+                        "They will appear in Sidenote when they are ready. You do not need to wait here."
+                    } else {
+                        "This usually takes a minute or two. The notes open here when they are ready."
+                    },
+                    p.soft,
+                )
+                .max_w(460.0)
             .mt(6.0),
         );
     if !s.live_notes.text.trim().is_empty() {
@@ -1050,7 +1051,7 @@ pub fn your_notes(notes: &str, p: Palette) -> El {
         body = body.child(if line.trim().is_empty() {
             el().h(6.0)
         } else {
-            label(line, BODY, 400.0, p.ink)
+            roles::READ.wrap(line, p.ink)
         });
     }
     col()
@@ -1089,13 +1090,13 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .gap(16.0);
     if lost {
         doc = doc.child(
-            label(
-                "Hex is not answering. The recording may still be running in Hex.",
-                13.5,
-                500.0,
-                p.warn,
-            )
-            .role("alert"),
+            roles::SMALL
+                .medium()
+                .wrap(
+                    "Hex is not answering. The recording may still be running in Hex.",
+                    p.warn,
+                )
+                .role("alert"),
         );
     }
     doc = doc.child(body);
