@@ -20,7 +20,7 @@ const ROLLING_FILE: &str = "transcript.rolling.ndjson";
 /// A notes file larger than this is not read back into the editor or the meeting page.
 const NOTES_MAX_BYTES: u64 = 1024 * 1024;
 /// A rolling transcript larger than this is not read: it would be many hours of speech.
-const ROLLING_MAX_BYTES: u64 = 24 * 1024 * 1024;
+pub const ROLLING_MAX_BYTES: u64 = 24 * 1024 * 1024;
 
 /// One stretch of speech. Hex's live file knows which side spoke (the microphone or the other
 /// side of the call), not who, so `you` is all the speaker the page can show.
@@ -89,7 +89,7 @@ pub fn read_rolling(folder: &Path, last: Option<Stamp>) -> io::Result<Read> {
     if last == Some(stamp) {
         return Ok(Read::Same);
     }
-    let raw = fs::read(&path)?;
+    let raw = super::file_reads::read(&path, ROLLING_MAX_BYTES)?;
     Ok(Read::Lines(
         parse_rolling(&String::from_utf8_lossy(&raw)),
         stamp,
@@ -133,7 +133,7 @@ pub fn read_notes(folder: &Path) -> String {
         Ok(m) if m.len() <= NOTES_MAX_BYTES => {}
         _ => return String::new(),
     }
-    let Ok(bytes) = fs::read(&path) else {
+    let Ok(bytes) = super::file_reads::read(&path, NOTES_MAX_BYTES) else {
         return String::new();
     };
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes));

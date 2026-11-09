@@ -105,6 +105,7 @@ pub struct TasksState {
     pub edit_title: String,
     pub edit_item: Option<TaskItem>,
     pub edit_failed: bool,
+    pub editor_generation: u64,
     /// The project the add form files the task under. None is Unsorted.
     pub add_project: Option<String>,
     pub rename_input: TextEdit,
@@ -169,6 +170,7 @@ impl TasksState {
             edit_title: String::new(),
             edit_item: None,
             edit_failed: false,
+            editor_generation: 0,
             add_project: None,
             rename_input: TextEdit::new(""),
             rename: None,
@@ -477,6 +479,7 @@ impl State {
             field,
             typed,
             close,
+            session: self.tasks.editor_generation,
         });
         false
     }
@@ -622,15 +625,15 @@ impl State {
     // ---- the right-hand panel ----
 
     /// Opens a task in the panel and selects its row.
-    pub fn open_task(&mut self, id: &str, index: usize) {
+    pub fn open_task(&mut self, id: &str, index: usize) -> bool {
         if self.keep_task_draft() {
-            return;
+            return false;
         }
         if !self.flush_title(false) {
-            return;
+            return false;
         }
         let Some(title) = self.tasks.item(id, index).map(|t| t.task.clone()) else {
-            return;
+            return false;
         };
         let t = &mut self.tasks;
         t.rename = None;
@@ -640,7 +643,16 @@ impl State {
             .iter()
             .find(|t| t.meeting_id == id && t.index == index)
             .cloned();
+        t.editor_generation += 1;
         t.edit_base = core::live_edit::task_value(&t.overrides, id, index);
+        if !id.starts_with("manual/")
+            && t.edit_base
+                .get("task")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text != title)
+        {
+            t.edit_base = serde_json::Value::Null;
+        }
         t.edit_title = title.clone();
         t.edit_failed = false;
         t.cursor = Some((id.to_string(), index));
@@ -651,6 +663,7 @@ impl State {
             title: TextEdit::new(&title),
             ..PanelInputs::default()
         };
+        true
     }
 
     fn keep_task_draft(&mut self) -> bool {
@@ -660,25 +673,41 @@ impl State {
                 && (!self.tasks.inputs.owner.text.is_empty()
                     || !self.tasks.inputs.due.text.is_empty()
                     || !self.tasks.inputs.project.text.is_empty()));
-        if keep {
+        if keep && self.tasks.notice.is_none() {
             self.tasks.notice = Some("Your draft is kept. Save it before closing.".into());
         }
         keep
     }
-    pub fn close_panel(&mut self) {
+    pub fn close_panel(&mut self) -> bool {
         if self.keep_task_draft() {
-            return;
+            return false;
         }
         if !self.flush_title(true) {
-            return;
+            return false;
         }
         let t = &mut self.tasks;
+        t.editor_generation += 1;
         t.panel = None;
         t.edit_item = None;
         t.ui = PanelUi::default();
         t.inputs = PanelInputs::default();
+        true
     }
 
+    pub fn discard_task(&mut self) -> bool {
+        if self.edit_busy {
+            return false;
+        }
+        self.tasks.editor_generation += 1;
+        self.tasks.panel = None;
+        self.tasks.edit_item = None;
+        self.tasks.edit_base = serde_json::Value::Null;
+        self.tasks.edit_failed = false;
+        self.tasks.ui = PanelUi::default();
+        self.tasks.inputs = PanelInputs::default();
+        self.tasks.notice = None;
+        true
+    }
     /// Opens the panel to add a task. One added while a project group is under the cursor
     /// goes to that project.
     pub fn open_add(&mut self) {
@@ -923,14 +952,14 @@ impl State {
             None if delta < 0 => rows.len() - 1,
             None => 0,
         };
-        self.tasks.keyboard = true;
         let (id, index) = rows[next].clone();
-        tx.scroll_into_view(format!("trow-{id}-{index}"));
-        self.tasks.cursor = Some((id.clone(), index));
-        // With the panel open on a task, it follows the cursor.
-        if matches!(self.tasks.panel, Some(Panel::Task(_))) {
-            self.open_task(&id, index);
+        // With the panel open on a task, it follows only after accepting the transition.
+        if matches!(self.tasks.panel, Some(Panel::Task(_))) && !self.open_task(&id, index) {
+            return;
         }
+        self.tasks.keyboard = true;
+        tx.scroll_into_view(format!("trow-{id}-{index}"));
+        self.tasks.cursor = Some((id, index));
     }
 
     fn cursor_row(&self) -> Option<RowId> {
@@ -989,7 +1018,9 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         // E edits: the panel opens on the task, with its title ready to type if it is yours.
         "e" | "d" => match s.cursor_row() {
             Some((id, index)) if s.tasks.keyboard => {
-                s.open_task(&id, index);
+                if !s.open_task(&id, index) {
+                    return true;
+                }
                 if t == "d" {
                     s.tasks.inputs.due = focused_input();
                 } else if let Some(task) = s.panel_task().filter(|x| x.manual) {
@@ -1026,10 +1057,9 @@ fn form_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 /// Escape in a panel text box closes the panel. Enter goes through `on_submit`.
 fn panel_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape {
-        // Escape drops a half-typed title instead of saving it.
-        s.tasks.inputs.title = TextEdit::default();
-        s.close_panel();
-        tx.blur();
+        if s.close_panel() {
+            tx.blur();
+        }
         return true;
     }
     false
@@ -1474,7 +1504,9 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     };
     let open = {
         let id = id.clone();
-        move |s: &mut State| s.open_task(&id, index)
+        move |s: &mut State| {
+            s.open_task(&id, index);
+        }
     };
     let open_title = pressable(row().h_full().items_center().min_w(0.0).child(title))
         .key(format!("ttask-{id}-{index}"))
@@ -2164,7 +2196,10 @@ fn project_control(
                                 s.tasks.inputs.project = TextEdit::default();
                             }
                         }
-                        Err(e) => s.tasks.notice = Some(e.to_string()),
+                        Err(e) => {
+                            s.tasks.notice =
+                                Some(super::edit_worker::SaveError::from(&e).message().into())
+                        }
                     }
                 }),
             );
@@ -2252,8 +2287,9 @@ fn panel_top(title: &str, overlay: bool, p: Palette) -> El {
         .radius(8.0)
         .hover(p.chip)
         .on_press_tx(|s: &mut State, tx| {
-            s.close_panel();
-            tx.blur();
+            if s.close_panel() {
+                tx.blur();
+            }
         });
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
@@ -2266,8 +2302,9 @@ fn panel_top(title: &str, overlay: bool, p: Palette) -> El {
                 .radius(8.0)
                 .hover(p.chip)
                 .on_press_tx(|s: &mut State, tx| {
-                    s.close_panel();
-                    tx.blur();
+                    if s.close_panel() {
+                        tx.blur();
+                    }
                 }),
         );
     }
@@ -2450,6 +2487,13 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         && let Some(msg) = &tasks.ui.error
     {
         body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
+    }
+    if tasks.edit_failed {
+        body = body.child(
+            button("Discard", "task-discard", false, p).on_press(|s: &mut State| {
+                s.discard_task();
+            }),
+        );
     }
     body = body
         .child(

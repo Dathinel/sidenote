@@ -524,7 +524,11 @@ impl MemoryStore {
             r.basis = Basis::OwnerConfirmed;
         })
     }
-    pub fn merge_edit(&self, base: &MemoryRecord, text: &str) -> io::Result<MemoryRecord> {
+    pub fn merge_edit(
+        &self,
+        base: &MemoryRecord,
+        text: &str,
+    ) -> io::Result<super::EditView<MemoryRecord>> {
         let _lock = store_io::lock(&self.path("records.lock"))?;
         if text.trim().is_empty() {
             return Err(invalid("Record text must not be empty"));
@@ -543,10 +547,18 @@ impl MemoryStore {
                 Ok(())
             },
         )?;
-        if file.migration.is_some() {
-            self.export(&file)?;
+        if file.value.migration.is_some() {
+            self.export(&file.value)?;
         }
-        Ok(file.records.into_iter().find(|r| r.id == base.id).unwrap())
+        Ok(super::EditView {
+            value: file
+                .value
+                .records
+                .into_iter()
+                .find(|r| r.id == base.id)
+                .unwrap(),
+            generation: file.generation,
+        })
     }
     pub fn confirm_record(&self, id: &str) -> io::Result<()> {
         self.owner_change(id, "confirm", |r| {

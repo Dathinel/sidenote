@@ -364,7 +364,7 @@ impl State {
         let since_ms = live.wall_start.timestamp_millis().saturating_sub(120_000);
         let known = live.known.clone();
         let waker = self.waker.clone();
-        self.rescan();
+        self.request_refresh();
         // The quick title lands a few seconds after Stop, well before the notes, so look often.
         let title_cancel = cancel.clone();
         let _ = thread::Builder::new()

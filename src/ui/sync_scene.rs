@@ -80,6 +80,28 @@ pub fn arrival_scene(s: &mut State) {
         .store
         .update_manual(&id, |m| m.owner = Some("Peer owner".into()))
         .unwrap();
-    let snapshot = super::arrival::Snapshot::read();
-    s.apply_event(super::Event::Meetings(Box::new(snapshot)));
+    let data = super::refresh::Data::read(s.refresh_options());
+    s.apply_event(super::Event::Refreshed(super::refresh::Result {
+        generation: core::mutation_generation(),
+        options: s.refresh_options(),
+        data: Some(Box::new(data)),
+    }));
+}
+
+pub fn failed_task_scene(s: &mut State) {
+    isolated();
+    s.config.features.tasks = true;
+    s.config.features.projects = true;
+    s.view = super::tasks::View::Tasks;
+    task(s);
+    s.tasks.inputs.title.text = "My task draft stays here".into();
+    s.tasks.inputs.title.focused = true;
+    let original = s.tasks.store.root.clone();
+    let blocked = core::state_dir().join("blocked-proof-root");
+    fs::write(&blocked, b"file").unwrap();
+    s.tasks.store.root = blocked;
+    s.panel_enter();
+    settle(s);
+    s.tasks.store.root = original;
+    s.close_panel();
 }

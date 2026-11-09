@@ -75,21 +75,31 @@ impl TaskStore {
         base: &Value,
         mine: &Value,
         source: Option<&std::path::Path>,
-    ) -> io::Result<Overrides> {
+    ) -> io::Result<super::EditView<Overrides>> {
+        let moved = || io::Error::new(io::ErrorKind::InvalidInput, MOVED);
+        let source_stamp = if !row.starts_with("manual/") {
+            let path = source.ok_or_else(moved)?.join("english-summary.json");
+            let meta = super::file_reads::checked_metadata(&path)?;
+            let raw = super::file_reads::read(&path, super::file_reads::SUMMARY_MAX)?;
+            let summary: super::Summary = serde_json::from_slice(&raw)?;
+            if summary.todo.get(index).map(|t| t.task.as_str())
+                != mine.get("task").and_then(Value::as_str)
+            {
+                return Err(moved());
+            }
+            Some((path, meta.len(), meta.modified().ok()))
+        } else {
+            None
+        };
         let identity = || -> io::Result<()> {
-            if !row.starts_with("manual/") {
-                let folder = source.ok_or_else(|| io::Error::other(MOVED))?;
-                let raw = std::fs::read(folder.join("english-summary.json"))?;
-                let summary: super::Summary = serde_json::from_slice(&raw)?;
-                if summary.todo.get(index).map(|t| t.task.as_str())
-                    != mine.get("task").and_then(Value::as_str)
-                {
-                    return Err(io::Error::other(MOVED));
+            if let Some((path, len, modified)) = &source_stamp {
+                let meta = super::file_reads::checked_metadata(path)?;
+                if meta.len() != *len || meta.modified().ok() != *modified {
+                    return Err(moved());
                 }
             }
             Ok(())
         };
-        identity()?;
         sync_state::update_merged_validated(
             &self.root,
             "task-overrides.json",
@@ -114,7 +124,7 @@ impl TaskStore {
                         .or_default();
                     let expected = mine.get("task").and_then(Value::as_str);
                     if t.task.as_deref().is_some_and(|text| Some(text) != expected) {
-                        return Err(io::Error::other(MOVED));
+                        *t = TaskOverride::default();
                     }
                     let b: TaskOverride = serde_json::from_value(if base.is_null() {
                         json!({})

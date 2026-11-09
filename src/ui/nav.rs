@@ -495,17 +495,17 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
                     col()
                         .grow(1.0)
                         .child(roles::CONTROL.line(words, p.ink))
-                        .child(match s.last_incoming {
+                        .child(match s.last_updated {
                             Some(at) => {
                                 let minutes = at.elapsed().as_secs() / 60;
                                 let text = if minutes == 0 {
-                                    "Synced just now".into()
+                                    "Updated just now".into()
                                 } else {
-                                    format!("Synced {minutes} min ago")
+                                    format!("Updated {minutes} min ago")
                                 };
                                 roles::META
                                     .wrap(text, p.faint)
-                                    .help("Last incoming change applied on this device")
+                                    .help("Last refresh applied in this window")
                             }
                             None => el(),
                         }),

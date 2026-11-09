@@ -30,7 +30,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_Security", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
 velopack = "=0.0.1298"
-notify = { version = "=7.0.0", default-features = false }
 
 [features]
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
@@ -48,7 +47,7 @@ opt-level = "s"
 lto = "thin"
 codegen-units = 1
 strip = true
-panic = "abort"
+panic = "unwind"
 
 [dev-dependencies]
 pollster = "1"

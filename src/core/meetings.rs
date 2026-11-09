@@ -143,7 +143,8 @@ pub fn read_quick_title(folder: &Path) -> Option<String> {
     if fs::metadata(&path).ok()?.len() > QUICK_TITLE_MAX_BYTES {
         return None;
     }
-    let parsed: QuickTitle = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    let parsed: QuickTitle =
+        serde_json::from_str(&super::file_reads::text(&path, QUICK_TITLE_MAX_BYTES).ok()?).ok()?;
     let one_line = parsed
         .title
         .chars()
@@ -166,7 +167,7 @@ pub fn pending_quick_title(
     known: &std::collections::HashSet<String>,
 ) -> Option<String> {
     let mut best: Option<(i64, String)> = None;
-    for entry in fs::read_dir(local).ok()?.flatten() {
+    for entry in super::file_reads::dir_iter(local).ok()?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
         let Some(made) = id.split('-').next().and_then(|n| n.parse::<i64>().ok()) else {
             continue;
@@ -323,13 +324,17 @@ impl Meeting {
             .ok_or("Missing meeting id")?
             .to_string_lossy()
             .into_owned();
-        let summary_raw = fs::read_to_string(folder.join("english-summary.json"))?;
+        let summary_raw = super::file_reads::text(
+            &folder.join("english-summary.json"),
+            super::file_reads::SUMMARY_MAX,
+        )?;
         let summary: Summary = serde_json::from_str(&summary_raw)?;
-        let manifest: Manifest = match fs::read_to_string(folder.join("manifest.json")) {
-            Ok(raw) => serde_json::from_str(&raw)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Manifest::default(),
-            Err(e) => return Err(e.into()),
-        };
+        let manifest: Manifest =
+            match super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024) {
+                Ok(raw) => serde_json::from_str(&raw)?,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Manifest::default(),
+                Err(e) => return Err(e.into()),
+            };
         let title = if matches!(
             manifest.title_source.as_deref(),
             Some("call" | "calendar" | "user")
@@ -345,26 +350,31 @@ impl Meeting {
                 summary.title.clone()
             }
         });
-        let transcript_raw = match fs::read_to_string(folder.join("english-transcript.md")) {
+        let transcript_raw = match super::file_reads::text(
+            &folder.join("english-transcript.md"),
+            super::live::ROLLING_MAX_BYTES,
+        ) {
             Ok(raw) => raw,
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
         let lines = parse_transcript(&transcript_raw);
-        let routed: Option<super::meeting_router::Transcript> =
-            if folder.parent().is_some_and(|p| p == meetings_dir()) {
-                let path = state_dir()
-                    .join("local/transcripts")
-                    .join(&id)
-                    .join("transcript.segments.v1.json");
-                fs::metadata(&path)
-                    .ok()
-                    .filter(|m| m.len() <= 24 * 1024 * 1024)
-                    .and_then(|_| fs::read(path).ok())
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            } else {
-                None
-            };
+        let routed: Option<super::meeting_router::Transcript> = if folder
+            .parent()
+            .is_some_and(|p| p == meetings_dir())
+        {
+            let path = state_dir()
+                .join("local/transcripts")
+                .join(&id)
+                .join("transcript.segments.v1.json");
+            fs::metadata(&path)
+                .ok()
+                .filter(|m| m.len() <= 24 * 1024 * 1024)
+                .and_then(|_| super::file_reads::read(&path, super::live::ROLLING_MAX_BYTES).ok())
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        } else {
+            None
+        };
         let routed_revision = routed.as_ref().map(|r| r.revision()).unwrap_or_default();
         let mut minutes = manifest
             .duration_ms
@@ -441,19 +451,19 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
     let (mut meetings, mut errors) = scan_in(local);
     let mut ids: std::collections::BTreeSet<String> =
         meetings.iter().map(|m| m.id.clone()).collect();
-    if let Ok(entries) = fs::read_dir(local) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
+    if let Ok(entries) = super::file_reads::dir_iter(local) {
+        for entry in entries.take(super::file_reads::ENTRIES_MAX).flatten() {
+            if super::file_reads::directory(&entry.path()) {
                 ids.insert(entry.file_name().to_string_lossy().into_owned());
             }
         }
     }
-    match fs::read_dir(peers) {
+    match super::file_reads::dir_iter(peers) {
         Ok(entries) => {
             let mut devices = Vec::new();
-            for entry in entries {
+            for entry in entries.take(super::file_reads::ENTRIES_MAX) {
                 match entry {
-                    Ok(e) if e.path().is_dir() => devices.push(e.path()),
+                    Ok(e) if super::file_reads::directory(&e.path()) => devices.push(e.path()),
                     Ok(_) => {}
                     Err(_) => errors.push("Could not read a peer device folder".into()),
                 }
@@ -489,9 +499,9 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
 pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
-    match fs::read_dir(root) {
+    match super::file_reads::dir_iter(root) {
         Ok(entries) => {
-            for entry in entries {
+            for entry in entries.take(super::file_reads::ENTRIES_MAX) {
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(_) => {
@@ -499,7 +509,9 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
                         continue;
                     }
                 };
-                if entry.path().join("english-summary.json").is_file() {
+                if super::file_reads::directory(&entry.path())
+                    && entry.path().join("english-summary.json").exists()
+                {
                     match Meeting::load(&entry.path()) {
                         Ok(m) => meetings.push(m),
                         Err(_) => errors.push(format!(

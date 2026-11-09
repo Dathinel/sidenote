@@ -69,14 +69,13 @@ the same task can therefore replace one another. Save-time merging cannot see a 
 that has not arrived. Field-level offline convergence is deferred to the live sync engine.
 This version writes the existing `checked` representation, readable by the 16cc27a reader.
 
-The OS watcher batches arrivals for 200 ms, with a 60-second fallback. Catalog, state and
-daily-check reads run on its worker. A single latest-snapshot slot replaces older completed
-refreshes. Snapshots carry store revisions, a sequence and the local mutation generation;
-an inconsistent read or a snapshot older than a local save is discarded and refreshed.
-The UI applies at most one snapshot and eight other events per poll, with a 4 ms budget
-between event handlers. An individual model application can take longer than that budget.
-The footer records the last incoming application in the current window, without confirming
-that another device received local changes.
+The app refreshes on focus and every 10 seconds while the window is visible. No refresh
+runs while it is hidden or minimized. One worker compares file names, sizes and modified
+times before parsing changes. Peer reads skip reparse points and non-regular files and use
+size limits (4 MB journals, 16 MB summaries and the existing transcript limit). Errors skip
+the affected entry and are counted. Refresh memory and entry counts are bounded, and each
+file is read at most once in a refresh. Results from before a local mutation are ignored.
+The footer's timer shows when a refresh was last applied; it does not confirm peer delivery.
 
 No compaction or journal deletion is performed. Keep every journal, including tombstones,
 on every device. Removing old files manually can restore old state or lose history.

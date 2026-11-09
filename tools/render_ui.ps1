@@ -22,6 +22,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 $shots = @(
     @('sync-memory-merged', 'sync-memory-merged', '1320x900', $null, @()),
     @('sync-task-merged', 'sync-task-merged', '1320x900', $null, @()),
+    @('sync-task-kept', 'sync-task-kept', '1320x900', $null, @()),
     @('sync-arrival-draft', 'sync-arrival-draft', '1320x900', $null, @()),
     @('sync-footer-now', 'sync-footer-now', '1320x900', $null, @()),
     @('sync-footer-age', 'sync-footer-age', '1320x900', $null, @()),

@@ -162,7 +162,7 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn read_optional(path: &Path) -> io::Result<String> {
-    match fs::read_to_string(path) {
+    match super::file_reads::text(path, super::file_reads::JOURNAL_MAX) {
         Ok(text) => Ok(text),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(e),

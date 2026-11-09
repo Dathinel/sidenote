@@ -17,40 +17,10 @@ pub fn mutation_generation() -> u64 {
     LOCAL_MUTATIONS.load(std::sync::atomic::Ordering::Acquire)
 }
 // A successful no-op may adopt peer fields in the UI without publishing a transaction.
-fn fence_local_mutation() {
-    LOCAL_MUTATIONS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+fn fence_local_mutation() -> u64 {
+    LOCAL_MUTATIONS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1
 }
 
-pub type StoreRevisions = BTreeMap<String, BTreeSet<String>>;
-/// Include immutable transaction identities, not directory mtimes or remote wall clocks.
-pub fn store_revisions(root: &Path) -> io::Result<StoreRevisions> {
-    let mut out = StoreRevisions::new();
-    for owner in entries(&root.join("state"))? {
-        let name = owner.file_name().to_string_lossy().into_owned();
-        if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
-            continue;
-        }
-        for store in entries(&owner.path())? {
-            if !store.file_type()?.is_dir() {
-                continue;
-            }
-            for entry in entries(&store.path())? {
-                if entry.path().extension().is_some_and(|e| e == "json") {
-                    let bytes = fs::read(entry.path())?;
-                    out.entry(store.file_name().to_string_lossy().into_owned())
-                        .or_default()
-                        .insert(format!(
-                            "{}:{}:{}",
-                            name,
-                            entry.file_name().to_string_lossy(),
-                            hash(&bytes)
-                        ));
-                }
-            }
-        }
-    }
-    Ok(out)
-}
 type Key = Vec<String>;
 type Items = BTreeMap<Key, Value>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -148,15 +118,17 @@ impl View {
 fn hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
-fn absent(error: io::Error) -> io::Result<Option<Vec<u8>>> {
+fn absent(error: io::Error) -> io::Result<Option<std::sync::Arc<[u8]>>> {
     if error.kind() == io::ErrorKind::NotFound {
         Ok(None)
     } else {
         Err(error)
     }
 }
-fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    fs::read(path).map(Some).or_else(absent)
+fn read_optional(path: &Path) -> io::Result<Option<std::sync::Arc<[u8]>>> {
+    super::file_reads::read(path, super::file_reads::JOURNAL_MAX)
+        .map(Some)
+        .or_else(absent)
 }
 fn parse(bytes: &[u8]) -> io::Result<Value> {
     Ok(serde_json::from_slice(
@@ -193,7 +165,7 @@ fn supported(store: &str) -> bool {
         )
 }
 fn read_journal(path: &Path, owner: &str, store: Option<&str>) -> io::Result<Journal> {
-    let bytes = fs::read(path)?;
+    let bytes = super::file_reads::read(path, super::file_reads::JOURNAL_MAX)?;
     let j: Journal = serde_json::from_slice(&bytes)?;
     if j.version != 2
         || j.device != owner
@@ -212,18 +184,20 @@ fn read_journal(path: &Path, owner: &str, store: Option<&str>) -> io::Result<Jou
     }
     Ok(j)
 }
-fn entries(path: &Path) -> io::Result<Vec<fs::DirEntry>> {
-    match fs::read_dir(path) {
-        Ok(e) => e.collect(),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(vec![]),
-        Err(e) => Err(e),
+fn entries(path: &Path) -> io::Result<Vec<std::sync::Arc<fs::DirEntry>>> {
+    match super::file_reads::entries(path) {
+        Ok(e) => Ok(e),
+        Err(_) => {
+            super::file_reads::skipped();
+            Ok(vec![])
+        }
     }
 }
 fn read_view(root: &Path, store: &str, own: &str) -> io::Result<View> {
     let mut view = View::default();
     for owner in entries(&root.join("state"))? {
         let name = owner.file_name().to_string_lossy().into_owned();
-        if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
+        if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
             continue;
         }
         for entry in entries(&owner.path().join(hash(store.as_bytes())))? {
@@ -510,12 +484,16 @@ pub(super) fn update_checked_validated<T: Serialize + DeserializeOwned + Default
     fence_local_mutation();
     Ok(value)
 }
+pub struct EditView<T> {
+    pub value: T,
+    pub generation: u64,
+}
 /// Save-time merge only. A busy incoming store returns a retryable error after three attempts.
 pub(super) fn update_merged<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,
     change: impl FnMut(&mut T) -> io::Result<()>,
-) -> io::Result<T> {
+) -> io::Result<EditView<T>> {
     update_merged_validated(root, store, change, || Ok(()))
 }
 pub(super) fn update_merged_validated<T: Serialize + DeserializeOwned + Default>(
@@ -523,7 +501,7 @@ pub(super) fn update_merged_validated<T: Serialize + DeserializeOwned + Default>
     store: &str,
     mut change: impl FnMut(&mut T) -> io::Result<()>,
     validate: impl Fn() -> io::Result<()>,
-) -> io::Result<T> {
+) -> io::Result<EditView<T>> {
     for _ in 0..3 {
         let mut s = Session::open(root, store)?;
         let before = s.value::<T>()?;
@@ -543,8 +521,8 @@ pub(super) fn update_merged_validated<T: Serialize + DeserializeOwned + Default>
             flatten(store, serde_json::to_value(&value)?)?,
             latest.next_time()?,
         )?;
-        fence_local_mutation();
-        return Ok(value);
+        let generation = fence_local_mutation();
+        return Ok(EditView { value, generation });
     }
     Err(io::Error::new(
         io::ErrorKind::WouldBlock,
@@ -579,7 +557,7 @@ fn legacy_sources(root: &Path, store: &str) -> io::Result<Vec<PathBuf>> {
         let name = entry.file_name();
         if name.to_string_lossy().starts_with(&prefix)
             && entry.path().extension() == main.extension()
-            && entry.file_type()?.is_file()
+            && super::file_reads::checked_metadata(&entry.path()).is_ok()
         {
             paths.push(entry.path());
         }
@@ -840,7 +818,7 @@ pub(super) fn stores(root: &Path) -> io::Result<Vec<String>> {
     let mut stores = BTreeSet::new();
     for folder in [root.to_owned(), root.join("memory"), root.join("checks")] {
         for entry in entries(&folder)? {
-            if !entry.file_type()?.is_file() {
+            if !super::file_reads::checked_metadata(&entry.path()).is_ok() {
                 continue;
             }
             let path = entry.path();
@@ -864,11 +842,11 @@ pub(super) fn stores(root: &Path) -> io::Result<Vec<String>> {
     }
     for owner in entries(&root.join("state"))? {
         let name = owner.file_name().to_string_lossy().into_owned();
-        if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
+        if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
             continue;
         }
         for folder in entries(&owner.path())? {
-            if !folder.file_type()?.is_dir() {
+            if !super::file_reads::directory(&folder.path()) {
                 continue;
             }
             for file in entries(&folder.path())? {
@@ -888,11 +866,11 @@ pub(super) fn reconcile(root: &Path) -> Vec<String> {
         let mut warnings = Vec::new();
         for owner in entries(&root.join("state"))? {
             let name = owner.file_name().to_string_lossy().into_owned();
-            if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
+            if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
                 continue;
             }
             for folder in entries(&owner.path())? {
-                if !folder.file_type()?.is_dir() {
+                if !super::file_reads::directory(&folder.path()) {
                     continue;
                 }
                 for file in entries(&folder.path())? {
@@ -929,32 +907,6 @@ pub(super) fn reconcile(root: &Path) -> Vec<String> {
     errors.dedup();
     errors
 }
-/// Validated remote journal inventory, used only to mark incoming applications.
-pub fn incoming_revision(root: &Path) -> io::Result<String> {
-    let own = DeviceSettings::load_in(root)?.id;
-    let mut hashes = Vec::new();
-    for owner in entries(&root.join("state"))? {
-        let name = owner.file_name().to_string_lossy().into_owned();
-        if name == own || !device::valid_id(&name) || !owner.file_type()?.is_dir() {
-            continue;
-        }
-        for store in entries(&owner.path())? {
-            if !store.file_type()?.is_dir() {
-                continue;
-            }
-            for entry in entries(&store.path())? {
-                if entry.path().extension().is_some_and(|e| e == "json")
-                    && let Ok(j) = read_journal(&entry.path(), &name, None)
-                {
-                    hashes.push(j.checksum);
-                }
-            }
-        }
-    }
-    hashes.sort();
-    Ok(hash(&serde_json::to_vec(&hashes)?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

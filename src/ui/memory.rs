@@ -75,6 +75,7 @@ pub struct MemState {
     pub editing: bool,
     pub edit: TextEdit,
     pub edit_base: Option<MemoryRecord>,
+    pub editor_generation: u64,
     pub ask: Option<Ask>,
     /// Why an action failed, by record, proposal or `migration`.
     pub errors: HashMap<String, String>,
@@ -106,6 +107,7 @@ impl Default for MemState {
             editing: false,
             edit: TextEdit::default(),
             edit_base: None,
+            editor_generation: 0,
             ask: None,
             errors: HashMap::new(),
             notice: None,
@@ -411,6 +413,7 @@ impl State {
                 Some("Your draft is kept. Save or cancel it before opening another claim.".into());
             return;
         }
+        self.memory.editor_generation += 1;
         self.memory.cursor = Some(id.to_string());
         self.memory.panel = true;
         self.memory.editing = false;
@@ -424,6 +427,7 @@ impl State {
                 Some("Your draft is kept. Save or cancel it before closing.".into());
             return;
         }
+        self.memory.editor_generation += 1;
         self.memory.panel = false;
         self.memory.editing = false;
         self.memory.ask = None;
@@ -438,9 +442,10 @@ impl State {
                 true
             }
             Err(e) => {
-                self.memory
-                    .errors
-                    .insert(key.to_string(), format!("Not saved. {e}."));
+                self.memory.errors.insert(
+                    key.to_string(),
+                    super::edit_worker::SaveError::from(&e).message().into(),
+                );
                 false
             }
         }
@@ -465,10 +470,17 @@ impl State {
         }
     }
 
+    pub fn cancel_memory_edit(&mut self) {
+        self.memory.editor_generation += 1;
+        self.memory.editing = false;
+        self.memory.edit = TextEdit::default();
+        self.memory.edit_base = None;
+    }
     pub fn memory_edit_start(&mut self, id: &str) {
         let Some(text) = self.memory.record(id).and_then(|r| r.text.clone()) else {
             return;
         };
+        self.memory.editor_generation += 1;
         self.memory.edit_base = self.memory.record(id).cloned();
         self.memory.edit = TextEdit::new(&text);
         self.memory.edit.focused = true;
@@ -490,6 +502,10 @@ impl State {
         let Some(base) = self.memory.edit_base.clone() else {
             return;
         };
+        debug_assert_eq!(self.memory.cursor.as_deref(), Some(base.id.as_str()));
+        if self.memory.cursor.as_deref() != Some(base.id.as_str()) {
+            return;
+        }
         if self.edit_busy {
             return;
         }
@@ -497,6 +513,7 @@ impl State {
             store: MemoryStore::default(),
             base: Box::new(base),
             text,
+            session: self.memory.editor_generation,
         });
     }
 
@@ -1601,8 +1618,7 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
                     )
                     .child(button("Cancel", "mem-edit-cancel", false, p).on_press_tx(
                         |s: &mut State, tx| {
-                            s.memory.editing = false;
-                            s.memory.edit = TextEdit::default();
+                            s.cancel_memory_edit();
                             tx.blur();
                         },
                     ))
