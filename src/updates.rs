@@ -130,6 +130,7 @@ pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<(
     }
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = write_report(&load());
         loop {
             let _ = check(&publish);
             if matches!(
@@ -202,7 +203,8 @@ fn save(status: &Status) -> io::Result<()> {
     fs::create_dir_all(path.parent().unwrap())?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     fs::write(&temp, serde_json::to_vec_pretty(status)?)?;
-    crate::platform::replace_file(&temp, &path)
+    crate::platform::replace_file(&temp, &path)?;
+    write_report(status).map(|_| ())
 }
 pub fn feed() -> Option<PathBuf> {
     crate::env_var("SIDENOTE_UPDATE_FEED").map(PathBuf::from)
@@ -468,6 +470,7 @@ pub fn after_update() {
     if !installed() {
         return;
     }
+    let _ = write_report(&load());
     if load().version == VERSION {
         let _ = save(&Status {
             checked: load().checked,
@@ -569,6 +572,23 @@ pub fn apply(
     }
     std::process::exit(0)
 }
+fn report(status: &Status) -> serde_json::Value {
+    serde_json::json!({"current_version":VERSION,"reported_at":chrono::Utc::now().to_rfc3339(),
+        "data_dir":crate::core::state_dir(),"peers_dir":crate::core::peers_dir(),
+        "feed":source_label(),"listener_task":task().ok(),"update_dir":directory(),
+        "installed":installed(),"status":status})
+}
+fn write_report(status: &Status) -> io::Result<serde_json::Value> {
+    let report = report(status);
+    if installed() {
+        let path = local("update-report.json");
+        fs::create_dir_all(directory())?;
+        let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+        fs::write(&temp, serde_json::to_vec_pretty(&report)?)?;
+        crate::platform::replace_file(&temp, &path)?;
+    }
+    Ok(report)
+}
 pub fn cli(args: &[std::ffi::OsString]) -> i32 {
     let result = if args.iter().any(|a| a == "--update-window-start") {
         window_start(|_| {}).map(|_| load())
@@ -593,12 +613,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
         },
     };
     let _ = save(&status);
-    let report = serde_json::json!({"current_version":VERSION,"data_dir":crate::core::state_dir(),
-        "peers_dir":crate::core::peers_dir(),"feed":source_label(),"listener_task":task().ok(),"update_dir":directory(),"installed":installed(),"status":status});
-    if installed() {
-        let _ = fs::create_dir_all(local(""));
-        let _ = fs::write(local("update-report.json"), report.to_string());
-    }
+    let report = write_report(&status).unwrap_or_else(|_| report(&status));
     println!("{report}");
     i32::from(status.phase == Phase::Error)
 }

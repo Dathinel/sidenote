@@ -47,7 +47,11 @@ and packages are unsigned. No release is packed or uploaded by ordinary builds.
 
 `--update-check` checks and downloads. `--update-status` reports the current
 version, isolated paths, source and last status in JSON and writes the same
-report to `%LOCALAPPDATA%/Sidenote/updates/update-report.json`. `--update-apply` follows the same safety
+report to `%LOCALAPPDATA%/Sidenote/updates/update-report.json`.
+The report is also refreshed when the window's update worker starts, after an
+update hook, and whenever update status is saved. `current_version` comes from
+the running binary; `reported_at` is a UTC RFC 3339 timestamp. Reports are replaced
+atomically so readers do not see a partially written JSON file. `--update-apply` follows the same safety
 and listener path as the window, then restarts to `--update-status` for proof.
 No CLI helper silently applies a cached update. The normal window tries a
 verified pending package at its next startup. All apply paths recheck SHA256.
