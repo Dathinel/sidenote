@@ -115,34 +115,12 @@ pub fn read_rolling(folder: &Path, last: Option<Stamp>) -> io::Result<Read> {
     ))
 }
 
-/// The folder of the recording in progress. `hint` is the id Hex reports for it, when it does;
-/// otherwise the newest folder made at or after `since_ms` (folder ids start with their creation
-/// time, in milliseconds) that has no finished notes yet.
-pub fn find_folder(root: &Path, since_ms: i64, hint: Option<&str>) -> Option<PathBuf> {
-    if let Some(id) =
-        hint.filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_digit() || c == '-'))
-    {
-        let folder = root.join(id);
-        if folder.is_dir() {
-            return Some(folder);
-        }
-    }
-    let mut best: Option<(i64, PathBuf)> = None;
-    for entry in fs::read_dir(root).ok()?.flatten() {
-        let id = entry.file_name().to_string_lossy().into_owned();
-        let Some(made) = id.split('-').next().and_then(|n| n.parse::<i64>().ok()) else {
-            continue;
-        };
-        let path = entry.path();
-        if made < since_ms
-            || best.as_ref().is_some_and(|(b, _)| *b >= made)
-            || path.join("english-summary.json").exists()
-        {
-            continue;
-        }
-        best = Some((made, path));
-    }
-    best.map(|(_, p)| p)
+/// Only Hex's recording id identifies a writable meeting folder. A timestamp guess can
+/// select the previous unfinished meeting while the new recording is still starting.
+pub fn find_folder(root: &Path, hint: Option<&str>) -> Option<PathBuf> {
+    let id = hint.filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_digit() || c == '-'))?;
+    let folder = root.join(id);
+    folder.is_dir().then_some(folder)
 }
 
 /// The notes in a meeting folder, or empty when there are none or the file cannot be read.
@@ -271,21 +249,28 @@ mod tests {
     }
 
     #[test]
-    fn find_folder_prefers_the_hint_then_the_newest_unfinished() {
-        let root = std::env::temp_dir().join(format!("live-notes-find-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        for id in ["1000-1", "2000-1", "3000-1"] {
-            fs::create_dir_all(root.join(id)).unwrap();
+    fn startup_close_never_overwrites_the_previous_unfinished_meeting() {
+        let root = std::env::temp_dir().join(format!("live-startup-close-{}", std::process::id()));
+        let previous = root.join("1800000000000-1");
+        fs::create_dir_all(&previous).unwrap();
+        write_notes(&previous, "meeting A notes").unwrap();
+        let recovery = root.join("recovery/1800000060000.md");
+        for hint in [None, Some("1800000060000-1"), Some("../1800000000000-1")] {
+            let folder = find_folder(&root, hint);
+            assert_eq!(folder, None);
+            assert!(preserve_notes(folder, "meeting B draft", &recovery).is_err());
+            assert_eq!(read_notes(&previous), "meeting A notes");
+            assert_eq!(fs::read_to_string(&recovery).unwrap(), "meeting B draft");
         }
-        fs::write(root.join("3000-1").join("english-summary.json"), "{}").unwrap();
-        assert_eq!(find_folder(&root, 1500, None), Some(root.join("2000-1")));
+        let current = root.join("1800000060000-1");
+        fs::create_dir_all(&current).unwrap();
+        let folder = find_folder(&root, Some("1800000060000-1"));
         assert_eq!(
-            find_folder(&root, 1500, Some("1000-1")),
-            Some(root.join("1000-1"))
+            preserve_notes(folder, "meeting B draft", &recovery).unwrap(),
+            current
         );
-        assert_eq!(find_folder(&root, 2500, None), None);
-        // A hint that is not an id never leaves the root.
-        assert_eq!(find_folder(&root, 9999, Some("..\\x")), None);
-        let _ = fs::remove_dir_all(&root);
+        assert_eq!(read_notes(&previous), "meeting A notes");
+        assert_eq!(read_notes(&current), "meeting B draft");
+        fs::remove_dir_all(root).unwrap();
     }
 }

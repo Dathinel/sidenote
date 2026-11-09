@@ -108,8 +108,6 @@ pub struct Feed {
     words: usize,
     last_words: Option<Instant>,
     stamp: Option<feed_io::Stamp>,
-    /// Folders made before this (Unix ms) are not this recording's.
-    since_ms: i64,
     /// Counts every change, so the page knows to draw again.
     version: u64,
     notes_problem: Option<&'static str>,
@@ -532,12 +530,12 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         if !watching.load(Ordering::Relaxed) {
             continue;
         }
-        let (mut folder, hint, since, last) = {
+        let (mut folder, hint, last) = {
             let f = feed.lock().unwrap_or_else(|e| e.into_inner());
-            (f.folder.clone(), f.hint.clone(), f.since_ms, f.stamp)
+            (f.folder.clone(), f.hint.clone(), f.stamp)
         };
         if folder.is_none() {
-            folder = feed_io::find_folder(&root, since, hint.as_deref());
+            folder = feed_io::find_folder(&root, hint.as_deref());
         }
         let Some(folder) = folder else {
             continue;
@@ -617,7 +615,6 @@ impl State {
             if feed.hint.is_none() {
                 feed.hint = hint;
             }
-            feed.since_ms = live.wall_start.timestamp_millis().saturating_sub(120_000);
             if live.folder.is_none() {
                 live.folder = feed.folder.clone();
             }
@@ -684,7 +681,6 @@ impl State {
             return false;
         }
         let folder = live.folder.clone();
-        let since = live.wall_start.timestamp_millis().saturating_sub(120_000);
         let recovery = sidenote::core::state_dir()
             .join("unsaved-notes")
             .join(format!("{}.md", live.wall_start.timestamp_millis()));
@@ -693,9 +689,8 @@ impl State {
         live.saving = Saving::Pending;
         let wake = self.waker.clone();
         let queued = self.live_work(move || {
-            let folder = folder.or_else(|| {
-                feed_io::find_folder(&sidenote::core::meetings_dir(), since, hint.as_deref())
-            });
+            let folder = folder
+                .or_else(|| feed_io::find_folder(&sidenote::core::meetings_dir(), hint.as_deref()));
             let result = feed_io::preserve_notes(folder, &text, &recovery);
             results
                 .lock()
