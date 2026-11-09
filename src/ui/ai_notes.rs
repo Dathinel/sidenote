@@ -222,7 +222,12 @@ impl State {
         self.notes_work(Work::Load, "Loading AI notes...");
     }
     pub fn open_ai_notes(&mut self) {
-        self.open_hex();
+        if self.ai_notes.scene {
+            self.go_home();
+            self.hex_open = true;
+        } else {
+            self.open_hex();
+        }
         self.hex.section = super::hex::Section::AiNotes;
         self.hex.filter = TextEdit::default();
         self.nav_done();
