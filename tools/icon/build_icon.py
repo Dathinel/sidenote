@@ -2,8 +2,8 @@
 
     uv run --with pillow --with resvg-py python tools/icon/build_icon.py [--concept NAME]
 
-Each concept has a full SVG and a `-small` SVG with the fine detail removed. Sizes up to
-SMALL_MAX are drawn from the small one (16 px from a `-tiny` one when present), so the 16-32 px icons are drawn, not downscaled.
+The ink icon uses dedicated drawings at 16, 20, 24, 32 and 40 px; larger sizes use the full SVG.
+Older concepts fall back to their small SVG up to SMALL_MAX and tiny SVG at 16 px.
 Outputs: assets/icon/png/<size>.png and assets/icon/meetings.ico for the chosen concept, and
 artifacts/icon/preview.png (all concepts) plus preview-zoom.png (small sizes enlarged).
 """
@@ -21,18 +21,23 @@ OUT_DIR = ROOT / "artifacts" / "icon"
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 SMALL_MAX = 32
 TINY_MAX = 16  # pixel-grid aligned drawing, where one exists
+SIZE_SUFFIXES = {16: "tiny", 20: "20", 24: "24", 32: "small", 40: "40"}
 CONCEPTS = {
+    "sidenote-d3c-final-ink": "Sidenote  Ink",
     "concept-a-summary": "A  Summary bubble",
     "concept-b-check": "B  Bubble with check",
     "concept-c-card": "C  Meeting card",
 }
-DEFAULT_CONCEPT = "concept-a-summary"
+DEFAULT_CONCEPT = "sidenote-d3c-final-ink"
 LIGHT_BG, DARK_BG = (243, 243, 243), (32, 32, 32)
 
 
 def render(concept: str, size: int) -> Image.Image:
     name = f"{concept}.svg"
-    if size <= TINY_MAX and (ICON_DIR / f"{concept}-tiny.svg").exists():
+    suffix = SIZE_SUFFIXES.get(size)
+    if suffix and (ICON_DIR / f"{concept}-{suffix}.svg").exists():
+        name = f"{concept}-{suffix}.svg"
+    elif size <= TINY_MAX and (ICON_DIR / f"{concept}-tiny.svg").exists():
         name = f"{concept}-tiny.svg"
     elif size <= SMALL_MAX:
         name = f"{concept}-small.svg"
