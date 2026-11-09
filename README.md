@@ -25,8 +25,8 @@ The checked-in Cargo configuration selects Windows GNU, rust-lld and static CRT.
 ## Use and configuration
 
 The default meeting folder is `%APPDATA%/hex/meetings`; local state and
-`config.json` live in `%APPDATA%/sidenote` on new installs. If only the legacy
-`%APPDATA%/hex-meetings` folder exists, Sidenote keeps using it in place. Exports
+`config.json` live in `%APPDATA%/hex-meetings` by default, including on new installs.
+If `%APPDATA%/sidenote` already exists, Sidenote uses that folder instead. Exports
 stay under that selected root. New logs use `<state-root>/sidenote.log`; an existing
 `%LOCALAPPDATA%/hex-meeting-watch.log` stays in place. Nothing is moved or copied. See the
 [owner migration checklist](docs/rename-migration.md) and [MCP setup](docs/mcp.md)

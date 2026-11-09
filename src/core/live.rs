@@ -16,6 +16,25 @@ use std::{
 
 /// Where the user's own notes live, beside Hex's files. It syncs like other meeting text.
 pub const NOTES_FILE: &str = "notes.md";
+pub const NOTES_UNAVAILABLE: &str = "Meeting notes are not set up on this PC";
+pub const NOTES_FAILED: &str = "Meeting notes could not be created. Your recording is saved in Hex. Check the notes setup before trying again.";
+
+pub fn notes_pipeline() -> PathBuf {
+    PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
+        .join(".config/hex/scripts/hex-meeting-watch.ps1")
+}
+
+pub fn notes_problem(folder: &Path) -> Option<&'static str> {
+    if folder.join("english-summary.json").is_file() {
+        None
+    } else if folder.join("notes-failed").is_file() {
+        Some(NOTES_FAILED)
+    } else if !notes_pipeline().is_file() {
+        Some(NOTES_UNAVAILABLE)
+    } else {
+        None
+    }
+}
 const ROLLING_FILE: &str = "transcript.rolling.ndjson";
 /// A notes file larger than this is not read back into the editor or the meeting page.
 const NOTES_MAX_BYTES: u64 = 1024 * 1024;
@@ -152,9 +171,62 @@ pub fn write_notes(folder: &Path, text: &str) -> io::Result<()> {
     super::store_io::atomic_write(&folder.join(NOTES_FILE), text.as_bytes())
 }
 
+/// Keep a recovery copy when Hex has not created the meeting folder or a save fails.
+pub fn preserve_notes(
+    folder: Option<PathBuf>,
+    text: &str,
+    recovery: &Path,
+) -> Result<PathBuf, String> {
+    if let Some(folder) = folder
+        && write_notes(&folder, text).is_ok()
+    {
+        let _ = fs::remove_file(recovery);
+        return Ok(folder);
+    }
+    let backup = recovery
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing recovery folder"))
+        .and_then(fs::create_dir_all)
+        .and_then(|()| super::store_io::atomic_write(recovery, text.as_bytes()));
+    Err(if backup.is_ok() {
+        "Could not save notes to the meeting yet. Trying again. A recovery copy is in the local state folder under unsaved-notes.".into()
+    } else {
+        "Could not save your notes or a recovery copy. Keep this text before closing Sidenote."
+            .into()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pipeline_failure_is_visible_until_a_summary_arrives() {
+        let folder = std::env::temp_dir().join(format!("notes-status-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("notes-failed"), b"failed").unwrap();
+        assert_eq!(notes_problem(&folder), Some(NOTES_FAILED));
+        fs::write(folder.join("english-summary.json"), b"{}").unwrap();
+        assert_eq!(notes_problem(&folder), None);
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn missing_meeting_keeps_a_recovery_copy_until_the_save_succeeds() {
+        let root = std::env::temp_dir().join(format!("notes-recovery-{}", std::process::id()));
+        let recovery = root.join("recovery/notes.md");
+        assert!(preserve_notes(None, "unsaved text", &recovery).is_err());
+        assert_eq!(fs::read_to_string(&recovery).unwrap(), "unsaved text");
+        let folder = root.join("meeting");
+        fs::create_dir_all(&folder).unwrap();
+        assert_eq!(
+            preserve_notes(Some(folder.clone()), "latest text", &recovery).unwrap(),
+            folder
+        );
+        assert_eq!(read_notes(&folder), "latest text");
+        assert!(!recovery.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rolling_lines_come_out_in_spoken_order() {

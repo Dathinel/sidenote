@@ -347,6 +347,9 @@ fn task() -> Result<String, String> {
     Ok(name)
 }
 fn task_command(run: bool) -> Result<(), String> {
+    listener_task(run, false)
+}
+fn listener_task(run: bool, register: bool) -> Result<(), String> {
     let name = task()?;
     let exe = std::env::current_exe().map_err(|_| "Could not locate Sidenote.")?;
     let expected_args = if name.starts_with("Sidenote updates proof ") {
@@ -362,20 +365,73 @@ fn task_command(run: bool) -> Result<(), String> {
     } else {
         "--listen".into()
     };
-    let script = " $t=Get-ScheduledTask -TaskName $env:SIDENOTE_TASK_NAME -ErrorAction Stop; $a=@($t.Actions); if($a.Count -ne 1 -or $a[0].Execute -ne $env:SIDENOTE_TASK_EXE -or $a[0].Arguments -ne $env:SIDENOTE_TASK_ARGS){throw 'Listener task does not target this install'}; if($env:SIDENOTE_TASK_RUN -eq 'yes'){Start-ScheduledTask -InputObject $t}";
-    let out = Command::new("powershell.exe")
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$sid = $identity.User.Value
+$t = Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $env:SIDENOTE_TASK_NAME
+if (!$t -and $env:SIDENOTE_TASK_REGISTER -eq 'yes') {
+    $action = New-ScheduledTaskAction -Execute $env:SIDENOTE_TASK_EXE -Argument $env:SIDENOTE_TASK_ARGS
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
+    $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+}
+$t = Get-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME
+$a = @($t.Actions)
+$owner = $t.Principal.UserId
+if ($owner -ne $sid) { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value }
+if ($a.Count -ne 1 -or $a[0].Execute -ne $env:SIDENOTE_TASK_EXE -or $a[0].Arguments -ne $env:SIDENOTE_TASK_ARGS -or $owner -ne $sid -or $t.Principal.LogonType -ne 'Interactive' -or $t.Principal.RunLevel -ne 'Limited' -or !$t.Settings.Enabled) { throw 'Listener task does not target this user and install' }
+if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
+"#;
+    let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .env("SIDENOTE_TASK_NAME", name)
         .env("SIDENOTE_TASK_EXE", exe)
         .env("SIDENOTE_TASK_ARGS", expected_args)
         .env("SIDENOTE_TASK_RUN", if run { "yes" } else { "no" })
+        .env(
+            "SIDENOTE_TASK_REGISTER",
+            if register { "yes" } else { "no" },
+        )
         .creation_flags(0x08000000)
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .map_err(|_| "Could not check the listener task.")?;
-    if out.status.success() {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(
+                    "The meeting listener setup did not finish. Reopen Sidenote to retry.".into(),
+                );
+            }
+        }
+    };
+    if status.success() {
         Ok(())
     } else {
-        Err("The listener task is missing or does not target this install. Configure a Sidenote task first.".into())
+        Err("Sidenote could not prepare its meeting listener. Reopen Sidenote to retry. If this continues, reinstall Sidenote for your Windows account.".into())
+    }
+}
+static LISTENER_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn listener_ready() -> bool {
+    !installed() || LISTENER_READY.load(std::sync::atomic::Ordering::Acquire)
+}
+pub fn listener_installed() {
+    if installed()
+        && let Err(error) = listener_task(false, true)
+    {
+        let _ = save(&Status {
+            phase: Phase::Error,
+            error: Some(error),
+            ..load()
+        });
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -416,12 +472,29 @@ pub fn listener_stopping() -> bool {
     }
     current
 }
-pub fn window_lock() -> io::Result<Option<File>> {
+#[derive(Debug)]
+pub enum WindowLockError {
+    AlreadyOpen,
+    Io(io::Error),
+}
+impl From<io::Error> for WindowLockError {
+    fn from(error: io::Error) -> Self {
+        if error.raw_os_error() == Some(32) {
+            Self::AlreadyOpen
+        } else {
+            Self::Io(error)
+        }
+    }
+}
+pub fn window_lock() -> Result<Option<File>, WindowLockError> {
     if !installed() {
         return Ok(None);
     }
-    exclusive("update-window.lock").map(Some)
+    exclusive("update-window.lock")
+        .map(Some)
+        .map_err(Into::into)
 }
+
 pub fn listener_lock() -> io::Result<Option<File>> {
     if !installed() {
         return Ok(None);
@@ -433,16 +506,29 @@ pub fn ensure_listener() -> Result<(), String> {
         return Ok(());
     }
     if listener_stopping() {
-        return Ok(());
+        return Err("Sidenote is updating its meeting listener. Wait for the update to finish, then reopen Sidenote.".into());
     }
+    LISTENER_READY.store(false, std::sync::atomic::Ordering::Release);
+    listener_task(false, true)?;
     match listener_lock() {
         Ok(lock) => {
             drop(lock);
-            task_command(true)
+            task_command(true)?;
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                match listener_lock() {
+                    Err(error) if error.raw_os_error() == Some(32) => break,
+                    Err(_) => return Err("Could not check whether the listener is running.".into()),
+                    Ok(_) if Instant::now() >= deadline => return Err("The meeting listener did not start. Reopen Sidenote to retry, or reinstall it if this continues.".into()),
+                    Ok(_) => std::thread::sleep(Duration::from_millis(100)),
+                }
+            }
         }
-        Err(error) if error.raw_os_error() == Some(32) => Ok(()),
-        Err(_) => Err("Could not check whether the listener is running.".into()),
+        Err(error) if error.raw_os_error() == Some(32) => {}
+        Err(_) => return Err("Could not check whether the listener is running.".into()),
     }
+    LISTENER_READY.store(true, std::sync::atomic::Ordering::Release);
+    Ok(())
 }
 /// Runs on the window's worker, including recovery after a failed asynchronous apply.
 pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
@@ -598,4 +684,22 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
     }
     println!("{report}");
     i32::from(status.phase == Phase::Error)
+}
+
+#[cfg(test)]
+mod window_lock_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_sharing_violation_means_an_existing_window() {
+        assert!(matches!(
+            WindowLockError::from(io::Error::from_raw_os_error(32)),
+            WindowLockError::AlreadyOpen
+        ));
+        for code in [2, 3, 5, 19, 112] {
+            assert!(
+                matches!(WindowLockError::from(io::Error::from_raw_os_error(code)), WindowLockError::Io(error) if error.raw_os_error() == Some(code))
+            );
+        }
+    }
 }

@@ -324,10 +324,19 @@ impl Meeting {
             .ok_or("Missing meeting id")?
             .to_string_lossy()
             .into_owned();
-        let summary_raw = super::file_reads::text(
+        let summary_raw = match super::file_reads::text(
             &folder.join("english-summary.json"),
             super::file_reads::SUMMARY_MAX,
-        )?;
+        ) {
+            Ok(raw) => raw,
+            Err(e)
+                if e.kind() == io::ErrorKind::NotFound
+                    && folder.join(super::live::NOTES_FILE).is_file() =>
+            {
+                "{}".into()
+            }
+            Err(e) => return Err(e.into()),
+        };
         let summary: Summary = serde_json::from_str(&summary_raw)?;
         let manifest: Manifest =
             match super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024) {
@@ -497,7 +506,7 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
     meetings.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
     (meetings, errors)
 }
-/// Returns every summarised meeting, newest first, plus per-folder read errors.
+/// Returns meetings with summaries or personal notes, newest first, plus read errors.
 pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
@@ -512,7 +521,8 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
                     }
                 };
                 if super::file_reads::directory(&entry.path())
-                    && entry.path().join("english-summary.json").exists()
+                    && (entry.path().join("english-summary.json").exists()
+                        || entry.path().join(super::live::NOTES_FILE).is_file())
                 {
                     match Meeting::load(&entry.path()) {
                         Ok(m) => meetings.push(m),
@@ -543,6 +553,24 @@ pub fn nice_date(date: &str) -> String {
 mod quick_title_tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn personal_notes_without_a_summary_appear_in_saved_meetings() {
+        let root = std::env::temp_dir().join(format!("notes-only-{}", std::process::id()));
+        let folder = root.join("123456789-1");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("notes.md"), "Keep this thought").unwrap();
+        let (meetings, errors) = scan_in(&root);
+        assert!(errors.is_empty());
+        assert_eq!(meetings.len(), 1);
+        assert_eq!(meetings[0].notes, "Keep this thought");
+        assert!(meetings[0].summary.title.is_empty());
+        fs::write(folder.join("english-summary.json"), "invalid").unwrap();
+        let (meetings, errors) = scan_in(&root);
+        assert!(meetings.is_empty());
+        assert_eq!(errors.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("quick-title-{name}-{}", std::process::id()));

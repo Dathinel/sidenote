@@ -745,6 +745,15 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(note) = &s.notice {
         pane = pane.child(notice_bar(note, p));
     }
+    if let Some(problem) = sidenote::core::live::notes_problem(&m.folder) {
+        pane = pane.child(
+            roles::SMALL
+                .wrap(problem, p.soft)
+                .px(24.0)
+                .py(12.0)
+                .role("status"),
+        );
+    }
     let panel_on = s.transcript_open && !m.lines.is_empty();
     let (_, panel_w, covers) = split_geometry(s, narrow, panel_on);
     // No room beside the summary: the transcript is the page, and the Ask bar stays at the

@@ -69,16 +69,44 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
             log("routing remains queued for the next drain");
         }
     }
-    let script = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
-        .join(".config/hex/scripts/hex-meeting-watch.ps1");
-    let mut child = Command::new("powershell.exe")
+    let script = crate::core::live::notes_pipeline();
+    if !script.is_file() {
+        log(crate::core::live::NOTES_UNAVAILABLE);
+        return Ok(());
+    }
+    let root = crate::core::meetings_dir();
+    let folders: Vec<_> = fs::read_dir(&root)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|folder| {
+            !folder.join("english-summary.json").is_file()
+                && (meeting_id.is_some_and(|id| folder.file_name().is_some_and(|n| n == id))
+                    || fs::read(folder.join("manifest.json"))
+                        .ok()
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                        .is_some_and(|m| m["status"] == "complete"))
+        })
+        .collect();
+    let child = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .creation_flags(HIDDEN)
-        .spawn()?;
+        .spawn();
     std::thread::spawn(move || {
         let _activity = activity;
-        let _ = child.wait();
+        let succeeded = child
+            .and_then(|mut child| child.wait())
+            .is_ok_and(|status| status.success());
+        for folder in folders {
+            if !succeeded {
+                let _ = fs::write(folder.join("notes-failed"), b"failed");
+            } else {
+                let _ = fs::remove_file(folder.join("notes-failed"));
+            }
+        }
+        if !succeeded {
+            log("Notes pipeline failed; the recording and personal notes are saved");
+        }
     });
     Ok(())
 }
