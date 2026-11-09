@@ -20,6 +20,34 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('tasks-v2-edited', 'tasks-v2-edited', '1320x1100', 'tasks-v2-edit.json', @('--at', 'mark:end')),
+    @('tasks-v2-edited-560', 'tasks-v2-edited', '560x1400', 'tasks-v2-edit.json', @('--at', 'mark:end')),
+    @('tasks-v2-auto', 'tasks-v2-auto', '1320x1100', 'tasks-v2-auto.json', @('--at', 'mark:end')),
+    @('tasks-v2-auto-560', 'tasks-v2-auto', '560x1400', 'tasks-v2-auto.json', @('--at', 'mark:end')),
+    @('tasks-v2-team-saved', 'tasks-v2-team-saved', '1320x1100', 'tasks-v2-team.json', @('--at', 'mark:end')),
+    @('tasks-v2-team-saved-560', 'tasks-v2-team-saved', '560x1400', 'tasks-v2-team.json', @('--at', 'mark:end')),
+    @('tasks-v2-project', 'tasks-v2-project', '1320x1100', $null, @()),
+    @('tasks-v2-project-560', 'tasks-v2-project', '560x1400', $null, @()),
+    @('tasks-v2-team', 'tasks-v2-team', '1320x1100', $null, @()),
+    @('tasks-v2-team-560', 'tasks-v2-team', '560x1400', $null, @()),
+    @('tasks-v2-status', 'tasks-v2-status', '1320x1100', $null, @()),
+    @('tasks-v2-status-560', 'tasks-v2-status', '560x1400', $null, @()),
+    @('tasks-v2-owner', 'tasks-v2-owner', '1320x1100', $null, @()),
+    @('tasks-v2-owner-560', 'tasks-v2-owner', '560x1400', $null, @()),
+    @('tasks-v2-due', 'tasks-v2-due', '1320x1100', $null, @()),
+    @('tasks-v2-due-560', 'tasks-v2-due', '560x1400', $null, @()),
+    @('tasks-v2-panel', 'tasks-v2-panel', '1320x1100', $null, @()),
+    @('tasks-v2-panel-560', 'tasks-v2-panel', '560x1400', $null, @()),
+    @('tasks-v2-waiting', 'tasks-v2-waiting', '1320x1100', $null, @()),
+    @('tasks-v2-waiting-560', 'tasks-v2-waiting', '560x1400', $null, @()),
+    @('tasks-v2-review', 'tasks-v2-review', '1320x1100', $null, @()),
+    @('tasks-v2-review-560', 'tasks-v2-review', '560x1400', $null, @()),
+    @('tasks-v2-legacy', 'tasks-v2-legacy', '1320x1100', $null, @()),
+    @('tasks-v2-legacy-560', 'tasks-v2-legacy', '560x1400', $null, @()),
+    @('tasks-v2-empty', 'tasks-v2-empty', '1320x1100', $null, @()),
+    @('tasks-v2-empty-560', 'tasks-v2-empty', '560x1400', $null, @()),
+    @('tasks-v2-teams', 'tasks-v2-teams', '1320x1100', $null, @()),
+    @('tasks-v2-teams-560', 'tasks-v2-teams', '560x1400', $null, @()),
     @('sync-memory-merged', 'sync-memory-merged', '1320x900', $null, @()),
     @('sync-task-merged', 'sync-task-merged', '1320x900', $null, @()),
     @('sync-task-kept', 'sync-task-kept', '1320x900', $null, @()),
@@ -357,6 +385,10 @@ foreach ($theme in $Themes) {
             }); proposals = @(); events = @(); migration = $null } |
                 ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$state/memory/records.json"
         }
+        if ($scene -like 'tasks-v2-*') {
+            & python "$root/tools/prepare_tasks_v2_fixture.py" $state
+            if ($LASTEXITCODE -ne 0) { throw "Could not prepare tasks v2 fixture" }
+        }
         $enabled = $scene -notlike 'features-off-*' -and $scene -ne 'features-settings' -and $scene -ne 'features-tasks-only'
         @{ version = 1; features = @{ tasks = ($enabled -or $scene -eq 'features-tasks-only'); memory = $enabled; daily_check = $enabled; projects = $enabled; other_devices = $enabled } } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/config.json"
@@ -369,7 +401,7 @@ foreach ($theme in $Themes) {
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
         $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
-        $fixtureMeetings = if ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
+        $fixtureMeetings = if ($scene -like 'tasks-v2-*') { @('--meetings-dir', "$state/tasks-v2-meetings") } elseif ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/render.log"

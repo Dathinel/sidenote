@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "t": 0.5,
+      "type": "tap",
+      "key": "team-name"
+    },
+    {
+      "t": 0.7,
+      "type": "type",
+      "text": "Support"
+    },
+    {
+      "t": 1,
+      "type": "tap",
+      "key": "team-members"
+    },
+    {
+      "t": 1.2,
+      "type": "type",
+      "text": "Sam Reed"
+    },
+    {
+      "t": 1.5,
+      "type": "tap",
+      "key": "team-aliases"
+    },
+    {
+      "t": 1.7,
+      "type": "type",
+      "text": "Sam R = Sam Reed"
+    },
+    {
+      "t": 2,
+      "type": "tap",
+      "key": "team-save"
+    },
+    {
+      "t": 4,
+      "type": "mark",
+      "name": "end"
+    }
+  ]
+}
