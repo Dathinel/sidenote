@@ -306,7 +306,17 @@ impl TaskStore {
                 entry.task = Some(todo.text().into());
                 if matches!(edit, TaskV2Edit::Reset) {
                     if let Some(entries) = o.tasks.get_mut(meeting) {
-                        entries.retain(|k, v| k != &key && v.task.as_deref() != Some(todo.text()));
+                        let unique = summary
+                            .todo
+                            .iter()
+                            .filter(|t| t.text() == todo.text())
+                            .count()
+                            == 1;
+                        entries.retain(|k, v| {
+                            k != &key
+                                && !(v.task.as_deref() == Some(todo.text())
+                                    && (unique || k == &index.to_string()))
+                        });
                     }
                     return Ok(());
                 }
@@ -947,5 +957,30 @@ mod tests {
                 .as_deref(),
             Some("bb")
         );
+    }
+    #[test]
+    fn resetting_a_task_does_not_clear_another_with_the_same_title() {
+        let f =
+            Fixture::new(json!([{"id":"a","title":"Read proof"},{"id":"b","title":"Read proof"}]));
+        let store = f.store();
+        let tasks = f.tasks(&Overrides::default());
+        store
+            .edit_v2(
+                &tasks[0],
+                &f.meeting.folder,
+                TaskV2Edit::Status(TaskStatus::Review, None),
+            )
+            .unwrap();
+        store
+            .edit_v2(
+                &tasks[1],
+                &f.meeting.folder,
+                TaskV2Edit::Status(TaskStatus::Waiting, None),
+            )
+            .unwrap();
+        let view = store
+            .edit_v2(&tasks[0], &f.meeting.folder, TaskV2Edit::Reset)
+            .unwrap();
+        assert_eq!(f.tasks(&view.value)[1].status, TaskStatus::Waiting);
     }
 }
