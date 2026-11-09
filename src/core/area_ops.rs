@@ -18,6 +18,8 @@ pub struct MigrationRow {
     pub convert: bool,
     #[serde(default)]
     pub children: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assignments: BTreeMap<String, Option<String>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -54,6 +56,39 @@ pub struct Reference {
     pub project_id: Option<String>,
     pub area_id: Option<String>,
     pub baseline: Value,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Inventory {
+    pub references: Vec<Reference>,
+    pub by_project: BTreeMap<String, Vec<usize>>,
+    pub counts: [usize; 4],
+    pub project_counts: BTreeMap<String, [usize; 4]>,
+}
+impl Inventory {
+    pub fn new(references: Vec<Reference>) -> Self {
+        let mut by_project: BTreeMap<String, Vec<usize>> = Default::default();
+        let mut counts = [0; 4];
+        let mut project_counts: BTreeMap<String, [usize; 4]> = Default::default();
+        for (i, reference) in references.iter().enumerate() {
+            let kind = match reference.kind.as_str() {
+                "meeting" => 0,
+                "task" => 1,
+                "memory" => 2,
+                _ => 3,
+            };
+            counts[kind] += 1;
+            if let Some(id) = &reference.project_id {
+                by_project.entry(id.clone()).or_default().push(i);
+                project_counts.entry(id.clone()).or_default()[kind] += 1;
+            }
+        }
+        Self {
+            references,
+            by_project,
+            counts,
+            project_counts,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preview {
@@ -101,6 +136,17 @@ fn area_for_name(p: &mut Projects, name: &str) -> io::Result<String> {
     if let Some(a) = matches.first() {
         return Ok(a.id.clone());
     }
+    if let Some(area) = c.areas.values().find(|a| {
+        a.status == Status::Retired
+            && std::iter::once(&a.name)
+                .chain(a.aliases.iter())
+                .any(|n| project_merge::normalized_name(n) == project_merge::normalized_name(name))
+    }) {
+        let mut area = area.clone();
+        area.status = Status::Active;
+        put(p, "area:", &area.id, &area)?;
+        return Ok(area.id);
+    }
     let id = format!(
         "area-{}",
         blake3::hash(super::project_merge::normalized_name(name).as_bytes()).to_hex()
@@ -110,10 +156,12 @@ fn area_for_name(p: &mut Projects, name: &str) -> io::Result<String> {
         "area:",
         &id,
         &Area {
+            schema_version: 1,
             id: id.clone(),
             name: name.into(),
             aliases: Default::default(),
             status: Status::Active,
+            extra: Default::default(),
         },
     )?;
     Ok(id)
@@ -168,8 +216,10 @@ fn convert(
             "area-link:",
             &reference.key,
             &Link {
+                schema_version: 1,
                 target,
                 baseline: reference.baseline.clone(),
+                extra: Default::default(),
             },
         )?;
     }
@@ -195,6 +245,7 @@ fn convert(
     put(p, "area-project:", id, &project)
 }
 fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Projects> {
+    p.area_catalog()?.ensure_writable()?;
     let mut next = p.clone();
     next.retain_project_identity()?;
     match action {
@@ -245,6 +296,24 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
                     "Review every current project once before applying migration",
                 ));
             }
+            let converted: std::collections::BTreeSet<_> = rows
+                .iter()
+                .filter(|r| r.convert)
+                .map(|r| r.project_id.as_str())
+                .collect();
+            if rows.iter().any(|r| {
+                r.children
+                    .values()
+                    .any(|child| converted.contains(child.as_str()))
+                    || r.assignments
+                        .values()
+                        .flatten()
+                        .any(|child| converted.contains(child.as_str()))
+            }) {
+                return Err(invalid(
+                    "A selected child project is also being turned into an area. Keep it as a project or change the per-item choice.",
+                ));
+            }
             // Establish all parents before resolving any child-project choices.
             for row in rows {
                 let area = area_for_name(&mut next, &row.area_name)?;
@@ -252,7 +321,42 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
             }
             for row in rows.iter().filter(|r| r.convert) {
                 let area = area_for_name(&mut next, &row.area_name)?;
-                convert(&mut next, &row.project_id, &area, &row.children, refs)?;
+                let mut children = row.children.clone();
+                for (key, target) in &row.assignments {
+                    if let Some(target) = target {
+                        children.insert(key.clone(), target.clone());
+                    } else {
+                        children.remove(key);
+                    }
+                }
+                convert(&mut next, &row.project_id, &area, &children, refs)?;
+            }
+            for row in rows.iter().filter(|r| !r.convert) {
+                let area = area_for_name(&mut next, &row.area_name)?;
+                for (key, target) in &row.assignments {
+                    let reference = refs
+                        .iter()
+                        .find(|r| r.key == *key && r.project_id.as_ref() == Some(&row.project_id))
+                        .ok_or_else(|| {
+                            invalid("An item choice no longer belongs to this project")
+                        })?;
+                    let target = Target {
+                        area_id: area.clone(),
+                        project_id: target.clone(),
+                    };
+                    next.area_catalog()?.validate_target(&target)?;
+                    put(
+                        &mut next,
+                        "area-link:",
+                        key,
+                        &Link {
+                            schema_version: 1,
+                            target,
+                            baseline: reference.baseline.clone(),
+                            extra: Default::default(),
+                        },
+                    )?;
+                }
             }
         }
         Action::Assign { key, target } => {
@@ -266,8 +370,10 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
                 "area-link:",
                 key,
                 &Link {
+                    schema_version: 1,
                     target: target.clone(),
                     baseline: reference.baseline.clone(),
+                    extra: Default::default(),
                 },
             )?;
         }
@@ -277,10 +383,24 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
 }
 impl Projects {
     pub fn area_receipts(&self) -> io::Result<BTreeMap<String, Receipt>> {
-        read_entries(self, "area-operation:")
+        Ok(self
+            .other
+            .iter()
+            .filter_map(|(key, value)| {
+                key.strip_prefix("area-operation:").and_then(|id| {
+                    serde_json::from_value(value.clone())
+                        .ok()
+                        .map(|receipt| (id.into(), receipt))
+                })
+            })
+            .collect())
     }
 }
 impl TaskStore {
+    pub fn area_references(&self) -> io::Result<Inventory> {
+        self.area_inventory(&self.load_projects()?)
+            .map(|(_, refs)| Inventory::new(refs))
+    }
     fn area_inventory(&self, p: &Projects) -> io::Result<(String, Vec<Reference>)> {
         let meetings = project_merge::scan()?;
         for m in &meetings {
@@ -340,19 +460,22 @@ impl TaskStore {
         }
         for m in &meetings {
             let target = activity.meetings.get(&m.id);
-            let project = target.and_then(|t| t.project_id.clone()).or_else(|| {
-                let name = p
-                    .meeting_projects
-                    .get(&m.id)
-                    .cloned()
-                    .or_else(|| {
-                        super::dominant_project(tasks.iter().filter(|t| t.meeting_id == m.id))
-                    })
-                    .or_else(|| pipeline.get(&m.id).and_then(|f| f.meeting_project.clone()))?;
-                c.project(p, &name)
-                    .filter(|p| p.converted_to.is_none())
-                    .map(|p| p.id.clone())
-            });
+            let project = match target {
+                Some(target) => target.project_id.clone(),
+                None => (|| {
+                    let name = p
+                        .meeting_projects
+                        .get(&m.id)
+                        .cloned()
+                        .or_else(|| {
+                            super::dominant_project(tasks.iter().filter(|t| t.meeting_id == m.id))
+                        })
+                        .or_else(|| pipeline.get(&m.id).and_then(|f| f.meeting_project.clone()))?;
+                    c.project(p, &name)
+                        .filter(|p| p.converted_to.is_none())
+                        .map(|p| p.id.clone())
+                })(),
+            };
             push(
                 meeting_key(&m.id),
                 "meeting",
@@ -361,7 +484,7 @@ impl TaskStore {
                 target.map(|t| t.area_id.clone()),
             );
         }
-        for (kind, id, text, project) in memory
+        for (kind, id, text, project, assignment) in memory
             .records
             .iter()
             .map(|r| {
@@ -370,6 +493,7 @@ impl TaskStore {
                     &r.id,
                     r.text.as_deref().unwrap_or("Retained record"),
                     r.project.as_deref(),
+                    r.assignment.as_ref(),
                 )
             })
             .chain(memory.proposals.iter().map(|r| {
@@ -378,20 +502,21 @@ impl TaskStore {
                     &r.proposal.id,
                     r.proposal.text.as_str(),
                     r.proposal.project.as_deref(),
+                    None,
                 )
             }))
         {
             let key = json!([kind, id]).to_string();
-            let target = project.and_then(|n| c.target(p, &key, &raw[&key], n));
-            let project = target
-                .as_ref()
-                .and_then(|t| t.project_id.clone())
-                .or_else(|| {
-                    project
-                        .and_then(|n| c.project(p, n))
-                        .filter(|p| p.converted_to.is_none())
-                        .map(|p| p.id.clone())
-                });
+            let target = assignment
+                .and_then(|t| c.current_target(t))
+                .or_else(|| c.target(p, &key, &raw[&key], project.unwrap_or(super::UNSORTED)));
+            let project = match target.as_ref() {
+                Some(target) => target.project_id.clone(),
+                None => project
+                    .and_then(|n| c.project(p, n))
+                    .filter(|p| p.converted_to.is_none())
+                    .map(|p| p.id.clone()),
+            };
             push(key, kind, text.into(), project, target.map(|t| t.area_id));
         }
         refs.sort_by(|a, b| a.key.cmp(&b.key));
@@ -504,7 +629,15 @@ impl TaskStore {
                             p.other.insert(key.clone(), v.clone());
                         }
                         None => {
-                            p.other.remove(key);
+                            if key.starts_with("area:") {
+                                if let Some(value) =
+                                    p.other.get_mut(key).and_then(Value::as_object_mut)
+                                {
+                                    value.insert("status".into(), json!("retired"));
+                                }
+                            } else if !key.starts_with("area-identity:") {
+                                p.other.remove(key);
+                            }
                         }
                     }
                 }
@@ -583,10 +716,10 @@ impl TaskStore {
             &self.root,
             "projects.json",
             |p: &mut Projects| {
-                let mut receipt: Receipt = read_entries(p, "area-operation:")?
-                    .remove(id)
-                    .filter(|r: &Receipt| r.active)
-                    .ok_or_else(|| invalid("This operation changed. Reload before Undo."))?;
+                let mut receipt:Receipt=serde_json::from_value(p.other.get(&format!("area-operation:{id}")).cloned().ok_or_else(||invalid("This operation changed. Reload before Undo."))?)?;
+                if !receipt.active{return Err(invalid("This operation was already undone."));}
+                if receipt.schema_version!=1{return Err(invalid("This area operation uses a newer schema. Update the app before Undo."));}
+                p.area_catalog()?.ensure_writable()?;
                 let backup = self
                     .root
                     .join("local/area-operations")
@@ -605,6 +738,10 @@ impl TaskStore {
                     return Err(invalid("The backup changed. Undo was not applied."));
                 }
                 verify_backup(&backup, &snapshot)?;
+                let changed_projects:std::collections::BTreeSet<_>=receipt.after.keys().filter_map(|k|k.strip_prefix("area-project:")).collect();
+                if self.area_inventory(p)?.1.iter().any(|r|!receipt.baseline.contains_key(&r.key)&&r.project_id.as_deref().is_some_and(|id|changed_projects.contains(id))){
+                    return Err(invalid("New work now depends on this project. Undo was not applied. Reassign that work first."));
+                }
                 let raw = self.undo_state(p)?.1;
                 for (key, expected) in &receipt.baseline {
                     let current = if let Some(key) = key.strip_prefix("link:") {
@@ -643,13 +780,16 @@ impl TaskStore {
                             p.other.insert(key.clone(), v.clone());
                         }
                         None => {
-                            p.other.remove(key);
+                            if key.starts_with("area:") {
+                                if let Some(value)=p.other.get_mut(key).and_then(Value::as_object_mut){value.insert("status".into(),json!("retired"));}
+                            } else if !key.starts_with("area-identity:"){p.other.remove(key);}
                         }
                     }
                 }
                 receipt.active = false;
                 put(p, "area-operation:", id, &receipt)?;
                 p.area_catalog()?;
+                proof_boundary(&self.root,"undo-staged")?;
                 Ok(())
             },
             |before| {
@@ -659,7 +799,7 @@ impl TaskStore {
                 }
                 Ok(())
             },
-        )
+        ).and_then(|projects|{proof_boundary(&self.root,"undo-published")?;Ok(projects)})
     }
 }
 fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {

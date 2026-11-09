@@ -35,6 +35,8 @@ pub struct ProjectMerge {
     pub previous: Option<Box<ProjectMerge>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_baseline: Option<BTreeMap<String, Value>>,
+    #[serde(default)]
+    pub area_changes: BTreeMap<String, (Option<Value>, Option<Value>)>,
 }
 const MOVED_AFTER_MERGE: &str = "Some items were moved after the merge, so Undo would not restore them. Move them back by hand or keep the merge.";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,6 +237,24 @@ impl TaskStore {
                     ));
                 }
                 let previous = p.merges.get(&preview.from).cloned().map(Box::new);
+                let prior = p.other.clone();
+                p.prepare_area_merge(&preview.from, &preview.into)?;
+                let keys: std::collections::BTreeSet<_> = prior
+                    .keys()
+                    .chain(p.other.keys())
+                    .filter(|k| !k.starts_with("area-identity:"))
+                    .cloned()
+                    .collect();
+                let area_changes = keys
+                    .into_iter()
+                    .filter(|k| prior.get(k) != p.other.get(k))
+                    .map(|k| {
+                        (
+                            k.clone(),
+                            (prior.get(&k).cloned(), p.other.get(&k).cloned()),
+                        )
+                    })
+                    .collect();
                 p.aliases.insert(preview.from.clone(), preview.into.clone());
                 p.merges.insert(
                     preview.from.clone(),
@@ -246,6 +266,7 @@ impl TaskStore {
                         backup,
                         previous,
                         assignment_baseline: Some(assignments),
+                        area_changes,
                     },
                 );
                 Ok(())
@@ -287,6 +308,15 @@ impl TaskStore {
                     ));
                 }
                 verify_assignments(&merge, &self.undo_state(p)?.1)?;
+                if merge
+                    .area_changes
+                    .iter()
+                    .any(|(key, (_, after))| p.other.get(key) != after.as_ref())
+                {
+                    return Err(invalid(
+                        "Area assignments changed after the merge. Undo was not applied.",
+                    ));
+                }
                 let backup = self
                     .root
                     .join("local/project-merges")
@@ -317,6 +347,16 @@ impl TaskStore {
                     }
                     None => {
                         p.merges.remove(from);
+                    }
+                }
+                for (key, (before, _)) in merge.area_changes {
+                    match before {
+                        Some(value) => {
+                            p.other.insert(key, value);
+                        }
+                        None => {
+                            p.other.remove(&key);
+                        }
                     }
                 }
                 Ok(())
@@ -378,36 +418,36 @@ pub(super) fn raw_assignments(
         let file = pipeline.get(&meeting.id);
         out.insert(
             json!(["meeting", meeting.id]).to_string(),
-            json!([
-                p.meeting_projects.get(&meeting.id),
-                file.and_then(|f| f.meeting_project.as_ref())
-            ]),
+            super::areas::meeting_baseline(p, pipeline, &meeting.id),
         );
         for (index, todo) in meeting.summary.todo.iter().enumerate() {
             let edit = overrides.get(&meeting.id, index);
             out.insert(
                 json!(["task", meeting.id, index, todo.task]).to_string(),
-                json!([
-                    file.and_then(|f| f.tasks.iter().find(|t| t.i == index))
-                        .map(|t| &t.project),
-                    edit.and_then(|o| o.project.as_ref()),
-                    edit.filter(|o| o.project.is_some())
-                        .and_then(|o| o.task.as_ref()),
-                    file.and_then(|f| f.meeting_project.as_ref())
-                ]),
+                super::areas::assignment_baseline(
+                    json!([
+                        file.and_then(|f| f.tasks.iter().find(|t| t.i == index))
+                            .map(|t| &t.project),
+                        edit.and_then(|o| o.project.as_ref()),
+                        edit.filter(|o| o.project.is_some())
+                            .and_then(|o| o.task.as_ref()),
+                        file.and_then(|f| f.meeting_project.as_ref())
+                    ]),
+                    edit.and_then(|o| o.assignment.as_ref()),
+                ),
             );
         }
     }
     for task in &overrides.manual {
         out.insert(
             json!(["manual", format!("manual/{}", task.id)]).to_string(),
-            json!(task.project),
+            super::areas::assignment_baseline(json!(task.project), task.assignment.as_ref()),
         );
     }
     for record in &memory.records {
         out.insert(
             json!(["memory", record.id]).to_string(),
-            json!(record.project),
+            super::areas::assignment_baseline(json!(record.project), record.assignment.as_ref()),
         );
     }
     for proposal in &memory.proposals {

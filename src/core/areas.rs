@@ -10,21 +10,56 @@ use std::io;
 pub enum Status {
     Active,
     Inactive,
+    Retired,
+}
+pub fn schema_one() -> u32 {
+    1
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectChoice {
+    pub project: String,
+    pub revision: String,
+}
+pub fn new_assignment_revision(root: &std::path::Path) -> io::Result<String> {
+    super::sync_state::new_id(root)
+}
+pub fn assignment_baseline(legacy: Value, assignment: Option<&impl Serialize>) -> Value {
+    match assignment {
+        Some(intent) => json!({"legacy":legacy,"assignment":intent}),
+        None => legacy,
+    }
+}
+pub fn meeting_baseline(p: &Projects, pipeline: &Pipeline, id: &str) -> Value {
+    assignment_baseline(
+        json!([
+            p.meeting_projects.get(id),
+            pipeline.get(id).and_then(|f| f.meeting_project.as_ref())
+        ]),
+        p.other.get(&format!("assignment:{}", meeting_key(id))),
+    )
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Area {
+    #[serde(default = "schema_one")]
+    pub schema_version: u32,
     pub id: String,
     pub name: String,
     pub aliases: BTreeSet<String>,
     pub status: Status,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Project {
+    #[serde(default = "schema_one")]
+    pub schema_version: u32,
     pub id: String,
     pub name: String,
     pub area_id: Option<String>,
     pub status: Status,
     pub converted_to: Option<String>,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Target {
@@ -38,8 +73,12 @@ pub enum LegacyAlias {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Link {
+    #[serde(default = "schema_one")]
+    pub schema_version: u32,
     pub target: Target,
     pub baseline: Value,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Catalog {
@@ -47,16 +86,42 @@ pub struct Catalog {
     pub projects: BTreeMap<String, Project>,
     pub legacy_aliases: BTreeMap<String, LegacyAlias>,
     pub links: BTreeMap<String, Link>,
+    pub problems: Vec<String>,
+    pub read_only: bool,
 }
-pub(super) fn read_entries<T: DeserializeOwned>(
+fn read_catalog_entries<T: DeserializeOwned>(
     p: &Projects,
     prefix: &str,
-) -> io::Result<BTreeMap<String, T>> {
-    p.other
-        .iter()
-        .filter_map(|(k, v)| k.strip_prefix(prefix).map(|id| (id, v)))
-        .map(|(id, v)| Ok((id.into(), serde_json::from_value(v.clone())?)))
-        .collect()
+    problems: &mut Vec<String>,
+    read_only: &mut bool,
+) -> BTreeMap<String, T> {
+    let mut entries = BTreeMap::new();
+    for (key, value) in &p.other {
+        let Some(id) = key.strip_prefix(prefix) else {
+            continue;
+        };
+        if value
+            .get("schema_version")
+            .and_then(Value::as_u64)
+            .is_some_and(|v| v > 1)
+        {
+            *read_only = true;
+            problems.push("Some area data uses a newer schema and is read-only.".into());
+        }
+        match serde_json::from_value(value.clone()) {
+            Ok(value) => {
+                entries.insert(id.into(), value);
+            }
+            Err(_) => {
+                *read_only = true;
+                problems.push(
+                    "An unreadable area item was retained. The remaining catalog is available."
+                        .into(),
+                );
+            }
+        }
+    }
+    entries
 }
 pub(super) fn put(
     p: &mut Projects,
@@ -64,9 +129,35 @@ pub(super) fn put(
     id: &str,
     value: &impl Serialize,
 ) -> io::Result<()> {
-    p.other
-        .insert(format!("{prefix}{id}"), serde_json::to_value(value)?);
+    let key = format!("{prefix}{id}");
+    if p.other
+        .get(&key)
+        .and_then(|v| v.get("schema_version"))
+        .and_then(Value::as_u64)
+        .is_some_and(|v| v > 1)
+    {
+        return Err(store_io::invalid(
+            "This area data comes from a newer version. Update the app before changing it.",
+        ));
+    }
+    let mut next = serde_json::to_value(value)?;
+    if let Some(old) = p.other.get(&key) {
+        retain_unknown(old, &mut next);
+    }
+    p.other.insert(key, next);
     Ok(())
+}
+fn retain_unknown(old: &Value, new: &mut Value) {
+    if let (Some(old), Some(new)) = (old.as_object(), new.as_object_mut()) {
+        for (key, value) in old {
+            match new.get_mut(key) {
+                Some(next) => retain_unknown(value, next),
+                None => {
+                    new.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
 }
 pub fn task_key(t: &TaskItem) -> String {
     if t.manual {
@@ -80,32 +171,68 @@ pub fn meeting_key(id: &str) -> String {
 }
 pub fn task_baseline(t: &TaskItem, pipeline: &Pipeline, overrides: &super::Overrides) -> Value {
     if t.manual {
-        return json!(
-            overrides
-                .manual
-                .iter()
-                .find(|m| format!("manual/{}", m.id) == t.meeting_id)
-                .and_then(|m| m.project.as_ref())
+        let task = overrides
+            .manual
+            .iter()
+            .find(|m| format!("manual/{}", m.id) == t.meeting_id);
+        return assignment_baseline(
+            json!(task.and_then(|m| m.project.as_ref())),
+            task.and_then(|m| m.assignment.as_ref()),
         );
     }
     let edit = overrides.get(&t.meeting_id, t.index);
-    json!([
-        pipeline
-            .get(&t.meeting_id)
-            .and_then(|f| f.tasks.iter().find(|tag| tag.i == t.index))
-            .map(|tag| &tag.project),
-        edit.and_then(|o| o.project.as_ref()),
-        edit.filter(|o| o.project.is_some())
-            .and_then(|o| o.task.as_ref()),
-        pipeline
-            .get(&t.meeting_id)
-            .and_then(|f| f.meeting_project.as_ref())
-    ])
+    assignment_baseline(
+        json!([
+            pipeline
+                .get(&t.meeting_id)
+                .and_then(|f| f.tasks.iter().find(|tag| tag.i == t.index))
+                .map(|tag| &tag.project),
+            edit.and_then(|o| o.project.as_ref()),
+            edit.filter(|o| o.project.is_some())
+                .and_then(|o| o.task.as_ref()),
+            pipeline
+                .get(&t.meeting_id)
+                .and_then(|f| f.meeting_project.as_ref())
+        ]),
+        edit.and_then(|e| e.assignment.as_ref()),
+    )
 }
 pub fn project_id(name: &str) -> String {
     format!("project-{}", blake3::hash(name.as_bytes()).to_hex())
 }
 impl Projects {
+    pub(super) fn prepare_area_merge(&mut self, from: &str, into: &str) -> io::Result<()> {
+        let c = self.area_catalog()?;
+        c.ensure_writable()?;
+        let source = c
+            .project(self, from)
+            .ok_or_else(|| store_io::invalid("Source project is missing"))?;
+        let mut target = c
+            .project(self, into)
+            .cloned()
+            .ok_or_else(|| store_io::invalid("Target project is missing"))?;
+        if source.area_id.is_some() && target.area_id.is_some() && source.area_id != target.area_id
+        {
+            return Err(store_io::invalid(
+                "These projects belong to different areas. Move them into the same area before merging.",
+            ));
+        }
+        if target.area_id.is_none() && source.area_id.is_some() {
+            target.area_id = source.area_id.clone();
+            put(self, "area-project:", &target.id, &target)?;
+        }
+        for (key, link) in &c.links {
+            if link.target.project_id.as_ref() == Some(&source.id) {
+                let mut link = link.clone();
+                link.target.project_id = Some(target.id.clone());
+                if let Some(area) = &target.area_id {
+                    link.target.area_id = area.clone();
+                }
+                put(self, "area-link:", key, &link)?;
+            }
+        }
+        self.retain_project_identity()
+    }
     pub fn is_area_alias(&self, name: &str) -> bool {
         let normalized = normalized_name(name);
         self.other
@@ -114,16 +241,58 @@ impl Projects {
             .any(|n| normalized_name(n) == normalized)
     }
     pub fn area_catalog(&self) -> io::Result<Catalog> {
-        let mut catalog = Catalog {
-            areas: read_entries(self, "area:")?,
-            projects: read_entries(self, "area-project:")?,
-            legacy_aliases: read_entries(self, "area-alias:")?,
-            links: read_entries(self, "area-link:")?,
-        };
+        let mut catalog = Catalog::default();
+        catalog.areas =
+            read_catalog_entries(self, "area:", &mut catalog.problems, &mut catalog.read_only);
+        catalog.projects = read_catalog_entries(
+            self,
+            "area-project:",
+            &mut catalog.problems,
+            &mut catalog.read_only,
+        );
+        catalog.legacy_aliases = read_catalog_entries(
+            self,
+            "area-alias:",
+            &mut catalog.problems,
+            &mut catalog.read_only,
+        );
+        catalog.links = read_catalog_entries(
+            self,
+            "area-link:",
+            &mut catalog.problems,
+            &mut catalog.read_only,
+        );
         let identities = catalog.projects.clone();
-        catalog
-            .projects
-            .retain(|_, p| self.resolve(&p.name) == p.name);
+        let _: BTreeMap<String, super::area_ops::Receipt> = read_catalog_entries(
+            self,
+            "area-operation:",
+            &mut catalog.problems,
+            &mut catalog.read_only,
+        );
+        for p in catalog.projects.values_mut() {
+            p.name = self.resolve(&p.name);
+        }
+        for (key, value) in &self.other {
+            let Some(name) = key.strip_prefix("area-identity:") else {
+                continue;
+            };
+            let Some(id) = value.as_str() else { continue };
+            let name = self.resolve(name);
+            if !catalog.projects.values().any(|p| p.name == name) {
+                catalog.projects.insert(
+                    id.into(),
+                    Project {
+                        schema_version: 1,
+                        id: id.into(),
+                        name,
+                        area_id: None,
+                        status: Status::Active,
+                        converted_to: None,
+                        extra: Default::default(),
+                    },
+                );
+            }
+        }
         for name in super::project_names(self, &[]) {
             if !catalog
                 .projects
@@ -134,11 +303,13 @@ impl Projects {
                 catalog.projects.insert(
                     id.clone(),
                     Project {
+                        schema_version: 1,
                         id,
                         name,
                         area_id: None,
                         status: Status::Active,
                         converted_to: None,
+                        extra: Default::default(),
                     },
                 );
             }
@@ -146,7 +317,58 @@ impl Projects {
         for p in catalog.projects.values_mut() {
             p.name = self.resolve(&p.name);
         }
+        // A rename keeps its identity. A recorded merge chooses the target identity explicitly.
+        let mut redirects = BTreeMap::new();
+        for (from, merge) in self.merges.iter().filter(|(_, m)| m.active) {
+            let name = self.resolve(&merge.into);
+            let mut before_merge = self.clone();
+            before_merge.aliases.remove(from);
+            let survivor = identities
+                .values()
+                .find(|p| {
+                    p.name == merge.into
+                        || before_merge.resolve(&p.name) == before_merge.resolve(&merge.into)
+                })
+                .map(|p| p.id.clone())
+                .or_else(|| {
+                    self.other
+                        .get(&format!("area-identity:{}", merge.into))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| project_id(&merge.into));
+            let mut target = catalog.projects.get(&survivor).cloned().unwrap_or(Project {
+                schema_version: 1,
+                id: survivor.clone(),
+                name: name.clone(),
+                area_id: None,
+                status: Status::Active,
+                converted_to: None,
+                extra: Default::default(),
+            });
+            for source in identities
+                .values()
+                .filter(|p| self.resolve(&p.name) == name && p.id != survivor)
+            {
+                if target.area_id.is_none() {
+                    target.area_id = source.area_id.clone();
+                }
+                redirects.insert(source.id.clone(), survivor.clone());
+            }
+            catalog
+                .projects
+                .retain(|id, p| p.name != name || *id == survivor);
+            catalog.projects.insert(survivor, target);
+        }
         for link in catalog.links.values_mut() {
+            if let Some(id) = link
+                .target
+                .project_id
+                .as_ref()
+                .and_then(|id| redirects.get(id))
+            {
+                link.target.project_id = Some(id.clone());
+            }
             if let Some(id) = &link.target.project_id
                 && !catalog.projects.contains_key(id)
                 && let Some(old) = identities.get(id)
@@ -158,7 +380,7 @@ impl Projects {
                 link.target.project_id = Some(project.id.clone());
             }
         }
-        catalog.validate()?;
+        catalog.repair_missing();
         Ok(catalog)
     }
     pub fn project_area_label(&self, name: &str) -> String {
@@ -178,43 +400,75 @@ impl Projects {
         name.into()
     }
     pub(super) fn retain_project_identity(&mut self) -> io::Result<()> {
-        for project in self.area_catalog()?.projects.values() {
-            put(self, "area-project:", &project.id, project)?;
+        let catalog = self.area_catalog()?;
+        catalog.ensure_writable()?;
+        for project in catalog.projects.values() {
+            self.other
+                .entry(format!("area-identity:{}", project.name))
+                .or_insert_with(|| Value::String(project.id.clone()));
         }
         Ok(())
     }
 }
 impl Catalog {
-    fn validate(&self) -> io::Result<()> {
-        for (id, a) in &self.areas {
-            if *id != a.id || a.name.trim().is_empty() {
-                return Err(store_io::invalid("Invalid area registry"));
+    pub fn ensure_writable(&self) -> io::Result<()> {
+        if self.read_only {
+            return Err(store_io::invalid(
+                "Area data from a newer or unreadable version is read-only. Update the app before changing it.",
+            ));
+        }
+        Ok(())
+    }
+    fn repair_missing(&mut self) {
+        let required: BTreeSet<_> = self
+            .projects
+            .values()
+            .flat_map(|p| p.area_id.iter().chain(p.converted_to.iter()))
+            .chain(self.links.values().map(|l| &l.target.area_id))
+            .chain(self.legacy_aliases.values().map(|a| {
+                let LegacyAlias::Area { area_id } = a;
+                area_id
+            }))
+            .cloned()
+            .collect();
+        for id in required {
+            if !self.areas.contains_key(&id) {
+                self.problems.push(
+                    "Some work refers to a Missing area. The other areas are still available."
+                        .into(),
+                );
+                self.areas.insert(
+                    id.clone(),
+                    Area {
+                        schema_version: 1,
+                        id,
+                        name: "Missing area".into(),
+                        aliases: Default::default(),
+                        status: Status::Retired,
+                        extra: Default::default(),
+                    },
+                );
             }
         }
-        for (id, p) in &self.projects {
-            if *id != p.id
-                || p.area_id
-                    .iter()
-                    .chain(p.converted_to.iter())
-                    .any(|a| !self.areas.contains_key(a))
-            {
-                return Err(store_io::invalid("A project refers to a missing area"));
-            }
-        }
-        for alias in self.legacy_aliases.values() {
-            let LegacyAlias::Area { area_id } = alias;
-            if !self.areas.contains_key(area_id) {
-                return Err(store_io::invalid("A legacy alias refers to a missing area"));
+        for (id, area) in &mut self.areas {
+            if area.id != *id || area.name.trim().is_empty() {
+                area.id = id.clone();
+                area.name = "Missing area".into();
+                self.problems
+                    .push("An unreadable area is shown as Missing area.".into());
             }
         }
         for link in self.links.values() {
-            if self.current_target(&link.target).is_none() {
-                return Err(store_io::invalid(
-                    "An area assignment refers to a missing area or project",
-                ));
+            if self
+                .areas
+                .get(&link.target.area_id)
+                .is_some_and(|a| a.status == Status::Retired)
+            {
+                self.problems.push("Retired area has linked work from another device. Restore the area or reassign that work.".into());
             }
         }
-        Ok(())
+        self.problems.sort();
+        self.problems.dedup();
     }
     pub fn project<'a>(&'a self, p: &Projects, name: &str) -> Option<&'a Project> {
         self.projects
@@ -226,6 +480,9 @@ impl Catalog {
         self.areas
             .values()
             .filter(|a| {
+                if a.status == Status::Retired {
+                    return false;
+                }
                 std::iter::once(&a.name)
                     .chain(a.aliases.iter())
                     .any(|n| normalized_name(n) == key)
@@ -233,7 +490,11 @@ impl Catalog {
             .collect()
     }
     pub fn validate_target(&self, target: &Target) -> io::Result<()> {
-        if !self.areas.contains_key(&target.area_id)
+        self.ensure_writable()?;
+        if self
+            .areas
+            .get(&target.area_id)
+            .is_none_or(|a| a.status == Status::Retired)
             || target.project_id.as_ref().is_some_and(|id| {
                 self.projects.get(id).is_none_or(|p| {
                     p.converted_to.is_some() || p.area_id.as_ref() != Some(&target.area_id)
@@ -280,17 +541,22 @@ impl Catalog {
             })
         }
     }
-    fn current_target(&self, target: &Target) -> Option<Target> {
+    pub fn current_target(&self, target: &Target) -> Option<Target> {
         if let Some(id) = &target.project_id {
-            let project = self.projects.get(id)?;
+            let Some(project) = self.projects.get(id) else {
+                return Some(Target {
+                    area_id: target.area_id.clone(),
+                    project_id: None,
+                });
+            };
             return if let Some(area) = &project.converted_to {
                 Some(Target {
                     area_id: area.clone(),
                     project_id: None,
                 })
             } else {
-                project.area_id.as_ref().map(|area| Target {
-                    area_id: area.clone(),
+                Some(Target {
+                    area_id: project.area_id.as_ref().unwrap_or(&target.area_id).clone(),
                     project_id: Some(id.clone()),
                 })
             };
@@ -300,12 +566,16 @@ impl Catalog {
             .then(|| target.clone())
     }
     pub fn label(&self, target: &Target) -> String {
-        let area = &self.areas[&target.area_id].name;
+        let area = self
+            .areas
+            .get(&target.area_id)
+            .map(|a| a.name.as_str())
+            .unwrap_or("Missing area");
         target
             .project_id
             .as_ref()
             .and_then(|id| self.projects.get(id))
-            .map_or_else(|| area.clone(), |p| format!("{area} › {}", p.name))
+            .map_or_else(|| area.to_string(), |p| format!("{area} › {}", p.name))
     }
 }
 
@@ -326,6 +596,10 @@ pub fn activity(
 ) -> io::Result<Activity> {
     let catalog = p.area_catalog()?;
     let mut out = Activity::default();
+    let mut grouped: std::collections::HashMap<&str, Vec<&TaskItem>> = Default::default();
+    for task in tasks.iter().filter(|t| !t.manual) {
+        grouped.entry(&task.meeting_id).or_default().push(task);
+    }
     for task in tasks.iter().filter(|t| !t.done) {
         if let Some(area) = &task.area_id {
             out.areas.insert(area.clone());
@@ -344,13 +618,12 @@ pub fn activity(
             .get(&meeting.id)
             .cloned()
             .or_else(|| {
-                super::dominant_project(tasks.iter().filter(|t| t.meeting_id == meeting.id))
+                grouped
+                    .get(meeting.id.as_str())
+                    .and_then(|items| super::dominant_project(items.iter().copied()))
             })
             .or_else(|| file.and_then(|f| f.meeting_project.clone()));
-        let baseline = json!([
-            p.meeting_projects.get(&meeting.id),
-            file.and_then(|f| f.meeting_project.as_ref())
-        ]);
+        let baseline = meeting_baseline(p, pipeline, &meeting.id);
         if let Some(target) = catalog.target(
             p,
             &meeting_key(&meeting.id),
