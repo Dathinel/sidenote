@@ -192,7 +192,7 @@ pub(super) fn parse(
             return Err("empty task title");
         }
         todo.task = todo.title.clone();
-        if !["todo", "waiting", "review", "done"].contains(&todo.status.as_str()) {
+        if !["todo", "waiting"].contains(&todo.status.as_str()) {
             todo.status = "todo".into();
         }
         repair_stamps(&mut todo.at, &valid, 1);
@@ -347,6 +347,21 @@ mod tests {
             &[],
         )
         .unwrap()
+    }
+    #[test]
+    fn helper_can_only_create_todo_or_waiting_tasks() {
+        for status in ["todo", "waiting", "done", "review", "", "unknown"] {
+            let mut v = fixture();
+            v["todo"][0]["status"] = serde_json::json!(status);
+            assert_eq!(
+                check(&v).todo[0].status,
+                if status == "waiting" {
+                    "waiting"
+                } else {
+                    "todo"
+                }
+            );
+        }
     }
     #[test]
     fn valid_fenced_output_is_backward_compatible() {
