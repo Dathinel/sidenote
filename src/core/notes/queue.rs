@@ -11,7 +11,6 @@ use std::{
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::Duration,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -246,19 +245,6 @@ fn process(
             "existing notes preserved",
         );
     }
-    let mut transcript = if job.request == Some(Request::RedoTasks) {
-        let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
-        if existing.trim().is_empty() {
-            transcript::read(&folder)?
-        } else {
-            existing
-        }
-    } else {
-        transcript::write(&folder)?
-    };
-    if transcript.is_empty() {
-        return write(root, id, job, JobState::Empty, "empty transcript");
-    }
     let started = m["created_at_ms"]
         .as_i64()
         .or_else(|| id.split('-').next()?.parse().ok());
@@ -278,6 +264,19 @@ fn process(
             state,
             "notes need setup or an explicit click",
         );
+    }
+    let mut transcript = if job.request == Some(Request::RedoTasks) {
+        let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
+        if existing.trim().is_empty() {
+            transcript::read(&folder)?
+        } else {
+            existing
+        }
+    } else {
+        transcript::write(&folder)?
+    };
+    if transcript.is_empty() {
+        return write(root, id, job, JobState::Empty, "empty transcript");
     }
     let minutes = duration
         .map(|d| (d / 60_000.0).ceil() as u64)

@@ -129,7 +129,7 @@ fn unoffered_saved_helpers_never_run_and_have_a_fixed_reason() {
 }
 
 #[test]
-fn no_helper_or_no_consent_writes_transcript_without_any_call() {
+fn no_helper_or_no_consent_never_writes_meeting_files_or_calls_helper() {
     for s in [
         NotesSettings::default(),
         NotesSettings {
@@ -144,12 +144,27 @@ fn no_helper_or_no_consent_writes_transcript_without_any_call() {
         drain(&root.0, &s, &mut fake);
         assert_eq!(state(&root.0), JobState::NoHelper);
         assert!(fake.calls.is_empty());
-        assert!(
-            fs::read_to_string(folder.join("english-transcript.md"))
-                .unwrap()
-                .contains(PRIVATE)
-        );
+        assert!(!folder.join("english-transcript.md").exists());
+        assert!(!folder.join("english-summary.json").exists());
     }
+}
+
+#[test]
+fn existing_script_transcript_is_preserved_and_used() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let original = "[00:00:01.000] You (English): Script transcript.\n";
+    fs::write(folder.join("english-transcript.md"), original).unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fs::read_to_string(folder.join("english-transcript.md")).unwrap(),
+        original
+    );
+    assert!(fake.calls[0].0.contains("Script transcript."));
+    assert!(!fake.calls[0].0.contains(PRIVATE));
 }
 #[test]
 fn old_meeting_and_auto_off_need_click() {
@@ -170,6 +185,14 @@ fn old_meeting_and_auto_off_need_click() {
         drain(&root.0, &s, &mut fake);
         assert_eq!(state(&root.0), JobState::NeedsClick);
         assert!(fake.calls.is_empty());
+        assert!(
+            !root
+                .0
+                .join("meetings")
+                .join(ID)
+                .join("english-transcript.md")
+                .exists()
+        );
     }
 }
 #[test]
