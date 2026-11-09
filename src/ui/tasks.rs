@@ -1478,20 +1478,24 @@ fn owner_name(t: &TaskItem) -> Option<(String, bool)> {
 }
 
 fn avatar(name: &str, me: bool, size: f32, p: Palette) -> El {
-    let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
+    let initial: String = if me { "Me".into() } else { name.chars().take(1).flat_map(char::to_uppercase).collect() };
     let (fill, ink) = if me {
         (p.accent, p.card)
     } else {
-        (p.line, p.soft)
+        (p.card, p.soft)
     };
     col()
-        .size(size, size)
+        .w(if me { size + 12.0 } else { size })
+        .h(size)
         .radius(size / 2.0)
         .center()
         .fill(fill)
+        .border(1.0, if me { p.accent } else { p.faint })
+        .label(name)
+        .help(name)
         .child(
             text(initial)
-                .font(TextStyle::new(size * 0.55, 700.0).lh(size * 0.7))
+                .font(TextStyle::new(12.0, 600.0).lh(size))
                 .color(ink),
         )
 }
@@ -1586,12 +1590,12 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .child(title)
             .children(
                 (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none())
-                    .then(|| roles::META.wrap(t.status_label(), p.accent)),
+                    .then(|| roles::META.wrap(t.status_label(), p.soft).px(6.0).radius(4.0).fill(p.chip).self_start()),
             )
             .children(
                 t.waiting_label
                     .as_ref()
-                    .map(|label| roles::META.wrap(format!("Waiting on {label}"), p.soft)),
+                    .map(|label| roles::META.wrap(format!("Waiting on: {label}"), p.soft)),
             )
             .children((!t.subtasks.is_empty()).then(|| roles::META.wrap(t.progress(), p.soft))),
     )
@@ -1607,8 +1611,10 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 .w(lay.project_w)
                 .items_center()
                 .gap(6.0)
+                .help(&t.project)
+                .label(format!("Project: {}", t.project))
                 .child(project_dot(&t.project, p))
-                .child(roles::META.line(&t.project, p.faint)),
+                .children((lay.project_w > 30.0).then(|| roles::META.line(&t.project, p.faint))),
         );
     }
     props = props
@@ -1619,7 +1625,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 .items_center()
                 .child(due_chip(t, tasks.today, p).unwrap_or_else(el)),
         )
-        .child(row().w(22.0).center().child(match owner_name(t) {
+        .child(row().w(34.0).center().child(match owner_name(t) {
             Some((name, mine)) => avatar(&name, mine, 20.0, p),
             None => el(),
         }));
@@ -2846,9 +2852,12 @@ fn list_column(
     };
     // Rows give the title what is left after the properties. The project column is narrower
     // beside the panel and gone when grouping by project, where the heading says it.
+    let several_projects = t.items.first().is_some_and(|first| t.items.iter().any(|item| item.project != first.project));
     let project_w =
-        if !s.config.features.projects || t.grouping == TaskGrouping::Project || list_w < 620.0 {
+        if !s.config.features.projects || !several_projects || t.grouping == TaskGrouping::Project || list_w < 620.0 {
             0.0
+        } else if t.grouping == TaskGrouping::Status {
+            14.0
         } else if list_w < 700.0 {
             104.0
         } else {
@@ -2892,7 +2901,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     let mut out = col().w_full().gap(10.0);
     out = out.child(roles::META.wrap(format!("Team: {}", t.team), p.soft));
     if let Some(wait) = &t.waiting_label {
-        out = out.child(roles::SMALL.wrap(format!("Waiting on {wait}"), p.soft));
+        out = out.child(roles::SMALL.wrap(format!("Waiting on: {wait}"), p.soft));
     }
     out = out.child(roles::GROUP.wrap(if t.done { "Status: Done" } else { "Status" }, p.ink));
     let mut choices = row().w_full().gap(6.0).flex_wrap();
