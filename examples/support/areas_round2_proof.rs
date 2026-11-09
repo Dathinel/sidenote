@@ -15,6 +15,7 @@ pub const CASES: &[&str] = &[
     "r2-resolver",
     "r2-memory-export-retained-later",
     "r2-store-load",
+    "r2-legacy-source-quarantine",
     "r2-backup-retention",
     "r2-large-undo",
 ];
@@ -913,6 +914,64 @@ pub fn run(mode: &str, store: &TaskStore) {
             fs::write(dir.join("huge.json"), vec![b' '; 4 * 1024 * 1024 + 1]).unwrap();
             assert!(store.load_projects().is_ok());
             assert!(store.unreadable_items().unwrap() >= 2);
+        }
+        "r2-legacy-source-quarantine" => {
+            let copy = TaskStore::new(root.join("legacy-quarantine-copy"));
+            let duplicate = copy
+                .root
+                .join("task-overrides.sync-conflict-a-duplicate.json");
+            let huge = copy.root.join("task-overrides.sync-conflict-b-huge.json");
+            let good = copy.root.join("task-overrides.sync-conflict-z-good.json");
+            write(
+                &copy.root.join("task-overrides.json"),
+                &json!({"manual":[{"id":"base","task":"Base task","project":SOURCE,"added":"2026-11-09"}]}),
+            );
+            write(
+                &duplicate,
+                &json!({"manual":[{"id":"duplicate","task":"First","added":"2026-11-09"},{"id":"duplicate","task":"Second","added":"2026-11-09"}]}),
+            );
+            write(
+                &huge,
+                &json!({"manual":[{"id":"huge","task":"x".repeat(4 * 1024 * 1024),"added":"2026-11-09"}]}),
+            );
+            write(
+                &good,
+                &json!({"manual":[{"id":"good","task":"Readable peer task","added":"2026-11-09"}]}),
+            );
+            let sources = [
+                duplicate.clone(),
+                huge.clone(),
+                good.clone(),
+                copy.root.join("task-overrides.json"),
+            ]
+            .map(|p| {
+                let bytes = fs::read(&p).unwrap();
+                (p, bytes)
+            });
+            assert!(sources[1].1.len() > 4 * 1024 * 1024 && sources[1].1.len() < 16 * 1024 * 1024);
+            for _ in 0..2 {
+                let loaded = copy.load_overrides().unwrap();
+                assert_eq!(
+                    loaded
+                        .manual
+                        .iter()
+                        .map(|t| t.id.as_str())
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    std::collections::BTreeSet::from(["base", "good"])
+                );
+                assert_eq!(
+                    copy.unreadable_items().unwrap(),
+                    2,
+                    "Each bad source is counted once and later good sources still load"
+                );
+                for (path, bytes) in &sources {
+                    assert_eq!(
+                        fs::read(path).unwrap(),
+                        *bytes,
+                        "Quarantine retains the exact original bytes"
+                    );
+                }
+            }
         }
         "r2-large-undo" => {
             store

@@ -34,6 +34,15 @@ struct Journal {
     checksum: String,
 }
 impl Journal {
+    fn bytes(&self) -> io::Result<Vec<u8>> {
+        let bytes = serde_json::to_vec(self)?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(invalid(
+                "This change exceeds the 4 MB journal limit. Save smaller groups.",
+            ));
+        }
+        Ok(bytes)
+    }
     fn checksum(&self) -> io::Result<String> {
         Ok(hash(&serde_json::to_vec(&(
             self.version,
@@ -284,12 +293,7 @@ impl Session {
             .join(&self.own)
             .join(hash(self.store.as_bytes()))
             .join(format!("{}.json", j.id));
-        let bytes = serde_json::to_vec(&j)?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err(invalid(
-                "This change exceeds the 4 MB journal limit. Save smaller groups.",
-            ));
-        }
+        let bytes = j.bytes()?;
         store_io::publish(&path, &bytes)?;
         self.view.merge(&j);
         Ok(())
@@ -320,29 +324,31 @@ impl Session {
             {
                 continue;
             }
-            let value = if self.store == "memory/legacy.json" {
-                let text = std::str::from_utf8(&bytes)
-                    .map_err(|_| invalid("Legacy memory is not UTF-8"))?;
-                json!({"documents": { hash(text.as_bytes()): text }})
-            } else {
-                match parse(&bytes).and_then(|value| {
+            let values = (|| {
+                let value = if self.store == "memory/legacy.json" {
+                    let text = std::str::from_utf8(&bytes)
+                        .map_err(|_| invalid("Legacy memory is not UTF-8"))?;
+                    json!({"documents": { hash(text.as_bytes()): text }})
+                } else {
+                    let value = parse(&bytes)?;
                     validate_legacy(&self.store, &value)?;
-                    Ok(value)
-                }) {
-                    Ok(value) => value,
-                    Err(_) => {
-                        self.view
-                            .warnings
-                            .push("Could not read a legacy state file; it was retained".into());
-                        continue;
-                    }
+                    value
+                };
+                legacy_items(
+                    &self.store,
+                    value,
+                    &format!("{}:{}", self.own, relative.to_string_lossy()),
+                )
+            })();
+            let values = match values {
+                Ok(values) => values,
+                Err(_) => {
+                    self.view
+                        .warnings
+                        .push("Could not read a legacy state file; it was retained".into());
+                    continue;
                 }
             };
-            let values = legacy_items(
-                &self.store,
-                value,
-                &format!("{}:{}", self.own, relative.to_string_lossy()),
-            )?;
             // Legacy snapshots seed the same registers in both read and migration modes.
             let changes = values
                 .into_iter()
@@ -352,17 +358,25 @@ impl Session {
                     value: Some(value),
                 })
                 .collect();
+            let mut journal = Journal {
+                version: 2,
+                device: self.own.clone(),
+                id: source[..32].into(),
+                store: self.store.clone(),
+                checksum: String::new(),
+                sources: BTreeSet::from([source.clone()]),
+                changes,
+            };
+            journal.checksum = journal.checksum()?;
+            // Check the exact publication size before backup; generated IDs have this same length.
+            if journal.bytes().is_err() {
+                self.view.warnings.push("Could not import a legacy state file within the journal limit; it was retained".into());
+                continue;
+            }
             if self.read_only {
                 // Apply exactly the same seed registers in memory without migration or backups.
-                self.view.merge(&Journal {
-                    version: 2,
-                    device: self.own.clone(),
-                    id: source[..32].into(),
-                    store: self.store.clone(),
-                    checksum: String::new(),
-                    sources: BTreeSet::new(),
-                    changes,
-                });
+                journal.sources.clear();
+                self.view.merge(&journal);
                 continue;
             }
             let backup = self
@@ -383,7 +397,7 @@ impl Session {
             if hash(&verified) != hash(&bytes) {
                 return Err(invalid("Migration backup verification failed"));
             }
-            self.publish(changes, BTreeSet::from([source]))?;
+            self.publish(journal.changes, journal.sources)?;
         }
         Ok(())
     }
