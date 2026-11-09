@@ -188,6 +188,13 @@ pub fn meeting(s: &mut State, name: &str) {
     if !m.has_summary() {
         m.summary = Default::default();
     }
+    if name == "empty" {
+        m.lines.clear();
+        m.transcript_raw.clear();
+    }
+    if name == "too-long" {
+        m.minutes = Some(360);
+    }
     m.notes = "Share the revised plan on Friday.".into();
     s.selected = Some(m.id.clone());
     s.ai_notes.jobs.insert(
