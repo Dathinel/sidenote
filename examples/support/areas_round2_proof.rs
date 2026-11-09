@@ -67,10 +67,17 @@ fn retain_record(store: &TaskStore, target: &Target) {
     );
 }
 fn memory_changes(store: &TaskStore, changes: Value) {
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Change {
+        key: Vec<String>,
+        at: u64,
+        value: Option<Value>,
+    }
+    let changes: Vec<Change> = serde_json::from_value(changes).unwrap();
     let revision = core::areas::new_assignment_revision(&store.root).unwrap();
     let (device, id) = revision.split_once('-').unwrap();
     let checksum = blake3::hash(
-        &serde_json::to_vec(&json!([2, device, id, "memory/records.json", changes, []])).unwrap(),
+        &serde_json::to_vec(&(2, device, id, "memory/records.json", &changes, Vec::<String>::new())).unwrap(),
     )
     .to_hex()
     .to_string();
