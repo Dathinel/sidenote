@@ -17,6 +17,9 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct AreaUi {
+    pub open_task_after_refresh: Option<(String, usize)>,
+    pub meeting_projects: BTreeMap<String, super::project::MeetingProject>,
+    pub project_labels: BTreeMap<String, String>,
     pub catalog: Catalog,
     pub activity: Activity,
     pub receipts: BTreeMap<String, Receipt>,
@@ -31,15 +34,23 @@ pub struct AreaUi {
 }
 pub enum Completion {
     Refreshed(Box<Snapshot>),
-    Preview(Preview),
+    Preview(Box<(Preview, core::area_ops::Inventory)>),
+    Inventory(core::area_ops::Inventory),
     Changed(Projects),
 }
 pub struct Snapshot {
+    all_tasks: Vec<core::TaskItem>,
+    task_items: Vec<core::TaskItem>,
+    task_names: Vec<String>,
+    task_counts: core::TaskCounts,
+    meeting_projects: BTreeMap<String, super::project::MeetingProject>,
+    project_labels: BTreeMap<String, String>,
     catalog: Catalog,
     activity: Activity,
     receipts: BTreeMap<String, Receipt>,
 }
 enum Job {
+    Inventory,
     Preview(Action),
     Apply(Preview),
     Undo(String),
@@ -52,11 +63,14 @@ impl State {
         self.areas.refresh_generation += 1;
         self.areas.refresh_pending = true;
         let generation = self.areas.refresh_generation;
-        let (projects, meetings, pipeline, tasks) = (
+        let (projects, meetings, pipeline, overrides, checked, cutoff, show_cleared) = (
             self.tasks.projects.clone(),
             self.meetings.clone(),
             self.tasks.pipeline.clone(),
-            self.tasks.all.clone(),
+            self.tasks.overrides.clone(),
+            self.tasks.checked.clone(),
+            self.tasks.cutoff,
+            self.tasks.show_cleared,
         );
         let running: std::collections::BTreeSet<_> = self
             .asks
@@ -76,17 +90,54 @@ impl State {
                     let mut running = running;
                     core::area_ops::proof_boundary(&store.root, "activity-worker")?;
                     running.extend(core::areas::running_meetings(&store.root)?);
+                    let catalog = projects.area_catalog()?;
+                    let tasks =
+                        core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
+                    let kept = core::without_cleared(tasks.clone(), cutoff);
+                    let task_counts = core::count_tasks(&kept);
+                    let task_names = core::project_names(&projects, &tasks);
+                    let project_labels = catalog
+                        .projects
+                        .values()
+                        .map(|p| {
+                            (
+                                p.name.clone(),
+                                p.converted_to
+                                    .as_ref()
+                                    .or(p.area_id.as_ref())
+                                    .map(|id| {
+                                        catalog.label(&core::areas::Target {
+                                            area_id: id.clone(),
+                                            project_id: p
+                                                .converted_to
+                                                .is_none()
+                                                .then(|| p.id.clone()),
+                                        })
+                                    })
+                                    .unwrap_or_else(|| p.name.clone()),
+                            )
+                        })
+                        .collect();
+                    let activity = core::areas::activity(
+                        &projects,
+                        &meetings,
+                        &pipeline,
+                        &tasks,
+                        &running,
+                        chrono::Utc::now(),
+                    )?;
+                    let meeting_projects =
+                        super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
                     Ok(Completion::Refreshed(Box::new(Snapshot {
-                        catalog: projects.area_catalog()?,
-                        activity: core::areas::activity(
-                            &projects,
-                            &meetings,
-                            &pipeline,
-                            &tasks,
-                            &running,
-                            chrono::Utc::now(),
-                        )?,
+                        meeting_projects,
+                        project_labels,
+                        catalog,
+                        activity,
                         receipts: projects.area_receipts()?,
+                        task_items: if show_cleared { tasks.clone() } else { kept },
+                        all_tasks: tasks,
+                        task_counts,
+                        task_names,
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
@@ -113,6 +164,14 @@ impl State {
         self.areas.editor = Some(Editor::new(action));
         self.areas.preview = None;
         self.areas.error = None;
+        if self
+            .areas
+            .editor
+            .as_ref()
+            .is_some_and(|e| matches!(e.action, Action::Migrate { .. }))
+        {
+            self.launch_area(Job::Inventory, "Loading project counts...");
+        }
     }
     pub fn assign_area(&mut self, key: String, area: String) {
         self.set_filter(Filter::Areas);
@@ -124,6 +183,18 @@ impl State {
         }
     }
     pub fn confirm_area(&mut self) {
+        if let Some(preview) = &self.areas.preview
+            && self
+                .areas
+                .editor
+                .as_ref()
+                .is_none_or(|e| e.action() != preview.action)
+        {
+            self.areas.preview = None;
+            self.areas.error =
+                Some("The mapping changed. Review it again before confirming.".into());
+            return;
+        }
         if let Some(preview) = self.areas.preview.clone() {
             self.launch_area(Job::Apply(preview), "Applying change...");
         }
@@ -136,6 +207,9 @@ impl State {
             return;
         }
         self.areas.pending = Some(label);
+        if let Some(e) = &mut self.areas.editor {
+            e.picker = None;
+        }
         self.areas.error = None;
         self.areas.generation += 1;
         let generation = self.areas.generation;
@@ -150,7 +224,12 @@ impl State {
                 let result = std::panic::catch_unwind(|| -> std::io::Result<Completion> {
                     core::area_ops::proof_boundary(&store.root, "operation-worker")?;
                     match job {
-                        Job::Preview(action) => store.preview_area(action).map(Completion::Preview),
+                        Job::Inventory => store.area_references().map(Completion::Inventory),
+                        Job::Preview(action) => store.preview_area(action).map(|preview| {
+                            let inventory =
+                                core::area_ops::Inventory::new(preview.references.clone());
+                            Completion::Preview(Box::new((preview, inventory)))
+                        }),
                         Job::Apply(preview) => store.apply_area(&preview).map(Completion::Changed),
                         Job::Undo(id) => store.undo_area(&id).map(Completion::Changed),
                     }
@@ -191,15 +270,46 @@ impl State {
         }
         match result {
             Ok(Completion::Refreshed(snapshot)) => {
+                self.tasks.today = chrono::Local::now().date_naive();
+                self.tasks.all = snapshot.all_tasks;
+                self.tasks.items = snapshot.task_items;
+                self.tasks.names = snapshot.task_names;
+                self.tasks.counts = snapshot.task_counts;
+                self.areas.meeting_projects = snapshot.meeting_projects;
+                self.areas.project_labels = snapshot.project_labels;
                 self.areas.catalog = snapshot.catalog;
                 self.areas.activity = snapshot.activity;
                 self.areas.receipts = snapshot.receipts;
+                self.rebuild_nav();
+                self.refresh_list();
+                if let Some((id, index)) = self.areas.open_task_after_refresh.take() {
+                    self.open_task(&id, index);
+                }
             }
-            Ok(Completion::Preview(preview)) => {
+            Ok(Completion::Preview(data)) => {
+                let (preview, inventory) = *data;
+                if self
+                    .areas
+                    .editor
+                    .as_ref()
+                    .is_none_or(|e| e.action() != preview.action)
+                {
+                    self.areas.error =
+                        Some("The mapping changed while reviewing. Review it again.".into());
+                    return;
+                }
                 if let Some(e) = &mut self.areas.editor {
-                    e.references = preview.references.clone();
+                    if !matches!(e.action, Action::Migrate { .. }) {
+                        e.references = preview.references.clone();
+                    }
+                    e.set_inventory(inventory);
                 }
                 self.areas.preview = Some(preview);
+            }
+            Ok(Completion::Inventory(inventory)) => {
+                if let Some(e) = &mut self.areas.editor {
+                    e.set_inventory(inventory);
+                }
             }
             Ok(Completion::Changed(projects)) => {
                 self.tasks.projects = projects;
@@ -235,6 +345,9 @@ pub fn button(title: impl Into<String>, key: &str, p: Palette) -> El {
 }
 pub fn notices(s: &State, p: Palette) -> El {
     let mut content = col().w_full().gap(8.0);
+    for problem in &s.areas.catalog.problems {
+        content = content.child(roles::SMALL.wrap(problem, p.warn).role("status"));
+    }
     if let Some(pending) = s.areas.pending {
         content = content.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
@@ -260,7 +373,7 @@ pub fn project_tools(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Opt
     {
         let id = area.id.clone();
         content = content.child(
-            pressable(roles::CONTROL.wrap(format!("{} › {}", area.name, project.name), p.accent))
+            pressable(roles::CONTROL.wrap(format!("{} â€º {}", area.name, project.name), p.accent))
                 .on_press(move |s: &mut State| s.set_filter(Filter::Area(id.clone()))),
         );
     } else {
@@ -367,6 +480,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         ));
     if let Some(area) = area {
         let (id, name) = (area.id.clone(), area.name.clone());
+        if area.status == core::areas::Status::Retired {
+            let name = area.name.clone();
+            doc = doc.child(
+                button("Restore area", "area-restore", p)
+                    .self_start()
+                    .disabled(s.areas.pending.is_some())
+                    .on_press(move |s: &mut State| {
+                        s.start_area(Action::Create { name: name.clone() })
+                    }),
+            );
+        }
         doc = doc.child(
             row()
                 .wrap()
@@ -485,8 +609,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                             .child(roles::TITLE.wrap(&area.name, p.ink))
                             .child(roles::META.wrap(
                                 format!(
-                                    "{count} projects · {}",
-                                    if s.areas.activity.areas.contains(&area.id) {
+                                    "{count} projects Â· {}",
+                                    if area.status == core::areas::Status::Retired {
+                                        "Retired"
+                                    } else if s.areas.activity.areas.contains(&area.id) {
                                         "Active"
                                     } else {
                                         "Inactive"

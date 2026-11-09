@@ -91,6 +91,8 @@ impl TaskStore {
         if from == into || !names.contains(&from) || !names.contains(&into) {
             return Err(invalid("Choose two different existing projects"));
         }
+        let mut planned = p.clone();
+        planned.prepare_area_merge(&from, &into)?;
         let meetings = scan()?;
         let pipeline = super::load_pipeline(&meetings);
         // A malformed tag file must never be mistaken for an empty inventory.

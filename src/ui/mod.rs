@@ -1132,7 +1132,12 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
                 changed = true;
             }
             // A headless render has no event loop to wake, so it waits for a running Ask.
-            Err(_) if headless && s.asks.values().any(|r| r.live) => {
+            Err(_)
+                if headless
+                    && (s.asks.values().any(|r| r.live)
+                        || s.areas.refresh_pending
+                        || s.areas.pending.is_some()) =>
+            {
                 if let Ok(event) = s.events_rx.recv_timeout(Duration::from_secs(600)) {
                     s.apply_event(event);
                     changed = true;

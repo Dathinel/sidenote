@@ -551,7 +551,12 @@ impl TaskStore {
             .collect();
         let c = p.area_catalog()?;
         let affected = |r: &Reference| match &action {
-            Action::Create { .. } => false,
+            Action::Create { name } => c.areas.values().any(|a| {
+                a.status == Status::Retired
+                    && project_merge::normalized_name(&a.name)
+                        == project_merge::normalized_name(name)
+                    && r.area_id.as_ref() == Some(&a.id)
+            }),
             Action::Rename { area_id, .. } => r.area_id.as_ref() == Some(area_id),
             Action::Move { project_id, .. } | Action::Convert { project_id, .. } => {
                 r.project_id.as_ref() == Some(project_id)
@@ -739,8 +744,9 @@ impl TaskStore {
                 }
                 verify_backup(&backup, &snapshot)?;
                 let changed_projects:std::collections::BTreeSet<_>=receipt.after.keys().filter_map(|k|k.strip_prefix("area-project:")).collect();
-                if self.area_inventory(p)?.1.iter().any(|r|!receipt.baseline.contains_key(&r.key)&&r.project_id.as_deref().is_some_and(|id|changed_projects.contains(id))){
-                    return Err(invalid("New work now depends on this project. Undo was not applied. Reassign that work first."));
+                let retiring_areas:std::collections::BTreeSet<_>=receipt.after.keys().filter(|key|key.starts_with("area:")&&!snapshot.projects.other.contains_key(*key)).filter_map(|key|key.strip_prefix("area:")).collect();
+                if self.area_inventory(p)?.1.iter().any(|r|!receipt.baseline.contains_key(&r.key)&&(r.project_id.as_deref().is_some_and(|id|changed_projects.contains(id))||r.area_id.as_deref().is_some_and(|id|retiring_areas.contains(id)))){
+                    return Err(invalid("New work now depends on this area or project. Undo was not applied. Reassign that work first."));
                 }
                 let raw = self.undo_state(p)?.1;
                 for (key, expected) in &receipt.baseline {

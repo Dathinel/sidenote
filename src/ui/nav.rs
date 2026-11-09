@@ -74,7 +74,7 @@ impl State {
     }
 
     pub fn rebuild_nav(&mut self) {
-        let catalog = self.tasks.projects.area_catalog().ok();
+        let catalog = &self.areas.catalog;
         let mut items: HashMap<&str, Vec<&core::TaskItem>> = HashMap::new();
         for t in self.tasks.all.iter().filter(|t| !t.manual) {
             items.entry(t.meeting_id.as_str()).or_default().push(t);
@@ -110,16 +110,11 @@ impl State {
                 })
                 .filter(|n| n != core::UNSORTED)
                 .and_then(|name| {
-                    let Some(catalog) = &catalog else {
-                        return Some(name);
-                    };
-                    let baseline = serde_json::json!([
-                        self.tasks.projects.meeting_projects.get(&m.id),
-                        self.tasks
-                            .pipeline
-                            .get(&m.id)
-                            .and_then(|f| f.meeting_project.as_ref())
-                    ]);
+                    let baseline = core::areas::meeting_baseline(
+                        &self.tasks.projects,
+                        &self.tasks.pipeline,
+                        &m.id,
+                    );
                     match catalog.target(
                         &self.tasks.projects,
                         &core::areas::meeting_key(&m.id),
@@ -786,7 +781,9 @@ fn projects(s: &State, p: Palette) -> El {
         .catalog
         .areas
         .values()
-        .filter(|a| s.areas.activity.areas.contains(&a.id))
+        .filter(|a| {
+            a.status != core::areas::Status::Retired && s.areas.activity.areas.contains(&a.id)
+        })
         .collect();
     areas.sort_by_key(|a| a.name.to_lowercase());
     if areas.is_empty() {

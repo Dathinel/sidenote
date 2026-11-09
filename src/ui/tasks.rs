@@ -283,6 +283,10 @@ fn due_text(d: NaiveDate) -> String {
 
 impl State {
     pub fn rebuild_tasks(&mut self) {
+        if self.config.features.projects {
+            self.refresh_areas();
+            return;
+        }
         self.tasks.rebuild(&self.meetings);
         // The sidebar's project counts and the home filter read the same tasks.
         self.rebuild_nav();
@@ -422,7 +426,20 @@ impl State {
 
     pub fn set_task_project(&mut self, id: &str, index: usize, name: &str) {
         if let Some(name) = self.known_project(name) {
-            self.apply_override(id, index, |o| o.project = Some(name));
+            let revision = match core::areas::new_assignment_revision(&self.tasks.store.root) {
+                Ok(revision) => revision,
+                Err(e) => {
+                    self.tasks.notice = Some(e.to_string());
+                    return;
+                }
+            };
+            self.apply_override(id, index, |o| {
+                o.project = Some(name.clone());
+                o.assignment = Some(core::areas::ProjectChoice {
+                    project: name,
+                    revision,
+                });
+            });
         }
     }
 
@@ -542,6 +559,9 @@ impl State {
     pub fn open_task(&mut self, id: &str, index: usize) {
         self.flush_title();
         let Some(title) = self.tasks.item(id, index).map(|t| t.task.clone()) else {
+            if self.areas.refresh_pending {
+                self.areas.open_task_after_refresh = Some((id.into(), index));
+            }
             return;
         };
         let t = &mut self.tasks;
@@ -2050,7 +2070,13 @@ fn project_control(
         .and_then(|id| s.areas.catalog.areas.get(id))
         .filter(|_| current == UNSORTED)
         .map(|area| area.name.clone())
-        .unwrap_or_else(|| s.tasks.projects.project_area_label(&current));
+        .unwrap_or_else(|| {
+            s.areas
+                .project_labels
+                .get(&current)
+                .cloned()
+                .unwrap_or_else(|| current.clone())
+        });
     let trigger = value_button(
         row()
             .gap(8.0)

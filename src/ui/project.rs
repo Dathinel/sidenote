@@ -7,11 +7,72 @@ use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{self, TaskOverride, UNSORTED};
 
 /// What the chip shows.
+#[derive(Clone)]
 pub struct MeetingProject {
     /// None when every to-do is unsorted.
     pub name: Option<String>,
     /// Every to-do in that project was placed there by the owner, not only by the pipeline.
     pub confirmed: bool,
+}
+pub fn cache(
+    projects: &core::Projects,
+    pipeline: &core::Pipeline,
+    overrides: &core::Overrides,
+    tasks: &[core::TaskItem],
+    meetings: &[core::Meeting],
+) -> std::collections::BTreeMap<String, MeetingProject> {
+    let mut grouped: std::collections::HashMap<&str, Vec<&core::TaskItem>> = Default::default();
+    for task in tasks.iter().filter(|t| !t.manual) {
+        grouped.entry(&task.meeting_id).or_default().push(task);
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for meeting in meetings {
+        let id = &meeting.id;
+        let value = if let Some(name) = projects.meeting_projects.get(id) {
+            MeetingProject {
+                name: (name != UNSORTED).then(|| projects.resolve(name)),
+                confirmed: true,
+            }
+        } else {
+            let items = grouped.get(id.as_str());
+            let mut candidates: Vec<_> =
+                items.into_iter().flatten().map(|t| (**t).clone()).collect();
+            let file = pipeline.get(id);
+            let mut confirmed = std::collections::BTreeMap::new();
+            for task in &mut candidates {
+                let edit = overrides
+                    .get(id, task.index)
+                    .filter(|o| o.task.as_deref().is_none_or(|text| text == task.task));
+                let overridden =
+                    edit.is_some_and(|o| o.assignment.is_some() || o.project.is_some());
+                if !overridden
+                    && let Some(name) = file.and_then(|f| {
+                        f.tasks
+                            .iter()
+                            .find(|tag| tag.i == task.index)
+                            .map(|tag| &tag.project)
+                            .or(f.meeting_project.as_ref())
+                    })
+                {
+                    task.project = projects.resolve(name);
+                }
+                *confirmed.entry(task.project.clone()).or_insert(true) &= overridden;
+            }
+            let name = core::dominant_project(candidates.iter()).or_else(|| {
+                file.and_then(|f| f.meeting_project.as_deref())
+                    .map(|n| projects.resolve(n))
+                    .filter(|n| !n.is_empty() && n != UNSORTED)
+            });
+            MeetingProject {
+                confirmed: name
+                    .as_ref()
+                    .is_some_and(|n| confirmed.get(n) == Some(&true)),
+                name,
+            }
+        };
+        out.insert(id.clone(), value);
+    }
+    out
 }
 
 impl State {
@@ -31,50 +92,7 @@ impl State {
         if !self.config.features.projects {
             return None;
         }
-        if let Some(name) = self.tasks.projects.meeting_projects.get(id) {
-            return Some(MeetingProject {
-                name: (name != UNSORTED).then(|| self.tasks.projects.resolve(name)),
-                confirmed: true,
-            });
-        }
-        let items: Vec<_> = self
-            .tasks
-            .all
-            .iter()
-            .filter(|t| t.meeting_id == id)
-            .collect();
-        if items.is_empty() {
-            let name = self
-                .tasks
-                .pipeline
-                .get(id)
-                .and_then(|f| f.meeting_project.as_ref())
-                .map(|n| self.tasks.projects.resolve(n))
-                .filter(|n| !n.is_empty() && n != UNSORTED);
-            return Some(MeetingProject {
-                name,
-                confirmed: false,
-            });
-        }
-        let mut candidates: Vec<_> = items.iter().map(|t| (*t).clone()).collect();
-        for t in &mut candidates {
-            let overridden = self.tasks.overrides.get(id, t.index).is_some_and(|o| {
-                o.project.is_some() && o.task.as_deref().is_none_or(|text| text == t.task)
-            });
-            if !overridden && let Some(name) = self.suggested_task_project(id, t.index) {
-                t.project = name;
-            }
-        }
-        let name = core::dominant_project(candidates.iter());
-        let confirmed = name.as_ref().is_some_and(|n| {
-            candidates.iter().filter(|t| &t.project == n).all(|t| {
-                self.tasks
-                    .overrides
-                    .get(id, t.index)
-                    .is_some_and(|o| o.project.is_some() && o.task.as_deref() == Some(&t.task))
-            })
-        });
-        Some(MeetingProject { name, confirmed })
+        self.areas.meeting_projects.get(id).cloned()
     }
 
     /// Moves the to-dos that sit in the meeting's project (or every to-do, when none is
@@ -129,6 +147,13 @@ impl State {
                     *entry = TaskOverride::default();
                 }
                 entry.project = Some(name.clone());
+                entry.assignment = Some(core::areas::ProjectChoice {
+                    project: name.clone(),
+                    revision: format!(
+                        "meeting-choice-{}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                    ),
+                });
                 entry.task = Some(task.clone());
             }
         });
@@ -186,9 +211,13 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         mp.confirmed = true;
     }
     let display_name = target.map(|t| s.areas.catalog.label(t)).or_else(|| {
-        mp.name
-            .as_deref()
-            .map(|n| s.tasks.projects.project_area_label(n))
+        mp.name.as_deref().map(|n| {
+            s.areas
+                .project_labels
+                .get(n)
+                .cloned()
+                .unwrap_or_else(|| n.into())
+        })
     });
     let open = s.project_menu.as_deref() == Some(id);
     let chevron = rune::icon(
@@ -491,6 +520,7 @@ pub fn scene(s: &mut State, action: &str) {
         .load_overrides()
         .expect("render overrides readable");
     s.rebuild_tasks();
+    super::area_scene::wait(s);
     let project = s.meeting_project(&id).expect("render meeting has tasks");
     match action {
         "create" => {

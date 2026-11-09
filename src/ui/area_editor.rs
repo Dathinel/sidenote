@@ -11,15 +11,76 @@ pub struct RowInput {
     pub area: TextEdit,
     pub convert: bool,
     pub children: std::collections::BTreeMap<String, String>,
+    pub assignments: std::collections::BTreeMap<String, Option<String>>,
+    pub expanded: bool,
+    pub search: TextEdit,
+    pub visible_items: Vec<usize>,
 }
 pub struct Editor {
     pub action: Action,
     pub name: TextEdit,
     pub rows: Vec<RowInput>,
     pub references: Vec<Reference>,
+    pub inventory: sidenote::core::area_ops::Inventory,
+    pub search: TextEdit,
+    pub visible_projects: Vec<usize>,
+    pub notice: Option<String>,
     pub picker: Option<String>,
 }
 impl Editor {
+    pub fn set_inventory(&mut self, inventory: sidenote::core::area_ops::Inventory) {
+        for row in &mut self.rows {
+            row.visible_items = inventory
+                .by_project
+                .get(&row.project_id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|i| {
+                    row.search.text.is_empty()
+                        || inventory.references[*i]
+                            .label
+                            .to_lowercase()
+                            .contains(&row.search.text.to_lowercase())
+                })
+                .collect();
+        }
+        self.inventory = inventory;
+    }
+    pub fn reconcile(&mut self) {
+        let targets: std::collections::BTreeMap<_, _> = self
+            .rows
+            .iter()
+            .filter(|r| !r.convert)
+            .map(|r| {
+                (
+                    r.project_id.clone(),
+                    sidenote::core::project_merge::normalized_name(&r.area.text),
+                )
+            })
+            .collect();
+        let mut cleared = 0;
+        for row in &mut self.rows {
+            let area = sidenote::core::project_merge::normalized_name(&row.area.text);
+            row.children.retain(|_, id| {
+                let keep = targets.get(id) == Some(&area);
+                cleared += usize::from(!keep);
+                keep
+            });
+            row.assignments.retain(|_, target| {
+                let keep = target
+                    .as_ref()
+                    .is_none_or(|id| targets.get(id) == Some(&area));
+                cleared += usize::from(!keep);
+                keep
+            });
+        }
+        if cleared > 0 {
+            self.notice = Some(format!(
+                "{cleared} item choices cleared because their project changed area or became an area."
+            ));
+        }
+    }
     pub fn new(action: Action) -> Self {
         let name = match &action {
             Action::Create { name } | Action::Rename { name, .. } => name.as_str(),
@@ -34,15 +95,24 @@ impl Editor {
                     area: TextEdit::new(&r.area_name),
                     convert: r.convert,
                     children: r.children.clone(),
+                    assignments: r.assignments.clone(),
+                    expanded: false,
+                    search: TextEdit::default(),
+                    visible_items: Vec::new(),
                 })
                 .collect(),
             _ => Vec::new(),
         };
+        let visible_projects = (0..rows.len()).collect();
         Self {
             name: TextEdit::new(name),
             action,
             rows,
             references: Vec::new(),
+            inventory: Default::default(),
+            search: TextEdit::default(),
+            visible_projects,
+            notice: None,
             picker: None,
         }
     }
@@ -73,6 +143,7 @@ impl Editor {
                         area_name: r.area.text.clone(),
                         convert: r.convert,
                         children: r.children.clone(),
+                        assignments: r.assignments.clone(),
                     })
                     .collect(),
             },
@@ -91,24 +162,25 @@ pub fn title(action: &Action) -> &'static str {
     }
 }
 pub fn migration(c: &Catalog) -> Action {
-    Action::Migrate {
-        rows: c
-            .projects
-            .values()
-            .filter(|p| p.converted_to.is_none())
-            .map(|p| MigrationRow {
-                project_id: p.id.clone(),
-                area_name: p
-                    .area_id
-                    .as_ref()
-                    .and_then(|id| c.areas.get(id))
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default(),
-                convert: false,
-                children: Default::default(),
-            })
-            .collect(),
-    }
+    let mut rows: Vec<_> = c
+        .projects
+        .values()
+        .filter(|p| p.converted_to.is_none())
+        .map(|p| MigrationRow {
+            project_id: p.id.clone(),
+            area_name: p
+                .area_id
+                .as_ref()
+                .and_then(|id| c.areas.get(id))
+                .map(|a| a.name.clone())
+                .unwrap_or_default(),
+            convert: false,
+            children: Default::default(),
+            assignments: Default::default(),
+        })
+        .collect();
+    rows.sort_by_key(|r| c.projects[&r.project_id].name.to_lowercase());
+    Action::Migrate { rows }
 }
 fn name_input(s: &State, k: &Kit, p: Palette) -> El {
     let editor = s.areas.editor.as_ref().unwrap();
@@ -267,6 +339,9 @@ fn mapping(
 }
 pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
     let e = s.areas.editor.as_ref()?;
+    if matches!(e.action, Action::Migrate { .. }) {
+        return None;
+    }
     let busy = s.areas.pending.is_some();
     let mut card = col()
         .w_full()

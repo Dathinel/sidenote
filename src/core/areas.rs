@@ -204,6 +204,9 @@ impl Projects {
     pub(super) fn prepare_area_merge(&mut self, from: &str, into: &str) -> io::Result<()> {
         let c = self.area_catalog()?;
         c.ensure_writable()?;
+        if c.areas.is_empty() && c.links.is_empty() {
+            return Ok(());
+        }
         let source = c
             .project(self, from)
             .ok_or_else(|| store_io::invalid("Source project is missing"))?;
@@ -420,6 +423,13 @@ impl Catalog {
         Ok(())
     }
     fn repair_missing(&mut self) {
+        for (id, project) in &mut self.projects {
+            if project.id != *id {
+                project.id = id.clone();
+                self.problems
+                    .push("A project identity needs review. Its work is still available.".into());
+            }
+        }
         let required: BTreeSet<_> = self
             .projects
             .values()
@@ -466,6 +476,15 @@ impl Catalog {
             {
                 self.problems.push("Retired area has linked work from another device. Restore the area or reassign that work.".into());
             }
+        }
+        if self.projects.values().any(|p| {
+            p.area_id.iter().chain(p.converted_to.iter()).any(|id| {
+                self.areas
+                    .get(id)
+                    .is_some_and(|a| a.status == Status::Retired)
+            })
+        }) {
+            self.problems.push("Retired area has linked work from another device. Restore the area or reassign that work.".into());
         }
         self.problems.sort();
         self.problems.dedup();
