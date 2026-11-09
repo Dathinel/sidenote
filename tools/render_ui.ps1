@@ -150,6 +150,23 @@ $shots = @(
     @('check-home-card-narrow', 'list',  '560x900',  $null,                @()),
     @('check-v1',       'check',         '1320x800', $null,                @()),
     @('check-v1-panel', 'check-panel',   '1320x800', $null,                @()),
+    # The Diary: invented days from prepare_check_fixture.py --diary (meetings 3 to 6 Nov, memory
+    # changes, three checks), today with two ticks, the newest check's findings, the finding
+    # panel, the day picker, an older day's full report, the sidebar and an empty diary. The
+    # tall shots show the whole feed in one picture.
+    @('diary',              'diary',         '1320x800',  $null, @()),
+    @('diary-tall',         'diary',         '1320x2400', $null, @()),
+    @('diary-panel',        'diary-panel',   '1320x800',  $null, @()),
+    @('diary-picker',       'diary-picker',  '1320x800',  $null, @()),
+    @('diary-older',        'diary-older',   '1320x800',  $null, @()),
+    @('diary-report',       'diary-report',  '1320x800',  $null, @()),
+    @('diary-sidebar',      'diary-sidebar', '1320x800',  $null, @()),
+    @('diary-sidebar-560',  'diary-sidebar', '560x900',   $null, @()),
+    @('diary-narrow',       'diary',         '560x900',   $null, @()),
+    @('diary-narrow-tall',  'diary',         '560x3200',  $null, @()),
+    @('diary-panel-narrow', 'diary-panel',   '560x900',   $null, @()),
+    @('diary-empty',        'diary',         '1320x800',  $null, @()),
+    @('diary-empty-narrow', 'diary',         '560x900',   $null, @()),
     # The Memory page: migrated records, the review list, a record panel and the migration banner.
     @('memory',         'memory',        '1320x800', $null,                @()),
     @('memory-panel',   'memory-panel',  '1320x800', $null,                @()),
@@ -230,6 +247,7 @@ $shots += ,@('home-ask-running-narrow', 'home-ask-running', '560x900', $null, @(
 # Which shots get a generated synthetic report, and with which options.
 $v2 = @('--v2', '--triage', '--gaps', '--actions')
 $mem = @('--v2', '--memory', '--proposals')
+$diary = @('--v2', '--triage', '--actions', '--memory', '--proposals', '--diary')
 $checkFixture = @{
     'screens-today' = $v2; 'screens-today-820' = $v2; 'screens-today-560' = $v2;
     'check' = $v2; 'check-panel' = $v2; 'check-applied' = $v2; 'check-snooze' = $v2; 'check-click' = $v2;
@@ -265,13 +283,14 @@ foreach ($theme in $Themes) {
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/config.json"
         if ($scene -eq 'ask') { Copy-Item "$root/tools/ui-fixtures/ask-answer.json" "$state/$meeting.json" }
         if ($scene -like 'sidebar-*') { $checkFixture[$name] = $mem }
+        if ($name -like 'diary*' -and $name -notlike 'diary-empty*') { $checkFixture[$name] = $diary }
         if ($checkFixture.ContainsKey($name)) { & python "$root/tools/prepare_check_fixture.py" $state @($checkFixture[$name]); if ($LASTEXITCODE -ne 0) { throw "No check fixture for $name" } }
         if ($scene -like 'tasks-cleared*') { Set-Content -Encoding utf8 "$state/tasks-settings.json" '{"cleared_before": "2026-10-31"}' }
         Copy-Item "$root/tools/ui-fixtures/hex.json" "$state/hex-fixture.json"
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
         $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
-        $fixtureMeetings = if ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
+        $fixtureMeetings = if ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/render.log"

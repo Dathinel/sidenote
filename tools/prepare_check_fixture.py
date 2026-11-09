@@ -1,5 +1,6 @@
 """Generate wholly synthetic Northwind check/memory state. Never read AppData or call agents."""
 import json
+import shutil
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -36,6 +37,20 @@ def main():
     flags = set(sys.argv[2:])
     if state == ROOT or ROOT in state.parents:
         raise SystemExit("Fixture output must be outside the source checkout")
+    # --diary: several invented days. The screens meetings (3 to 6 Nov) are copied next to the
+    # state, each with a tasks.json that gives the first task to "me", and the findings point
+    # at one of them so Apply has a real task.
+    diary = "--diary" in flags
+    meeting = "1793939400000-1" if diary else MEETING
+    folder = ROOT / ("tools/ui-fixtures/screens/meetings" if diary else "tools/ui-fixtures/meetings")
+    if diary:
+        target = state / "diary-meetings"
+        shutil.copytree(folder, target, dirs_exist_ok=True)
+        for one in target.iterdir():
+            todo = json.loads((one / "english-summary.json").read_text(encoding="utf-8"))["todo"]
+            tags = [{"i": i, "project": "Northwind Atlas", "new": False, "mine": i == 0} for i in range(len(todo))]
+            (one / "tasks.json").write_text(json.dumps({"meeting_project": "Northwind Atlas", "tasks": tags}, indent=2),
+                                            encoding="utf-8")
     today = date(2026, 11, 8)
     day = today.isoformat()
     previous = (today - timedelta(days=1)).isoformat()
@@ -46,10 +61,10 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    cite = {"type": "meeting", "reference": f"[[{MEETING}@14:22]]"}
+    cite = {"type": "meeting", "reference": f"[[{meeting}@00:05]]" if diary else f"[[{MEETING}@14:22]]"}
     kb = {"revision": "0" * 40, "captured_at": stamp,
           "path": str(state / "kb-snapshot" / "synthetic"), "stale": False}
-    summary = json.loads((ROOT / "tools/ui-fixtures/meetings" / MEETING / "english-summary.json").read_text())
+    summary = json.loads((folder / meeting / "english-summary.json").read_text())
     findings = []
     kinds = ["other", "project_mismatch", "task_without_owner", "overdue_or_stale", "missing_followup",
              "conflicting_decisions", "story_gap", "decision_not_in_kb", "duplicate_task", "other"]
@@ -60,17 +75,18 @@ def main():
     actions = [("set_project", "Northwind Atlas"), ("set_owner", "Morgan"),
                ("set_due", "2026-11-12"), ("mark_done", True)]
     for index, (kind, title) in enumerate(zip(kinds, titles)):
-        item = {"id": f"finding-synthetic-{index}", "kind": kind, "severity": "medium",
+        severity = ("high" if index in (1, 2) else "low" if index >= 8 else "medium") if diary else "medium"
+        item = {"id": f"finding-synthetic-{index}", "kind": kind, "severity": severity,
                 "title": title, "explanation": f"Synthetic Northwind example {index + 1}. Alex and Morgan need to confirm this item.",
                 "project": "Northwind Atlas", "evidence": [cite["reference"]],
-                "subject_refs": [f"task:{MEETING}:{index % len(summary['todo'])}"],
+                "subject_refs": [f"task:{meeting}:{index % len(summary['todo'])}"],
                 "subject_keys": [f"synthetic-{index}"], "material_state": f"synthetic-{index}",
                 "evidence_keys": [cite["reference"]], "first_seen": previous,
                 "last_seen": day, "change": "new" if index == 0 else "changed" if index == 1 else "still_open"}
         if "--actions" in flags and 1 <= index <= 4:
-            task_index = index - 1
-            kind_action, value = actions[task_index]
-            item["action"] = {"kind": kind_action, "meeting_id": MEETING, "todo_index": task_index,
+            kind_action, value = actions[index - 1]
+            task_index = (index - 1) % len(summary["todo"])
+            item["action"] = {"kind": kind_action, "meeting_id": meeting, "todo_index": task_index,
                               "expected_task": summary["todo"][task_index]["task"], "value": value}
         findings.append(item)
 
@@ -112,8 +128,18 @@ def main():
         "version": 1, "source_fingerprint": fnv([legacy]), "response": compact(response),
         "error": None, "runner": "Synthetic cached response (no model call)", "runtime_ms": 0,
     })
+    events = []
+    if diary:
+        for rec, op, at in [(0, "accept_proposal", "2026-11-06T15:10:00+00:00"), (2, "accept_proposal", "2026-11-06T15:12:00+00:00"),
+                            (1, "confirm", "2026-11-06T15:20:00+00:00"), (20, "retire", "2026-11-05T17:00:00+00:00"),
+                            (6, "edit", "2026-11-04T11:00:00+00:00")]:
+            events.append({"record_id": records[rec]["id"], "operation": op, "at": at, "proposal_id": None})
+        records[0]["text"] = "Northwind Atlas ships the paper prototype before the hardware demo."
+        records[2]["text"] = "The pricing review moves to Thursdays."
+        records[1]["text"] = "Priya owns the Northwind sprint goals."
+        records[6]["text"] = "Tom sends the vendor pricing summary each Friday."
     if "--memory" in flags:
-        save("memory/records.json", {"schema_version": 1, "records": records, "proposals": [], "events": [],
+        save("memory/records.json", {"schema_version": 1, "records": records, "proposals": [], "events": events,
                                      "migration": {"version": 1, "source_path": "synthetic", "fingerprint": fnv([legacy]), "accepted_at": stamp}})
         (state / "memory/company.legacy.md").write_text(legacy, encoding="utf-8", newline="\n")
     report = {"schema_version": 2 if "--v2" in flags else 1, "date": day,
@@ -131,7 +157,14 @@ def main():
                              "resolved": ["finding-synthetic-resolved"], "unmatched": ["finding-synthetic-unmatched"]},
               "resolutions": [{"finding_id": "finding-synthetic-resolved", "explanation": "The sample review finished.", "evidence": [cite["reference"]]}]}
     save(f"checks/{day}.json", report)
-    if flags & {"--earlier", "--gaps", "--v2"}:
+    if diary:
+        # Two older checks, smaller, so their days read differently.
+        for back, keep, new in [(2, 6, 2), (3, 3, 3)]:
+            old = (today - timedelta(days=back)).isoformat()
+            fs = findings[:keep]
+            save(f"checks/{old}.json", dict(report, date=old, memory_proposals=[], findings=fs,
+                                             comparison=dict(report["comparison"], new=[f["id"] for f in fs[:new]])))
+    elif flags & {"--earlier", "--gaps", "--v2"}:
         for back in ([1, 3, 4] if "--gaps" in flags else [1]):
             old = (today - timedelta(days=back)).isoformat()
             save(f"checks/{old}.json", dict(report, date=old, memory_proposals=[]))

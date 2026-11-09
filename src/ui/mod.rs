@@ -1533,6 +1533,24 @@ fn scene_check(s: &mut State) {
     }
 }
 
+/// The Diary over the invented days of `prepare_check_fixture.py --diary`. In the isolated
+/// state folder it first ticks the first task of the two newest meetings, so today has a Done
+/// list.
+fn scene_diary(s: &mut State) {
+    if isolated() {
+        let mut ticks: Vec<(String, String)> = s
+            .meetings
+            .iter()
+            .filter_map(|m| Some((m.id.clone(), m.summary.todo.first()?.task.clone())))
+            .collect();
+        ticks.truncate(2);
+        for (id, task) in ticks {
+            s.toggle_task_at(&id, &task);
+        }
+    }
+    s.open_check();
+}
+
 /// The key of the first open finding with a proposed action.
 fn first_action(s: &State) -> Option<String> {
     let r = s.check.report.as_ref()?;
@@ -1956,6 +1974,28 @@ pub fn spec() -> AppSpec<State> {
                 s.runner = Some("Claude Sonnet (answer only)".into());
             }),
             ("check", scene_check),
+            ("diary", scene_diary),
+            ("diary-panel", |s| {
+                scene_diary(s);
+                if let Some(key) = first_action(s) {
+                    s.open_finding(&key);
+                }
+            }),
+            ("diary-picker", |s| {
+                scene_diary(s);
+                s.check.picker_open = true;
+            }),
+            ("diary-older", |s| {
+                scene_diary(s);
+                scene_scroll(s, "diary-2026-11-05");
+            }),
+            ("diary-report", |s| {
+                scene_diary(s);
+                if let Some(date) = s.check.dates.get(1).copied() {
+                    s.open_report(date);
+                }
+            }),
+            ("diary-sidebar", |s| scene_side(s, scene_diary)),
             ("check-panel", scene_check_panel),
             ("check-applied", scene_check_apply),
             ("check-story", |s| {
