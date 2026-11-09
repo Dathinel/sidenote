@@ -81,9 +81,19 @@ fn picker(s: &State, label: &str, key: &str, p: Palette) -> Menu {
         })
 }
 fn item(s: &State, index: usize, position: usize, p: Palette) -> El {
-    let e = s.areas.editor.as_ref().unwrap();
-    let r = &e.rows[index];
-    let reference = &e.inventory.references[r.visible_items[position]];
+    let Some(e) = s.areas.editor.as_ref() else {
+        return col();
+    };
+    let Some(r) = e.rows.get(index) else {
+        return col();
+    };
+    let Some(reference) = r
+        .visible_items
+        .get(position)
+        .and_then(|i| e.inventory.references.get(*i))
+    else {
+        return col();
+    };
     let chosen = r
         .assignments
         .get(&reference.key)
@@ -140,8 +150,12 @@ fn item(s: &State, index: usize, position: usize, p: Palette) -> El {
         .children(layer)
 }
 fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
-    let e = s.areas.editor.as_ref().unwrap();
-    let r = &e.rows[index];
+    let Some(e) = s.areas.editor.as_ref() else {
+        return col();
+    };
+    let Some(r) = e.rows.get(index) else {
+        return col();
+    };
     let name = s
         .areas
         .catalog
@@ -177,7 +191,12 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
     let input = TextInput::new(&r.area)
         .plain()
         .placeholder("Choose or enter area")
-        .on_edit(move |s: &mut State| &mut s.areas.editor.as_mut().unwrap().rows[index].area)
+        .on_edit(move |s: &mut State| {
+            match s.areas.editor.as_mut().and_then(|e| e.rows.get_mut(index)) {
+                Some(r) => &mut r.area,
+                None => &mut s.areas.input_sink,
+            }
+        })
         .on_change(|s: &mut State, _| changed(s))
         .height(34.0)
         .build(&theme::kit(&p))
@@ -267,7 +286,10 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
                     .plain()
                     .placeholder("Search these items")
                     .on_edit(move |s: &mut State| {
-                        &mut s.areas.editor.as_mut().unwrap().rows[index].search
+                        match s.areas.editor.as_mut().and_then(|e| e.rows.get_mut(index)) {
+                            Some(r) => &mut r.search,
+                            None => &mut s.areas.input_sink,
+                        }
                     })
                     .on_change(move |s: &mut State, _| item_search(s, index))
                     .height(34.0)
@@ -276,6 +298,11 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
                     .w_full()
                     .border(1.0, p.line)
                     .radius(6.0),
+            )
+            .children(
+                r.visible_items
+                    .is_empty()
+                    .then(|| roles::SMALL.wrap("No items match this search.", p.soft)),
             )
             .child(
                 col()
@@ -294,15 +321,17 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
                                 r.visible_items.len(),
                                 88.0,
                                 move |s: &State, i| {
-                                    s.areas.editor.as_ref().unwrap().inventory.references[s
-                                        .areas
+                                    s.areas
                                         .editor
                                         .as_ref()
-                                        .unwrap()
-                                        .rows[index]
-                                        .visible_items[i]]
-                                        .key
-                                        .as_str()
+                                        .and_then(|e| {
+                                            e.rows
+                                                .get(index)
+                                                .and_then(|r| r.visible_items.get(i))
+                                                .and_then(|j| e.inventory.references.get(*j))
+                                        })
+                                        .map(|r| r.key.as_str())
+                                        .unwrap_or("missing-item")
                                         .into()
                                 },
                                 move |s: &State, i| item(s, index, i, p),
@@ -313,7 +342,9 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
     content
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
-    let e = s.areas.editor.as_ref().unwrap();
+    let Some(e) = s.areas.editor.as_ref() else {
+        return col();
+    };
     let busy = s.areas.pending.is_some();
     let tasks = e.inventory.counts[1];
     let header = col()
@@ -337,7 +368,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
             TextInput::new(&e.search)
                 .plain()
                 .placeholder("Find a project or area")
-                .on_edit(|s: &mut State| &mut s.areas.editor.as_mut().unwrap().search)
+                .on_edit(|s: &mut State| match s.areas.editor.as_mut() {
+                    Some(e) => &mut e.search,
+                    None => &mut s.areas.input_sink,
+                })
                 .on_change(|s: &mut State, _| project_search(s))
                 .height(34.0)
                 .build(k)
@@ -346,7 +380,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                 .border(1.0, p.line)
                 .radius(6.0),
         );
-    let rows = col()
+    let mut rows = col()
         .key("migration-project-rows")
         .w_full()
         .growth(GrowthSpec::default())
@@ -354,21 +388,30 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
             e.visible_projects.len(),
             if narrow { 154.0 } else { 140.0 },
             |s: &State, i| {
-                s.areas.editor.as_ref().unwrap().rows
-                    [s.areas.editor.as_ref().unwrap().visible_projects[i]]
-                    .project_id
-                    .as_str()
+                s.areas
+                    .editor
+                    .as_ref()
+                    .and_then(|e| e.visible_projects.get(i).and_then(|j| e.rows.get(*j)))
+                    .map(|r| r.project_id.as_str())
+                    .unwrap_or("missing-project")
                     .into()
             },
             move |s: &State, i| {
-                project(
-                    s,
-                    s.areas.editor.as_ref().unwrap().visible_projects[i],
-                    p,
-                    narrow,
-                )
+                let Some(index) = s
+                    .areas
+                    .editor
+                    .as_ref()
+                    .and_then(|e| e.visible_projects.get(i))
+                    .copied()
+                else {
+                    return col();
+                };
+                project(s, index, p, narrow)
             },
         );
+    if e.visible_projects.is_empty() {
+        rows = rows.child(roles::SMALL.wrap("No projects match this search.", p.soft));
+    }
     let mut footer = col()
         .w_full()
         .gap(8.0)
@@ -417,9 +460,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                 area::button("Cancel", "migration-cancel", p)
                     .disabled(busy)
                     .on_press(|s: &mut State| {
-                        s.areas.editor = None;
-                        s.areas.preview = None;
-                        s.areas.error = None;
+                        s.cancel_area();
                     }),
             ),
     );

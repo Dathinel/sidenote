@@ -1372,6 +1372,22 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);
     }
+    if let Some(error) = s.areas.error.as_ref().or(s.areas.notice.as_ref()) {
+        main = main.child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .px(16.0)
+                .py(8.0)
+                .child(roles::SMALL.wrap(error, p.warn).grow(1.0).role("alert"))
+                .child(area::button("Dismiss", "area-global-dismiss", p).on_press(
+                    |s: &mut State| {
+                        s.areas.error = None;
+                        s.areas.notice = None;
+                    },
+                )),
+        );
+    }
     let main = main.child(content);
     let mut app = row()
         .key("app")
@@ -1947,6 +1963,17 @@ pub fn spec() -> AppSpec<State> {
             ("areas-rename", |s| area_scene::scene(s, "rename")),
             ("areas-move", |s| area_scene::scene(s, "move")),
             ("areas-assign", |s| area_scene::scene(s, "assign")),
+            ("areas-refresh-error", |s| {
+                area_scene::scene(s, "refresh-error")
+            }),
+            ("areas-large-reconcile", |s| {
+                area_scene::scene(s, "large-reconcile")
+            }),
+            ("areas-large-empty", |s| area_scene::scene(s, "large-empty")),
+            ("areas-large-page", |s| area_scene::scene(s, "large-page")),
+            ("areas-large-convert", |s| {
+                area_scene::scene(s, "large-convert")
+            }),
             ("areas-worker-proof", |s| {
                 area_scene::scene(s, "worker-proof")
             }),

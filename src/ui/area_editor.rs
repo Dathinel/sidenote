@@ -47,6 +47,43 @@ impl Editor {
         }
         self.inventory = inventory;
     }
+    pub fn dirty(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|r| !r.area.text.is_empty() || !r.assignments.is_empty() || !r.children.is_empty())
+            || !self.name.text.is_empty()
+    }
+    pub fn merge_catalog(&mut self, c: &Catalog) {
+        if !matches!(self.action, Action::Migrate { .. }) {
+            return;
+        }
+        let Action::Migrate { rows } = migration(c) else {
+            return;
+        };
+        let mut added = 0;
+        for row in rows {
+            if !self.rows.iter().any(|r| r.project_id == row.project_id) {
+                self.rows.push(RowInput {
+                    project_id: row.project_id,
+                    area: TextEdit::default(),
+                    convert: false,
+                    children: Default::default(),
+                    assignments: Default::default(),
+                    expanded: false,
+                    search: TextEdit::default(),
+                    visible_items: Vec::new(),
+                });
+                added += 1;
+            }
+        }
+        if added > 0 {
+            self.notice = Some(format!(
+                "{added} new projects need review. Your existing choices were kept."
+            ));
+            self.visible_projects = (0..self.rows.len()).collect();
+        }
+        self.reconcile();
+    }
     pub fn reconcile(&mut self) {
         let targets: std::collections::BTreeMap<_, _> = self
             .rows
@@ -153,6 +190,7 @@ impl Editor {
 }
 pub fn title(action: &Action) -> &'static str {
     match action {
+        Action::ResolveName { .. } => "Resolve project name",
         Action::Create { .. } => "Create area",
         Action::Rename { .. } => "Rename area",
         Action::Move { .. } => "Move project into area",
@@ -183,11 +221,16 @@ pub fn migration(c: &Catalog) -> Action {
     Action::Migrate { rows }
 }
 fn name_input(s: &State, k: &Kit, p: Palette) -> El {
-    let editor = s.areas.editor.as_ref().unwrap();
+    let Some(editor) = s.areas.editor.as_ref() else {
+        return col();
+    };
     TextInput::new(&editor.name)
         .plain()
         .placeholder("Area name")
-        .on_edit(|s: &mut State| &mut s.areas.editor.as_mut().unwrap().name)
+        .on_edit(|s: &mut State| match s.areas.editor.as_mut() {
+            Some(e) => &mut e.name,
+            None => &mut s.areas.input_sink,
+        })
         .on_change(|s: &mut State, _| s.areas.preview = None)
         .height(38.0)
         .build(k)
@@ -274,68 +317,151 @@ fn child_choices(s: &State, project: &str, area_name: &str) -> Vec<(String, Stri
         .map(|p| (p.id.clone(), p.name.clone()))
         .collect()
 }
-fn mapping(
-    s: &State,
-    k: &Kit,
-    p: Palette,
-    layer: &mut Vec<El>,
-    project: &str,
-    area_name: &str,
-    row_index: Option<usize>,
-) -> El {
-    let e = s.areas.editor.as_ref().unwrap();
-    let mut content = col().w_full().gap(8.0);
-    let choices = child_choices(s, project, area_name);
-    for r in e
-        .references
-        .iter()
-        .filter(|r| r.project_id.as_deref() == Some(project))
+fn mapping_item(s: &State, index: usize, project: &str, area_name: &str, p: Palette) -> El {
+    let Some(e) = s.areas.editor.as_ref() else {
+        return col();
+    };
+    let Some(r) = e.references.get(index) else {
+        return col();
+    };
+    let Action::Convert { children, .. } = &e.action else {
+        return col();
+    };
+    let selected = children.get(&r.key);
+    let label = selected
+        .and_then(|id| s.areas.catalog.projects.get(id))
+        .map(|p| p.name.as_str())
+        .unwrap_or("Area-only work");
+    let mut layer = Vec::new();
+    let k = super::theme::kit(&p);
+    let mut menu = choice_menu(s, &k, p, &mut layer, &r.key, label);
+    for (id, name) in std::iter::once((String::new(), "Area-only work".into()))
+        .chain(child_choices(s, project, area_name))
     {
-        let children = match (&e.action, row_index) {
-            (_, Some(i)) => &e.rows[i].children,
-            (Action::Convert { children, .. }, None) => children,
-            _ => continue,
-        };
-        let selected = children.get(&r.key);
-        let label = selected
-            .and_then(|id| s.areas.catalog.projects.get(id))
-            .map(|p| p.name.as_str())
-            .unwrap_or("Area-only work");
-        let mut menu = choice_menu(s, k, p, layer, &r.key, label);
-        for (id, name) in
-            std::iter::once((String::new(), "Area-only work".into())).chain(choices.iter().cloned())
-        {
-            let key = r.key.clone();
-            menu = menu.item(
-                MenuItem::new(name)
-                    .checked(selected.map(String::as_str).unwrap_or("") == id)
-                    .on_select(move |s: &mut State| {
-                        if let Some(e) = &mut s.areas.editor {
-                            let children = match (&mut e.action, row_index) {
-                                (_, Some(i)) => &mut e.rows[i].children,
-                                (Action::Convert { children, .. }, None) => children,
-                                _ => return,
-                            };
-                            if id.is_empty() {
-                                children.remove(&key);
-                            } else {
-                                children.insert(key.clone(), id.clone());
-                            }
-                            e.picker = None;
-                            s.areas.preview = None;
-                        }
-                    }),
-            );
-        }
-        content = content.child(
-            col()
-                .w_full()
-                .gap(4.0)
-                .child(roles::META.wrap(format!("{} · {}", r.kind, r.label), p.soft))
-                .child(menu.build(k, layer).self_start()),
+        let key = r.key.clone();
+        menu = menu.item(
+            MenuItem::new(name)
+                .checked(selected.map(String::as_str).unwrap_or("") == id)
+                .on_select(move |s: &mut State| {
+                    let Some(e) = &mut s.areas.editor else {
+                        return;
+                    };
+                    let Action::Convert { children, .. } = &mut e.action else {
+                        return;
+                    };
+                    if id.is_empty() {
+                        children.remove(&key);
+                    } else {
+                        children.insert(key.clone(), id.clone());
+                    }
+                    e.picker = None;
+                    s.areas.preview = None;
+                }),
         );
     }
-    content
+    col()
+        .w_full()
+        .gap(4.0)
+        .py(6.0)
+        .child(roles::META.wrap(format!("{} ? {}", r.kind, r.label), p.soft))
+        .child(menu.build(&k, &mut layer).self_start())
+        .children(layer)
+}
+fn mapping(
+    s: &State,
+    _k: &Kit,
+    p: Palette,
+    _layer: &mut Vec<El>,
+    project: &str,
+    area_name: &str,
+    _row_index: Option<usize>,
+) -> El {
+    let Some(e) = s.areas.editor.as_ref() else {
+        return col();
+    };
+    let indices: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(
+        e.references
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.project_id.as_deref() == Some(project))
+            .map(|(i, _)| i)
+            .collect(),
+    );
+    let count = indices.len();
+    let keys = indices.clone();
+    let (project, area) = (project.to_string(), area_name.to_string());
+    if count == 0 {
+        return roles::SMALL.wrap("Review counts to see the items in this project.", p.soft);
+    }
+    col()
+        .w_full()
+        .h(320.0)
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(
+            col()
+                .w_full()
+                .growth(rune::GrowthSpec::default())
+                .virtual_rows(
+                    count,
+                    100.0,
+                    move |s: &State, i| {
+                        s.areas
+                            .editor
+                            .as_ref()
+                            .and_then(|e| keys.get(i).and_then(|j| e.references.get(*j)))
+                            .map(|r| r.key.as_str())
+                            .unwrap_or("missing-item")
+                            .into()
+                    },
+                    move |s: &State, i| {
+                        indices
+                            .get(i)
+                            .map(|index| mapping_item(s, *index, &project, &area, p))
+                            .unwrap_or_else(col)
+                    },
+                ),
+        )
+}
+fn preview_items(s: &State, p: Palette) -> El {
+    let Some(preview) = &s.areas.preview else {
+        return col();
+    };
+    col()
+        .w_full()
+        .h(240.0)
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(
+            col()
+                .w_full()
+                .growth(rune::GrowthSpec::default())
+                .virtual_rows(
+                    preview.references.len(),
+                    64.0,
+                    |s: &State, i| {
+                        s.areas
+                            .preview
+                            .as_ref()
+                            .and_then(|p| p.references.get(i))
+                            .map(|r| r.key.as_str())
+                            .unwrap_or("missing-item")
+                            .into()
+                    },
+                    move |s: &State, i| {
+                        s.areas
+                            .preview
+                            .as_ref()
+                            .and_then(|p| p.references.get(i))
+                            .map(|r| roles::META.wrap(format!("{} ? {}", r.kind, r.label), p.soft))
+                            .unwrap_or_else(col)
+                    },
+                ),
+        )
 }
 pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
     let e = s.areas.editor.as_ref()?;
@@ -355,7 +481,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
     if let Some(preview) = &s.areas.preview {
         let count = |kind: &str| preview.references.iter().filter(|r| r.kind == kind).count();
         card=card.child(roles::GROUP.wrap(format!("{} meetings · {} tasks · {} memory · {} proposals",count("meeting"),count("task"),count("memory"),count("proposal")),p.ink))
-            .child(roles::SMALL.wrap("One verified backup is saved before this change. Undo remains available after restart. Later moves can block Undo.",p.soft));
+            .child(roles::SMALL.wrap("One verified backup is saved before this change. Undo remains available after restart. Undo leaves later changes in place.",p.soft));
         if matches!(e.action, Action::Migrate { .. }) {
             card = card.child(roles::META.wrap(
                 format!("{} project rows reviewed", preview.project_count),
@@ -422,7 +548,10 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                     .plain()
                     .placeholder("Enter proposed area")
                     .on_edit(move |s: &mut State| {
-                        &mut s.areas.editor.as_mut().unwrap().rows[i].area
+                        match s.areas.editor.as_mut().and_then(|e| e.rows.get_mut(i)) {
+                            Some(r) => &mut r.area,
+                            None => &mut s.areas.input_sink,
+                        }
                     })
                     .on_change(|s: &mut State, _| s.areas.preview = None)
                     .height(36.0)
@@ -475,15 +604,19 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                 card = card.child(item);
             }
         }
+        Action::ResolveName { name, .. } => {
+            card = card.child(roles::SMALL.wrap(
+                format!("Keep the project name {name}. Its identity and work stay together."),
+                p.soft,
+            ));
+        }
         Action::Assign { target, .. } => {
             card=card.child(roles::SMALL.wrap(format!("File this item in {}. It will have no project. Review the count before applying.",s.areas.catalog.label(target)),p.soft));
         }
     }
-    if let Some(preview) = &s.areas.preview {
+    if s.areas.preview.is_some() {
         if !matches!(e.action, Action::Convert { .. } | Action::Migrate { .. }) {
-            for r in &preview.references {
-                card = card.child(roles::META.wrap(format!("{} · {}", r.kind, r.label), p.soft));
-            }
+            card = card.child(preview_items(s, p));
         }
         card = card.child(
             super::tasks::button("Confirm change", "area-confirm", true, p)
@@ -504,9 +637,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
             .self_start()
             .disabled(busy)
             .on_press(|s: &mut State| {
-                s.areas.editor = None;
-                s.areas.preview = None;
-                s.areas.error = None;
+                s.cancel_area();
             }),
     );
     Some(card)
