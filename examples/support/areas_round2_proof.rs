@@ -5,6 +5,7 @@ pub const CASES: &[&str] = &[
     "r2-version-gate",
     "r2-renames",
     "r2-receipt-paths",
+    "r2-merge-receipt-paths",
     "r2-scoped-undo",
     "r2-quarantine",
     "r2-extra-cap",
@@ -12,7 +13,9 @@ pub const CASES: &[&str] = &[
     "r2-sharing-retry",
     "r2-old-merge",
     "r2-resolver",
+    "r2-memory-export-retained-later",
     "r2-store-load",
+    "r2-legacy-source-quarantine",
     "r2-backup-retention",
     "r2-large-undo",
 ];
@@ -58,9 +61,14 @@ fn retain_record(store: &TaskStore, target: &Target) {
         .unwrap();
     record.assignment = Some(target.clone());
     record.project = Some(CHILD.into());
+    memory_changes(
+        store,
+        json!([{"key":["records",record.id],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":record}]),
+    );
+}
+fn memory_changes(store: &TaskStore, changes: Value) {
     let revision = core::areas::new_assignment_revision(&store.root).unwrap();
     let (device, id) = revision.split_once('-').unwrap();
-    let changes = json!([{"key":["records",record.id],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":record}]);
     let checksum = blake3::hash(
         &serde_json::to_vec(&json!([2, device, id, "memory/records.json", changes, []])).unwrap(),
     )
@@ -144,17 +152,27 @@ pub fn run(mode: &str, store: &TaskStore) {
         "r2-renames" => {
             migrate(store);
             let (id, _) = ids(store);
+            let before_count = catalog(store).projects.len();
             let before = catalog(store).projects[&id].clone();
+            let unchanged = serde_json::to_value(store.load_projects().unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(store.rename_project(SOURCE, " ").unwrap()).unwrap(),
+                unchanged,
+                "An empty rename remains a no-op"
+            );
             let a = peer(store, "rename-q");
             let b = peer(store, "rename-s");
             a.rename_project(SOURCE, "Outcome Q").unwrap();
-            a.add_project("Seed Q").unwrap();
             b.rename_project(SOURCE, "Outcome S").unwrap();
-            b.add_project("Seed S").unwrap();
             copy_tree(&a.root.join("state"), &root.join("state"));
             copy_tree(&b.root.join("state"), &root.join("state"));
             store.add_project("Seed after both renames").unwrap();
             let c = catalog(store);
+            assert_eq!(
+                c.projects.len(),
+                before_count + 1,
+                "Both renamed copies retain exactly one identity and its metadata"
+            );
             assert_eq!(c.projects[&id].area_id, before.area_id);
             assert_eq!(c.projects[&id].converted_to, before.converted_to);
             let p = store.load_projects().unwrap();
@@ -162,7 +180,10 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert_eq!(c.project(&p, "Outcome S").unwrap().id, id);
             assert!(
                 !c.projects
-                    .contains_key(&core::areas::project_id("Outcome Q")),
+                    .contains_key(&core::areas::project_id("Outcome Q"))
+                    && !c
+                        .projects
+                        .contains_key(&core::areas::project_id("Outcome S")),
                 "A conflicting name must not synthesize a second identity"
             );
             assert!(
@@ -292,6 +313,82 @@ pub fn run(mode: &str, store: &TaskStore) {
                 })
                 .unwrap();
             store.undo_area(&id).unwrap();
+        }
+        "r2-merge-receipt-paths" => {
+            let preview = store.preview_merge(SOURCE, CHILD).unwrap();
+            let merged = store.merge_projects(&preview).unwrap();
+            let receipt = merged.merges[SOURCE].clone();
+            assert!(store.local_project_merge_backup(SOURCE, &receipt).is_ok());
+            let state_before = protected(root);
+            for id in [
+                r"..\..\outside",
+                r"\\host\share\outside",
+                r"C:relative",
+                r"C:\outside",
+                "invalid-operation-id",
+            ] {
+                let mut bad = receipt.clone();
+                bad.id = id.into();
+                bad.backup = root
+                    .join("local/project-merges")
+                    .join(id)
+                    .join("backup.json");
+                store
+                    .update_projects(|p| {
+                        p.merges.insert(SOURCE.into(), bad.clone());
+                    })
+                    .unwrap();
+                assert!(store.local_project_merge_backup(SOURCE, &bad).is_err());
+                assert!(store.undo_project_merge(SOURCE, id).is_err());
+            }
+            store
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), receipt.clone());
+                })
+                .unwrap();
+            let bytes = fs::read(&receipt.backup).unwrap();
+            fs::write(&receipt.backup, vec![b' '; 16 * 1024 * 1024 + 1]).unwrap();
+            assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
+            fs::write(&receipt.backup, &bytes).unwrap();
+            let dir = receipt.backup.parent().unwrap();
+            let saved = dir.with_extension("saved");
+            fs::rename(dir, &saved).unwrap();
+            assert!(
+                Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(dir)
+                    .arg(&saved)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(store.local_project_merge_backup(SOURCE, &receipt).is_err());
+            assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
+            fs::remove_dir(dir).unwrap();
+            fs::rename(&saved, dir).unwrap();
+            let forger = peer(store, "merge-receipt-peer");
+            let mut fake = receipt.clone();
+            fake.checksum = "peer-forgery".into();
+            forger
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), fake.clone());
+                })
+                .unwrap();
+            copy_tree(&forger.root.join("state"), &root.join("state"));
+            assert!(store.local_project_merge_backup(SOURCE, &fake).is_err());
+            assert!(store.undo_project_merge(SOURCE, &fake.id).is_err());
+            assert_eq!(
+                protected(root),
+                state_before,
+                "Refused Undo leaves source bytes intact"
+            );
+            store
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), receipt.clone());
+                })
+                .unwrap();
+            store.undo_project_merge(SOURCE, &receipt.id).unwrap();
+            assert!(!store.load_projects().unwrap().merges.contains_key(SOURCE));
         }
         "r2-scoped-undo" => {
             migrate(store);
@@ -721,6 +818,58 @@ pub fn run(mode: &str, store: &TaskStore) {
                 Some(target_id)
             );
         }
+        "r2-memory-export-retained-later" => {
+            migrate(store);
+            let p = store.load_projects().unwrap();
+            let c = p.area_catalog().unwrap();
+            let child = c.project(&p, CHILD).unwrap();
+            let retained = Target {
+                area_id: child.area_id.clone().unwrap(),
+                project_id: Some(child.id.clone()),
+            };
+            retain_record(store, &retained);
+            memory_changes(
+                store,
+                json!([{"key":["migration"],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":{"version":1,"source_path":"local/memory/company.legacy.md","fingerprint":"synthetic","accepted_at":"2026-11-09T00:00:00Z"}}]),
+            );
+            let later = c.project(&p, "Archive outcome").unwrap();
+            apply(
+                store,
+                Action::Assign {
+                    key: json!(["memory", "synthetic-memory"]).to_string(),
+                    target: Target {
+                        area_id: later.area_id.clone().unwrap(),
+                        project_id: Some(later.id.clone()),
+                    },
+                },
+            );
+            let memory = core::memory::MemoryStore::new(root.clone());
+            let (snapshot, text) = memory.snapshot().unwrap();
+            assert_eq!(
+                snapshot
+                    .records
+                    .iter()
+                    .find(|r| r.id == "synthetic-memory")
+                    .unwrap()
+                    .project
+                    .as_deref(),
+                Some("Archive outcome")
+            );
+            assert!(text.contains("Archive outcome"));
+            assert_eq!(
+                text,
+                fs::read_to_string(root.join("local/memory/company.md")).unwrap()
+            );
+            assert_eq!(
+                memory.company_memory().unwrap(),
+                text,
+                "Repeated exports resolve the raw assignment once"
+            );
+            assert_eq!(
+                text,
+                fs::read_to_string(root.join("local/memory/company.md")).unwrap()
+            );
+        }
         "r2-store-load" => {
             let own_bad = TaskStore::new(root.join("own-bad-copy"));
             core::areas::new_assignment_revision(&own_bad.root).unwrap();
@@ -765,6 +914,64 @@ pub fn run(mode: &str, store: &TaskStore) {
             fs::write(dir.join("huge.json"), vec![b' '; 4 * 1024 * 1024 + 1]).unwrap();
             assert!(store.load_projects().is_ok());
             assert!(store.unreadable_items().unwrap() >= 2);
+        }
+        "r2-legacy-source-quarantine" => {
+            let copy = TaskStore::new(root.join("legacy-quarantine-copy"));
+            let duplicate = copy
+                .root
+                .join("task-overrides.sync-conflict-a-duplicate.json");
+            let huge = copy.root.join("task-overrides.sync-conflict-b-huge.json");
+            let good = copy.root.join("task-overrides.sync-conflict-z-good.json");
+            write(
+                &copy.root.join("task-overrides.json"),
+                &json!({"manual":[{"id":"base","task":"Base task","project":SOURCE,"added":"2026-11-09"}]}),
+            );
+            write(
+                &duplicate,
+                &json!({"manual":[{"id":"duplicate","task":"First","added":"2026-11-09"},{"id":"duplicate","task":"Second","added":"2026-11-09"}]}),
+            );
+            write(
+                &huge,
+                &json!({"manual":[{"id":"huge","task":"x".repeat(4 * 1024 * 1024),"added":"2026-11-09"}]}),
+            );
+            write(
+                &good,
+                &json!({"manual":[{"id":"good","task":"Readable peer task","added":"2026-11-09"}]}),
+            );
+            let sources = [
+                duplicate.clone(),
+                huge.clone(),
+                good.clone(),
+                copy.root.join("task-overrides.json"),
+            ]
+            .map(|p| {
+                let bytes = fs::read(&p).unwrap();
+                (p, bytes)
+            });
+            assert!(sources[1].1.len() > 4 * 1024 * 1024 && sources[1].1.len() < 16 * 1024 * 1024);
+            for _ in 0..2 {
+                let loaded = copy.load_overrides().unwrap();
+                assert_eq!(
+                    loaded
+                        .manual
+                        .iter()
+                        .map(|t| t.id.as_str())
+                        .collect::<std::collections::BTreeSet<_>>(),
+                    std::collections::BTreeSet::from(["base", "good"])
+                );
+                assert_eq!(
+                    copy.unreadable_items().unwrap(),
+                    2,
+                    "Each bad source is counted once and later good sources still load"
+                );
+                for (path, bytes) in &sources {
+                    assert_eq!(
+                        fs::read(path).unwrap(),
+                        *bytes,
+                        "Quarantine retains the exact original bytes"
+                    );
+                }
+            }
         }
         "r2-large-undo" => {
             store

@@ -287,6 +287,37 @@ impl TaskStore {
             },
         )
     }
+    pub fn local_project_merge_backup(
+        &self,
+        from: &str,
+        merge: &ProjectMerge,
+    ) -> io::Result<PathBuf> {
+        let own = super::DeviceSettings::read_in(&self.root)?.id;
+        if !super::area_ops::valid_receipt_id(&merge.id, &own)
+            || sync_state::writer(
+                &self.root,
+                "projects.json",
+                vec!["merges".into(), from.into()],
+            )?
+            .as_deref()
+                != Some(own.as_str())
+        {
+            return Err(invalid(
+                "Undo is available only on the device that wrote this merge",
+            ));
+        }
+        let base = self.root.join("local/project-merges");
+        let backup = base.join(&merge.id).join("backup.json");
+        // Old local receipts stored this absolute path; never use the peer-provided path.
+        if merge.backup != backup {
+            return Err(invalid("Backup location does not match this device"));
+        }
+        store_io::reject_reparse(&backup)?;
+        if !backup.canonicalize()?.starts_with(base.canonicalize()?) {
+            return Err(invalid("Invalid Undo backup location"));
+        }
+        Ok(backup)
+    }
     pub fn undo_project_merge(&self, from: &str, expected_id: &str) -> io::Result<Projects> {
         let projects = self.load_projects()?;
         let merge = projects
@@ -294,6 +325,7 @@ impl TaskStore {
             .get(from)
             .filter(|m| m.active && m.id == expected_id)
             .ok_or_else(|| invalid("Merge changed; reload before undoing"))?;
+        self.local_project_merge_backup(from, merge)?;
         if merge.assignment_baseline.is_none() {
             return Err(invalid(MOVED_AFTER_MERGE));
         }
@@ -323,15 +355,9 @@ impl TaskStore {
                         "Area assignments changed after the merge. Undo was not applied.",
                     ));
                 }
-                let backup = self
-                    .root
-                    .join("local/project-merges")
-                    .join(&merge.id)
-                    .join("backup.json");
-                if merge.backup != backup {
-                    return Err(invalid("Backup location does not match this device"));
-                }
-                let snapshot: Backup = serde_json::from_slice(&fs::read(&backup)?)?;
+                let backup = self.local_project_merge_backup(from, &merge)?;
+                let snapshot: Backup =
+                    serde_json::from_slice(&store_io::read_bounded(&backup, 16 * 1024 * 1024)?)?;
                 if digest(&snapshot)? != merge.checksum {
                     return Err(invalid("Backup checksum changed; undo was not applied"));
                 }
@@ -543,7 +569,7 @@ pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>
     Ok(out)
 }
 fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {
-    let bytes = fs::read(path)?;
+    let bytes = store_io::read_bounded(path, 16 * 1024 * 1024)?;
     let backup: Backup = serde_json::from_slice(&bytes)?;
     if digest(&backup)? != digest(expected)? {
         return Err(invalid("Backup verification failed"));
