@@ -385,7 +385,16 @@ impl TaskStore {
                     "Use Merge into to preview this change",
                 ));
             }
+            let identity = p.area_catalog()?.project(p, old).map(|p| p.id.clone());
             p.rename(old.trim(), new.trim());
+            if !new.trim().is_empty()
+                && let Some(id) = identity
+            {
+                p.other.insert(
+                    format!("area-identity:{}", p.resolve(new)),
+                    Value::String(id),
+                );
+            }
             Ok(())
         })
     }

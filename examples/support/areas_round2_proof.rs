@@ -144,17 +144,27 @@ pub fn run(mode: &str, store: &TaskStore) {
         "r2-renames" => {
             migrate(store);
             let (id, _) = ids(store);
+            let before_count = catalog(store).projects.len();
             let before = catalog(store).projects[&id].clone();
+            let unchanged = serde_json::to_value(store.load_projects().unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(store.rename_project(SOURCE, " ").unwrap()).unwrap(),
+                unchanged,
+                "An empty rename remains a no-op"
+            );
             let a = peer(store, "rename-q");
             let b = peer(store, "rename-s");
             a.rename_project(SOURCE, "Outcome Q").unwrap();
-            a.add_project("Seed Q").unwrap();
             b.rename_project(SOURCE, "Outcome S").unwrap();
-            b.add_project("Seed S").unwrap();
             copy_tree(&a.root.join("state"), &root.join("state"));
             copy_tree(&b.root.join("state"), &root.join("state"));
             store.add_project("Seed after both renames").unwrap();
             let c = catalog(store);
+            assert_eq!(
+                c.projects.len(),
+                before_count + 1,
+                "Both renamed copies retain exactly one identity and its metadata"
+            );
             assert_eq!(c.projects[&id].area_id, before.area_id);
             assert_eq!(c.projects[&id].converted_to, before.converted_to);
             let p = store.load_projects().unwrap();
@@ -162,7 +172,10 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert_eq!(c.project(&p, "Outcome S").unwrap().id, id);
             assert!(
                 !c.projects
-                    .contains_key(&core::areas::project_id("Outcome Q")),
+                    .contains_key(&core::areas::project_id("Outcome Q"))
+                    && !c
+                        .projects
+                        .contains_key(&core::areas::project_id("Outcome S")),
                 "A conflicting name must not synthesize a second identity"
             );
             assert!(
