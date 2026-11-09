@@ -131,8 +131,9 @@ fn listing_failure_refuses_save_and_preserves_other_fields() {
     let base = core::live_edit::task_value(&old, &row, 0);
     let mut mine = base.clone();
     mine["task"] = json!("Kept draft");
-    fs::rename(f.0.join("state"), f.0.join("kept-state")).unwrap();
-    fs::write(f.0.join("state"), b"not a folder").unwrap();
+    let journal = journal_dir(&f.0);
+    fs::rename(&journal, f.0.join("kept-state")).unwrap();
+    fs::write(&journal, b"not a folder").unwrap();
     let before = files(&f.0);
     let error = store.merge_task(&row, 0, &base, &mine, None).err().unwrap();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
