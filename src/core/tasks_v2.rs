@@ -1055,4 +1055,28 @@ mod tests {
         assert_eq!(tasks[0].status, TaskStatus::Review);
         assert_eq!(tasks[0].owner.as_deref(), Some("Alex"));
     }
+    #[test]
+    fn clearing_a_legacy_edit_does_not_restore_its_old_numeric_copy() {
+        for id in ["", "a"] {
+            let f = Fixture::new(json!([{"id":id,"task":"Read proof"}]));
+            let store = f.store();
+            let old = store
+                .update_override(&f.meeting.id, 0, "Read proof", |o| {
+                    o.due = Some("2026-11-12".into())
+                })
+                .unwrap();
+            let base = core::live_edit::task_value(&old, &f.meeting.id, 0);
+            let mut mine = base.clone();
+            mine["due"] = serde_json::Value::Null;
+            let view = store
+                .merge_task(&f.meeting.id, 0, &base, &mine, Some(&f.meeting.folder))
+                .unwrap();
+            assert!(
+                view.value
+                    .match_task(&f.meeting.id, id, "Read proof", 0)
+                    .is_none()
+            );
+            assert!(f.tasks(&view.value)[0].due.is_none());
+        }
+    }
 }

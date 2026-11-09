@@ -197,12 +197,21 @@ impl TaskStore {
                         "updated_at".into(),
                         Value::String(chrono::Utc::now().to_rfc3339()),
                     );
-                    if t.is_empty() {
-                        let per = o.tasks.get_mut(row).unwrap();
+                    let empty = t.is_empty();
+                    let per = o.tasks.get_mut(row).unwrap();
+                    if empty {
                         per.remove(&key);
-                        if per.is_empty() {
-                            o.tasks.remove(row);
-                        }
+                    }
+                    let legacy = index.to_string();
+                    if key != legacy
+                        && per.get(&legacy).is_some_and(|o| {
+                            o.task.as_deref().is_none_or(|text| Some(text) == expected)
+                        })
+                    {
+                        per.remove(&legacy);
+                    }
+                    if per.is_empty() {
+                        o.tasks.remove(row);
                     }
                 }
                 Ok(())
