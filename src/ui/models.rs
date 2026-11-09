@@ -1,5 +1,5 @@
 use super::{
-    Event, State, hex,
+    Event, State, hex, roles,
     theme::Palette,
     widgets::{hairline, label, link, pressable},
 };
@@ -190,11 +190,13 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
     let mut body = col()
         .w_full()
         .gap(12.0)
-        .child(label("Meeting languages and models", 23.0, 600.0, p.ink))
-        .child(label(
+        .child(
+            roles::SECTION
+                .wrap("Meeting languages and models", p.ink)
+                .mt(10.0),
+        )
+        .child(roles::SMALL.wrap(
             "Choose the languages people speak in your meetings.",
-            14.0,
-            400.0,
             p.soft,
         ));
     let mut languages = row().w_full().flex_wrap().gap(8.0);
@@ -228,7 +230,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
     }
     body = body.child(languages).child(routing);
     if let Some(e) = &models.preference_error {
-        body = body.child(label(e, 13.0, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
     }
     // English is Hex's Parakeet: nothing to download. Speech models show for the other chosen
     // languages; language detection shows once a second language is chosen (ADR 0009 (b)).
@@ -253,12 +255,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
         })
         .collect();
     if visible.is_empty() {
-        return body.child(label(
-            "English uses Hex's own model. Nothing to download. Add another language to see its models.",
-            14.0,
-            400.0,
-            p.soft,
-        ));
+        return body.child(roles::SMALL.wrap("English uses Hex's own model. Nothing to download. Add another language to see its models.", p.soft));
     }
     let total: u64 = visible
         .iter()
@@ -266,7 +263,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
         .map(|m| m.bytes())
         .sum();
     body = body
-        .child(label(
+        .child(roles::SMALL.bold().wrap(
             if total == 0 {
                 "Everything recommended for these languages is downloaded.".to_string()
             } else {
@@ -275,23 +272,14 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                     total as f64 / 1_000_000.0
                 )
             },
-            14.0,
-            600.0,
             p.ink,
         ))
-        .child(label(
+        .child(roles::META.wrap(
             "Models run on this computer. Each download is your choice.",
-            13.0,
-            400.0,
             p.soft,
         ));
     if models.installed.is_empty() && models.progress.is_empty() {
-        body = body.child(label(
-            "No meeting models downloaded yet.",
-            13.0,
-            400.0,
-            p.soft,
-        ));
+        body = body.child(roles::META.wrap("No meeting models downloaded yet.", p.soft));
     }
     for m in visible {
         let id = m.id;
@@ -300,7 +288,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
             .gap(5.0)
             .py(12.0)
             .child(hairline(p))
-            .child(label(m.name, 16.0, 600.0, p.ink));
+            .child(roles::TITLE.wrap(m.name, p.ink));
         let tier = if m.size_tier() == SizeTier::Default {
             "Recommended"
         } else {
@@ -320,7 +308,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        card = card.child(label(
+        card = card.child(roles::META.wrap(
             format!(
                 "{langs} · {} licence · {}",
                 m.licence,
@@ -330,39 +318,29 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                     tier
                 }
             ),
-            12.5,
-            400.0,
-            p.soft,
+            p.faint,
         ));
         if m.runtime == Runtime::Hex {
-            card = card.child(label(m.runtime_note, 13.0, 400.0, p.soft));
+            card = card.child(roles::META.wrap(m.runtime_note, p.soft));
         } else {
-            card = card.child(label(
+            card = card.child(roles::META.wrap(
                 format!("{:.1} MB download", m.bytes() as f64 / 1_000_000.0),
-                13.0,
-                400.0,
-                p.soft,
+                p.faint,
             ));
             if let Some(memory) = m.minimum_ram_mb {
-                card = card.child(label(
-                    format!("Measured model memory: {memory} MB"),
-                    12.5,
-                    400.0,
-                    p.soft,
-                ));
+                card = card.child(
+                    roles::META.wrap(format!("Measured model memory: {memory} MB"), p.faint),
+                );
             }
             if m.role == model_catalog::Role::LanguageId {
-                card = card.child(label(
-                    "Tells English from Hindi in each part of the meeting, so each part goes to the right model.",
-                    12.5,
-                    400.0,
-                    p.soft,
-                ));
+                card = card.child(roles::META.wrap("Tells English from Hindi in each part of the meeting, so each part goes to the right model.", p.soft));
             }
             if let Some(progress) = models.progress.get(id) {
                 if models.jobs.get(id).is_some_and(|job| job.removing) {
                     card = card.child(
-                        label("Removing downloaded files...", 13.0, 500.0, p.soft).role("status"),
+                        roles::CONTROL
+                            .wrap("Removing downloaded files...", p.soft)
+                            .role("status"),
                     );
                 } else {
                     let cancelling = models
@@ -378,17 +356,16 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                     };
                     card = card
                         .child(
-                            label(
-                                format!(
-                                    "{phase}: {:.1} / {:.1} MB",
-                                    progress.downloaded as f64 / 1_000_000.0,
-                                    progress.total as f64 / 1_000_000.0
-                                ),
-                                13.0,
-                                500.0,
-                                p.accent,
-                            )
-                            .role("status"),
+                            roles::CONTROL
+                                .wrap(
+                                    format!(
+                                        "{phase}: {:.1} / {:.1} MB",
+                                        progress.downloaded as f64 / 1_000_000.0,
+                                        progress.total as f64 / 1_000_000.0
+                                    ),
+                                    p.accent,
+                                )
+                                .role("status"),
                         )
                         .child(
                             link("Cancel download", p)
@@ -404,7 +381,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 card = card.child(
                     row()
                         .gap(14.0)
-                        .child(label("Installed", 13.0, 600.0, p.accent))
+                        .child(roles::CONTROL.wrap("Installed", p.accent))
                         .child(
                             link("Remove", p)
                                 .key(format!("model-remove-{id}"))
@@ -436,12 +413,8 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 && !models.installed.contains(id)
                 && !models.progress.contains_key(id)
             {
-                card = card.child(label(
-                    "Partial download saved on this device.",
-                    12.5,
-                    400.0,
-                    p.soft,
-                ));
+                card =
+                    card.child(roles::META.wrap("Partial download saved on this device.", p.soft));
                 card = card.child(
                     link("Remove partial download", p)
                         .key(format!("model-clear-partial-{id}"))
@@ -449,12 +422,12 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 );
             }
             if let Some(error) = models.errors.get(id) {
-                card = card.child(label(error, 13.0, 500.0, p.warn).role("alert"));
+                card = card.child(roles::META.medium().wrap(error, p.warn).role("alert"));
             }
         }
         body = body.child(card);
     }
-    body.child(label("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", 13.0, 400.0, p.soft))
+    body.child(roles::META.wrap("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", p.soft))
 }
 pub fn scene(s: &mut State, name: &str) {
     hex::scene(s, false);

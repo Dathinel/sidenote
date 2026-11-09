@@ -7,8 +7,9 @@
 use super::{
     Event, State,
     list::text_title,
+    roles,
     theme::Palette,
-    widgets::{badge, hairline, label, line, link, pressable, scroll},
+    widgets::{badge, hairline, label, link, pressable, scroll},
 };
 mod meeting_languages;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
@@ -912,7 +913,11 @@ fn model_section(s: &State, p: Palette) -> El {
             .items_center()
             .flex_wrap()
             .py(6.0)
-            .child(label(format!("Selected: {name}"), 15.0, 500.0, p.ink));
+            .child(
+                roles::SMALL
+                    .medium()
+                    .wrap(format!("Selected: {name}"), p.ink),
+            );
         r = r.child(match m.installed {
             Some(true) => badge("Installed", p.ok, Some(p.okbg)),
             Some(false) => badge("Not installed", p.warn, Some(p.warnbg)),
@@ -944,13 +949,9 @@ fn model_section(s: &State, p: Palette) -> El {
                 .w(170.0),
             )
             .child(
-                label(
-                    format!("{}  {}", m.languages.join(", "), m.size),
-                    12.5,
-                    400.0,
-                    p.faint,
-                )
-                .w(190.0),
+                roles::META
+                    .wrap(format!("{}  {}", m.languages.join(", "), m.size), p.faint)
+                    .w(190.0),
             )
             .child(
                 if m.installed {
@@ -1007,12 +1008,11 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
     .grow(1.0)
     .min_w(140.0);
     let ready = can_add && !h.term.text.trim().is_empty();
-    let mut add = pressable(label(
-        "Add",
-        13.5,
-        650.0,
-        if ready { p.card } else { p.faint },
-    ))
+    let mut add = pressable(
+        roles::CONTROL
+            .bold()
+            .wrap("Add", if ready { p.card } else { p.faint }),
+    )
     .key("hex-vocab-add")
     .label("Add the word")
     .px(14.0)
@@ -1050,24 +1050,21 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
         sec = sec.child(note(n, p));
     }
     if h.vocabulary.is_empty() && h.vocabulary_note.is_none() && h.running() {
-        sec = sec.child(label("No words yet.", 14.0, 400.0, p.soft));
+        sec = sec.child(roles::SMALL.wrap("No words yet.", p.soft));
     }
     let can_remove = h.can(Feature::VocabularyRemove) && !h.vocab_busy;
     for (i, v) in h.vocabulary.iter().enumerate() {
         let mut text = col()
             .grow(1.0)
             .min_w(0.0)
-            .child(line(v.term.clone(), 14.5, 500.0, p.ink));
+            .child(roles::CONTROL.line(v.term.clone(), p.ink));
         if !v.sounds_like.is_empty() {
-            text = text.child(line(
-                format!("Sounds like {}", v.sounds_like.join(", ")),
-                12.5,
-                400.0,
-                p.faint,
-            ));
+            text = text.child(
+                roles::META.line(format!("Sounds like {}", v.sounds_like.join(", ")), p.faint),
+            );
         }
         let term = v.term.clone();
-        let mut remove = pressable(label("Remove", 13.0, 500.0, p.soft))
+        let mut remove = pressable(roles::CONTROL.wrap("Remove", p.soft))
             .key(format!("hex-vocab-rm-{i}"))
             .label(format!("Remove {}", v.term))
             .px(8.0)
@@ -1224,10 +1221,10 @@ fn one_line(about: &str) -> String {
 fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
     let mut top = row()
         .gap(8.0)
-        .items_end()
-        .child(label(section.name(), 20.0, 600.0, p.ink));
+        .items_center()
+        .child(roles::SECTION.wrap(section.name(), p.ink));
     if let Some(n) = count {
-        top = top.child(label(n.to_string(), 14.0, 500.0, p.faint));
+        top = top.child(roles::count(n, p));
     }
     col()
         .key(format!("hex-head-{}", section.name()))
@@ -1236,7 +1233,7 @@ fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
         .mt(22.0)
         .mb(10.0)
         .child(top)
-        .child(label(section.blurb(), 14.0, 400.0, p.soft))
+        .child(roles::SMALL.wrap(section.blurb(), p.soft))
 }
 
 fn section_tab(section: Section, active: bool, p: Palette) -> El {
@@ -1301,7 +1298,7 @@ fn search_box(s: &State, k: &Kit, p: Palette) -> El {
 /// What stands in for the rows when there are none to show.
 fn empty_note(s: &State, p: Palette, text_: &'static str) -> Option<El> {
     let h = &s.hex;
-    (h.running() && h.settings_note.is_none()).then(|| label(text_, 14.0, 400.0, p.soft).py(8.0))
+    (h.running() && h.settings_note.is_none()).then(|| roles::SMALL.wrap(text_, p.soft).py(8.0))
 }
 
 fn state_notes(s: &State, p: Palette) -> Vec<El> {
@@ -1358,10 +1355,10 @@ fn fold(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, at: Place, items: &
             .items_center()
             .px(8.0)
             .py(10.0)
-            .child(label(chevron, 14.0, 500.0, p.soft).w(12.0))
-            .child(label(at.group_name(), 15.0, 600.0, p.ink))
-            .child(label(items.len().to_string(), 13.0, 500.0, p.faint))
-            .child(line(blurb, 13.0, 400.0, p.faint).grow(1.0).ml(6.0)),
+            .child(roles::CONTROL.wrap(chevron, p.soft).w(12.0))
+            .child(roles::TITLE.wrap(at.group_name(), p.ink))
+            .child(roles::count(items.len(), p))
+            .child(roles::META.line(blurb, p.faint).grow(1.0).ml(6.0)),
     )
     .key(format!("hex-fold-{id}"))
     .label(format!(
@@ -1417,14 +1414,12 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
         }
         return c;
     }
-    c = c.child(label(
+    c = c.child(roles::CONTROL.wrap(
         format!(
             "{} setting{} match",
             matches.len(),
             if matches.len() == 1 { "" } else { "s" }
         ),
-        13.5,
-        500.0,
         p.soft,
     ));
     for at in [
@@ -1448,7 +1443,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
             _ => format!("Advanced \u{b7} {}", at.group_name()),
         };
         c = c
-            .child(label(title, 12.5, 600.0, p.faint).mt(16.0).mb(2.0))
+            .child(roles::CAPTION.wrap(title, p.faint).mt(16.0).mb(2.0))
             .child(hairline(p))
             .child(rows(s, k, p, layer, &group));
     }
@@ -1557,36 +1552,26 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .min_w(220.0)
         .gap(2.0)
-        .child(label("Keep audio", 14.5, 500.0, p.ink))
-        .child(line(
-            "Transcripts, notes and summaries stay.",
-            12.5,
-            400.0,
-            p.faint,
-        ));
+        .child(roles::CONTROL.wrap("Keep audio", p.ink))
+        .child(roles::META.line("Transcripts, notes and summaries stay.", p.faint));
     if let Some(reason) = h.page_note().or(h.settings_note) {
-        text = text.child(label(reason, 12.5, 400.0, p.faint));
+        text = text.child(roles::META.wrap(reason, p.faint));
     } else if !can && !busy {
-        text = text.child(label(
-            "This Hex build cannot change audio expiry.",
-            12.5,
-            400.0,
-            p.faint,
-        ));
+        text = text.child(roles::META.wrap("This Hex build cannot change audio expiry.", p.faint));
     }
     if busy {
-        text = text.child(label("Saving.", 12.5, 400.0, p.faint));
+        text = text.child(roles::META.wrap("Saving.", p.faint));
     }
     if let Some(error) = h.row_errors.get("meetings.audio_retention") {
-        text = text.child(label(error.clone(), 12.5, 500.0, p.warn).role("alert"));
+        text = text.child(
+            roles::META
+                .medium()
+                .wrap(error.clone(), p.warn)
+                .role("alert"),
+        );
     }
     if enabled == Some(true) && current.is_none() {
-        text = text.child(label(
-            "Audio follows Keep whole meetings in Hex.",
-            12.5,
-            400.0,
-            p.faint,
-        ));
+        text = text.child(roles::META.wrap("Audio follows Keep whole meetings in Hex.", p.faint));
     }
     let options = ["24 hours", "7 days", "1 month", "Forever"].map(str::to_string);
     let control = Select::new("keep-audio", &options)
@@ -1625,27 +1610,28 @@ fn setting_row(s: &State, k: &Kit, st: &Setting, at: Place, p: Palette, layer: &
     let key = st.key.clone();
     let name = human(st, at);
     let can = editable(st) && h.can(Feature::SettingsSet) && !h.busy_keys.contains(&key);
-    let mut text =
-        col()
-            .gap(2.0)
-            .grow(1.0)
-            .min_w(220.0)
-            .child(label(name.clone(), 14.5, 500.0, p.ink));
+    let mut text = col()
+        .gap(2.0)
+        .grow(1.0)
+        .min_w(220.0)
+        .child(roles::CONTROL.wrap(name.clone(), p.ink));
     if !st.about.is_empty() {
         text = text.child(
-            line(one_line(&st.about), 12.5, 400.0, p.faint).help_when_truncated(st.about.clone()),
+            roles::META
+                .line(one_line(&st.about), p.faint)
+                .help_when_truncated(st.about.clone()),
         );
     }
     if st.available == Some(false) {
-        text = text.child(label("Not available here.", 12.5, 400.0, p.faint));
+        text = text.child(roles::META.wrap("Not available here.", p.faint));
     } else if !st.writable {
-        text = text.child(label("Read only.", 12.5, 400.0, p.faint));
+        text = text.child(roles::META.wrap("Read only.", p.faint));
     }
     if let Some(e) = h.row_errors.get(&key) {
-        text = text.child(label(e.clone(), 12.5, 500.0, p.warn).role("alert"));
+        text = text.child(roles::META.medium().wrap(e.clone(), p.warn).role("alert"));
     }
     if h.busy_keys.contains(&key) {
-        text = text.child(label("Saving.", 12.5, 400.0, p.faint));
+        text = text.child(roles::META.wrap("Saving.", p.faint));
     }
     // A folder or file path needs more room than a short value.
     let width = if st.kind == "path" { 360.0 } else { 220.0 };
@@ -1655,18 +1641,17 @@ fn setting_row(s: &State, k: &Kit, st: &Setting, at: Place, p: Palette, layer: &
         } else {
             setting_text(&st.value)
         };
-        line(
-            if shown.is_empty() {
-                "Not set".into()
-            } else {
-                shown.clone()
-            },
-            13.5,
-            400.0,
-            p.soft,
-        )
-        .w(width)
-        .help_when_truncated(shown)
+        roles::META
+            .line(
+                if shown.is_empty() {
+                    "Not set".into()
+                } else {
+                    shown.clone()
+                },
+                p.soft,
+            )
+            .w(width)
+            .help_when_truncated(shown)
     } else {
         match st.kind.as_str() {
             "bool" => {
@@ -1761,24 +1746,23 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
         .w_full()
         .gap(8.0)
         .child(section_head(Section::Features, None, p))
-        .child(label("Always on", 13.0, 600.0, p.soft))
-        .child(label(
-            "Meetings and notes, Ask, and Hex settings.",
-            14.0,
-            400.0,
-            p.ink,
-        ))
+        .child(roles::GROUP.wrap("Always on", p.soft))
+        .child(roles::SMALL.wrap("Meetings and notes, Ask, and Hex settings.", p.ink))
         .child(
-            label(
-                "Meeting to-dos stay visible. Turning a feature off keeps its data.",
-                13.0,
-                400.0,
-                p.soft,
-            )
-            .mb(12.0),
+            roles::META
+                .wrap(
+                    "Meeting to-dos stay visible. Turning a feature off keeps its data.",
+                    p.soft,
+                )
+                .mb(12.0),
         );
     if let Some(error) = &s.feature_error {
-        body = body.child(label(error.clone(), 13.0, 500.0, p.warn).role("alert"));
+        body = body.child(
+            roles::META
+                .medium()
+                .wrap(error.clone(), p.warn)
+                .role("alert"),
+        );
     }
     for feature in sidenote::core::Feature::ALL {
         body = body
@@ -1793,8 +1777,8 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
                             .grow(1.0)
                             .min_w(0.0)
                             .gap(4.0)
-                            .child(label(feature.name(), 15.0, 600.0, p.ink))
-                            .child(label(feature.description(), 13.5, 400.0, p.soft)),
+                            .child(roles::TITLE.wrap(feature.name(), p.ink))
+                            .child(roles::META.wrap(feature.description(), p.soft)),
                     )
                     .child(
                         Switch::new(s.config.features.enabled(feature))
