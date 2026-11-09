@@ -20,6 +20,13 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('sync-memory-merged', 'sync-memory-merged', '1320x900', $null, @()),
+    @('sync-task-merged', 'sync-task-merged', '1320x900', $null, @()),
+    @('sync-arrival-draft', 'sync-arrival-draft', '1320x900', $null, @()),
+    @('sync-footer-now', 'sync-footer-now', '1320x900', $null, @()),
+    @('sync-footer-age', 'sync-footer-age', '1320x900', $null, @()),
+    @('sync-footer-off', 'sync-footer-off', '1320x900', $null, @()),
+
     @('merge-worker-proof', 'merge-worker-proof', '1320x1000', $null, @()),
     @('merge-preparing', 'merge-preparing', '1320x1000', $null, @()),
     @('merge-preparing-560', 'merge-preparing', '560x1100', $null, @()),

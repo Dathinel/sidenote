@@ -1,6 +1,7 @@
 //! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
+mod arrival;
 mod ask;
 mod benchmark;
 mod check;
@@ -18,6 +19,7 @@ mod nav;
 mod project;
 mod project_merge;
 mod roles;
+mod sync_scene;
 mod tasks;
 mod theme;
 mod today;
@@ -38,7 +40,7 @@ use std::{
 
 /// The meeting the review renders use.
 const REVIEW_MEETING: &str = "1800000000000-1";
-const RESCAN_EVERY: Duration = Duration::from_secs(30);
+
 const DEFAULT_SIZE: (f32, f32) = (1320.0, 800.0);
 /// Under this width the window shows one thing at a time, and the sidebar is a drawer.
 const NARROW: f32 = 820.0;
@@ -94,7 +96,7 @@ pub enum Event {
     Hex(hex::Msg),
     Models(models::Msg),
     /// The scan, its errors, and the pipeline's `tasks.json` of each meeting.
-    Meetings(Vec<Meeting>, Vec<String>, core::Pipeline),
+    Meetings(Box<arrival::Snapshot>),
     Progress {
         id: String,
         generation: u64,
@@ -262,7 +264,11 @@ pub struct State {
     events_tx: Sender<Event>,
     events_rx: Receiver<Event>,
     edit_busy: bool,
-    scan_tx: Option<Sender<()>>,
+    applied_snapshot: u64,
+    applied_incoming: String,
+    applied_revisions: core::StoreRevisions,
+    scan_tx: Option<arrival::Handle>,
+    last_incoming: Option<Instant>,
     waker: Option<Waker>,
 }
 
@@ -409,9 +415,14 @@ impl State {
             events_tx,
             events_rx,
             edit_busy: false,
+            applied_snapshot: 0,
+            applied_incoming: String::new(),
+            applied_revisions: Default::default(),
             scan_tx: None,
+            last_incoming: None,
             waker: None,
         };
+        s.applied_incoming = arrival::remote_revision(&s.meetings);
         s.rebuild_nav();
         s.refresh_list();
         s.load_saved();
@@ -970,50 +981,101 @@ impl State {
                     self.memory.errors.insert("migration".into(), error);
                 }
             }
-            Event::Meetings(meetings, errors, pipeline) => {
+            Event::Meetings(snapshot) => {
+                if self.edit_busy
+                    || !snapshot.stamp.valid
+                    || snapshot.stamp.generation != core::mutation_generation()
+                    || snapshot.stamp.sequence <= self.applied_snapshot
+                    || snapshot.options != self.refresh_options()
+                {
+                    self.rescan();
+                    return;
+                }
+                if self.scan_tx.is_some() {
+                    debug_assert_ne!(snapshot.worker, std::thread::current().id());
+                }
+                let stores_changed = self.applied_revisions != snapshot.stamp.revisions;
+                let incoming = self.applied_incoming != snapshot.remote_revision;
+                self.applied_incoming = snapshot.remote_revision.clone();
+                self.applied_snapshot = snapshot.stamp.sequence;
+                self.applied_revisions = snapshot.stamp.revisions.clone();
+                let arrival::Snapshot {
+                    meetings,
+                    errors,
+                    pipeline,
+                    projects,
+                    overrides,
+                    cutoff,
+                    saved,
+                    memory,
+                    check,
+                    options,
+                    ..
+                } = *snapshot;
+                let before = serde_json::to_value((
+                    &self.tasks.projects,
+                    &self.tasks.overrides,
+                    &self.tasks.checked,
+                    &self.tasks.cutoff,
+                    &self.saved,
+                    &self.memory.records,
+                    &self.memory.proposals,
+                ))
+                .ok();
+                let catalog_changed = !same_catalog(&self.meetings, &meetings);
                 if !same_catalog(&self.meetings, &meetings) {
                     self.meetings = meetings;
                     // An open meeting that has gone away returns to the home list.
                     if self.selected.is_some() && self.current().is_none() {
                         self.selected = None;
-                        self.load_saved();
+                        self.saved = Saved::default();
                     }
                     self.refresh_list();
                 }
                 self.scan_errors = errors;
-                // Other devices can register projects, so read the merged names again.
-                if let Ok(projects) = self.tasks.store.load_projects() {
+                if let Some(projects) = projects {
+                    self.memory.projects = projects.clone();
                     self.tasks.projects = projects;
                 }
-                if let Ok(overrides) = self.tasks.store.load_overrides() {
+                if let Some(overrides) = overrides {
                     self.tasks.overrides = overrides;
                 }
-                if let Ok(settings) = self.tasks.store.load_settings() {
-                    self.tasks.cutoff = settings.cutoff();
+                if let Some(cutoff) = cutoff {
+                    self.tasks.cutoff = cutoff;
                 }
-                for meeting in &self.meetings {
-                    if let Ok(saved) = self.store.load(&meeting.id) {
-                        self.tasks.checked.insert(meeting.id.clone(), saved.checked);
-                    }
+                for (id, saved) in &saved {
+                    self.tasks.checked.insert(id.clone(), saved.checked.clone());
                 }
-                if let Ok(saved) = self.store.load(&self.ask_key())
-                    && self.saved != saved
-                {
-                    self.saved = saved;
-                    self.show_latest_question();
+                if let Some(saved) = saved.get(&self.ask_key()) {
+                    self.saved = saved.clone();
+                }
+                if let Some(file) = memory {
+                    self.memory.apply_file(file);
                 }
                 self.tasks.pipeline = pipeline;
                 self.rebuild_tasks();
                 self.live_scanned();
-                // The daily run writes its report from another process.
-                if self.config.features.daily_check {
-                    self.check.refresh();
+                if let Some(check) = check {
+                    self.check.apply_refresh(check);
                 }
-                if self.config.features.memory {
-                    self.memory.refresh(false);
+                if options.check_date != self.check.date {
+                    self.rescan();
                 }
-                if self.on_memory() {
-                    self.migration_prepare(false);
+                let after = serde_json::to_value((
+                    &self.tasks.projects,
+                    &self.tasks.overrides,
+                    &self.tasks.checked,
+                    &self.tasks.cutoff,
+                    &self.saved,
+                    &self.memory.records,
+                    &self.memory.proposals,
+                ))
+                .ok();
+                if incoming
+                    && (catalog_changed || stores_changed)
+                    && (catalog_changed || before != after)
+                {
+                    self.last_incoming = Some(Instant::now());
                 }
             }
             Event::Progress {
@@ -1045,9 +1107,16 @@ impl State {
         }
     }
 
+    fn refresh_options(&self) -> arrival::Options {
+        arrival::Options {
+            check_date: self.check.date,
+            memory: self.config.features.memory,
+            check: self.config.features.daily_check,
+        }
+    }
     pub fn rescan(&self) {
-        if let Some(tx) = &self.scan_tx {
-            let _ = tx.send(());
+        if let Some(handle) = &self.scan_tx {
+            handle.request(self.refresh_options());
         }
     }
 }
@@ -1075,39 +1144,27 @@ fn setup(s: &mut State, waker: Waker) {
     s.waker = Some(waker.clone());
     s.updates_start();
     s.hex_start(waker.clone());
-    let (tx, rx) = mpsc::channel::<()>();
-    s.scan_tx = Some(tx);
-    let events = s.events_tx.clone();
-    std::thread::spawn(move || {
-        // A focus signal or thirty quiet seconds triggers a scan. The window dropping its
-        // sender ends the thread.
-        loop {
-            if matches!(
-                rx.recv_timeout(RESCAN_EVERY),
-                Err(mpsc::RecvTimeoutError::Disconnected)
-            ) {
-                break;
-            }
-            let (meetings, errors) = core::scan();
-            let pipeline = core::load_pipeline(&meetings);
-            if events
-                .send(Event::Meetings(meetings, errors, pipeline))
-                .is_err()
-            {
-                break;
-            }
-            waker();
-        }
-    });
+    s.scan_tx = Some(arrival::start(waker, s.refresh_options()));
 }
 
-fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
+fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
     let mut changed = false;
-    let headless = rune::tooling::headless_run().is_some();
-    loop {
+    let deadline = Instant::now() + Duration::from_millis(4);
+    if !s.edit_busy
+        && let Some(snapshot) = s.scan_tx.as_ref().and_then(|h| h.take())
+    {
+        s.apply_event(Event::Meetings(snapshot));
+        changed = true;
+    }
+    let mut events = 0;
+    for _ in 0..8 {
+        if !headless && Instant::now() >= deadline {
+            break;
+        }
         match s.events_rx.try_recv() {
             Ok(event) => {
                 s.apply_event(event);
+                events += 1;
                 changed = true;
             }
             // A headless render has no event loop to wake, so it waits for a running Ask.
@@ -1122,6 +1179,16 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
             Err(_) => break,
         }
     }
+    if Instant::now() >= deadline
+        && let Some(waker) = &s.waker
+    {
+        waker();
+    }
+    (changed, events)
+}
+fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
+    let headless = rune::tooling::headless_run().is_some();
+    let (mut changed, _) = apply_pending(s, headless);
     // The Ask bar opens and folds in a commit of its own, so it moves instead of jumping.
     if s.ask_open != s.question.focused {
         s.ask_open = s.question.focused;
@@ -1748,6 +1815,21 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("sync-footer-now", |s| {
+                scene_sidebar(s, true);
+                s.last_incoming = Some(Instant::now());
+            }),
+            ("sync-footer-age", |s| {
+                scene_sidebar(s, true);
+                s.last_incoming = Instant::now().checked_sub(Duration::from_secs(300));
+            }),
+            ("sync-footer-off", |s| {
+                scene_sidebar(s, true);
+                s.last_incoming = None;
+            }),
+            ("sync-memory-merged", sync_scene::memory_scene),
+            ("sync-task-merged", sync_scene::task_scene),
+            ("sync-arrival-draft", sync_scene::arrival_scene),
             ("updates-settings", updates::settings_scene),
             ("updates-manual", |s| {
                 updates::scene(s, sidenote::updates::Phase::Manual)
@@ -2210,11 +2292,10 @@ pub fn spec() -> AppSpec<State> {
                 let (memory, check) = (s.config.features.memory, s.config.features.daily_check);
                 s.config.features.memory = false;
                 s.config.features.daily_check = false;
-                s.apply_event(Event::Meetings(
-                    published,
-                    Vec::new(),
-                    s.tasks.pipeline.clone(),
-                ));
+                let mut snapshot = arrival::Snapshot::read();
+                snapshot.meetings = published;
+                snapshot.pipeline = s.tasks.pipeline.clone();
+                s.apply_event(Event::Meetings(Box::new(snapshot)));
                 s.config.features.memory = memory;
                 s.config.features.daily_check = check;
             }),

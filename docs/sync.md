@@ -57,6 +57,27 @@ item changes and migration receipts. Reads combine all available device journals
 - Edits compare against the actual snapshot that was edited. They do not delete unrelated
   items that arrived while the operation was in progress.
 
+The editor keeps its edit-start value and merges it with changes already visible when Save
+runs. Different fields survive; if both changed one field, the current save wins. Publication
+runs on a worker and tries at most three times if more state arrives. A busy-store error
+keeps every input so Save can be retried. A meeting-task edit is rejected if its original
+text no longer occupies that index after summary regeneration.
+
+**Offline limit:** edits made on two devices while both are offline still resolve per whole
+item when their journals arrive. An offline owner change and an offline due-date change to
+the same task can therefore replace one another. Save-time merging cannot see a journal
+that has not arrived. Field-level offline convergence is deferred to the live sync engine.
+This version writes the existing `checked` representation, readable by the 16cc27a reader.
+
+The OS watcher batches arrivals for 200 ms, with a 60-second fallback. Catalog, state and
+daily-check reads run on its worker. A single latest-snapshot slot replaces older completed
+refreshes. Snapshots carry store revisions, a sequence and the local mutation generation;
+an inconsistent read or a snapshot older than a local save is discarded and refreshed.
+The UI applies at most one snapshot and eight other events per poll, with a 4 ms budget
+between event handlers. An individual model application can take longer than that budget.
+The footer records the last incoming application in the current window, without confirming
+that another device received local changes.
+
 No compaction or journal deletion is performed. Keep every journal, including tombstones,
 on every device. Removing old files manually can restore old state or lose history.
 Tombstones hide removed content from the merged view; they do not securely erase old journal
@@ -69,7 +90,7 @@ they are not authentication against a malicious device allowed to rewrite and re
 
 ## Migration and backup
 
-Migration happens automatically on load or the existing focus/30-second refresh. It reads
+Migration happens automatically on load or the watcher, focus or 60-second fallback refresh. It reads
 legacy per-meeting JSON, `all.json`, task overrides, projects, task settings, memory records,
 legacy company memory, triage and daily reports. It never overwrites, deletes or renames a
 legacy input. Existing supported `*.sync-conflict-*` copies are also read as legacy inputs.

@@ -137,6 +137,21 @@ pub struct CheckState {
     pub open_parts: BTreeSet<String>,
 }
 
+pub(super) struct Refresh {
+    pub dates: Vec<NaiveDate>,
+    pub date: Option<NaiveDate>,
+    pub report: Option<DailyCheck>,
+    pub saved_at: Option<DateTime<Local>>,
+    pub handled: HashMap<String, Handled>,
+    pub latest: Counts,
+    pub today: NaiveDate,
+    pub notice: Option<String>,
+    pub baseline_titles: HashMap<String, String>,
+    pub strip: Vec<StripDay>,
+    pub done_on: HashMap<(String, usize), NaiveDate>,
+    pub totals: HashMap<NaiveDate, (usize, Option<usize>)>,
+    pub day_summaries: HashMap<NaiveDate, String>,
+}
 impl Default for CheckState {
     fn default() -> Self {
         Self {
@@ -327,6 +342,43 @@ impl CheckState {
         }
     }
 
+    pub(super) fn read_refresh(date: Option<NaiveDate>) -> Refresh {
+        let mut fresh = Self {
+            date,
+            ..Self::default()
+        };
+        fresh.refresh();
+        Refresh {
+            dates: fresh.dates,
+            date: fresh.date,
+            report: fresh.report,
+            saved_at: fresh.saved_at,
+            handled: fresh.handled,
+            latest: fresh.latest,
+            today: fresh.today,
+            notice: fresh.notice,
+            baseline_titles: fresh.baseline_titles,
+            strip: fresh.strip,
+            done_on: fresh.done_on,
+            totals: fresh.totals,
+            day_summaries: fresh.day_summaries,
+        }
+    }
+    pub(super) fn apply_refresh(&mut self, fresh: Refresh) {
+        self.dates = fresh.dates;
+        self.date = fresh.date;
+        self.report = fresh.report;
+        self.saved_at = fresh.saved_at;
+        self.handled = fresh.handled;
+        self.latest = fresh.latest;
+        self.today = fresh.today;
+        self.notice = fresh.notice;
+        self.baseline_titles = fresh.baseline_titles;
+        self.strip = fresh.strip;
+        self.done_on = fresh.done_on;
+        self.totals = fresh.totals;
+        self.day_summaries = fresh.day_summaries;
+    }
     /// Titles for the ids in the comparison, from the baseline report.
     fn load_baseline(&mut self, r: &DailyCheck) {
         let Some(date) = r.content.comparison.baseline_date else {
