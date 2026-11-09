@@ -48,10 +48,12 @@ impl Editor {
         self.inventory = inventory;
     }
     pub fn dirty(&self) -> bool {
-        self.rows
-            .iter()
-            .any(|r| !r.area.text.is_empty() || !r.assignments.is_empty() || !r.children.is_empty())
-            || !self.name.text.is_empty()
+        self.rows.iter().any(|r| {
+            r.convert
+                || !r.area.text.is_empty()
+                || !r.assignments.is_empty()
+                || !r.children.is_empty()
+        }) || !self.name.text.is_empty()
     }
     pub fn merge_catalog(&mut self, c: &Catalog) {
         if !matches!(self.action, Action::Migrate { .. }) {

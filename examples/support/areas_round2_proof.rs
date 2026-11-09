@@ -368,7 +368,21 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert!(core::memory::MemoryStore::new(root.clone()).load().is_ok());
         }
         "r2-extra-cap" => {
+            let long_name = format!("Synthetic outcome {}", "paper ".repeat(20))
+                .trim()
+                .to_string();
+            store.add_project(&long_name).unwrap();
             migrate(store);
+            let p = store.load_projects().unwrap();
+            assert!(
+                p.area_catalog()
+                    .unwrap()
+                    .project(&p, &long_name)
+                    .unwrap()
+                    .area_id
+                    .is_some(),
+                "The area name cap must not quarantine existing long project names"
+            );
             let id = catalog(store).area_matches("Supply")[0].id.clone();
             store
                 .update_projects(|p| {

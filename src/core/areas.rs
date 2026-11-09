@@ -174,9 +174,9 @@ fn valid_item(prefix: &str, id: &str, value: &Value) -> bool {
     };
     if matches!(prefix, "area:" | "area-project:")
         && (value["id"].as_str() != Some(id)
-            || value["name"]
-                .as_str()
-                .is_none_or(|n| n.trim().is_empty() || n.chars().count() > 80))
+            || value["name"].as_str().is_none_or(|n| {
+                n.trim().is_empty() || (prefix == "area:" && n.chars().count() > 80)
+            }))
     {
         return false;
     }

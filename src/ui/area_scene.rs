@@ -278,6 +278,12 @@ fn large(s: &mut State, kind: &str) {
     s.start_area(super::area_editor::migration(&s.areas.catalog));
     wait(s);
     assert_eq!(s.areas.editor.as_ref().unwrap().inventory.counts[1], 800);
+    s.areas.editor.as_mut().unwrap().rows[0].convert = true;
+    assert!(
+        s.areas.editor.as_ref().unwrap().dirty(),
+        "A default choice needs discard confirmation even before an area name is typed"
+    );
+    s.areas.editor.as_mut().unwrap().rows[0].convert = false;
     if kind != "large-migration" {
         let e = s.areas.editor.as_mut().unwrap();
         for row in &mut e.rows {
