@@ -5,6 +5,7 @@ pub const CASES: &[&str] = &[
     "r2-version-gate",
     "r2-renames",
     "r2-receipt-paths",
+    "r2-merge-receipt-paths",
     "r2-scoped-undo",
     "r2-quarantine",
     "r2-extra-cap",
@@ -305,6 +306,82 @@ pub fn run(mode: &str, store: &TaskStore) {
                 })
                 .unwrap();
             store.undo_area(&id).unwrap();
+        }
+        "r2-merge-receipt-paths" => {
+            let preview = store.preview_merge(SOURCE, CHILD).unwrap();
+            let merged = store.merge_projects(&preview).unwrap();
+            let receipt = merged.merges[SOURCE].clone();
+            assert!(store.local_project_merge_backup(SOURCE, &receipt).is_ok());
+            let state_before = protected(root);
+            for id in [
+                r"..\..\outside",
+                r"\\host\share\outside",
+                r"C:relative",
+                r"C:\outside",
+                "invalid-operation-id",
+            ] {
+                let mut bad = receipt.clone();
+                bad.id = id.into();
+                bad.backup = root
+                    .join("local/project-merges")
+                    .join(id)
+                    .join("backup.json");
+                store
+                    .update_projects(|p| {
+                        p.merges.insert(SOURCE.into(), bad.clone());
+                    })
+                    .unwrap();
+                assert!(store.local_project_merge_backup(SOURCE, &bad).is_err());
+                assert!(store.undo_project_merge(SOURCE, id).is_err());
+            }
+            store
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), receipt.clone());
+                })
+                .unwrap();
+            let bytes = fs::read(&receipt.backup).unwrap();
+            fs::write(&receipt.backup, vec![b' '; 16 * 1024 * 1024 + 1]).unwrap();
+            assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
+            fs::write(&receipt.backup, &bytes).unwrap();
+            let dir = receipt.backup.parent().unwrap();
+            let saved = dir.with_extension("saved");
+            fs::rename(dir, &saved).unwrap();
+            assert!(
+                Command::new("cmd")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(dir)
+                    .arg(&saved)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(store.local_project_merge_backup(SOURCE, &receipt).is_err());
+            assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
+            fs::remove_dir(dir).unwrap();
+            fs::rename(&saved, dir).unwrap();
+            let forger = peer(store, "merge-receipt-peer");
+            let mut fake = receipt.clone();
+            fake.checksum = "peer-forgery".into();
+            forger
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), fake.clone());
+                })
+                .unwrap();
+            copy_tree(&forger.root.join("state"), &root.join("state"));
+            assert!(store.local_project_merge_backup(SOURCE, &fake).is_err());
+            assert!(store.undo_project_merge(SOURCE, &fake.id).is_err());
+            assert_eq!(
+                protected(root),
+                state_before,
+                "Refused Undo leaves source bytes intact"
+            );
+            store
+                .update_projects(|p| {
+                    p.merges.insert(SOURCE.into(), receipt.clone());
+                })
+                .unwrap();
+            store.undo_project_merge(SOURCE, &receipt.id).unwrap();
+            assert!(!store.load_projects().unwrap().merges.contains_key(SOURCE));
         }
         "r2-scoped-undo" => {
             migrate(store);

@@ -39,6 +39,7 @@ pub struct AreaUi {
     pub catalog_revision: String,
     pub notice: Option<String>,
     pub undo_available: std::collections::BTreeSet<String>,
+    pub merge_undo_available: std::collections::BTreeSet<String>,
     pub receipt_devices: BTreeMap<String, String>,
     pub show_all: bool,
 }
@@ -52,6 +53,7 @@ pub struct Snapshot {
     revision: String,
     inventory: Option<core::area_ops::Inventory>,
     undo_available: std::collections::BTreeSet<String>,
+    merge_undo_available: std::collections::BTreeSet<String>,
     receipt_devices: BTreeMap<String, String>,
     checked: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
     all_tasks: Vec<core::TaskItem>,
@@ -192,12 +194,13 @@ impl State {
                     let mut meeting_projects = super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
                     for (id,target) in &activity.meetings { if let Some(chip)=meeting_projects.get_mut(id) {chip.name=target.project_id.as_ref().and_then(|id|catalog.projects.get(id)).map(|p|p.name.clone());} }
                     let receipts=projects.area_receipts()?;
+                    let merge_undo_available = projects.merges.iter().filter(|(from, merge)| merge.active && store.local_project_merge_backup(from, merge).is_ok()).map(|(_, merge)| merge.id.clone()).collect();
                     let undo_available=receipts.iter().filter(|(id,r)|core::area_ops::receipt_backup(&store.root,id,r,&own_device).is_ok()).map(|(id,_)|id.clone()).collect();
                     let receipt_devices=receipts.values().map(|r|(r.device.clone(),core::area_version::device_name(&store.root,&r.device))).collect();
                     Ok(Completion::Refreshed(Box::new(Snapshot {
                         revision:blake3::hash(&serde_json::to_vec(&projects)?).to_hex().to_string(),
                         inventory:if migration_open {Some(store.area_references()?)} else {None},
-                        undo_available, receipt_devices,
+                        undo_available, merge_undo_available, receipt_devices,
                         meeting_projects,
                         project_labels,
                         alias_names,
@@ -372,6 +375,7 @@ impl State {
                     e.set_inventory(inventory);
                 }
                 self.areas.undo_available = snapshot.undo_available;
+                self.areas.merge_undo_available = snapshot.merge_undo_available;
                 self.areas.receipt_devices = snapshot.receipt_devices;
                 self.tasks.today = chrono::Local::now().date_naive();
                 self.tasks.checked = snapshot.checked;

@@ -238,15 +238,53 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
             continue;
         }
         let changed = s.tasks.projects.aliases.get(from) != Some(&merge.into);
+        let local = s.areas.merge_undo_available.contains(&merge.id);
         let (from, id) = (from.clone(), merge.id.clone());
         let undoing = s.project_merge.pending == Some(Pending::Undo);
-        content = content.child(col().w_full().gap(6.0).px(12.0).py(12.0).radius(8.0).fill(p.okbg)
-            .child(roles::NAME.wrap(if changed { format!("Alias changed for {from}") } else { format!("Merged {from} into {name}") }, p.ink))
-            .child(roles::SMALL.wrap(if changed { "This project was renamed after the merge. Undo will not replace that choice." }
-                else { "The old name is an alias. Notes and source files are preserved." }, p.soft))
-            .child(pressable(roles::META.wrap("Readable backup saved locally", p.faint)).help(merge.backup.display().to_string()))
-            .child(button(if undoing { "Undoing..." } else { "Undo merge" }, "project-undo", p).self_start().disabled(busy)
-                .on_press(move |s: &mut State| s.undo_project_merge(&from, &id))));
+        let mut card = col()
+            .w_full()
+            .gap(6.0)
+            .px(12.0)
+            .py(12.0)
+            .radius(8.0)
+            .fill(p.okbg)
+            .child(roles::NAME.wrap(
+                if changed {
+                    format!("Alias changed for {from}")
+                } else {
+                    format!("Merged {from} into {name}")
+                },
+                p.ink,
+            ))
+            .child(roles::SMALL.wrap(
+                if changed {
+                    "This project was renamed after the merge. Undo will not replace that choice."
+                } else {
+                    "The old name is an alias. Notes and source files are preserved."
+                },
+                p.soft,
+            ))
+            .child(roles::META.wrap(
+                if local {
+                    "Backup saved on this device"
+                } else {
+                    "Undo is available on the device that wrote this merge"
+                },
+                p.faint,
+            ));
+        if local {
+            card = card.child(
+                button(
+                    if undoing { "Undoing..." } else { "Undo merge" },
+                    "project-undo",
+                    p,
+                )
+                .self_start()
+                .disabled(busy)
+                .on_press(move |s: &mut State| s.undo_project_merge(&from, &id)),
+            );
+        }
+        content = content.child(card);
     }
     if let Some(from) = &s.project_merge.from {
         let mut card = col()
