@@ -240,7 +240,16 @@ fn process(
             "existing notes preserved",
         );
     }
-    let mut transcript = transcript::write(&folder)?;
+    let mut transcript = if job.request == Some(Request::RedoTasks) {
+        let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
+        if existing.trim().is_empty() {
+            transcript::read(&folder)?
+        } else {
+            existing
+        }
+    } else {
+        transcript::write(&folder)?
+    };
     if transcript.is_empty() {
         return write(root, id, job, JobState::Empty, "empty transcript");
     }
@@ -683,11 +692,13 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
     let raw = text(&path, file_reads::SUMMARY_MAX)?;
     let mut source: serde_json::Value = serde_json::from_str(&raw)?;
     let old: core::Summary = serde_json::from_value(source.clone())?;
+    let typed = text(&folder.join("notes.md"), file_reads::JOURNAL_MAX)?;
     let material = format!(
-        "Extract the tasks from this meeting. Only redo the tasks.\nTeams: {}\nTranscript:\n{}\nExisting notes:\n{}",
+        "Extract the tasks from this meeting. Only redo the tasks.\nTeams: {}\nTranscript:\n{}\nExisting notes:\n{}\nUser notes:\n{}",
         serde_json::to_string(teams)?,
         transcript,
-        raw
+        raw,
+        typed
     );
     let helper = settings
         .helper

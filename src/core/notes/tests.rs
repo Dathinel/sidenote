@@ -626,3 +626,33 @@ fn failed_redo_keeps_original_summary_and_overrides() {
     );
     assert_eq!(state(&root.0), JobState::BadOutput);
 }
+
+#[test]
+fn redo_uses_existing_english_transcript_without_rewriting_it() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::remove_file(folder.join("transcript.ndjson")).unwrap();
+    let transcript = "[00:00:01.000] You (English): Send the paper proof.\n";
+    fs::write(folder.join("english-transcript.md"), transcript).unwrap();
+    fs::write(folder.join("english-summary.json"), summary()).unwrap();
+    fs::write(folder.join("notes.md"), "Use the folded sample.").unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, Some(Request::RedoTasks));
+    let mut fake = Fake::new(vec![
+        Ok(serde_json::json!({"todo":[{"title":"Send the paper proof"}]}).to_string()),
+        Ok(sorted()),
+    ]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(
+        state(&root.0),
+        JobState::Done {
+            tasks_failed: false,
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read_to_string(folder.join("english-transcript.md")).unwrap(),
+        transcript
+    );
+    assert!(fake.calls[0].0.contains("Use the folded sample."));
+}

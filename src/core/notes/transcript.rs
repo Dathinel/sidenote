@@ -46,7 +46,7 @@ pub(super) fn render(raw: &str) -> String {
     out
 }
 
-pub(super) fn write(folder: &Path) -> io::Result<String> {
+pub(super) fn read(folder: &Path) -> io::Result<String> {
     let original = folder.join("hex-original/transcript.ndjson");
     let source = if original.is_file() {
         original
@@ -58,7 +58,10 @@ pub(super) fn write(folder: &Path) -> io::Result<String> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
-    let text = render(&String::from_utf8_lossy(&bytes));
+    Ok(render(&String::from_utf8_lossy(&bytes)))
+}
+pub(super) fn write(folder: &Path) -> io::Result<String> {
+    let text = read(folder)?;
     store_io::atomic_write(&folder.join("english-transcript.md"), text.as_bytes())?;
     Ok(text)
 }

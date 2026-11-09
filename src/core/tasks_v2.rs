@@ -423,6 +423,12 @@ pub fn redo_matches(old: &[Todo], new: &[Todo]) -> Vec<Option<usize>> {
 impl TaskStore {
     pub fn preserve_redo(&self, meeting: &str, old: &[Todo], new: &[Todo]) -> io::Result<()> {
         let matches = redo_matches(old, new);
+        let ids: BTreeMap<_, _> = new
+            .iter()
+            .zip(&matches)
+            .filter_map(|(next, matched)| matched.map(|i| (old[i].id.clone(), next.id.clone())))
+            .filter(|(id, _)| !id.is_empty())
+            .collect();
         self.update_overrides(|overrides| {
             let before = overrides.clone();
             for (next, matched) in new.iter().zip(&matches) {
@@ -432,6 +438,12 @@ impl TaskStore {
                     .cloned()
                 {
                     edit.task = Some(next.text().into());
+                    if let Some(waiting) = edit.waiting_on.as_mut()
+                        && let Some(id) = waiting.task_id.as_mut()
+                        && let Some(next) = ids.get(id)
+                    {
+                        *id = next.clone();
+                    }
                     for sub in &next.subtasks {
                         if let Some(previous) = old[*i]
                             .subtasks
@@ -896,5 +908,44 @@ mod tests {
         let tasks = f.tasks(&overrides);
         assert_eq!(tasks[0].status, TaskStatus::Review);
         assert_eq!(tasks[0].due.as_deref(), Some("2026-11-12"));
+    }
+    #[test]
+    fn redo_remaps_a_user_waiting_link_when_task_ids_change() {
+        let f = Fixture::new(
+            json!([{"id":"a","title":"Send proof"},{"id":"b","title":"Approve proof"}]),
+        );
+        let store = f.store();
+        let task = f.tasks(&Overrides::default()).remove(0);
+        store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Status(
+                    TaskStatus::Waiting,
+                    Some(WaitingOn {
+                        task_id: Some("b".into()),
+                        text: None,
+                    }),
+                ),
+            )
+            .unwrap();
+        let mut next = f.meeting.summary.todo.clone();
+        next[0].id = "aa".into();
+        next[1].id = "bb".into();
+        store
+            .preserve_redo(&f.meeting.id, &f.meeting.summary.todo, &next)
+            .unwrap();
+        let overrides = store.load_overrides().unwrap();
+        assert_eq!(
+            overrides
+                .match_task(&f.meeting.id, "aa", "Send proof", 0)
+                .unwrap()
+                .waiting_on
+                .as_ref()
+                .unwrap()
+                .task_id
+                .as_deref(),
+            Some("bb")
+        );
     }
 }
