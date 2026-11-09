@@ -33,11 +33,14 @@ function Write-DependencyNotices {
         [string]$StandardLicenseRoot = (Join-Path $PSScriptRoot 'licenses'),
         [string]$LicenseChoicesPath = (Join-Path $PSScriptRoot 'license_choices.json')
     )
+    if (-not $Metadata.resolve) { throw 'Cargo metadata must include its resolve graph.' }
+    $resolved = @{}
+    foreach ($node in $Metadata.resolve.nodes) { $resolved[$node.id] = $true }
     $choices = Get-Content -LiteralPath $LicenseChoicesPath -Raw | ConvertFrom-Json
     $inventory = @('# Dependency notices', '', 'Notices for every dependency in the locked Cargo inventory.', '')
     $coverage = @()
     $usedStandards = @{}
-    foreach ($package in $Metadata.packages | Sort-Object name, version) {
+    foreach ($package in $Metadata.packages | Where-Object { $resolved.ContainsKey($_.id) } | Sort-Object name, version) {
         if ($package.id -in $Metadata.workspace_members) { continue }
         if ($package.name -notmatch '^[A-Za-z0-9._+-]+$' -or $package.version -notmatch '^[A-Za-z0-9._+-]+$') {
             throw 'Invalid dependency notice folder name.'

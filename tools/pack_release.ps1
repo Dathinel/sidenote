@@ -21,7 +21,7 @@ Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
     if (-not $version) { throw 'Cargo.toml has no package version.' }
-    $metadataJson = & cargo metadata --offline --locked --all-features --format-version 1
+    $metadataJson = & cargo metadata --offline --locked --filter-platform x86_64-pc-windows-gnu --format-version 1
     if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
     $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
     $stage = "$root/artifacts/updates-core/package-$version-$([guid]::NewGuid().ToString('N'))"

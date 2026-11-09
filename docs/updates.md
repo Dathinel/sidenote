@@ -39,7 +39,10 @@ feeds: hashes detect corruption but do not authenticate an unsigned publisher.
 The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
 the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,
 copyright and notice files under `dependency-notices/<crate>-<version>/`.
-Notices cover the locked offline Cargo inventory, including optional dependencies.
+Notices cover the locked Windows GNU dependency graph with the same default
+features used by the release build. Cargo metadata uses
+`--filter-platform x86_64-pc-windows-gnu`; the generator also follows the returned
+resolve-node IDs, so packages from other platform graphs are not bundled.
 For crates that omit licence files, `tools/dependency_notices.ps1` generates a
 notice from the crate's name, version, authors (or repository) and complete
 declared licence expression. The common permissive texts committed under
@@ -50,12 +53,10 @@ licence exceptions and missing attribution stay uncovered.
 Owner-approved choices of declared standalone OR alternatives are recorded in
 `tools/license_choices.json`, scoped to an exact crate version and expression.
 The notice records both the full declaration and the selected licence.
-The packer writes
-`DEPENDENCY_NOTICE_COVERAGE.json` and refuses every uncovered dependency before
+The packer writes `DEPENDENCY_NOTICE_COVERAGE.json` and refuses every uncovered dependency before
 building or packing. `tools/dependency_notices_proof.ps1` checks both generated
 notices and refusal cases in fresh OS temp folders, and runs in CI.
-For Git workspace
-dependencies, shared notices are collected from the checkout root. Original relative paths
+For Git workspace dependencies, shared notices are collected from the checkout root. Original relative paths
 are preserved. Fetch the locked sources before the offline packaging step.
 
 The default release output is `<checkout>/artifacts/releases`. Set `-Feed` to
