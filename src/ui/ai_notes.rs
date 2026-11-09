@@ -387,6 +387,7 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
         ));
     let input = rune::text_input(&e.text, roles::SMALL.style())
         .key(format!("instructions-input-{index}"))
+        .min_h(8.0 * roles::SMALL.lh)
         .color(p.ink)
         .wrap_anywhere()
         .caret(p.ink, p.hit)
