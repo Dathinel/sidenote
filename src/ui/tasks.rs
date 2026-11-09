@@ -1582,7 +1582,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .gap(3.0)
             .child(title)
             .children(
-                (t.status != core::TaskStatus::Todo && !t.done)
+                (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none())
                     .then(|| roles::META.wrap(t.status_label(), p.accent)),
             )
             .children(
