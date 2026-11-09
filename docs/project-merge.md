@@ -46,7 +46,7 @@ dropping any items. They are not automatic merge suggestions.
 No tests are run locally. `examples/project_merge_proof.rs` is a separate-process
 synthetic proof driver, invoked by `tools/project_merge_proof.ps1`. It requires
 explicit data, meetings and peer folders under
-`E:/Personal-Projects/reviews/project-merge-proof`. It checks merge inventory,
+`<checkout>/artifacts/project-merge-proof`. It checks merge inventory,
 source byte preservation, alias search and proposals, completed manual tasks,
 meetings without tasks, peer writes, stale previews, backup checksum refusal,
 crash after backup, retry and exact project-view restoration after restart. Boundary

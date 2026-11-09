@@ -8,6 +8,32 @@ You need Windows, Hex, and an installed agent CLI such as Claude Code
 or Codex for Ask. Configure a provider and model you can use. Provider calls may
 send meeting text to that provider. Reading saved meetings does not require an agent.
 
+## Install and updates
+
+Download `sidenote-win-Setup.exe` from the latest stable
+[GitHub Release](https://github.com/harshanandak/hex-meetings/releases/latest).
+Run Setup to install Sidenote for your Windows user. The 0.0.1 installer is
+**unsigned**: Windows may show "Windows protected your PC". After checking that
+the file came from that release, choose **More info**, then **Run anyway**.
+If your organisation blocks unsigned applications, ask its administrator to
+approve the installer; that policy may prevent the override.
+
+Installed copies check GitHub Releases when opened, every six hours, and when
+the window gets focus if the last attempt was over 30 minutes ago. Updates
+download in the background. Use **Settings > Updates > Install and restart**,
+or keep working and install the pending update on the next launch. Installation
+waits for recording and background jobs to finish. A manually copied executable
+does not update. `SIDENOTE_UPDATE_FEED` overrides GitHub with a local development
+folder; clear it for public updates. See [release and update details](docs/updates.md).
+
+The notes pipeline still needs separately installed helpers. On a PC without
+them, recording works but Sidenote says "Meeting notes are not set up on this PC".
+Meeting notes move into the app in 0.0.2.
+
+If you used the private 0.0.6 build, back up `%APPDATA%/hex-meetings`, uninstall
+0.0.6, then install 0.0.1. Clear `SIDENOTE_UPDATE_FEED` or point it at a fresh,
+empty folder; the old development feed can otherwise offer 0.0.6 again.
+
 ## Build
 
 Install Rust (stable), the `x86_64-pc-windows-gnu` target and a full MinGW GNU

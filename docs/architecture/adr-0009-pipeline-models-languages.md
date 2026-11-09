@@ -192,7 +192,7 @@ Lane M0 measures the baseline plus WER (mixed-script normalization) and CPU real
 - IndicTrans2: https://arxiv.org/pdf/2305.16307
 - NLLB licence: https://github.com/facebookresearch/fairseq/blob/nllb/README.md
 - MADLAD-400: https://huggingface.co/google/madlad400-3b-mt
-- Indic ASR research, 2026-11-08 (source reading, no live measurement): `E:\Personal-Projects\reviews\hex-meetings-2026-11-08\indic-asr-research.md`
+- Indic ASR research, 2026-11-08 (source reading, no live measurement): `<review-root>/hex-meetings-2026-11-08/indic-asr-research.md`
 - Ollama OpenAI compatibility: https://docs.ollama.com/api/openai-compatibility
 - llama.cpp server: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
 - LM Studio staff picks: https://lmstudio.ai/changelog/lmstudio-v0.3.16

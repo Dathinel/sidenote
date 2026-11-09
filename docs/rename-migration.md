@@ -74,7 +74,7 @@ real app data, pipeline scripts, scheduled tasks, listener or MCP registrations.
 ## Read-only pipeline inventory
 
 Searched case-insensitively for `hex-meetings` under
-`C:\Users\harsha_befach\.config\hex\scripts` on 2026-11-08. Each matching line is
+`%USERPROFILE%\.config\hex\scripts` on 2026-11-08. Each matching line is
 listed once, including backups. Paths below are relative to that directory.
 No script was edited or executed.
 

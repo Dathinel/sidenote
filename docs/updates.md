@@ -1,25 +1,66 @@
-# Local updates
+# Releases and updates
 
 Sidenote uses Velopack 0.0.1298 (MIT). Packaging uses the matching CLI and the
 per-user .NET SDK 8.0.427. These builds are unsigned.
 
-Set `SIDENOTE_UPDATE_FEED` in the launching environment to an absolute local
-folder or UNC file share containing `releases.win.json` and its packages.
-There is no HTTP update source and no repository URL. Apply preparation makes
-loopback-only HTTP requests to Hex's local status API. There is no other network
-request from the updater; a UNC file share uses Windows file I/O. A missing feed
-produces a retryable error. An unset feed disables automatic checks.
+Installed copies check the public HTTPS feed at
+`https://github.com/harshanandak/hex-meetings/releases/latest/download/`.
+Velopack's built-in `HttpSource` reads `releases.win.json` from that base URL
+and downloads the named packages from the same base. No additional dependency
+or Velopack feature is required. Checks run at startup and every six hours.
+Window focus also wakes the existing update worker when it is idle; the worker
+checks only if its last attempt (including a failure) was over 30 minutes ago.
+Manual builds do not start the worker. Manual checks can retry sooner.
 
-Run `tools/pack_release.ps1 -ReleaseNotes <markdown-file>` after changing the
-package version in Cargo.toml. The script builds at BelowNormal priority with
-the shared GNU target directory, copies its own binary and packages locally.
-It retains three full versions and their deltas. Publish a previous build with
-a higher version to roll back. Restrict write access to the feed: hashes detect
-corruption, but an unsigned feed does not authenticate its publisher.
+For development, set `SIDENOTE_UPDATE_FEED` in the launching environment to an
+absolute local folder or UNC file share containing `releases.win.json` and its
+packages. This replaces the public source; URLs and relative paths are rejected.
+Clear the override to return to GitHub Releases. Restrict write access to local
+feeds: hashes detect corruption but do not authenticate an unsigned publisher.
+
+## Pack and publish a release
+
+1. Set the package version in `Cargo.toml` and update the workspace package's
+   entry in `Cargo.lock`. Use a fresh output folder for the initial 0.0.1 feed;
+   never publish the private 0.0.6 feed to this public channel.
+2. Install the matching Velopack CLI 0.0.1298 and .NET SDK. From the checkout,
+   run `tools/pack_release.ps1 -Feed <absolute-output-folder> -ReleaseNotes <markdown-file>`.
+   The script builds and packs locally; it does not upload anything.
+3. Create a public GitHub Release in `harshanandak/hex-meetings`, tagged with the
+   package version (for example `v0.0.1`). Upload the generated `sidenote-win-Setup.exe`,
+   `releases.win.json`, and **every `.nupkg` referenced by that JSON**, preserving
+   filenames. Also retain the generated `RELEASES` manifest if present.
+   The feed and all referenced packages must be assets on this same release,
+   even when a package came from an older release. The app downloads full packages.
+4. Mark the release as the latest stable release, not a draft or prerelease.
+   The `/releases/latest/download/` URL must resolve to the release containing
+   the complete feed. Verify its assets before announcing it.
+
+The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
+the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,
+copyright and notice files under `dependency-notices/<crate>-<version>/`.
+Notices come from the locked offline Cargo cache, including optional dependencies;
+packing fails if a dependency has no cached notice files. For Git workspace
+dependencies, shared notices are collected from the checkout root. Original relative paths
+are preserved. Fetch the locked sources before the offline packaging step.
+
+The default release output is `<checkout>/artifacts/releases`. Set `-Feed` to
+choose another absolute folder. The script uses Cargo's configured target
+directory (including `CARGO_TARGET_DIR`), `DOTNET_ROOT` or `-DotnetRoot`, and
+`RUST_GNU_BIN` or `-GnuBin` rather than machine-specific tool paths. Each pack
+uses a fresh staging folder under `artifacts/updates-core`.
+
+The script retains three full versions and their deltas in its local output.
+Publish a previous build with a higher version to roll back. These installers
+and packages are unsigned. No release is packed or uploaded by ordinary builds.
 
 `--update-check` checks and downloads. `--update-status` reports the current
 version, isolated paths, source and last status in JSON and writes the same
-report to `%LOCALAPPDATA%/Sidenote/updates/update-report.json`. `--update-apply` follows the same safety
+report to `%LOCALAPPDATA%/Sidenote/updates/update-report.json`.
+The report is also refreshed when the window's update worker starts, after an
+update hook, and whenever update status is saved. `current_version` comes from
+the running binary; `reported_at` is a UTC RFC 3339 timestamp. Reports are replaced
+atomically so readers do not see a partially written JSON file. `--update-apply` follows the same safety
 and listener path as the window, then restarts to `--update-status` for proof.
 No CLI helper silently applies a cached update. The normal window tries a
 verified pending package at its next startup. All apply paths recheck SHA256.
@@ -92,11 +133,11 @@ them using the stable executable path.
    Change its launcher to a new Sidenote task pointing to
    `%LOCALAPPDATA%/sidenote/current/sidenote.exe --listen`, with single-instance
    task policy. Keep the old task disabled for rollback.
-5. Change known MCP configs to that same stable exe with `--mcp`. Set the local
-   feed in the window's launching environment. Launch and check data and listener
+5. Change known MCP configs to that same stable exe with `--mcp`. Clear any development feed
+   override in the window's launching environment. Launch and check data and listener
    status before using Install and restart.
 6. To reverse the migration, stop the new listener and restore the saved task and
    MCP definitions. The old install and data remain available.
 
-No migration is performed by this lane. D1's hosted release and CI install job
-remain deferred under the owner's local-only instruction. Nothing is uploaded.
+Packing and publication are manual release steps. Ordinary app startup never
+uploads packages or changes GitHub releases.

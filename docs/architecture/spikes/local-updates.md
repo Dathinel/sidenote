@@ -22,7 +22,7 @@ probe. A launch without a pending package does not wait on Hex to discover that
 there is nothing to apply. MCP, listener and daily-check entry points do not run
 the update service or this apply path.
 
-The isolated evidence lives under `E:/Personal-Projects/reviews/updates-proof`.
+The isolated evidence lives under `<proof-root>/updates-proof`.
 The two release versions are proof-only overrides, not committed app versions.
 
 The installed proof also showed that Velopack kills app-root processes again

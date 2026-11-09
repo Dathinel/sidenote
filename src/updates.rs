@@ -1,4 +1,4 @@
-//! Local Velopack feeds. Checks and downloads never apply an update.
+//! Public and local Velopack feeds. Checks and downloads never apply an update.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -12,7 +12,7 @@ use std::{
 };
 use velopack::{
     UpdateCheck, UpdateManager, VelopackAsset,
-    sources::{FileSource, UpdateSource},
+    sources::{FileSource, HttpSource, UpdateSource},
 };
 
 #[derive(Clone)]
@@ -73,6 +73,9 @@ impl UpdateSource for LocalSource {
     }
 }
 fn cache_path(asset: &VelopackAsset) -> Result<PathBuf, String> {
+    if !valid_asset(asset) {
+        return Err("The update package is invalid.".into());
+    }
     let locator = velopack::locator::auto_locate_app_manifest(
         velopack::locator::LocationContext::FromCurrentExe,
     )
@@ -117,25 +120,37 @@ fn verify(asset: &VelopackAsset) -> Result<(), String> {
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-// TODO: Add a remote source at public release.
+pub const PUBLIC_FEED: &str =
+    "https://github.com/harshanandak/hex-meetings/releases/latest/download/";
 
-/// Dropping the sender stops the six-hour worker after its current local copy.
-pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<()>> {
+pub const FOCUS_CHECK_AFTER: Duration = Duration::from_secs(30 * 60);
+pub enum CheckRequest {
+    Manual,
+    Focus,
+}
+fn focus_check_due(last_attempt: Instant, now: Instant) -> bool {
+    now.duration_since(last_attempt) > FOCUS_CHECK_AFTER
+}
+/// Dropping the sender stops the six-hour worker after its current check/download.
+pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<CheckRequest>> {
     if !installed() {
         return None;
     }
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let _ = write_report(&load());
+        let mut last_attempt = Instant::now();
+        let _ = check(&publish);
         loop {
-            if feed().is_some() {
-                let _ = check(&publish);
+            match rx.recv_timeout(CHECK_EVERY) {
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(CheckRequest::Focus) if !focus_check_due(last_attempt, Instant::now()) => {
+                    continue;
+                }
+                _ => {}
             }
-            if matches!(
-                rx.recv_timeout(CHECK_EVERY),
-                Err(mpsc::RecvTimeoutError::Disconnected)
-            ) {
-                break;
-            }
+            last_attempt = Instant::now();
+            let _ = check(&publish);
         }
     });
     Some(tx)
@@ -200,23 +215,25 @@ fn save(status: &Status) -> io::Result<()> {
     fs::create_dir_all(path.parent().unwrap())?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     fs::write(&temp, serde_json::to_vec_pretty(status)?)?;
-    crate::platform::replace_file(&temp, &path)
+    crate::platform::replace_file(&temp, &path)?;
+    write_report(status).map(|_| ())
 }
 pub fn feed() -> Option<PathBuf> {
     crate::env_var("SIDENOTE_UPDATE_FEED").map(PathBuf::from)
 }
 pub fn source_label() -> String {
-    feed().map_or_else(
-        || "No update folder set".into(),
-        |p| p.display().to_string(),
-    )
+    feed().map_or_else(|| PUBLIC_FEED.into(), |p| p.display().to_string())
 }
 fn manager() -> Result<UpdateManager, String> {
-    let feed = feed().ok_or("Set SIDENOTE_UPDATE_FEED to your update folder.")?;
-    if !feed.is_absolute() || feed.to_string_lossy().contains("://") {
-        return Err("The update feed must be an absolute folder or file-share path.".into());
-    }
-    UpdateManager::new(LocalSource(feed), None, None)
+    let source: Box<dyn UpdateSource> = if let Some(feed) = feed() {
+        if !feed.is_absolute() || feed.to_string_lossy().contains("://") {
+            return Err("The update feed must be an absolute folder or file-share path.".into());
+        }
+        Box::new(LocalSource(feed))
+    } else {
+        Box::new(HttpSource::new(PUBLIC_FEED))
+    };
+    UpdateManager::new_boxed(source, None, None)
         .map_err(|_| "Updates need a Sidenote Setup install. Manual builds cannot update.".into())
 }
 pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
@@ -232,9 +249,9 @@ pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
     publish(status.clone());
     let result = (|| {
         let mgr = manager()?;
-        let update = mgr.check_for_updates().map_err(
-            |_| "Could not read the update folder. Check that it is connected and try again.",
-        )?;
+        let update = mgr
+            .check_for_updates()
+            .map_err(|_| "Could not read the update feed. Check your connection and try again.")?;
         match update {
             UpdateCheck::UpdateAvailable(mut update) => {
                 // Reconstructed delta ZIPs are not byte-identical to the feed's full SHA256.
@@ -551,6 +568,7 @@ pub fn after_update() {
     if !installed() {
         return;
     }
+    let _ = write_report(&load());
     if load().version == VERSION {
         let _ = save(&Status {
             checked: load().checked,
@@ -652,6 +670,23 @@ pub fn apply(
     }
     std::process::exit(0)
 }
+fn report(status: &Status) -> serde_json::Value {
+    serde_json::json!({"current_version":VERSION,"reported_at":chrono::Utc::now().to_rfc3339(),
+        "data_dir":crate::core::state_dir(),"peers_dir":crate::core::peers_dir(),
+        "feed":source_label(),"listener_task":task().ok(),"update_dir":directory(),
+        "installed":installed(),"status":status})
+}
+fn write_report(status: &Status) -> io::Result<serde_json::Value> {
+    let report = report(status);
+    if installed() {
+        let path = local("update-report.json");
+        fs::create_dir_all(directory())?;
+        let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+        fs::write(&temp, serde_json::to_vec_pretty(&report)?)?;
+        crate::platform::replace_file(&temp, &path)?;
+    }
+    Ok(report)
+}
 pub fn cli(args: &[std::ffi::OsString]) -> i32 {
     let result = if args.iter().any(|a| a == "--update-window-start") {
         window_start(|_| {}).map(|_| load())
@@ -676,12 +711,7 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
         },
     };
     let _ = save(&status);
-    let report = serde_json::json!({"current_version":VERSION,"data_dir":crate::core::state_dir(),
-        "peers_dir":crate::core::peers_dir(),"feed":source_label(),"listener_task":task().ok(),"update_dir":directory(),"installed":installed(),"status":status});
-    if installed() {
-        let _ = fs::create_dir_all(local(""));
-        let _ = fs::write(local("update-report.json"), report.to_string());
-    }
+    let report = write_report(&status).unwrap_or_else(|_| report(&status));
     println!("{report}");
     i32::from(status.phase == Phase::Error)
 }
@@ -699,6 +729,46 @@ mod window_lock_tests {
         for code in [2, 3, 5, 19, 112] {
             assert!(
                 matches!(WindowLockError::from(io::Error::from_raw_os_error(code)), WindowLockError::Io(error) if error.raw_os_error() == Some(code))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_checks_wait_more_than_thirty_minutes_since_the_attempt() {
+        let attempt = Instant::now();
+        assert!(!focus_check_due(attempt, attempt));
+        assert!(!focus_check_due(attempt, attempt + FOCUS_CHECK_AFTER));
+        assert!(focus_check_due(
+            attempt,
+            attempt + FOCUS_CHECK_AFTER + Duration::from_nanos(1)
+        ));
+        // A failed check also becomes the latest attempt.
+        let retry = attempt + FOCUS_CHECK_AFTER + Duration::from_secs(1);
+        assert!(!focus_check_due(retry, retry + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn rejects_untrusted_package_paths_before_cache_lookup() {
+        for name in [
+            "../sidenote.nupkg",
+            "other/sidenote.nupkg",
+            "https://example.com/a.nupkg",
+        ] {
+            let asset = VelopackAsset {
+                PackageId: "sidenote".into(),
+                FileName: name.into(),
+                SHA256: "a".repeat(64),
+                ..Default::default()
+            };
+            assert!(!valid_asset(&asset));
+            assert_eq!(
+                cache_path(&asset).unwrap_err(),
+                "The update package is invalid."
             );
         }
     }
