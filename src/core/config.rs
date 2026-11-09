@@ -109,6 +109,8 @@ pub struct Config {
     pub knowledge_base: KnowledgeBase,
     #[serde(default)]
     pub pipeline: super::meeting_router::RoutingConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<super::notes::NotesSettings>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -120,6 +122,7 @@ impl Default for Config {
             features: Features::default(),
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
+            notes: None,
             extra: BTreeMap::new(),
         }
     }

@@ -13,6 +13,7 @@ pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
 pub mod memory;
+pub mod notes;
 mod paths;
 pub mod project_merge;
 pub use paths::configure_paths;
