@@ -46,7 +46,11 @@ declared licence expression. The common permissive texts committed under
 `tools/licenses` are copied once under `dependency-notices/standard-licenses`.
 The generated notice supplies its own metadata attribution; it does not borrow
 the cached text donor's copyright holder. Unknown or non-permissive identifiers,
-licence exceptions and missing attribution stay uncovered. The packer writes
+licence exceptions and missing attribution stay uncovered.
+Owner-approved choices of declared standalone OR alternatives are recorded in
+`tools/license_choices.json`, scoped to an exact crate version and expression.
+The notice records both the full declaration and the selected licence.
+The packer writes
 `DEPENDENCY_NOTICE_COVERAGE.json` and refuses every uncovered dependency before
 building or packing. `tools/dependency_notices_proof.ps1` checks both generated
 notices and refusal cases in fresh OS temp folders, and runs in CI.

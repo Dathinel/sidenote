@@ -30,8 +30,10 @@ function Write-DependencyNotices {
     param(
         [Parameter(Mandatory=$true)]$Metadata,
         [Parameter(Mandatory=$true)][string]$Destination,
-        [string]$StandardLicenseRoot = (Join-Path $PSScriptRoot 'licenses')
+        [string]$StandardLicenseRoot = (Join-Path $PSScriptRoot 'licenses'),
+        [string]$LicenseChoicesPath = (Join-Path $PSScriptRoot 'license_choices.json')
     )
+    $choices = Get-Content -LiteralPath $LicenseChoicesPath -Raw | ConvertFrom-Json
     $inventory = @('# Dependency notices', '', 'Notices for every dependency in the locked Cargo inventory.', '')
     $coverage = @()
     $usedStandards = @{}
@@ -65,6 +67,7 @@ function Write-DependencyNotices {
         $files = @($files | Sort-Object FullName -Unique)
         $kind = 'upstream'
         $reason = ''
+        $selected = ''
         if ($files.Count) {
             foreach ($file in $files) {
                 $relative = $file.FullName.Substring($sourceRoot.Length).TrimStart('\', '/')
@@ -77,7 +80,20 @@ function Write-DependencyNotices {
             $count = 0
             $kind = 'uncovered'
             try {
-                $ids = @(Get-StandardLicenseIds $package.license)
+                $choice = @($choices | Where-Object { $_.name -ceq $package.name -and $_.version -ceq $package.version })
+                if ($choice.Count -gt 1) { throw 'Duplicate licence choices.' }
+                if ($choice.Count) {
+                    $choice = $choice[0]
+                    if ($choice.declared -cne $package.license) { throw 'Declared expression changed; review the licence choice.' }
+                    $alternatives = @($package.license -csplit '\s+OR\s+')
+                    if ($alternatives.Count -lt 2 -or @($alternatives | Where-Object { $_ -cnotmatch '^[A-Za-z0-9.+-]+$' }).Count -or $choice.selected -cnotin $alternatives) {
+                        throw 'Licence choice must select a declared standalone OR alternative.'
+                    }
+                    $selected = $choice.selected
+                    $ids = @(Get-StandardLicenseIds $selected)
+                } else {
+                    $ids = @(Get-StandardLicenseIds $package.license)
+                }
                 $authors = @($package.authors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
                 $holder = if ($authors.Count) { $authors -join '; ' } else { $package.repository }
                 if ([string]::IsNullOrWhiteSpace($holder)) { throw 'Cargo metadata declares neither authors nor a repository.' }
@@ -97,6 +113,7 @@ function Write-DependencyNotices {
                     'Copyright attribution above comes from that metadata; no year is inferred.',
                     'Shared standard licence texts (relative to this notice):'
                 )
+                if ($selected) { $notice += @("Selected licence alternative: $selected", "Selection basis: $($choice.reason)") }
                 foreach ($id in $ids) { $notice += "- ../standard-licenses/$id.txt"; $usedStandards[$id] = $true }
                 New-Item -ItemType Directory -Force -Path $noticeRoot | Out-Null
                 [IO.File]::WriteAllText((Join-Path $noticeRoot 'NOTICE.md'), ($notice -join "`n") + "`n")
@@ -106,7 +123,7 @@ function Write-DependencyNotices {
                 $reason = $_.Exception.Message
             }
         }
-        $coverage += [pscustomobject]@{ name=$package.name; version=$package.version; license=$package.license; kind=$kind; notice_files=$count; reason=$reason }
+        $coverage += [pscustomobject]@{ name=$package.name; version=$package.version; license=$package.license; selected_license=$selected; kind=$kind; notice_files=$count; reason=$reason }
         $inventory += "- $($package.name) $($package.version): $($package.license); $count notice file(s). [$kind]"
     }
     $shared = Join-Path $Destination 'dependency-notices/standard-licenses'

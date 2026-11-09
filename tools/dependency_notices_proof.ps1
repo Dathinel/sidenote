@@ -10,6 +10,9 @@ function Package([string]$Name, [string]$License, [string[]]$Authors = @('Fixtur
     New-Item -ItemType Directory -Force -Path $folder | Out-Null
     [pscustomobject]@{ id=$Name; name=$Name; version='1.0.0'; authors=$Authors; repository=$Repository; license=$License; license_file=$null; source='registry+fixture'; manifest_path=(Join-Path $folder 'Cargo.toml') }
 }
+function Graph([object[]]$Packages) {
+    [pscustomobject]@{packages=$Packages;workspace_members=@();resolve=[pscustomobject]@{nodes=@($Packages | ForEach-Object { [pscustomobject]@{id=$_.id} })}}
+}
 $packages = @(
     (Package 'mit-authors' 'MIT'),
     (Package 'apache-repository' 'Apache-2.0' @()),
@@ -19,7 +22,7 @@ $packages = @(
 )
 $upstream = Split-Path -Parent $packages[-1].manifest_path
 [IO.File]::WriteAllText((Join-Path $upstream 'LICENSE'), 'Exact upstream fixture notice bytes.')
-$metadata = [pscustomobject]@{ packages=$packages; workspace_members=@() }
+$metadata = Graph $packages
 foreach ($run in @('first', 'second')) {
     $destination = Join-Path $root $run
     New-Item -ItemType Directory -Path $destination | Out-Null
@@ -56,7 +59,21 @@ $blocked = @(
 )
 $destination = Join-Path $root 'blocked'
 New-Item -ItemType Directory -Path $destination | Out-Null
-$result = Write-DependencyNotices -Metadata ([pscustomobject]@{packages=$blocked;workspace_members=@()}) -Destination $destination
+$result = Write-DependencyNotices -Metadata (Graph $blocked) -Destination $destination
 Assert ($result.uncovered.Count -eq 4) 'Copyleft, custom, malformed and unattributed cases must remain uncovered.'
 Assert (@(Get-ChildItem $destination -Recurse -Filter NOTICE.md).Count -eq 0) 'Uncovered dependencies must not receive fabricated notices.'
-Write-Output "PASS: metadata attribution, complete SPDX expressions, shared canonical texts, upstream preservation, deterministic output and four refusal cases. Evidence: $root"
+$approved = Package 'r-efi' 'MIT OR Apache-2.0 OR LGPL-2.1-or-later' @()
+$approved.version = '5.3.0'
+$destination = Join-Path $root 'approved-choice'
+New-Item -ItemType Directory -Path $destination | Out-Null
+$result = Write-DependencyNotices -Metadata (Graph @($approved)) -Destination $destination
+Assert ($result.uncovered.Count -eq 0) 'The recorded MIT alternative must be usable.'
+$notice = [IO.File]::ReadAllText("$destination/dependency-notices/r-efi-5.3.0/NOTICE.md")
+Assert ($notice.Contains('Declared licence expression: MIT OR Apache-2.0 OR LGPL-2.1-or-later')) 'A choice must preserve the full declared expression.'
+Assert ($notice.Contains('Selected licence alternative: MIT')) 'A choice must be recorded in its notice.'
+$approved.license = 'Apache-2.0 OR LGPL-2.1-or-later'
+$destination = Join-Path $root 'changed-choice'
+New-Item -ItemType Directory -Path $destination | Out-Null
+$result = Write-DependencyNotices -Metadata (Graph @($approved)) -Destination $destination
+Assert ($result.uncovered.Count -eq 1) 'A changed declaration must invalidate the recorded choice.'
+Write-Output "PASS: metadata attribution, complete SPDX expressions, explicit OR choices, shared texts, upstream preservation, deterministic output and refusal cases. Evidence: $root"

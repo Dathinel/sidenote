@@ -18,4 +18,7 @@ The initial texts came from this device's cached published crates:
 Line endings are normalized to LF. MIT and Zlib have descriptive headings.
 Unknown identifiers, exceptions, incomplete expressions and missing copyright
 attribution remain uncovered. An expression containing an unsupported identifier
-is not silently reduced to one of its alternatives.
+is not silently reduced to one of its alternatives. An owner-approved choice of a
+standalone OR alternative can be recorded per name, version and exact expression
+in `tools/license_choices.json`. The notice retains the full declaration and
+records the selected alternative. A changed declaration invalidates the choice.
