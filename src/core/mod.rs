@@ -15,6 +15,8 @@ pub mod project_merge;
 pub use paths::configure_paths;
 pub mod agent_tools;
 mod device;
+pub mod live_edit;
+pub use sync_state::{StoreRevisions, incoming_revision, mutation_generation, store_revisions};
 mod memory_migration;
 mod store_io;
 mod sync_state;

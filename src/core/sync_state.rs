@@ -12,6 +12,45 @@ use std::{
     path::{Path, PathBuf},
 };
 
+static LOCAL_MUTATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn mutation_generation() -> u64 {
+    LOCAL_MUTATIONS.load(std::sync::atomic::Ordering::Acquire)
+}
+// A successful no-op may adopt peer fields in the UI without publishing a transaction.
+fn fence_local_mutation() {
+    LOCAL_MUTATIONS.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+pub type StoreRevisions = BTreeMap<String, BTreeSet<String>>;
+/// Include immutable transaction identities, not directory mtimes or remote wall clocks.
+pub fn store_revisions(root: &Path) -> io::Result<StoreRevisions> {
+    let mut out = StoreRevisions::new();
+    for owner in entries(&root.join("state"))? {
+        let name = owner.file_name().to_string_lossy().into_owned();
+        if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
+            continue;
+        }
+        for store in entries(&owner.path())? {
+            if !store.file_type()?.is_dir() {
+                continue;
+            }
+            for entry in entries(&store.path())? {
+                if entry.path().extension().is_some_and(|e| e == "json") {
+                    let bytes = fs::read(entry.path())?;
+                    out.entry(store.file_name().to_string_lossy().into_owned())
+                        .or_default()
+                        .insert(format!(
+                            "{}:{}:{}",
+                            name,
+                            entry.file_name().to_string_lossy(),
+                            hash(&bytes)
+                        ));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
 type Key = Vec<String>;
 type Items = BTreeMap<Key, Value>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -276,6 +315,7 @@ impl Session {
             .join(format!("{}.json", j.id));
         store_io::publish(&path, &serde_json::to_vec(&j)?)?;
         self.view.merge(&j);
+        fence_local_mutation();
         Ok(())
     }
     fn import_legacy(&mut self) -> io::Result<()> {
@@ -412,7 +452,9 @@ pub(super) fn update<T: Serialize + DeserializeOwned + Default>(
     session.diff(before, flatten(store, serde_json::to_value(&value)?)?)?;
     // Include independent edits that arrived during the local operation.
     session.view = read_view(root, store, &session.own)?;
-    Ok(serde_json::from_value(session.value::<T>()?)?)
+    let value = serde_json::from_value(session.value::<T>()?)?;
+    fence_local_mutation();
+    Ok(value)
 }
 pub(super) fn save_changes<T: Serialize>(
     root: &Path,
@@ -424,7 +466,9 @@ pub(super) fn save_changes<T: Serialize>(
     session.diff(
         flatten(store, serde_json::to_value(before)?)?,
         flatten(store, serde_json::to_value(after)?)?,
-    )
+    )?;
+    fence_local_mutation();
+    Ok(())
 }
 /// Run a guarded edit under the existing store lock, then publish one immutable journal.
 pub(super) fn update_checked<T: Serialize + DeserializeOwned + Default>(
@@ -463,7 +507,49 @@ pub(super) fn update_checked_validated<T: Serialize + DeserializeOwned + Default
         flatten(store, serde_json::to_value(&value)?)?,
         at,
     )?;
+    fence_local_mutation();
     Ok(value)
+}
+/// Save-time merge only. A busy incoming store returns a retryable error after three attempts.
+pub(super) fn update_merged<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+    change: impl FnMut(&mut T) -> io::Result<()>,
+) -> io::Result<T> {
+    update_merged_validated(root, store, change, || Ok(()))
+}
+pub(super) fn update_merged_validated<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+    mut change: impl FnMut(&mut T) -> io::Result<()>,
+    validate: impl Fn() -> io::Result<()>,
+) -> io::Result<T> {
+    for _ in 0..3 {
+        let mut s = Session::open(root, store)?;
+        let before = s.value::<T>()?;
+        let registers = s.view.items.clone();
+        let mut value: T = serde_json::from_value(before.clone())?;
+        change(&mut value)?;
+        let latest = read_view(root, store, &s.own)?;
+        if latest.own_bad {
+            return Err(invalid("Own journal is unreadable"));
+        }
+        if latest.items != registers {
+            continue;
+        }
+        validate()?;
+        s.publish_diff(
+            flatten(store, before)?,
+            flatten(store, serde_json::to_value(&value)?)?,
+            latest.next_time()?,
+        )?;
+        fence_local_mutation();
+        return Ok(value);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "Changes are still arriving. Your changes are kept. Try Save again.",
+    ))
 }
 pub(super) fn new_id(root: &Path) -> io::Result<String> {
     Ok(format!(
@@ -843,6 +929,32 @@ pub(super) fn reconcile(root: &Path) -> Vec<String> {
     errors.dedup();
     errors
 }
+/// Validated remote journal inventory, used only to mark incoming applications.
+pub fn incoming_revision(root: &Path) -> io::Result<String> {
+    let own = DeviceSettings::load_in(root)?.id;
+    let mut hashes = Vec::new();
+    for owner in entries(&root.join("state"))? {
+        let name = owner.file_name().to_string_lossy().into_owned();
+        if name == own || !device::valid_id(&name) || !owner.file_type()?.is_dir() {
+            continue;
+        }
+        for store in entries(&owner.path())? {
+            if !store.file_type()?.is_dir() {
+                continue;
+            }
+            for entry in entries(&store.path())? {
+                if entry.path().extension().is_some_and(|e| e == "json")
+                    && let Ok(j) = read_journal(&entry.path(), &name, None)
+                {
+                    hashes.push(j.checksum);
+                }
+            }
+        }
+    }
+    hashes.sort();
+    Ok(hash(&serde_json::to_vec(&hashes)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

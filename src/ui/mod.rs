@@ -5,6 +5,7 @@ mod ask;
 mod benchmark;
 mod check;
 mod diary;
+mod edit_worker;
 mod finder;
 mod hex;
 mod list;
@@ -85,6 +86,7 @@ pub enum Event {
         worker: std::thread::ThreadId,
         result: Result<project_merge::Completion, String>,
     },
+    Edited(edit_worker::Completion),
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     MigrationPrepared(Result<(), String>),
@@ -259,6 +261,7 @@ pub struct State {
     pending_thread: Option<PendingScroll>,
     events_tx: Sender<Event>,
     events_rx: Receiver<Event>,
+    edit_busy: bool,
     scan_tx: Option<Sender<()>>,
     waker: Option<Waker>,
 }
@@ -405,6 +408,7 @@ impl State {
             pending_thread: None,
             events_tx,
             events_rx,
+            edit_busy: false,
             scan_tx: None,
             waker: None,
         };
@@ -944,6 +948,7 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::Edited(result) => self.edit_finished(result),
             Event::ProjectMerge {
                 generation,
                 worker,

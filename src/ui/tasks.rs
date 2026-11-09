@@ -101,6 +101,10 @@ pub struct TasksState {
     pub panel: Option<Panel>,
     pub ui: PanelUi,
     pub inputs: PanelInputs,
+    pub edit_base: serde_json::Value,
+    pub edit_title: String,
+    pub edit_item: Option<TaskItem>,
+    pub edit_failed: bool,
     /// The project the add form files the task under. None is Unsorted.
     pub add_project: Option<String>,
     pub rename_input: TextEdit,
@@ -161,6 +165,10 @@ impl TasksState {
             panel: None,
             ui: PanelUi::default(),
             inputs: PanelInputs::default(),
+            edit_base: serde_json::Value::Null,
+            edit_title: String::new(),
+            edit_item: None,
+            edit_failed: false,
             add_project: None,
             rename_input: TextEdit::new(""),
             rename: None,
@@ -204,6 +212,11 @@ impl TasksState {
         self.items
             .iter()
             .find(|t| t.meeting_id == id && t.index == index)
+            .or_else(|| {
+                self.edit_item
+                    .as_ref()
+                    .filter(|t| t.meeting_id == id && t.index == index)
+            })
     }
 
     fn close_menus(&mut self) {
@@ -383,7 +396,17 @@ impl State {
         }
     }
 
-    fn apply_override(&mut self, id: &str, index: usize, change: impl FnOnce(&mut TaskOverride)) {
+    fn apply_override(
+        &mut self,
+        id: &str,
+        index: usize,
+        field: super::edit_worker::Field,
+        change: impl FnOnce(&mut TaskOverride),
+    ) {
+        if self.tasks.panel == Some(Panel::Task((id.into(), index))) {
+            self.save_task_edit(id, index, None, field, false, change);
+            return;
+        }
         if id == MANUAL || id.starts_with("manual/") {
             self.change_manual(id, |m| m.edit(change));
             return;
@@ -400,6 +423,63 @@ impl State {
         }
     }
 
+    fn save_task_edit(
+        &mut self,
+        id: &str,
+        index: usize,
+        title: Option<&str>,
+        field: super::edit_worker::Field,
+        close: bool,
+        change: impl FnOnce(&mut TaskOverride),
+    ) -> bool {
+        if self.edit_busy {
+            return false;
+        }
+        let base = self.tasks.edit_base.clone();
+        let mine = if id.starts_with("manual/") {
+            let Ok(mut m) = serde_json::from_value::<ManualTask>(base.clone()) else {
+                return false;
+            };
+            m.edit(change);
+            if let Some(title) = title {
+                m.task = title.into();
+            }
+            serde_json::to_value(m).unwrap()
+        } else {
+            let mut o: TaskOverride = serde_json::from_value(base.clone()).unwrap_or_default();
+            change(&mut o);
+            o.task = Some(self.tasks.edit_title.clone());
+            serde_json::to_value(o).unwrap()
+        };
+        let typed = match field {
+            super::edit_worker::Field::Title => &self.tasks.inputs.title,
+            super::edit_worker::Field::Owner | super::edit_worker::Field::Mine => {
+                &self.tasks.inputs.owner
+            }
+            super::edit_worker::Field::Due => &self.tasks.inputs.due,
+            super::edit_worker::Field::Project => &self.tasks.inputs.project,
+        }
+        .text
+        .clone();
+        let source = self
+            .meetings
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.folder.clone());
+        self.tasks.edit_failed = false;
+        self.publish_edit(super::edit_worker::Job::Task {
+            store: self.tasks.store.clone(),
+            row: id.into(),
+            index,
+            base,
+            mine,
+            source,
+            field,
+            typed,
+            close,
+        });
+        false
+    }
     /// Finds a project by name, ignoring case, and adds a new name to the list.
     fn known_project(&mut self, name: &str) -> Option<String> {
         if !self.config.features.projects {
@@ -421,19 +501,23 @@ impl State {
 
     pub fn set_task_project(&mut self, id: &str, index: usize, name: &str) {
         if let Some(name) = self.known_project(name) {
-            self.apply_override(id, index, |o| o.project = Some(name));
+            self.apply_override(id, index, super::edit_worker::Field::Project, |o| {
+                o.project = Some(name)
+            });
         }
     }
 
     pub fn set_task_mine(&mut self, id: &str, index: usize, mine: bool) {
-        self.apply_override(id, index, |o| o.mine = Some(mine));
+        self.apply_override(id, index, super::edit_worker::Field::Mine, |o| {
+            o.mine = Some(mine)
+        });
     }
 
     /// A name makes the task someone else's; empty text goes back to the owner the summary
     /// named.
     pub fn set_task_owner(&mut self, id: &str, index: usize, owner: &str) {
         let owner = owner.trim().to_string();
-        self.apply_override(id, index, |o| {
+        self.apply_override(id, index, super::edit_worker::Field::Owner, |o| {
             if !owner.is_empty() {
                 o.mine = Some(false);
             }
@@ -442,7 +526,7 @@ impl State {
     }
 
     pub fn set_task_due(&mut self, id: &str, index: usize, due: DueChoice) {
-        self.apply_override(id, index, |o| {
+        self.apply_override(id, index, super::edit_worker::Field::Due, |o| {
             o.due = match due {
                 DueChoice::Date(d) => Some(d.format("%Y-%m-%d").to_string()),
                 DueChoice::Clear => Some(String::new()),
@@ -539,13 +623,26 @@ impl State {
 
     /// Opens a task in the panel and selects its row.
     pub fn open_task(&mut self, id: &str, index: usize) {
-        self.flush_title();
+        if self.keep_task_draft() {
+            return;
+        }
+        if !self.flush_title(false) {
+            return;
+        }
         let Some(title) = self.tasks.item(id, index).map(|t| t.task.clone()) else {
             return;
         };
         let t = &mut self.tasks;
         t.rename = None;
         t.close_menus();
+        t.edit_item = t
+            .items
+            .iter()
+            .find(|t| t.meeting_id == id && t.index == index)
+            .cloned();
+        t.edit_base = core::live_edit::task_value(&t.overrides, id, index);
+        t.edit_title = title.clone();
+        t.edit_failed = false;
         t.cursor = Some((id.to_string(), index));
         t.keyboard = true;
         t.panel = Some(Panel::Task((id.to_string(), index)));
@@ -556,10 +653,28 @@ impl State {
         };
     }
 
+    fn keep_task_draft(&mut self) -> bool {
+        let keep = self.edit_busy
+            || self.tasks.edit_failed
+            || (matches!(self.tasks.panel, Some(Panel::Task(_)))
+                && (!self.tasks.inputs.owner.text.is_empty()
+                    || !self.tasks.inputs.due.text.is_empty()
+                    || !self.tasks.inputs.project.text.is_empty()));
+        if keep {
+            self.tasks.notice = Some("Your draft is kept. Save it before closing.".into());
+        }
+        keep
+    }
     pub fn close_panel(&mut self) {
-        self.flush_title();
+        if self.keep_task_draft() {
+            return;
+        }
+        if !self.flush_title(true) {
+            return;
+        }
         let t = &mut self.tasks;
         t.panel = None;
+        t.edit_item = None;
         t.ui = PanelUi::default();
         t.inputs = PanelInputs::default();
     }
@@ -567,7 +682,12 @@ impl State {
     /// Opens the panel to add a task. One added while a project group is under the cursor
     /// goes to that project.
     pub fn open_add(&mut self) {
-        self.flush_title();
+        if self.keep_task_draft() {
+            return;
+        }
+        if !self.flush_title(false) {
+            return;
+        }
         let project = self
             .tasks
             .cursor
@@ -598,15 +718,27 @@ impl State {
 
     /// Saves a changed title of a hand-made task, as the panel closes or moves on. An empty
     /// title is dropped: the task keeps its text.
-    fn flush_title(&mut self) {
+    fn flush_title(&mut self, close: bool) -> bool {
         let Some(t) = self.panel_task() else {
-            return;
+            return !self.tasks.edit_failed;
         };
-        let (id, manual, old) = (t.meeting_id.clone(), t.manual, t.task.clone());
+        let (id, index, manual) = (t.meeting_id.clone(), t.index, t.manual);
         let text = self.tasks.inputs.title.text.trim().to_string();
-        if manual && !text.is_empty() && text != old {
-            self.change_manual(&id, |m| m.task = text);
+        if manual && text != self.tasks.edit_title {
+            if text.is_empty() {
+                self.tasks.ui.error = Some("A task needs some text.".into());
+                return false;
+            }
+            return self.save_task_edit(
+                &id,
+                index,
+                Some(&text),
+                super::edit_worker::Field::Title,
+                close,
+                |_| {},
+            );
         }
+        !self.tasks.edit_failed
     }
 
     fn commit_title(&mut self) -> bool {
@@ -615,8 +747,7 @@ impl State {
             return false;
         }
         self.tasks.ui.error = None;
-        self.flush_title();
-        true
+        self.flush_title(false)
     }
 
     fn commit_due(&mut self) -> bool {
@@ -638,17 +769,23 @@ impl State {
             return false;
         };
         self.tasks.ui.due_error = None;
-        self.tasks.inputs.due = TextEdit::default();
         self.set_task_due(&id, index, choice);
+        if self.tasks.edit_failed || self.edit_busy {
+            return false;
+        }
+        self.tasks.inputs.due = TextEdit::default();
         true
     }
 
     fn commit_owner(&mut self) -> bool {
         if let Some((id, index)) = self.panel_task().map(|t| (t.meeting_id.clone(), t.index)) {
             let typed = self.tasks.inputs.owner.text.trim().to_string();
+            self.set_task_owner(&id, index, &typed);
+            if self.tasks.edit_failed || self.edit_busy {
+                return false;
+            }
             self.tasks.ui.owner_edit = false;
             self.tasks.inputs.owner = TextEdit::default();
-            self.set_task_owner(&id, index, &typed);
         }
         true
     }
@@ -661,11 +798,14 @@ impl State {
                     Some("Choose an existing project or click Create first.".into());
                 return false;
             }
-            self.tasks.ui.new_project = false;
-            self.tasks.inputs.project = TextEdit::default();
             if !typed.is_empty() {
                 self.set_task_project(&id, index, &typed);
             }
+            if self.tasks.edit_failed || self.edit_busy {
+                return false;
+            }
+            self.tasks.ui.new_project = false;
+            self.tasks.inputs.project = TextEdit::default();
         }
         true
     }
@@ -1771,9 +1911,11 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
         pill(name, &format!("{pre}-{key}"), on, p).on_press(move |s: &mut State| match &target {
             Some((id, index)) => {
                 s.tasks.ui.due_error = None;
-                s.tasks.inputs.due = TextEdit::default();
                 let choice = date.map_or(DueChoice::Clear, DueChoice::Date);
                 s.set_task_due(id, *index, choice);
+                if !s.tasks.edit_failed && !s.edit_busy {
+                    s.tasks.inputs.due = TextEdit::default();
+                }
             }
             None => {
                 s.tasks.ui.due_error = None;
@@ -1923,10 +2065,12 @@ fn owner_control(
                 .checked(task.is_none_or(|x| x.mine == Some(true)))
                 .on_select(move |s: &mut State| {
                     s.tasks.ui.owner_menu = false;
-                    s.tasks.ui.owner_edit = false;
-                    s.tasks.inputs.owner = TextEdit::default();
                     if let Some((id, index)) = &t1 {
                         s.set_task_mine(id, *index, true);
+                    }
+                    if !s.tasks.edit_failed && !s.edit_busy {
+                        s.tasks.ui.owner_edit = false;
+                        s.tasks.inputs.owner = TextEdit::default();
                     }
                 }),
         );
@@ -1984,12 +2128,14 @@ fn project_control(
                 pressable(roles::CONTROL.wrap(&name, p.accent))
                     .py(4.0)
                     .on_press(move |s: &mut State| {
-                        s.tasks.ui.new_project = false;
-                        s.tasks.inputs.project = TextEdit::default();
                         if let Some((id, i)) = &target {
                             s.set_task_project(id, *i, &name);
                         } else {
                             s.tasks.add_project = Some(name.clone());
+                        }
+                        if !s.tasks.edit_failed && !s.edit_busy {
+                            s.tasks.ui.new_project = false;
+                            s.tasks.inputs.project = TextEdit::default();
                         }
                     }),
             );
@@ -2008,12 +2154,14 @@ fn project_control(
                     match s.tasks.store.add_project(&typed) {
                         Ok(p) => {
                             s.tasks.projects = p;
-                            s.tasks.ui.new_project = false;
-                            s.tasks.inputs.project = TextEdit::default();
                             if let Some((id, i)) = &target {
                                 s.set_task_project(id, *i, &typed);
                             } else {
                                 s.tasks.add_project = Some(s.tasks.projects.resolve(&typed));
+                            }
+                            if !s.tasks.edit_failed && !s.edit_busy {
+                                s.tasks.ui.new_project = false;
+                                s.tasks.inputs.project = TextEdit::default();
                             }
                         }
                         Err(e) => s.tasks.notice = Some(e.to_string()),

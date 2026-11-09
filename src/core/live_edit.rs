@@ -1,0 +1,146 @@
+//! Whole-field merge seam. A later text CRDT can replace `merge` without changing editors.
+use super::{ManualTask, Overrides, TaskOverride, TaskStore, sync_state};
+use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
+use std::io;
+pub const MOVED: &str = "This task moved after the summary was updated. Your changes are kept.";
+pub fn task_value(o: &Overrides, row: &str, index: usize) -> Value {
+    if let Some(id) = row.strip_prefix("manual/") {
+        serde_json::to_value(o.manual.iter().find(|m| m.id == id)).unwrap_or(Value::Null)
+    } else {
+        serde_json::to_value(o.get(row, index)).unwrap_or(Value::Null)
+    }
+}
+/// Missing and null are equivalent for optional fields. Only mine's changed fields overwrite.
+pub fn merge<T: Serialize + DeserializeOwned>(base: &T, mine: &T, theirs: &T) -> io::Result<T> {
+    let (base, mine, mut out) = (
+        serde_json::to_value(base)?,
+        serde_json::to_value(mine)?,
+        serde_json::to_value(theirs)?,
+    );
+    let b = base
+        .as_object()
+        .ok_or_else(|| io::Error::other("Invalid edit base"))?;
+    let m = mine
+        .as_object()
+        .ok_or_else(|| io::Error::other("Invalid edit"))?;
+    let o = out
+        .as_object_mut()
+        .ok_or_else(|| io::Error::other("Invalid current item"))?;
+    for key in b
+        .keys()
+        .chain(m.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        if key == "updated_at" {
+            continue;
+        }
+        let (bv, mv) = (
+            b.get(key).unwrap_or(&Value::Null),
+            m.get(key).unwrap_or(&Value::Null),
+        );
+        if mv == bv {
+            continue;
+        }
+        if mv.is_null() {
+            o.remove(key);
+        } else {
+            o.insert(key.clone(), mv.clone());
+        }
+    }
+    Ok(serde_json::from_value(out)?)
+}
+/// Rebase only saved fields. Drafts in the other boxes still use their edit-start values.
+pub fn advance_base(base: &mut Value, mine: &Value, saved: &Value) {
+    let mut next = base.as_object().cloned().unwrap_or_default();
+    if let Some(m) = mine.as_object() {
+        let keys: std::collections::BTreeSet<_> = next.keys().chain(m.keys()).cloned().collect();
+        for key in keys {
+            if base.get(&key).unwrap_or(&Value::Null) != m.get(&key).unwrap_or(&Value::Null) {
+                if let Some(value) = saved.get(&key) {
+                    next.insert(key, value.clone());
+                } else {
+                    next.remove(&key);
+                }
+            }
+        }
+    }
+    *base = Value::Object(next);
+}
+impl TaskStore {
+    pub fn merge_task(
+        &self,
+        row: &str,
+        index: usize,
+        base: &Value,
+        mine: &Value,
+        source: Option<&std::path::Path>,
+    ) -> io::Result<Overrides> {
+        let identity = || -> io::Result<()> {
+            if !row.starts_with("manual/") {
+                let folder = source.ok_or_else(|| io::Error::other(MOVED))?;
+                let raw = std::fs::read(folder.join("english-summary.json"))?;
+                let summary: super::Summary = serde_json::from_slice(&raw)?;
+                if summary.todo.get(index).map(|t| t.task.as_str())
+                    != mine.get("task").and_then(Value::as_str)
+                {
+                    return Err(io::Error::other(MOVED));
+                }
+            }
+            Ok(())
+        };
+        identity()?;
+        sync_state::update_merged_validated(
+            &self.root,
+            "task-overrides.json",
+            |o: &mut Overrides| {
+                identity()?;
+                if let Some(id) = row.strip_prefix("manual/") {
+                    let t =
+                        o.manual.iter_mut().find(|m| m.id == id).ok_or_else(|| {
+                            io::Error::other("Task removed. Your changes are kept.")
+                        })?;
+                    *t = merge(
+                        &serde_json::from_value::<ManualTask>(base.clone())?,
+                        &serde_json::from_value(mine.clone())?,
+                        t,
+                    )?;
+                } else {
+                    let t = o
+                        .tasks
+                        .entry(row.into())
+                        .or_default()
+                        .entry(index.to_string())
+                        .or_default();
+                    let expected = mine.get("task").and_then(Value::as_str);
+                    if t.task.as_deref().is_some_and(|text| Some(text) != expected) {
+                        return Err(io::Error::other(MOVED));
+                    }
+                    let b: TaskOverride = serde_json::from_value(if base.is_null() {
+                        json!({})
+                    } else {
+                        base.clone()
+                    })?;
+                    *t = merge(&b, &serde_json::from_value(mine.clone())?, t)?;
+                    t.other.insert(
+                        "updated_at".into(),
+                        Value::String(chrono::Utc::now().to_rfc3339()),
+                    );
+                    if t.project.is_none()
+                        && t.owner.is_none()
+                        && t.due.is_none()
+                        && t.mine.is_none()
+                    {
+                        let per = o.tasks.get_mut(row).unwrap();
+                        per.remove(&index.to_string());
+                        if per.is_empty() {
+                            o.tasks.remove(row);
+                        }
+                    }
+                }
+                Ok(())
+            },
+            identity,
+        )
+    }
+}

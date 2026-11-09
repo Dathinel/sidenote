@@ -524,6 +524,30 @@ impl MemoryStore {
             r.basis = Basis::OwnerConfirmed;
         })
     }
+    pub fn merge_edit(&self, base: &MemoryRecord, text: &str) -> io::Result<MemoryRecord> {
+        let _lock = store_io::lock(&self.path("records.lock"))?;
+        if text.trim().is_empty() {
+            return Err(invalid("Record text must not be empty"));
+        }
+        let mut mine = base.clone();
+        mine.text = Some(text.trim().into());
+        let file = super::sync_state::update_merged(
+            &self.root,
+            "memory/records.json",
+            |file: &mut MemoryFile| {
+                let current = active_record(file, &base.id)?;
+                *current = super::live_edit::merge(base, &mine, current)?;
+                current.basis = Basis::OwnerConfirmed;
+                current.updated_at = Local::now().to_rfc3339();
+                event(file, &base.id, "edit", None);
+                Ok(())
+            },
+        )?;
+        if file.migration.is_some() {
+            self.export(&file)?;
+        }
+        Ok(file.records.into_iter().find(|r| r.id == base.id).unwrap())
+    }
     pub fn confirm_record(&self, id: &str) -> io::Result<()> {
         self.owner_change(id, "confirm", |r| {
             r.basis = Basis::OwnerConfirmed;

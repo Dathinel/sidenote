@@ -74,6 +74,7 @@ pub struct MemState {
     pub panel: bool,
     pub editing: bool,
     pub edit: TextEdit,
+    pub edit_base: Option<MemoryRecord>,
     pub ask: Option<Ask>,
     /// Why an action failed, by record, proposal or `migration`.
     pub errors: HashMap<String, String>,
@@ -104,6 +105,7 @@ impl Default for MemState {
             panel: false,
             editing: false,
             edit: TextEdit::default(),
+            edit_base: None,
             ask: None,
             errors: HashMap::new(),
             notice: None,
@@ -253,15 +255,7 @@ impl MemState {
         }
         match store.load() {
             Ok(file) => {
-                self.migrated = file.migration.is_some();
-                self.accepted_at = file.migration.as_ref().map(|m| m.accepted_at.clone());
-                self.records = file.records;
-                self.events = file.events;
-                self.proposals = file
-                    .proposals
-                    .into_iter()
-                    .filter(|p| p.status == sidenote::core::memory::ProposalStatus::Pending)
-                    .collect();
+                self.apply_file(file);
             }
             Err(e) => {
                 self.notice = Some(format!("Could not read the company memory. {e}."));
@@ -275,13 +269,24 @@ impl MemState {
             self.legacy = store.company_memory().unwrap_or_default();
             self.tab = Tab::All;
         }
-        if self.cursor.as_ref().is_some_and(|c| !self.has_target(c)) {
+        if !self.editing && self.cursor.as_ref().is_some_and(|c| !self.has_target(c)) {
             self.cursor = None;
             self.panel = false;
             self.editing = false;
         }
     }
 
+    pub(super) fn apply_file(&mut self, file: sidenote::core::memory::MemoryFile) {
+        self.migrated = file.migration.is_some();
+        self.accepted_at = file.migration.as_ref().map(|m| m.accepted_at.clone());
+        self.records = file.records;
+        self.events = file.events;
+        self.proposals = file
+            .proposals
+            .into_iter()
+            .filter(|p| p.status == sidenote::core::memory::ProposalStatus::Pending)
+            .collect();
+    }
     pub fn typing(&self) -> bool {
         self.search.focused || self.edit.focused
     }
@@ -296,7 +301,11 @@ impl MemState {
     }
 
     fn record(&self, id: &str) -> Option<&MemoryRecord> {
-        self.records.iter().find(|r| r.id == id)
+        self.records.iter().find(|r| r.id == id).or_else(|| {
+            self.edit_base
+                .as_ref()
+                .filter(|r| self.editing && r.id == id)
+        })
     }
 
     fn shown_record(&self, r: &MemoryRecord) -> bool {
@@ -391,12 +400,17 @@ impl State {
         }
         self.go_home();
         self.memory_open = true;
-        self.memory.panel = false;
+        self.memory.panel = self.memory.editing;
         self.memory.refresh(true);
         self.migration_prepare(false);
     }
 
     pub fn open_record(&mut self, id: &str) {
+        if self.memory.editing {
+            self.memory.notice =
+                Some("Your draft is kept. Save or cancel it before opening another claim.".into());
+            return;
+        }
         self.memory.cursor = Some(id.to_string());
         self.memory.panel = true;
         self.memory.editing = false;
@@ -405,6 +419,11 @@ impl State {
     }
 
     pub fn close_record(&mut self) {
+        if self.memory.editing {
+            self.memory.notice =
+                Some("Your draft is kept. Save or cancel it before closing.".into());
+            return;
+        }
         self.memory.panel = false;
         self.memory.editing = false;
         self.memory.ask = None;
@@ -450,6 +469,7 @@ impl State {
         let Some(text) = self.memory.record(id).and_then(|r| r.text.clone()) else {
             return;
         };
+        self.memory.edit_base = self.memory.record(id).cloned();
         self.memory.edit = TextEdit::new(&text);
         self.memory.edit.focused = true;
         self.memory.editing = true;
@@ -460,18 +480,24 @@ impl State {
         let Some(id) = self.memory.cursor.clone() else {
             return;
         };
-        let text = self.memory.edit.text.trim().to_string();
-        if text.is_empty() {
+        let text = self.memory.edit.text.clone();
+        if text.trim().is_empty() {
             self.memory
                 .errors
                 .insert(id, "A claim needs some text.".into());
             return;
         }
-        let r = MemoryStore::default().edit_record(&id, &text);
-        if self.memory_done(&id, r) {
-            self.memory.editing = false;
-            self.memory.edit = TextEdit::default();
+        let Some(base) = self.memory.edit_base.clone() else {
+            return;
+        };
+        if self.edit_busy {
+            return;
         }
+        self.publish_edit(super::edit_worker::Job::Memory {
+            store: MemoryStore::default(),
+            base: Box::new(base),
+            text,
+        });
     }
 
     pub fn proposal_accept(&mut self, id: &str) {
@@ -1422,8 +1448,7 @@ fn history_block(s: &State, r: &MemoryRecord, p: Palette) -> El {
 
 fn edit_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape {
-        s.memory.editing = false;
-        s.memory.edit = TextEdit::default();
+        s.close_record();
         tx.blur();
         return true;
     }
