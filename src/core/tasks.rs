@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fs, io,
+    io,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -22,7 +22,7 @@ pub const UNSORTED: &str = "Unsorted";
 static WRITES: Mutex<()> = Mutex::new(());
 
 fn read_json<T: Default + DeserializeOwned>(path: &Path) -> io::Result<T> {
-    match fs::read(path) {
+    match super::file_reads::read(path, super::file_reads::JOURNAL_MAX) {
         Ok(bytes) => {
             let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
             serde_json::from_slice(body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
