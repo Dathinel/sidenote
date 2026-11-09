@@ -316,6 +316,7 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
     Some(
         roles::META
             .wrap(format!("Notes by {helper} ({model})"), p.soft)
+            .key("notes-provenance")
             .mt(24.0),
     )
 }

@@ -37,7 +37,21 @@ pub fn settings(s: &mut State, mode: &str) {
     s.hex.section = hex::Section::AiNotes;
     match mode {
         "off" | "none" => {
-            s.ai_notes.settings.as_mut().unwrap().helper = None;
+            let settings = s.ai_notes.settings.as_mut().unwrap();
+            settings.helper = None;
+            if mode == "off" {
+                settings.engine = "off".into();
+            }
+        }
+        "last-error" => {
+            s.ai_notes.jobs.insert(
+                "1800000000000-1".into(),
+                Job {
+                    state: state("backend-error"),
+                    helper: Some(Helper::Claude),
+                    updated_at: 1,
+                },
+            );
         }
         "scripts" | "switch" => {
             let settings = s.ai_notes.settings.as_mut().unwrap();
@@ -191,6 +205,9 @@ pub fn meeting(s: &mut State, name: &str) {
     s.meetings = vec![m];
     s.rebuild_tasks();
     s.refresh_list();
+    if name == "tasks-failed" {
+        super::scene_scroll(s, "sec-todo");
+    }
 }
 pub fn live(s: &mut State, name: &str) {
     meeting(s, name);

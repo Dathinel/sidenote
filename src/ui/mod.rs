@@ -1930,6 +1930,13 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("notes-settings-last-error", |s| {
+                notes_scene::settings(s, "last-error")
+            }),
+            ("notes-meeting-provenance", |s| {
+                notes_scene::meeting(s, "done");
+                scene_scroll(s, "notes-provenance");
+            }),
             ("notes-settings-helpers", |s| {
                 notes_scene::settings(s, "helpers")
             }),
