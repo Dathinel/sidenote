@@ -581,11 +581,19 @@ impl TaskStore {
         let next = simulate(p, &action, &refs)?;
         let keys: std::collections::BTreeSet<_> =
             p.other.keys().chain(next.other.keys()).cloned().collect();
-        let changes: BTreeMap<_, _> = keys
+        let mut changes: BTreeMap<_, _> = keys
             .into_iter()
             .filter(|k| p.other.get(k) != next.other.get(k))
             .map(|k| (k.clone(), next.other.get(&k).cloned()))
             .collect();
+        for name in p.aliases.keys().chain(next.aliases.keys()) {
+            if p.aliases.get(name) != next.aliases.get(name) {
+                changes.insert(
+                    format!("$alias:{name}"),
+                    next.aliases.get(name).map(|v| json!(v)),
+                );
+            }
+        }
         let c = p.area_catalog()?;
         let affected = |r: &Reference| match &action {
             Action::Create { name } => c.areas.values().any(|a| {
@@ -625,6 +633,14 @@ impl TaskStore {
         }
         let mut next = original.clone();
         for (key, value) in &preview.changes {
+            if let Some(name) = key.strip_prefix("$alias:") {
+                if let Some(value) = value.as_ref().and_then(Value::as_str) {
+                    next.aliases.insert(name.into(), value.into());
+                } else {
+                    next.aliases.remove(name);
+                }
+                continue;
+            }
             match value {
                 Some(v) => {
                     next.other.insert(key.clone(), v.clone());
@@ -716,11 +732,27 @@ impl TaskStore {
         }
         let projects = result?;
         proof_boundary(&self.root, "published")?;
-        cleanup_backups(&self.root, &projects)?;
+        let _ = cleanup_backups(&self.root, &projects);
         Ok(projects)
     }
     pub fn area_receipts(&self) -> io::Result<BTreeMap<String, Receipt>> {
         self.load_projects()?.area_receipts()
+    }
+    pub fn local_area_backup(&self, id: &str, receipt: &Receipt) -> io::Result<PathBuf> {
+        let own = super::DeviceSettings::read_in(&self.root)?.id;
+        if sync_state::writer(
+            &self.root,
+            "projects.json",
+            vec![format!("area-operation:{id}")],
+        )?
+        .as_deref()
+            != Some(own.as_str())
+        {
+            return Err(invalid(
+                "This change was done on another device. Undo is available there.",
+            ));
+        }
+        receipt_backup(&self.root, id, receipt, &own)
     }
     pub fn undo_area(&self, id: &str) -> io::Result<Projects> {
         super::area_version::ensure(&self.root)?;
@@ -740,8 +772,7 @@ impl TaskStore {
                 "This area operation uses a newer schema. Update the app before Undo.",
             ));
         }
-        let own = super::DeviceSettings::read_in(&self.root)?.id;
-        let backup = receipt_backup(&self.root, id, &receipt, &own)?;
+        let backup = self.local_area_backup(id, &receipt)?;
         let snapshot: Backup =
             serde_json::from_slice(&store_io::read_bounded(&backup, 16 * 1024 * 1024)?)?;
         if digest(&snapshot)? != receipt.checksum {
@@ -760,7 +791,11 @@ impl TaskStore {
                 continue;
             }
             let reference = key.strip_prefix("area-link:");
-            let changed = original.other.get(key) != written.as_ref()
+            let current = key
+                .strip_prefix("$alias:")
+                .map(|name| original.aliases.get(name).map(|v| json!(v)))
+                .unwrap_or_else(|| original.other.get(key).cloned());
+            let changed = current != *written
                 || reference.is_some_and(|r| receipt.baseline.get(r) != raw.get(r));
             if changed {
                 receipt.skipped.push(
@@ -769,6 +804,14 @@ impl TaskStore {
                         .map(|r| r.label.clone())
                         .unwrap_or_else(|| register_label(&original, key)),
                 );
+                continue;
+            }
+            if let Some(name) = key.strip_prefix("$alias:") {
+                if let Some(value) = snapshot.projects.aliases.get(name) {
+                    next.aliases.insert(name.into(), value.clone());
+                } else {
+                    next.aliases.remove(name);
+                }
                 continue;
             }
             match snapshot.projects.other.get(key) {

@@ -75,6 +75,7 @@ pub(super) fn scan() -> io::Result<Vec<Meeting>> {
 }
 impl TaskStore {
     pub fn preview_merge(&self, from: &str, into: &str) -> io::Result<MergePreview> {
+        super::area_version::ensure(&self.root)?;
         self.merge_inventory(&self.load_projects()?, from, into)
     }
     fn merge_inventory(&self, p: &Projects, from: &str, into: &str) -> io::Result<MergePreview> {
@@ -90,7 +91,7 @@ impl TaskStore {
         let from = p.resolve(from);
         let into = p.resolve(into);
         let names = super::project_names(p, &[]);
-        if from == into || !names.contains(&from) || !names.contains(&into) {
+        if from == into || p.area_catalog()?.project(p, &from).is_none() || !names.contains(&into) {
             return Err(invalid("Choose two different existing projects"));
         }
         let mut planned = p.clone();

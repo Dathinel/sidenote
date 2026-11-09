@@ -117,7 +117,9 @@ fn absent(error: io::Error) -> io::Result<Option<Vec<u8>>> {
     }
 }
 fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    fs::read(path).map(Some).or_else(absent)
+    store_io::read_bounded(path, 16 * 1024 * 1024)
+        .map(Some)
+        .or_else(absent)
 }
 fn parse(bytes: &[u8]) -> io::Result<Value> {
     Ok(serde_json::from_slice(
@@ -277,8 +279,15 @@ impl Session {
     }
     fn import_legacy(&mut self) -> io::Result<()> {
         for path in legacy_sources(&self.root, &self.store)? {
-            let Some(bytes) = read_optional(&path)? else {
-                continue;
+            let bytes = match read_optional(&path) {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => continue,
+                Err(_) => {
+                    self.view
+                        .warnings
+                        .push("Could not read a legacy state file; it was retained".into());
+                    continue;
+                }
             };
             let relative = path
                 .strip_prefix(&self.root)
@@ -352,6 +361,7 @@ impl Session {
                 Some(_) => {}
                 None => store_io::publish(&backup, &bytes)?,
             }
+            super::area_ops::proof_boundary(&self.root, "legacy-backup")?;
             let verified = store_io::read_bounded(&backup, 16 * 1024 * 1024)?;
             if hash(&verified) != hash(&bytes) {
                 return Err(invalid("Migration backup verification failed"));
@@ -361,6 +371,12 @@ impl Session {
         Ok(())
     }
     fn value<T: Serialize + DeserializeOwned + Default>(&self) -> io::Result<Value> {
+        self.value_report::<T>().map(|(value, _)| value)
+    }
+    fn value_report<T: Serialize + DeserializeOwned + Default>(
+        &self,
+    ) -> io::Result<(Value, usize)> {
+        let mut skipped = 0;
         let default = serde_json::to_value(T::default())?;
         let mut valid = Items::new();
         for (key, value) in self.view.values() {
@@ -374,9 +390,11 @@ impl Session {
                 .is_ok_and(|v| serde_json::from_value::<T>(v.clone()).is_ok())
             {
                 valid.insert(key, value);
+            } else {
+                skipped += 1;
             }
         }
-        inflate(&self.store, valid, default)
+        Ok((inflate(&self.store, valid, default)?, skipped))
     }
 
     fn diff(&mut self, before: Items, after: Items) -> io::Result<()> {
@@ -414,6 +432,18 @@ pub(super) fn load<T: Serialize + DeserializeOwned + Default>(
 ) -> io::Result<T> {
     let session = Session::open_mode(root, store, super::paths::read_only())?;
     Ok(serde_json::from_value(session.value::<T>()?)?)
+}
+pub(super) fn writer(root: &Path, store: &str, key: Vec<String>) -> io::Result<Option<String>> {
+    let session = Session::open_mode(root, store, true)?;
+    Ok(session.view.items.get(&key).map(|r| r.device.clone()))
+}
+pub(super) fn diagnostics<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+) -> io::Result<usize> {
+    let session = Session::open_mode(root, store, true)?;
+    let (_, skipped) = session.value_report::<T>()?;
+    Ok(skipped + session.view.warnings.len())
 }
 /// When each present item of a store was last written, in nanoseconds since 1970, read the same
 /// way as `load`. Values imported from a legacy file carry no time and read as 0.

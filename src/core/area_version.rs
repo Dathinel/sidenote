@@ -123,3 +123,15 @@ pub(super) fn guard_changes(
     }
     Ok(())
 }
+
+pub fn device_name(root: &Path, id: &str) -> String {
+    if !device::valid_id(id) {
+        return "another device".into();
+    }
+    store_io::read_bounded(&root.join("state").join(id).join("device.json"), 4096)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
+        .filter(|m| m.device == id)
+        .map(|m| m.name)
+        .unwrap_or_else(|| id.into())
+}
