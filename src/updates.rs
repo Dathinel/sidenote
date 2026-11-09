@@ -472,12 +472,29 @@ pub fn listener_stopping() -> bool {
     }
     current
 }
-pub fn window_lock() -> io::Result<Option<File>> {
+#[derive(Debug)]
+pub enum WindowLockError {
+    AlreadyOpen,
+    Io(io::Error),
+}
+impl From<io::Error> for WindowLockError {
+    fn from(error: io::Error) -> Self {
+        if error.raw_os_error() == Some(32) {
+            Self::AlreadyOpen
+        } else {
+            Self::Io(error)
+        }
+    }
+}
+pub fn window_lock() -> Result<Option<File>, WindowLockError> {
     if !installed() {
         return Ok(None);
     }
-    exclusive("update-window.lock").map(Some)
+    exclusive("update-window.lock")
+        .map(Some)
+        .map_err(Into::into)
 }
+
 pub fn listener_lock() -> io::Result<Option<File>> {
     if !installed() {
         return Ok(None);
@@ -667,4 +684,22 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
     }
     println!("{report}");
     i32::from(status.phase == Phase::Error)
+}
+
+#[cfg(test)]
+mod window_lock_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_sharing_violation_means_an_existing_window() {
+        assert!(matches!(
+            WindowLockError::from(io::Error::from_raw_os_error(32)),
+            WindowLockError::AlreadyOpen
+        ));
+        for code in [2, 3, 5, 19, 112] {
+            assert!(
+                matches!(WindowLockError::from(io::Error::from_raw_os_error(code)), WindowLockError::Io(error) if error.raw_os_error() == Some(code))
+            );
+        }
+    }
 }

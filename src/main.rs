@@ -125,7 +125,12 @@ fn main() {
         match platform::single_instance() {
             Ok(Some(instance)) => Some(instance),
             Ok(None) => return,
-            Err(_) => return,
+            Err(_) => {
+                platform::show_error(
+                    "Sidenote could not check whether it is already open. Reopen Sidenote to try again. If this continues, restart Windows.",
+                );
+                return;
+            }
         }
     };
     let _update_window = if headless || offscreen_bench {
@@ -133,7 +138,19 @@ fn main() {
     } else {
         match sidenote::updates::window_lock() {
             Ok(guard) => Some(guard),
-            Err(_) => return,
+            Err(sidenote::updates::WindowLockError::AlreadyOpen) => return,
+            Err(sidenote::updates::WindowLockError::Io(error)) => {
+                let message = match error.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        "Sidenote cannot access its update folder. Check your Windows account's folder permissions, then reopen Sidenote."
+                    }
+                    _ => {
+                        "Sidenote could not open its update lock. Check that your local drive is available and has free space, then reopen Sidenote."
+                    }
+                };
+                platform::show_error(message);
+                return;
+            }
         }
     };
     if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
