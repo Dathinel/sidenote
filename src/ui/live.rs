@@ -321,7 +321,11 @@ impl State {
     }
 
     fn known_ids(&self) -> HashSet<String> {
-        self.meetings.iter().map(|m| m.id.clone()).collect()
+        self.meetings
+            .iter()
+            .filter(|m| m.has_summary())
+            .map(|m| m.id.clone())
+            .collect()
     }
 
     /// Starts a live page with empty notes and, while a recording runs, the reader thread.
@@ -499,11 +503,7 @@ impl State {
         let found = self
             .meetings
             .iter()
-            .find(|m| {
-                m.device.is_none()
-                    && !live.known.contains(&m.id)
-                    && m.folder.join("english-summary.json").is_file()
-            })
+            .find(|m| m.device.is_none() && !live.known.contains(&m.id) && m.has_summary())
             .map(|m| m.id.clone());
         if let Some(id) = found {
             let was_open = self.on_live();

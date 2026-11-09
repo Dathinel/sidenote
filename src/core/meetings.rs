@@ -119,6 +119,7 @@ pub struct Unsettled {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct Manifest {
+    pub status: Option<String>,
     pub title: Option<String>,
     pub title_source: Option<String>,
     pub created_at_ms: Option<i64>,
@@ -319,6 +320,23 @@ fn parse_untimed(raw: &str) -> Vec<Line> {
 }
 impl Meeting {
     pub fn load(folder: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::load_inner(folder, false)
+    }
+    pub fn load_pending(folder: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let raw = super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024)?;
+        let manifest: Manifest = serde_json::from_str(&raw)?;
+        if manifest.status.as_deref() != Some("complete") {
+            return Err("Meeting is not complete".into());
+        }
+        Self::load_inner(folder, true)
+    }
+    pub fn has_summary(&self) -> bool {
+        !self.summary_raw.is_empty()
+    }
+    fn load_inner(
+        folder: &Path,
+        pending: bool,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = folder
             .file_name()
             .ok_or("Missing meeting id")?
@@ -331,13 +349,17 @@ impl Meeting {
             Ok(raw) => raw,
             Err(e)
                 if e.kind() == io::ErrorKind::NotFound
-                    && folder.join(super::live::NOTES_FILE).is_file() =>
+                    && (pending || folder.join(super::live::NOTES_FILE).is_file()) =>
             {
-                "{}".into()
+                String::new()
             }
             Err(e) => return Err(e.into()),
         };
-        let summary: Summary = serde_json::from_str(&summary_raw)?;
+        let summary: Summary = if summary_raw.is_empty() {
+            Summary::default()
+        } else {
+            serde_json::from_str(&summary_raw)?
+        };
         let manifest: Manifest =
             match super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024) {
                 Ok(raw) => serde_json::from_str(&raw)?,
@@ -348,13 +370,25 @@ impl Meeting {
             manifest.title_source.as_deref(),
             Some("call" | "calendar" | "user")
         ) {
-            manifest.title.filter(|s| !s.is_empty())
+            manifest.title.clone().filter(|s| !s.is_empty())
         } else {
             None
         }
         .unwrap_or_else(|| {
             if summary.title.is_empty() {
-                id.clone()
+                read_quick_title(folder)
+                    .or_else(|| manifest.title.clone().filter(|t| !t.trim().is_empty()))
+                    .unwrap_or_else(|| {
+                        manifest
+                            .created_at_ms
+                            .and_then(DateTime::from_timestamp_millis)
+                            .map(|t| {
+                                t.with_timezone(&Local)
+                                    .format("Meeting on %-d %b at %H:%M")
+                                    .to_string()
+                            })
+                            .unwrap_or_else(|| id.clone())
+                    })
             } else {
                 summary.title.clone()
             }
@@ -486,7 +520,7 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
-                let (peer_meetings, peer_errors) = scan_in(&folder);
+                let (peer_meetings, peer_errors) = scan_in_mode(&folder, false);
                 errors.extend(
                     peer_errors
                         .into_iter()
@@ -506,8 +540,11 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
     meetings.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
     (meetings, errors)
 }
-/// Returns meetings with summaries or personal notes, newest first, plus read errors.
+/// Returns saved and complete pending local meetings, newest first, plus read errors.
 pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
+    scan_in_mode(root, true)
+}
+fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
     match super::file_reads::dir_iter(root) {
@@ -520,19 +557,39 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
                         continue;
                     }
                 };
-                if super::file_reads::directory(&entry.path())
-                    && (entry.path().join("english-summary.json").exists()
-                        || entry.path().join(super::live::NOTES_FILE).is_file())
-                {
-                    match Meeting::load(&entry.path()) {
-                        Ok(m) => meetings.push(m),
-                        Err(_) => {
-                            super::file_reads::not_refreshed(&entry.path());
-                            errors.push(format!(
-                                "Could not read meeting {}",
-                                entry.file_name().to_string_lossy()
-                            ));
-                        }
+                let folder = entry.path();
+                if !super::file_reads::directory(&folder) {
+                    continue;
+                }
+                let saved = folder.join("english-summary.json").exists()
+                    || folder.join(super::live::NOTES_FILE).is_file();
+                let loaded = if saved {
+                    Meeting::load(&folder)
+                } else if pending {
+                    let manifest =
+                        super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024);
+                    match manifest {
+                        Ok(raw) => match serde_json::from_str::<Manifest>(&raw) {
+                            Ok(m) if m.status.as_deref() == Some("complete") => {
+                                Meeting::load_pending(&folder)
+                            }
+                            Ok(_) => continue,
+                            Err(e) => Err(e.into()),
+                        },
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                        Err(e) => Err(e.into()),
+                    }
+                } else {
+                    continue;
+                };
+                match loaded {
+                    Ok(m) => meetings.push(m),
+                    Err(_) => {
+                        super::file_reads::not_refreshed(&folder);
+                        errors.push(format!(
+                            "Could not read meeting {}",
+                            entry.file_name().to_string_lossy()
+                        ));
                     }
                 }
             }
@@ -577,6 +634,51 @@ mod quick_title_tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn complete_local_meetings_without_notes_are_listed_but_peers_are_not() {
+        let root = folder("pending-list");
+        let local = root.join("local");
+        let peers = root.join("peers/device");
+        for (base, id, status) in [
+            (&local, "1000-1", "complete"),
+            (&local, "2000-2", "recording"),
+            (&peers, "3000-3", "complete"),
+        ] {
+            let d = base.join(id);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("manifest.json"),
+                format!(r#"{{"status":"{status}","created_at_ms":1000,"title":"Planning"}}"#),
+            )
+            .unwrap();
+            fs::write(
+                d.join("english-transcript.md"),
+                "[00:00:01] You (English): Plan the launch.",
+            )
+            .unwrap();
+            fs::write(d.join("quick-title.json"), r#"{"title":"Launch plan"}"#).unwrap();
+        }
+        let (meetings, errors) = scan_sources(&local, &root.join("peers"));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(meetings.len(), 1);
+        let m = &meetings[0];
+        assert_eq!(m.id, "1000-1");
+        assert_eq!(m.title, "Launch plan");
+        assert!(!m.has_summary());
+        assert_eq!(m.lines.len(), 1);
+        let known = meetings
+            .iter()
+            .filter(|m| m.has_summary())
+            .map(|m| m.id.clone())
+            .collect();
+        assert_eq!(
+            pending_quick_title(&local, 0, &known).as_deref(),
+            Some("Launch plan")
+        );
+        assert!(Meeting::load_pending(&local.join("2000-2")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
