@@ -15,6 +15,8 @@ pub enum Helper {
     OpenCode,
 }
 
+pub const HELPER_NOT_OFFERED: &str = "helper_not_offered";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Engine {
     App,
@@ -82,6 +84,15 @@ impl Default for NotesSettings {
     }
 }
 impl NotesSettings {
+    pub fn effective_helper(&self) -> Option<Helper> {
+        self.helper.filter(|helper| helper.offered())
+    }
+    /// Fixed code for UI-owned wording; stored choices remain available for migration.
+    pub fn helper_reason(&self) -> Option<&'static str> {
+        self.helper
+            .filter(|helper| !helper.offered())
+            .map(|_| HELPER_NOT_OFFERED)
+    }
     pub fn engine(&self) -> Engine {
         match self.engine.as_str() {
             "app" => Engine::App,

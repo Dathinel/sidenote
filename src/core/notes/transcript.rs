@@ -61,8 +61,22 @@ pub(super) fn read(folder: &Path) -> io::Result<String> {
     Ok(render(&String::from_utf8_lossy(&bytes)))
 }
 pub(super) fn write(folder: &Path) -> io::Result<String> {
+    let path = folder.join("english-transcript.md");
+    let existing = || -> io::Result<String> {
+        String::from_utf8(store_io::read_bounded(&path, file_reads::STORE_MAX)?)
+            .map_err(|_| store_io::invalid("Invalid text encoding"))
+    };
+    match existing() {
+        Ok(text) => return Ok(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
     let text = read(folder)?;
-    store_io::atomic_write(&folder.join("english-transcript.md"), text.as_bytes())?;
+    match store_io::publish(&path, text.as_bytes()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return existing(),
+        Err(e) => return Err(e),
+    }
     Ok(text)
 }
 

@@ -490,8 +490,18 @@ pub(super) fn load<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,
 ) -> io::Result<T> {
+    load_report(root, store).map(|(value, _)| value)
+}
+pub(super) fn load_report<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+) -> io::Result<(T, bool)> {
     let session = Session::open_mode(root, store, true)?;
-    Ok(serde_json::from_value(session.value::<T>()?)?)
+    let (value, skipped) = session.value_report::<T>()?;
+    Ok((
+        serde_json::from_value(value)?,
+        skipped != 0 || !session.view.warnings.is_empty() || session.view.own_bad,
+    ))
 }
 pub(super) fn prepare(root: &Path, store: &str) -> io::Result<()> {
     Session::open(root, store).map(|_| ())

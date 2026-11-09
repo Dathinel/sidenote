@@ -7,6 +7,13 @@ use crate::core::agent_instructions::{self as instructions, Agent};
 use std::{io, path::Path, time::Duration};
 
 pub(super) const TRANSCRIPT_CAP: usize = 250_000;
+pub(super) const TYPED_CAP: usize = 16_000;
+pub(super) const GLOSSARY_CAP: usize = 16_000;
+
+pub(super) fn bounded_inputs(typed: &str, glossary: &[String]) -> bool {
+    typed.chars().count() <= TYPED_CAP
+        && glossary.iter().map(|s| s.chars().count()).sum::<usize>() <= GLOSSARY_CAP
+}
 
 pub(super) fn escape(text: &str, tag: &str) -> String {
     let needle = format!("</{tag}");

@@ -81,7 +81,39 @@ fn diagnosis(text: &str) -> &'static str {
 }
 enum Stream {
     Line(String),
+    TooLarge,
     Done,
+}
+const STDOUT_CAP: usize = 4 * 1024 * 1024;
+
+fn forward_stdout(stdout: impl Read, sender: mpsc::SyncSender<Stream>) {
+    let mut reader = BufReader::new(stdout.take((STDOUT_CAP + 1) as u64));
+    let mut total = 0;
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        let Ok(n) = reader.read_until(b'\n', &mut bytes) else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if total > STDOUT_CAP {
+            let _ = sender.send(Stream::TooLarge);
+            return;
+        }
+        let Ok(line) = String::from_utf8(bytes.clone()) else {
+            break;
+        };
+        if sender
+            .send(Stream::Line(line.trim_end_matches(['\r', '\n']).into()))
+            .is_err()
+        {
+            return;
+        }
+    }
+    let _ = sender.send(Stream::Done);
 }
 struct Output {
     final_text: String,
@@ -312,20 +344,8 @@ pub(super) fn run_runner_with_timeout(
         }
         String::from_utf8_lossy(&bytes).into_owned()
     });
-    let (sender, receiver) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            match line {
-                Ok(line) => {
-                    if sender.send(Stream::Line(line)).is_err() {
-                        return;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let _ = sender.send(Stream::Done);
-    });
+    let (sender, receiver) = mpsc::sync_channel(8);
+    let reader = std::thread::spawn(move || forward_stdout(stdout, sender));
     let mut output = Output {
         final_text: String::new(),
         plain: String::new(),
@@ -334,8 +354,11 @@ pub(super) fn run_runner_with_timeout(
     };
     let mut done = false;
     let mut status = None;
+    let mut too_large = false;
     loop {
-        let stop = if super::ask::stop_requested() {
+        let stop = if too_large {
+            Some("The runner exceeded its output limit.")
+        } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
         } else if super::ask::cancel_requested() {
             Some(super::ask::STOPPED)
@@ -345,6 +368,7 @@ pub(super) fn run_runner_with_timeout(
             None
         };
         if let Some(message) = stop {
+            drop(receiver);
             drop(job);
             let _ = child.kill();
             let _ = child.wait();
@@ -357,6 +381,7 @@ pub(super) fn run_runner_with_timeout(
         }
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(Stream::Line(line)) => output.line(&line, harness, structured, &progress),
+            Ok(Stream::TooLarge) => too_large = true,
             Ok(Stream::Done) | Err(mpsc::RecvTimeoutError::Disconnected) => done = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
@@ -394,4 +419,46 @@ pub(super) fn run_runner_with_timeout(
         ));
     }
     Ok(answer.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn capture(bytes: Vec<u8>) -> (usize, bool) {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let reader =
+            std::thread::spawn(move || forward_stdout(std::io::Cursor::new(bytes), sender));
+        let mut total = 0;
+        let mut limited = false;
+        for event in receiver {
+            match event {
+                Stream::Line(line) => total += line.len(),
+                Stream::TooLarge => limited = true,
+                Stream::Done => {}
+            }
+        }
+        reader.join().unwrap();
+        (total, limited)
+    }
+    #[test]
+    fn stdout_caps_unterminated_lines_and_streams_without_running_a_cli() {
+        assert_eq!(capture(vec![b'x'; STDOUT_CAP]), (STDOUT_CAP, false));
+        assert_eq!(capture(vec![b'x'; STDOUT_CAP + 1]), (0, true));
+        let (total, limited) = capture(
+            format!("{}\n", "x".repeat(1023))
+                .repeat(STDOUT_CAP / 1024 + 1)
+                .into_bytes(),
+        );
+        assert!(limited);
+        assert!(total <= STDOUT_CAP);
+    }
+    #[test]
+    fn cancelling_bounded_stdout_does_not_leave_the_reader_blocked() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            forward_stdout(std::io::Cursor::new(b"x\n".repeat(100)), sender)
+        });
+        drop(receiver);
+        reader.join().unwrap();
+    }
 }

@@ -94,15 +94,21 @@ pub struct Snapshot {
     found: Vec<(Helper, bool)>,
     store: instructions::Store,
 }
+const INSTRUCTIONS_LOAD_ERROR: &str =
+    "Could not read agent instructions. Your saved text was kept.";
+
+fn instructions_warning(store: &instructions::Store) -> Option<String> {
+    store
+        .using_defaults_after_error
+        .then(|| INSTRUCTIONS_LOAD_ERROR.to_owned())
+}
 impl Snapshot {
     fn read(root: &Path) -> Result<Self, String> {
         Ok(Self {
             settings: notes::settings()
                 .map_err(|_| "Could not read AI notes settings. Try Reload.".to_string())?,
             found: notes::detect(),
-            store: instructions::load(root).map_err(|_| {
-                "Could not read agent instructions. Your saved text was kept.".to_string()
-            })?,
+            store: instructions::load(root).map_err(|_| INSTRUCTIONS_LOAD_ERROR.to_string())?,
         })
     }
 }
@@ -245,6 +251,7 @@ impl State {
             Err(error) => self.ai_notes.error = Some(error),
             Ok(Completion::Loaded(snapshot)) => {
                 let s = &mut self.ai_notes;
+                s.error = instructions_warning(&snapshot.store);
                 for (index, h) in HELPERS.iter().enumerate() {
                     s.models[index] = TextEdit::new(if snapshot.settings.helper == Some(*h) {
                         &snapshot.settings.model
@@ -742,6 +749,16 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn instruction_fallback_reaches_existing_banner_without_blocking_settings() {
+        assert!(instructions_warning(&instructions::Store::default()).is_none());
+        let mut store = instructions::Store::default();
+        store.using_defaults_after_error = true;
+        assert_eq!(
+            instructions_warning(&store).as_deref(),
+            Some(INSTRUCTIONS_LOAD_ERROR)
+        );
+    }
     #[test]
     fn unreadable_test_answers_use_plain_words() {
         assert!(!test_error("The helper test returned invalid JSON").contains("JSON"));
