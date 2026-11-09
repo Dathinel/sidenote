@@ -138,6 +138,7 @@ impl Job {
     }
 }
 pub enum Completion {
+    Redo(Result<(), SaveError>),
     V2 {
         result: Result<Box<core::EditView<core::Overrides>>, SaveError>,
         added: Option<String>,
@@ -175,7 +176,8 @@ impl Completion {
             Self::Tick { .. }
             | Self::ManualTick(_)
             | Self::Preferences { .. }
-            | Self::V2 { .. } => Target::Tick,
+            | Self::V2 { .. }
+            | Self::Redo(_) => Target::Tick,
             Self::Task {
                 row,
                 index,
@@ -253,11 +255,10 @@ impl State {
                         result: store.save_teams(&teams).map_err(|e| SaveError::from(&e)),
                         teams: Some(teams),
                     },
-                    Job::Redo { id } => Completion::Preferences {
-                        teams: None,
-                        result: core::notes::request(&id, core::notes::Request::RedoTasks)
+                    Job::Redo { id } => Completion::Redo(
+                        core::notes::request(&id, core::notes::Request::RedoTasks)
                             .map_err(|e| SaveError::from(&e)),
-                    },
+                    ),
                     Job::Tick {
                         store,
                         id,
@@ -332,6 +333,17 @@ impl State {
             return;
         }
         match completion {
+            Completion::Redo(result) => {
+                self.tasks.notice = Some(
+                    match result {
+                        Ok(()) => "Tasks queued. Your changes will be kept.",
+                        Err(_) => {
+                            "Could not queue tasks. Check AI notes in Settings, then try again."
+                        }
+                    }
+                    .into(),
+                );
+            }
             Completion::Preferences { teams, result } => match result {
                 Ok(()) => {
                     if let Some(teams) = teams {
