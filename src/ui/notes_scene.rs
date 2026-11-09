@@ -78,11 +78,11 @@ pub fn settings(s: &mut State, mode: &str) {
         "test-error" => {
             s.ai_notes
                 .test_results
-                .insert(0, "The helper test failed; check its sign-in".into());
+                .insert(0, super::ai_notes::test_error("sign-in failed"));
         }
         "load-error" => {
             s.ai_notes.settings = None;
-            s.ai_notes.error = Some("Could not read AI notes settings. Try Reload.".into());
+            s.ai_notes.error = Some(super::ai_notes::LOAD_ERROR.into());
         }
         "loading" => {
             s.ai_notes.settings = None;
@@ -114,7 +114,7 @@ pub fn settings(s: &mut State, mode: &str) {
         "save-error" => {
             s.ai_notes.editor_target = Some(0);
             s.ai_notes.error =
-                Some("Could not save instructions. Check the length and try again.".into());
+                Some(super::ai_notes::SAVE_ERROR.into());
         }
         _ => {}
     }

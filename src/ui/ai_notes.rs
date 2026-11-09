@@ -14,6 +14,8 @@ use std::{
 
 pub const HELPERS: [Helper; 3] = [Helper::Claude, Helper::Codex, Helper::OpenCode];
 pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed notes to Claude Code. Audio stays on this PC.";
+pub const LOAD_ERROR: &str = "Sidenote could not load AI notes settings. Press Reload helper status. If it fails again, restart Sidenote.";
+pub const SAVE_ERROR: &str = "Sidenote could not save your instructions. Your text is still here. Try Save instructions again. If it fails twice, copy the text and restart Sidenote.";
 
 // shortcut: local 0.0.1 policy, replace with the core helper availability API when E1 lands.
 pub fn helper_unavailable_reason(helper: Helper) -> Option<&'static str> {
@@ -116,7 +118,7 @@ impl Snapshot {
     fn read(root: &Path) -> Result<Self, String> {
         Ok(Self {
             settings: notes::settings()
-                .map_err(|_| "Could not read AI notes settings. Try Reload.".to_string())?,
+                .map_err(|_| LOAD_ERROR.to_string())?,
             found: notes::detect(),
             store: instructions::load(root).map_err(|_| {
                 "Could not read agent instructions. Your saved text was kept.".to_string()
@@ -159,7 +161,7 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
         }
         Work::Save(index, text) => {
             instructions::save(root, agent(index), &text).map_err(|_| {
-                "Could not save instructions. Check the length and try again.".to_string()
+                SAVE_ERROR.to_string()
             })?;
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were written but could not be read back. Reload to check.".to_string()
@@ -361,9 +363,9 @@ impl State {
 }
 pub(super) fn test_error(message: &str) -> String {
     if message.to_ascii_lowercase().contains("json") {
-        "The helper's test answer could not be read. Try Test again or check its setup.".into()
+        "Claude Code replied, but Sidenote could not read the sample. Press Send a sample again. If it fails again, choose the recommended model.".into()
     } else {
-        message.into()
+        "The sample failed. Claude Code did not answer. Open a terminal, type claude, sign in, then press Send a sample.".into()
     }
 }
 pub fn valid_instructions(text: &str) -> bool {
@@ -538,7 +540,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         c = c.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
     if let Some(error) = &a.error {
-        c = c.child(roles::SMALL.wrap(error, p.warn).role("alert"));
+        c = c.child(super::widgets::banner("Settings need attention", error, super::widgets::BannerKind::Problem, p));
     }
     if let Some(notice) = &a.notice {
         c = c.child(roles::SMALL.wrap(notice, p.ok).role("status"));
@@ -792,7 +794,7 @@ mod tests {
         assert!(!test_error("The helper test returned invalid JSON").contains("JSON"));
         assert_eq!(
             test_error("The helper was not found on this PC"),
-            "The helper was not found on this PC"
+            "The sample failed. Claude Code did not answer. Open a terminal, type claude, sign in, then press Send a sample."
         );
     }
 
