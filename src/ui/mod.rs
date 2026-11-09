@@ -106,6 +106,7 @@ pub enum Event {
     Edited(edit_worker::Completion),
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
+    ListenerFinished(Result<(), String>),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -1002,6 +1003,7 @@ impl State {
             }
             Event::Update(status) => self.update_status(status),
             Event::UpdateFinished(result) => self.update_finished(result),
+            Event::ListenerFinished(result) => self.listener_finished(result),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::MigrationPrepared(result) => {
@@ -1466,6 +1468,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .min_h(0.0)
         .fill(p.bg)
         .child(top_bar(s, p, narrow));
+    if let Some(notice) = updates::listener_notice(s, p) {
+        main = main.child(notice);
+    }
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);
     }
@@ -1924,6 +1929,7 @@ pub fn spec() -> AppSpec<State> {
             ("sync-task-merged", sync_scene::task_scene),
             ("sync-task-kept", sync_scene::failed_task_scene),
             ("sync-arrival-draft", sync_scene::arrival_scene),
+            ("listener-error", updates::listener_error_scene),
             ("updates-settings", updates::settings_scene),
             ("updates-manual", |s| {
                 updates::scene(s, sidenote::updates::Phase::Manual)

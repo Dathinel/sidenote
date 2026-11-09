@@ -465,23 +465,7 @@ fn task() -> Result<String, String> {
 fn task_command(run: bool) -> Result<(), String> {
     listener_task(run, false)
 }
-fn listener_task(run: bool, register: bool) -> Result<(), String> {
-    let name = task()?;
-    let exe = std::env::current_exe().map_err(|_| "Could not locate Sidenote.")?;
-    let expected_args = if name.starts_with("Sidenote updates proof ") {
-        let data = crate::env_var("SIDENOTE_DATA_DIR")
-            .ok_or("Proof task needs an isolated data folder.")?;
-        format!(
-            "--listen --listener-isolated --data-dir \"{}\" --listener-localappdata \"{}\"",
-            data.to_string_lossy(),
-            std::env::var_os("LOCALAPPDATA")
-                .ok_or("Proof task needs isolated LocalAppData.")?
-                .to_string_lossy()
-        )
-    } else {
-        "--listen".into()
-    };
-    let script = r#"
+const LISTENER_TASK_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
@@ -500,8 +484,30 @@ if ($owner -ne $sid) { $owner = ([Security.Principal.NTAccount]$owner).Translate
 if ($a.Count -ne 1 -or $a[0].Execute -ne $env:SIDENOTE_TASK_EXE -or $a[0].Arguments -ne $env:SIDENOTE_TASK_ARGS -or $owner -ne $sid -or $t.Principal.LogonType -ne 'Interactive' -or $t.Principal.RunLevel -ne 'Limited' -or !$t.Settings.Enabled) { throw 'Listener task does not target this user and install' }
 if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
 "#;
+fn listener_task(run: bool, register: bool) -> Result<(), String> {
+    let name = task()?;
+    let exe = std::env::current_exe().map_err(|_| "Could not locate Sidenote.")?;
+    let expected_args = if name.starts_with("Sidenote updates proof ") {
+        let data = crate::env_var("SIDENOTE_DATA_DIR")
+            .ok_or("Proof task needs an isolated data folder.")?;
+        format!(
+            "--listen --listener-isolated --data-dir \"{}\" --listener-localappdata \"{}\"",
+            data.to_string_lossy(),
+            std::env::var_os("LOCALAPPDATA")
+                .ok_or("Proof task needs isolated LocalAppData.")?
+                .to_string_lossy()
+        )
+    } else {
+        "--listen".into()
+    };
+
     let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            LISTENER_TASK_SCRIPT,
+        ])
         .env("SIDENOTE_TASK_NAME", name)
         .env("SIDENOTE_TASK_EXE", exe)
         .env("SIDENOTE_TASK_ARGS", expected_args)
@@ -523,31 +529,52 @@ if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(
-                    "The meeting listener setup did not finish. Reopen Sidenote to retry.".into(),
-                );
+                return Err("The meeting listener setup did not finish. Try again.".into());
             }
         }
     };
     if status.success() {
         Ok(())
     } else {
-        Err("Sidenote could not prepare its meeting listener. Reopen Sidenote to retry. If this continues, reinstall Sidenote for your Windows account.".into())
+        Err("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into())
     }
 }
-static LISTENER_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[derive(Clone, Debug, Default)]
+pub struct ListenerStatus {
+    pub ready: bool,
+    pub error: Option<String>,
+}
+impl ListenerStatus {
+    fn complete(&mut self, result: &Result<(), String>) {
+        self.ready = result.is_ok();
+        self.error = result.as_ref().err().cloned();
+    }
+}
+static LISTENER: std::sync::Mutex<ListenerStatus> = std::sync::Mutex::new(ListenerStatus {
+    ready: false,
+    error: None,
+});
+pub fn listener_status() -> ListenerStatus {
+    if !installed() {
+        return ListenerStatus {
+            ready: true,
+            error: None,
+        };
+    }
+    LISTENER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
 pub fn listener_ready() -> bool {
-    !installed() || LISTENER_READY.load(std::sync::atomic::Ordering::Acquire)
+    listener_status().ready
 }
 pub fn listener_installed() {
-    if installed()
-        && let Err(error) = listener_task(false, true)
-    {
-        let _ = save(&Status {
-            phase: Phase::Error,
-            error: Some(error),
-            ..load()
-        });
+    if installed() {
+        let result = listener_task(false, true);
+        if let Err(error) = result {
+            LISTENER
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .complete(&Err(error));
+        }
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -618,13 +645,21 @@ pub fn listener_lock() -> io::Result<Option<File>> {
     exclusive("update-listener.lock").map(Some)
 }
 pub fn ensure_listener() -> Result<(), String> {
+    let result = prepare_listener();
+    LISTENER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .complete(&result);
+    result
+}
+fn prepare_listener() -> Result<(), String> {
     if !installed() {
         return Ok(());
     }
     if listener_stopping() {
         return Err("Sidenote is updating its meeting listener. Wait for the update to finish, then reopen Sidenote.".into());
     }
-    LISTENER_READY.store(false, std::sync::atomic::Ordering::Release);
+    LISTENER.lock().unwrap_or_else(|e| e.into_inner()).ready = false;
     listener_task(false, true)?;
     match listener_lock() {
         Ok(lock) => {
@@ -635,7 +670,7 @@ pub fn ensure_listener() -> Result<(), String> {
                 match listener_lock() {
                     Err(error) if error.raw_os_error() == Some(32) => break,
                     Err(_) => return Err("Could not check whether the listener is running.".into()),
-                    Ok(_) if Instant::now() >= deadline => return Err("The meeting listener did not start. Reopen Sidenote to retry, or reinstall it if this continues.".into()),
+                    Ok(_) if Instant::now() >= deadline => return Err("The meeting listener did not start. Try again, or reinstall it if this continues.".into()),
                     Ok(_) => std::thread::sleep(Duration::from_millis(100)),
                 }
             }
@@ -643,7 +678,6 @@ pub fn ensure_listener() -> Result<(), String> {
         Err(error) if error.raw_os_error() == Some(32) => {}
         Err(_) => return Err("Could not check whether the listener is running.".into()),
     }
-    LISTENER_READY.store(true, std::sync::atomic::Ordering::Release);
     Ok(())
 }
 /// Runs on the window's worker, including recovery after a failed asynchronous apply.
@@ -916,6 +950,72 @@ mod tests {
             fs::rename(&destination, root.join("retry.nupkg")).unwrap();
             fs::remove_dir_all(root).unwrap();
         });
+    }
+
+    #[test]
+    fn mismatched_listener_task_is_never_started() {
+        // Mock every task cmdlet; this never queries, registers or starts a real task.
+        let prelude = r#"
+function Get-ScheduledTask {
+    $action = [PSCustomObject]@{ Execute = $env:SIDENOTE_TASK_EXE; Arguments = $env:SIDENOTE_TASK_ARGS }
+    $principal = [PSCustomObject]@{ UserId = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; LogonType = 'Interactive'; RunLevel = 'Limited' }
+    $settings = [PSCustomObject]@{ Enabled = $true }
+    switch ($env:SIDENOTE_TEST_MISMATCH) {
+        'exe' { $action.Execute = 'other.exe' }
+        'args' { $action.Arguments = '--other' }
+        'privilege' { $principal.RunLevel = 'Highest' }
+        'disabled' { $settings.Enabled = $false }
+    }
+    [PSCustomObject]@{ TaskName = $env:SIDENOTE_TASK_NAME; Actions = @($action); Principal = $principal; Settings = $settings }
+}
+function Register-ScheduledTask { throw 'Registration is forbidden in this test' }
+function Start-ScheduledTask { $script:started = $true }
+$script:started = $false
+try {
+"#;
+        let suffix = r#"
+} catch { if ($script:started) { exit 2 }; exit 1 }
+if ($script:started) { exit 0 }; exit 3
+"#;
+        for mismatch in ["none", "exe", "args", "privilege", "disabled"] {
+            let status = Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!("{prelude}\n{LISTENER_TASK_SCRIPT}\n{suffix}"),
+                ])
+                .env("SIDENOTE_TASK_NAME", "Sidenote mock listener")
+                .env("SIDENOTE_TASK_EXE", "sidenote-test.exe")
+                .env("SIDENOTE_TASK_ARGS", "--listen")
+                .env("SIDENOTE_TASK_RUN", "yes")
+                .env("SIDENOTE_TASK_REGISTER", "no")
+                .env("SIDENOTE_TEST_MISMATCH", mismatch)
+                .creation_flags(0x08000000)
+                .status()
+                .unwrap();
+            assert_eq!(
+                status.code(),
+                Some(if mismatch == "none" { 0 } else { 1 }),
+                "{mismatch}"
+            );
+        }
+    }
+
+    #[test]
+    fn listener_failure_is_independent_and_retry_clears_it_only_on_success() {
+        let mut listener = ListenerStatus::default();
+        listener.complete(&Err(
+            "Listener task does not target this user and install".into()
+        ));
+        assert!(!listener.ready);
+        assert!(listener.error.is_some());
+        listener.complete(&Err("Still mismatched".into()));
+        assert!(!listener.ready);
+        assert_eq!(listener.error.as_deref(), Some("Still mismatched"));
+        listener.complete(&Ok(()));
+        assert!(listener.ready);
+        assert!(listener.error.is_none());
     }
 
     #[test]

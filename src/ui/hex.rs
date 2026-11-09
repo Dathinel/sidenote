@@ -599,7 +599,7 @@ impl State {
     }
 
     pub fn hex_record_start(&mut self) {
-        if !sidenote::updates::listener_ready()
+        if !super::updates::listener_ready(self)
             || self.hex.record_busy
             || !self.hex.can(Feature::RecordStart)
             || self.hex.recording().is_some()
@@ -839,8 +839,8 @@ pub fn recording_start(s: &State) -> Option<(chrono::DateTime<chrono::Local>, bo
 /// Why a new recording cannot start right now, in words fit for a tooltip.
 pub fn start_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
-    if !sidenote::updates::listener_ready() {
-        Some("Meeting listener is not ready. Wait a moment, then reopen Sidenote if needed")
+    if !super::updates::listener_ready(s) {
+        Some("Meeting listener is not ready. Use Try again beside the recording controls")
     } else if !h.running() {
         Some("Hex is not running")
     } else if h.recording().is_some() {

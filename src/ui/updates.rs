@@ -9,6 +9,8 @@ use sidenote::updates::{self, Phase, Status};
 
 pub struct Updates {
     pub status: Status,
+    listener: updates::ListenerStatus,
+    listener_busy: bool,
     service: Option<std::sync::mpsc::Sender<updates::CheckRequest>>,
     dismissed: bool,
     notes_open: bool,
@@ -19,6 +21,8 @@ impl Default for Updates {
     fn default() -> Self {
         Self {
             status: updates::load(),
+            listener: updates::listener_status(),
+            listener_busy: false,
             service: None,
             dismissed: false,
             notes_open: false,
@@ -27,11 +31,17 @@ impl Default for Updates {
         }
     }
 }
+impl Updates {
+    fn feed_status(&mut self, status: Status) {
+        self.status = status;
+    }
+}
 impl State {
     pub fn updates_start(&mut self) {
         if !updates::installed() {
             return;
         }
+        self.updates.listener_busy = true;
         self.updates.applying = true;
         let events = self.events_tx.clone();
         let wake = self.waker.clone();
@@ -63,10 +73,12 @@ impl State {
         if self.updates.status.version != status.version && !status.version.is_empty() {
             self.updates.dismissed = false;
         }
-        self.updates.status = status;
+        self.updates.feed_status(status);
     }
     pub fn update_finished(&mut self, result: Result<Status, String>) {
         self.updates.applying = false;
+        self.updates.listener_busy = false;
+        self.updates.listener = updates::listener_status();
         if self.updates.service.is_none() && updates::installed() {
             let events = self.events_tx.clone();
             let wake = self.waker.clone();
@@ -79,6 +91,7 @@ impl State {
         }
         match result {
             Ok(status) => self.updates.status = status,
+            Err(_) if !self.updates.listener.ready => {}
             Err(error) => {
                 self.updates.status.phase = if self.updates.status.version.is_empty() {
                     Phase::Error
@@ -88,6 +101,31 @@ impl State {
                 self.updates.status.error = Some(error);
             }
         }
+    }
+    pub fn listener_finished(&mut self, result: Result<(), String>) {
+        self.updates.listener_busy = false;
+        self.updates.listener = updates::ListenerStatus {
+            ready: result.is_ok(),
+            error: result.err(),
+        };
+    }
+    fn retry_listener(&mut self) {
+        if self.updates.scene
+            || self.updates.listener_busy
+            || self.updates.applying
+            || rune::tooling::headless_run().is_some()
+        {
+            return;
+        }
+        self.updates.listener_busy = true;
+        let events = self.events_tx.clone();
+        let wake = self.waker.clone();
+        std::thread::spawn(move || {
+            let _ = events.send(Event::ListenerFinished(updates::ensure_listener()));
+            if let Some(wake) = wake {
+                wake();
+            }
+        });
     }
     fn check_updates(&mut self) {
         if self.updates.scene
@@ -454,4 +492,74 @@ pub fn scene(s: &mut State, phase: Phase) {
 }
 pub fn settings_scene(s: &mut State) {
     s.open_updates();
+}
+
+pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
+    let error = s.updates.listener.error.as_ref()?;
+    let mut retry = link(
+        if s.updates.listener_busy {
+            "Trying again\u{2026}"
+        } else {
+            "Try again"
+        },
+        p,
+    )
+    .key("listener-retry");
+    if s.updates.listener_busy {
+        retry = retry.dim(0.5);
+    } else {
+        retry = retry.on_press(|s: &mut State| s.retry_listener());
+    }
+    Some(
+        col()
+            .key("listener-error")
+            .w_full()
+            .gap(6.0)
+            .px(24.0)
+            .py(12.0)
+            .child(roles::SMALL.wrap(error, p.warn).role("alert"))
+            .child(retry),
+    )
+}
+pub fn listener_error_scene(s: &mut State) {
+    hex::scene(s, false);
+    s.updates.scene = true;
+    s.updates.listener = updates::ListenerStatus { ready: false, error: Some("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into()) };
+}
+
+pub fn listener_ready(s: &State) -> bool {
+    if s.updates.scene {
+        s.updates.listener.ready
+    } else {
+        updates::listener_ready()
+    }
+}
+
+#[cfg(test)]
+mod listener_tests {
+    use super::*;
+    #[test]
+    fn feed_checks_never_clear_a_listener_failure() {
+        let mut updates = Updates {
+            listener: updates::ListenerStatus {
+                ready: false,
+                error: Some("mismatched task".into()),
+            },
+            ..Default::default()
+        };
+        for phase in [
+            Phase::Checking,
+            Phase::Downloading,
+            Phase::Idle,
+            Phase::Ready,
+            Phase::Error,
+        ] {
+            updates.feed_status(Status {
+                phase,
+                ..Default::default()
+            });
+            assert!(!updates.listener.ready);
+            assert_eq!(updates.listener.error.as_deref(), Some("mismatched task"));
+        }
+    }
 }
