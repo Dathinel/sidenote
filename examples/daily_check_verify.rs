@@ -84,6 +84,7 @@ fn main() {
         expected_task: "Check shipment".into(),
         value,
     };
+    core::TaskStore::default().add_project("Delivery").unwrap();
     apply_action(&action(ActionKind::SetProject, json!("Delivery"))).unwrap();
     apply_action(&action(ActionKind::SetOwner, json!("Owner"))).unwrap();
     apply_action(&action(ActionKind::SetDue, json!("2026-11-08"))).unwrap();
