@@ -1,5 +1,5 @@
 //! Plain, bounded status copy shared by the list, meeting page and live page.
-use super::{State, area::button, roles, theme::Palette};
+use super::{State, area::button, roles, theme::Palette, widgets::{self, BannerKind}};
 use rune::{El, col, row};
 use serde::Deserialize;
 use sidenote::core::{
@@ -60,18 +60,17 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         JobState::NeedsClick => "Notes were not made for this meeting because it ended before AI notes were turned on, or automatic notes were off.".into(),
         JobState::Queued => "This meeting is waiting to have its notes written.".into(),
         JobState::Running => format!("Writing notes with {name}. This can take a few minutes."),
-        JobState::HelperMissing => format!("{name} was not found on this PC. It may have been removed or moved."),
-        JobState::BackendError { next_try_ms, exit } => {
-            let code = exit.map(|code| format!(" (exit code {code})")).unwrap_or_default();
+        JobState::HelperMissing => format!("{name} was not found on this PC. Install it again, then choose it in Settings. Your transcript is saved."),
+        JobState::BackendError { next_try_ms, .. } => {
             let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your AI helper" };
-            let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Use Try now when you are ready.".into());
-            format!("{name} stopped with an error{code}. It may need you to sign in again: open a terminal, run {command}, and sign in.{retry}")
+            let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
+            format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
-        JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Long meetings take longer, or the service may be busy."),
-        JobState::BadOutput => "The AI helper's answer could not be read as notes after repeated tries. Your transcript is safe.".into(),
+        JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Try again in a few minutes. Your transcript is saved."),
+        JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into notes. Try again. If it keeps happening, reset your instructions in Settings. Your transcript is saved."),
         JobState::Done { fallback: true, .. } => "These notes used the default instructions, because notes made with your instructions could not be read.".into(),
         JobState::Done { .. } => String::new(),
-        JobState::TooLong { minutes } => format!("This meeting is too long for notes in this version (about {minutes} minutes; the limit is about 4 hours). The transcript is saved."),
+        JobState::TooLong { minutes } => format!("This meeting ran {} hours{} . Notes can cover the first 4 hours. Choose the first 4 hours below. Your transcript is saved.", minutes / 60, if minutes % 60 == 0 { String::new() } else { format!(" {} minutes", minutes % 60) }).replace("hours .", "hours.").replace("minutes .", "minutes."),
         JobState::Empty => "Hex heard no speech in this meeting, so there are no notes to write.".into(),
     }
 }
@@ -170,21 +169,10 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         return None;
     }
     let selected = s.ai_notes.settings.as_ref().and_then(|n| n.helper);
-    let mut c = col()
+    let kind = if is_failure(&job.state) { BannerKind::Problem } else if matches!(job.state, JobState::Running | JobState::Queued) { BannerKind::Working } else { BannerKind::Info };
+    let mut c = widgets::banner(label(&job.state), message(job, selected), kind, p)
         .key("notes-state-banner")
-        .w_full()
-        .min_w(0.0)
-        .px(16.0)
-        .py(16.0)
-        .gap(12.0)
-        .radius(10.0)
-        .fill(p.card)
-        .border(1.0, p.line)
-        .child(
-            roles::SMALL
-                .wrap(message(job, selected), p.ink)
-                .role("status"),
-        );
+        ;
     let mut buttons = row().w_full().flex_wrap().gaps(8.0, 8.0);
     match job.state {
         JobState::NoHelper => {
@@ -212,7 +200,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         JobState::BackendError { .. } => {
             buttons = buttons
                 .child(request_button(
-                    "Try now",
+                    "Try again",
                     id,
                     Request::TryAgain,
                     "notes-state-retry",
@@ -258,6 +246,15 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         _ => {}
     }
     c = c.child(buttons);
+    if let JobState::BackendError { exit: Some(code), .. } = job.state {
+        let key = id.to_string();
+        c = c.child(button("Details", "notes-error-details", p).self_start().on_press(move |s: &mut State| {
+            if !s.ai_notes.details.remove(&key) { s.ai_notes.details.insert(key.clone()); }
+        }));
+        if s.ai_notes.details.contains(id) {
+            c = c.child(roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft));
+        }
+    }
     if let Some(pending) = s.ai_notes.pending {
         c = c.child(roles::META.wrap(pending, p.soft).role("status"));
     }
@@ -268,7 +265,6 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
 }
 fn edit_button(p: Palette) -> El {
     button("Edit instructions", "notes-state-edit", p)
-        .min_w(148.0)
         .on_press(|s: &mut State| {
             s.open_ai_notes();
             super::scene_scroll(s, "agent-instructions");
@@ -405,10 +401,11 @@ mod tests {
             updated_at: 0,
         };
         let text = message(&job, Some(Helper::Claude));
-        assert!(text.contains("OpenCode stopped"));
-        assert!(text.contains("exit code 7"));
-        assert!(text.contains("run opencode"));
-        assert!(text.contains("Use Try now"));
+        assert!(text.contains("OpenCode did not finish"));
+        assert!(!text.contains("exit code"));
+        assert!(text.contains("type opencode"));
+        assert!(text.contains("Press Try again"));
+        assert!(text.contains("Your transcript is saved."));
         job.state = JobState::BackendError {
             next_try_ms: Some(1794305400000),
             exit: None,

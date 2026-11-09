@@ -1486,8 +1486,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .min_h(0.0)
         .fill(p.bg)
         .child(top_bar(s, p, narrow));
-    if let Some(notice) = updates::listener_notice(s, p) {
-        main = main.child(notice);
+    if !home && let Some(notice) = updates::listener_notice(s, p) {
+        main = main.child(col().w_full().items_center().child(col().w_full().max_w(860.0).px(if narrow { 16.0 } else { 40.0 }).child(notice)));
     }
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);

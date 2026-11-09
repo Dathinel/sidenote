@@ -495,14 +495,14 @@ pub fn settings_scene(s: &mut State) {
 }
 
 pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
-    let error = s.updates.listener.error.as_ref()?;
-    let mut retry = link(
+    s.updates.listener.error.as_ref()?;
+    let mut retry = super::area::button(
         if s.updates.listener_busy {
             "Trying again\u{2026}"
         } else {
             "Try again"
         },
-        p,
+        "listener-retry", p,
     )
     .key("listener-retry");
     if s.updates.listener_busy {
@@ -511,14 +511,10 @@ pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
         retry = retry.on_press(|s: &mut State| s.retry_listener());
     }
     Some(
-        col()
+        super::widgets::banner("Recording is unavailable", "Sidenote cannot record meetings right now. Press Try again. If that does not work, restart Sidenote. If it still fails, reinstall Sidenote. Your existing meetings are safe.", super::widgets::BannerKind::Problem, p)
             .key("listener-error")
-            .w_full()
-            .gap(6.0)
-            .px(24.0)
-            .py(12.0)
-            .child(roles::SMALL.wrap(error, p.warn).role("alert"))
-            .child(retry),
+            .mb(16.0)
+            .child(retry.self_start()),
     )
 }
 pub fn listener_error_scene(s: &mut State) {
