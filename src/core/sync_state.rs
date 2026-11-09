@@ -447,6 +447,9 @@ pub(super) fn update_checked_validated<T: Serialize + DeserializeOwned + Default
     change(&mut value)?;
     session.view = read_view(root, store, &session.own)?;
     session.import_legacy()?;
+    if session.view.own_bad || session.view.items != registers {
+        return Err(invalid("Project state changed; review a fresh preview"));
+    }
     super::project_merge::proof_pause(root, "publication")?;
     let latest = read_view(root, store, &session.own)?;
     if latest.own_bad || latest.items != registers {
