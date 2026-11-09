@@ -51,6 +51,7 @@ pub enum Panel {
 #[derive(Default)]
 pub struct PanelUi {
     pub waiting_menu: bool,
+    pub waiting_text: bool,
     pub project_menu: bool,
     pub owner_menu: bool,
     /// "New project..." swaps the project menu for a text box.
@@ -99,6 +100,7 @@ pub struct TasksState {
     pub waiting_input: TextEdit,
     pub group_menu: bool,
     pub redo_menu: bool,
+    pub redo_confirm: Option<String>,
     pub done: DoneFilter,
     pub who: Who,
     pub include_unassigned: bool,
@@ -175,6 +177,7 @@ impl TasksState {
             grouping_loaded: false,
             group_menu: false,
             redo_menu: false,
+            redo_confirm: None,
             done: DoneFilter::Open,
             who: Who::Everyone,
             include_unassigned: false,
@@ -1993,7 +1996,7 @@ fn empty_note(s: &State, p: Palette) -> El {
         .w_full()
         .gap(6.0)
         .pt(40.0)
-        .items_center()
+        .items_start()
         .child(roles::SECTION.wrap(head, p.ink))
         .child(roles::SMALL.wrap(body, p.soft))
 }
@@ -2861,6 +2864,7 @@ fn list_column(
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0)
         .child(title_row(narrow, p))
+        .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(summary_line(s, p).mb(16.0))
         .child(toolbar(s, k, p, layer).mb(10.0));
     if v.groups.is_empty() && v.done.is_empty() {
@@ -2872,8 +2876,9 @@ fn list_column(
     if !v.done.is_empty() {
         doc = doc.child(done_section(s, &v, lay, p));
     }
-    doc = doc.child(cleared_line(s, k, p, layer));
-    doc = doc.child(redo_older_control(s, k, p, layer));
+    if !t.items.is_empty() || t.cutoff.is_some() {
+        doc = doc.child(cleared_line(s, k, p, layer));
+    }
     if !narrow && t.panel.is_none() {
         doc = doc.child(key_hints(p));
     }
@@ -2922,80 +2927,34 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     }
     out = out.child(choices);
     if t.status == core::TaskStatus::Waiting {
-        out = out.child(
-            TextInput::new(&s.tasks.waiting_input)
-                .placeholder("Person or event")
-                .on_edit(|s: &mut State| &mut s.tasks.waiting_input)
-                .height(34.0)
-                .build(k)
-                .key("waiting-text")
-                .w_full(),
-        );
-        let (id, index) = (t.meeting_id.clone(), t.index);
-        out = out.child(
-            button("Set person or event", "waiting-save", false, p).on_press(
-                move |s: &mut State| {
-                    let text = s.tasks.waiting_input.text.trim().to_string();
-                    if !text.is_empty() {
-                        s.edit_task_v2(
-                            &id,
-                            index,
-                            core::TaskV2Edit::Status(
-                                core::TaskStatus::Waiting,
-                                Some(core::WaitingOn {
-                                    task_id: None,
-                                    text: Some(text),
-                                }),
-                            ),
-                        );
-                    }
-                },
-            ),
-        );
-        let linked: Vec<_> = s
-            .tasks
-            .all
-            .iter()
-            .filter(|l| {
-                l.meeting_id == t.meeting_id && !l.stable_id.is_empty() && l.index != t.index
-            })
-            .collect();
-        if !linked.is_empty() {
+        if s.tasks.ui.waiting_text {
+            let (id, index) = (t.meeting_id.clone(), t.index);
+            let submit_id = id.clone();
+            out = out.child(row().w_full().gap(6.0).items_center()
+                .child(TextInput::new(&s.tasks.waiting_input).placeholder("Person or event")
+                    .on_edit(|s: &mut State| &mut s.tasks.waiting_input)
+                    .on_submit(move |s: &mut State, _| s.save_waiting(&submit_id, index))
+                    .height(34.0).build(k).key("waiting-text").grow(1.0).min_w(0.0))
+                .child(button("Save", "waiting-save", true, p).on_press(move |s: &mut State| s.save_waiting(&id, index))));
+        } else {
             let mut menu = Menu::new("waiting-tasks")
-                .trigger(
-                    button("Choose a task", "waiting-choose", false, p).on_press(
-                        |s: &mut State| s.tasks.ui.waiting_menu = !s.tasks.ui.waiting_menu,
-                    ),
-                )
-                .open(s.tasks.ui.waiting_menu)
-                .placement(Placement::BottomStart)
-                .min_width(240.0);
+                .trigger(button(t.waiting_label.as_deref().unwrap_or("Choose a person, event or task"), "waiting-choose", false, p)
+                    .label("Waiting on: choose a person, event or task")
+                    .on_press(|s: &mut State| s.tasks.ui.waiting_menu = !s.tasks.ui.waiting_menu))
+                .open(s.tasks.ui.waiting_menu).placement(Placement::BottomStart).min_width(240.0);
             if s.tasks.ui.waiting_menu {
-                menu = menu.on_close(|s: &mut State| s.tasks.ui.waiting_menu = false);
-                for linked in linked {
-                    let (id, index, target) =
-                        (t.meeting_id.clone(), t.index, linked.stable_id.clone());
-                    menu = menu.item(
-                        MenuItem::new(&linked.title)
-                            .checked(
-                                t.waiting_on.as_ref().and_then(|w| w.task_id.as_ref())
-                                    == Some(&target),
-                            )
-                            .on_select(move |s: &mut State| {
-                                s.tasks.ui.waiting_menu = false;
-                                s.edit_task_v2(
-                                    &id,
-                                    index,
-                                    core::TaskV2Edit::Status(
-                                        core::TaskStatus::Waiting,
-                                        Some(core::WaitingOn {
-                                            task_id: Some(target.clone()),
-                                            text: None,
-                                        }),
-                                    ),
-                                );
-                            }),
-                    );
+                menu = menu.on_close(|s: &mut State| s.tasks.ui.waiting_menu = false)
+                    .item(MenuItem::new("Person or event...").on_select(|s: &mut State| {
+                        s.tasks.ui.waiting_menu = false;
+                        s.tasks.ui.waiting_text = true;
+                    }));
+                for linked in s.tasks.all.iter().filter(|l| l.meeting_id == t.meeting_id && !l.stable_id.is_empty() && l.index != t.index) {
+                    let (id, index, target) = (t.meeting_id.clone(), t.index, linked.stable_id.clone());
+                    menu = menu.item(MenuItem::new(&linked.title).checked(t.waiting_on.as_ref().and_then(|w| w.task_id.as_ref()) == Some(&target))
+                        .on_select(move |s: &mut State| {
+                            s.tasks.ui.waiting_menu = false;
+                            s.edit_task_v2(&id, index, core::TaskV2Edit::Status(core::TaskStatus::Waiting, Some(core::WaitingOn { task_id: Some(target.clone()), text: None })));
+                        }));
                 }
             }
             out = out.child(menu.build(k, layer));
@@ -3043,37 +3002,14 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
         );
     }
     let (id, index) = (t.meeting_id.clone(), t.index);
-    out = out
-        .child(
-            TextInput::new(&s.tasks.subtask_input)
-                .placeholder("Add a sub-task")
-                .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
-                .height(34.0)
-                .build(k)
-                .key("subtask-title")
-                .w_full(),
-        )
-        .child(
-            button("Add sub-task", "subtask-add", false, p).on_press(move |s: &mut State| {
-                let title = s.tasks.subtask_input.text.trim().to_string();
-                if !title.is_empty() {
-                    s.edit_task_v2(&id, index, core::TaskV2Edit::AddSubtask(title));
-                }
-            }),
-        );
-    if s.meetings
-        .iter()
-        .find(|m| m.id == t.meeting_id)
-        .is_some_and(core::needs_task_redo)
-    {
-        let id = t.meeting_id.clone();
-        out = out.child(button("Redo tasks", "redo-tasks", false, p).on_press(
-            move |s: &mut State| {
-                s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
-                s.tasks.notice = Some("Tasks queued. Your changes will be kept.".into());
-            },
-        ));
-    }
+    let submit_id = id.clone();
+    out = out.child(row().w_full().gap(6.0).items_center()
+        .child(TextInput::new(&s.tasks.subtask_input).placeholder("Add a sub-task")
+            .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
+            .on_submit(move |s: &mut State, _| s.add_panel_subtask(&submit_id, index))
+            .height(34.0).build(k).key("subtask-title").grow(1.0).min_w(0.0))
+        .child(button("Add", "subtask-add", true, p).on_press(move |s: &mut State| s.add_panel_subtask(&id, index))));
+
     out
 }
 
@@ -3088,8 +3024,8 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     }
     let mut menu = Menu::new("redo-older-tasks")
         .trigger(
-            button("Redo tasks", "redo-meeting-open", false, p)
-                .label("Redo tasks from an older meeting")
+            button("Task list options", "redo-meeting-open", false, p)
+                .label("Rebuild tasks from old summaries")
                 .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
         )
         .open(s.tasks.redo_menu)
@@ -3098,7 +3034,7 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     if s.tasks.redo_menu {
         menu = menu
             .on_close(|s: &mut State| s.tasks.redo_menu = false)
-            .group_label("Choose an older meeting");
+            .group_label("Rebuild tasks from old summaries");
         for m in older {
             let id = m.id.clone();
             let date = m
@@ -3108,16 +3044,37 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
             menu = menu.item(MenuItem::new(format!("{} ({date})", m.title)).on_select(
                 move |s: &mut State| {
                     s.tasks.redo_menu = false;
-                    s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
-                    s.tasks.notice = Some("Tasks queued. Your changes will be kept.".into());
+                    s.tasks.redo_confirm = Some(id.clone());
                 },
             ));
         }
     }
-    col()
-        .w_full()
-        .gap(4.0)
-        .mt(12.0)
-        .child(roles::META.wrap("Update tasks from older meeting notes.", p.soft))
-        .child(menu.build(k, layer))
+    let mut out = col().w_full().gap(10.0).mb(12.0).child(menu.build(k, layer).self_start());
+    if let Some(id) = &s.tasks.redo_confirm {
+        let title = s.meetings.iter().find(|m| m.id == *id).map(|m| m.title.as_str()).unwrap_or("this meeting");
+        let id = id.clone();
+        out = out.child(super::widgets::banner("Rebuild tasks?", format!("Rebuild tasks from the summary of {title}? The summary goes to your helper again. Edits are kept where tasks can be matched."), super::widgets::BannerKind::Info, p)
+            .child(row().flex_wrap().gaps(8.0, 8.0)
+                .child(button("Keep tasks", "redo-cancel", true, p).on_press(|s: &mut State| s.tasks.redo_confirm = None))
+                .child(button("Rebuild tasks", "redo-confirm", false, p).on_press(move |s: &mut State| {
+                    s.tasks.redo_confirm = None;
+                    s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
+                    s.tasks.notice = Some("Tasks queued. Edits are kept where tasks can be matched.".into());
+                }))));
+    }
+    out
+}
+
+impl State {
+    fn add_panel_subtask(&mut self, id: &str, index: usize) {
+        let title = self.tasks.subtask_input.text.trim().to_string();
+        if !title.is_empty() { self.edit_task_v2(id, index, core::TaskV2Edit::AddSubtask(title)); }
+    }
+    fn save_waiting(&mut self, id: &str, index: usize) {
+        let text = self.tasks.waiting_input.text.trim().to_string();
+        if !text.is_empty() {
+            self.tasks.ui.waiting_text = false;
+            self.edit_task_v2(id, index, core::TaskV2Edit::Status(core::TaskStatus::Waiting, Some(core::WaitingOn { task_id: None, text: Some(text) })));
+        }
+    }
 }
