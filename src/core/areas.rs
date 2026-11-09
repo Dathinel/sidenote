@@ -293,17 +293,6 @@ impl Projects {
             .keys()
             .filter_map(|k| k.strip_prefix("area-alias:"))
             .any(|n| normalized_name(n) == normalized)
-            || self
-                .other
-                .iter()
-                .filter(|(key, _)| key.starts_with("area-project:"))
-                .any(|(_, value)| {
-                    value.get("converted_to").and_then(Value::as_str).is_some()
-                        && value
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .is_some_and(|old| self.resolve(old) == self.resolve(name))
-                })
     }
     pub fn area_catalog(&self) -> io::Result<Catalog> {
         let mut catalog = Catalog::default();

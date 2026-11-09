@@ -122,7 +122,21 @@ pub struct Receipt {
 struct Backup {
     projects: Projects,
     preview: Preview,
-    files: BTreeMap<PathBuf, Vec<u8>>,
+    files: BTreeMap<PathBuf, FileCopy>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum FileCopy {
+    Text(String),
+    LegacyBytes(Vec<u8>),
+}
+impl FileCopy {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Text(text) => text.as_bytes(),
+            Self::LegacyBytes(bytes) => bytes,
+        }
+    }
 }
 fn invalid(message: &str) -> io::Error {
     store_io::invalid(message)
@@ -664,7 +678,16 @@ impl TaskStore {
         let snapshot = Backup {
             projects: original.clone(),
             preview: preview.clone(),
-            files: project_merge::project_files(&self.root)?,
+            files: project_merge::project_files(&self.root)?
+                .into_iter()
+                .map(|(path, bytes)| {
+                    String::from_utf8(bytes)
+                        .map(|text| (path, FileCopy::Text(text)))
+                        .map_err(|_| {
+                            invalid("A project input is not readable UTF-8. It was kept unchanged.")
+                        })
+                })
+                .collect::<io::Result<_>>()?,
         };
         let receipt = Receipt {
             schema_version: 1,
@@ -779,6 +802,15 @@ impl TaskStore {
             return Err(invalid("The backup changed. Undo was not applied."));
         }
         verify_backup(&backup, &snapshot)?;
+        if receipt.after != snapshot.preview.changes || receipt.action != snapshot.preview.action {
+            return Err(invalid("The Undo record changed. Undo was not applied."));
+        }
+        let operation_baseline: BTreeMap<_, _> = snapshot
+            .preview
+            .references
+            .iter()
+            .map(|r| (r.key.clone(), r.baseline.clone()))
+            .collect();
         original.area_catalog()?.ensure_writable()?;
         let (_, refs) = self.area_inventory(&original)?;
         let raw: BTreeMap<_, _> = refs
@@ -796,11 +828,15 @@ impl TaskStore {
                 .map(|name| original.aliases.get(name).map(|v| json!(v)))
                 .unwrap_or_else(|| original.other.get(key).cloned());
             let changed = current != *written
-                || reference.is_some_and(|r| receipt.baseline.get(r) != raw.get(r));
+                || reference.is_some_and(|r| operation_baseline.get(r) != raw.get(r));
             if changed {
                 receipt.skipped.push(
                     reference
-                        .and_then(|r| refs.iter().find(|item| item.key == r))
+                        .and_then(|r| {
+                            refs.iter()
+                                .chain(snapshot.preview.references.iter())
+                                .find(|item| item.key == r)
+                        })
                         .map(|r| r.label.clone())
                         .unwrap_or_else(|| register_label(&original, key)),
                 );
@@ -829,7 +865,6 @@ impl TaskStore {
             }
         }
         receipt.skipped.sort();
-        receipt.skipped.dedup();
         receipt.active = false;
         put(&mut next, "area-operation:", id, &receipt)?;
         let before_check = self.area_inventory(&original)?.0;
@@ -891,6 +926,9 @@ pub fn receipt_backup(root: &Path, id: &str, receipt: &Receipt, own: &str) -> io
     Ok(path)
 }
 fn register_label(p: &Projects, key: &str) -> String {
+    if let Some(name) = key.strip_prefix("$alias:") {
+        return name.into();
+    }
     p.other
         .get(key)
         .and_then(|v| v.get("name"))
@@ -946,18 +984,23 @@ fn cleanup_backups(root: &Path, p: &Projects) -> io::Result<()> {
             continue;
         }
         store_io::reject_reparse(&entry.path())?;
-        folders.push((entry.metadata()?.modified()?,id, entry.path()));
+        folders.push((entry.metadata()?.modified()?, id, entry.path()));
     }
     folders.sort();
     let keep: std::collections::BTreeSet<_> = folders
         .iter()
         .rev()
-        .filter(|(_,id, _)| receipts.contains_key(id))
+        .filter(|(_, id, _)| receipts.contains_key(id))
         .take(10)
-        .map(|(_,id, _)| id.clone())
+        .map(|(_, id, _)| id.clone())
         .collect();
-    for (_,id, path) in folders {
-        let orphan_old=!receipts.contains_key(&id) && path.metadata()?.modified()?.elapsed().is_ok_and(|age|age>std::time::Duration::from_secs(3600));
+    for (_, id, path) in folders {
+        let orphan_old = !receipts.contains_key(&id)
+            && path
+                .metadata()?
+                .modified()?
+                .elapsed()
+                .is_ok_and(|age| age > std::time::Duration::from_secs(3600));
         if (!keep.contains(&id) && receipts.contains_key(&id)) || orphan_old {
             let _ = fs::remove_file(path.join("backup.json"));
             let _ = fs::remove_dir(path);
@@ -970,7 +1013,8 @@ fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {
     if digest(&actual)? != digest(expected)? {
         return Err(invalid("Backup verification failed"));
     }
-    for bytes in actual.files.values() {
+    for file in actual.files.values() {
+        let bytes = file.bytes();
         let _: Value =
             serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))?;
     }

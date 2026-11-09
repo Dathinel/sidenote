@@ -61,7 +61,9 @@ pub fn ensure(root: &Path) -> io::Result<()> {
             store_io::reject_reparse(&folder.path())?;
             for file in fs::read_dir(folder.path())? {
                 let file = file?;
-                if file.path().extension().is_some_and(|e| e == "json") && file.file_type()?.is_file() {
+                if file.path().extension().is_some_and(|e| e == "json")
+                    && file.file_type()?.is_file()
+                {
                     store_io::reject_reparse(&file.path())?;
                     seen = seen.max(
                         file.metadata()?
@@ -76,7 +78,7 @@ pub fn ensure(root: &Path) -> io::Result<()> {
         if seen < now - 30 * 86400 {
             continue;
         }
-        if marker.as_ref().is_none_or(|m|m.area_format < AREA_FORMAT) {
+        if marker.as_ref().is_none_or(|m| m.area_format < AREA_FORMAT) {
             let name = marker
                 .as_ref()
                 .map(|m| m.name.as_str())
@@ -101,7 +103,10 @@ pub(super) fn guard_changes(
     let area_edit = changes.iter().any(|(key, before, after)| {
         (store == "projects.json"
             && (key.first().is_some_and(|k| {
-                k.starts_with("area") || k.starts_with("assignment:") || k == "merges"
+                k.starts_with("area")
+                    || k.starts_with("assignment:")
+                    || k == "merges"
+                    || k == "aliases"
             })))
             || before.as_ref().and_then(|v| v.get("assignment"))
                 != after.as_ref().and_then(|v| v.get("assignment"))

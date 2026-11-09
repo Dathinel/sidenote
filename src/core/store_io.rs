@@ -21,7 +21,7 @@ pub(crate) fn message(error: &io::Error) -> Option<&str> {
 }
 
 pub(super) fn read<T: DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
-    match read_bounded(path,16*1024*1024) {
+    match read_bounded(path, 16 * 1024 * 1024) {
         Ok(bytes) => serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
             .map_err(io::Error::from),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(T::default()),
@@ -50,7 +50,7 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::create_dir_all(path.parent().ok_or_else(|| invalid("Missing parent"))?)?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
     let result = (|| {
-        let mut file = retry_sharing_violation(||fs::File::create(&temp))?;
+        let mut file = retry_sharing_violation(|| fs::File::create(&temp))?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);

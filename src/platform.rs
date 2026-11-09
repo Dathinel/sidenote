@@ -85,7 +85,18 @@ fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
             )
         } == 0
         {
-            Err(io::Error::last_os_error())
+            let error = io::Error::last_os_error();
+            // MoveFileEx can report access denied for a locked destination. Confirm sharing before retrying.
+            if error.raw_os_error() == Some(5) {
+                for path in [to, from] {
+                    if let Err(sharing) = std::fs::File::open(path)
+                        && matches!(sharing.raw_os_error(), Some(32 | 33))
+                    {
+                        return Err(sharing);
+                    }
+                }
+            }
+            Err(error)
         } else {
             Ok(())
         }

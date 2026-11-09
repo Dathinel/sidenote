@@ -476,29 +476,39 @@ pub(super) fn raw_assignments(
 }
 pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) -> io::Result<()> {
-        if !dir.try_exists()? {
+        if store_io::reject_reparse(dir).is_err() {
             return Ok(());
         }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                visit(root, &entry.path(), out)?;
-            } else if entry.file_type()?.is_file()
-                && entry.path().extension().is_some_and(|e| e == "json")
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            if !entry.file_type()?.is_file() || entry.path().extension().is_none_or(|e| e != "json")
             {
-                let bytes = fs::read(entry.path())?;
-                let value: serde_json::Value =
-                    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
-                if value.get("store").and_then(|s| s.as_str()) == Some("projects.json") {
-                    out.insert(
-                        entry
-                            .path()
-                            .strip_prefix(root)
-                            .map_err(|_| invalid("Invalid backup source"))?
-                            .into(),
-                        bytes,
-                    );
-                }
+                continue;
+            }
+            let Ok(bytes) = store_io::read_bounded(&entry.path(), 4 * 1024 * 1024) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<Value>(
+                bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes),
+            ) else {
+                continue;
+            };
+            if value.get("store").and_then(Value::as_str) == Some("projects.json") {
+                out.insert(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .map_err(|_| invalid("Invalid backup source"))?
+                        .into(),
+                    bytes,
+                );
             }
         }
         Ok(())
@@ -509,7 +519,9 @@ pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>
         let project_store = blake3::hash(b"projects.json").to_hex().to_string();
         for owner in fs::read_dir(state)? {
             let owner = owner?;
-            if owner.file_type()?.is_dir() {
+            if owner.file_type()?.is_dir()
+                && super::device::valid_id(&owner.file_name().to_string_lossy())
+            {
                 visit(root, &owner.path().join(&project_store), &mut out)?;
             }
         }
@@ -519,8 +531,13 @@ pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>
         let name = entry.file_name().to_string_lossy().into_owned();
         if entry.file_type()?.is_file()
             && (name == "projects.json" || name.starts_with("projects.sync-conflict-"))
+            && let Ok(bytes) = store_io::read_bounded(&entry.path(), 16 * 1024 * 1024)
+            && serde_json::from_slice::<Value>(
+                bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes),
+            )
+            .is_ok()
         {
-            out.insert(PathBuf::from(name), fs::read(entry.path())?);
+            out.insert(PathBuf::from(name), bytes);
         }
     }
     Ok(out)
