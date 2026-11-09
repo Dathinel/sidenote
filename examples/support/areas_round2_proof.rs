@@ -77,7 +77,15 @@ fn memory_changes(store: &TaskStore, changes: Value) {
     let revision = core::areas::new_assignment_revision(&store.root).unwrap();
     let (device, id) = revision.split_once('-').unwrap();
     let checksum = blake3::hash(
-        &serde_json::to_vec(&(2, device, id, "memory/records.json", &changes, Vec::<String>::new())).unwrap(),
+        &serde_json::to_vec(&(
+            2,
+            device,
+            id,
+            "memory/records.json",
+            &changes,
+            Vec::<String>::new(),
+        ))
+        .unwrap(),
     )
     .to_hex()
     .to_string();
@@ -100,7 +108,11 @@ fn junction(link: &Path, target: &Path) {
         .creation_flags(0x08000000)
         .output()
         .unwrap();
-    assert!(output.status.success(), "Synthetic junction creation failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Synthetic junction creation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 pub fn run(mode: &str, store: &TaskStore) {
     let root = &store.root;
@@ -623,7 +635,10 @@ pub fn run(mode: &str, store: &TaskStore) {
         }
         "r2-old-merge" => {
             store
-                .update_projects(|p| p.other.retain(|k, _| !k.starts_with("assignment:") && !k.starts_with("area")))
+                .update_projects(|p| {
+                    p.other
+                        .retain(|k, _| !k.starts_with("assignment:") && !k.starts_with("area"))
+                })
                 .unwrap();
             let before = store.load_projects().unwrap();
             let preview = store.preview_merge(SOURCE, CHILD).unwrap();
@@ -641,11 +656,13 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert!(wire.get("baseline_version").is_none());
             assert!(wire.get("area_changes").is_none());
             let legacy = serde_json::from_value(wire).unwrap();
-            store.update_projects(|p| {
-                *p = before;
-                p.aliases.insert(SOURCE.into(), CHILD.into());
-                p.merges.insert(SOURCE.into(), legacy);
-            }).unwrap();
+            store
+                .update_projects(|p| {
+                    *p = before;
+                    p.aliases.insert(SOURCE.into(), CHILD.into());
+                    p.merges.insert(SOURCE.into(), legacy);
+                })
+                .unwrap();
             let p = store.load_projects().unwrap();
             let (from, merge) = p.merges.iter().find(|(_, m)| m.active).unwrap();
             assert!(merge.baseline_version.is_none());

@@ -492,6 +492,9 @@ pub(super) fn load<T: Serialize + DeserializeOwned + Default>(
     let session = Session::open_mode(root, store, true)?;
     Ok(serde_json::from_value(session.value::<T>()?)?)
 }
+pub(super) fn prepare(root: &Path, store: &str) -> io::Result<()> {
+    Session::open(root, store).map(|_| ())
+}
 pub(super) fn writer(root: &Path, store: &str, key: Vec<String>) -> io::Result<Option<String>> {
     let session = Session::open_mode(root, store, true)?;
     Ok(session.view.items.get(&key).map(|r| r.device.clone()))

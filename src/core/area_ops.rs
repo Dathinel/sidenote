@@ -593,6 +593,11 @@ impl TaskStore {
         ))
     }
     pub fn preview_area(&self, action: Action) -> io::Result<Preview> {
+        super::area_version::ensure(&self.root)?;
+        if !super::paths::read_only() {
+            // Finish local legacy import before fingerprinting the journals we will guard.
+            sync_state::prepare(&self.root, "projects.json")?;
+        }
         self.area_preview(&self.load_projects()?, action)
     }
     fn area_preview(&self, p: &Projects, action: Action) -> io::Result<Preview> {
