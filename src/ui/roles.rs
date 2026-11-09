@@ -28,6 +28,14 @@ impl Role {
         }
     }
 
+    /// The same size at 400.
+    pub const fn regular(self) -> Role {
+        Role {
+            weight: 400.0,
+            ..self
+        }
+    }
+
     pub fn style(self) -> TextStyle {
         TextStyle::new(self.size, self.weight).lh(self.lh)
     }

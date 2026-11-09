@@ -10,11 +10,11 @@ use super::{
     AskRun, State,
     meeting::COLUMN,
     roles,
-    theme::{BODY_LH, Palette},
+    theme::Palette,
     widgets::{hairline, link, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
-use rune::{El, Key, KeyEvent, Spring, SpringPair, TextStyle, Transition, Tx, col, el, row, text};
+use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, Spinner, TextInput};
 use sidenote::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
 use std::{f32::consts::FRAC_PI_2, sync::LazyLock};
@@ -111,7 +111,7 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
                 .text(p.ink)
                 .muted(p.soft)
                 .link(p.accent)
-                .body_font(TextStyle::new(15.0, 400.0).lh(BODY_LH - 2.0)),
+                .body_font(roles::READ.style()),
         )
         .on_link_tx(move |s: &mut State, url, tx| {
             if let Some(stamp) = url.strip_prefix("stamp:") {

@@ -7,9 +7,10 @@ use super::{
     State, hex,
     list::{people_line, snippet},
     nav::Page,
+    roles,
     tasks::View,
     theme::Palette,
-    widgets::{hairline, keycap, label, line, pressable},
+    widgets::{hairline, keycap, pressable},
 };
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, TextInput};
@@ -307,13 +308,13 @@ fn result_row(i: usize, e: &Entry, active: bool, p: Palette) -> El {
             row()
                 .gap(10.0)
                 .items_center()
-                .child(line(&e.title, 14.5, 600.0, p.ink))
-                .child(line(&e.detail, 12.5, 400.0, p.faint).grow(1.0)),
+                .child(roles::NAME.line(&e.title, p.ink))
+                .child(roles::META.line(&e.detail, p.faint).grow(1.0)),
         );
     } else {
         text_col = text_col
-            .child(line(&e.title, 14.5, 600.0, p.ink))
-            .child(line(&e.detail, 12.5, 400.0, p.soft));
+            .child(roles::NAME.line(&e.title, p.ink))
+            .child(roles::META.line(&e.detail, p.soft));
     }
     if let Some(hit) = &e.hit {
         text_col = text_col.child(snippet(hit, p));
@@ -341,7 +342,7 @@ fn hint(cap: &str, words: &str, p: Palette) -> El {
         .gap(6.0)
         .items_center()
         .child(keycap(cap, p))
-        .child(label(words, 12.5, 400.0, p.faint))
+        .child(roles::meta(words, p))
 }
 
 /// The palette over the whole window, or nothing while it is closed.
@@ -365,7 +366,9 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
         if e.section != section {
             section = e.section;
             list = list.child(
-                label(section, 12.0, 600.0, p.faint)
+                roles::META
+                    .bold()
+                    .wrap(section, p.faint)
                     .px(12.0)
                     .pt(12.0)
                     .pb(4.0),
@@ -375,18 +378,17 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
     }
     if f.entries.is_empty() {
         list = list.child(
-            label(
-                if s.has_agent() {
-                    "Nothing matches. Press Tab to ask your agent."
-                } else {
-                    "Nothing matches."
-                },
-                14.0,
-                400.0,
-                p.soft,
-            )
-            .px(12.0)
-            .py(16.0),
+            roles::SMALL
+                .wrap(
+                    if s.has_agent() {
+                        "Nothing matches. Press Tab to ask your agent."
+                    } else {
+                        "Nothing matches."
+                    },
+                    p.soft,
+                )
+                .px(12.0)
+                .py(16.0),
         );
     }
     let mut foot = row()

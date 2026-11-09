@@ -9,15 +9,15 @@ use super::{
     list::text_title,
     meeting::COLUMN,
     roles,
-    tasks::{button, cap, chevron, one_line, pill, prop_row, value_button},
-    theme::{BODY_LH, Palette},
+    tasks::{button, cap, chevron, pill, prop_row, value_button},
+    theme::Palette,
     widgets::{
         badge, dot, hairline, heading, label, link, list_and_panel, notice_bar, panel_frame,
         panel_top, pressable, quiet_button, scroll, spaced_caps, split_geometry,
     },
 };
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
-use rune::{El, Key, KeyEvent, Span, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{El, Key, KeyEvent, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{
     self,
@@ -802,11 +802,11 @@ pub fn prose(s: &State, k: &Kit, p: Palette, md: &str, origin: &str, size: f32) 
                 .text(p.ink)
                 .muted(p.soft)
                 .link(p.accent)
-                .body_font(TextStyle::new(size, 400.0).lh(if size >= 16.0 {
-                    BODY_LH
+                .body_font(if size >= roles::READ.size {
+                    roles::READ.style()
                 } else {
-                    BODY_LH - 2.0
-                })),
+                    roles::SMALL.style()
+                }),
         )
         .on_link_tx(move |s: &mut State, url, tx| {
             if let Some(target) = url.strip_prefix("cite:") {
@@ -977,7 +977,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
     }
     if r.kb.stale {
         head = head.child(
-            roles::META.medium().wrap("The KB snapshot is stale. The refresh failed, so this check used the last saved copy. Its date is not today's verification.", p.warn)
+            roles::SMALL.medium().wrap("The KB snapshot is stale. The refresh failed, so this check used the last saved copy. Its date is not today's verification.", p.warn)
             .px(12.0)
             .py(8.0)
             .radius(10.0)
@@ -989,7 +989,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
         if w.starts_with("KB refresh failed") || !seen.insert(w.clone()) {
             continue;
         }
-        head = head.child(roles::META.medium().wrap(w, p.warn));
+        head = head.child(roles::SMALL.medium().wrap(w, p.warn));
     }
     head
 }
@@ -1114,7 +1114,13 @@ fn due_chip(due: NaiveDate, today: NaiveDate, p: Palette) -> El {
         (p.soft, None, 500.0)
     };
     let chip = text(format!("Due {}", due.format("%-d %b")))
-        .font(TextStyle::new(12.0, weight).lh(18.0))
+        .font(
+            roles::Role {
+                weight,
+                ..roles::META
+            }
+            .style(),
+        )
         .color(ink)
         .px(8.0)
         .py(1.0)
@@ -1142,7 +1148,13 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
     let at_cursor = c.keyboard && c.cursor.as_deref() == Some(key.as_str()) && !selected;
     let due = finding_due(s, f);
     let ink = if done { p.faint } else { p.ink };
-    let weight = if done { 400.0 } else { 500.0 };
+    let title = |s: &str| {
+        if done {
+            roles::SMALL.line(s, ink).shrink()
+        } else {
+            roles::NAME.line(s, ink).shrink()
+        }
+    };
     let mark = dot(8.0, if done { p.line } else { tone(&f.severity, p) });
     let project_name = f.project.clone().unwrap_or_default();
     let open_key = key.clone();
@@ -1175,7 +1187,7 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(2.0)
-                        .child(one_line(&f.title, 14.0, weight, ink))
+                        .child(title(&f.title))
                         .child(meta),
                 )
                 .child(side),
@@ -1187,7 +1199,7 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
             .gap(10.0)
             .items_center()
             .child(mark)
-            .child(one_line(&f.title, 14.0, weight, ink).grow(1.0))
+            .child(title(&f.title).grow(1.0))
             .child(
                 row()
                     .w(150.0)
@@ -1251,8 +1263,6 @@ fn group_head(name: &str, n: usize, ink: rune::Color, p: Palette) -> El {
         .px(8.0)
         .gap(8.0)
         .items_center()
-        .radius(6.0)
-        .fill(p.side)
         .child(dot(8.0, ink))
         .child(roles::GROUP.wrap(name, p.ink))
         .child(roles::META.medium().wrap(n.to_string(), p.faint))
@@ -1388,12 +1398,11 @@ fn attention(s: &State, k: &Kit, r: &DailyCheck, lay: Lay, p: Palette, layer: &m
         if of.is_empty() {
             continue;
         }
-        let mut group = col().w_full().mt(10.0).gap(1.0).child(group_head(
-            severity_name(&sev),
-            of.len(),
-            ink,
-            p,
-        ));
+        let mut group = col()
+            .w_full()
+            .mt(roles::GROUP_TOP)
+            .gap(1.0)
+            .child(group_head(severity_name(&sev), of.len(), ink, p));
         for i in of {
             group = group.child(finding_row(s, r, i, lay, p));
         }
@@ -1487,7 +1496,7 @@ fn changed_section(s: &State, r: &DailyCheck, p: Palette) -> El {
     out = out.child(chips);
     if !cmp.complete {
         out = out.child(
-            roles::META.medium().wrap("The comparison is incomplete. This check or the one before it had warnings, so a finding that is missing is not necessarily resolved.", p.warn)
+            roles::SMALL.medium().wrap("The comparison is incomplete. This check or the one before it had warnings, so a finding that is missing is not necessarily resolved.", p.warn)
             .mt(8.0),
         );
     }
@@ -1741,15 +1750,13 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
                     .child(
                         rune::text(total.to_string())
                             .color(p.ink)
-                            .font(TextStyle::new(20.0, 600.0).lh(26.0)),
+                            .font(roles::SECTION.style()),
                     )
-                    .child(label(
+                    .child(roles::META.wrap(
                         match new {
                             Some(n) => format!("{n} new"),
                             None => "findings".to_string(),
                         },
-                        11.5,
-                        400.0,
                         p.soft,
                     ));
             }
@@ -1757,9 +1764,9 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
                 cell = cell
                     .child(
                         label("\u{2013}", 20.0, 400.0, p.faint)
-                            .font(TextStyle::new(20.0, 400.0).lh(26.0)),
+                            .font(roles::SECTION.regular().style()),
                     )
-                    .child(label("No check", 11.5, 400.0, p.faint));
+                    .child(roles::meta("No check", p));
             }
         }
         let cell = if d.counts.is_some() {
@@ -1853,7 +1860,7 @@ pub fn copy_row(s: &State, value: &str, key: String, p: Palette) -> El {
         .items_center()
         .child(
             rune::text(value.to_string())
-                .font(TextStyle::new(12.0, 400.0).mono().lh(18.0))
+                .font(roles::META.style().mono())
                 .color(p.soft)
                 .wrap()
                 .selectable(true)
@@ -1968,7 +1975,7 @@ fn snooze_pick_row(s: &State, k: &Kit, p: Palette) -> El {
             ),
     );
     if let Some(e) = &c.snooze_error {
-        out = out.child(roles::META.medium().wrap(e, p.warn).role("alert"));
+        out = out.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
     out
 }
@@ -2157,7 +2164,7 @@ fn finding_panel(
             p.soft,
         ));
         if let Some(w) = warn.filter(|_| !applied) {
-            box_ = box_.child(roles::META.medium().wrap(w, p.warn));
+            box_ = box_.child(roles::SMALL.medium().wrap(w, p.warn));
         }
         box_ = box_.child(roles::META.wrap(no_undo(a), if applied { p.soft } else { p.warn }));
         body = body.child(box_);
@@ -2174,7 +2181,7 @@ fn finding_panel(
         );
     }
     if let Some(err) = c.errors.get(&key) {
-        body = body.child(roles::META.medium().wrap(err, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(err, p.warn).role("alert"));
     }
 
     // The footer: what the owner can do with it.

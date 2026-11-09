@@ -15,7 +15,7 @@ use super::{
         spaced_caps, split_geometry,
     },
 };
-use rune::{El, Key, Span, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{El, Key, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::{Meeting, Point, short};
 use std::ops::Range;
@@ -391,7 +391,7 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         if show_time {
             meta = meta.child(
                 text(short(&line.at).to_string())
-                    .font(TextStyle::new(12.0, 400.0).mono())
+                    .font(roles::META.style().mono())
                     .color(p.faint),
             );
         }

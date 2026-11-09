@@ -958,20 +958,24 @@ pub(super) fn button(name: &str, key: &str, primary: bool, p: Palette) -> El {
 
 /// A pill that sets a value: the due shortcuts.
 pub(super) fn pill(name: &str, key: &str, on: bool, p: Palette) -> El {
-    pressable(label(name, 13.0, if on { 600.0 } else { 400.0 }, p.ink))
-        .key(key.to_string())
-        .px(11.0)
-        .py(3.0)
-        .radius(999.0)
-        .fill(if on { p.card } else { p.chip })
-        .border(1.0, if on { p.accent } else { p.line })
-        .hover(p.line)
+    pressable(if on {
+        roles::CONTROL.bold().wrap(name, p.ink)
+    } else {
+        roles::CONTROL.regular().wrap(name, p.ink)
+    })
+    .key(key.to_string())
+    .px(11.0)
+    .py(3.0)
+    .radius(999.0)
+    .fill(if on { p.card } else { p.chip })
+    .border(1.0, if on { p.accent } else { p.line })
+    .hover(p.line)
 }
 
 /// A key cap for the shortcut hints.
 pub(super) fn cap(k: &str, p: Palette) -> El {
     text(k.to_string())
-        .font(TextStyle::new(11.5, 600.0).lh(16.0))
+        .font(roles::CAPTION.style())
         .color(p.soft)
         .px(5.0)
         .radius(4.0)
@@ -1014,16 +1018,6 @@ fn input_h(
         .radius(8.0)
         .fill(p.card)
         .min_w(0.0)
-}
-
-/// One line of text that ends in an ellipsis when it does not fit.
-pub(super) fn one_line(s: impl Into<String>, size: f32, weight: f32, ink: rune::Color) -> El {
-    text(s.into())
-        .font(TextStyle::new(size, weight).lh((size * 1.45).round()))
-        .color(ink)
-        .truncate()
-        .min_w(0.0)
-        .shrink()
 }
 
 // ---- the top of the page -----------------------------------------------------------------
@@ -1273,7 +1267,13 @@ fn due_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
         Urgency::Calm => (p.faint, 400.0, None),
     };
     let chip = text(shown)
-        .font(TextStyle::new(12.0, weight).lh(18.0))
+        .font(
+            roles::Role {
+                weight,
+                ..roles::META
+            }
+            .style(),
+        )
         .color(ink)
         .px(8.0)
         .py(1.0)
@@ -1315,7 +1315,11 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         .radius(13.0)
         .on_press(move |s: &mut State| s.toggle_row(&id, index))
     };
-    let title = roles::SMALL.line(&t.task, if on { p.faint } else { p.ink });
+    let title = if on {
+        roles::SMALL.line(&t.task, p.faint)
+    } else {
+        roles::SMALL.medium().line(&t.task, p.ink)
+    };
     let title = if on {
         title.strike(0, t.task.len(), None)
     } else {
@@ -1477,14 +1481,7 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
                 s.tasks.collapsed.insert(key.clone());
             }
         });
-    let mut head = row()
-        .w_full()
-        .h(32.0)
-        .gap(6.0)
-        .items_center()
-        .radius(6.0)
-        .fill(p.side)
-        .child(toggle);
+    let mut head = row().w_full().h(32.0).gap(6.0).items_center().child(toggle);
     match &g.kind {
         GroupKind::Project(name) if name != UNSORTED => {
             let name = name.clone();
@@ -1523,7 +1520,7 @@ fn group_card(s: &State, k: &Kit, g: &TaskGroup, n: usize, lay: RowLayout, p: Pa
     let mut card = col()
         .key(format!("tgroup-{n}"))
         .w_full()
-        .mt(10.0)
+        .mt(roles::GROUP_TOP)
         .gap(1.0)
         .child(group_header(s, k, g, n, p));
     if s.tasks.collapsed.contains(&g.key) {
@@ -1806,7 +1803,13 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
             } else {
                 format!("{phrase}.")
             };
-            c = c.child(label(note, 12.5, weight, ink));
+            c = c.child(
+                roles::Role {
+                    weight,
+                    ..roles::META
+                }
+                .wrap(note, ink),
+            );
         }
         if !x.manual && t.overrides.get(&id, index).is_some_and(|o| o.due.is_some()) {
             c = c.child(
@@ -1822,7 +1825,7 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
         }
     }
     if let Some(msg) = &t.ui.due_error {
-        c = c.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
+        c = c.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
     c
 }
@@ -2140,7 +2143,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
                     )
                     .child(
                         text(core::short(&l.at).to_string())
-                            .font(TextStyle::new(12.0, 500.0).mono().lh(18.0))
+                            .font(roles::META.medium().style().mono())
                             .color(p.faint),
                     ),
             )
@@ -2234,7 +2237,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
     if t.manual
         && let Some(msg) = &tasks.ui.error
     {
-        body = body.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
     body = body
         .child(
@@ -2271,7 +2274,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
     if t.manual {
         let id = t.meeting_id.clone();
         foot = foot.child(el().grow(1.0)).child(
-            pressable(roles::META.medium().wrap("Delete task", p.warn))
+            pressable(roles::SMALL.medium().wrap("Delete task", p.warn))
                 .key("pdelete")
                 .px(10.0)
                 .py(6.0)
@@ -2309,7 +2312,7 @@ fn add_panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> (El, El) {
         .pb(28.0)
         .child(title);
     if let Some(msg) = &t.ui.error {
-        body = body.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
     body = body
         .child(
@@ -2406,7 +2409,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .gap(12.0)
                 .items_center()
                 .fill(p.warnbg)
-                .child(roles::META.medium().wrap(note, p.warn).grow(1.0))
+                .child(roles::SMALL.medium().wrap(note, p.warn).grow(1.0))
                 .child(
                     button("Dismiss", "tasks-notice-dismiss", false, p)
                         .on_press(|s: &mut State| s.tasks.notice = None),

@@ -644,12 +644,11 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
                     .items_center()
                     .child(status_badge(r.status, p)),
             )
-            .child(row().w(116.0).items_center().child(label(
-                confirmed_text(r),
-                12.5,
-                if review { 500.0 } else { 400.0 },
-                if review { p.open } else { p.faint },
-            )))
+            .child(row().w(116.0).items_center().child(if review {
+                roles::META.medium().wrap(confirmed_text(r), p.open)
+            } else {
+                roles::meta(confirmed_text(r), p)
+            }))
             .child(
                 row()
                     .w(76.0)
@@ -813,8 +812,6 @@ fn group_head(name: &str, n: usize, p: Palette) -> El {
         .px(8.0)
         .gap(8.0)
         .items_center()
-        .radius(6.0)
-        .fill(p.side)
         .child(roles::GROUP.wrap(name, p.ink))
         .child(roles::META.medium().wrap(n.to_string(), p.faint))
 }
@@ -962,7 +959,7 @@ fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
         }
     }
     if let Some(e) = m.errors.get("migration") {
-        card = card.child(roles::META.medium().wrap(e, p.warn).role("alert"));
+        card = card.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
     card
 }
@@ -1147,7 +1144,7 @@ fn record_list(s: &State, lay: Lay, p: Palette) -> El {
         if of.is_empty() {
             continue;
         }
-        let mut g = col().w_full().mt(10.0).gap(1.0);
+        let mut g = col().w_full().mt(roles::GROUP_TOP).gap(1.0);
         if grouped {
             g = g.child(group_head(kind_label(kind), of.len(), p));
         }
@@ -1171,7 +1168,7 @@ fn proposal_list(s: &State, lay: Lay, p: Palette) -> El {
     let mut g = col().w_full().mt(10.0).gap(1.0);
     if !m.migrated {
         g = g.child(
-            roles::META.medium().wrap("Accept the migration first. Proposals cannot be accepted until memory is in the new format.", p.warn)
+            roles::SMALL.medium().wrap("Accept the migration first. Proposals cannot be accepted until memory is in the new format.", p.warn)
             .mb(6.0),
         );
     }
@@ -1204,7 +1201,7 @@ fn candidate_list(s: &State, lay: Lay, p: Palette) -> El {
     for (name, of) in groups {
         let mut g = col()
             .w_full()
-            .mt(10.0)
+            .mt(roles::GROUP_TOP)
             .gap(1.0)
             .child(group_head(&name, of.len(), p));
         for c in of {
@@ -1503,15 +1500,14 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         ))
         .child(prop_row(
             "Confirmed",
-            label(
-                r.last_confirmed
-                    .as_deref()
-                    .map_or_else(|| "Not confirmed yet".to_string(), day_text),
-                13.5,
-                if review { 600.0 } else { 400.0 },
-                if review { p.open } else { p.ink },
-            )
-            .mt(2.0),
+            if review { roles::NAME } else { roles::SMALL }
+                .wrap(
+                    r.last_confirmed
+                        .as_deref()
+                        .map_or_else(|| "Not confirmed yet".to_string(), day_text),
+                    if review { p.open } else { p.ink },
+                )
+                .mt(2.0),
             p,
         ));
     body = body.child(props);
@@ -1524,7 +1520,7 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         .child(hairline(p))
         .child(history_block(s, r, p));
     if let Some(e) = m.errors.get(&r.id) {
-        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
 
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
@@ -1615,7 +1611,7 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
                 ));
             }
             buttons = buttons.child(el().grow(1.0)).child(
-                pressable(roles::META.medium().wrap("Forget", p.warn))
+                pressable(roles::SMALL.medium().wrap("Forget", p.warn))
                     .key("mem-forget")
                     .label("Forget this claim")
                     .px(10.0)
@@ -1731,18 +1727,18 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
             .is_some_and(|u| u != t.updated_at)
     });
     if pr.op != ProposalOp::Add && target.is_none() {
-        body = body.child(roles::META.medium().wrap(
+        body = body.child(roles::SMALL.medium().wrap(
             "The claim this refers to is gone or no longer active. Accepting will refuse.",
             p.warn,
         ));
     } else if stale {
-        body = body.child(roles::META.medium().wrap("This claim changed after the check suggested the update. Accepting will refuse. Reject it and let the next check look again.", p.warn));
+        body = body.child(roles::SMALL.medium().wrap("This claim changed after the check suggested the update. Accepting will refuse. Reject it and let the next check look again.", p.warn));
     }
     body = body
         .child(hairline(p))
         .child(source_block(s, &pr.sources, &format!("pp-{}", pr.id), p));
     if let Some(e) = m.errors.get(&pr.id) {
-        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
     let id = pr.id.clone();
     let id2 = pr.id.clone();

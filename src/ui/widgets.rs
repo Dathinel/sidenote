@@ -15,15 +15,6 @@ pub fn label(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
         .wrap()
 }
 
-/// One line that ends in an ellipsis when it does not fit.
-pub fn line(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
-    text(s)
-        .font(TextStyle::new(size, weight).lh((size * 1.5).round()))
-        .color(ink)
-        .truncate()
-        .min_w(0.0)
-}
-
 pub fn spaced_caps(s: &str, p: Palette) -> El {
     roles::CAPTION.wrap(s.to_uppercase(), p.faint)
 }

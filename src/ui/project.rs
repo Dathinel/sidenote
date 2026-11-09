@@ -1,11 +1,7 @@
 //! A meeting's project, shown as a chip on its home row and under its title. The pipeline's
 //! guess (from `tasks.json`) shows as a suggestion until the owner accepts or changes it.
 //! Both write the same per-task overrides the Tasks view writes, in one file write.
-use super::{
-    State,
-    theme::Palette,
-    widgets::{label, pressable},
-};
+use super::{State, roles, theme::Palette, widgets::pressable};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{self, TaskOverride, UNSORTED};
@@ -183,21 +179,19 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     let name_ink = if mp.confirmed { p.soft } else { p.ink };
     let mut trigger_row = row().gap(4.0).items_center();
     if mp.name.is_some() && !mp.confirmed {
-        trigger_row = trigger_row.child(label(
+        trigger_row = trigger_row.child(roles::META.wrap(
             if new_project {
                 "New project:"
             } else {
                 "Add to"
             },
-            13.0,
-            400.0,
             p.faint,
         ));
     }
     trigger_row = trigger_row
         .child(
             rune::text(mp.name.clone().unwrap_or_else(|| "Add to a project".into()))
-                .font(rune::TextStyle::new(13.0, 500.0).lh(20.0))
+                .font(roles::META.medium().style())
                 .color(if mp.name.is_some() { name_ink } else { p.faint })
                 .truncate()
                 .min_w(0.0)
@@ -268,12 +262,11 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         let id = id.to_string();
         let name = mp.name.clone().unwrap_or_default();
         wrap = wrap.child(
-            pressable(label(
-                if new_project { "Create" } else { "\u{2713}" },
-                13.0,
-                700.0,
-                p.ok,
-            ))
+            pressable(
+                roles::META
+                    .bold()
+                    .wrap(if new_project { "Create" } else { "\u{2713}" }, p.ok),
+            )
             .key(format!("project-accept-{id}"))
             .label(format!(
                 "{} the project {name}",
@@ -290,7 +283,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             .on_press(move |s: &mut State| s.set_meeting_project(&id, &name)),
         );
         wrap = wrap.child(
-            pressable(label("Dismiss", 12.0, 400.0, p.faint))
+            pressable(roles::meta("Dismiss", p))
                 .key(format!("project-dismiss-{dismiss_id}"))
                 .label("Dismiss this project suggestion")
                 .px(8.0)
@@ -339,7 +332,7 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
             .mt(8.0)
             .child(input)
             .child(
-                pressable(label("Save", 13.5, 600.0, p.card))
+                pressable(roles::CONTROL.bold().wrap("Save", p.card))
                     .key("project-save")
                     .px(14.0)
                     .py(6.0)
@@ -348,7 +341,7 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
                     .on_press(|s: &mut State| s.commit_project_form()),
             )
             .child(
-                pressable(label("Cancel", 13.5, 500.0, p.soft))
+                pressable(roles::CONTROL.wrap("Cancel", p.soft))
                     .key("project-cancel")
                     .px(10.0)
                     .py(6.0)

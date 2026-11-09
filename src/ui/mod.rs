@@ -1229,11 +1229,11 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
-    use widgets::{label, pressable};
+    use widgets::pressable;
     let mut left = row().gap(4.0).items_center().min_w(0.0);
     if s.view == tasks::View::Meetings && s.selected.is_some() {
         left = left.child(
-            pressable(label("\u{2039}  All meetings", 13.5, 500.0, p.soft))
+            pressable(roles::CONTROL.wrap("\u{2039}  All meetings", p.soft))
                 .key("all-meetings")
                 .label("All meetings (Escape)")
                 .px(10.0)
