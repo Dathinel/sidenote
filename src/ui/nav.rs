@@ -74,11 +74,6 @@ impl State {
     }
 
     pub fn rebuild_nav(&mut self) {
-        let catalog = &self.areas.catalog;
-        let mut items: HashMap<&str, Vec<&core::TaskItem>> = HashMap::new();
-        for t in self.tasks.all.iter().filter(|t| !t.manual) {
-            items.entry(t.meeting_id.as_str()).or_default().push(t);
-        }
         let mut cache = NavCache {
             show_all: self.nav.show_all,
             ..NavCache::default()
@@ -88,46 +83,10 @@ impl State {
                 cache.peers += 1;
             }
             let project = self
-                .tasks
-                .projects
+                .areas
                 .meeting_projects
                 .get(&m.id)
-                .map(|n| self.tasks.projects.resolve(n))
-                .or_else(|| {
-                    items
-                        .get(m.id.as_str())
-                        .and_then(|v| core::dominant_project(v.iter().copied()))
-                })
-                .or_else(|| {
-                    self.tasks
-                        .pipeline
-                        .get(&m.id)
-                        .and_then(|f| f.meeting_project.as_ref())
-                        .and_then(|n| {
-                            let names = self.tasks.projects.matches(n);
-                            (names.len() == 1).then(|| names[0].clone())
-                        })
-                })
-                .filter(|n| n != core::UNSORTED)
-                .and_then(|name| {
-                    let baseline = core::areas::meeting_baseline(
-                        &self.tasks.projects,
-                        &self.tasks.pipeline,
-                        &m.id,
-                    );
-                    match catalog.target(
-                        &self.tasks.projects,
-                        &core::areas::meeting_key(&m.id),
-                        &baseline,
-                        &name,
-                    ) {
-                        Some(target) => target
-                            .project_id
-                            .and_then(|id| catalog.projects.get(&id))
-                            .map(|p| p.name.clone()),
-                        None => Some(name),
-                    }
-                });
+                .and_then(|v| v.name.clone());
             if let Some(name) = project {
                 *cache.project_counts.entry(name.clone()).or_default() += 1;
                 if let Some(started) = m.started {

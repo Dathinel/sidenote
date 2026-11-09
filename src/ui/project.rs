@@ -45,17 +45,6 @@ pub fn cache(
                     .filter(|o| o.task.as_deref().is_none_or(|text| text == task.task));
                 let overridden =
                     edit.is_some_and(|o| o.assignment.is_some() || o.project.is_some());
-                if !overridden
-                    && let Some(name) = file.and_then(|f| {
-                        f.tasks
-                            .iter()
-                            .find(|tag| tag.i == task.index)
-                            .map(|tag| &tag.project)
-                            .or(f.meeting_project.as_ref())
-                    })
-                {
-                    task.project = projects.resolve(name);
-                }
                 *confirmed.entry(task.project.clone()).or_insert(true) &= overridden;
             }
             let name = core::dominant_project(candidates.iter()).or_else(|| {
@@ -99,6 +88,11 @@ impl State {
     /// set) to `name`. To-dos the owner filed elsewhere one by one stay where they are.
     /// Accepting a suggestion is the same call with the suggested name.
     pub fn set_meeting_project(&mut self, id: &str, name: &str) {
+        if self.areas.pending.is_some() {
+            self.tasks.notice =
+                Some("Wait for the area change to finish before editing projects.".into());
+            return;
+        }
         if !self.config.features.projects {
             return;
         }
@@ -107,7 +101,7 @@ impl State {
         if name.is_empty() {
             return;
         }
-        let known = self.tasks.projects.choose_existing(name);
+        let known = self.cached_project(name);
         if name != UNSORTED && known.is_none() {
             self.start_project_form(id);
             self.project_input = TextEdit::new(name);
@@ -397,7 +391,10 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .fill(p.card)
         .grow(1.0)
         .min_w(0.0);
-    let area_alias = s.tasks.projects.is_area_alias(&s.project_input.text);
+    let area_alias = s
+        .areas
+        .alias_names
+        .contains(&core::project_merge::normalized_name(&s.project_input.text));
     let matches = if area_alias {
         Vec::new()
     } else {

@@ -30,6 +30,16 @@ pub struct AreaUi {
     pub generation: u64,
     pub refresh_generation: u64,
     pub refresh_pending: bool,
+    pub refresh_again: bool,
+    pub alias_names: std::collections::BTreeSet<String>,
+    pub own_device: String,
+    pub redirect_after_refresh: Option<String>,
+    pub discard_action: Option<Option<Action>>,
+    pub input_sink: rune::TextEdit,
+    pub catalog_revision: String,
+    pub notice: Option<String>,
+    pub undo_available: std::collections::BTreeSet<String>,
+    pub receipt_devices: BTreeMap<String, String>,
     pub show_all: bool,
 }
 pub enum Completion {
@@ -39,12 +49,19 @@ pub enum Completion {
     Changed(Projects),
 }
 pub struct Snapshot {
+    revision: String,
+    inventory: Option<core::area_ops::Inventory>,
+    undo_available: std::collections::BTreeSet<String>,
+    receipt_devices: BTreeMap<String, String>,
+    checked: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
     all_tasks: Vec<core::TaskItem>,
     task_items: Vec<core::TaskItem>,
     task_names: Vec<String>,
     task_counts: core::TaskCounts,
     meeting_projects: BTreeMap<String, super::project::MeetingProject>,
     project_labels: BTreeMap<String, String>,
+    alias_names: std::collections::BTreeSet<String>,
+    own_device: String,
     catalog: Catalog,
     activity: Activity,
     receipts: BTreeMap<String, Receipt>,
@@ -57,7 +74,8 @@ enum Job {
 }
 impl State {
     pub fn refresh_areas(&mut self) {
-        if !self.config.features.projects {
+        if self.areas.refresh_pending {
+            self.areas.refresh_again = true;
             return;
         }
         self.areas.refresh_generation += 1;
@@ -65,7 +83,29 @@ impl State {
         let generation = self.areas.refresh_generation;
         let (projects, meetings, pipeline, overrides, checked, cutoff, show_cleared) = (
             self.tasks.projects.clone(),
-            self.meetings.clone(),
+            self.meetings
+                .iter()
+                .map(|m| core::Meeting {
+                    id: m.id.clone(),
+                    title: m.title.clone(),
+                    started: m.started,
+                    summary: core::Summary {
+                        todo: m.summary.todo.clone(),
+                        ..Default::default()
+                    },
+                    folder: m.folder.clone(),
+                    device: m.device.clone(),
+                    summary_raw: String::new(),
+                    transcript_raw: String::new(),
+                    routed: None,
+                    routed_revision: String::new(),
+                    notes: String::new(),
+                    lines: Vec::new(),
+                    minutes: m.minutes,
+                    export_path: None,
+                    search: String::new(),
+                })
+                .collect::<Vec<_>>(),
             self.tasks.pipeline.clone(),
             self.tasks.overrides.clone(),
             self.tasks.checked.clone(),
@@ -83,14 +123,37 @@ impl State {
             self.events_tx.clone(),
             self.waker.clone(),
         );
+        let migration_open = self
+            .areas
+            .editor
+            .as_ref()
+            .is_some_and(|e| matches!(e.action, Action::Migrate { .. }));
         let result = std::thread::Builder::new()
             .name("area-activity".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| -> std::io::Result<Completion> {
                     let mut running = running;
                     core::area_ops::proof_boundary(&store.root, "activity-worker")?;
-                    running.extend(core::areas::running_meetings(&store.root)?);
-                    let catalog = projects.area_catalog()?;
+                    running.extend(core::areas::running_meetings(&store.root).unwrap_or_default());
+                    let mut catalog = projects.area_catalog()?;
+                    let unreadable=store.unreadable_items()?;
+                    if unreadable>0 {catalog.problems.push(format!("Could not read {unreadable} stored items or files. They were kept for review."));}
+                    let alias_names = projects
+                        .projects
+                        .iter()
+                        .chain(projects.aliases.keys())
+                        .filter(|n| projects.is_area_alias(n))
+                        .map(|n| core::project_merge::normalized_name(n))
+                        .chain(
+                            catalog
+                                .legacy_aliases
+                                .keys()
+                                .map(|n| core::project_merge::normalized_name(n)),
+                        )
+                        .collect();
+                    let own_device = core::DeviceSettings::load()?.id;
+                    let mut checked=checked;
+                    for m in &meetings {checked.entry(m.id.clone()).or_insert_with(||store.load_ticks(&m.id));}
                     let tasks =
                         core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
                     let kept = core::without_cleared(tasks.clone(), cutoff);
@@ -126,22 +189,31 @@ impl State {
                         &running,
                         chrono::Utc::now(),
                     )?;
-                    let meeting_projects =
-                        super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
+                    let mut meeting_projects = super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
+                    for (id,target) in &activity.meetings { if let Some(chip)=meeting_projects.get_mut(id) {chip.name=target.project_id.as_ref().and_then(|id|catalog.projects.get(id)).map(|p|p.name.clone());} }
+                    let receipts=projects.area_receipts()?;
+                    let undo_available=receipts.iter().filter(|(id,r)|core::area_ops::receipt_backup(&store.root,id,r,&own_device).is_ok()).map(|(id,_)|id.clone()).collect();
+                    let receipt_devices=receipts.values().map(|r|(r.device.clone(),core::area_version::device_name(&store.root,&r.device))).collect();
                     Ok(Completion::Refreshed(Box::new(Snapshot {
+                        revision:blake3::hash(&serde_json::to_vec(&projects)?).to_hex().to_string(),
+                        inventory:if migration_open {Some(store.area_references()?)} else {None},
+                        undo_available, receipt_devices,
                         meeting_projects,
                         project_labels,
+                        alias_names,
+                        own_device,
                         catalog,
                         activity,
                         receipts: projects.area_receipts()?,
                         task_items: if show_cleared { tasks.clone() } else { kept },
+                        checked,
                         all_tasks: tasks,
                         task_counts,
                         task_names,
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
-                .and_then(|r| r.map_err(|e| e.to_string()));
+                .and_then(|r| r.map_err(area_error));
                 let _ = events.send(super::Event::Area {
                     generation,
                     refresh: true,
@@ -152,13 +224,18 @@ impl State {
                     waker();
                 }
             });
-        if let Err(e) = result {
+        if result.is_err() {
             self.areas.refresh_pending = false;
-            self.areas.error = Some(e.to_string());
+            self.areas.error =
+                Some("Could not start the Areas worker. Reload to try again.".into());
         }
     }
     pub fn start_area(&mut self, action: Action) {
         if !self.config.features.projects || self.areas.pending.is_some() {
+            return;
+        }
+        if self.areas.editor.as_ref().is_some_and(Editor::dirty) {
+            self.areas.discard_action = Some(Some(action));
             return;
         }
         self.areas.editor = Some(Editor::new(action));
@@ -199,6 +276,15 @@ impl State {
             self.launch_area(Job::Apply(preview), "Applying change...");
         }
     }
+    pub fn cancel_area(&mut self) {
+        if self.areas.editor.as_ref().is_some_and(Editor::dirty) {
+            self.areas.discard_action = Some(None);
+            return;
+        }
+        self.areas.editor = None;
+        self.areas.preview = None;
+        self.areas.error = None;
+    }
     pub fn undo_area(&mut self, id: String) {
         self.launch_area(Job::Undo(id), "Undoing change...");
     }
@@ -211,6 +297,7 @@ impl State {
             e.picker = None;
         }
         self.areas.error = None;
+        self.areas.notice = None;
         self.areas.generation += 1;
         let generation = self.areas.generation;
         let (store, events, waker) = (
@@ -218,7 +305,7 @@ impl State {
             self.events_tx.clone(),
             self.waker.clone(),
         );
-        if let Err(e) = std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("area-operation".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| -> std::io::Result<Completion> {
@@ -235,7 +322,7 @@ impl State {
                     }
                 })
                 .map_err(|_| "Could not finish the area change. Reload before trying again.".into())
-                .and_then(|r| r.map_err(|e| e.to_string()));
+                .and_then(|r| r.map_err(area_error));
                 let _ = events.send(super::Event::Area {
                     generation,
                     refresh: false,
@@ -246,9 +333,11 @@ impl State {
                     waker();
                 }
             })
+            .is_err()
         {
             self.areas.pending = None;
-            self.areas.error = Some(e.to_string());
+            self.areas.error =
+                Some("Could not start the Areas worker. Reload to try again.".into());
         }
     }
     pub fn area_finished(
@@ -270,14 +359,40 @@ impl State {
         }
         match result {
             Ok(Completion::Refreshed(snapshot)) => {
+                if self.areas.catalog_revision != snapshot.revision {
+                    if let Some(e) = &mut self.areas.editor {
+                        e.merge_catalog(&snapshot.catalog);
+                        self.areas.preview = None;
+                    }
+                    self.areas.catalog_revision = snapshot.revision;
+                }
+                if let Some(inventory) = snapshot.inventory
+                    && let Some(e) = &mut self.areas.editor
+                {
+                    e.set_inventory(inventory);
+                }
+                self.areas.undo_available = snapshot.undo_available;
+                self.areas.receipt_devices = snapshot.receipt_devices;
                 self.tasks.today = chrono::Local::now().date_naive();
+                self.tasks.checked = snapshot.checked;
                 self.tasks.all = snapshot.all_tasks;
                 self.tasks.items = snapshot.task_items;
                 self.tasks.names = snapshot.task_names;
                 self.tasks.counts = snapshot.task_counts;
                 self.areas.meeting_projects = snapshot.meeting_projects;
                 self.areas.project_labels = snapshot.project_labels;
+                self.areas.alias_names = snapshot.alias_names;
+                self.areas.own_device = snapshot.own_device;
                 self.areas.catalog = snapshot.catalog;
+                if let Some(name) = self.areas.redirect_after_refresh.take()
+                    && let Some(id) = self
+                        .areas
+                        .catalog
+                        .project(&self.tasks.projects, &name)
+                        .and_then(|p| p.converted_to.clone())
+                {
+                    self.filter = Filter::Area(id);
+                }
                 self.areas.activity = snapshot.activity;
                 self.areas.receipts = snapshot.receipts;
                 self.rebuild_nav();
@@ -302,7 +417,9 @@ impl State {
                     if !matches!(e.action, Action::Migrate { .. }) {
                         e.references = preview.references.clone();
                     }
-                    e.set_inventory(inventory);
+                    if !matches!(e.action, Action::Migrate { .. }) {
+                        e.set_inventory(inventory);
+                    }
                 }
                 self.areas.preview = Some(preview);
             }
@@ -315,13 +432,21 @@ impl State {
                 self.tasks.projects = projects;
                 self.areas.preview = None;
                 self.areas.editor = None;
-                if let Filter::Project(name) = &self.filter
-                    && let Ok(c) = self.tasks.projects.area_catalog()
-                    && let Some(id) = c
-                        .project(&self.tasks.projects, name)
-                        .and_then(|p| p.converted_to.clone())
-                {
-                    self.filter = Filter::Area(id);
+                if let Filter::Project(name) = &self.filter {
+                    self.areas.redirect_after_refresh = Some(name.clone());
+                }
+                if let Some(receipt) = self.tasks.projects.area_receipts().ok().and_then(|r| {
+                    r.into_values().rfind(|r| {
+                        !r.active
+                            && !r.skipped.is_empty()
+                            && self.areas.receipts.get(&r.id).is_some_and(|old| old.active)
+                    })
+                }) {
+                    self.areas.notice = Some(format!(
+                        "{} items changed since; left as they are: {}",
+                        receipt.skipped.len(),
+                        receipt.skipped.join(", ")
+                    ));
                 }
                 self.rebuild_tasks();
                 self.memory.notice =
@@ -329,10 +454,73 @@ impl State {
             }
             Err(error) => {
                 self.areas.preview = None;
+                self.notice = Some(error.clone());
                 self.areas.error = Some(error);
             }
         }
+        if refresh && self.areas.refresh_again {
+            self.areas.refresh_again = false;
+            self.refresh_areas();
+        }
     }
+}
+fn area_error(error: std::io::Error) -> String {
+    core::validation_message(&error)
+        .unwrap_or("Could not finish the area change. Your data was kept. Reload and try again.")
+        .into()
+}
+fn undo_cards(s: &State, p: Palette) -> El {
+    let mut content = col().w_full().gap(8.0);
+    for receipt in s.areas.receipts.values().filter(|r| r.active).rev() {
+        let id = receipt.id.clone();
+        let date = id
+            .split('-')
+            .next()
+            .and_then(|t| chrono::NaiveDateTime::parse_from_str(t, "%Y%m%dT%H%M%S").ok())
+            .map(|t| t.format("%-d %b %H:%M").to_string())
+            .unwrap_or_else(|| "Unknown time".into());
+        let projects = match &receipt.action {
+            Action::Migrate { rows } => rows.len(),
+            _ => receipt
+                .after
+                .keys()
+                .filter(|k| k.starts_with("area-project:"))
+                .count(),
+        };
+        let title = if matches!(receipt.action, Action::Migrate { .. }) {
+            "Project migration"
+        } else {
+            area_editor::title(&receipt.action)
+        };
+        let mut card = col()
+            .w_full()
+            .gap(6.0)
+            .py(10.0)
+            .child(roles::NAME.wrap(format!("{title}, {date}, {projects} projects"), p.ink));
+        if receipt.device != s.areas.own_device {
+            card = card.child(roles::META.wrap(
+                format!(
+                        "Done on {}",
+                        s.areas
+                            .receipt_devices
+                            .get(&receipt.device)
+                            .unwrap_or(&receipt.device)
+                    ),
+                p.faint,
+            ));
+        } else if s.areas.undo_available.contains(&id) {
+            card = card.child(
+                button("Undo change", &format!("area-undo-{id}"), p)
+                    .self_start()
+                    .disabled(s.areas.pending.is_some())
+                    .on_press(move |s: &mut State| s.undo_area(id.clone())),
+            );
+        } else {
+            card = card.child(roles::META.wrap("Undo backup is unavailable or expired.", p.faint));
+        }
+        content = content.child(card);
+    }
+    content
 }
 pub fn button(title: impl Into<String>, key: &str, p: Palette) -> El {
     pressable(roles::CONTROL.wrap(title, p.accent))
@@ -348,11 +536,58 @@ pub fn notices(s: &State, p: Palette) -> El {
     for problem in &s.areas.catalog.problems {
         content = content.child(roles::SMALL.wrap(problem, p.warn).role("status"));
     }
+    for (id, choices) in &s.areas.catalog.name_conflicts {
+        for name in choices {
+            let (id, name) = (id.clone(), name.clone());
+            content = content.child(
+                button(format!("Keep {name}"), &format!("resolve-{id}-{name}"), p).on_press(
+                    move |s: &mut State| {
+                        s.start_area(Action::ResolveName {
+                            project_id: id.clone(),
+                            name: name.clone(),
+                        })
+                    },
+                ),
+            );
+        }
+    }
+    if s.areas.discard_action.is_some() {
+        content = content
+            .child(roles::SMALL.wrap("Discard your mapping choices?", p.warn))
+            .child(
+                row()
+                    .gap(8.0)
+                    .child(
+                        button("Keep editing", "area-keep-editing", p)
+                            .on_press(|s: &mut State| s.areas.discard_action = None),
+                    )
+                    .child(button("Discard choices", "area-discard", p).on_press(
+                        |s: &mut State| {
+                            let next = s.areas.discard_action.take();
+                            s.areas.editor = None;
+                            s.areas.preview = None;
+                            s.areas.error = None;
+                            if let Some(Some(action)) = next {
+                                s.start_area(action);
+                            }
+                        },
+                    )),
+            );
+    }
     if let Some(pending) = s.areas.pending {
         content = content.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
     if let Some(error) = &s.areas.error {
-        content = content.child(roles::SMALL.wrap(error, p.warn).role("alert"));
+        content = content
+            .child(roles::SMALL.wrap(error, p.warn).role("alert"))
+            .child(
+                button("Dismiss", "area-error-dismiss", p)
+                    .self_start()
+                    .on_press(|s: &mut State| {
+                        s.areas.error = None;
+                        s.notice = None;
+                    }),
+            );
     }
     content
 }
@@ -418,7 +653,11 @@ fn project_rows(s: &State, area: Option<&str>, p: Palette) -> El {
         .catalog
         .projects
         .values()
-        .filter(|project| project.converted_to.is_none() && project.area_id.as_deref() == area)
+        .filter(|project| {
+            project.converted_to.is_none()
+                && project.area_id.as_deref() == area
+                && (s.areas.show_all || s.areas.activity.projects.contains(&project.id))
+        })
         .collect();
     projects.sort_by_key(|project| {
         (
@@ -426,31 +665,128 @@ fn project_rows(s: &State, area: Option<&str>, p: Palette) -> El {
             project.name.to_lowercase(),
         )
     });
-    let mut content = col().w_full().gap(6.0);
-    for project in projects {
-        let active = s.areas.activity.projects.contains(&project.id);
-        if !active && !s.areas.show_all {
-            continue;
-        }
-        let name = project.name.clone();
-        content = content.child(
-            pressable(
-                row()
-                    .w_full()
-                    .gap(12.0)
-                    .items_center()
-                    .py(12.0)
-                    .child(roles::NAME.line(&project.name, p.ink).grow(1.0))
-                    .child(roles::META.wrap(if active { "Active" } else { "Inactive" }, p.faint)),
-            )
-            .key(format!("area-project-{}", project.id))
-            .hover(p.chip)
-            .radius(6.0)
-            .px(8.0)
-            .on_press(move |s: &mut State| s.set_filter(Filter::Project(name.clone()))),
-        );
+    if projects.is_empty() {
+        return roles::SMALL.wrap("No projects to show.", p.faint);
     }
-    content
+    let ids: std::sync::Arc<Vec<String>> =
+        std::sync::Arc::new(projects.iter().map(|p| p.id.clone()).collect());
+    let keys = ids.clone();
+    col()
+        .w_full()
+        .h((projects.len() as f32 * 58.0).min(300.0))
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(
+            col()
+                .w_full()
+                .growth(rune::GrowthSpec::default())
+                .virtual_rows(
+                    ids.len(),
+                    58.0,
+                    move |_: &State, i| {
+                        keys.get(i)
+                            .cloned()
+                            .unwrap_or_else(|| "missing-project".into())
+                            .into()
+                    },
+                    move |s: &State, i| {
+                        let Some(project) =
+                            ids.get(i).and_then(|id| s.areas.catalog.projects.get(id))
+                        else {
+                            return col();
+                        };
+                        let active = s.areas.activity.projects.contains(&project.id);
+                        let name = project.name.clone();
+                        pressable(
+                            row()
+                                .w_full()
+                                .gap(12.0)
+                                .items_center()
+                                .py(12.0)
+                                .child(roles::NAME.line(&project.name, p.ink).grow(1.0))
+                                .child(
+                                    roles::META
+                                        .wrap(if active { "Active" } else { "Inactive" }, p.faint),
+                                ),
+                        )
+                        .key(format!("area-project-{}", project.id))
+                        .hover(p.chip)
+                        .radius(6.0)
+                        .px(8.0)
+                        .on_press(move |s: &mut State| s.set_filter(Filter::Project(name.clone())))
+                    },
+                ),
+        )
+}
+fn area_tasks(s: &State, area: &str, p: Palette) -> El {
+    let indices: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(
+        s.tasks
+            .all
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                t.area_id.as_deref() == Some(area)
+                    && t.project == core::UNSORTED
+                    && (!t.done || s.areas.show_all)
+            })
+            .map(|(i, _)| i)
+            .collect(),
+    );
+    if indices.is_empty() {
+        return roles::SMALL.wrap("No open area-only tasks.", p.faint);
+    }
+    let keys = indices.clone();
+    col()
+        .w_full()
+        .h((indices.len() as f32 * 76.0).min(320.0))
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(
+            col()
+                .w_full()
+                .growth(rune::GrowthSpec::default())
+                .virtual_rows(
+                    indices.len(),
+                    76.0,
+                    move |s: &State, i| {
+                        keys.get(i)
+                            .and_then(|j| s.tasks.all.get(*j))
+                            .map(|t| core::areas::task_key(t).into())
+                            .unwrap_or_else(|| "missing-task".into())
+                    },
+                    move |s: &State, i| {
+                        let Some(task) = indices.get(i).and_then(|j| s.tasks.all.get(*j)) else {
+                            return col();
+                        };
+                        let (id, index) = (task.meeting_id.clone(), task.index);
+                        pressable(
+                            col()
+                                .w_full()
+                                .py(9.0)
+                                .gap(2.0)
+                                .child(
+                                    roles::SMALL
+                                        .wrap(&task.task, if task.done { p.faint } else { p.ink }),
+                                )
+                                .child(
+                                    roles::META.wrap(
+                                        if task.done { "Done" } else { "Open task" },
+                                        p.faint,
+                                    ),
+                                ),
+                        )
+                        .hover(p.chip)
+                        .on_press(move |s: &mut State| {
+                            s.set_view(super::tasks::View::Tasks);
+                            s.open_task(&id, index);
+                        })
+                    },
+                ),
+        )
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     if s.areas
@@ -485,6 +821,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             },
             p.soft,
         ));
+    if s.areas.editor.is_none() {
+        doc = doc.child(undo_cards(s, p));
+    }
     if let Some(area) = area {
         let (id, name) = (area.id.clone(), area.name.clone());
         if area.status == core::areas::Status::Retired {
@@ -521,38 +860,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .child(roles::section("Projects", None, p))
             .child(project_rows(s, Some(&area.id), p));
         doc = doc.child(roles::section("Area-only work", None, p));
-        let mut count = 0;
-        for task in s.tasks.all.iter().filter(|t| {
-            t.area_id.as_ref() == Some(&area.id)
-                && t.project == core::UNSORTED
-                && (!t.done || s.areas.show_all)
-        }) {
-            count += 1;
-            let (id, index) = (task.meeting_id.clone(), task.index);
-            doc = doc.child(
-                pressable(
-                    col()
-                        .w_full()
-                        .py(9.0)
-                        .gap(2.0)
-                        .child(
-                            roles::SMALL.wrap(&task.task, if task.done { p.faint } else { p.ink }),
-                        )
-                        .child(
-                            roles::META.wrap(if task.done { "Done" } else { "Open task" }, p.faint),
-                        ),
-                )
-                .key(format!("area-task-{count}"))
-                .hover(p.chip)
-                .on_press(move |s: &mut State| {
-                    s.set_view(super::tasks::View::Tasks);
-                    s.open_task(&id, index);
-                }),
-            );
-        }
-        if count == 0 {
-            doc = doc.child(roles::SMALL.wrap("No open area-only tasks.", p.faint));
-        }
+        doc = doc.child(area_tasks(s, &area.id, p));
         doc = doc.child(roles::section("Area-only meetings", None, p));
         for meeting in s.meetings.iter().filter(|m| {
             s.areas
@@ -653,28 +961,6 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     doc = doc
         .children(area_editor::panel(s, k, p, layer))
         .child(notices(s, p));
-    if s.areas.editor.is_none() {
-        for receipt in s.areas.receipts.values().filter(|r| r.active).rev() {
-            let id = receipt.id.clone();
-            doc = doc.child(
-                col()
-                    .w_full()
-                    .gap(6.0)
-                    .py(12.0)
-                    .child(roles::NAME.wrap(area_editor::title(&receipt.action), p.ink))
-                    .child(roles::META.wrap(
-                        "Verified backup saved locally. Undo checks later moves.",
-                        p.faint,
-                    ))
-                    .child(
-                        button("Undo change", &format!("area-undo-{id}"), p)
-                            .self_start()
-                            .disabled(s.areas.pending.is_some())
-                            .on_press(move |s: &mut State| s.undo_area(id.clone())),
-                    ),
-            );
-        }
-    }
     col()
         .grow(1.0)
         .w_full()
