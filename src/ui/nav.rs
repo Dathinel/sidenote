@@ -491,7 +491,25 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
                 .py(8.0)
                 .child(dot(8.0, ink))
                 .child(roles::META.wrap("Hex", p.faint))
-                .child(roles::CONTROL.line(words, p.ink).grow(1.0)),
+                .child(
+                    col()
+                        .grow(1.0)
+                        .child(roles::CONTROL.line(words, p.ink))
+                        .child(match s.last_incoming {
+                            Some(at) => {
+                                let minutes = at.elapsed().as_secs() / 60;
+                                let text = if minutes == 0 {
+                                    "Synced just now".into()
+                                } else {
+                                    format!("Synced {minutes} min ago")
+                                };
+                                roles::META
+                                    .wrap(text, p.faint)
+                                    .help("Last incoming change applied on this device")
+                            }
+                            None => el(),
+                        }),
+                ),
         )
         .key("hex-status")
         .label(help.clone())
