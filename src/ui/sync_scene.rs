@@ -7,7 +7,11 @@ fn isolated() {
     assert!(super::isolated(), "Sync scenes need isolated render state");
 }
 pub(super) fn settle(s: &mut State) {
-    while s.edit_busy || s.areas.refresh_pending || s.areas.pending.is_some() {
+    while s.edit_busy
+        || s.memory.refresh_pending
+        || s.areas.refresh_pending
+        || s.areas.pending.is_some()
+    {
         let event = s
             .events_rx
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -44,7 +48,8 @@ pub fn memory_scene(s: &mut State) {
     isolated();
     seed_memory();
     s.config.features.memory = true;
-    s.memory.refresh(false);
+    s.refresh_memory(false);
+    settle(s);
     s.memory_open = true;
     s.open_record("proof-memory");
     s.memory_edit_start("proof-memory");

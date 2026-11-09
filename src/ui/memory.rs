@@ -20,7 +20,7 @@ use sidenote::core::memory::{
     Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview, PendingProposal,
     ProposalOp, RecordStatus, RecordType,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, io};
 
 /// A claim not confirmed for this many days is suggested for review. Information only: age
 /// never changes a claim.
@@ -80,6 +80,11 @@ pub struct MemState {
     /// Why an action failed, by record, proposal or `migration`.
     pub errors: HashMap<String, String>,
     pub notice: Option<String>,
+    pub refresh_pending: bool,
+    refresh_generation: u64,
+    refresh_again: Option<bool>,
+    refresh_error: Option<String>,
+    prepare_after_refresh: bool,
     pub today: NaiveDate,
 }
 
@@ -111,6 +116,11 @@ impl Default for MemState {
             ask: None,
             errors: HashMap::new(),
             notice: None,
+            refresh_pending: false,
+            refresh_generation: 0,
+            refresh_again: None,
+            refresh_error: None,
+            prepare_after_refresh: false,
             today: Local::now().date_naive(),
         }
     }
@@ -241,34 +251,82 @@ fn confirmed_text(r: &MemoryRecord) -> String {
 
 // ---- state ---------------------------------------------------------------------------------
 
-impl MemState {
-    /// Reads the records and the pending proposals. `full` also asks the store to recover
-    /// proposals from saved reports, which writes; the periodic rescan reads the merged device view.
-    pub fn refresh(&mut self, full: bool) {
-        self.today = Local::now().date_naive();
-        self.notice = None;
-        let store = MemoryStore::default();
-        if let Ok(projects) = sidenote::core::TaskStore::default().load_projects() {
-            self.projects = projects;
-            self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
+pub struct Snapshot {
+    mutation_generation: u64,
+    projects: sidenote::core::Projects,
+    file: sidenote::core::memory::MemoryFile,
+    preview: Option<MigrationPreview>,
+    legacy: String,
+}
+
+impl Snapshot {
+    fn read(store: &MemoryStore, full: bool) -> io::Result<Self> {
+        if full {
+            store.list_pending_proposals()?;
         }
-        if full && let Err(e) = store.list_pending_proposals() {
-            self.notice = Some(super::edit_worker::SaveError::from(&e).message().into());
-        }
-        match store.load() {
-            Ok(file) => {
-                self.apply_file(file);
-            }
-            Err(e) => {
-                self.notice = Some(super::edit_worker::SaveError::from(&e).message().into());
-            }
-        }
-        if self.migrated {
-            self.preview = None;
-            self.legacy = String::new();
+        // Reconciliation can publish its own mutations before the snapshot read begins.
+        let mutation_generation = sidenote::core::mutation_generation();
+        let projects = sidenote::core::TaskStore::new(store.root.clone()).load_projects()?;
+        let file = store.load()?;
+        let (preview, legacy) = if file.migration.is_some() {
+            (None, String::new())
         } else {
-            self.preview = store.preview_migration().ok();
-            self.legacy = store.company_memory().unwrap_or_default();
+            (Some(store.preview_migration()?), store.company_memory()?)
+        };
+        Ok(Self {
+            mutation_generation,
+            projects,
+            file,
+            preview,
+            legacy,
+        })
+    }
+}
+
+impl MemState {
+    fn begin_refresh(&mut self, full: bool) -> Option<u64> {
+        self.notice = None;
+        if self.refresh_pending {
+            self.refresh_again = Some(self.refresh_again.unwrap_or(false) || full);
+            return None;
+        }
+        self.refresh_generation += 1;
+        self.refresh_pending = true;
+        self.refresh_error = None;
+        Some(self.refresh_generation)
+    }
+
+    fn finish_refresh(
+        &mut self,
+        generation: u64,
+        mutation_generation: u64,
+        result: Result<Snapshot, String>,
+    ) -> Option<bool> {
+        if generation != self.refresh_generation {
+            return None;
+        }
+        self.refresh_pending = false;
+        let again = self.refresh_again.take();
+        match result {
+            Ok(snapshot) => {
+                if snapshot.mutation_generation != mutation_generation || again.is_some() {
+                    return Some(again.unwrap_or(false));
+                }
+                self.apply_snapshot(snapshot);
+            }
+            Err(error) => self.refresh_error = Some(error),
+        }
+        again
+    }
+
+    fn apply_snapshot(&mut self, snapshot: Snapshot) {
+        self.today = Local::now().date_naive();
+        self.projects = snapshot.projects;
+        self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
+        self.apply_file(snapshot.file);
+        self.preview = snapshot.preview;
+        self.legacy = snapshot.legacy;
+        if !self.migrated {
             self.tab = Tab::All;
         }
         if !self.editing && self.cursor.as_ref().is_some_and(|c| !self.has_target(c)) {
@@ -392,6 +450,66 @@ impl MemState {
 }
 
 impl State {
+    /// One reconcile-and-load worker, with at most one coalesced follow-up request.
+    pub fn refresh_memory(&mut self, full: bool) {
+        let Some(generation) = self.memory.begin_refresh(full) else {
+            return;
+        };
+        let events = self.events_tx.clone();
+        let waker = self.waker.clone();
+        let result = std::thread::Builder::new()
+            .name("memory-refresh".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(|| {
+                    Snapshot::read(&MemoryStore::default(), full)
+                })
+                .map_err(|_| "The Memory update stopped. Reopen Memory or Diary to try again.".into())
+                .and_then(|r| {
+                    r.map_err(|_| {
+                        "Could not update Memory. Previous data is kept. Reopen Memory or Diary to try again."
+                            .into()
+                    })
+                });
+                let _ = events.send(super::Event::MemoryRefreshed {
+                    generation,
+                    worker: std::thread::current().id(),
+                    result: result.map(Box::new),
+                });
+                if let Some(waker) = waker {
+                    waker();
+                }
+            });
+        if result.is_err() {
+            self.memory.refresh_pending = false;
+            self.memory.refresh_error = Some(
+                "Could not start the Memory update. Reopen Memory or Diary to try again.".into(),
+            );
+        }
+    }
+
+    pub fn memory_refreshed(&mut self, generation: u64, result: Result<Snapshot, String>) {
+        if generation != self.memory.refresh_generation {
+            return;
+        }
+        if !self.config.features.memory {
+            self.memory.refresh_pending = false;
+            self.memory.refresh_again = None;
+            self.memory.prepare_after_refresh = false;
+            return;
+        }
+        if let Some(full) =
+            self.memory
+                .finish_refresh(generation, sidenote::core::mutation_generation(), result)
+        {
+            self.refresh_memory(full);
+        } else if self.memory.refresh_error.is_none()
+            && std::mem::take(&mut self.memory.prepare_after_refresh)
+            && self.on_memory()
+        {
+            self.migration_prepare(false);
+        }
+    }
+
     pub fn on_memory(&self) -> bool {
         self.memory_open && self.view == super::tasks::View::Meetings && self.selected.is_none()
     }
@@ -403,8 +521,8 @@ impl State {
         self.go_home();
         self.memory_open = true;
         self.memory.panel = self.memory.editing;
-        self.memory.refresh(true);
-        self.migration_prepare(false);
+        self.memory.prepare_after_refresh = true;
+        self.refresh_memory(true);
     }
 
     pub fn open_record(&mut self, id: &str) {
@@ -438,7 +556,7 @@ impl State {
         match result {
             Ok(()) => {
                 self.memory.errors.remove(key);
-                self.memory.refresh(false);
+                self.refresh_memory(false);
                 true
             }
             Err(e) => {
@@ -1933,6 +2051,16 @@ fn panel(s: &State, k: &Kit, overlay: bool, p: Palette) -> Option<El> {
     Some(record_panel(s, k, r, overlay, p))
 }
 
+pub(super) fn refresh_status(m: &MemState, p: Palette) -> El {
+    if m.refresh_pending {
+        roles::META.wrap("Updating...", p.faint).role("status")
+    } else if let Some(error) = &m.refresh_error {
+        roles::SMALL.wrap(error, p.warn).role("alert")
+    } else {
+        el()
+    }
+}
+
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let m = &s.memory;
     let probe = split_geometry(s, narrow, true);
@@ -1944,7 +2072,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_w(0.0)
         .min_h(0.0)
         .w_full()
-        .fill(p.bg);
+        .fill(p.bg)
+        .child(refresh_status(m, p).px(16.0));
     if let Some(note) = m.notice.as_ref().or(s.notice.as_ref()) {
         pane = pane.child(notice_bar(note, p));
     }
@@ -2021,4 +2150,92 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         _ => return false,
     }
     true
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    fn snapshot(mutation_generation: u64, legacy: &str) -> Snapshot {
+        Snapshot {
+            mutation_generation,
+            projects: Default::default(),
+            file: Default::default(),
+            preview: None,
+            legacy: legacy.into(),
+        }
+    }
+
+    #[test]
+    fn coalesces_requests_and_keeps_full_reconciliation_queued() {
+        let mut m = MemState {
+            legacy: "previous".into(),
+            notice: Some("Reload memory to see current assignments.".into()),
+            ..Default::default()
+        };
+        assert_eq!(m.begin_refresh(false), Some(1));
+        assert!(m.notice.is_none());
+        for full in [false, true, false, true, false] {
+            assert_eq!(m.begin_refresh(full), None);
+        }
+        assert_eq!(m.refresh_generation, 1);
+        assert_eq!(m.refresh_again, Some(true));
+        assert_eq!(m.legacy, "previous");
+        assert_eq!(m.finish_refresh(1, 7, Ok(snapshot(7, "old"))), Some(true));
+        assert_eq!(m.legacy, "previous");
+        assert!(!m.refresh_pending);
+        assert_eq!(m.begin_refresh(true), Some(2));
+        assert_eq!(m.finish_refresh(2, 7, Ok(snapshot(7, "latest"))), None);
+        assert_eq!(m.legacy, "latest");
+        assert!(!m.refresh_pending);
+        assert_eq!(m.refresh_again, None);
+    }
+
+    #[test]
+    fn rejects_old_request_and_mutation_results_without_losing_a_draft() {
+        let mut m = MemState {
+            legacy: "previous".into(),
+            editing: true,
+            panel: true,
+            cursor: Some("claim".into()),
+            edit: TextEdit::new("my draft"),
+            ..Default::default()
+        };
+        assert_eq!(m.begin_refresh(true), Some(1));
+        assert_eq!(
+            m.finish_refresh(1, 8, Ok(snapshot(7, "stale"))),
+            Some(false)
+        );
+        assert_eq!(m.legacy, "previous");
+        assert_eq!(m.begin_refresh(false), Some(2));
+        assert_eq!(m.finish_refresh(1, 8, Err("old error".into())), None);
+        assert!(m.refresh_pending);
+        assert!(m.refresh_error.is_none());
+        assert_eq!(m.finish_refresh(2, 8, Ok(snapshot(8, "latest"))), None);
+        assert_eq!(m.legacy, "latest");
+        assert!(m.editing && m.panel);
+        assert_eq!(m.cursor.as_deref(), Some("claim"));
+        assert_eq!(m.edit.text, "my draft");
+    }
+
+    #[test]
+    fn failure_keeps_the_snapshot_and_allows_retry() {
+        let mut m = MemState {
+            legacy: "previous".into(),
+            ..Default::default()
+        };
+        assert_eq!(m.begin_refresh(true), Some(1));
+        assert_eq!(
+            m.finish_refresh(1, 7, Err("Could not update Memory.".into())),
+            None
+        );
+        assert!(!m.refresh_pending);
+        assert_eq!(m.legacy, "previous");
+        assert_eq!(m.refresh_error.as_deref(), Some("Could not update Memory."));
+        assert_eq!(m.begin_refresh(false), Some(2));
+        assert!(m.refresh_error.is_none());
+        assert_eq!(m.begin_refresh(true), None);
+        assert_eq!(m.finish_refresh(2, 7, Err("Stopped".into())), Some(true));
+        assert_eq!(m.legacy, "previous");
+    }
 }

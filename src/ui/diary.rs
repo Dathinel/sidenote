@@ -596,6 +596,9 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .child(text_title("Diary", if narrow { 26.0 } else { 30.0 }, p))
             .child(picker(s, k, &all, p, layer).pb(4.0)),
     );
+    if s.config.features.memory {
+        doc = doc.child(super::memory::refresh_status(&s.memory, p));
+    }
     if all.is_empty() {
         return doc.child(check::empty(s, p));
     }

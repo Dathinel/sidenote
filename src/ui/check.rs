@@ -486,7 +486,7 @@ impl State {
         }
         self.refresh_diary();
         if self.config.features.memory {
-            self.memory.refresh(true);
+            self.refresh_memory(true);
         }
     }
 
