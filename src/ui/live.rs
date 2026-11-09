@@ -219,6 +219,23 @@ impl Live {
         live
     }
 
+    fn matches_meeting(&self, meeting: &sidenote::core::Meeting) -> bool {
+        if meeting.device.is_some() {
+            return false;
+        }
+        match self
+            .folder
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|id| id.to_str())
+        {
+            Some(id) => meeting.id == id,
+            None => meeting.started.is_some_and(|t| {
+                t.timestamp_millis() >= self.wall_start.timestamp_millis().saturating_sub(120_000)
+            }),
+        }
+    }
+
     pub fn scene_pending(mut self, id: &str) -> Self {
         self.folder = Some(PathBuf::from(id));
         self
@@ -505,7 +522,7 @@ impl State {
         let found = self
             .meetings
             .iter()
-            .find(|m| m.device.is_none() && !live.known.contains(&m.id) && m.has_summary())
+            .find(|m| live.matches_meeting(m) && !live.known.contains(&m.id) && m.has_summary())
             .map(|m| m.id.clone());
         if let Some(id) = found {
             let was_open = self.on_live();
@@ -1058,15 +1075,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|v| v.to_str());
-        let meeting = s.meetings.iter().find(|m| {
-            m.device.is_none()
-                && (Some(m.id.as_str()) == id
-                    || (id.is_none()
-                        && m.started.is_some_and(|t| {
-                            t.timestamp_millis()
-                                >= live.wall_start.timestamp_millis().saturating_sub(120_000)
-                        })))
-        });
+        let meeting = s.meetings.iter().find(|m| live.matches_meeting(m));
         let job = id
             .and_then(|id| {
                 s.ai_notes
@@ -1296,6 +1305,31 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn a_previous_pending_meeting_cannot_replace_the_current_live_meeting() {
+        let root = std::env::temp_dir().join(format!(
+            "notes-live-match-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("english-summary.json"), "{}").unwrap();
+        let mut meeting = sidenote::core::Meeting::load(&root).unwrap();
+        let mut live = Live::scene(Phase::Making, None);
+        meeting.started = Some(live.wall_start - chrono::Duration::minutes(20));
+        assert!(!live.matches_meeting(&meeting));
+        meeting.started = Some(live.wall_start);
+        assert!(live.matches_meeting(&meeting));
+        live.folder = Some(PathBuf::from("1234-1"));
+        assert!(!live.matches_meeting(&meeting));
+        meeting.id = "1234-1".into();
+        meeting.started = None;
+        assert!(live.matches_meeting(&meeting));
+        meeting.device = Some("peer".into());
+        assert!(!live.matches_meeting(&meeting));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reverting_text_still_flushes_after_an_older_queued_save() {
