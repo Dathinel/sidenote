@@ -6,7 +6,7 @@ use std::fs;
 fn isolated() {
     assert!(super::isolated(), "Sync scenes need isolated render state");
 }
-fn settle(s: &mut State) {
+pub(super) fn settle(s: &mut State) {
     while s.edit_busy {
         let event = s
             .events_rx

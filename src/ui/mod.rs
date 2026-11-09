@@ -1546,6 +1546,7 @@ fn scene_tick(s: &mut State, index: usize) {
         .map(|t| t.task.clone());
     if let (true, Some(task)) = (isolated(), task) {
         s.toggle_task_at(REVIEW_MEETING, &task);
+        sync_scene::settle(s);
     }
 }
 
@@ -1649,6 +1650,7 @@ fn scene_diary(s: &mut State) {
         ticks.truncate(2);
         for (id, task) in ticks {
             s.toggle_task_at(&id, &task);
+            sync_scene::settle(s);
         }
     }
     s.open_check();
@@ -2046,6 +2048,7 @@ pub fn spec() -> AppSpec<State> {
                     .and_then(|m| m.summary.todo.get(1).map(|t| t.task.clone()))
                 {
                     s.toggle_task(&task);
+                    sync_scene::settle(s);
                 }
                 scene_scroll(s, "sec-todo");
             }),
