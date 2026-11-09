@@ -110,13 +110,6 @@ pub struct Point {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Todo {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub status: String,
-    pub waiting_on: Option<WaitingOn>,
-    pub subtasks: Vec<Subtask>,
-    pub team: Option<String>,
     pub span: Vec<String>,
     pub task: String,
     pub id: String,
@@ -156,19 +149,6 @@ pub struct WaitingOn {
     pub text: Option<String>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(default)]
-pub struct Subtask {
-    pub id: String,
-    pub title: String,
-    pub done: bool,
-}
-#[derive(Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct WaitingOn {
-    pub task_id: Option<String>,
-    pub text: Option<String>,
-}
-#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Subtask {
     pub id: String,
