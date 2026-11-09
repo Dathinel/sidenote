@@ -191,7 +191,7 @@ fn projects(root: &Path) -> io::Result<Vec<String>> {
 }
 fn consent(settings: &NotesSettings, manual: bool, end: Option<i64>) -> Option<JobState> {
     if settings.engine() != Engine::App
-        || settings.helper.is_none()
+        || settings.effective_helper().is_none()
         || settings.enabled_at_ms.is_none()
     {
         return Some(JobState::NoHelper);
@@ -309,7 +309,7 @@ fn process(
         }
     }
     let helper = settings
-        .helper
+        .effective_helper()
         .ok_or_else(|| store_io::invalid("No helper selected"))?;
     if !run.installed(helper) {
         return failure(root, id, job, Failure::Missing);
@@ -701,7 +701,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         typed
     );
     let helper = settings
-        .helper
+        .effective_helper()
         .ok_or_else(|| store_io::invalid("No helper selected"))?;
     let model = if settings.model.trim().is_empty() {
         helper.default_model()

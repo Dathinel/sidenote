@@ -15,6 +15,10 @@ pub(super) const TASKS_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub(super) const TITLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl Helper {
+    /// Detection is independent of whether this release permits a helper to run.
+    pub fn offered(self) -> bool {
+        self == Self::Claude
+    }
     pub fn default_model(self) -> &'static str {
         match self {
             Self::Claude => "claude-sonnet-5-5",
@@ -115,14 +119,15 @@ pub(super) struct Cli {
     pub root: Option<PathBuf>,
 }
 pub(super) fn authorized(root: &std::path::Path, helper: Helper) -> bool {
-    crate::core::Config::load_in(root)
-        .ok()
-        .and_then(|c| c.notes)
-        .is_some_and(|s| {
-            s.engine() == super::Engine::App
-                && s.helper == Some(helper)
-                && s.enabled_at_ms.is_some()
-        })
+    helper.offered()
+        && crate::core::Config::load_in(root)
+            .ok()
+            .and_then(|c| c.notes)
+            .is_some_and(|s| {
+                s.engine() == super::Engine::App
+                    && s.helper == Some(helper)
+                    && s.enabled_at_ms.is_some()
+            })
 }
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
@@ -163,6 +168,9 @@ impl Run for Cli {
         prompt: String,
         timeout: Duration,
     ) -> Result<String, Failure> {
+        if !helper.offered() {
+            return Err(Failure::Consent);
+        }
         if let Some(root) = &self.root
             && !authorized(root, helper)
         {

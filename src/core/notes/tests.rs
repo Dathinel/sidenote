@@ -104,6 +104,31 @@ fn state(root: &Path) -> JobState {
 }
 
 #[test]
+fn unoffered_saved_helpers_never_run_and_have_a_fixed_reason() {
+    assert!(Helper::Claude.offered());
+    for helper in [Helper::Codex, Helper::OpenCode] {
+        assert!(!helper.offered());
+        let s: NotesSettings = serde_json::from_value(serde_json::json!({
+            "helper": helper, "enabled_at_ms": 1
+        }))
+        .unwrap();
+        assert_eq!(s.effective_helper(), None);
+        assert_eq!(s.helper_reason(), Some(HELPER_NOT_OFFERED));
+        let root = Temp::new();
+        meeting(&root.0, PRIVATE);
+        enqueue(&root.0, &s, Some(Request::MakeNotes));
+        let mut fake = Fake::new(vec![]);
+        drain(&root.0, &s, &mut fake);
+        assert_eq!(state(&root.0), JobState::NoHelper);
+        assert!(fake.calls.is_empty());
+        assert_eq!(
+            helper::Cli { root: None }.run(helper, "", String::new(), Duration::ZERO),
+            Err(Failure::Consent)
+        );
+    }
+}
+
+#[test]
 fn no_helper_or_no_consent_writes_transcript_without_any_call() {
     for s in [
         NotesSettings::default(),
