@@ -159,10 +159,20 @@ def main():
     save(f"checks/{day}.json", report)
     if diary:
         # Two older checks, smaller, so their days read differently.
+        # Each check describes the day before it in day_summary; 7 Nov had no meeting, and 6 and
+        # 3 Nov have no check after them, so those days fall back to the meetings' own lines.
+        said = {
+            "2026-11-05": "Maya and Jordan met the vendor about pricing on the Vendor pricing call. "
+                          "They agreed to ask for a yearly price, and Maya will email the vendor about it.",
+            "2026-11-04": "Jordan and Priya checked in on the hiring plan. They decided to open one design "
+                          "role first and to review the job post on Wednesday. Priya will share the interview plan.",
+        }
         for back, keep, new in [(2, 6, 2), (3, 3, 3)]:
             old = (today - timedelta(days=back)).isoformat()
+            described = (today - timedelta(days=back + 1)).isoformat()
             fs = findings[:keep]
             save(f"checks/{old}.json", dict(report, date=old, memory_proposals=[], findings=fs,
+                                             day_summary=said[described], day_summary_date=described,
                                              comparison=dict(report["comparison"], new=[f["id"] for f in fs[:new]])))
     elif flags & {"--earlier", "--gaps", "--v2"}:
         for back in ([1, 3, 4] if "--gaps" in flags else [1]):

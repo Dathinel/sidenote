@@ -131,6 +131,10 @@ pub struct CheckState {
     pub done_on: HashMap<(String, usize), NaiveDate>,
     /// Findings and new findings of the recent reports, for their days in the Diary.
     pub totals: HashMap<NaiveDate, (usize, Option<usize>)>,
+    /// The check's paragraph about each day, by the day it describes, from the recent reports.
+    pub day_summaries: HashMap<NaiveDate, String>,
+    /// The Diary sections the owner opened, by `diary::part_key`. All start folded.
+    pub open_parts: BTreeSet<String>,
 }
 
 impl Default for CheckState {
@@ -168,6 +172,8 @@ impl Default for CheckState {
             shown: diary::PAGE,
             done_on: HashMap::new(),
             totals: HashMap::new(),
+            day_summaries: HashMap::new(),
+            open_parts: BTreeSet::new(),
         }
     }
 }
@@ -339,16 +345,23 @@ impl CheckState {
     fn build_strip(&mut self) {
         // Older days in the Diary say what their check found. Thirty days of reports is
         // enough to read on each rescan; earlier days just link to their report.
-        self.totals = self
-            .dates
-            .iter()
-            .take(30)
-            .filter_map(|&d| {
-                let r = core::load_check(d).ok()?;
-                let new = is_v2(&r).then_some(r.content.comparison.new.len());
-                Some((d, (r.content.findings.len(), new)))
-            })
-            .collect();
+        self.totals = HashMap::new();
+        self.day_summaries = HashMap::new();
+        for &d in self.dates.iter().take(30) {
+            let Ok(r) = core::load_check(d) else {
+                continue;
+            };
+            let new = is_v2(&r).then_some(r.content.comparison.new.len());
+            self.totals.insert(d, (r.content.findings.len(), new));
+            if let Some(day) = r.content.day_summary_date
+                && !r.content.day_summary.trim().is_empty()
+            {
+                // Dates are newest first, so a later report's paragraph wins.
+                self.day_summaries
+                    .entry(day)
+                    .or_insert_with(|| r.content.day_summary.trim().to_string());
+            }
+        }
         let newest = self.dates.first().copied().unwrap_or(self.today);
         let anchor = newest.max(self.today);
         self.strip = (0..7)
@@ -400,6 +413,7 @@ impl State {
         self.check.date = None;
         self.check.panel = false;
         self.check.report_open = false;
+        self.check.open_parts.clear();
         self.check.shown = diary::PAGE;
         self.check.filter = Filter::Open;
         self.check.refresh();
@@ -800,10 +814,14 @@ fn rows(s: &State) -> Vec<usize> {
     let mut v: Vec<usize> = (0..r.content.findings.len())
         .filter(|&i| {
             let f = &r.content.findings[i];
-            // The Diary lists what is open and not low; the full report has the filters.
+            // The Diary lists what is open, lows only while their fold is open; the full
+            // report has the filters.
             if !c.report_open {
+                let lows = c
+                    .open_parts
+                    .contains(&diary::part_key(r.date, diary::Part::Low));
                 return c.status_at(r, i) == TriageStatus::Open
-                    && !matches!(f.severity, Severity::Low);
+                    && (lows || !matches!(f.severity, Severity::Low));
             }
             c.status_at(r, i) == c.filter.status()
                 && c.project
@@ -1473,9 +1491,10 @@ fn report_link(date: NaiveDate, words: &str, p: Palette) -> El {
         .on_press(move |s: &mut State| s.open_report(date))
 }
 
-/// The newest check's open findings, as "Needs your attention" in its day of the Diary. Each
-/// row opens the same panel as the full report, with Apply, Dismiss and Snooze.
-pub(super) fn day_attention(s: &State, k: &Kit, p: Palette) -> El {
+/// The newest check's open findings, folded under "Needs your attention" in its day of the
+/// Diary. Open, it lists high and medium findings, then lows under their own fold. Each row
+/// opens the same panel as the full report, with Apply, Dismiss and Snooze.
+pub(super) fn day_attention(s: &State, k: &Kit, date: NaiveDate, p: Palette) -> El {
     let Some(r) = &s.check.report else {
         return el();
     };
@@ -1483,60 +1502,69 @@ pub(super) fn day_attention(s: &State, k: &Kit, p: Palette) -> El {
     let open: Vec<usize> = (0..r.content.findings.len())
         .filter(|&i| c.status_at(r, i) == TriageStatus::Open)
         .collect();
-    let low = open
+    let low: Vec<usize> = open
         .iter()
-        .filter(|&&i| matches!(r.content.findings[i].severity, Severity::Low))
-        .count();
-    let shown = rows(s);
-    let mut head = row()
-        .w_full()
-        .gap(8.0)
-        .items_center()
-        .child(roles::GROUP.wrap("Needs your attention", p.ink));
-    if !open.is_empty() {
-        head = head.child(roles::count(open.len(), p));
-    }
-    head = head
-        .child(el().grow(1.0))
-        .child(report_link(r.date, "Full check", p));
-    let mut out = col()
+        .copied()
+        .filter(|&i| matches!(r.content.findings[i].severity, Severity::Low))
+        .collect();
+    let key = diary::part_key(date, diary::Part::Attention);
+    let on = c.open_parts.contains(&key);
+    let out = col()
         .key("check-attention")
         .w_full()
-        .gap(1.0)
-        .child(head.mb(4.0));
+        .child(diary::fold_head(
+            key,
+            "Needs your attention",
+            open.len(),
+            on,
+            p,
+        ));
+    if !on {
+        return out;
+    }
+    let mut body = col().w_full().gap(1.0).pl(20.0).pb(6.0);
     if open.is_empty() {
         let words = if r.content.findings.is_empty() {
             "The daily check found nothing to flag."
         } else {
             "Nothing open. You handled everything the daily check found."
         };
-        return out.child(roles::SMALL.wrap(words, p.soft));
-    }
-    if let Some(line) = r.content.brief.first().filter(|_| is_v2(r)) {
-        out = out.child(prose(s, k, p, line.trim(), "check-attention", 14.0).mb(6.0));
+        body = body.child(roles::SMALL.wrap(words, p.soft).px(8.0).py(4.0));
+    } else if let Some(line) = r.content.brief.first().filter(|_| is_v2(r)) {
+        body = body.child(
+            prose(s, k, p, line.trim(), "check-attention", 14.0)
+                .px(8.0)
+                .py(4.0),
+        );
     }
     let lay = Lay {
         compact: true,
         project: false,
     };
-    for i in shown {
-        out = out.child(finding_row(s, r, i, lay, p));
+    let shown = rows(s);
+    for &i in shown.iter().filter(|i| !low.contains(i)) {
+        body = body.child(finding_row(s, r, i, lay, p));
     }
-    if low > 0 {
-        out = out.child(
-            roles::META
-                .wrap(
-                    format!(
-                        "and {} in the full check",
-                        plural(low, "low priority finding", "low priority findings")
-                    ),
-                    p.faint,
-                )
-                .px(8.0)
-                .mt(4.0),
-        );
+    if !low.is_empty() {
+        let low_key = diary::part_key(date, diary::Part::Low);
+        let low_on = c.open_parts.contains(&low_key);
+        body = body.child(diary::fold_head(low_key, "Low priority", low.len(), low_on, p).mt(4.0));
+        if low_on {
+            let mut lows = col().w_full().gap(1.0).pl(20.0);
+            for &i in shown.iter().filter(|i| low.contains(i)) {
+                lows = lows.child(finding_row(s, r, i, lay, p));
+            }
+            body = body.child(lows);
+        }
     }
-    out
+    body = body.child(
+        row()
+            .w_full()
+            .pl(4.0)
+            .pt(6.0)
+            .child(report_link(r.date, "Full check", p)),
+    );
+    out.child(body)
 }
 
 /// An older day's check in one quiet line, with a link to its report.
@@ -2505,6 +2533,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 // ---- the keyboard ----------------------------------------------------------------------------
 
 fn move_cursor(s: &mut State, delta: isize, tx: &mut Tx) {
+    // In the Diary the keys work inside "Needs your attention", so they open it.
+    if !s.check.report_open
+        && let Some(date) = s.check.report.as_ref().map(|r| r.date)
+    {
+        s.check
+            .open_parts
+            .insert(diary::part_key(date, diary::Part::Attention));
+    }
     let shown = rows(s);
     let Some(r) = &s.check.report else {
         return;

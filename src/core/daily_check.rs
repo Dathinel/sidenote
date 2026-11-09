@@ -114,6 +114,13 @@ pub struct CheckContent {
     pub summary: String,
     #[serde(default)]
     pub brief: Vec<String>,
+    /// Two to four plain sentences about the meetings of `day_summary_date`, for the Diary.
+    /// Empty in reports from before it existed and when nobody met that day.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub day_summary: String,
+    /// The day `day_summary` describes: the day before the check. Set by the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day_summary_date: Option<NaiveDate>,
     #[serde(default)]
     pub coverage: Coverage,
     #[serde(default)]
@@ -609,7 +616,7 @@ fn report_prompt(
         })
         .collect::<io::Result<Vec<_>>>()?;
     let context = super::config::Config::load()?.knowledge_base;
-    let data = json!({"business_context":{"company_name":context.company_name,"people_roster_source":context.people_roster_source,"glossary":context.glossary},"today":today,"kb":kb,"input_warnings":warnings,"meetings":inputs,"projects":projects,
+    let data = json!({"business_context":{"company_name":context.company_name,"people_roster_source":context.people_roster_source,"glossary":context.glossary},"today":today,"day_summary_date":today - Days::days(1),"kb":kb,"input_warnings":warnings,"meetings":inputs,"projects":projects,
         "overrides":overrides,"effective_tasks":effective,"company_memory":memory,"memory_records":records.iter().filter(|r| r.status == RecordStatus::Active).collect::<Vec<_>>(),"last_seven_reports":recent});
     let instructions = include_str!("daily_check_prompt.txt");
     Ok((
@@ -934,6 +941,18 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     let mut content: CheckContent =
         serde_json::from_value(value).map_err(|_| invalid("Runner returned invalid v2 report"))?;
     validate_content(&mut content, &meetings, &kb, &memory_records)?;
+    // The day summary is a nicety: a malformed one is dropped, never the whole report.
+    let day_summary = content
+        .day_summary
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    content.day_summary = if day_summary.chars().count() <= 1200 {
+        day_summary
+    } else {
+        String::new()
+    };
+    content.day_summary_date = (!content.day_summary.is_empty()).then(|| today - Days::days(1));
     let history = list_checks()?
         .into_iter()
         .filter(|d| *d < today)

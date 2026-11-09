@@ -151,13 +151,16 @@ $shots = @(
     @('check-v1',       'check',         '1320x800', $null,                @()),
     @('check-v1-panel', 'check-panel',   '1320x800', $null,                @()),
     # The Diary: invented days from prepare_check_fixture.py --diary (meetings 3 to 6 Nov, memory
-    # changes, three checks), today with two ticks, the newest check's findings, the finding
+    # changes, three checks, two with a day summary), today with two ticks, the newest check's findings, the finding
     # panel, the day picker, an older day's full report, the sidebar and an empty diary. The
     # tall shots show the whole feed in one picture.
     @('diary',              'diary',         '1320x800',  $null, @()),
     @('diary-tall',         'diary',         '1320x2400', $null, @()),
     @('diary-panel',        'diary-panel',   '1320x800',  $null, @()),
     @('diary-picker',       'diary-picker',  '1320x800',  $null, @()),
+    # Every section open: tasks created, memories created, done, needs your attention and lows.
+    @('diary-open-tall',    'diary-open',    '1320x2400', $null, @()),
+    @('diary-open-narrow-tall', 'diary-open', '560x3200', $null, @()),
     @('diary-older',        'diary-older',   '1320x800',  $null, @()),
     @('diary-report',       'diary-report',  '1320x800',  $null, @()),
     @('diary-sidebar',      'diary-sidebar', '1320x800',  $null, @()),

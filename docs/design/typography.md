@@ -96,14 +96,16 @@ user: memory proposals to review (`accent`) and open high findings in the daily 
 One entry per day, newest first, in the reading column (760). Days with nothing are left out.
 
 - The day: `CAPTION` in `accent` for Today or Yesterday, then the date in `SECTION`.
-- The summary: one or two sentences in `READ`, counted from what the entry lists below it.
-- A meeting: its time in `META` (`faint`) in a 44-point column, its title in `TITLE` (a
-  link to the meeting), its facts on a `meta_line`, its context line in `SMALL` `soft`, then
-  "Decided" and "For you" as 12 px 500 captions over `SMALL` rows. At 560 px the time joins
-  the facts line and the column goes.
-- Done, Memory and Needs your attention: `GROUP` labels with `SMALL` rows. The newest check's
-  open high and medium findings use the compact finding row; lows are counted. An older
-  day's check is one `SMALL` `soft` line with an Open link to its full report.
+- The summary: two to four sentences in `READ`. It is the `day_summary` the daily check
+  writes about the day before it, in the same run; a day without one joins the first
+  sentence of each meeting's own summary.
+- Meetings: one 32-point link row each, the time in `META` (`faint`) in a 44-point column,
+  the title in `CONTROL` `ink`, the length in `META` at the end.
+- Folded sections, all closed at first, like the Tasks page groups: the Tasks chevron, a
+  `GROUP` name and a count pill. Tasks created, Memories created (Memory proposals when none
+  were accepted), Done, and Needs your attention for the newest check, with low findings in
+  their own fold inside it. Rows inside are `SMALL` with a `meta_line`, or the compact
+  finding row. An older day's check is one `SMALL` `soft` line with an Open link.
 
 ## When to use what
 

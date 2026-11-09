@@ -1551,6 +1551,22 @@ fn scene_diary(s: &mut State) {
     s.open_check();
 }
 
+/// Opens these Diary sections on every day the Diary lists.
+fn scene_diary_open(s: &mut State, parts: &[diary::Part]) {
+    let mut days: Vec<chrono::NaiveDate> = s
+        .meetings
+        .iter()
+        .filter_map(|m| m.started.map(|t| t.date_naive()))
+        .collect();
+    days.extend(s.check.dates.iter().copied());
+    days.push(s.check.today);
+    for d in days {
+        for &part in parts {
+            s.check.open_parts.insert(diary::part_key(d, part));
+        }
+    }
+}
+
 /// The key of the first open finding with a proposed action.
 fn first_action(s: &State) -> Option<String> {
     let r = s.check.report.as_ref()?;
@@ -1977,9 +1993,24 @@ pub fn spec() -> AppSpec<State> {
             ("diary", scene_diary),
             ("diary-panel", |s| {
                 scene_diary(s);
+                scene_diary_open(s, &[diary::Part::Attention]);
                 if let Some(key) = first_action(s) {
                     s.open_finding(&key);
                 }
+            }),
+            // Every section of the newest days open, lows included.
+            ("diary-open", |s| {
+                scene_diary(s);
+                scene_diary_open(
+                    s,
+                    &[
+                        diary::Part::Tasks,
+                        diary::Part::Memories,
+                        diary::Part::Done,
+                        diary::Part::Attention,
+                        diary::Part::Low,
+                    ],
+                );
             }),
             ("diary-picker", |s| {
                 scene_diary(s);
