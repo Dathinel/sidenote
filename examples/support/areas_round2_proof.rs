@@ -13,6 +13,7 @@ pub const CASES: &[&str] = &[
     "r2-sharing-retry",
     "r2-old-merge",
     "r2-resolver",
+    "r2-memory-export-retained-later",
     "r2-store-load",
     "r2-backup-retention",
     "r2-large-undo",
@@ -59,9 +60,14 @@ fn retain_record(store: &TaskStore, target: &Target) {
         .unwrap();
     record.assignment = Some(target.clone());
     record.project = Some(CHILD.into());
+    memory_changes(
+        store,
+        json!([{"key":["records",record.id],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":record}]),
+    );
+}
+fn memory_changes(store: &TaskStore, changes: Value) {
     let revision = core::areas::new_assignment_revision(&store.root).unwrap();
     let (device, id) = revision.split_once('-').unwrap();
-    let changes = json!([{"key":["records",record.id],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":record}]);
     let checksum = blake3::hash(
         &serde_json::to_vec(&json!([2, device, id, "memory/records.json", changes, []])).unwrap(),
     )
@@ -809,6 +815,58 @@ pub fn run(mode: &str, store: &TaskStore) {
                 .unwrap()
                 .project_id,
                 Some(target_id)
+            );
+        }
+        "r2-memory-export-retained-later" => {
+            migrate(store);
+            let p = store.load_projects().unwrap();
+            let c = p.area_catalog().unwrap();
+            let child = c.project(&p, CHILD).unwrap();
+            let retained = Target {
+                area_id: child.area_id.clone().unwrap(),
+                project_id: Some(child.id.clone()),
+            };
+            retain_record(store, &retained);
+            memory_changes(
+                store,
+                json!([{"key":["migration"],"at":chrono::Utc::now().timestamp_nanos_opt().unwrap() as u64 | (1u64<<63),"value":{"version":1,"source_path":"local/memory/company.legacy.md","fingerprint":"synthetic","accepted_at":"2026-11-09T00:00:00Z"}}]),
+            );
+            let later = c.project(&p, "Archive outcome").unwrap();
+            apply(
+                store,
+                Action::Assign {
+                    key: json!(["memory", "synthetic-memory"]).to_string(),
+                    target: Target {
+                        area_id: later.area_id.clone().unwrap(),
+                        project_id: Some(later.id.clone()),
+                    },
+                },
+            );
+            let memory = core::memory::MemoryStore::new(root.clone());
+            let (snapshot, text) = memory.snapshot().unwrap();
+            assert_eq!(
+                snapshot
+                    .records
+                    .iter()
+                    .find(|r| r.id == "synthetic-memory")
+                    .unwrap()
+                    .project
+                    .as_deref(),
+                Some("Archive outcome")
+            );
+            assert!(text.contains("Archive outcome"));
+            assert_eq!(
+                text,
+                fs::read_to_string(root.join("local/memory/company.md")).unwrap()
+            );
+            assert_eq!(
+                memory.company_memory().unwrap(),
+                text,
+                "Repeated exports resolve the raw assignment once"
+            );
+            assert_eq!(
+                text,
+                fs::read_to_string(root.join("local/memory/company.md")).unwrap()
             );
         }
         "r2-store-load" => {

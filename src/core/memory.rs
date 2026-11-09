@@ -267,12 +267,12 @@ impl MemoryStore {
     fn save(&self, before: &MemoryFile, file: &MemoryFile) -> io::Result<()> {
         super::sync_state::save_changes(&self.root, "memory/records.json", before, file)?;
         if file.migration.is_some() {
-            self.export(file)?;
+            let text = render(&self.resolve_projects(file.clone())?);
+            self.export(&text)?;
         }
         Ok(())
     }
-    fn export(&self, file: &MemoryFile) -> io::Result<()> {
-        let text = render(&self.resolve_projects(file.clone())?);
+    fn export(&self, text: &str) -> io::Result<()> {
         match fs::read(self.path("company.md")) {
             Ok(bytes) if bytes == text.as_bytes() => return Ok(()),
             Ok(_) => {}
@@ -299,8 +299,8 @@ impl MemoryStore {
         let _lock = store_io::lock(&self.path("records.lock"))?;
         let file = self.resolve_projects(self.load_locked()?)?;
         if file.migration.is_some() {
-            self.export(&file)?;
             let text = render(&file);
+            self.export(&text)?;
             Ok((file, text))
         } else {
             self.legacy_text().map(|text| (file, text))
