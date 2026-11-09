@@ -44,6 +44,12 @@ packing fails if a dependency has no cached notice files. For Git workspace
 dependencies, shared notices are collected from the checkout root. Original relative paths
 are preserved. Fetch the locked sources before the offline packaging step.
 
+The default release output is `<checkout>/artifacts/releases`. Set `-Feed` to
+choose another absolute folder. The script uses Cargo's configured target
+directory (including `CARGO_TARGET_DIR`), `DOTNET_ROOT` or `-DotnetRoot`, and
+`RUST_GNU_BIN` or `-GnuBin` rather than machine-specific tool paths. Each pack
+uses a fresh staging folder under `artifacts/updates-core`.
+
 The script retains three full versions and their deltas in its local output.
 Publish a previous build with a higher version to roll back. These installers
 and packages are unsigned. No release is packed or uploaded by ordinary builds.

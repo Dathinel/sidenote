@@ -51,7 +51,7 @@ The one-hour memory proof joins only public Hindi clips into a 3,600-second, 115
 
 ## Artifacts, gates and limits
 
-Evidence is under `E:/Personal-Projects/reviews/sidenote-router-proof-v2/`: `normal/measurements.json`, `comparison.json`, and `hour/evidence.json`. The final core executable is `artifacts/router-core-final/sidenote.exe`, SHA256 `cef0b4dacb3a211b23bd1612153da81a1547b7acd82970656441aa5a0e06cbe2`. The 150-clip and hour runs use that exact copy. Its dev sizes are 165,496,832 bytes without and 180,738,560 with the backend. The runtime branch's sizes are 164,361,216 / 179,379,712 bytes. The DLL pair adds 17,146,880 bytes and models about 366.7 MB. Release installer size and clean-machine redistributable installation remain unverified.
+Evidence is under `<proof-root>/sidenote-router-proof-v2/`: `normal/measurements.json`, `comparison.json`, and `hour/evidence.json`. The final core executable is `artifacts/router-core-final/sidenote.exe`, SHA256 `cef0b4dacb3a211b23bd1612153da81a1547b7acd82970656441aa5a0e06cbe2`. The 150-clip and hour runs use that exact copy. Its dev sizes are 165,496,832 bytes without and 180,738,560 with the backend. The runtime branch's sizes are 164,361,216 / 179,379,712 bytes. The DLL pair adds 17,146,880 bytes and models about 366.7 MB. Release installer size and clean-machine redistributable installation remain unverified.
 
 The DLL integrity run uses that same core executable. The documented pinned DLL returns Hindi, matching the measured native text; a same-size copy with its final byte changed returns marked English fallback, exit zero, and preserves the baseline. It is rejected before loading (`dll-integrity/evidence.json`). The temporary altered copy never replaces the runtime or model store.
 

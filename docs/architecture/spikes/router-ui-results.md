@@ -8,7 +8,7 @@ Meeting loading computes a routed-content revision. The catalogue comparison che
 
 The final UI dev executables are 166,298,112 bytes without the backend and 181,500,928 with it. The feature executable SHA256 is `4df318ad9454ad543ef17daa98ab44e49c50ad6c2c8f7769e6cf810f0cac0aaf`. Stable fmt, locked clippy with all targets and warnings denied, and locked builds pass in both configurations (`reviews/sidenote-router-build/router-ui-final-gate-*`). No tests ran. The copied feature executable produced all eight PNGs below; main and lib were refreshed before the build.
 
-Renders under `E:/Personal-Projects/hex-meetings/.worktrees/router-ui/artifacts/router-ui/`:
+Renders under `<checkout>/artifacts/router-ui/`:
 
 | Scene | Dark | Light |
 |---|---|---|

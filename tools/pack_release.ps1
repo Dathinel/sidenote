@@ -1,26 +1,34 @@
 param(
-    [string]$Feed = 'E:\Personal-Projects\reviews\updates-proof\feed',
-    [string]$DotnetRoot = 'E:\Personal-Projects\tools\dotnet',
+    [string]$Feed = (Join-Path $PSScriptRoot '../artifacts/releases'),
+    [string]$DotnetRoot = $env:DOTNET_ROOT,
+    [string]$GnuBin = $env:RUST_GNU_BIN,
     [string]$ReleaseNotes = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/..").Path
 $feedPath = [IO.Path]::GetFullPath($Feed)
 if ($Feed -match '^[a-z]+://' -or -not [IO.Path]::IsPathRooted($Feed)) { throw 'Feed must be an absolute local folder or file share.' }
-$env:DOTNET_ROOT = $DotnetRoot
+if ($DotnetRoot) {
+    $env:DOTNET_ROOT = $DotnetRoot
+    $env:PATH = "$DotnetRoot;$DotnetRoot/tools;$env:PATH"
+}
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-$env:PATH = "$DotnetRoot;$DotnetRoot/tools;$env:USERPROFILE/.cargo/bin;E:/Personal-Projects/tools/hex-meetings-gnu/w64devkit/bin;$env:PATH"
-$env:CARGO_TARGET_DIR = 'E:\Personal-Projects\hex-meetings-shared-target'
+$env:PATH = "$env:USERPROFILE/.cargo/bin;$env:PATH"
+if ($GnuBin) { $env:PATH = "$GnuBin;$env:PATH" }
+if (-not (Get-Command as.exe -ErrorAction SilentlyContinue)) { throw 'Set RUST_GNU_BIN to a full MinGW GNU bin folder, or put it on PATH.' }
 (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
 Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
     if (-not $version) { throw 'Cargo.toml has no package version.' }
+    $metadataJson = & cargo metadata --offline --locked --all-features --format-version 1
+    if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
+    $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
     & cargo build --release --locked --bin sidenote
     if ($LASTEXITCODE) { throw 'Release build failed.' }
-    $stage = "$root/artifacts/updates-core/package-$version"
+    $stage = "$root/artifacts/updates-core/package-$version-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $stage, $feedPath | Out-Null
-    Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
+    Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
     $notices = @('LICENSE', 'THIRD_PARTY.md', 'assets/fonts/Inter-LICENSE.txt',
         'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt')
     foreach ($notice in $notices) {
@@ -29,9 +37,6 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $notice) -Destination $destination -Force
     }
     # Include cached upstream notices, not just the licence-name inventory.
-    $metadataJson = & cargo metadata --offline --locked --all-features --format-version 1
-    if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
-    $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
     $inventory = @('# Dependency notices', '', 'Upstream notices for the locked Cargo dependency inventory.', '')
     foreach ($package in $metadata.packages | Sort-Object name, version) {
         if ($package.id -in $metadata.workspace_members) { continue }
