@@ -50,6 +50,9 @@ pub enum Completion {
     Changed(Projects),
 }
 pub struct Snapshot {
+    teams: core::Teams,
+    task_grouping: Option<core::TaskGrouping>,
+    task_notice: Option<String>,
     mutation_generation: u64,
     revision: String,
     inventory: Option<core::area_ops::Inventory>,
@@ -127,6 +130,7 @@ impl State {
             self.events_tx.clone(),
             self.waker.clone(),
         );
+        let load_grouping = !self.tasks.grouping_loaded;
         let migration_open = self
             .areas
             .editor
@@ -163,7 +167,16 @@ impl State {
                     }
                     let mut tasks =
                         core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
-                    store.load_teams().unwrap_or_default().apply(&mut tasks);
+                    let mut task_notice=None;
+                    let teams=store.load_teams().unwrap_or_else(|_| {
+                        task_notice=Some("Could not read teams.json. Tasks show No team until teams can be read.".into());
+                        core::Teams::default()
+                    });
+                    teams.apply(&mut tasks);
+                    let task_grouping=load_grouping.then(|| store.load_grouping().unwrap_or_else(|_| {
+                        task_notice=Some("Could not read the saved task grouping. Choose a grouping to save it again.".into());
+                        core::TaskGrouping::Due
+                    }));
                     let kept = core::without_cleared(tasks.clone(), cutoff);
                     let task_counts = core::count_tasks(&kept);
                     let task_names = core::project_names(&projects, &tasks);
@@ -258,6 +271,9 @@ impl State {
                         all_tasks: tasks,
                         task_counts,
                         task_names,
+                        teams,
+                        task_grouping,
+                        task_notice,
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
@@ -429,6 +445,16 @@ impl State {
                 self.areas.undo_available = snapshot.undo_available;
                 self.areas.merge_undo_available = snapshot.merge_undo_available;
                 self.areas.receipt_devices = snapshot.receipt_devices;
+                self.tasks.teams = snapshot.teams;
+                if !self.tasks.grouping_loaded
+                    && let Some(grouping) = snapshot.task_grouping
+                {
+                    self.tasks.grouping = grouping;
+                    self.tasks.grouping_loaded = true;
+                }
+                if let Some(notice) = snapshot.task_notice {
+                    self.tasks.notice = Some(notice);
+                }
                 self.tasks.today = chrono::Local::now().date_naive();
                 self.tasks.checked = snapshot.checked;
                 self.tasks.all = snapshot.all_tasks;

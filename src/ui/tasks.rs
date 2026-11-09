@@ -89,6 +89,7 @@ pub struct TasksState {
     pub counts: TaskCounts,
     pub today: NaiveDate,
     pub grouping: TaskGrouping,
+    pub grouping_loaded: bool,
     pub teams: core::Teams,
     pub team_name: TextEdit,
     pub team_members: TextEdit,
@@ -152,15 +153,8 @@ impl TasksState {
                 core::TasksSettings::default()
             })
             .cutoff();
-        let grouping = store.load_grouping().unwrap_or_default();
-        let teams = store.load_teams().unwrap_or_else(|_| {
-            notice = Some(
-                "Could not read teams.json. Tasks show No team until teams can be read.".into(),
-            );
-            core::Teams::default()
-        });
         Self {
-            teams,
+            teams: core::Teams::default(),
             team_name: TextEdit::new(""),
             team_members: TextEdit::new(""),
             team_aliases: TextEdit::new(""),
@@ -177,7 +171,8 @@ impl TasksState {
             names: Vec::new(),
             counts: TaskCounts::default(),
             today: Local::now().date_naive(),
-            grouping,
+            grouping: TaskGrouping::Due,
+            grouping_loaded: false,
             group_menu: false,
             redo_menu: false,
             done: DoneFilter::Open,
@@ -1369,6 +1364,7 @@ fn group_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                     .checked(t.grouping == by)
                     .on_select(move |s: &mut State| {
                         s.tasks.grouping = by;
+                        s.tasks.grouping_loaded = true;
                         s.tasks.group_menu = false;
                         s.publish_edit(super::edit_worker::Job::Grouping {
                             store: s.tasks.store.clone(),

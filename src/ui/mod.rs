@@ -1579,6 +1579,12 @@ fn busiest_project(s: &State) -> String {
         .unwrap_or_default()
 }
 
+fn tasks_v2_teams_scene(s: &mut State) {
+    s.refresh_areas();
+    area_scene::wait(s);
+    scene_hex(s, hex::Section::Teams, false);
+}
+
 fn tasks_v2_scene(s: &mut State, grouping: core::TaskGrouping, panel: Option<usize>) {
     scene_tasks(s);
     area_scene::wait(s);
@@ -2663,9 +2669,7 @@ pub fn spec() -> AppSpec<State> {
             ("tasks-v2-auto", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, None)
             }),
-            ("tasks-v2-team-saved", |s| {
-                scene_hex(s, hex::Section::Teams, false)
-            }),
+            ("tasks-v2-team-saved", tasks_v2_teams_scene),
             ("tasks-v2-project", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Project, None)
             }),
@@ -2699,9 +2703,7 @@ pub fn spec() -> AppSpec<State> {
                 s.tasks.all.clear();
                 s.tasks.counts = core::TaskCounts::default();
             }),
-            ("tasks-v2-teams", |s| {
-                scene_hex(s, hex::Section::Teams, false);
-            }),
+            ("tasks-v2-teams", tasks_v2_teams_scene),
             ("tasks", scene_tasks),
             ("tasks-meeting", |s| {
                 scene_tasks(s);
