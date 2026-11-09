@@ -582,6 +582,24 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
 // ---- the page ----------------------------------------------------------------------------
 
 fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
+    if !m.has_summary() {
+        if !m.lines.is_empty() {
+            body = body
+                .child(
+                    roles::SMALL
+                        .wrap("Read the transcript while notes are unavailable.", p.soft)
+                        .mt(24.0),
+                )
+                .child(
+                    super::area::button("Read transcript", "notes-read-transcript", p)
+                        .self_start()
+                        .mt(8.0)
+                        .on_press(|s: &mut State| s.toggle_transcript()),
+                );
+        }
+        return body;
+    }
+
     let decided: Vec<&Point> = m.points().filter(|pt| pt.kind == "decided").collect();
     body = body.child(counts(m, p));
 
@@ -628,6 +646,7 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
     if !m.summary.todo.is_empty() {
         body = body
             .child(heading("To do", Some(m.summary.todo.len()), "sec-todo", p))
+            .children(super::notes_status::tasks_notice(s, m, p))
             .child(todo::section(s, m, p));
     }
 
@@ -711,9 +730,13 @@ fn document(
     if let Some(form) = project::form(s, k, &m.id, p) {
         body = body.child(form);
     }
+    body = body.children(super::notes_status::banner(s, m, p).map(|b| b.mt(20.0)));
     body = body.child(tab_row(s, k, m, narrow, p, layer).mt(20.0));
     match main_tab(s, m) {
-        Tab::Summary => summary_sections(s, m, p, body),
+        Tab::Summary => {
+            let body = summary_sections(s, m, p, body);
+            body.children(super::notes_status::provenance(m, p))
+        }
         Tab::Notes => body
             .child(
                 super::live::your_notes(&m.notes, p)
@@ -744,15 +767,6 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     };
     if let Some(note) = &s.notice {
         pane = pane.child(notice_bar(note, p));
-    }
-    if let Some(problem) = sidenote::core::live::notes_problem(&m.folder) {
-        pane = pane.child(
-            roles::SMALL
-                .wrap(problem, p.soft)
-                .px(24.0)
-                .py(12.0)
-                .role("status"),
-        );
     }
     let panel_on = s.transcript_open && !m.lines.is_empty();
     let (_, panel_w, covers) = split_geometry(s, narrow, panel_on);

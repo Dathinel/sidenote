@@ -162,7 +162,6 @@ pub struct Live {
     timer_armed: Arc<AtomicBool>,
     /// A render scene: nothing is read, and the bars hold still.
     scene: bool,
-    notes_unavailable: bool,
     saves: Arc<Mutex<Vec<SaveResult>>>,
     queued: Option<String>,
 }
@@ -200,7 +199,6 @@ impl Live {
             saving: Saving::Quiet,
             timer_armed: Arc::new(AtomicBool::new(false)),
             scene: false,
-            notes_unavailable: !feed_io::notes_pipeline().is_file(),
             saves: Arc::new(Mutex::new(Vec::new())),
             queued: None,
         }
@@ -217,9 +215,13 @@ impl Live {
             .unwrap_or(live.wall_start);
         live.exact = true;
         live.scene = true;
-        live.notes_unavailable = false;
         *live.quick_title.lock().unwrap_or_else(|e| e.into_inner()) = title.map(str::to_string);
         live
+    }
+
+    pub fn scene_pending(mut self, id: &str) -> Self {
+        self.folder = Some(PathBuf::from(id));
+        self
     }
 
     /// A scene with the transcript panel and lines shown. `lines` are `(seconds, you, text)`.
@@ -1008,12 +1010,10 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                 .pb(6.0),
         );
     }
-    let hint = if s.live.as_ref().is_some_and(|l| l.notes_unavailable) {
-        feed_io::NOTES_UNAVAILABLE
-    } else if starting {
+    let hint = if starting {
         "Starting the recording. You can start writing now."
     } else {
-        "Notes save as you type. Hex writes the full notes after you stop."
+        "Notes save as you type. Your transcript is ready after the meeting."
     };
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
@@ -1052,20 +1052,73 @@ fn heading(s: &State) -> String {
 }
 
 fn making_view(s: &State, p: Palette, narrow: bool) -> El {
+    if let Some(live) = &s.live {
+        let id = live
+            .folder
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|v| v.to_str());
+        let meeting = s.meetings.iter().find(|m| {
+            m.device.is_none()
+                && (Some(m.id.as_str()) == id
+                    || (id.is_none()
+                        && m.started.is_some_and(|t| {
+                            t.timestamp_millis()
+                                >= live.wall_start.timestamp_millis().saturating_sub(120_000)
+                        })))
+        });
+        let job = id
+            .and_then(|id| {
+                s.ai_notes
+                    .jobs
+                    .get(id)
+                    .cloned()
+                    .map(|j| (id.to_string(), j))
+            })
+            .or_else(|| {
+                meeting.and_then(|m| super::notes_status::job(s, m).map(|j| (m.id.clone(), j)))
+            });
+        if let Some((id, job)) = job
+            && let Some(banner) = super::notes_status::banner_for(s, &id, &job, p)
+        {
+            return col()
+                .key("live-notes-state")
+                .w_full()
+                .gap(16.0)
+                .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+                .child(banner)
+                .children(
+                    (!s.live_notes.text.trim().is_empty())
+                        .then(|| your_notes(s.live_notes.text.trim(), p)),
+                )
+                .child(link("Open meeting and transcript", p).on_press_tx(
+                    move |s: &mut State, tx| {
+                        s.leave_live();
+                        s.select(&id, tx);
+                        s.toggle_transcript();
+                    },
+                ))
+                .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()));
+        }
+    }
     let slow = s
         .live
         .as_ref()
         .and_then(|l| l.stopped)
         .is_some_and(|t| t.elapsed() > MAKING_SLOW);
     let problem = s.live.as_ref().and_then(|live| {
-        if live.notes_unavailable {
-            Some(feed_io::NOTES_UNAVAILABLE)
-        } else {
+        if s.ai_notes
+            .settings
+            .as_ref()
+            .is_some_and(|n| n.engine == "scripts")
+        {
             live.feed
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .notes_problem
                 .or(slow.then_some(feed_io::NOTES_FAILED))
+        } else {
+            None
         }
     });
     if let Some(problem) = problem {

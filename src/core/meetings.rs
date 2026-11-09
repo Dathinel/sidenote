@@ -641,7 +641,10 @@ mod quick_title_tests {
         let raw = r#"{"task":"Send the plan","id":"stable-id","title":"Send the plan","description":"Include the agreed date.","status":"waiting","waiting_on":{"task_id":"blocker"},"team":"Design","subtasks":[{"id":"child","title":"Check date","done":true}],"span":["00:00:01","00:00:10"]}"#;
         let task: Todo = serde_json::from_str(raw).unwrap();
         assert_eq!(task.id, "stable-id");
-        assert_eq!(task.waiting_on.as_ref().unwrap().task_id.as_deref(), Some("blocker"));
+        assert_eq!(
+            task.waiting_on.as_ref().unwrap().task_id.as_deref(),
+            Some("blocker")
+        );
         assert!(task.subtasks[0].done);
         let roundtrip: Todo = serde_json::from_str(&serde_json::to_string(&task).unwrap()).unwrap();
         assert_eq!(roundtrip.description, task.description);

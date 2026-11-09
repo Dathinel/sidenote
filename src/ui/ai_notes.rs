@@ -56,6 +56,8 @@ pub struct AiNotes {
     pub name: TextEdit,
     pub editors: [Editor; 2],
     pub pending: Option<&'static str>,
+    pub editor_target: Option<usize>,
+    pub testing: Option<usize>,
     pub error: Option<String>,
     pub notice: Option<String>,
     pub test_results: BTreeMap<usize, String>,
@@ -74,6 +76,8 @@ impl Default for AiNotes {
             name: TextEdit::default(),
             editors: [Editor::new(Agent::Notes), Editor::new(Agent::Tasks)],
             pending: None,
+            editor_target: None,
+            testing: None,
             error: None,
             notice: None,
             test_results: BTreeMap::new(),
@@ -176,6 +180,14 @@ impl State {
             return;
         }
         self.ai_notes.pending = Some(label);
+        self.ai_notes.editor_target = match &work {
+            Work::Save(i, _) | Work::Reset(i) => Some(*i),
+            _ => None,
+        };
+        self.ai_notes.testing = match &work {
+            Work::Test(i, _) => Some(*i),
+            _ => None,
+        };
         self.ai_notes.error = None;
         self.ai_notes.notice = None;
         self.ai_notes.generation += 1;
@@ -214,6 +226,7 @@ impl State {
         self.hex.section = super::hex::Section::AiNotes;
         self.hex.filter = TextEdit::default();
         self.nav_done();
+        super::scene_scroll(self, "ai-notes-settings");
         if self.ai_notes.settings.is_none() {
             self.refresh_ai_notes();
         }
@@ -355,7 +368,11 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
     let mut c = card(p)
         .key(format!("instructions-{index}"))
         .child(roles::TITLE.wrap(if index == 0 { "Meeting notes" } else { "Tasks" }, p.ink))
-        .child(roles::META.wrap(edit_time(e.edited_at.as_deref()), p.soft));
+        .child(roles::META.wrap(edit_time(e.edited_at.as_deref()), p.soft))
+        .child(roles::META.wrap(
+            "Scroll inside the box to read the full instructions.",
+            p.soft,
+        ));
     let input = rune::text_input(&e.text, roles::SMALL.style())
         .key(format!("instructions-input-{index}"))
         .color(p.ink)
@@ -432,6 +449,26 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
         }),
     );
     c = c.child(actions);
+    if s.ai_notes.editor_target == Some(index) {
+        c = c
+            .children(
+                s.ai_notes
+                    .pending
+                    .map(|text| roles::SMALL.wrap(text, p.soft).role("status")),
+            )
+            .children(
+                s.ai_notes
+                    .error
+                    .as_ref()
+                    .map(|text| roles::SMALL.wrap(text, p.warn).role("alert")),
+            )
+            .children(
+                s.ai_notes
+                    .notice
+                    .as_ref()
+                    .map(|text| roles::SMALL.wrap(text, p.ok).role("status")),
+            );
+    }
     if e.reset_confirm {
         c = c.child(roles::SMALL.wrap("Replace your instructions with the default? Your saved copy and unsaved changes will be removed.", p.warn))
             .child(row().flex_wrap().gaps(8.0, 8.0)
@@ -534,13 +571,17 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 p.soft,
             ))
             .child(roles::SMALL.wrap(
-                match h {
-                    Helper::Claude => {
-                        "Install Claude Code, then run claude in a terminal and sign in."
+                if found {
+                    match h {
+                        Helper::Claude => "Uses your Claude Code account. To sign in again, run claude in a terminal.",
+                        Helper::Codex => "Uses your Codex account. To sign in again, run codex in a terminal.",
+                        Helper::OpenCode => "Uses the provider and account you chose in OpenCode.",
                     }
-                    Helper::Codex => "Install Codex CLI, then run codex in a terminal and sign in.",
-                    Helper::OpenCode => {
-                        "Install OpenCode, then run opencode in a terminal and choose a provider."
+                } else {
+                    match h {
+                        Helper::Claude => "Install Claude Code, then run claude in a terminal and sign in.",
+                        Helper::Codex => "Install Codex CLI, then run codex in a terminal and sign in.",
+                        Helper::OpenCode => "Install OpenCode, then run opencode in a terminal and choose a provider.",
                     }
                 },
                 p.soft,
@@ -551,7 +592,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 p.soft,
             ));
         } else {
-            r = r.child(
+            r = r.child(roles::META.wrap("Model name", p.soft)).child(
                 field(&a.models[index], "Model name")
                     .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
                     .build(k)
@@ -581,8 +622,26 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             actions = actions.child(use_this.dim(0.5)).child(test.dim(0.5));
         }
         r = r.child(actions);
+        if a.testing == Some(index) && a.pending.is_some() {
+            r = r.child(
+                roles::SMALL
+                    .wrap("Testing fixed sample text...", p.soft)
+                    .role("status"),
+            );
+        }
         if let Some(result) = a.test_results.get(&index) {
-            r = r.child(roles::SMALL.wrap(result, p.soft).role("status"));
+            r = r.child(
+                roles::SMALL
+                    .wrap(
+                        result,
+                        if result.starts_with("Worked in ") {
+                            p.ok
+                        } else {
+                            p.warn
+                        },
+                    )
+                    .role("status"),
+            );
         }
         if a.switch_confirm == Some(h) {
             r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write notes.", p.warn))
@@ -595,6 +654,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if settings.script.is_some() {
         c = c.child(
             card(p)
+                .key("notes-scripts-card")
                 .child(roles::TITLE.wrap("Your own scripts (advanced)", p.ink))
                 .child(roles::SMALL.wrap(
                     "Use your configured script. Built-in notes will stop starting new jobs.",
@@ -627,7 +687,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     }),
             ),
     );
-    c = c.child(card(p).child(roles::NAME.wrap("Make notes automatically when a meeting ends", p.ink))
+    c = c.child(card(p).key("notes-options").child(roles::NAME.wrap("Make notes automatically when a meeting ends", p.ink))
         .child(Switch::new(settings.auto).label("Make notes automatically").on_toggle(|s: &mut State| {
             if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic notes..."); }
         }).build(k).key("notes-auto"))
