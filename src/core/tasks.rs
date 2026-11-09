@@ -5,7 +5,9 @@
 //! `<meeting folder>/tasks.json` (written by the pipeline, read only), `projects.json` (the
 //! user registers names and renames) and `task-overrides.json` (the app's edits).
 //! Ticks are the existing `StateStore` ticks, so the To do panel and this list stay in step.
-use super::{Meeting, StateStore, state_dir};
+use super::{
+    Meeting, StateStore, TaskStatus, effective_subtasks, resolve_waiting, state_dir, todo_done,
+};
 use chrono::{Datelike, Duration, NaiveDate};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
@@ -175,6 +177,14 @@ impl Projects {
 #[serde(default)]
 pub struct TaskOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<super::WaitingOn>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub subtask_ticks: BTreeMap<String, bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub added_subtasks: Vec<super::Subtask>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub assignment: Option<super::areas::ProjectChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -193,8 +203,12 @@ pub struct TaskOverride {
     pub other: Map<String, Value>,
 }
 impl TaskOverride {
-    fn is_empty(&self) -> bool {
-        self.assignment.is_none()
+    pub(super) fn is_empty(&self) -> bool {
+        self.status.is_none()
+            && self.waiting_on.is_none()
+            && self.subtask_ticks.is_empty()
+            && self.added_subtasks.is_empty()
+            && self.assignment.is_none()
             && self.project.is_none()
             && self.mine.is_none()
             && self.owner.is_none()
@@ -208,6 +222,14 @@ pub const MANUAL: &str = "manual";
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ManualTask {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<super::WaitingOn>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subtasks: Vec<super::Subtask>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub subtask_ticks: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignment: Option<super::areas::ProjectChoice>,
     /// Numeric legacy metadata, never used for merge/edit/delete identity.
@@ -463,7 +485,12 @@ impl TaskStore {
     ) -> io::Result<Overrides> {
         self.update_overrides(|o| {
             let per_meeting = o.tasks.entry(meeting_id.to_string()).or_default();
-            let entry = per_meeting.entry(index.to_string()).or_default();
+            let key = per_meeting
+                .iter()
+                .find(|(key, o)| key.starts_with("id:") && o.task.as_deref() == Some(task))
+                .map(|(key, _)| key.clone())
+                .unwrap_or_else(|| index.to_string());
+            let entry = per_meeting.entry(key.clone()).or_default();
             // An override made against other text belongs to a different to-do.
             if entry.task.as_deref().is_some_and(|t| t != task) {
                 *entry = TaskOverride::default();
@@ -475,7 +502,7 @@ impl TaskStore {
                 Value::String(chrono::Utc::now().to_rfc3339()),
             );
             if entry.is_empty() {
-                per_meeting.remove(&index.to_string());
+                per_meeting.remove(&key);
             }
             if per_meeting.is_empty() {
                 o.tasks.remove(meeting_id);
@@ -536,6 +563,14 @@ pub struct TaskItem {
     /// Index into the meeting's `todo` list.
     pub index: usize,
     pub task: String,
+    pub stable_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: TaskStatus,
+    pub waiting_on: Option<super::WaitingOn>,
+    pub waiting_label: Option<String>,
+    pub subtasks: Vec<super::Subtask>,
+    pub team: String,
     pub owner: Option<String>,
     /// As written: `YYYY-MM-DD`, or whatever the summary said.
     pub due: Option<String>,
@@ -583,6 +618,27 @@ pub fn build_tasks(
             meeting_rank: 0,
             index: 0,
             task: m.task.clone(),
+            stable_id: m.id.clone(),
+            title: m.task.clone(),
+            description: String::new(),
+            status: m.status.unwrap_or_default(),
+            waiting_on: m.waiting_on.clone(),
+            waiting_label: None,
+            subtasks: m
+                .subtasks
+                .iter()
+                .cloned()
+                .map(|mut sub| {
+                    if let Some(done) = m
+                        .subtask_ticks
+                        .get(&super::subtask_tick_key(&m.id, &sub.id))
+                    {
+                        sub.done = *done;
+                    }
+                    sub
+                })
+                .collect(),
+            team: "No team".into(),
             owner: m.owner.clone().filter(|o| !o.trim().is_empty()),
             due_date: due
                 .as_deref()
@@ -603,9 +659,7 @@ pub fn build_tasks(
         let file = pipeline.get(&m.id);
         for (index, todo) in m.summary.todo.iter().enumerate() {
             let tag = file.and_then(|f| f.tasks.iter().find(|t| t.i == index));
-            let edit = overrides
-                .get(&m.id, index)
-                .filter(|o| o.task.as_deref().is_none_or(|t| t == todo.task));
+            let edit = overrides.match_task(&m.id, &todo.id, todo.text(), index);
             let project = edit
                 .and_then(|o| o.project.clone())
                 .or_else(|| tag.map(|t| t.project.clone()))
@@ -642,7 +696,20 @@ pub fn build_tasks(
                 meeting_date: m.started.map(|s| s.date_naive()),
                 meeting_rank: rank,
                 index,
-                task: todo.task.clone(),
+                task: todo.text().into(),
+                stable_id: todo.id.clone(),
+                title: todo.title().into(),
+                description: todo.description.clone(),
+                status: edit
+                    .and_then(|o| o.status)
+                    .unwrap_or_else(|| TaskStatus::parse(&todo.status)),
+                waiting_on: match edit {
+                    Some(o) if o.status.is_some() => o.waiting_on.clone(),
+                    _ => todo.waiting_on.clone(),
+                },
+                waiting_label: None,
+                subtasks: effective_subtasks(todo, edit),
+                team: todo.team.clone().unwrap_or_default(),
                 owner,
                 due_date: due
                     .as_deref()
@@ -655,7 +722,7 @@ pub fn build_tasks(
                 mine: edit
                     .and_then(|o| o.mine)
                     .or_else(|| tag.and_then(|t| t.mine)),
-                done: checked.get(&m.id).is_some_and(|c| c.contains(&todo.task)),
+                done: todo_done(todo, checked.get(&m.id)),
                 edited: edit.is_some(),
                 manual: false,
             });
@@ -691,8 +758,7 @@ pub fn build_tasks(
                 manual_baselines.get(&task.meeting_id).and_then(|(_, a)| *a)
             } else {
                 overrides
-                    .get(&task.meeting_id, task.index)
-                    .filter(|o| o.task.as_deref().is_none_or(|t| t == task.task))
+                    .match_task(&task.meeting_id, &task.stable_id, &task.task, task.index)
                     .and_then(|o| o.assignment.as_ref())
             };
             if let Some(target) = catalog.resolve_target(
@@ -710,6 +776,7 @@ pub fn build_tasks(
             }
         }
     }
+    resolve_waiting(&mut out);
     out
 }
 
@@ -838,11 +905,15 @@ impl TaskFilter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskGrouping {
     #[default]
     Project,
     Meeting,
+    Team,
+    Status,
+    Owner,
     Due,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -889,6 +960,9 @@ pub fn due_bucket(t: &TaskItem, today: NaiveDate) -> DueBucket {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GroupKind {
+    Team,
+    Status,
+    Owner,
     Project(String),
     Meeting(String),
     Due(DueBucket),
@@ -942,6 +1016,17 @@ pub fn group_tasks(
                 t.meeting_title.clone(),
                 t.meeting_date.map(|d| d.format("%-d %b %Y").to_string()),
             ),
+            TaskGrouping::Team => (t.team.clone(), GroupKind::Team, t.team.clone(), None),
+            TaskGrouping::Status => (
+                t.status_label().into(),
+                GroupKind::Status,
+                t.status_label().into(),
+                None,
+            ),
+            TaskGrouping::Owner => {
+                let name = t.owner.clone().unwrap_or_else(|| "No owner".into());
+                (name.clone(), GroupKind::Owner, name, None)
+            }
             TaskGrouping::Due => {
                 let b = due_bucket(t, today);
                 (
@@ -979,7 +1064,10 @@ pub fn group_tasks(
     for g in &mut groups {
         match by {
             // With Show All, finished tasks sit under the open ones.
-            TaskGrouping::Project => g.rows.sort_by_key(|&i| {
+            TaskGrouping::Project
+            | TaskGrouping::Team
+            | TaskGrouping::Status
+            | TaskGrouping::Owner => g.rows.sort_by_key(|&i| {
                 let t = &tasks[i];
                 (t.done, mine_rank(t), due_key(t), t.meeting_rank, t.index)
             }),
@@ -1002,6 +1090,13 @@ pub fn group_tasks(
         }
     }
     match by {
+        TaskGrouping::Team | TaskGrouping::Owner => groups.sort_by_key(|g| g.label.to_lowercase()),
+        TaskGrouping::Status => groups.sort_by_key(|g| match g.label.as_str() {
+            "To do" => 0,
+            "Waiting on" => 1,
+            "Review" => 2,
+            _ => 3,
+        }),
         TaskGrouping::Project => {
             groups.sort_by_key(|g| (g.label == UNSORTED, g.label.to_lowercase()))
         }

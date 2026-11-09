@@ -122,16 +122,17 @@ impl TaskStore {
         source: Option<&std::path::Path>,
     ) -> io::Result<super::EditView<Overrides>> {
         let moved = || io::Error::new(io::ErrorKind::InvalidInput, MOVED);
+        let mut stable_id = String::new();
         let source_stamp = if !row.starts_with("manual/") {
             let path = source.ok_or_else(moved)?.join("english-summary.json");
             let meta = super::file_reads::checked_metadata(&path)?;
             let raw = super::file_reads::read(&path, super::file_reads::SUMMARY_MAX)?;
             let summary: super::Summary = serde_json::from_slice(&raw)?;
-            if summary.todo.get(index).map(|t| t.task.as_str())
-                != mine.get("task").and_then(Value::as_str)
+            if summary.todo.get(index).map(|t| t.text()) != mine.get("task").and_then(Value::as_str)
             {
                 return Err(moved());
             }
+            stable_id = summary.todo[index].id.clone();
             Some((path, meta.len(), meta.modified().ok()))
         } else {
             None
@@ -161,12 +162,27 @@ impl TaskStore {
                         t,
                     )?;
                 } else {
+                    let key = super::task_override_key(
+                        row,
+                        &stable_id,
+                        mine["task"].as_str().unwrap_or_default(),
+                        index,
+                    );
+                    let initial = o
+                        .match_task(
+                            row,
+                            &stable_id,
+                            mine["task"].as_str().unwrap_or_default(),
+                            index,
+                        )
+                        .cloned()
+                        .unwrap_or_default();
                     let t = o
                         .tasks
                         .entry(row.into())
                         .or_default()
-                        .entry(index.to_string())
-                        .or_default();
+                        .entry(key.clone())
+                        .or_insert(initial);
                     let expected = mine.get("task").and_then(Value::as_str);
                     if t.task.as_deref().is_some_and(|text| Some(text) != expected) {
                         *t = TaskOverride::default();
@@ -181,17 +197,21 @@ impl TaskStore {
                         "updated_at".into(),
                         Value::String(chrono::Utc::now().to_rfc3339()),
                     );
-                    if t.assignment.is_none()
-                        && t.project.is_none()
-                        && t.owner.is_none()
-                        && t.due.is_none()
-                        && t.mine.is_none()
+                    let empty = t.is_empty();
+                    let per = o.tasks.get_mut(row).unwrap();
+                    if empty {
+                        per.remove(&key);
+                    }
+                    let legacy = index.to_string();
+                    if key != legacy
+                        && per.get(&legacy).is_some_and(|o| {
+                            o.task.as_deref().is_none_or(|text| Some(text) == expected)
+                        })
                     {
-                        let per = o.tasks.get_mut(row).unwrap();
-                        per.remove(&index.to_string());
-                        if per.is_empty() {
-                            o.tasks.remove(row);
-                        }
+                        per.remove(&legacy);
+                    }
+                    if per.is_empty() {
+                        o.tasks.remove(row);
                     }
                 }
                 Ok(())

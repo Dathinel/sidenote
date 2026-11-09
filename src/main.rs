@@ -55,7 +55,13 @@ fn main() {
     let helper = args.iter().any(|a| {
         matches!(
             a.to_str(),
-            Some("--transcribe-file" | "--route-one" | "--route-pending" | "--daily-check")
+            Some(
+                "--transcribe-file"
+                    | "--route-one"
+                    | "--route-pending"
+                    | "--notes-pending"
+                    | "--daily-check"
+            )
         )
     });
     let _activity = if helper {
@@ -91,6 +97,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--route-pending") {
         let result = sidenote::core::meeting_router::jobs::run_pending();
+        std::process::exit(i32::from(result.is_err()));
+    }
+    if args.iter().any(|a| a == "--notes-pending") {
+        let result = sidenote::core::notes::queue::run_pending();
         std::process::exit(i32::from(result.is_err()));
     }
     if std::env::args().any(|a| a == "--hex-engine-status") {

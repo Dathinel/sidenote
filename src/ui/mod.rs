@@ -25,6 +25,7 @@ mod refresh;
 mod roles;
 mod sync_scene;
 mod tasks;
+mod teams;
 mod theme;
 mod today;
 mod todo;
@@ -662,13 +663,7 @@ impl State {
         let Some(id) = self.selected.clone() else {
             return;
         };
-        let on = !self.saved.checked.contains(task);
-        self.publish_edit(edit_worker::Job::Tick {
-            store: self.store.clone(),
-            id,
-            task: task.into(),
-            on,
-        });
+        self.toggle_task_at(&id, task);
     }
 
     /// Opens the transcript at the line for `stamp`, lights it and its neighbours, and
@@ -1587,6 +1582,25 @@ fn busiest_project(s: &State) -> String {
         .max_by_key(|n| s.nav.project_counts.get(*n).copied().unwrap_or(0))
         .cloned()
         .unwrap_or_default()
+}
+
+fn tasks_v2_teams_scene(s: &mut State) {
+    s.refresh_areas();
+    area_scene::wait(s);
+    scene_hex(s, hex::Section::Teams, false);
+}
+
+fn tasks_v2_scene(s: &mut State, grouping: core::TaskGrouping, panel: Option<usize>) {
+    scene_tasks(s);
+    area_scene::wait(s);
+    s.tasks.grouping = grouping;
+    s.tasks.done_open = true;
+    if let Some(index) = panel
+        && let Some(t) = s.tasks.all.iter().find(|t| t.index == index)
+    {
+        let id = t.meeting_id.clone();
+        s.open_task(&id, index);
+    }
 }
 
 fn scene_tasks(s: &mut State) {
@@ -2662,6 +2676,47 @@ pub fn spec() -> AppSpec<State> {
                     s.open_record(&id);
                 }
             }),
+            ("tasks-v2-edited", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, Some(0))
+            }),
+            ("tasks-v2-auto", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None)
+            }),
+            ("tasks-v2-team-saved", tasks_v2_teams_scene),
+            ("tasks-v2-project", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Project, None)
+            }),
+            ("tasks-v2-team", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Team, None)
+            }),
+            ("tasks-v2-status", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None)
+            }),
+            ("tasks-v2-owner", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Owner, None)
+            }),
+            ("tasks-v2-due", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Due, None)
+            }),
+            ("tasks-v2-panel", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, Some(0))
+            }),
+            ("tasks-v2-waiting", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, Some(1))
+            }),
+            ("tasks-v2-review", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, Some(2))
+            }),
+            ("tasks-v2-legacy", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Project, Some(6))
+            }),
+            ("tasks-v2-empty", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Project, None);
+                s.tasks.items.clear();
+                s.tasks.all.clear();
+                s.tasks.counts = core::TaskCounts::default();
+            }),
+            ("tasks-v2-teams", tasks_v2_teams_scene),
             ("tasks", scene_tasks),
             ("tasks-meeting", |s| {
                 scene_tasks(s);

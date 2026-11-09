@@ -167,6 +167,7 @@ fn supported(store: &str) -> bool {
             "projects.json"
                 | "task-overrides.json"
                 | "tasks-settings.json"
+                | "agent-instructions.json"
                 | "memory/records.json"
                 | "memory/legacy.json"
                 | "checks/triage.json"
@@ -688,6 +689,9 @@ fn validate_legacy(store: &str, value: &Value) -> io::Result<()> {
         }
         "tasks-settings.json" => {
             serde_json::from_value::<super::TasksSettings>(value.clone())?;
+        }
+        "agent-instructions.json" => {
+            super::agent_instructions::validate_store(value)?;
         }
         "memory/records.json" => {
             let v: super::memory::MemoryFile = serde_json::from_value(value.clone())?;

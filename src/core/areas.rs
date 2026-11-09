@@ -244,7 +244,7 @@ pub fn task_baseline(t: &TaskItem, pipeline: &Pipeline, overrides: &super::Overr
             task.and_then(|m| m.assignment.as_ref()),
         );
     }
-    let edit = overrides.get(&t.meeting_id, t.index);
+    let edit = overrides.match_task(&t.meeting_id, &t.stable_id, &t.task, t.index);
     assignment_baseline(
         json!([
             pipeline

@@ -1,4 +1,5 @@
 //! Meeting data and background work, with no Rune or other UI dependencies.
+pub mod agent_instructions;
 pub mod area_ops;
 pub mod area_version;
 pub mod areas;
@@ -13,6 +14,7 @@ pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
 pub mod memory;
+pub mod notes;
 mod paths;
 pub mod project_merge;
 pub use paths::{configure_paths, is_proof_path};
@@ -51,3 +53,6 @@ mod model_catalog_data;
 pub fn validation_message(error: &std::io::Error) -> Option<&str> {
     store_io::message(error)
 }
+
+pub mod tasks_v2;
+pub use tasks_v2::*;
