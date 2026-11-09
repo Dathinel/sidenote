@@ -1,6 +1,8 @@
 //! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
+mod area;
+mod area_editor;
 mod ask;
 mod benchmark;
 mod check;
@@ -80,6 +82,12 @@ fn default_runner(
 }
 
 pub enum Event {
+    Area {
+        generation: u64,
+        refresh: bool,
+        worker: std::thread::ThreadId,
+        result: Result<area::Completion, String>,
+    },
     ProjectMerge {
         generation: u64,
         worker: std::thread::ThreadId,
@@ -213,6 +221,7 @@ pub struct State {
     /// What the home list shows, and the per-meeting lookups the sidebar's counts need.
     pub filter: nav::Filter,
     pub nav: nav::NavCache,
+    pub areas: area::AreaUi,
     /// The recording's page. Nobody types a title: the heading is the start time, then the quick title.
     pub live: Option<live::Live>,
     pub live_open: bool,
@@ -282,7 +291,10 @@ impl State {
                     self.go_meetings();
                 }
                 if (!self.config.features.projects
-                    && matches!(self.filter, nav::Filter::Project(_)))
+                    && matches!(
+                        self.filter,
+                        nav::Filter::Project(_) | nav::Filter::Area(_) | nav::Filter::Areas
+                    ))
                     || (!self.config.features.other_devices && self.filter == nav::Filter::Peers)
                 {
                     self.filter = nav::Filter::All;
@@ -377,6 +389,7 @@ impl State {
             drawer_open: Cell::new(false),
             filter: nav::Filter::All,
             nav: nav::NavCache::default(),
+            areas: area::AreaUi::default(),
             live: None,
             live_open: false,
             live_notes: TextEdit::new(""),
@@ -409,6 +422,7 @@ impl State {
             waker: None,
         };
         s.rebuild_nav();
+        s.refresh_areas();
         s.refresh_list();
         s.load_saved();
         if s.config.features.daily_check {
@@ -944,6 +958,15 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::Area {
+                generation,
+                refresh,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.area_finished(generation, refresh, result);
+            }
             Event::ProjectMerge {
                 generation,
                 worker,
@@ -1319,6 +1342,11 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         hex::pane(s, &k, p, narrow, &mut layer)
     } else if on_live {
         live::pane(s, &k, p, narrow, &mut layer)
+    } else if home
+        && s.config.features.projects
+        && matches!(s.filter, nav::Filter::Area(_) | nav::Filter::Areas)
+    {
+        area::pane(s, &k, p, narrow, &mut layer)
     } else if home {
         list::home(s, &k, p, narrow, &mut layer)
     } else {

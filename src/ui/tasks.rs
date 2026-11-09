@@ -286,6 +286,7 @@ impl State {
         self.tasks.rebuild(&self.meetings);
         // The sidebar's project counts and the home filter read the same tasks.
         self.rebuild_nav();
+        self.refresh_areas();
         self.refresh_list();
     }
 
@@ -2083,6 +2084,16 @@ fn project_control(
                     .checked(*name == current)
                     .on_select(pick(name.clone())),
             );
+        }
+        if let Some(task) = task {
+            menu = menu.separator().group_label("Area-only work");
+            for area in s.areas.catalog.areas.values() {
+                let (id,key) = (area.id.clone(),core::areas::task_key(task));
+                menu = menu.item(MenuItem::new(&area.name).on_select(move |s: &mut State| {
+                    s.tasks.ui.project_menu=false;
+                    s.assign_area(key.clone(),id.clone());
+                }));
+            }
         }
         menu = menu
             .separator()

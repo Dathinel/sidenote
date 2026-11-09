@@ -220,6 +220,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         }))
         .children(super::today::strip(s, p))
         .children(super::project_merge::panel(s, k, p, layer))
+        .children(super::area::project_tools(s, k, p, layer))
         .child(search_box(
             s,
             k,
