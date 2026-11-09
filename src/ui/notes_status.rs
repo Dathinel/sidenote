@@ -1,6 +1,12 @@
 //! Plain, bounded status copy shared by the list, meeting page and live page.
-use super::{State, area::button, roles, theme::Palette, widgets::{self, BannerKind}};
-use rune::{El, col, row};
+use super::{
+    State,
+    area::button,
+    roles,
+    theme::Palette,
+    widgets::{self, BannerKind},
+};
+use rune::{El, row};
 use serde::Deserialize;
 use sidenote::core::{
     self, Meeting,
@@ -58,7 +64,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
     match &job.state {
         JobState::NoHelper => "No summary yet. Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "No summary yet. Sidenote only writes summaries automatically for meetings that end after you turn on AI notes. You can write this one now.".into(),
-        JobState::Queued => "This meeting is waiting to have its notes written.".into(),
+        JobState::Queued => "This meeting is waiting for its summary. You can read the saved transcript now.".into(),
         JobState::Running => format!("Writing summary with {name}. This can take a few minutes."),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install it again, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
@@ -67,22 +73,25 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
         JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Try again in a few minutes. Your transcript is saved."),
-        JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into notes. Try again. If it keeps happening, reset your instructions in Settings. Your transcript is saved."),
-        JobState::Done { fallback: true, .. } => "These notes used the default instructions, because notes made with your instructions could not be read.".into(),
+        JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into a summary. Try again. If it keeps happening, reset your instructions in Settings. Your transcript is saved."),
+        JobState::Done { fallback: true, .. } => "This summary used the default instructions because your own instructions did not work. Edit your instructions before trying again.".into(),
         JobState::Done { .. } => String::new(),
-        JobState::TooLong { minutes } => format!("This meeting ran {} hours{} . Notes can cover the first 4 hours. Choose the first 4 hours below. Your transcript is saved.", minutes / 60, if minutes % 60 == 0 { String::new() } else { format!(" {} minutes", minutes % 60) }).replace("hours .", "hours.").replace("minutes .", "minutes."),
+        JobState::TooLong { minutes } => {
+            let length = if minutes % 60 == 0 { format!("{} hours", minutes / 60) } else { format!("{} hours {} minutes", minutes / 60, minutes % 60) };
+            format!("This meeting ran {length}. Summaries can cover the first 4 hours. Choose the first 4 hours below. Your transcript is saved.")
+        },
         JobState::Empty => "Hex heard no speech in this meeting, so there are no notes to write.".into(),
     }
 }
 pub fn label(state: &JobState) -> &'static str {
     match state {
-        JobState::NoHelper => "No notes yet",
+        JobState::NoHelper => "No summary yet",
         JobState::NeedsClick => "Ready to write a summary",
         JobState::Queued => "Summary queued",
         JobState::Running => "Writing summary",
-        JobState::HelperMissing => "helper not found",
-        JobState::BackendError { .. } => "helper stopped with an error",
-        JobState::TimedOut => "helper took too long",
+        JobState::HelperMissing => "Helper not found",
+        JobState::BackendError { .. } => "Helper did not finish",
+        JobState::TimedOut => "Helper took too long",
         JobState::BadOutput => "Helper reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for notes",
         JobState::Empty => "No speech heard",
@@ -104,11 +113,11 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
     if m.device.is_some() {
         return None;
     }
-    let configured = s
-        .ai_notes
-        .settings
-        .as_ref()
-        .is_some_and(|n| n.engine == "app" && n.helper.is_some());
+    let configured = s.ai_notes.settings.as_ref().is_some_and(|n| {
+        n.engine == "app"
+            && n.helper
+                .is_some_and(|h| super::ai_notes::helper_unavailable_reason(h).is_none())
+    });
     s.ai_notes
         .jobs
         .get(&m.id)
@@ -169,21 +178,30 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         return None;
     }
     let selected = s.ai_notes.settings.as_ref().and_then(|n| n.helper);
-    let kind = if is_failure(&job.state) { BannerKind::Problem } else if matches!(job.state, JobState::Running | JobState::Queued) { BannerKind::Working } else { BannerKind::Info };
+    let kind = if is_failure(&job.state) {
+        BannerKind::Problem
+    } else if matches!(job.state, JobState::Running | JobState::Queued) {
+        BannerKind::Working
+    } else {
+        BannerKind::Info
+    };
     let mut c = widgets::banner(label(&job.state), message(job, selected), kind, p)
-        .key("notes-state-banner")
-        ;
+        .key("notes-state-banner");
     let mut buttons = row().w_full().flex_wrap().gaps(8.0, 8.0);
     match job.state {
         JobState::NoHelper => {
             buttons = buttons.child(
-                button("Set up AI notes", "notes-state-setup", p)
+                button("Choose a helper", "notes-state-setup", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
         JobState::NeedsClick => {
+            let title = selected
+                .filter(|h| super::ai_notes::helper_unavailable_reason(*h).is_none())
+                .map(|h| format!("Write summary with {}", h.name()))
+                .unwrap_or_else(|| "Write summary".into());
             buttons = buttons.child(request_button(
-                "Write summary",
+                &title,
                 id,
                 Request::MakeNotes,
                 "notes-state-make",
@@ -193,7 +211,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         JobState::HelperMissing => {
             buttons = buttons.child(
-                button("Open Settings", "notes-state-settings", p)
+                button("Choose a helper", "notes-state-settings", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
@@ -208,7 +226,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     p,
                 ))
                 .child(
-                    button("Open Settings", "notes-state-settings", p)
+                    button("Choose a helper", "notes-state-settings", p)
                         .on_press(|s: &mut State| s.open_ai_notes()),
                 )
         }
@@ -246,13 +264,24 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         _ => {}
     }
     c = c.child(buttons);
-    if let JobState::BackendError { exit: Some(code), .. } = job.state {
+    if let JobState::BackendError {
+        exit: Some(code), ..
+    } = job.state
+    {
         let key = id.to_string();
-        c = c.child(button("Details", "notes-error-details", p).self_start().on_press(move |s: &mut State| {
-            if !s.ai_notes.details.remove(&key) { s.ai_notes.details.insert(key.clone()); }
-        }));
+        c = c.child(
+            button("Details", "notes-error-details", p)
+                .self_start()
+                .on_press(move |s: &mut State| {
+                    if !s.ai_notes.details.remove(&key) {
+                        s.ai_notes.details.insert(key.clone());
+                    }
+                }),
+        );
         if s.ai_notes.details.contains(id) {
-            c = c.child(roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft));
+            c = c.child(
+                roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft),
+            );
         }
     }
     if let Some(pending) = s.ai_notes.pending {
@@ -264,7 +293,8 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     Some(c)
 }
 fn edit_button(p: Palette) -> El {
-    button("Edit instructions", "notes-state-edit", p)
+    button("Edit\u{a0}instructions", "notes-state-edit", p)
+        .label("Edit instructions")
         .on_press(|s: &mut State| {
             s.open_ai_notes();
             super::scene_scroll(s, "agent-instructions");
@@ -280,33 +310,35 @@ pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
         }
     )
     .then(|| {
-        col()
-            .w_full()
-            .gap(8.0)
-            .mt(12.0)
-            .child(roles::SMALL.wrap("These tasks were not sorted into projects.", p.soft))
-            .children(
-                s.ai_notes
-                    .error
-                    .as_ref()
-                    .map(|error| roles::SMALL.wrap(error, p.warn).role("alert")),
+        widgets::banner(
+            "Tasks need another try",
+            "Tasks could not be added to projects. Press Try again. Your transcript is saved.",
+            BannerKind::Problem,
+            p,
+        )
+        .mt(12.0)
+        .children(
+            s.ai_notes
+                .error
+                .as_ref()
+                .map(|error| roles::SMALL.wrap(error, p.warn).role("alert")),
+        )
+        .children(
+            s.ai_notes
+                .pending
+                .map(|text| roles::META.wrap(text, p.soft).role("status")),
+        )
+        .child(
+            request_button(
+                "Try again",
+                &m.id,
+                Request::SortAgain,
+                "notes-sort-again",
+                s,
+                p,
             )
-            .children(
-                s.ai_notes
-                    .pending
-                    .map(|text| roles::META.wrap(text, p.soft).role("status")),
-            )
-            .child(
-                request_button(
-                    "Sort again",
-                    &m.id,
-                    Request::SortAgain,
-                    "notes-sort-again",
-                    s,
-                    p,
-                )
-                .self_start(),
-            )
+            .self_start(),
+        )
     })
 }
 pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
@@ -326,7 +358,7 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
         .unwrap_or("configured model");
     Some(
         roles::META
-            .wrap(format!("Notes by {helper} ({model})"), p.soft)
+            .wrap(format!("Summary by {helper} ({model})"), p.soft)
             .key("notes-provenance")
             .mt(24.0),
     )
@@ -387,7 +419,19 @@ mod tests {
             assert!(!text.is_empty(), "{name}");
             assert!(!label(&job.state).is_empty());
             assert!(!text.contains('\u{2014}'));
-            assert!(!text.contains("Claude Code"));
+            if matches!(
+                job.state,
+                JobState::Running
+                    | JobState::HelperMissing
+                    | JobState::BackendError { .. }
+                    | JobState::TimedOut
+                    | JobState::BadOutput
+            ) {
+                assert!(!text.contains("Claude Code"));
+            }
+            if is_failure(&job.state) {
+                assert!(text.contains("Your transcript is saved."), "{name}");
+            }
         }
     }
     #[test]

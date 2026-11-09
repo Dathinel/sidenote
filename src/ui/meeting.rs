@@ -300,7 +300,7 @@ fn tab_row(s: &State, k: &Kit, m: &Meeting, narrow: bool, p: Palette, layer: &mu
             tab_button(
                 "tab-transcript",
                 "Transcript",
-                Some(m.lines.len()),
+                None,
                 covers,
                 panel_on && !covers,
                 p,
@@ -584,18 +584,13 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
 fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
     if !m.has_summary() {
         if !m.lines.is_empty() {
-            body = body
-                .child(
-                    roles::SMALL
-                        .wrap("Read the transcript while notes are unavailable.", p.soft)
-                        .mt(24.0),
-                )
-                .child(
-                    super::area::button("Read transcript", "notes-read-transcript", p)
-                        .self_start()
-                        .mt(8.0)
-                        .on_press(|s: &mut State| s.toggle_transcript()),
-                );
+            body = body.child(
+                super::widgets::link("Open the Transcript tab", p)
+                    .key("notes-read-transcript")
+                    .self_start()
+                    .mt(24.0)
+                    .on_press(|s: &mut State| s.toggle_transcript()),
+            );
         }
         return body;
     }

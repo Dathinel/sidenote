@@ -237,14 +237,14 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             if new_project {
                 "New project:"
             } else {
-                "Add to"
+                "Suggested project:"
             },
             p.faint,
         ));
     }
     trigger_row = trigger_row
         .child(
-            rune::text(display_name.unwrap_or_else(|| "Add to an project".into()))
+            rune::text(display_name.unwrap_or_else(|| "Add to project".into()))
                 .font(roles::META.medium().style())
                 .color(if mp.name.is_some() { name_ink } else { p.faint })
                 .truncate()
@@ -327,7 +327,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             pressable(
                 roles::META
                     .bold()
-                    .wrap(if new_project { "Create" } else { "\u{2713}" }, p.ok),
+                    .wrap(if new_project { "Create" } else { "Add" }, p.ok),
             )
             .key(format!("project-accept-{id}"))
             .label(format!(

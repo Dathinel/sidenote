@@ -25,7 +25,7 @@ pub fn prepare(s: &mut State) {
         found: HELPERS.map(|h| (h, true)).into(),
         ..AiNotes::default()
     };
-    s.sidebar_open.set(false);
+    s.sidebar_open.set(true);
     s.drawer_open.set(false);
     s.ask_open = false;
     s.config.features.daily_check = false;
@@ -36,6 +36,9 @@ pub fn settings(s: &mut State, mode: &str) {
     s.hex_open = true;
     s.hex.section = hex::Section::AiNotes;
     match mode {
+        "saved-codex" => s.ai_notes.settings.as_mut().unwrap().helper = Some(Helper::Codex),
+        "saved-opencode" => s.ai_notes.settings.as_mut().unwrap().helper = Some(Helper::OpenCode),
+        "privacy" => s.ai_notes.privacy_open = true,
         "off" | "none" => {
             let settings = s.ai_notes.settings.as_mut().unwrap();
             settings.helper = None;
@@ -113,8 +116,7 @@ pub fn settings(s: &mut State, mode: &str) {
         "fixed-tasks" => s.ai_notes.editors[1].fixed_open = true,
         "save-error" => {
             s.ai_notes.editor_target = Some(0);
-            s.ai_notes.error =
-                Some(super::ai_notes::SAVE_ERROR.into());
+            s.ai_notes.error = Some(super::ai_notes::SAVE_ERROR.into());
         }
         _ => {}
     }
@@ -146,7 +148,18 @@ pub fn today(s: &mut State, found: bool) {
     s.ai_notes.settings.as_mut().unwrap().helper = None;
     if !found {
         s.ai_notes.found = HELPERS.map(|h| (h, false)).into();
+        super::scene_agents(s, &[]);
     }
+}
+
+pub fn first_open(s: &mut State) {
+    today(s, false);
+    s.meetings.clear();
+    s.ai_notes.jobs.clear();
+    s.rebuild_tasks();
+    s.rebuild_nav();
+    s.refresh_list();
+    assert!(s.meetings.is_empty() && s.tasks.all.is_empty() && s.groups.is_empty());
 }
 pub fn state(name: &str) -> JobState {
     match name {

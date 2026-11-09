@@ -466,7 +466,11 @@ fn toggle(s: &State, p: Palette) -> El {
 
 fn hex_line(s: &State, p: Palette, wide: bool) -> El {
     let (ink, words) = hex::short_status(s, p);
-    let words = if s.hex_recording() { "Recording".into() } else { words };
+    let words = if s.hex_recording() {
+        "Recording".into()
+    } else {
+        words
+    };
     let recording = s.hex_recording();
     let help = if recording {
         format!("Hex: {words}. Open the live meeting")
@@ -830,7 +834,7 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         return recording_pill(s, p, narrow);
     }
     let blocked = hex::start_blocked(s);
-    let ink = p.card;
+    let ink = if blocked.is_some() { p.soft } else { p.card };
     let b = pressable(
         row().gap(8.0).items_center().child(icon_plus(ink)).child(
             roles::CONTROL
@@ -853,11 +857,18 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
             .help(reason)
             .fill(p.chip)
             .color(p.soft)
-            .disabled(true),
+            .focusable(false),
     };
-    col().items_end().gap(2.0).child(action).children(blocked.map(|reason| {
-        roles::META.wrap(reason, p.soft).max_w(if narrow { 300.0 } else { 440.0 }).role("status")
-    }))
+    col()
+        .items_end()
+        .gap(2.0)
+        .child(action)
+        .children(blocked.map(|reason| {
+            roles::META
+                .wrap(reason, p.soft)
+                .max_w(if narrow { 300.0 } else { 440.0 })
+                .role("status")
+        }))
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {

@@ -52,7 +52,7 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
     if let Some(due) = t.due.as_deref().filter(|d| !d.is_empty()) {
         let default = if t.due_default { " (default)" } else { "" };
         meta = meta.child(roles::meta(
-            format!("\u{b7} by {}{default}", nice_date(due)),
+            format!("\u{b7} due {}{default}", nice_date(due)),
             p,
         ));
     }

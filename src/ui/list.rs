@@ -203,7 +203,6 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .px(side)
         .pt(if narrow { 8.0 } else { 20.0 })
         .pb(s.overlay_h.get() + 32.0)
-        .children(super::updates::listener_notice(s, p))
         .child(
             row()
                 .w_full()
@@ -218,6 +217,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .child(roles::meta(count, p).pb(6.0)),
         )
+        .children(super::updates::listener_notice(s, p))
         .children((s.filter != Filter::All).then(|| {
             link("\u{2039} Show all meetings", p)
                 .key("filter-clear")

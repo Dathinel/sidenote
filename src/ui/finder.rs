@@ -92,11 +92,7 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         hit: None,
         target,
     };
-    let mut pages = vec![page(
-        "Meetings",
-        "Every meeting",
-        Target::Meetings,
-    )];
+    let mut pages = vec![page("Meetings", "Every meeting", Target::Meetings)];
     if f.tasks {
         pages.push(page("Tasks", "Tasks from your meetings", Target::Tasks));
     }

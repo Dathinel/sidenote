@@ -1,6 +1,6 @@
 //! "New meeting": the live page. Starting a meeting starts a Hex recording and opens a page with
 //! a heading ("Meeting at 14:30"), a recording mark, the elapsed time and a large Stop button.
-//! After Stop it says "Making notes" until the normal pipeline has written the meeting, then
+//! After Stop it says "Writing summary" until the normal pipeline has written the meeting, then
 //! opens the notes.
 //!
 //! While recording, the page is a calm notes editor (plain text, saved to the meeting folder's
@@ -14,7 +14,7 @@
 //! transcript activity: they lift while new words keep arriving and rest in a slow, gentle idle
 //! otherwise.
 //!
-//! After Stop it says "Making notes" (with the user's notes beside it) until the normal pipeline
+//! After Stop it says "Writing summary" (with the user's notes beside it) until the normal pipeline
 //! has written the meeting, then opens it. Nobody types a title: a cheap model names the meeting
 //! seconds after Stop (quick-title.json, read here while the notes are made), and the notes' own
 //! title replaces it.
@@ -818,8 +818,18 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
     } else {
         k.glyph.chevron_up
     };
-    let mut group = row().gap(10.0).items_center().child(bars)
-        .child(roles::CONTROL.wrap(if open { "Hide live transcript" } else { "Show live transcript" }, p.accent));
+    let mut group = row()
+        .gap(10.0)
+        .items_center()
+        .child(bars)
+        .child(roles::CONTROL.wrap(
+            if open {
+                "Hide live transcript"
+            } else {
+                "Show live transcript"
+            },
+            p.accent,
+        ));
     if !starting {
         group = group.child(rune::icon(chevron, 14.0).color(p.faint));
     }
@@ -841,12 +851,11 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
         .py(8.0)
         .radius(999.0)
         .hover(p.chip);
-    let group = if starting {
+    if starting {
         group.dim(0.8)
     } else {
         group.on_press(|s: &mut State| s.live_toggle_panel())
-    };
-    group
+    }
 }
 
 /// "1:05" or "1:02:05" for a line in the live transcript.
@@ -1017,6 +1026,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .child(head);
     if let Some(Saving::Failed(_)) = saving {
         let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
+        let warning = save_warning(s.hex_recording(), recovered);
         c = c.child(
             col()
                 .key("live-save-warning")
@@ -1028,11 +1038,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                 .gap(12.0)
                 .role("alert")
                 .child(roles::NAME.wrap("!  Your notes need saving", p.warn))
-                .child(roles::SMALL.wrap(if recovered {
-                    "Sidenote saved a backup copy, but could not save your notes in the meeting folder. The meeting is still recording. Copy your notes, then try saving again."
-                } else {
-                    "Sidenote could not save your notes, even to a backup copy. The meeting is still recording. Copy your notes now, then try saving again. Do not close Sidenote yet."
-                }, p.ink))
+                .child(roles::SMALL.wrap(warning, p.ink))
                 .child(
                     row()
                         .flex_wrap()
@@ -1064,6 +1070,22 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
             .w_full()
             .mt(if narrow { 4.0 } else { 10.0 })
             .child(rune::auto_grow(field, if narrow { 8 } else { 12 }, 400)),
+    )
+}
+
+fn save_warning(recording: bool, recovered: bool) -> String {
+    let saved = if recovered {
+        "Sidenote saved a backup copy, but could not save your notes in the meeting folder."
+    } else {
+        "Sidenote could not save your notes, even to a backup copy."
+    };
+    let status = if recording {
+        " The meeting is still recording."
+    } else {
+        ""
+    };
+    format!(
+        "{saved}{status} Copy your notes now, then try saving again. Do not close Sidenote yet."
     )
 }
 
@@ -1187,7 +1209,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         )
         .child(
             roles::SECTION
-                .wrap(if slow { "Notes are taking a while" } else { "Making notes" }, p.ink)
+                .wrap(if slow { "The summary is taking a while" } else { "Writing summary" }, p.ink)
                 .mt(if narrow { 6.0 } else { 18.0 })
                 .role("status"),
         )
@@ -1197,15 +1219,15 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                 .gap(6.0)
                 .mt(4.0)
                 .child(step(true, "Recording saved"))
-                .child(step(false, "Writing the notes")),
+                .child(step(false, "Writing the summary")),
         )
         .child(
             roles::SMALL
                 .wrap(
                     if slow {
-                        "They will appear in Sidenote when they are ready. You do not need to wait here."
+                        "The summary will appear in Sidenote when it is ready. You do not need to wait here."
                     } else {
-                        "This usually takes a minute or two. The notes open here when they are ready."
+                        "This usually takes a minute or two. The summary opens here when it is ready."
                     },
                     p.soft,
                 )
@@ -1315,6 +1337,19 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn save_warning_tells_the_truth_about_recording_and_backups() {
+        for recording in [false, true] {
+            for recovered in [false, true] {
+                let warning = save_warning(recording, recovered);
+                assert_eq!(warning.contains("still recording"), recording);
+                assert_eq!(warning.contains("saved a backup copy"), recovered);
+                assert!(warning.contains("Copy your notes now"));
+                assert!(warning.contains("Do not close Sidenote yet"));
+            }
+        }
+    }
 
     #[test]
     fn close_requires_the_latest_text_to_be_durable_and_the_queue_drained() {

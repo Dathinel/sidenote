@@ -794,7 +794,7 @@ fn indicator(s: &State, p: Palette) -> (Color, String) {
                 },
             ),
             (None, Some(true)) => (p.open, "Dictating".into()),
-            (None, _) => (p.ok, "Idle".into()),
+            (None, _) => (p.ok, "Ready".into()),
         },
     }
 }
@@ -1145,8 +1145,8 @@ pub enum Section {
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
 const SECTIONS: [Section; 12] = [
     Section::Features,
-    Section::Teams,
     Section::AiNotes,
+    Section::Teams,
     Section::MeetingModels,
     Section::Model,
     Section::Vocabulary,

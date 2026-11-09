@@ -502,7 +502,8 @@ pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
         } else {
             "Try again"
         },
-        "listener-retry", p,
+        "listener-retry",
+        p,
     )
     .key("listener-retry");
     if s.updates.listener_busy {

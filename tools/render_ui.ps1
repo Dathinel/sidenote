@@ -2,6 +2,8 @@ param(
     [string]$Exe = "$PSScriptRoot/../target/x86_64-pc-windows-gnu/debug/sidenote.exe",
     # Another output folder (for example a before set), and an optional list of shot names.
     [string]$Out = "",
+    [switch]$Dev3,
+    [ValidateRange(1, 4)][int]$Throttle = 1,
     [string[]]$Only = @(),
     # Themes to render; dark first is enough for a quick look.
     [string[]]$Themes = @('dark', 'light')
@@ -284,7 +286,7 @@ foreach ($areaScene in @('areas-large-migration','areas-large-review','areas-lar
 $screensScenes = @(
     'screens-summary', 'screens-notes', 'screens-transcript', 'screens-transcript-jump',
     'screens-more-menu', 'screens-toast', 'screens-home-more', 'screens-today',
-    'screens-today-tasks', 'screens-today-quiet', 'screens-finder', 'screens-finder-query',
+    'screens-today-tasks', 'screens-today-quiet', 'screens-today', 'screens-today-tasks', 'screens-finder', 'screens-finder-query',
     'screens-finder-none', 'screens-finder-off', 'screens-ask-focused'
 )
 foreach ($n in $screensScenes) {
@@ -327,6 +329,56 @@ foreach ($n in 'meetings', 'meeting', 'tasks', 'memory', 'check', 'settings', 'u
 $shots += ,@('ask-narrow',         'ask',              '560x900', $null, @())
 $shots += ,@('ask-running-narrow', 'ask-running',      '560x900', $null, @())
 $shots += ,@('home-ask-running-narrow', 'home-ask-running', '560x900', $null, @())
+# The dev3 matrix is one reproducible run, including the reviewer's unopened scenes.
+if ($Dev3) {
+    $shots = @($shots | Where-Object { $_[0] -like 'tasks-v2-*' -or $_[0] -like 'listener-error*' -or $_[0] -like 'live-close-failure*' })
+    $source = Get-Content "$root/src/ui/mod.rs" -Raw
+    $notes = [regex]::Matches($source, '"(notes-(?:settings|meeting|live|today|list)-[^" ]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+    foreach ($scene in $notes) {
+        foreach ($width in @(1320, 560)) {
+            $height = if ($scene -like 'notes-settings-fixed-*') { 3400 } elseif ($scene -like 'notes-settings-*') { 1600 } elseif ($scene -like 'notes-list-*') { 1800 } else { 1100 }
+            $shots += ,@("$scene-$width", $scene, "${width}x${height}", $null, @())
+        }
+    }
+    foreach ($interaction in @(
+        @('notes-click-dismiss', 'notes-meeting-fallback', 'notes-dismiss.json'),
+        @('notes-click-reset', 'notes-settings-edited', 'notes-reset-confirm.json'),
+        @('notes-click-fixed', 'notes-settings-tasks', 'notes-show-fixed.json'),
+        @('notes-click-privacy', 'notes-today-found', 'notes-privacy.json'),
+        @('notes-click-teams', 'notes-settings-tasks', 'notes-teams.json')
+    )) {
+        foreach ($width in @(1320, 560)) {
+            $height = if ($interaction[0] -eq 'notes-click-fixed') { 3400 } else { 1600 }
+            $shots += ,@("$($interaction[0])-$width", $interaction[1], "${width}x${height}", $interaction[2], @('--at', 'mark:end'))
+        }
+    }
+    foreach ($scene in @('live-recording', 'live-starting', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-panel-closed', 'live-making-notes', 'live-making', 'live-naming', 'recording-away', 'meeting-your-notes', 'screens-summary', 'screens-transcript', 'screens-today-quiet', 'screens-today', 'screens-today-tasks', 'screens-finder', 'screens-finder-query', 'screens-finder-none', 'screens-finder-off', 'screens-more-menu', 'screens-home-more', 'ask-no-agent', 'ask-no-agent-again', 'features-settings', 'tasks-v2-rebuild-confirm', 'tasks-v2-waiting-edit')) {
+        foreach ($width in @(1320, 560)) {
+            $closeDrawer = $scene -eq 'features-settings' -and $width -eq 560
+            $script = if ($closeDrawer) { 'dev3-close-drawer.json' } else { $null }
+            $extra = if ($closeDrawer) { @('--at', 'mark:end') } else { @() }
+            $shots += ,@("$scene-$width", $scene, "${width}x1400", $script, $extra)
+        }
+    }
+}
+if ($Dev3) {
+    foreach ($width in @(1320, 560)) {
+        $shots += ,@("tasks-v2-rebuild-blocked-$width", 'tasks-v2-rebuild-confirm', "${width}x1400", 'dev3-rebuild-blocked.json', @('--at', 'mark:end'))
+    }
+}
+$priorAppData = $env:APPDATA
+$priorLocalAppData = $env:LOCALAPPDATA
+$priorState = $env:SIDENOTE_STATE_DIR
+$rows = [System.Collections.Generic.List[object]]::new()
+$pending = [System.Collections.Generic.Queue[object]]::new()
+function Complete-Render($job) {
+    $job.Process.WaitForExit()
+    if ($job.Process.ExitCode -ne 0) { throw "Render $($job.Name) failed with exit $($job.Process.ExitCode), see $($job.Log)" }
+    $rows.Add($job.Row)
+    $rows | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 "$out/render-index.json"
+    Remove-Item -LiteralPath $job.State -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output $job.Row.Path
+}
 # Which shots get a generated synthetic report, and with which options.
 $v2 = @('--v2', '--triage', '--gaps', '--actions')
 $mem = @('--v2', '--memory', '--proposals')
@@ -345,6 +397,7 @@ $checkFixture = @{
     'memory-narrow' = $mem; 'memory-panel-narrow' = $mem; 'memory-review-narrow' = $mem;
     'memory-migration' = @(); 'memory-skim' = @(); 'memory-migrated' = @(); 'memory-migration-narrow' = @()
 }
+try {
 foreach ($theme in $Themes) {
     foreach ($shot in $shots) {
         $name, $scene, $size, $script, $extra = $shot
@@ -403,16 +456,24 @@ foreach ($theme in $Themes) {
         if ($scene -like 'tasks-cleared*') { Set-Content -Encoding utf8 "$state/tasks-settings.json" '{"cleared_before": "2026-10-31"}' }
         Copy-Item "$root/tools/ui-fixtures/hex.json" "$state/hex-fixture.json"
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
+        New-Item -ItemType Directory -Force -Path "$state/appdata", "$state/localappdata", "$state/peers" | Out-Null
+        $env:APPDATA = "$state/appdata"
+        $env:LOCALAPPDATA = "$state/localappdata"
         $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
-        $fixtureMeetings = if ($scene -like 'tasks-v2-*') { @('--meetings-dir', "$state/tasks-v2-meetings") } elseif ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
-        $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
+        $fixtureMeetings = if ($scene -in @('notes-today-first-open', 'notes-today-hex-missing')) { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($scene -like 'notes-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } elseif ($scene -like 'tasks-v2-*') { @('--meetings-dir', "$state/tasks-v2-meetings") } elseif ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
+        $arguments = $fixtureMeetings + @('--data-dir', $state, '--peers-dir', "$state/peers", '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
-        $log = "$out/render.log"
-        $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError $log -Wait -PassThru
-        if ($process.ExitCode -ne 0) { throw "Render $name-$theme failed with exit $($process.ExitCode), see $log" }
-        Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Output "$out/$name-$theme.png"
+        $log = "$out/$name-$theme.log"
+        $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError $log -PassThru
+        $null = $process.Handle
+        $pending.Enqueue([PSCustomObject]@{ Process = $process; Name = "$name-$theme"; Log = $log; State = $state; Row = [PSCustomObject]@{ Scene = $name; SourceScene = $scene; Size = $size; Theme = $theme; Path = "$out/$name-$theme.png" } })
+        if ($pending.Count -ge $Throttle) { Complete-Render ($pending.Dequeue()) }
     }
 }
-Remove-Item Env:SIDENOTE_STATE_DIR -ErrorAction SilentlyContinue
+    while ($pending.Count -gt 0) { Complete-Render ($pending.Dequeue()) }
+} finally {
+    $env:APPDATA = $priorAppData
+    $env:LOCALAPPDATA = $priorLocalAppData
+    $env:SIDENOTE_STATE_DIR = $priorState
+}

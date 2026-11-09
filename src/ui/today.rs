@@ -48,9 +48,9 @@ fn items(s: &State, p: Palette) -> Vec<Item> {
     let mut out = Vec::new();
     if let Some(l) = s.live.as_ref().filter(|l| l.phase == live::Phase::Making) {
         let (lead, words) = match l.quick_title() {
-            Some(title) => ("Making notes".to_string(), title),
+            Some(title) => ("Writing summary".to_string(), title),
             None => (
-                "Making notes".to_string(),
+                "Writing summary".to_string(),
                 format!("for the {} meeting", l.clock()),
             ),
         };
