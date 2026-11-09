@@ -3,9 +3,9 @@
 use super::{
     ListItem, State, ask,
     nav::Filter,
-    project,
+    project, roles,
     theme::{Palette, display},
-    widgets::{highlighted, keycap, label, line, link, notice_bar, page_icon, pressable, scroll},
+    widgets::{highlighted, keycap, link, notice_bar, page_icon, pressable, scroll},
 };
 use rune::{El, Key, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
@@ -50,11 +50,11 @@ pub(super) fn snippet(hit: &SearchHit, p: Palette) -> El {
     col()
         .mt(4.0)
         .gap(1.0)
-        .child(label(source_name(hit.source), 11.0, 600.0, p.faint))
+        .child(roles::CAPTION.wrap(source_name(hit.source), p.faint))
         .child(highlighted(
             &hit.snippet.text,
             &hit.snippet.matches,
-            13.0,
+            roles::META.size,
             p.soft,
             p.hit,
         ))
@@ -124,9 +124,9 @@ fn home_row(
     let mut text_col = col()
         .grow(1.0)
         .min_w(0.0)
-        .gap(1.0)
-        .child(line(&m.title, 15.5, 600.0, p.ink))
-        .child(line(people_line(m), 13.5, 400.0, p.soft));
+        .gap(2.0)
+        .child(roles::TITLE.line(&m.title, p.ink))
+        .child(roles::META.line(people_line(m), p.faint));
     if let Some(hit) = &item.hit {
         text_col = text_col.child(snippet(hit, p));
     }
@@ -155,12 +155,7 @@ fn home_row(
     if !narrow && let Some(chip) = project::chip(s, k, &m.id, p, layer) {
         r = r.child(chip);
     }
-    r = r.child(
-        row()
-            .w(44.0)
-            .justify_end()
-            .child(label(at, 13.0, 400.0, p.faint)),
-    );
+    r = r.child(row().w(44.0).justify_end().child(roles::meta(at, p)));
     r = r.child(super::more::menu(s, k, m, "row", p, layer));
     let keyboard = (s.keyboard || !s.search.text.trim().is_empty()) && s.cursor == position;
     if keyboard {
@@ -214,7 +209,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                         .grow(1.0)
                         .min_w(0.0),
                 )
-                .child(label(count, 13.0, 400.0, p.faint).pb(6.0)),
+                .child(roles::meta(count, p).pb(6.0)),
         )
         .children((s.filter != Filter::All).then(|| {
             link("\u{2039} Show all meetings", p)
@@ -234,8 +229,9 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let mut position = 0;
     for group in &s.groups {
         doc = doc.child(
-            label(&group.label, 13.5, 600.0, p.soft)
-                .mt(28.0)
+            roles::GROUP
+                .wrap(&group.label, p.soft)
+                .mt(24.0)
                 .mb(4.0)
                 .px(10.0),
         );
@@ -245,11 +241,12 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         }
     }
     if position == 0 {
-        doc = doc.child(label(empty_text(s), 15.0, 400.0, p.soft).mt(28.0).px(10.0));
+        doc = doc.child(roles::SMALL.wrap(empty_text(s), p.soft).mt(24.0).px(10.0));
     }
     if !s.scan_errors.is_empty() {
         doc = doc.child(
-            label(s.scan_errors.join(" "), 12.5, 400.0, p.warn)
+            roles::META
+                .wrap(s.scan_errors.join(" "), p.warn)
                 .mt(20.0)
                 .px(10.0),
         );

@@ -1,7 +1,7 @@
 //! The To do section of the reading column. Ticks write the same file the Tasks view reads.
 use super::{
-    State,
-    theme::{BODY, BODY_LH, Palette},
+    State, roles,
+    theme::Palette,
     widgets::{label, pressable, stamp},
 };
 use rune::{El, TextStyle, col, el, row, text};
@@ -41,14 +41,19 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
         .flex_wrap()
         .items_center()
         .gaps(2.0, 6.0)
-        .child(label(owner, 13.5, 500.0, p.soft));
+        .mt(2.0)
+        .child(
+            roles::Role {
+                weight: 500.0,
+                ..roles::META
+            }
+            .wrap(owner, p.soft),
+        );
     if let Some(due) = t.due.as_deref().filter(|d| !d.is_empty()) {
         let default = if t.due_default { " (default)" } else { "" };
-        meta = meta.child(label(
+        meta = meta.child(roles::meta(
             format!("\u{b7} by {}{default}", nice_date(due)),
-            13.5,
-            400.0,
-            p.faint,
+            p,
         ));
     }
     let key = format!("todo-{index}");
@@ -59,7 +64,7 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
     let task = t.task.clone();
     // Next steps read in bold, as the actions of the meeting; a finished one steps back.
     let task_text = text(t.task.clone())
-        .font(TextStyle::new(BODY, if on { 400.0 } else { 600.0 }).lh(BODY_LH))
+        .font(if on { roles::READ } else { roles::READ.bold() }.style())
         .color(if on { p.faint } else { p.ink })
         .wrap();
     let task_text = if on {
@@ -103,15 +108,13 @@ pub fn section(s: &State, m: &Meeting, p: Palette) -> El {
         out = out.child(item(s, i, t, p));
     }
     out.child(
-        label(
+        roles::meta(
             if s.config.features.tasks {
                 "Ticks are saved on this computer and show in Tasks too."
             } else {
                 "Ticks are saved on this computer."
             },
-            12.5,
-            400.0,
-            p.faint,
+            p,
         )
         .pl(34.0)
         .pt(6.0),

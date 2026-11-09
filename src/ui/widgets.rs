@@ -1,6 +1,6 @@
 //! Small shared pieces: text, chips, links, headings, bullets and the drawn icons.
 use super::{
-    State,
+    State, roles,
     theme::{BODY, BODY_LH, Palette},
 };
 use rune::{Color, Cursor, El, Link, LinkPaint, ScrollSpec, Span, TextStyle, col, el, row, text};
@@ -23,27 +23,28 @@ pub fn line(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
 }
 
 pub fn spaced_caps(s: &str, p: Palette) -> El {
-    label(s.to_uppercase(), 11.5, 600.0, p.faint)
+    roles::CAPTION.wrap(s.to_uppercase(), p.faint)
 }
 
-/// A section heading in the reading column, with an optional quiet count after it.
+/// A section heading in the reading column, with an optional count pill after it.
 pub fn heading(s: &str, count: Option<usize>, key: &str, p: Palette) -> El {
     let mut r = row()
         .key(key.to_string())
-        .items_end()
+        .items_center()
         .gap(8.0)
-        .mt(40.0)
-        .mb(6.0)
-        .child(label(s, 19.0, 600.0, p.ink));
+        .mt(32.0)
+        .mb(8.0)
+        .child(roles::SECTION.wrap(s, p.ink));
     if let Some(n) = count {
-        r = r.child(label(n.to_string(), 14.0, 500.0, p.faint));
+        r = r.child(roles::count(n, p));
     }
     r
 }
 
 /// A quiet outlined chip for facts about a meeting.
 pub fn chip(s: impl Into<String>, p: Palette) -> El {
-    label(s, 13.0, 400.0, p.soft)
+    roles::META
+        .wrap(s, p.soft)
         .px(10.0)
         .py(2.0)
         .radius(999.0)
@@ -56,12 +57,12 @@ pub fn pressable(e: El) -> El {
 
 /// A text link with a quiet hover.
 pub fn link(s: impl Into<String>, p: Palette) -> El {
-    pressable(label(s, 13.5, 600.0, p.accent).px(4.0).radius(5.0)).hover(p.chip)
+    pressable(roles::CONTROL.wrap(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
 }
 
 /// A small text button for toolbars and headers.
 pub fn quiet_button(s: &str, key: &str, p: Palette) -> El {
-    pressable(label(s, 13.0, 500.0, p.soft))
+    pressable(roles::CONTROL.wrap(s, p.soft))
         .key(key.to_string())
         .px(8.0)
         .py(2.0)
@@ -149,7 +150,7 @@ pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     Some(
         pressable(
             text(shown.clone())
-                .font(TextStyle::new(12.5, 500.0).mono())
+                .font(TextStyle::new(12.0, 500.0).mono())
                 .color(p.faint),
         )
         .key(format!("stamp-{origin}"))
@@ -184,7 +185,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
         spans.push(
             Span::new(start, content.len())
                 .weight(400.0)
-                .size(14.0)
+                .size(roles::META.size)
                 .color(p.faint),
         );
     }
@@ -198,7 +199,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
             Span::new(range.start, range.end)
                 .mono()
                 .weight(400.0)
-                .size(12.5)
+                .size(12.0)
                 .color(p.faint),
         );
         stamp_link = Some(
@@ -262,7 +263,7 @@ pub fn notice_bar(note: &str, p: Palette) -> El {
         .gap(12.0)
         .items_center()
         .fill(p.warnbg)
-        .child(label(note, 13.5, 500.0, p.warn).grow(1.0))
+        .child(roles::CONTROL.wrap(note, p.warn).grow(1.0))
         .child(
             link("Dismiss", p)
                 .key("notice-dismiss")
@@ -318,7 +319,7 @@ pub fn panel_top(title: &str, back: &str, overlay: bool, close: fn(&mut State), 
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
         top = top.child(
-            pressable(label(format!("\u{2039}  {back}"), 13.5, 500.0, p.soft))
+            pressable(roles::CONTROL.wrap(format!("\u{2039}  {back}"), p.soft))
                 .key("panel-back")
                 .label(format!("Back to {back} (Escape)"))
                 .px(10.0)
@@ -395,6 +396,6 @@ pub fn toast(text_: &str, p: Palette) -> El {
                 .shadow(4.0, 16.0, p.shadow)
                 .transition(super::ask::rise(8.0))
                 .child(label("\u{2713}", 13.0, 700.0, p.ok))
-                .child(label(text_, 13.5, 500.0, p.ink)),
+                .child(roles::CONTROL.wrap(text_, p.ink)),
         )
 }

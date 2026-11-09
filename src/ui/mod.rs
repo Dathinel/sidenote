@@ -14,6 +14,7 @@ mod models;
 mod more;
 mod nav;
 mod project;
+mod roles;
 mod tasks;
 mod theme;
 mod today;

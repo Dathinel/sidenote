@@ -7,10 +7,10 @@
 //!
 //! A line with nothing to say is left out, and the whole strip goes when no line is left.
 use super::{
-    State, check, live,
+    State, check, live, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, hairline, label, pressable, spaced_caps},
+    widgets::{dot, hairline, pressable, spaced_caps},
 };
 use rune::{Color, El, col, row};
 use sidenote::core::{self, DueBucket};
@@ -134,21 +134,20 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
             .items_center()
             .child(dot(8.0, item.mark));
         if let Some(lead) = &item.lead {
-            words = words.child(label(lead, 14.5, 600.0, item.ink));
+            words = words.child(roles::SMALL.bold().wrap(lead, item.ink));
         }
         words = words.child(
-            label(
-                &item.words,
-                14.5,
-                if item.lead.is_some() { 400.0 } else { 500.0 },
-                if item.lead.is_some() {
-                    p.soft
-                } else {
-                    item.ink
-                },
-            )
-            .grow(1.0)
-            .min_w(0.0),
+            roles::SMALL
+                .wrap(
+                    &item.words,
+                    if item.lead.is_some() {
+                        p.soft
+                    } else {
+                        item.ink
+                    },
+                )
+                .grow(1.0)
+                .min_w(0.0),
         );
         let said = match &item.lead {
             Some(lead) => format!("{lead} {}", item.words),
@@ -163,12 +162,7 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
                     .px(14.0)
                     .py(9.0)
                     .child(words)
-                    .child(label(
-                        format!("{} \u{203a}", item.action),
-                        13.5,
-                        600.0,
-                        p.accent,
-                    )),
+                    .child(roles::CONTROL.wrap(format!("{} \u{203a}", item.action), p.accent)),
             )
             .key(item.key)
             .label(format!("{said}. {}", item.action))

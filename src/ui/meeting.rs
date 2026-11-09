@@ -7,12 +7,12 @@
 use super::{
     State, ask,
     list::text_title,
-    more, project,
+    more, project, roles,
     theme::Palette,
     todo,
     widgets::{
-        chip, hairline, heading, label, notice_bar, panel_top, point_row, pressable, quiet_button,
-        scroll, spaced_caps, split_geometry,
+        chip, hairline, heading, notice_bar, panel_top, point_row, pressable, quiet_button, scroll,
+        spaced_caps, split_geometry,
     },
 };
 use rune::{El, Key, Span, TextEdit, TextStyle, Tx, col, el, row, text};
@@ -89,16 +89,16 @@ fn counts(m: &Meeting, p: Palette) -> El {
     let mut r = row().flex_wrap().items_center().gaps(4.0, 4.0).mt(14.0);
     for (i, (n, name, ink, target)) in parts.into_iter().enumerate() {
         if i > 0 {
-            r = r.child(label("\u{b7}", 14.0, 400.0, p.faint));
+            r = r.child(roles::SMALL.wrap("\u{b7}", p.faint));
         }
         let content = format!("{n} {name}");
         let number_end = n.to_string().len();
         let body = text(content.clone())
-            .font(TextStyle::new(14.0, 400.0).lh(22.0))
+            .font(roles::SMALL.style())
             .color(p.soft)
             .spans(vec![
                 Span::new(0, number_end)
-                    .weight(650.0)
+                    .weight(600.0)
                     .color(if n == 0 { p.faint } else { ink }),
             ]);
         // A zero has no section to jump to, so it stays plain text.
@@ -136,7 +136,7 @@ fn topic(s: &State, ti: usize, title: &str, pts: &[Point], p: Palette) -> El {
         .key(format!("topic-{}", ti + 1))
         .w_full()
         .gap(2.0)
-        .child(label(title, 17.0, 600.0, p.ink).mt(26.0).mb(4.0));
+        .child(roles::TITLE.wrap(title, p.ink).mt(24.0).mb(4.0));
     for (pi, pt) in pts.iter().enumerate() {
         let key = format!("pt-{ti}-{pi}");
         let from = s.back.as_deref() == Some(key.as_str());
@@ -230,9 +230,16 @@ fn tab_button(
         .px(8.0)
         .py(3.0)
         .radius(6.0)
-        .child(label(name, 14.5, if open { 600.0 } else { 500.0 }, ink));
+        .child(
+            if open {
+                roles::CONTROL.bold()
+            } else {
+                roles::CONTROL
+            }
+            .wrap(name, ink),
+        );
     if let Some(n) = count {
-        head = head.child(label(n.to_string(), 12.5, 500.0, p.faint));
+        head = head.child(roles::count(n, p));
     }
     if lit {
         head = head.fill(p.chip);
@@ -384,14 +391,14 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         if show_time {
             meta = meta.child(
                 text(short(&line.at).to_string())
-                    .font(TextStyle::new(12.5, 400.0).mono())
+                    .font(TextStyle::new(12.0, 400.0).mono())
                     .color(p.faint),
             );
         }
         if !line.who.is_empty() {
             meta = meta.child(
                 text(line.who.clone())
-                    .font(TextStyle::new(13.5, 600.0))
+                    .font(roles::GROUP.style())
                     .color(speaker_ink(m, &line.who, p))
                     .truncate()
                     .min_w(0.0),
@@ -399,10 +406,11 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         }
         let spans: Vec<Span> = find_all(&line.text, &filter)
             .into_iter()
-            .map(|r| Span::new(r.start, r.end).weight(650.0).bg(p.hit, 1.5))
+            .map(|r| Span::new(r.start, r.end).weight(600.0).bg(p.hit, 1.5))
             .collect();
-        let body = label(&line.text, 14.5, 400.0, p.ink)
-            .font(TextStyle::new(14.5, 400.0).lh(23.0))
+        let body = roles::SMALL
+            .wrap(&line.text, p.ink)
+            .font(roles::SMALL.style().lh(22.0))
             .spans(spans)
             .selectable(true)
             .w_full()
@@ -426,7 +434,8 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         }
         if s.transcript_original && m.routed.is_some() && !line.language.is_empty() {
             item = item.child(
-                label(&line.language, 12.0, 400.0, p.soft)
+                roles::META
+                    .wrap(&line.language, p.faint)
                     .w_full()
                     .min_w(0.0),
             );
@@ -435,7 +444,8 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     }
     if shown == 0 {
         out = out.child(
-            label("No transcript lines match.", 14.0, 400.0, p.soft)
+            roles::SMALL
+                .wrap("No transcript lines match.", p.soft)
                 .px(10.0)
                 .py(8.0),
         );
@@ -535,7 +545,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
                 .on_press_tx(move |s: &mut State, tx| s.copy_transcript(&id, tx)),
         )
         .child(el().grow(1.0))
-        .child(label(count, 12.5, 400.0, p.faint).px(4.0));
+        .child(roles::meta(count, p).px(4.0));
     let mut frame = col()
         .key("transcript-panel")
         .h_full()
@@ -646,7 +656,7 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
     }
 
     if !m.summary.topics.is_empty() {
-        body = body.child(spaced_caps("Discussion", p).key("sec-discussion").mt(48.0));
+        body = body.child(spaced_caps("Discussion", p).key("sec-discussion").mt(40.0));
     }
     for (ti, t) in m.summary.topics.iter().enumerate() {
         body = body.child(topic(s, ti, &t.title, &t.points, p));
@@ -711,11 +721,9 @@ fn document(
                     .mt(24.0),
             )
             .child(
-                label(
+                roles::meta(
                     "Typed during the meeting. The summary used these notes first.",
-                    13.0,
-                    400.0,
-                    p.faint,
+                    p,
                 )
                 .mt(10.0)
                 .px(4.0),
