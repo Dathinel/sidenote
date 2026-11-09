@@ -108,6 +108,7 @@ pub fn run(mode: &str, store: &TaskStore) {
         "r2-version-gate" => {
             let other = peer(store, "old-device");
             other.add_project("Peer draft").unwrap();
+            store.update_overrides(|_| {}).unwrap();
             let id = own(&other);
             copy_tree(&other.root.join("state"), &root.join("state"));
             let marker = root.join("state").join(&id).join("area-format.json");
@@ -545,7 +546,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             let gate = other.root.join("local/area-legacy-backup.pause");
             write(&gate, &true);
             let task = other.clone();
-            let handle = std::thread::spawn(move || task.load_projects());
+            let handle = std::thread::spawn(move || task.add_project("Synthetic import trigger"));
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
             while !gate.with_extension("reached").exists() {
                 assert!(std::time::Instant::now() < deadline);
