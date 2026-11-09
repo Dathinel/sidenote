@@ -51,7 +51,15 @@ pub fn ensure(root: &Path) -> io::Result<()> {
             .ok()
             .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
             .filter(|m| m.device == id);
-        let mut seen = marker.as_ref().map_or(0, |m| m.seen_at);
+        let folder_seen = entry
+            .metadata()?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let mut seen = marker
+            .as_ref()
+            .map_or(folder_seen, |m| m.seen_at.max(folder_seen));
         // Old installations have no marker. Recent journal arrival still makes them visible.
         for folder in fs::read_dir(entry.path())? {
             let folder = folder?;

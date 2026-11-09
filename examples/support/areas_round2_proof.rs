@@ -127,6 +127,18 @@ pub fn run(mode: &str, store: &TaskStore) {
             supported["area_format"] = json!(1);
             write(&marker, &supported);
             migrate(store);
+            let empty_id = "e".repeat(32);
+            let folder = root.join("state").join(&empty_id);
+            fs::create_dir_all(&folder).unwrap();
+            assert!(
+                core::area_version::ensure(root).is_err(),
+                "A newly seen empty device with no marker is format zero"
+            );
+            write(
+                &folder.join("device.json"),
+                &json!({"device":empty_id,"name":"Synthetic fresh device","app_version":"0.0.1","area_format":1,"seen_at":chrono::Utc::now().timestamp()}),
+            );
+            core::area_version::ensure(root).unwrap();
         }
         "r2-renames" => {
             migrate(store);
