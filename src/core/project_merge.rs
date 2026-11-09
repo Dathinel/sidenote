@@ -150,100 +150,136 @@ impl TaskStore {
         })
     }
     pub fn merge_projects(&self, preview: &MergePreview) -> io::Result<Projects> {
-        sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
-            if self.merge_inventory(p, &preview.from, &preview.into)? != *preview {
-                return Err(invalid("Items changed; review a fresh preview"));
-            }
-            let id = format!(
-                "{}-{}",
-                chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-                sync_state::new_id(&self.root)?
-            );
-            let backup = self
-                .root
-                .join("local/project-merges")
-                .join(&id)
-                .join("backup.json");
-            let files = project_files(&self.root)?;
-            let snapshot = Backup {
-                projects: p.clone(),
-                preview: preview.clone(),
-                files,
-            };
-            store_io::write(&backup, &snapshot)?;
-            verify_backup(&backup, &snapshot)?;
-            // The isolated proof can terminate after backup, before the sole commit point.
-            if super::project_merge::crash_requested(&self.root) {
-                std::process::exit(86);
-            }
-            if self.merge_inventory(p, &preview.from, &preview.into)? != *preview {
-                return Err(invalid(
-                    "Items changed during backup; review a fresh preview",
-                ));
-            }
-            let previous = p.merges.get(&preview.from).cloned().map(Box::new);
-            p.aliases.insert(preview.from.clone(), preview.into.clone());
-            p.merges.insert(
-                preview.from.clone(),
-                ProjectMerge {
-                    id,
-                    into: preview.into.clone(),
-                    active: true,
-                    checksum: digest(&snapshot)?,
-                    backup,
-                    previous,
-                },
-            );
-            Ok(())
-        })
+        sync_state::update_checked_validated(
+            &self.root,
+            "projects.json",
+            |p: &mut Projects| {
+                if self.merge_inventory(p, &preview.from, &preview.into)? != *preview {
+                    return Err(invalid("Items changed; review a fresh preview"));
+                }
+                let id = format!(
+                    "{}-{}",
+                    chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+                    sync_state::new_id(&self.root)?
+                );
+                let backup = self
+                    .root
+                    .join("local/project-merges")
+                    .join(&id)
+                    .join("backup.json");
+                let files = project_files(&self.root)?;
+                let snapshot = Backup {
+                    projects: p.clone(),
+                    preview: preview.clone(),
+                    files,
+                };
+                store_io::write(&backup, &snapshot)?;
+                verify_backup(&backup, &snapshot)?;
+                // The isolated proof can terminate after backup, before the sole commit point.
+                if super::project_merge::crash_requested(&self.root) {
+                    std::process::exit(86);
+                }
+                if self.merge_inventory(p, &preview.from, &preview.into)? != *preview {
+                    return Err(invalid(
+                        "Items changed during backup; review a fresh preview",
+                    ));
+                }
+                let previous = p.merges.get(&preview.from).cloned().map(Box::new);
+                p.aliases.insert(preview.from.clone(), preview.into.clone());
+                p.merges.insert(
+                    preview.from.clone(),
+                    ProjectMerge {
+                        id,
+                        into: preview.into.clone(),
+                        active: true,
+                        checksum: digest(&snapshot)?,
+                        backup,
+                        previous,
+                    },
+                );
+                Ok(())
+            },
+            |before| {
+                if self.merge_inventory(before, &preview.from, &preview.into)? != *preview {
+                    return Err(invalid(
+                        "Items changed before publication; review a fresh preview",
+                    ));
+                }
+                Ok(())
+            },
+        )
     }
     pub fn undo_project_merge(&self, from: &str, expected_id: &str) -> io::Result<Projects> {
-        sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
-            let merge = p
-                .merges
-                .get(from)
-                .filter(|m| m.active && m.id == expected_id)
-                .cloned()
-                .ok_or_else(|| invalid("Merge changed; reload before undoing"))?;
-            let backup = self
-                .root
-                .join("local/project-merges")
-                .join(&merge.id)
-                .join("backup.json");
-            if merge.backup != backup {
-                return Err(invalid("Backup location does not match this device"));
-            }
-            let snapshot: Backup = serde_json::from_slice(&fs::read(&backup)?)?;
-            if digest(&snapshot)? != merge.checksum {
-                return Err(invalid("Backup checksum changed; undo was not applied"));
-            }
-            verify_backup(&backup, &snapshot)?;
-            if snapshot.preview.from != from || snapshot.preview.into != merge.into {
-                return Err(invalid("Backup does not match this merge"));
-            }
-            if p.aliases.get(from) != Some(&merge.into) {
-                return Err(invalid(
-                    "Alias changed after this merge; undo was not applied",
-                ));
-            }
-            match snapshot.projects.aliases.get(from) {
-                Some(alias) => {
-                    p.aliases.insert(from.into(), alias.clone());
+        let dependencies = self.undo_dependencies()?;
+        sync_state::update_checked_validated(
+            &self.root,
+            "projects.json",
+            |p: &mut Projects| {
+                let merge = p
+                    .merges
+                    .get(from)
+                    .filter(|m| m.active && m.id == expected_id)
+                    .cloned()
+                    .ok_or_else(|| invalid("Merge changed; reload before undoing"))?;
+                if p.aliases.get(from) != Some(&merge.into) {
+                    return Err(invalid(
+                        "This project was renamed after the merge. Undo was not applied.",
+                    ));
                 }
-                None => {
-                    p.aliases.remove(from);
+                let backup = self
+                    .root
+                    .join("local/project-merges")
+                    .join(&merge.id)
+                    .join("backup.json");
+                if merge.backup != backup {
+                    return Err(invalid("Backup location does not match this device"));
                 }
+                let snapshot: Backup = serde_json::from_slice(&fs::read(&backup)?)?;
+                if digest(&snapshot)? != merge.checksum {
+                    return Err(invalid("Backup checksum changed; undo was not applied"));
+                }
+                verify_backup(&backup, &snapshot)?;
+                if snapshot.preview.from != from || snapshot.preview.into != merge.into {
+                    return Err(invalid("Backup does not match this merge"));
+                }
+                match snapshot.projects.aliases.get(from) {
+                    Some(alias) => {
+                        p.aliases.insert(from.into(), alias.clone());
+                    }
+                    None => {
+                        p.aliases.remove(from);
+                    }
+                }
+                match merge.previous {
+                    Some(previous) => {
+                        p.merges.insert(from.into(), *previous);
+                    }
+                    None => {
+                        p.merges.remove(from);
+                    }
+                }
+                Ok(())
+            },
+            |_| {
+                if self.undo_dependencies()? != dependencies {
+                    return Err(invalid("Items changed before undo; reload and try again"));
+                }
+                Ok(())
+            },
+        )
+    }
+    fn undo_dependencies(&self) -> io::Result<String> {
+        let meetings = scan()?;
+        let pipeline: BTreeMap<_, _> = super::load_pipeline(&meetings).into_iter().collect();
+        for m in &meetings {
+            let path = m.folder.join("tasks.json");
+            if path.try_exists()? {
+                let _: super::TasksFile = store_io::read(&path)?;
             }
-            match merge.previous {
-                Some(previous) => {
-                    p.merges.insert(from.into(), *previous);
-                }
-                None => {
-                    p.merges.remove(from);
-                }
-            }
-            Ok(())
-        })
+        }
+        let sources: Vec<_> = meetings.iter().map(|m| (&m.id, &m.summary)).collect();
+        let memory: MemoryFile = sync_state::load(&self.root, "memory/records.json")?;
+        digest(&(self.load_overrides()?, memory, sources, pipeline))
     }
 }
 fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
@@ -316,4 +352,27 @@ fn crash_requested(root: &Path) -> bool {
             "E:/Personal-Projects/reviews/project-merge-proof",
         ))
         && std::env::var_os("SIDENOTE_MERGE_CRASH_AFTER_BACKUP").is_some()
+}
+/// Isolated debug proof rendezvous. Release builds and ordinary data folders never wait.
+pub fn proof_pause(root: &Path, stage: &str) -> io::Result<()> {
+    if !cfg!(debug_assertions)
+        || !root.starts_with(Path::new(
+            "E:/Personal-Projects/reviews/project-merge-proof",
+        ))
+    {
+        return Ok(());
+    }
+    let gate = root.join(format!("local/proof-{stage}-pause"));
+    if !gate.try_exists()? {
+        return Ok(());
+    }
+    fs::write(gate.with_extension("reached"), b"ready")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while gate.try_exists()? {
+        if std::time::Instant::now() >= deadline {
+            return Err(invalid("Proof rendezvous timed out"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    Ok(())
 }

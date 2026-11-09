@@ -45,7 +45,7 @@ impl Journal {
         ))?))
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct Register {
     at: u64,
     device: String,
@@ -364,6 +364,9 @@ impl Session {
             return Err(invalid("Own journal changed or is unreadable"));
         }
         let at = latest.next_time()?;
+        self.publish_diff(before, after, at)
+    }
+    fn publish_diff(&mut self, before: Items, after: Items, at: u64) -> io::Result<()> {
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
         let changes = keys
             .into_iter()
@@ -429,18 +432,33 @@ pub(super) fn update_checked<T: Serialize + DeserializeOwned + Default>(
     store: &str,
     change: impl FnOnce(&mut T) -> io::Result<()>,
 ) -> io::Result<T> {
+    update_checked_validated(root, store, change, |_| Ok(()))
+}
+pub(super) fn update_checked_validated<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+    change: impl FnOnce(&mut T) -> io::Result<()>,
+    validate: impl FnOnce(&T) -> io::Result<()>,
+) -> io::Result<T> {
     let mut session = Session::open(root, store)?;
     let before = session.value::<T>()?;
+    let registers = session.view.items.clone();
     let mut value: T = serde_json::from_value(before.clone())?;
     change(&mut value)?;
     session.view = read_view(root, store, &session.own)?;
     session.import_legacy()?;
-    if session.value::<T>()? != before {
+    super::project_merge::proof_pause(root, "publication")?;
+    let latest = read_view(root, store, &session.own)?;
+    if latest.own_bad || latest.items != registers {
         return Err(invalid("Project state changed; review a fresh preview"));
     }
-    session.diff(
+    // Compare versions and choose the timestamp from this exact view. Never refresh past it.
+    let at = latest.next_time()?;
+    validate(&serde_json::from_value(before.clone())?)?;
+    session.publish_diff(
         flatten(store, before)?,
         flatten(store, serde_json::to_value(&value)?)?,
+        at,
     )?;
     Ok(value)
 }

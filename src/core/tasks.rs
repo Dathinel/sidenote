@@ -107,12 +107,7 @@ impl Projects {
                 return seen[start..].iter().min().unwrap_or(&name).to_string();
             }
             seen.push(name);
-            let next = self
-                .merges
-                .get(name)
-                .filter(|m| m.active)
-                .map(|m| &m.into)
-                .or_else(|| self.aliases.get(name));
+            let next = self.aliases.get(name);
             match next {
                 Some(next) if next != name => name = next.trim(),
                 _ => return name.to_string(),
