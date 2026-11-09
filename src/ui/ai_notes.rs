@@ -291,6 +291,7 @@ impl State {
             Ok(Completion::Settings(settings)) => {
                 self.config.notes = Some(settings.clone());
                 self.ai_notes.settings = Some(settings);
+                self.ai_notes.fallback = None;
                 self.ai_notes.notice = Some("AI notes settings saved.".into());
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
@@ -646,6 +647,12 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             c = c.child(r);
             continue;
         }
+        if !found {
+            r = r.child(roles::SMALL.wrap("After installing Claude Code, open a terminal and type claude to sign in.", p.soft))
+                .child(row().flex_wrap().gaps(8.0, 8.0)
+                    .child(button("Copy command: claude", "notes-copy-command", p).on_press_tx(|_: &mut State, tx| tx.copy("claude")))
+                    .child(button("Check again", "notes-helper-check", p).on_press(|s: &mut State| s.refresh_ai_notes())));
+        }
         if h == Helper::OpenCode {
             r = r.child(roles::META.wrap(
                 "OpenCode uses its own configured model. Change it in OpenCode.",
@@ -773,17 +780,23 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
 pub fn setup_card(s: &State, p: Palette) -> Option<El> {
     let a = &s.ai_notes;
     let settings = a.settings.as_ref()?;
-    if settings.engine == "scripts" || (settings.engine == "app" && settings.helper.is_some()) {
+    if settings.engine == "scripts" || (settings.engine == "app" && settings.helper.is_some_and(|h| helper_unavailable_reason(h).is_none())) {
         return None;
     }
-    let helper = HELPERS.into_iter().find(|h| a.found.contains(&(*h, true)));
-    let text = helper.map(|h| format!("{} is installed. Sidenote can use it to write notes for your meetings.", h.name())).unwrap_or_else(|| "Sidenote writes notes with an helper you already use: Claude Code, Codex or OpenCode. None was found on this PC.".into());
-    Some(card(p).key("today-ai-notes").mb(16.0)
-        .child(roles::TITLE.wrap("Turn on AI notes", p.ink)).child(roles::SMALL.wrap(text, p.soft))
-        .child(roles::SMALL.wrap("Your meeting text goes to the helper's AI provider under your account after you turn notes on.", p.soft))
+    let helper = HELPERS.into_iter().find(|h| helper_unavailable_reason(*h).is_none() && a.found.contains(&(*h, true)));
+    let text = if helper.is_some() { "Claude Code is installed. You can use your account to write meeting summaries." } else { "Sidenote needs Claude Code to write meeting summaries. It was not detected on this PC. Install Claude Code, then open a terminal and type claude to sign in." };
+    let mut card = card(p).key("today-ai-notes").mb(16.0)
+        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "AI notes need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
+        .child(roles::SMALL.wrap("After you turn on AI notes, meeting text goes to Anthropic through your Claude Code account.", p.soft))
         .child(row().flex_wrap().gaps(8.0, 8.0)
-            .child(button(if helper.is_some() { "Turn on AI notes" } else { "How to set one up" }, "today-notes-setup", p).on_press(|s: &mut State| s.open_ai_notes()))
-            .child(button("What is sent", "today-notes-privacy", p).on_press(|s: &mut State| s.open_ai_notes()))))
+            .child(button(if helper.is_some() { "Turn on AI notes" } else { "Show setup steps" }, "today-notes-setup", p).on_press(|s: &mut State| s.open_ai_notes()))
+            .child(button("What is sent", "today-notes-privacy", p).on_press(|s: &mut State| s.open_ai_notes())));
+    if helper.is_none() {
+        card = card.child(row().flex_wrap().gaps(8.0, 8.0)
+            .child(button("Copy command: claude", "today-notes-copy", p).on_press_tx(|_: &mut State, tx| tx.copy("claude")))
+            .child(button("Check again", "today-notes-check", p).on_press(|s: &mut State| s.refresh_ai_notes())));
+    }
+    Some(card)
 }
 
 #[cfg(test)]
