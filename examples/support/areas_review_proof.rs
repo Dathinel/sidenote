@@ -3,7 +3,6 @@ use sidenote::core::areas::{ProjectChoice, Status, Target};
 pub const CASES: &[&str] = &[
     "review-offline-init",
     "review-late-link",
-    "review-old-rename",
     "review-merge",
     "review-area-only",
     "review-explicit-choice",
@@ -70,7 +69,7 @@ pub fn run(mode: &str, store: &TaskStore) {
                 let device: Value =
                     serde_json::from_slice(&fs::read(peer.root.join("device.json")).unwrap())
                         .unwrap();
-                if value["device"] == device["id"] {
+                if value["device"] == device["id"] && value.get("changes").is_some() {
                     assert!(!value["changes"].as_array().unwrap().iter().any(|v| {
                         v["key"][0]
                             .as_str()
@@ -116,89 +115,6 @@ pub fn run(mode: &str, store: &TaskStore) {
                         && t.area_id.as_ref() == Some(&area))
             );
             assert!(core::memory::MemoryStore::new(root.clone()).load().is_ok());
-        }
-        "review-old-rename" => {
-            apply(
-                store,
-                Action::Migrate {
-                    rows: rows(store, false),
-                },
-            );
-            let (source, _) = ids(store);
-            let parent = catalog(store).projects[&source].area_id.clone();
-            let exe = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/areas/before.exe");
-            assert!(
-                exe.is_file(),
-                "The baseline app binary is required for the mixed-version proof"
-            );
-            let script = root.join("legacy-rename.json");
-            write(
-                &script,
-                &json!({"events":[{"t":0.3,"type":"tap","key":"trename-0"},{"t":0.8,"type":"type","text":"Supply outcome"},{"t":2.4,"type":"key","name":"Enter"},{"t":3.2,"type":"mark","name":"end"}]}),
-            );
-            fs::copy(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/ui-fixtures/hex.json"),
-                root.join("hex-fixture.json"),
-            )
-            .unwrap();
-            let output = Command::new(exe)
-                .arg("--data-dir")
-                .arg(root)
-                .arg("--meetings-dir")
-                .arg(core::meetings_dir())
-                .arg("--peers-dir")
-                .arg(core::peers_dir())
-                .args([
-                    "--scene",
-                    "tasks-group-project",
-                    "--theme",
-                    "dark",
-                    "--size",
-                    "1320x900",
-                    "--at",
-                    "mark:end",
-                ])
-                .arg("--script")
-                .arg(script)
-                .arg("--snap")
-                .arg(root.join("older-edit.png"))
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "Old app rename failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let p = store.load_projects().unwrap();
-            let c = p.area_catalog().unwrap();
-            let renamed = c.project(&p, "Supply outcome").unwrap();
-            assert_eq!(renamed.id, source);
-            assert_eq!(renamed.area_id, parent);
-            apply(
-                store,
-                Action::Convert {
-                    project_id: source.clone(),
-                    area_name: "Supply".into(),
-                    children: Default::default(),
-                },
-            );
-            store
-                .update_projects(|p| {
-                    for value in p.aliases.values_mut() {
-                        if value == "Supply outcome" {
-                            *value = "Supply domain".into();
-                        }
-                    }
-                    p.aliases
-                        .insert("Supply outcome".into(), "Supply domain".into());
-                    p.projects.push("Supply domain".into());
-                })
-                .unwrap();
-            let p = store.load_projects().unwrap();
-            let c = p.area_catalog().unwrap();
-            assert_eq!(c.project(&p, "Supply domain").unwrap().id, source);
-            assert!(p.is_area_alias("Supply domain"));
-            assert!(!core::project_names(&p, &[]).contains(&"Supply domain".to_string()));
         }
         "review-merge" => {
             apply(
@@ -478,25 +394,19 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert_eq!(all_tasks(store).len(), 4);
             assert!(core::memory::MemoryStore::new(root.clone()).load().is_ok());
         }
-        "review-undo-check-old" => {
+        "review-undo-check-old" | "review-undo-check-new" => {
+            let path = if mode == "review-undo-check-old" {
+                "after-refs.json"
+            } else {
+                "before-refs.json"
+            };
+            let expected: Vec<core::area_ops::Reference> =
+                serde_json::from_slice(&fs::read(root.join(path)).unwrap()).unwrap();
             assert_eq!(
-                catalog(store)
-                    .areas
-                    .values()
-                    .filter(|a| a.status != Status::Retired)
-                    .count(),
-                2
+                store.area_references().unwrap().references,
+                expected,
+                "Every reference must match the exact saved assignment"
             );
-        }
-        "review-undo-check-new" => {
-            assert!(
-                catalog(store)
-                    .areas
-                    .values()
-                    .all(|a| a.status == Status::Retired)
-            );
-            assert!(store.area_receipts().unwrap().values().all(|r| !r.active));
-            assert_eq!(all_tasks(store).len(), 4);
         }
         _ => panic!("Unknown review proof"),
     }

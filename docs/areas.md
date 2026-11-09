@@ -57,26 +57,37 @@ project baselines. Local writers share the existing project lock. Full inventory
 and journal versions are checked before publication, including after dependency
 validation. A migration publishes one immutable journal and one receipt.
 
-A crash before publication leaves the old view and possibly an unused backup.
-A crash after publication leaves the new view and durable receipt. There is no
-cross-store write to recover. Undo checks the originating device's backup and
-current assignments, then publishes one journal restoring only touched registers.
-It refuses changed backups, later moves, peer conflicts and dangling references.
-It preserves unrelated later edits and records that the operation was undone.
+A process stop before publication leaves the old view and possibly an unused
+backup. A process stop after publication leaves the new view and durable receipt.
+The proof runner stops processes; it does not simulate a power failure.
 
-Undo retires a newly created area instead of deleting it. Its name and stable ID
-remain readable when a late peer reference arrives. Such work appears with a
-conflict notice and a Restore area action. Known new dependencies block Undo.
-Missing references get a `Missing area` entry without blocking the rest of the
-catalog. Unknown fields survive writes. A newer or unreadable schema makes area
-operations read-only while the available catalog stays readable.
+Apply scans and builds the backup outside the project lock. It rechecks the
+project registers and dependency file stamps under the lock, then publishes one
+journal. Backup JSON is compact and bounded to 16 MB. Failed attempts remove their
+backup; subsequent successful operations remove orphans and keep the latest ten
+local backups. Receipts store a relative path. Undo accepts only receipts written
+by this device, validates the timestamp and IDs, rejects linked paths and reads
+only inside the local area-operations folder.
 
-Task overrides and manual tasks have one `assignment` field holding a project
-choice and a revision. Choosing the same project again still records new intent
-and supersedes an older area-only link. The raw project field stays for older
-readers. Accepted memory proposals store the effective stable target in the new
-record's own `assignment` field. These are whole fields for the parallel
-field-level three-way merge; that stack is not included here.
+Undo restores each touched register only while its value still equals the value
+that operation wrote. Changed references and registers stay as they are, with a
+count and item names in the result. New areas are retired rather than deleted,
+so late references still resolve. Missing references show Missing area. Invalid
+items are quarantined individually and counted. Only future area schemas make
+the entire catalog read-only. Unknown fields survive within a 64 KB per-item cap.
+
+Each device publishes a synced version marker. Area writes, migration, merging,
+Undo and assignment choices require every installation seen within thirty days
+to report integer `area_format >= 1`. The app version is display-only and may
+reset at launch. A recent device
+without a marker must update too. Editing area data with older app versions is
+unsupported. The raw project field is retained for display compatibility.
+
+One resolver handles every reference. It chooses a later explicit link whose
+full assignment baseline still matches, then retained assignment intent, then a
+raw project. Stable project redirects apply before conversion to area-only work.
+Task and manual assignment intent remains one atomic field for the parallel
+field-level merge lane. Accepted proposals retain their effective target.
 
 The migration editor starts with one default for each project's references.
 Area-only work turns the old project into an area alias. Exceptions are optional,
@@ -103,17 +114,30 @@ No tests run locally. Build the `areas_proof` example offline, then invoke it wi
 <folder>/peers`. All three folders must be under
 `E:/Personal-Projects/reviews/areas-proof`. It starts separate processes for move,
 conversion, batch migration, restart Undo, stale previews, later moves, peer
-edits, publication races, backup tampering and crashes before the commit point.
+edits, publication races, backup tampering and process stops around publication.
 It checks source bytes after each scenario and writes `results.json`.
 
 The `areas-worker-proof` render holds real workers before I/O and checks that
 the UI returns, repeated operation clicks are ignored, worker thread IDs differ
 and Undo restores the area view. It writes a sibling `.proof.json`.
 
-Backups are local and retained without pruning. Preview scans all references,
-so large histories can take time. Undo is deliberately conservative and may
-refuse after unrelated alias edits or linked-child moves. Syncthing cannot make
+Backups are local and limited to ten; older receipts stay visible without Undo.
+Preview scans all references on a worker, so large histories can take time.
+Undo refuses a changed backup or an edit that arrives during publication. Syncthing cannot make
 two offline devices agree before they exchange journals. Simultaneous unseen
 edits to the same register use the existing deterministic last-writer rule;
 both immutable journals remain available. Classifier prompts, Group by, teams
 and series are unchanged in this merge.
+
+Round-two proofs cover concurrent renames followed by identity seeds, malicious
+receipt paths and a junction, a later peer assignment during scoped Undo,
+quarantine among fourteen projects, bounded unknown fields, import backup
+read-back, sharing retries, an actual pre-area merge receipt, retained memory
+choices through conversion and merging, malformed and oversized peer journals,
+and version refusal. Undo process-stop checks compare every reference exactly.
+
+Refreshes use slim meeting snapshots and coalesce into one active worker plus
+one queued refresh. A broken running-job marker does not fail the read model.
+Errors are plain authored messages shown globally. Migration choices survive
+catalog refreshes; new projects appear unreviewed, and discarding choices needs
+an explicit confirmation. Area work and operation item lists are virtualized.

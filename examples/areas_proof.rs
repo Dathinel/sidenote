@@ -14,6 +14,8 @@ const SOURCE: &str = "Supply planning";
 const CHILD: &str = "Supplier selection";
 #[path = "support/areas_review_proof.rs"]
 mod review;
+#[path = "support/areas_round2_proof.rs"]
+mod round2;
 fn write(path: &Path, value: &impl serde::Serialize) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
@@ -111,9 +113,17 @@ fn seed(root: &Path, store: &TaskStore) {
     write(&root.join("before.json"), &store.load_projects().unwrap());
 }
 fn apply(store: &TaskStore, action: Action) -> String {
+    write(
+        &store.root.join("before-refs.json"),
+        &store.area_references().unwrap().references,
+    );
     let preview = store.preview_area(action).unwrap();
     write(&store.root.join("last-preview.json"), &preview);
     let p = store.apply_area(&preview).unwrap();
+    write(
+        &store.root.join("after-refs.json"),
+        &store.area_references().unwrap().references,
+    );
     let receipts = store.area_receipts().unwrap();
     let id = receipts
         .keys()
@@ -156,7 +166,7 @@ fn rows(store: &TaskStore, convert: bool) -> Vec<MigrationRow> {
         })
         .collect()
 }
-fn child(root: &Path, command: &str, crash: Option<&str>) -> i32 {
+fn child(root: &Path, command: &str, process_stop: Option<&str>) -> i32 {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
     cmd.arg(command)
         .arg("--data-dir")
@@ -165,7 +175,7 @@ fn child(root: &Path, command: &str, crash: Option<&str>) -> i32 {
         .arg(root.join("meetings"))
         .arg("--peers-dir")
         .arg(root.join("peers"));
-    if let Some(stage) = crash {
+    if let Some(stage) = process_stop {
         cmd.env("SIDENOTE_AREA_CRASH", stage);
     }
     cmd.status().unwrap().code().unwrap()
@@ -220,6 +230,7 @@ fn main() {
             ]
             .into_iter()
             .chain(review::CASES.iter().copied())
+            .chain(round2::CASES.iter().copied())
             {
                 let data = root.join(scenario);
                 assert_eq!(child(&data, "prepare", None), 0);
@@ -231,7 +242,7 @@ fn main() {
                 evidence.push(json!({"scenario":scenario,"passed":true,"data":data}));
             }
             for stage in ["backup", "staged", "published"] {
-                let data = root.join(format!("crash-{stage}"));
+                let data = root.join(format!("process-stop-{stage}"));
                 assert_eq!(child(&data, "prepare", None), 0);
                 assert_eq!(child(&data, "batch", Some(stage)), 86);
                 if stage == "published" {
@@ -242,11 +253,12 @@ fn main() {
                 }
                 assert_eq!(child(&data, "undo", None), 0);
                 assert_eq!(child(&data, "bytes", None), 0);
-                evidence
-                    .push(json!({"scenario":format!("crash-{stage}"),"passed":true,"data":data}));
+                evidence.push(
+                    json!({"scenario":format!("process-stop-{stage}"),"passed":true,"data":data}),
+                );
             }
             for stage in ["undo-staged", "undo-publication", "undo-published"] {
-                let data = root.join(format!("crash-{stage}"));
+                let data = root.join(format!("process-stop-{stage}"));
                 assert_eq!(child(&data, "prepare", None), 0);
                 assert_eq!(child(&data, "batch", None), 0);
                 assert_eq!(child(&data, "undo", Some(stage)), 86);
@@ -256,8 +268,9 @@ fn main() {
                 }
                 assert_eq!(child(&data, "review-undo-check-new", None), 0);
                 assert_eq!(child(&data, "bytes", None), 0);
-                evidence
-                    .push(json!({"scenario":format!("crash-{stage}"),"passed":true,"data":data}));
+                evidence.push(
+                    json!({"scenario":format!("process-stop-{stage}"),"passed":true,"data":data}),
+                );
             }
             write(&root.join("results.json"), &evidence);
             println!(
@@ -514,21 +527,16 @@ fn main() {
                 &store,
                 Action::Move {
                     project_id: source,
-                    area_id: target,
+                    area_id: target.clone(),
                 },
             );
-            let before = serde_json::to_value(store.load_projects().unwrap()).unwrap();
-            assert!(
-                store
-                    .undo_area(&id)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("changed later")
-            );
+            store.undo_area(&id).unwrap();
+            let p = store.load_projects().unwrap();
             assert_eq!(
-                before,
-                serde_json::to_value(store.load_projects().unwrap()).unwrap()
+                p.area_catalog().unwrap().projects[&ids(&store).0].area_id,
+                Some(target)
             );
+            assert!(!store.area_receipts().unwrap()[&id].skipped.is_empty());
         }
         "child-move" | "raw-move" => {
             apply(
@@ -607,7 +615,7 @@ fn main() {
                     .update_manual("synthetic-done", |t| t.project = Some(CHILD.into()))
                     .unwrap();
             }
-            assert!(store.undo_area(&id).is_err());
+            store.undo_area(&id).unwrap();
         }
         "checksum" => {
             let id = apply(
@@ -617,10 +625,10 @@ fn main() {
                 },
             );
             let receipt = &store.area_receipts().unwrap()[&id];
-            let mut value: Value =
-                serde_json::from_slice(&fs::read(&receipt.backup).unwrap()).unwrap();
+            let backup = root.join("local/area-operations").join(&receipt.backup);
+            let mut value: Value = serde_json::from_slice(&fs::read(&backup).unwrap()).unwrap();
             value["preview"]["fingerprint"] = json!("tampered");
-            write(&receipt.backup, &value);
+            write(&backup, &value);
             assert!(
                 store
                     .undo_area(&id)
@@ -776,6 +784,7 @@ fn main() {
             assert_eq!(all.manual.len(), 2);
         }
         "bytes" => verify_bytes(&root),
+        mode if mode.starts_with("r2-") => round2::run(mode, &store),
         mode if mode.starts_with("review-") => review::run(mode, &store),
         _ => panic!("Unknown proof mode"),
     }
