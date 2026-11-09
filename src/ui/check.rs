@@ -417,6 +417,21 @@ impl State {
         self.check.shown = diary::PAGE;
         self.check.filter = Filter::Open;
         self.check.refresh();
+        // Open findings of high priority should not hide behind a fold: open "Needs your
+        // attention" for the latest check's day. Folding it again lasts until the next visit.
+        let urgent = self.check.report.as_ref().and_then(|r| {
+            (0..r.content.findings.len())
+                .any(|i| {
+                    self.check.status_at(r, i) == TriageStatus::Open
+                        && matches!(r.content.findings[i].severity, Severity::High)
+                })
+                .then_some(r.date)
+        });
+        if let Some(date) = urgent {
+            self.check
+                .open_parts
+                .insert(diary::part_key(date, diary::Part::Attention));
+        }
         self.refresh_diary();
         if self.config.features.memory {
             self.memory.refresh(true);
