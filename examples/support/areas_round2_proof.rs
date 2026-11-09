@@ -83,7 +83,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             other.add_project("Peer draft").unwrap();
             let id = own(&other);
             copy_tree(&other.root.join("state"), &root.join("state"));
-            let marker = root.join("state").join(&id).join("device.json");
+            let marker = root.join("state").join(&id).join("area-format.json");
             let mut value: Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
             value["app_version"] = json!("99.0.0");
             value["area_format"] = json!(0);
@@ -135,7 +135,7 @@ pub fn run(mode: &str, store: &TaskStore) {
                 "A newly seen empty device with no marker is format zero"
             );
             write(
-                &folder.join("device.json"),
+                &folder.join("area-format.json"),
                 &json!({"device":empty_id,"name":"Synthetic fresh device","app_version":"0.0.1","area_format":1,"seen_at":chrono::Utc::now().timestamp()}),
             );
             core::area_version::ensure(root).unwrap();
@@ -455,7 +455,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             );
             let journals = files(&other.root.join("state"));
             assert!(
-                journals.keys().all(|p| p.ends_with("device.json")),
+                journals.keys().all(|p| p.ends_with("area-format.json")),
                 "No import journal published after failed read-back"
             );
         }
@@ -723,7 +723,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             assert_eq!(store.load_projects().unwrap().projects.len(), 3);
             assert!(store.unreadable_items().unwrap() > 0);
             write(
-                &root.join("state").join(&peer_id).join("device.json"),
+                &root.join("state").join(&peer_id).join("area-format.json"),
                 &json!({"device":peer_id,"name":"Synthetic peer","app_version":env!("CARGO_PKG_VERSION"),"area_format":1,"seen_at":chrono::Utc::now().timestamp()}),
             );
             apply(

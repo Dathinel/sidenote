@@ -3,6 +3,7 @@ use super::{DeviceSettings, device, store_io};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 const AREA_FORMAT: u32 = 1;
+// device.json* is excluded by existing Syncthing shares; format markers must use another name.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Marker {
@@ -13,7 +14,7 @@ struct Marker {
     seen_at: i64,
 }
 pub(super) fn record(root: &Path, own: &DeviceSettings) -> io::Result<()> {
-    let path = root.join("state").join(&own.id).join("device.json");
+    let path = root.join("state").join(&own.id).join("area-format.json");
     store_io::reject_reparse(&path)?;
     let now = chrono::Utc::now().timestamp();
     if let Ok(bytes) = store_io::read_bounded(&path, 4096)
@@ -47,7 +48,7 @@ pub fn ensure(root: &Path) -> io::Result<()> {
             continue;
         }
         store_io::reject_reparse(&entry.path())?;
-        let marker = store_io::read_bounded(&entry.path().join("device.json"), 4096)
+        let marker = store_io::read_bounded(&entry.path().join("area-format.json"), 4096)
             .ok()
             .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
             .filter(|m| m.device == id);
@@ -129,7 +130,7 @@ pub fn device_name(root: &Path, id: &str) -> String {
     if !device::valid_id(id) {
         return "another device".into();
     }
-    store_io::read_bounded(&root.join("state").join(id).join("device.json"), 4096)
+    store_io::read_bounded(&root.join("state").join(id).join("area-format.json"), 4096)
         .ok()
         .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
         .filter(|m| m.device == id)

@@ -76,7 +76,7 @@ so late references still resolve. Missing references show Missing area. Invalid
 items are quarantined individually and counted. Only future area schemas make
 the entire catalog read-only. Unknown fields survive within a 64 KB per-item cap.
 
-Each device publishes a synced version marker. Area writes, migration, merging,
+Each device publishes `state/<device>/area-format.json`, a synced format marker. Area writes, migration, merging,
 Undo and assignment choices require every installation seen within thirty days
 to report integer `area_format >= 1`. The app version is display-only and may
 reset at launch. A recent device
