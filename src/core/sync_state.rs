@@ -423,6 +423,27 @@ pub(super) fn save_changes<T: Serialize>(
         flatten(store, serde_json::to_value(after)?)?,
     )
 }
+/// Run a guarded edit under the existing store lock, then publish one immutable journal.
+pub(super) fn update_checked<T: Serialize + DeserializeOwned + Default>(
+    root: &Path,
+    store: &str,
+    change: impl FnOnce(&mut T) -> io::Result<()>,
+) -> io::Result<T> {
+    let mut session = Session::open(root, store)?;
+    let before = session.value::<T>()?;
+    let mut value: T = serde_json::from_value(before.clone())?;
+    change(&mut value)?;
+    session.view = read_view(root, store, &session.own)?;
+    session.import_legacy()?;
+    if session.value::<T>()? != before {
+        return Err(invalid("Project state changed; review a fresh preview"));
+    }
+    session.diff(
+        flatten(store, before)?,
+        flatten(store, serde_json::to_value(&value)?)?,
+    )?;
+    Ok(value)
+}
 pub(super) fn new_id(root: &Path) -> io::Result<String> {
     Ok(format!(
         "{}-{}",
@@ -614,7 +635,7 @@ fn flatten(store: &str, value: Value) -> io::Result<Items> {
                     }
                 }
             }
-            ("projects.json", "aliases")
+            ("projects.json", "aliases" | "merges" | "meeting_projects")
             | ("checks/triage.json", "findings")
             | ("memory/legacy.json", "documents") => {
                 for (key, item) in value

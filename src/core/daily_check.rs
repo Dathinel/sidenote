@@ -284,6 +284,18 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
             )?;
         }
         _ => {
+            let project = if matches!(action.kind, ActionKind::SetProject) {
+                let projects = TaskStore::default().load_projects()?;
+                let matches = projects.matches(action.value.as_str().unwrap());
+                if matches.len() != 1 {
+                    return Err(invalid(
+                        "Choose an existing project or explicitly Create it in Projects first",
+                    ));
+                }
+                Some(matches[0].clone())
+            } else {
+                None
+            };
             TaskStore::default().update_override(
                 &action.meeting_id,
                 action.todo_index,
@@ -291,7 +303,7 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
                 |edit| {
                     let value = Some(action.value.as_str().unwrap().to_owned());
                     match action.kind {
-                        ActionKind::SetProject => edit.project = value,
+                        ActionKind::SetProject => edit.project = project,
                         ActionKind::SetOwner => edit.owner = value,
                         ActionKind::SetDue => edit.due = value,
                         _ => unreachable!(),

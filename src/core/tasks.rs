@@ -34,7 +34,7 @@ fn read_json<T: Default + DeserializeOwned>(path: &Path) -> io::Result<T> {
 
 // ---- the pipeline's tasks.json -------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskTag {
     /// Index into the meeting's `todo` list.
     pub i: usize,
@@ -45,7 +45,7 @@ pub struct TaskTag {
     #[serde(default)]
     pub mine: Option<bool>,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TasksFile {
     pub meeting_project: Option<String>,
@@ -66,7 +66,6 @@ pub fn load_pipeline(meetings: &[Meeting]) -> Pipeline {
 pub fn load_pipeline_in(root: &Path, meetings: &[Meeting]) -> Pipeline {
     meetings
         .iter()
-        .filter(|m| !m.summary.todo.is_empty())
         .filter_map(|m| {
             let file = read_json::<TasksFile>(&root.join(&m.id).join("tasks.json")).ok()?;
             Some((m.id.clone(), file))
@@ -83,21 +82,54 @@ pub struct Projects {
     pub projects: Vec<String>,
     /// Old name to new name. Chains are followed, so a renamed project stays merged.
     pub aliases: BTreeMap<String, String>,
+    pub merges: BTreeMap<String, super::project_merge::ProjectMerge>,
+    /// Stable assignments also cover meetings with no tasks. Source files remain untouched.
+    pub meeting_projects: BTreeMap<String, String>,
     #[serde(flatten)]
     pub other: Map<String, Value>,
 }
 impl Projects {
     /// The name a project now goes by, after following its aliases.
     pub fn resolve(&self, name: &str) -> String {
+        let matches = self.matches(name);
+        if matches.len() == 1 {
+            matches[0].clone()
+        } else {
+            self.resolve_exact(name)
+        }
+    }
+    fn resolve_exact(&self, name: &str) -> String {
         let mut name = name.trim();
-        // A cycle would never settle, so stop after a few hops.
-        for _ in 0..16 {
-            match self.aliases.get(name) {
+        let mut seen = BTreeSet::new();
+        while seen.insert(name) {
+            let next = self
+                .merges
+                .get(name)
+                .filter(|m| m.active)
+                .map(|m| &m.into)
+                .or_else(|| self.aliases.get(name));
+            match next {
                 Some(next) if next != name => name = next.trim(),
-                _ => break,
+                _ => return name.to_string(),
             }
         }
-        name.to_string()
+        // Concurrent peer merges can form a cycle. Keep every item in one stable folder.
+        seen.into_iter().min().unwrap_or(name).to_string()
+    }
+    pub fn matches(&self, name: &str) -> Vec<String> {
+        let key = super::project_merge::normalized_name(name);
+        let mut matches = BTreeSet::new();
+        for known in self
+            .projects
+            .iter()
+            .chain(self.aliases.keys())
+            .chain(self.merges.keys())
+        {
+            if super::project_merge::normalized_name(known) == key {
+                matches.insert(self.resolve_exact(known));
+            }
+        }
+        matches.into_iter().collect()
     }
     /// Points `old` at `new`, so every task of either name lands under `new`.
     fn rename(&mut self, old: &str, new: &str) {
@@ -115,7 +147,7 @@ impl Projects {
         self.add(new);
     }
     fn add(&mut self, name: &str) {
-        if !name.is_empty() && !self.projects.iter().any(|p| p == name) {
+        if !name.is_empty() && self.matches(name).is_empty() {
             self.projects.push(name.to_string());
         }
     }
@@ -299,11 +331,36 @@ impl TaskStore {
     }
     /// Adds a project name to the list the pipeline reads.
     pub fn add_project(&self, name: &str) -> io::Result<Projects> {
-        self.update_projects(|p| p.add(name.trim()))
+        super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            if p.matches(name).len() > 1 {
+                return Err(super::store_io::invalid("Choose an existing project"));
+            }
+            p.add(name.trim());
+            Ok(())
+        })
     }
     /// Renames a project by writing an alias `old -> new`. Naming an existing project merges.
     pub fn rename_project(&self, old: &str, new: &str) -> io::Result<Projects> {
-        self.update_projects(|p| p.rename(old.trim(), new.trim()))
+        super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            if !p.matches(new).is_empty() && p.resolve(old) != p.resolve(new) {
+                return Err(super::store_io::invalid(
+                    "Use Merge into to preview this change",
+                ));
+            }
+            p.rename(old.trim(), new.trim());
+            Ok(())
+        })
+    }
+    pub fn assign_meeting(&self, id: &str, name: &str) -> io::Result<Projects> {
+        super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            if name != UNSORTED && p.matches(name).len() != 1 {
+                return Err(super::store_io::invalid(
+                    "Choose or explicitly create a project first",
+                ));
+            }
+            p.meeting_projects.insert(id.into(), p.resolve(name));
+            Ok(())
+        })
     }
     /// Changes one task's override. The entry is removed when nothing is left in it.
     pub fn update_override(

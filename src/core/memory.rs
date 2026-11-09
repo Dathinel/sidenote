@@ -207,10 +207,24 @@ impl MemoryStore {
     }
     pub fn load(&self) -> io::Result<MemoryFile> {
         if super::paths::read_only() {
-            return self.load_locked();
+            return self.resolve_projects(self.load_locked()?);
         }
         let _lock = store_io::lock(&self.path("records.lock"))?;
-        self.load_locked()
+        self.resolve_projects(self.load_locked()?)
+    }
+    fn resolve_projects(&self, mut file: MemoryFile) -> io::Result<MemoryFile> {
+        let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
+        for record in &mut file.records {
+            record.project = record.project.as_deref().map(|p| projects.resolve(p));
+        }
+        for pending in &mut file.proposals {
+            pending.proposal.project = pending
+                .proposal
+                .project
+                .as_deref()
+                .map(|p| projects.resolve(p));
+        }
+        Ok(file)
     }
     fn load_locked(&self) -> io::Result<MemoryFile> {
         let file: MemoryFile = super::sync_state::load(&self.root, "memory/records.json")?;
@@ -246,7 +260,7 @@ impl MemoryStore {
     /// One consistent prompt snapshot, protected against simultaneous owner edits.
     pub fn snapshot(&self) -> io::Result<(MemoryFile, String)> {
         if super::paths::read_only() {
-            let file = self.load_locked()?;
+            let file = self.resolve_projects(self.load_locked()?)?;
             let text = if file.migration.is_some() {
                 render(&file)
             } else {
@@ -255,7 +269,7 @@ impl MemoryStore {
             return Ok((file, text));
         }
         let _lock = store_io::lock(&self.path("records.lock"))?;
-        let file = self.load_locked()?;
+        let file = self.resolve_projects(self.load_locked()?)?;
         if file.migration.is_some() {
             self.export(&file)?;
             let text = render(&file);
@@ -391,7 +405,7 @@ impl MemoryStore {
             }
         }
         if super::paths::read_only() {
-            Ok(file.proposals)
+            Ok(self.resolve_projects(file)?.proposals)
         } else {
             Ok(self.load()?.proposals)
         }
