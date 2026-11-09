@@ -1051,7 +1051,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     let hint = if starting {
         "Starting the recording. You can start writing now."
     } else {
-        "Notes save as you type. Your transcript is ready after the meeting."
+        "Your typed notes save as you type. The transcript is added when you stop."
     };
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
@@ -1068,32 +1068,48 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .w_full()
         .items_start()
         .gap(if narrow { 10.0 } else { 12.0 })
-        .child(head)
-        .child(roles::META.wrap(hint, p.faint));
-    if let Some(Saving::Failed(why)) = saving {
+        .child(head);
+    if let Some(Saving::Failed(_)) = saving {
+        let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
         c = c.child(
             col()
-                .gap(8.0)
-                .child(roles::SMALL.medium().wrap(why, p.warn).role("alert"))
+                .key("live-save-warning")
+                .w_full()
+                .padding(16.0)
+                .radius(10.0)
+                .border(1.0, p.warn)
+                .fill(p.warnbg)
+                .gap(12.0)
+                .role("alert")
+                .child(roles::NAME.wrap("!  Your notes need saving", p.warn))
+                .child(roles::SMALL.wrap(if recovered {
+                    "Sidenote saved a backup copy, but could not save your notes in the meeting folder. The meeting is still recording. Copy your notes, then try saving again."
+                } else {
+                    "Sidenote could not save your notes, even to a backup copy. The meeting is still recording. Copy your notes now, then try saving again. Do not close Sidenote yet."
+                }, p.ink))
                 .child(
                     row()
-                        .gap(16.0)
+                        .flex_wrap()
+                        .gaps(8.0, 8.0)
                         .child(
-                            link("Retry save and close", p)
-                                .key("live-close-retry")
+                            super::area::button("Copy notes", "live-copy-notes", p)
+                                .fill(p.accent)
+                                .color(p.card)
                                 .on_press_tx(|s: &mut State, tx| {
-                                    if s.live_close() {
-                                        tx.quit();
-                                    }
+                                    tx.copy(s.live_notes.text.clone());
                                 }),
                         )
-                        .child(link("Copy notes", p).key("live-copy-notes").on_press_tx(
-                            |s: &mut State, tx| {
-                                tx.copy(s.live_notes.text.clone());
-                            },
-                        )),
+                        .child(
+                            super::area::button("Try saving again", "live-save-retry", p)
+                                .key("live-close-retry")
+                                .on_press(|s: &mut State| {
+                                    s.live_flush();
+                                }),
+                        ),
                 ),
         );
+    } else {
+        c = c.child(roles::META.wrap(hint, p.faint));
     }
     c.child(
         col()
