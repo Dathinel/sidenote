@@ -367,20 +367,21 @@ impl Meeting {
             &folder.join("english-summary.json"),
             super::file_reads::SUMMARY_MAX,
         ) {
-            Ok(raw) => raw,
+            Ok(raw) => Some(raw),
             Err(e)
                 if e.kind() == io::ErrorKind::NotFound
                     && (pending || folder.join(super::live::NOTES_FILE).is_file()) =>
             {
-                String::new()
+                None
             }
             Err(e) => return Err(e.into()),
         };
-        let summary: Summary = if summary_raw.is_empty() {
-            Summary::default()
-        } else {
-            serde_json::from_str(&summary_raw)?
-        };
+        let summary: Summary = summary_raw
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
+        let summary_raw = summary_raw.unwrap_or_default();
         let manifest: Manifest =
             match super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024) {
                 Ok(raw) => serde_json::from_str(&raw)?,
@@ -664,6 +665,10 @@ mod quick_title_tests {
         assert_eq!(meetings[0].notes, "Keep this thought");
         assert!(meetings[0].summary.title.is_empty());
         fs::write(folder.join("english-summary.json"), "invalid").unwrap();
+        let (meetings, errors) = scan_in(&root);
+        assert!(meetings.is_empty());
+        assert_eq!(errors.len(), 1);
+        fs::write(folder.join("english-summary.json"), "").unwrap();
         let (meetings, errors) = scan_in(&root);
         assert!(meetings.is_empty());
         assert_eq!(errors.len(), 1);
