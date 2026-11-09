@@ -16,7 +16,6 @@ Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
     if (-not $version) { throw 'Cargo.toml has no package version.' }
-    (Get-Item src/main.rs).LastWriteTime = Get-Date
     & cargo build --release --locked --bin sidenote
     if ($LASTEXITCODE) { throw 'Release build failed.' }
     $stage = "$root/artifacts/updates-core/package-$version"
