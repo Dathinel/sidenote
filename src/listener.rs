@@ -143,6 +143,11 @@ fn catch_up() -> io::Result<()> {
     }
     pipeline(None)
 }
+fn continue_after_pipeline(result: io::Result<()>, report: impl FnOnce(&str)) {
+    if result.is_err() {
+        report("could not queue notes; listening continues");
+    }
+}
 // A streaming HTTP body, with no TLS or proxy needed for the loopback API.
 struct Body {
     stream: BufReader<TcpStream>,
@@ -247,7 +252,7 @@ fn listen() -> Result<(), Problem> {
     }
     log("connected");
     crate::hex_engine::meeting_event();
-    pipeline(None)?;
+    continue_after_pipeline(pipeline(None), log);
     let mut body = BufReader::new(Body {
         stream,
         chunked,
@@ -277,10 +282,23 @@ fn listen() -> Result<(), Problem> {
             let valid = !id.is_empty()
                 && id.bytes().any(|c| c.is_ascii_digit())
                 && id.bytes().all(|c| c.is_ascii_digit() || c == b'-');
-            pipeline(valid.then_some(id))?;
+            continue_after_pipeline(pipeline(valid.then_some(id)), log);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+    #[test]
+    fn enqueue_failure_is_reported_without_ending_event_handling() {
+        let mut messages = Vec::new();
+        for result in [Err(io::Error::other("private failure")), Ok(())] {
+            continue_after_pipeline(result, |message| messages.push(message.to_owned()));
+        }
+        assert_eq!(messages, ["could not queue notes; listening continues"]);
+    }
 }
 pub fn run() -> ! {
     let _instance = match crate::updates::listener_lock() {

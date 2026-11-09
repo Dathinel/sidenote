@@ -132,7 +132,13 @@ pub(super) fn enqueue_in(
     if sorting && !folder.join("english-summary.json").is_file() {
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
+    if let Some(job) = read(root, id)?
+        && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
+    {
+        return Ok(());
+    }
     let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
+    // A different enqueue may have won while we acquired the writer lock.
     if let Some(job) = read(root, id)?
         && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
     {
@@ -575,13 +581,17 @@ pub fn catch_up() -> io::Result<()> {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if valid_id(&id) && complete(&entry.path()) {
-            enqueue_in(
+            if enqueue_in(
                 &core::state_dir(),
                 &core::meetings_dir(),
                 &id,
                 None,
                 &settings,
-            )?;
+            )
+            .is_err()
+            {
+                let _ = log(&core::state_dir(), &id, "could not enqueue notes");
+            }
         }
     }
     start_worker()

@@ -317,6 +317,18 @@ fn one_worker_at_a_time() {
     assert_eq!(state(&root.0), JobState::Queued);
     drop(lock);
 }
+
+#[test]
+fn existing_job_enqueue_does_not_wait_for_the_running_job_lock() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let _lock = store_io::lock(&root.0.join(format!("local/notes-jobs/{ID}.lock"))).unwrap();
+    enqueue(&root.0, &s, None);
+    enqueue(&root.0, &s, Some(Request::TryAgain));
+    assert_eq!(state(&root.0), JobState::Queued);
+}
 #[test]
 fn backend_retry_delays_are_fifteen_then_sixty_minutes_then_manual() {
     let root = Temp::new();
