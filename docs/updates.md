@@ -1,4 +1,4 @@
-# Local updates
+# Releases and updates
 
 Sidenote uses Velopack 0.0.1298 (MIT). Packaging uses the matching CLI and the
 per-user .NET SDK 8.0.427. These builds are unsigned.
@@ -32,6 +32,14 @@ feeds: hashes detect corruption but do not authenticate an unsigned publisher.
 4. Mark the release as the latest stable release, not a draft or prerelease.
    The `/releases/latest/download/` URL must resolve to the release containing
    the complete feed. Verify its assets before announcing it.
+
+The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
+the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,
+copyright and notice files under `dependency-notices/<crate>-<version>/`.
+Notices come from the locked offline Cargo cache, including optional dependencies;
+packing fails if a dependency has no cached notice files. For Git workspace
+dependencies, shared notices are collected from the checkout root. Original relative paths
+are preserved. Fetch the locked sources before the offline packaging step.
 
 The script retains three full versions and their deltas in its local output.
 Publish a previous build with a higher version to roll back. These installers
