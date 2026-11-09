@@ -74,7 +74,12 @@ impl Summary {
                 )
             }))
             .chain(self.todo.iter().flat_map(|t| {
-                std::iter::once(t.task.as_str())
+                std::iter::once(t.text())
+                    .chain(std::iter::once(t.title()))
+                    .chain(std::iter::once(t.description.as_str()))
+                    .chain(t.subtasks.iter().map(|s| s.title.as_str()))
+                    .chain(t.waiting_on.iter().filter_map(|w| w.text.as_deref()))
+                    .chain(t.team.as_deref())
                     .chain(t.owner.as_deref())
                     .chain(t.due.as_deref())
             }))
@@ -105,10 +110,48 @@ pub struct Point {
 #[serde(default)]
 pub struct Todo {
     pub task: String,
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub waiting_on: Option<WaitingOn>,
+    pub subtasks: Vec<Subtask>,
+    pub team: Option<String>,
     pub owner: Option<String>,
     pub due: Option<String>,
     pub due_default: bool,
     pub at: Vec<String>,
+}
+impl Todo {
+    pub fn title(&self) -> &str {
+        if self.title.trim().is_empty() {
+            &self.task
+        } else {
+            &self.title
+        }
+    }
+    pub fn text(&self) -> &str {
+        if self.task.trim().is_empty() {
+            self.title()
+        } else {
+            &self.task
+        }
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WaitingOn {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Subtask {
+    pub id: String,
+    pub title: String,
+    pub done: bool,
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]

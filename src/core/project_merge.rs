@@ -463,7 +463,7 @@ pub(super) fn raw_assignments(
             super::areas::meeting_baseline(p, pipeline, &meeting.id),
         );
         for (index, todo) in meeting.summary.todo.iter().enumerate() {
-            let edit = overrides.get(&meeting.id, index);
+            let edit = overrides.match_task(&meeting.id, &todo.id, todo.text(), index);
             out.insert(
                 json!(["task", meeting.id, index, todo.task]).to_string(),
                 super::areas::assignment_baseline(
