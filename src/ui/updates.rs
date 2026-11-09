@@ -1,8 +1,8 @@
 //! Quiet update notices and the device's Updates settings.
 use super::{
-    Event, State, hex,
+    Event, State, hex, roles,
     theme::Palette,
-    widgets::{hairline, label, link, pressable},
+    widgets::{hairline, link, pressable},
 };
 use rune::{El, col, el, row};
 use sidenote::updates::{self, Phase, Status};
@@ -168,19 +168,18 @@ fn busy(status: &Status) -> bool {
 fn install(s: &State, p: Palette, footer: bool) -> El {
     let ready = s.updates.status.phase == Phase::Ready;
     let b = pressable(
-        label(
-            match s.updates.status.phase {
-                Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
-                Phase::Preparing => "Preparing update".into(),
-                Phase::StoppingListener => "Stopping the listener".into(),
-                _ => "Install and restart".into(),
-            },
-            13.5,
-            600.0,
-            if ready { p.card } else { p.faint },
-        )
-        .px(12.0)
-        .py(7.0),
+        roles::CONTROL
+            .wrap(
+                match s.updates.status.phase {
+                    Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
+                    Phase::Preparing => "Preparing update".into(),
+                    Phase::StoppingListener => "Stopping the listener".into(),
+                    _ => "Install and restart".into(),
+                },
+                if ready { p.card } else { p.soft },
+            )
+            .px(12.0)
+            .py(7.0),
     )
     .key(if footer {
         "update-footer-install"
@@ -257,13 +256,8 @@ pub fn section(s: &State, p: Palette) -> El {
             .w_full()
             .gap(12.0)
             .pt(20.0)
-            .child(label("Updates", 21.0, 600.0, p.ink))
-            .child(label(
-                "Updates are off for this manual install",
-                14.0,
-                400.0,
-                p.soft,
-            ));
+            .child(roles::SECTION.wrap("Updates", p.ink))
+            .child(roles::SMALL.wrap("Updates are off for this manual install", p.soft));
     }
     let status = &s.updates.status;
     let mut body = col()
@@ -271,11 +265,9 @@ pub fn section(s: &State, p: Palette) -> El {
         .w_full()
         .gap(12.0)
         .pt(20.0)
-        .child(label("Updates", 21.0, 600.0, p.ink))
-        .child(label(
+        .child(roles::SECTION.wrap("Updates", p.ink))
+        .child(roles::CONTROL.wrap(
             format!("Current version: Sidenote {}", updates::VERSION),
-            14.0,
-            500.0,
             p.ink,
         ));
     let title = match status.phase {
@@ -303,26 +295,17 @@ pub fn section(s: &State, p: Palette) -> El {
         .radius(10.0)
         .border(1.0, p.line)
         .fill(p.card)
-        .child(label(title, 16.0, 600.0, p.ink).role("status"));
+        .child(roles::TITLE.wrap(title, p.ink).role("status"));
     match status.phase {
         Phase::Available => {
-            card = card.child(label(
-                "The download will start in the background.",
-                13.5,
-                400.0,
-                p.soft,
-            ));
+            card =
+                card.child(roles::SMALL.wrap("The download will start in the background.", p.soft));
         }
         Phase::Downloading => {
             let width =
                 (s.app_w.get() - if s.narrow.get() { 140.0 } else { 430.0 }).clamp(180.0, 720.0);
             card = card
-                .child(label(
-                    format!("Downloading: {}%", status.progress),
-                    13.5,
-                    500.0,
-                    p.soft,
-                ))
+                .child(roles::CONTROL.wrap(format!("Downloading: {}%", status.progress), p.soft))
                 .child(
                     el().w(width)
                         .max_w(width)
@@ -341,12 +324,12 @@ pub fn section(s: &State, p: Palette) -> El {
                 );
         }
         Phase::Ready => {
-            card = card.child(label("Ready to install. Restart now, or keep working and install next time you open Sidenote.", 13.5, 400.0, p.soft));
+            card = card.child(roles::SMALL.wrap("Ready to install. Restart now, or keep working and install next time you open Sidenote.", p.soft));
         }
         _ => {}
     }
     if let Some(error) = &status.error {
-        card = card.child(label(error, 13.5, 500.0, p.warn).role("alert"));
+        card = card.child(roles::CONTROL.wrap(error, p.warn).role("alert"));
     }
     if status.phase == Phase::Error || status.error.is_some() {
         card = card.child(
@@ -363,20 +346,18 @@ pub fn section(s: &State, p: Palette) -> El {
     }
     card = card.child(actions(s, p, false));
     if s.updates.dismissed {
-        card = card.child(label(
+        card = card.child(roles::META.wrap(
             "You can keep working. The update will wait until the next restart.",
-            13.0,
-            400.0,
             p.soft,
         ));
     }
     if s.updates.notes_open && !status.notes.is_empty() {
         card = card
             .child(hairline(p))
-            .child(label("What changed", 14.0, 600.0, p.ink))
-            .child(label(&status.notes, 13.5, 400.0, p.soft));
+            .child(roles::SMALL.bold().wrap("What changed", p.ink))
+            .child(roles::SMALL.wrap(&status.notes, p.soft));
     }
-    body = body.child(card).child(label(
+    body = body.child(card).child(roles::META.wrap(
         format!(
             "Last checked: {}",
             status
@@ -388,28 +369,19 @@ pub fn section(s: &State, p: Palette) -> El {
                     |d| d.format("%d %b %Y at %H:%M").to_string()
                 )
         ),
-        13.0,
-        400.0,
         p.soft,
     ));
     body = body
-        .child(label("Update folder", 13.0, 600.0, p.soft))
-        .child(label(
-            if s.updates.scene {
+        .child(roles::GROUP.wrap("Update folder", p.soft))
+        .child(roles::SMALL.wrap(if s.updates.scene {
                 "E:\\Sidenote updates".into()
             } else {
                 updates::source_label()
-            },
-            13.5,
-            400.0,
-            p.ink,
-        ))
-        .child(label("Anyone who can change files in this folder can change what gets installed. Use a folder only you can write to.", 13.0, 400.0, p.soft));
+            }, p.ink))
+        .child(roles::SMALL.wrap("Anyone who can change files in this folder can change what gets installed. Use a folder only you can write to.", p.soft));
     if updates::feed().is_none() && !s.updates.scene {
-        body = body.child(label(
+        body = body.child(roles::META.wrap(
             "Set SIDENOTE_UPDATE_FEED in your launcher to choose a folder or file share.",
-            13.0,
-            400.0,
             p.soft,
         ));
     }
@@ -420,7 +392,7 @@ pub fn section(s: &State, p: Palette) -> El {
                 .on_press(|s: &mut State| s.check_updates()),
         );
     }
-    body.child(label("Checks run when Sidenote opens and every 6 hours. Installation waits until recording, Ask and background jobs finish.", 13.0, 400.0, p.faint).mt(8.0))
+    body.child(roles::META.wrap("Checks run when Sidenote opens and every 6 hours. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
 }
 pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     let u = &s.updates;
@@ -440,12 +412,7 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
             .w_full()
             .gap(3.0)
             .py(10.0)
-            .child(super::widgets::line(
-                format!("Sidenote {} is ready", u.status.version),
-                13.0,
-                500.0,
-                p.soft,
-            ))
+            .child(roles::CONTROL.line(format!("Sidenote {} is ready", u.status.version), p.soft))
             .child(
                 link("Restart to update", p)
                     .key("update-footer-install")
