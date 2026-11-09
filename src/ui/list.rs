@@ -97,7 +97,7 @@ fn search_box(s: &State, k: &Kit, height: f32, placeholder: &str, p: Palette) ->
 
 fn empty_text(s: &State) -> &'static str {
     if s.meetings.is_empty() {
-        "Meetings with an English summary appear here on their own."
+        "Your completed meetings and transcripts appear here."
     } else if s.filter != Filter::All && s.search.text.trim().is_empty() {
         "No meetings here yet."
     } else {
@@ -126,7 +126,14 @@ fn home_row(
         .min_w(0.0)
         .gap(2.0)
         .child(roles::TITLE.line(&m.title, p.ink))
-        .child(roles::META.line(people_line(m), p.faint));
+        .child(
+            roles::META.line(
+                super::notes_status::list_label(s, m)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| people_line(m)),
+                p.faint,
+            ),
+        );
     if let Some(hit) = &item.hit {
         text_col = text_col.child(snippet(hit, p));
     }
@@ -171,18 +178,14 @@ fn home_row(
     out
 }
 
-/// The home page: every summarised meeting, newest day first, with the Ask bar floating over
+/// The home page: saved and pending meetings, newest day first, with the Ask bar floating over
 /// it. Ask here covers all of them.
 pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let side = if narrow { 16.0 } else { 40.0 };
     let (title, count) = match &s.filter {
         Filter::All => (
             "Meetings".to_string(),
-            plural(
-                s.meetings.len(),
-                "meeting summarised",
-                "meetings summarised",
-            ),
+            plural(s.meetings.len(), "meeting", "meetings"),
         ),
         f => {
             let n = s.meetings.iter().filter(|m| s.matches_filter(m)).count();
@@ -221,6 +224,11 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .mb(10.0)
                 .on_press(|s: &mut State| s.go_meetings())
         }))
+        .children(
+            (s.filter == Filter::All && s.search.text.trim().is_empty())
+                .then(|| super::ai_notes::setup_card(s, p))
+                .flatten(),
+        )
         .children(super::today::strip(s, p))
         .children(super::project_merge::panel(s, k, p, layer))
         .children(super::area::project_tools(s, k, p, layer))

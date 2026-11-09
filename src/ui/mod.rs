@@ -1,6 +1,7 @@
 //! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
+mod ai_notes;
 mod area;
 mod area_editor;
 mod area_migration;
@@ -19,6 +20,8 @@ mod memory;
 mod models;
 mod more;
 mod nav;
+mod notes_scene;
+mod notes_status;
 mod project;
 mod project_merge;
 mod refresh;
@@ -88,6 +91,11 @@ fn default_runner(
 }
 
 pub enum Event {
+    AiNotes {
+        generation: u64,
+        worker: std::thread::ThreadId,
+        result: Result<ai_notes::Completion, String>,
+    },
     MemoryRefreshed {
         generation: u64,
         worker: std::thread::ThreadId,
@@ -235,6 +243,7 @@ pub struct State {
     pub filter: nav::Filter,
     pub nav: nav::NavCache,
     pub areas: area::AreaUi,
+    pub ai_notes: ai_notes::AiNotes,
     /// The recording's page. Nobody types a title: the heading is the start time, then the quick title.
     pub live: Option<live::Live>,
     pub live_open: bool,
@@ -409,6 +418,7 @@ impl State {
             filter: nav::Filter::All,
             nav: nav::NavCache::default(),
             areas: area::AreaUi::default(),
+            ai_notes: ai_notes::AiNotes::default(),
             live: None,
             live_open: false,
             live_notes: TextEdit::new(""),
@@ -970,6 +980,14 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::AiNotes {
+                generation,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.notes_finished(generation, result);
+            }
             Event::MemoryRefreshed {
                 generation,
                 worker,
@@ -1035,6 +1053,7 @@ impl State {
                     saved,
                     memory,
                     check,
+                    notes_jobs,
                     ..
                 } = *data;
                 refresh::retain_catalog(&self.meetings, &mut meetings, &retained);
@@ -1048,6 +1067,7 @@ impl State {
                     }
                     self.refresh_list();
                 }
+                self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
                 if let Some(projects) = projects {
                     content_changed |= different(&self.tasks.projects, &projects);
@@ -1183,6 +1203,7 @@ fn setup(s: &mut State, waker: Waker) {
         return;
     }
     s.waker = Some(waker.clone());
+    s.refresh_ai_notes();
     s.updates_start();
     s.hex_start(waker.clone());
     s.scan_tx = Some(refresh::start(waker, s.refresh_options()));
@@ -1212,6 +1233,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_)
                 if headless
                     && (s.asks.values().any(|r| r.live)
+                        || (s.ai_notes.pending.is_some() && !s.ai_notes.scene)
                         || s.edit_busy
                         || s.memory.refresh_pending
                         || s.areas.refresh_pending
@@ -1927,6 +1949,142 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("notes-meeting-after-setup", |s| {
+                notes_scene::meeting(s, "no-helper");
+                s.ai_notes.settings.as_mut().unwrap().helper = Some(core::notes::Helper::Claude);
+            }),
+            ("notes-settings-test-bad-answer", |s| {
+                notes_scene::settings(s, "test-bad-answer")
+            }),
+            ("notes-settings-last-error", |s| {
+                notes_scene::settings(s, "last-error")
+            }),
+            ("notes-meeting-provenance", |s| {
+                notes_scene::meeting(s, "done");
+                scene_scroll(s, "notes-provenance");
+            }),
+            ("notes-settings-helpers", |s| {
+                notes_scene::settings(s, "helpers")
+            }),
+            ("notes-settings-on", |s| notes_scene::settings(s, "on")),
+            ("notes-settings-off", |s| notes_scene::settings(s, "off")),
+            ("notes-settings-none", |s| notes_scene::settings(s, "none")),
+            ("notes-settings-scripts", |s| {
+                notes_scene::settings(s, "scripts")
+            }),
+            ("notes-settings-switch", |s| {
+                notes_scene::settings(s, "switch")
+            }),
+            ("notes-settings-testing", |s| {
+                notes_scene::settings(s, "testing")
+            }),
+            ("notes-settings-worked", |s| {
+                notes_scene::settings(s, "worked")
+            }),
+            ("notes-settings-test-error", |s| {
+                notes_scene::settings(s, "test-error")
+            }),
+            ("notes-settings-load-error", |s| {
+                notes_scene::settings(s, "load-error")
+            }),
+            ("notes-settings-loading", |s| {
+                notes_scene::settings(s, "loading")
+            }),
+            ("notes-settings-options", |s| {
+                notes_scene::settings(s, "options")
+            }),
+            ("notes-settings-instructions", |s| {
+                notes_scene::settings(s, "instructions")
+            }),
+            ("notes-settings-edited", |s| {
+                notes_scene::settings(s, "edited")
+            }),
+            ("notes-settings-limit", |s| {
+                notes_scene::settings(s, "limit")
+            }),
+            ("notes-settings-reset", |s| {
+                notes_scene::settings(s, "reset")
+            }),
+            ("notes-settings-fixed-notes", |s| {
+                notes_scene::settings(s, "fixed-notes")
+            }),
+            ("notes-settings-tasks", |s| {
+                notes_scene::settings(s, "tasks")
+            }),
+            ("notes-settings-fixed-tasks", |s| {
+                notes_scene::settings(s, "fixed-tasks")
+            }),
+            ("notes-settings-save-error", |s| {
+                notes_scene::settings(s, "save-error")
+            }),
+            ("notes-meeting-no-notes", |s| {
+                notes_scene::meeting(s, "no-notes")
+            }),
+            ("notes-meeting-no-helper", |s| {
+                notes_scene::meeting(s, "no-helper")
+            }),
+            ("notes-live-no-helper", |s| {
+                notes_scene::live(s, "no-helper")
+            }),
+            ("notes-meeting-needs-click", |s| {
+                notes_scene::meeting(s, "needs-click")
+            }),
+            ("notes-live-needs-click", |s| {
+                notes_scene::live(s, "needs-click")
+            }),
+            ("notes-meeting-queued", |s| {
+                notes_scene::meeting(s, "queued")
+            }),
+            ("notes-live-queued", |s| notes_scene::live(s, "queued")),
+            ("notes-meeting-running", |s| {
+                notes_scene::meeting(s, "running")
+            }),
+            ("notes-live-running", |s| notes_scene::live(s, "running")),
+            ("notes-meeting-helper-missing", |s| {
+                notes_scene::meeting(s, "helper-missing")
+            }),
+            ("notes-live-helper-missing", |s| {
+                notes_scene::live(s, "helper-missing")
+            }),
+            ("notes-meeting-backend-error", |s| {
+                notes_scene::meeting(s, "backend-error")
+            }),
+            ("notes-live-backend-error", |s| {
+                notes_scene::live(s, "backend-error")
+            }),
+            ("notes-meeting-backend-manual", |s| {
+                notes_scene::meeting(s, "backend-manual")
+            }),
+            ("notes-live-backend-manual", |s| {
+                notes_scene::live(s, "backend-manual")
+            }),
+            ("notes-meeting-timeout", |s| {
+                notes_scene::meeting(s, "timeout")
+            }),
+            ("notes-live-timeout", |s| notes_scene::live(s, "timeout")),
+            ("notes-meeting-bad-output", |s| {
+                notes_scene::meeting(s, "bad-output")
+            }),
+            ("notes-live-bad-output", |s| {
+                notes_scene::live(s, "bad-output")
+            }),
+            ("notes-meeting-fallback", |s| {
+                notes_scene::meeting(s, "fallback")
+            }),
+            ("notes-live-fallback", |s| notes_scene::live(s, "fallback")),
+            ("notes-meeting-too-long", |s| {
+                notes_scene::meeting(s, "too-long")
+            }),
+            ("notes-live-too-long", |s| notes_scene::live(s, "too-long")),
+            ("notes-meeting-empty", |s| notes_scene::meeting(s, "empty")),
+            ("notes-live-empty", |s| notes_scene::live(s, "empty")),
+            ("notes-meeting-tasks-failed", |s| {
+                notes_scene::meeting(s, "tasks-failed")
+            }),
+            ("notes-meeting-done", |s| notes_scene::meeting(s, "done")),
+            ("notes-today-found", |s| notes_scene::today(s, true)),
+            ("notes-today-none", |s| notes_scene::today(s, false)),
+            ("notes-list-states", notes_scene::list),
             ("sync-footer-now", |s| {
                 scene_sidebar(s, true);
                 s.last_updated = Some(Instant::now());
