@@ -20,6 +20,15 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('merge-worker-proof', 'merge-worker-proof', '1320x1000', $null, @()),
+    @('merge-preparing', 'merge-preparing', '1320x1000', $null, @()),
+    @('merge-preparing-560', 'merge-preparing', '560x1100', $null, @()),
+    @('merge-merging', 'merge-merging', '1320x1000', $null, @()),
+    @('merge-merging-560', 'merge-merging', '560x1100', $null, @()),
+    @('merge-undoing', 'merge-undoing', '1320x1000', $null, @()),
+    @('merge-undoing-560', 'merge-undoing', '560x1100', $null, @()),
+    @('merge-preview-expanded', 'merge-preview-expanded', '1320x1300', $null, @()),
+    @('merge-preview-expanded-560', 'merge-preview-expanded', '560x1600', $null, @()),
     @('merge-page', 'merge-page', '1320x1000', $null, @()),
     @('merge-page-560', 'merge-page', '560x1100', $null, @()),
     @('merge-picker', 'merge-picker', '1320x1000', $null, @()),

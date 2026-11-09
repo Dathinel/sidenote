@@ -80,6 +80,11 @@ fn default_runner(
 }
 
 pub enum Event {
+    ProjectMerge {
+        generation: u64,
+        worker: std::thread::ThreadId,
+        result: Result<project_merge::Completion, String>,
+    },
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     MigrationPrepared(Result<(), String>),
@@ -939,6 +944,14 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::ProjectMerge {
+                generation,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.project_merge_finished(generation, result);
+            }
             Event::Update(status) => self.update_status(status),
             Event::UpdateFinished(result) => self.update_finished(result),
             Event::Hex(msg) => self.hex_apply(msg),
@@ -1864,6 +1877,15 @@ pub fn spec() -> AppSpec<State> {
                 s.config.features.memory = false;
                 s.config.features.daily_check = false;
                 s.open_finder();
+            }),
+            ("merge-worker-proof", |s| {
+                project_merge::scene(s, "worker-proof")
+            }),
+            ("merge-preparing", |s| project_merge::scene(s, "preparing")),
+            ("merge-merging", |s| project_merge::scene(s, "merging")),
+            ("merge-undoing", |s| project_merge::scene(s, "undoing")),
+            ("merge-preview-expanded", |s| {
+                project_merge::scene(s, "preview-expanded")
             }),
             ("merge-page", |s| project_merge::scene(s, "page")),
             ("merge-picker", |s| project_merge::scene(s, "picker")),
