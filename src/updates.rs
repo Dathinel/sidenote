@@ -551,11 +551,14 @@ pub fn apply(
         recording_idle().map_err(|_| "Recording started. Try again when it is finished.")?;
         mgr.wait_exit_then_apply_updates(&asset, true, true, restart_args)
             .map_err(|_| "Could not start the update. Try again.")?;
-        let pid = crate::platform::updater_child()
-            .ok()
-            .flatten()
-            .ok_or("The updater did not stay running. Try again.")?;
-        write_stop(pid).map_err(|_| "Could not save updater restart state.")
+        // Update.exe now waits for this process to exit, and nothing here can cancel it.
+        // Never roll back past this point: a restarted listener could be mid-job when the
+        // updater replaces files. If the handoff below fails, the stop marker keeps this
+        // process's PID, which is dead after exit, so the next start restarts the listener.
+        if let Some(pid) = crate::platform::updater_child().ok().flatten() {
+            let _ = write_stop(pid);
+        }
+        Ok(())
     });
     if let Err(error) = result {
         restart_listener();

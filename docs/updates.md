@@ -63,7 +63,17 @@ Rust router and runs the normal idempotent notes watcher, which scans completed
 manifests and skips meetings that already have notes. A meeting that finishes
 while the listener is stopped is processed after restart, even if the event API
 is still unavailable. Existing pipeline retry and audio-size policies remain.
-No dictation setting is written. Apply preparation, checksum reads, status
+No dictation setting is written.
+
+Known limit: once Update.exe has been started, Sidenote exits and never rolls
+back, because a restarted listener could be mid-job when files are replaced. If
+Update.exe then crashes without restarting Sidenote, nothing restarts the
+listener until the next Sidenote window or the listener task's next trigger (for
+example sign-in). Meetings recorded meanwhile are not lost; the startup catch-up
+above processes them then. A separate watchdog would close this gap; it is not
+built.
+
+Apply preparation, checksum reads, status
 probes, task commands and listener-stop waits run on a worker. The window
 publishes "Preparing update" and "Stopping the listener" while staying usable.
 An idle MCP connection does not block installation. A memory proposal holds the
