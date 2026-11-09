@@ -1004,4 +1004,23 @@ mod tests {
         f.meeting.device = Some("Other PC".into());
         assert!(!needs_task_redo(&f.meeting));
     }
+    #[test]
+    fn a_released_waiting_task_can_wait_on_a_new_blocker() {
+        let f = Fixture::new(
+            json!([{"id":"a","title":"Send proof","status":"waiting","waiting_on":{"task_id":"b"}},{"id":"b","title":"Approve proof","status":"done"}]),
+        );
+        let task = f.tasks(&Overrides::default()).remove(0);
+        assert_eq!(task.status, TaskStatus::Todo);
+        let view = f
+            .store()
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Status(TaskStatus::Waiting, None),
+            )
+            .unwrap();
+        let next = f.tasks(&view.value);
+        assert_eq!(next[0].status, TaskStatus::Waiting);
+        assert!(next[0].waiting_on.is_none());
+    }
 }

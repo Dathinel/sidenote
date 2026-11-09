@@ -2902,7 +2902,12 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     ] {
         let id = t.meeting_id.clone();
         let index = t.index;
-        let waiting = t.waiting_on.clone();
+        let waiting =
+            if status == core::TaskStatus::Waiting && t.status != core::TaskStatus::Waiting {
+                None
+            } else {
+                t.waiting_on.clone()
+            };
         choices = choices.child(
             button(
                 status.label(),

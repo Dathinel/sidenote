@@ -703,9 +703,10 @@ pub fn build_tasks(
                 status: edit
                     .and_then(|o| o.status)
                     .unwrap_or_else(|| TaskStatus::parse(&todo.status)),
-                waiting_on: edit
-                    .and_then(|o| o.waiting_on.clone())
-                    .or_else(|| todo.waiting_on.clone()),
+                waiting_on: match edit {
+                    Some(o) if o.status.is_some() => o.waiting_on.clone(),
+                    _ => todo.waiting_on.clone(),
+                },
                 waiting_label: None,
                 subtasks: effective_subtasks(todo, edit),
                 team: todo.team.clone().unwrap_or_default(),
