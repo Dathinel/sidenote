@@ -13,9 +13,11 @@ function Invoke-Proof([string]$Name, [string]$Step, [int]$Expected = 0) {
     $arguments = @($Step, '--data-dir', "`"$base/data`"", '--meetings-dir', "`"$base/meetings`"", '--peers-dir', "`"$base/peers`"")
     $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput "$base/$Step.out" -RedirectStandardError "$base/$Step.err"
     $code = $process.ExitCode
-    Get-Content -LiteralPath "$base/$Step.out", "$base/$Step.err" | Add-Content -LiteralPath $log
+    Get-Content -LiteralPath "$base/$Step.out", "$base/$Step.err" | Add-Content -LiteralPath $log -Encoding utf8
     if ($code -ne $Expected) { throw "$Name $Step exited $code instead of $Expected. See $log" }
-    "$Name $Step exit=$code" | Tee-Object -FilePath $log -Append
+    $line = "$Name $Step exit=$code"
+    Add-Content -LiteralPath $log -Value $line -Encoding utf8
+    Write-Output $line
 }
 Invoke-Proof normal prepare
 Invoke-Proof normal merge
@@ -43,4 +45,6 @@ foreach ($scenario in @('boundary-merge', 'boundary-same-value', 'boundary-task'
     Invoke-Proof "r$caseIndex" prepare
     Invoke-Proof "r$caseIndex" $scenario
 }
-"PASS: separate-process merge, alias suggestion, peer edit, crash, retry and restart undo. $run" | Tee-Object -FilePath $log -Append
+$line = "PASS: separate-process merge, alias suggestion, peer edit, crash, retry and restart undo. $run"
+Add-Content -LiteralPath $log -Value $line -Encoding utf8
+Write-Output $line
