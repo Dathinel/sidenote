@@ -24,6 +24,10 @@ pub struct MigrationRow {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Action {
+    ResolveName {
+        project_id: String,
+        name: String,
+    },
     Create {
         name: String,
     },
@@ -111,6 +115,8 @@ pub struct Receipt {
     pub baseline: BTreeMap<String, Value>,
     pub project_baseline: BTreeMap<String, Value>,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Backup {
@@ -123,8 +129,8 @@ fn invalid(message: &str) -> io::Error {
 }
 fn area_for_name(p: &mut Projects, name: &str) -> io::Result<String> {
     let name = name.trim();
-    if name.is_empty() || name == super::UNSORTED {
-        return Err(invalid("Enter an area name for every project"));
+    if name.is_empty() || name.chars().count() > 80 || name == super::UNSORTED {
+        return Err(invalid("Enter an area name of 1 to 80 characters"));
     }
     let c = p.area_catalog()?;
     let matches = c.area_matches(name);
@@ -249,6 +255,23 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
     let mut next = p.clone();
     next.retain_project_identity()?;
     match action {
+        Action::ResolveName { project_id, name } => {
+            let catalog = next.area_catalog()?;
+            let choices = catalog
+                .name_conflicts
+                .get(project_id)
+                .ok_or_else(|| invalid("This rename was already resolved. Reload."))?;
+            if !choices.contains(name) {
+                return Err(invalid("Choose one of the conflicting project names"));
+            }
+            let mut project = catalog.projects[project_id].clone();
+            project.name = name.clone();
+            next.aliases.remove(name);
+            for candidate in choices.iter().filter(|n| *n != name) {
+                next.aliases.insert(candidate.clone(), name.clone());
+            }
+            put(&mut next, "area-project:", project_id, &project)?;
+        }
         Action::Create { name } => {
             if !next.area_catalog()?.area_matches(name).is_empty() {
                 return Err(invalid("An area already uses that name or alias"));
@@ -262,7 +285,10 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
                 .get(area_id)
                 .cloned()
                 .ok_or_else(|| invalid("This area no longer exists"))?;
-            if name.trim().is_empty() || c.area_matches(name).iter().any(|a| a.id != *area_id) {
+            if name.trim().is_empty()
+                || name.chars().count() > 80
+                || c.area_matches(name).iter().any(|a| a.id != *area_id)
+            {
                 return Err(invalid("Choose a unique, nonempty area name"));
             }
             area.aliases.insert(area.name.clone());
@@ -507,9 +533,13 @@ impl TaskStore {
             }))
         {
             let key = json!([kind, id]).to_string();
-            let target = assignment
-                .and_then(|t| c.current_target(t))
-                .or_else(|| c.target(p, &key, &raw[&key], project.unwrap_or(super::UNSORTED)));
+            let target = c.resolve_target(
+                p,
+                &key,
+                &raw[&key],
+                assignment.map(Assignment::Target),
+                project.unwrap_or(super::UNSORTED),
+            );
             let project = match target.as_ref() {
                 Some(target) => target.project_id.clone(),
                 None => project
@@ -517,7 +547,13 @@ impl TaskStore {
                     .filter(|p| p.converted_to.is_none())
                     .map(|p| p.id.clone()),
             };
-            push(key, kind, text.into(), project, target.map(|t| t.area_id));
+            push(
+                key,
+                kind,
+                text.into(),
+                project,
+                target.and_then(|t| (!t.area_id.is_empty()).then_some(t.area_id)),
+            );
         }
         refs.sort_by(|a, b| a.key.cmp(&b.key));
         let sources: Vec<_> = meetings.iter().map(|m| (&m.id, &m.summary)).collect();
@@ -540,6 +576,7 @@ impl TaskStore {
         self.area_preview(&self.load_projects()?, action)
     }
     fn area_preview(&self, p: &Projects, action: Action) -> io::Result<Preview> {
+        super::area_version::ensure(&self.root)?;
         let (fingerprint, refs) = self.area_inventory(p)?;
         let next = simulate(p, &action, &refs)?;
         let keys: std::collections::BTreeSet<_> =
@@ -558,9 +595,9 @@ impl TaskStore {
                     && r.area_id.as_ref() == Some(&a.id)
             }),
             Action::Rename { area_id, .. } => r.area_id.as_ref() == Some(area_id),
-            Action::Move { project_id, .. } | Action::Convert { project_id, .. } => {
-                r.project_id.as_ref() == Some(project_id)
-            }
+            Action::ResolveName { project_id, .. }
+            | Action::Move { project_id, .. }
+            | Action::Convert { project_id, .. } => r.project_id.as_ref() == Some(project_id),
             Action::Migrate { rows } => rows
                 .iter()
                 .any(|row| r.project_id.as_ref() == Some(&row.project_id)),
@@ -581,235 +618,311 @@ impl TaskStore {
         })
     }
     pub fn apply_area(&self, preview: &Preview) -> io::Result<Projects> {
-        let projects = sync_state::update_checked_validated(
-            &self.root,
-            "projects.json",
-            |p: &mut Projects| {
-                if self.area_preview(p, preview.action.clone())? != *preview {
-                    return Err(invalid("Items changed. Review a fresh preview."));
+        super::area_version::ensure(&self.root)?;
+        let original = self.load_projects()?;
+        if self.area_preview(&original, preview.action.clone())? != *preview {
+            return Err(invalid("Items changed. Review a fresh preview."));
+        }
+        let mut next = original.clone();
+        for (key, value) in &preview.changes {
+            match value {
+                Some(v) => {
+                    next.other.insert(key.clone(), v.clone());
                 }
-                let id = format!(
-                    "{}-{}",
-                    chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-                    sync_state::new_id(&self.root)?
-                );
-                let backup = self
-                    .root
-                    .join("local/area-operations")
-                    .join(&id)
-                    .join("backup.json");
-                let snapshot = Backup {
-                    projects: p.clone(),
-                    preview: preview.clone(),
-                    files: project_merge::project_files(&self.root)?,
-                };
-                store_io::write(&backup, &snapshot)?;
-                verify_backup(&backup, &snapshot)?;
-                proof_boundary(&self.root, "backup")?;
-                if self.area_preview(p, preview.action.clone())? != *preview {
-                    return Err(invalid(
-                        "Items changed during backup. Review a fresh preview.",
-                    ));
+                None => {
+                    next.other.remove(key);
                 }
-                let mut baseline: BTreeMap<_, _> = preview
-                    .references
-                    .iter()
-                    .map(|r| (r.key.clone(), r.baseline.clone()))
-                    .collect();
-                let mut project_baseline = BTreeMap::from([("$aliases".into(), json!(p.aliases))]);
-                for r in &preview.references {
-                    if let Some(id) = &r.project_id {
-                        project_baseline.insert(
-                            format!("area-project:{id}"),
-                            p.other
-                                .get(&format!("area-project:{id}"))
-                                .cloned()
-                                .unwrap_or(Value::Null),
-                        );
+            }
+        }
+        let id = format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+            sync_state::new_id(&self.root)?
+        );
+        let backup = self
+            .root
+            .join("local/area-operations")
+            .join(&id)
+            .join("backup.json");
+        store_io::reject_reparse(&backup)?;
+        let snapshot = Backup {
+            projects: original.clone(),
+            preview: preview.clone(),
+            files: project_merge::project_files(&self.root)?,
+        };
+        let receipt = Receipt {
+            schema_version: 1,
+            device: super::DeviceSettings::read_in(&self.root)?.id,
+            id: id.clone(),
+            action: preview.action.clone(),
+            backup: PathBuf::from(&id).join("backup.json"),
+            checksum: digest(&snapshot)?,
+            after: preview.changes.clone(),
+            baseline: preview
+                .references
+                .iter()
+                .map(|r| (r.key.clone(), r.baseline.clone()))
+                .collect(),
+            project_baseline: Default::default(),
+            active: true,
+            skipped: Vec::new(),
+        };
+        put(&mut next, "area-operation:", &id, &receipt)?;
+        if self.area_preview(&self.load_projects()?, preview.action.clone())? != *preview {
+            return Err(invalid(
+                "Items changed before publication. Review a fresh preview.",
+            ));
+        }
+        let stamps = dependency_stamps(&self.root)?;
+        let bytes = serde_json::to_vec(&snapshot)?;
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err(invalid(
+                "This backup exceeds the 16 MB limit. Migrate fewer projects at a time.",
+            ));
+        }
+        let result = (|| {
+            store_io::atomic_write(&backup, &bytes)?;
+            verify_backup(&backup, &snapshot)?;
+            proof_boundary(&self.root, "backup")?;
+            proof_boundary(&self.root, "staged")?;
+            sync_state::update_checked_validated(
+                &self.root,
+                "projects.json",
+                |p: &mut Projects| {
+                    if serde_json::to_value(&*p)? != serde_json::to_value(&original)? {
+                        return Err(invalid("Items changed. Review a fresh preview."));
                     }
-                }
-                for (key, value) in &preview.changes {
-                    match value {
-                        Some(v) => {
-                            p.other.insert(key.clone(), v.clone());
-                        }
-                        None => {
-                            if key.starts_with("area:") {
-                                if let Some(value) =
-                                    p.other.get_mut(key).and_then(Value::as_object_mut)
-                                {
-                                    value.insert("status".into(), json!("retired"));
-                                }
-                            } else if !key.starts_with("area-identity:") {
-                                p.other.remove(key);
-                            }
-                        }
+                    *p = next;
+                    Ok(())
+                },
+                |_| {
+                    proof_boundary(&self.root, "publication")?;
+                    if dependency_stamps(&self.root)? != stamps {
+                        return Err(invalid(
+                            "Items changed before publication. Review a fresh preview.",
+                        ));
                     }
-                }
-                // Include conversion targets and parent records in the Undo guard.
-                for key in preview
-                    .changes
-                    .keys()
-                    .filter(|k| k.starts_with("area-project:"))
-                {
-                    project_baseline.insert(
-                        key.clone(),
-                        p.other.get(key).cloned().unwrap_or(Value::Null),
-                    );
-                }
-                for key in baseline.clone().keys() {
-                    baseline.insert(
-                        format!("link:{key}"),
-                        p.other
-                            .get(&format!("area-link:{key}"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    );
-                }
-                for link in p.area_catalog()?.links.values() {
-                    if let Some(id) = &link.target.project_id {
-                        let key = format!("area-project:{id}");
-                        project_baseline.insert(
-                            key.clone(),
-                            p.other.get(&key).cloned().unwrap_or(Value::Null),
-                        );
-                    }
-                }
-                let receipt = Receipt {
-                    schema_version: 1,
-                    device: super::DeviceSettings::read_in(&self.root)?.id,
-                    id: id.clone(),
-                    action: preview.action.clone(),
-                    backup,
-                    checksum: digest(&snapshot)?,
-                    after: preview.changes.clone(),
-                    baseline,
-                    project_baseline,
-                    active: true,
-                };
-                put(p, "area-operation:", &id, &receipt)?;
-                proof_boundary(&self.root, "staged")?;
-                Ok(())
-            },
-            |before| {
-                proof_boundary(&self.root, "publication")?;
-                if self.area_preview(before, preview.action.clone())? != *preview {
-                    return Err(invalid(
-                        "Items changed before publication. Review a fresh preview.",
-                    ));
-                }
-                Ok(())
-            },
-        )?;
+                    Ok(())
+                },
+            )
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&backup);
+            let _ = fs::remove_dir(
+                backup
+                    .parent()
+                    .ok_or_else(|| invalid("Invalid backup folder"))?,
+            );
+        }
+        let projects = result?;
         proof_boundary(&self.root, "published")?;
+        cleanup_backups(&self.root, &projects)?;
         Ok(projects)
     }
     pub fn area_receipts(&self) -> io::Result<BTreeMap<String, Receipt>> {
         self.load_projects()?.area_receipts()
     }
     pub fn undo_area(&self, id: &str) -> io::Result<Projects> {
-        let parts: Vec<_> = id.split('-').collect();
-        if parts.len() != 3
-            || !super::device::valid_id(parts[1])
-            || !super::device::valid_id(parts[2])
-        {
-            return Err(invalid("Invalid area operation. Reload before Undo."));
+        super::area_version::ensure(&self.root)?;
+        let original = self.load_projects()?;
+        let mut receipt: Receipt = serde_json::from_value(
+            original
+                .other
+                .get(&format!("area-operation:{id}"))
+                .cloned()
+                .ok_or_else(|| invalid("This operation changed. Reload before Undo."))?,
+        )?;
+        if !receipt.active {
+            return Err(invalid("This operation was already undone."));
         }
-        let projects = self.load_projects()?;
-        let dependencies = self.area_inventory(&projects)?.0;
-        sync_state::update_checked_validated(
+        if receipt.schema_version != 1 {
+            return Err(invalid(
+                "This area operation uses a newer schema. Update the app before Undo.",
+            ));
+        }
+        let own = super::DeviceSettings::read_in(&self.root)?.id;
+        let backup = receipt_backup(&self.root, id, &receipt, &own)?;
+        let snapshot: Backup =
+            serde_json::from_slice(&store_io::read_bounded(&backup, 16 * 1024 * 1024)?)?;
+        if digest(&snapshot)? != receipt.checksum {
+            return Err(invalid("The backup changed. Undo was not applied."));
+        }
+        verify_backup(&backup, &snapshot)?;
+        original.area_catalog()?.ensure_writable()?;
+        let (_, refs) = self.area_inventory(&original)?;
+        let raw: BTreeMap<_, _> = refs
+            .iter()
+            .map(|r| (r.key.clone(), r.baseline.clone()))
+            .collect();
+        let mut next = original.clone();
+        for (key, written) in &receipt.after {
+            if key.starts_with("area-identity:") {
+                continue;
+            }
+            let reference = key.strip_prefix("area-link:");
+            let changed = original.other.get(key) != written.as_ref()
+                || reference.is_some_and(|r| receipt.baseline.get(r) != raw.get(r));
+            if changed {
+                receipt.skipped.push(
+                    reference
+                        .and_then(|r| refs.iter().find(|item| item.key == r))
+                        .map(|r| r.label.clone())
+                        .unwrap_or_else(|| register_label(&original, key)),
+                );
+                continue;
+            }
+            match snapshot.projects.other.get(key) {
+                Some(value) => {
+                    next.other.insert(key.clone(), value.clone());
+                }
+                None if key.starts_with("area:") => {
+                    if let Some(value) = next.other.get_mut(key).and_then(Value::as_object_mut) {
+                        value.insert("status".into(), json!("retired"));
+                    }
+                }
+                None => {
+                    next.other.remove(key);
+                }
+            }
+        }
+        receipt.skipped.sort();
+        receipt.skipped.dedup();
+        receipt.active = false;
+        put(&mut next, "area-operation:", id, &receipt)?;
+        let before_check = self.area_inventory(&original)?.0;
+        let stamps = dependency_stamps(&self.root)?;
+        if before_check != self.area_inventory(&self.load_projects()?)?.0 {
+            return Err(invalid("Items changed before Undo. Reload and try again."));
+        }
+        proof_boundary(&self.root, "undo-staged")?;
+        let result = sync_state::update_checked_validated(
             &self.root,
             "projects.json",
             |p: &mut Projects| {
-                let mut receipt:Receipt=serde_json::from_value(p.other.get(&format!("area-operation:{id}")).cloned().ok_or_else(||invalid("This operation changed. Reload before Undo."))?)?;
-                if !receipt.active{return Err(invalid("This operation was already undone."));}
-                if receipt.schema_version!=1{return Err(invalid("This area operation uses a newer schema. Update the app before Undo."));}
-                p.area_catalog()?.ensure_writable()?;
-                let backup = self
-                    .root
-                    .join("local/area-operations")
-                    .join(id)
-                    .join("backup.json");
-                if receipt.id != id
-                    || receipt.device != super::DeviceSettings::read_in(&self.root)?.id
-                    || receipt.backup != backup
-                {
-                    return Err(invalid(
-                        "This backup belongs to another device. Undo was not applied.",
-                    ));
+                if serde_json::to_value(&*p)? != serde_json::to_value(&original)? {
+                    return Err(invalid("Items changed before Undo. Reload and try again."));
                 }
-                let snapshot: Backup = serde_json::from_slice(&fs::read(&backup)?)?;
-                if digest(&snapshot)? != receipt.checksum {
-                    return Err(invalid("The backup changed. Undo was not applied."));
-                }
-                verify_backup(&backup, &snapshot)?;
-                let changed_projects:std::collections::BTreeSet<_>=receipt.after.keys().filter_map(|k|k.strip_prefix("area-project:")).collect();
-                let retiring_areas:std::collections::BTreeSet<_>=receipt.after.keys().filter(|key|key.starts_with("area:")&&!snapshot.projects.other.contains_key(*key)).filter_map(|key|key.strip_prefix("area:")).collect();
-                if self.area_inventory(p)?.1.iter().any(|r|!receipt.baseline.contains_key(&r.key)&&(r.project_id.as_deref().is_some_and(|id|changed_projects.contains(id))||r.area_id.as_deref().is_some_and(|id|retiring_areas.contains(id)))){
-                    return Err(invalid("New work now depends on this area or project. Undo was not applied. Reassign that work first."));
-                }
-                let raw = self.undo_state(p)?.1;
-                for (key, expected) in &receipt.baseline {
-                    let current = if let Some(key) = key.strip_prefix("link:") {
-                        p.other
-                            .get(&format!("area-link:{key}"))
-                            .cloned()
-                            .unwrap_or(Value::Null)
-                    } else {
-                        raw.get(key).cloned().unwrap_or(Value::Null)
-                    };
-                    if current != *expected {
-                        return Err(invalid(
-                            "Some items were moved later. Undo was not applied. Keep the change or move them back by hand.",
-                        ));
-                    }
-                }
-                if receipt
-                    .after
-                    .iter()
-                    .any(|(key, value)| p.other.get(key) != value.as_ref())
-                    || receipt.project_baseline.iter().any(|(key, value)| {
-                        (if key == "$aliases" {
-                            json!(p.aliases)
-                        } else {
-                            p.other.get(key).cloned().unwrap_or(Value::Null)
-                        }) != *value
-                    })
-                {
-                    return Err(invalid(
-                        "An area or project changed later. Undo was not applied.",
-                    ));
-                }
-                for key in receipt.after.keys() {
-                    match snapshot.projects.other.get(key) {
-                        Some(v) => {
-                            p.other.insert(key.clone(), v.clone());
-                        }
-                        None => {
-                            if key.starts_with("area:") {
-                                if let Some(value)=p.other.get_mut(key).and_then(Value::as_object_mut){value.insert("status".into(),json!("retired"));}
-                            } else if !key.starts_with("area-identity:"){p.other.remove(key);}
-                        }
-                    }
-                }
-                receipt.active = false;
-                put(p, "area-operation:", id, &receipt)?;
-                p.area_catalog()?;
-                proof_boundary(&self.root,"undo-staged")?;
+                *p = next;
                 Ok(())
             },
-            |before| {
+            |_| {
                 proof_boundary(&self.root, "undo-publication")?;
-                if self.area_inventory(before)?.0 != dependencies {
+                if dependency_stamps(&self.root)? != stamps {
                     return Err(invalid("Items changed before Undo. Reload and try again."));
                 }
                 Ok(())
             },
-        ).and_then(|projects|{proof_boundary(&self.root,"undo-published")?;Ok(projects)})
+        )?;
+        proof_boundary(&self.root, "undo-published")?;
+        Ok(result)
     }
 }
+pub fn valid_receipt_id(id: &str, device: &str) -> bool {
+    let parts: Vec<_> = id.split('-').collect();
+    parts.len() == 3
+        && parts[1] == device
+        && super::device::valid_id(parts[1])
+        && super::device::valid_id(parts[2])
+        && parts[0].len() == 15
+        && chrono::NaiveDateTime::parse_from_str(parts[0], "%Y%m%dT%H%M%S")
+            .is_ok_and(|t| t.format("%Y%m%dT%H%M%S").to_string() == parts[0])
+}
+pub fn receipt_backup(root: &Path, id: &str, receipt: &Receipt, own: &str) -> io::Result<PathBuf> {
+    let relative = PathBuf::from(id).join("backup.json");
+    if receipt.device != own
+        || receipt.id != id
+        || !valid_receipt_id(id, own)
+        || receipt.backup != relative
+    {
+        return Err(invalid(
+            "This backup belongs to another device or has an invalid location. Undo was not applied.",
+        ));
+    }
+    let base = root.join("local/area-operations");
+    let path = base.join(relative);
+    store_io::reject_reparse(&path)?;
+    let resolved = path.canonicalize()?;
+    if !resolved.starts_with(base.canonicalize()?) {
+        return Err(invalid("Invalid Undo backup location"));
+    }
+    Ok(path)
+}
+fn register_label(p: &Projects, key: &str) -> String {
+    p.other
+        .get(key)
+        .and_then(|v| v.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Area assignment")
+        .to_string()
+}
+fn dependency_stamps(root: &Path) -> io::Result<BTreeMap<PathBuf, (u64, std::time::SystemTime)>> {
+    fn visit(
+        path: &Path,
+        out: &mut BTreeMap<PathBuf, (u64, std::time::SystemTime)>,
+    ) -> io::Result<()> {
+        let entries = match fs::read_dir(path) {
+            Ok(v) => v,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                visit(&entry.path(), out)?;
+            } else if entry.path().extension().is_some_and(|e| e == "json") {
+                let meta = entry.metadata()?;
+                out.insert(entry.path(), (meta.len(), meta.modified()?));
+            }
+        }
+        Ok(())
+    }
+    let mut out = BTreeMap::new();
+    for path in [
+        root.join("state"),
+        super::meetings_dir(),
+        super::peers_dir(),
+    ] {
+        visit(&path, &mut out)?;
+    }
+    Ok(out)
+}
+fn cleanup_backups(root: &Path, p: &Projects) -> io::Result<()> {
+    let own = super::DeviceSettings::read_in(root)?.id;
+    let receipts = p.area_receipts()?;
+    let base = root.join("local/area-operations");
+    store_io::reject_reparse(&base)?;
+    let mut folders = Vec::new();
+    for entry in fs::read_dir(&base)? {
+        let entry = entry?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !valid_receipt_id(&id, &own) || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        store_io::reject_reparse(&entry.path())?;
+        folders.push((id, entry.path()));
+    }
+    folders.sort();
+    let keep: std::collections::BTreeSet<_> = folders
+        .iter()
+        .rev()
+        .filter(|(id, _)| receipts.contains_key(id))
+        .take(10)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for (id, path) in folders {
+        if !keep.contains(&id) {
+            let _ = fs::remove_file(path.join("backup.json"));
+            let _ = fs::remove_dir(path);
+        }
+    }
+    Ok(())
+}
 fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {
-    let actual: Backup = serde_json::from_slice(&fs::read(path)?)?;
+    let actual: Backup = serde_json::from_slice(&store_io::read_bounded(path, 16 * 1024 * 1024)?)?;
     if digest(&actual)? != digest(expected)? {
         return Err(invalid("Backup verification failed"));
     }
