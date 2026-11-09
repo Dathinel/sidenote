@@ -44,7 +44,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $root $notice) -Destination $destination -Force
     }
     $packArgs = @('pack', '--packId', 'sidenote', '--packVersion', $version, '--packDir', $stage,
-        '--mainExe', 'sidenote.exe', '--icon', "$root/assets/icon/meetings.ico", '--packTitle', 'Sidenote', '--outputDir', $feedPath, '--shortcuts', 'None')
+        '--mainExe', 'sidenote.exe', '--icon', "$root/assets/icon/meetings.ico", '--packTitle', 'Sidenote', '--outputDir', $feedPath, '--shortcuts', 'StartMenuRoot')
     if ($ReleaseNotes) { $packArgs += @('--releaseNotes', (Resolve-Path -LiteralPath $ReleaseNotes).Path) }
     & vpk --skip-updates --yes @packArgs
     if ($LASTEXITCODE) { throw 'Velopack pack failed.' }

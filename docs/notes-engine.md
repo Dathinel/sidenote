@@ -23,3 +23,16 @@ line buffering and channel backpressure. JSON output strings are limited to 16,0
 characters per field; generated project names to 100. Transcript input retains
 its 250,000-character limit. Typed notes and glossary each have a separate 16,000-
 character limit, including redo/first-part requests.
+
+E7: `tools/pack_release.ps1:47` requests `--shortcuts StartMenuRoot`, without
+Desktop. Checked against the installed vpk 0.0.1298 `--skip-updates pack --help`;
+its default lists `Desktop,StartMenuRoot`. `tools/pack_release_proof.ps1` parses
+the real argument array, passes it to a fake runner in an OS temp folder, and
+checks installed help without executing the release script.
+
+Upgrade limit: the installed vpk's bundled `vendor/update.exe` contains both
+`Shortcut Previous Locations:` and `Shortcut Next Locations:` diagnostics and
+recognizes `startmenuroot`. That is static evidence of location comparison, not
+proof that a dev.2-to-dev.3 update creates a missing shortcut. That migration
+requires an authorized installer/update test; packing, installing and app launch
+were prohibited in this task, so it remains unverified.
