@@ -188,6 +188,7 @@ pub fn run(mode: &str, store: &TaskStore) {
                     })
                     .unwrap();
                 assert!(store.undo_area(&id).is_err());
+                assert_eq!(catalog(store).unreadable_receipts, 1);
             }
             let mut bad = receipt.clone();
             bad.device = "a".repeat(32);

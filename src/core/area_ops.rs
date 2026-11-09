@@ -428,8 +428,13 @@ impl Projects {
             .iter()
             .filter_map(|(key, value)| {
                 key.strip_prefix("area-operation:").and_then(|id| {
-                    serde_json::from_value(value.clone())
+                    serde_json::from_value::<Receipt>(value.clone())
                         .ok()
+                        .filter(|r| {
+                            valid_receipt_id(id, &r.device)
+                                && r.id == id
+                                && r.backup == PathBuf::from(id).join("backup.json")
+                        })
                         .map(|receipt| (id.into(), receipt))
                 })
             })

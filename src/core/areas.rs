@@ -319,12 +319,10 @@ impl Projects {
         let identities = catalog.projects.clone();
         catalog.unreadable_receipts = self
             .other
-            .iter()
-            .filter(|(k, v)| {
-                k.starts_with("area-operation:")
-                    && serde_json::from_value::<super::area_ops::Receipt>((*v).clone()).is_err()
-            })
-            .count();
+            .keys()
+            .filter(|k| k.starts_with("area-operation:"))
+            .count()
+            - self.area_receipts()?.len();
         catalog.quarantined = catalog
             .problems
             .iter()
