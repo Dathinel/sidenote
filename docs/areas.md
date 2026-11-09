@@ -134,7 +134,7 @@ and series are unchanged in this merge.
 Round-two proofs cover concurrent renames followed by identity seeds, malicious
 receipt paths and a junction, a later peer assignment during scoped Undo,
 quarantine among fourteen projects, bounded unknown fields, import backup
-read-back, sharing retries, an actual pre-area merge receipt, retained memory
+read-back, sharing retries, a headless pre-area merge receipt wire-format fixture, retained memory
 choices through conversion and merging, malformed and oversized peer journals,
 and version refusal. Undo process-stop checks compare every reference exactly.
 

@@ -623,41 +623,29 @@ pub fn run(mode: &str, store: &TaskStore) {
         }
         "r2-old-merge" => {
             store
-                .update_projects(|p| p.other.retain(|k, _| !k.starts_with("assignment:")))
+                .update_projects(|p| p.other.retain(|k, _| !k.starts_with("assignment:") && !k.starts_with("area")))
                 .unwrap();
-            fs::copy(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/ui-fixtures/hex.json"),
-                root.join("hex-fixture.json"),
-            )
-            .unwrap();
-            let exe = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/areas/before.exe");
-            assert!(exe.is_file());
-            let output = Command::new(exe)
-                .arg("--data-dir")
-                .arg(root)
-                .arg("--meetings-dir")
-                .arg(core::meetings_dir())
-                .arg("--peers-dir")
-                .arg(core::peers_dir())
-                .args([
-                    "--scene",
-                    "merge-done",
-                    "--theme",
-                    "dark",
-                    "--size",
-                    "1320x1000",
-                    "--at",
-                    "1.5",
-                ])
-                .arg("--snap")
-                .arg(root.join("old-merge.png"))
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "The baseline app must produce the receipt: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let before = store.load_projects().unwrap();
+            let preview = store.preview_merge(SOURCE, CHILD).unwrap();
+            let merged = store.merge_projects(&preview).unwrap();
+            let mut legacy = merged.merges[SOURCE].clone();
+            // Pre-area receipts (fa4b158^) omit these fields and store three task values.
+            legacy.baseline_version = None;
+            legacy.area_changes.clear();
+            for (key, value) in legacy.assignment_baseline.as_mut().unwrap() {
+                if key.starts_with("[\"task\",") {
+                    value.as_array_mut().unwrap().truncate(3);
+                }
+            }
+            let wire = serde_json::to_value(&legacy).unwrap();
+            assert!(wire.get("baseline_version").is_none());
+            assert!(wire.get("area_changes").is_none());
+            let legacy = serde_json::from_value(wire).unwrap();
+            store.update_projects(|p| {
+                *p = before;
+                p.aliases.insert(SOURCE.into(), CHILD.into());
+                p.merges.insert(SOURCE.into(), legacy);
+            }).unwrap();
             let p = store.load_projects().unwrap();
             let (from, merge) = p.merges.iter().find(|(_, m)| m.active).unwrap();
             assert!(merge.baseline_version.is_none());
