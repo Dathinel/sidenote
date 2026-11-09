@@ -35,6 +35,8 @@ view and its durable receipt. No multi-store rollback is required.
 Undo restores the source's prior alias and merge register in one journal, preserving
 unrelated later edits. It works after restart on the originating device. It refuses
 a missing, changed or foreign-device backup and a subsequently changed source alias.
+Each receipt also pins the affected items' raw project assignments. Undo refuses a
+changed assignment or an older receipt without this baseline, before changing state.
 Only the current alias determines resolution; merge receipts are Undo metadata.
 Concurrent reverse peer merges resolve cycles to one deterministic project without
 dropping any items. They are not automatic merge suggestions.

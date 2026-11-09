@@ -28,6 +28,14 @@ Invoke-Proof normal peer
 Invoke-Proof normal undo
 Invoke-Proof normal old
 Invoke-Proof normal peer-kept
+Invoke-Proof moved prepare
+Invoke-Proof moved merge
+Invoke-Proof moved move-to-survivor
+Invoke-Proof moved undo-refused
+Invoke-Proof unchanged prepare
+Invoke-Proof unchanged merge
+Invoke-Proof unchanged undo
+Invoke-Proof unchanged old
 Invoke-Proof crash prepare
 $env:SIDENOTE_MERGE_CRASH_AFTER_BACKUP = '1'
 try { Invoke-Proof crash merge 86 } finally { Remove-Item Env:SIDENOTE_MERGE_CRASH_AFTER_BACKUP }

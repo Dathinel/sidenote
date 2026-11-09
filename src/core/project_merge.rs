@@ -1,6 +1,7 @@
 //! Project merges are one atomic register in the existing device journal. No source is edited.
 use super::{Meeting, Projects, TaskStore, memory::MemoryFile, store_io, sync_state};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs, io,
@@ -32,7 +33,10 @@ pub struct ProjectMerge {
     pub backup: PathBuf,
     pub checksum: String,
     pub previous: Option<Box<ProjectMerge>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_baseline: Option<BTreeMap<String, Value>>,
 }
+const MOVED_AFTER_MERGE: &str = "Some items were moved after the merge, so Undo would not restore them. Move them back by hand or keep the merge.";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MergePreview {
     pub from: String,
@@ -70,6 +74,15 @@ impl TaskStore {
         self.merge_inventory(&self.load_projects()?, from, into)
     }
     fn merge_inventory(&self, p: &Projects, from: &str, into: &str) -> io::Result<MergePreview> {
+        self.merge_snapshot(p, from, into)
+            .map(|(preview, _)| preview)
+    }
+    fn merge_snapshot(
+        &self,
+        p: &Projects,
+        from: &str,
+        into: &str,
+    ) -> io::Result<(MergePreview, BTreeMap<String, Value>)> {
         let from = p.resolve(from);
         let into = p.resolve(into);
         let names = super::project_names(p, &[]);
@@ -88,7 +101,16 @@ impl TaskStore {
         let overrides = self.load_overrides()?;
         let memory: MemoryFile = sync_state::load(&self.root, "memory/records.json")?;
         let tasks = super::build_tasks(&meetings, &pipeline, p, &overrides, &Default::default());
+        let mut assignments = raw_assignments(p, &meetings, &pipeline, &overrides, &memory);
+        let mut affected_keys = std::collections::BTreeSet::new();
         let affected = tasks.iter().filter(|t| t.project == from);
+        for task in affected.clone() {
+            affected_keys.insert(if task.manual {
+                json!(["manual", task.meeting_id]).to_string()
+            } else {
+                json!(["task", task.meeting_id, task.index, task.task]).to_string()
+            });
+        }
         let task_items = affected
             .clone()
             .map(|t| format!("{}: {}", t.meeting_title, t.task))
@@ -111,8 +133,31 @@ impl TaskStore {
                     });
                 assigned.as_deref() == Some(&from) || affected.clone().any(|t| t.meeting_id == m.id)
             })
-            .map(|m| m.title.clone())
+            .map(|m| {
+                affected_keys.insert(json!(["meeting", m.id]).to_string());
+                m.title.clone()
+            })
             .collect();
+        for record in &memory.records {
+            if record
+                .project
+                .as_deref()
+                .is_some_and(|n| p.resolve(n) == from)
+            {
+                affected_keys.insert(json!(["memory", record.id]).to_string());
+            }
+        }
+        for proposal in &memory.proposals {
+            if proposal
+                .proposal
+                .project
+                .as_deref()
+                .is_some_and(|n| p.resolve(n) == from)
+            {
+                affected_keys.insert(json!(["proposal", proposal.proposal.id]).to_string());
+            }
+        }
+        assignments.retain(|key, _| affected_keys.contains(key));
         let memory_items = memory
             .records
             .iter()
@@ -140,21 +185,26 @@ impl TaskStore {
         let sources: Vec<_> = meetings.iter().map(|m| (&m.id, &m.summary)).collect();
         // BTreeMap makes the fingerprint stable across independent scans and restarts.
         let pipeline: BTreeMap<_, _> = pipeline.into_iter().collect();
-        Ok(MergePreview {
-            from,
-            into,
-            meetings: meeting_items,
-            tasks: task_items,
-            memory: memory_items,
-            fingerprint: digest(&(p, overrides, memory, sources, pipeline))?,
-        })
+        Ok((
+            MergePreview {
+                from,
+                into,
+                meetings: meeting_items,
+                tasks: task_items,
+                memory: memory_items,
+                fingerprint: digest(&(p, overrides, memory, sources, pipeline))?,
+            },
+            assignments,
+        ))
     }
     pub fn merge_projects(&self, preview: &MergePreview) -> io::Result<Projects> {
         sync_state::update_checked_validated(
             &self.root,
             "projects.json",
             |p: &mut Projects| {
-                if self.merge_inventory(p, &preview.from, &preview.into)? != *preview {
+                let (current, assignments) =
+                    self.merge_snapshot(p, &preview.from, &preview.into)?;
+                if current != *preview {
                     return Err(invalid("Items changed; review a fresh preview"));
                 }
                 let id = format!(
@@ -195,6 +245,7 @@ impl TaskStore {
                         checksum: digest(&snapshot)?,
                         backup,
                         previous,
+                        assignment_baseline: Some(assignments),
                     },
                 );
                 Ok(())
@@ -210,7 +261,16 @@ impl TaskStore {
         )
     }
     pub fn undo_project_merge(&self, from: &str, expected_id: &str) -> io::Result<Projects> {
-        let dependencies = self.undo_dependencies()?;
+        let projects = self.load_projects()?;
+        let merge = projects
+            .merges
+            .get(from)
+            .filter(|m| m.active && m.id == expected_id)
+            .ok_or_else(|| invalid("Merge changed; reload before undoing"))?;
+        if merge.assignment_baseline.is_none() {
+            return Err(invalid(MOVED_AFTER_MERGE));
+        }
+        let dependencies = self.undo_state(&projects)?.0;
         sync_state::update_checked_validated(
             &self.root,
             "projects.json",
@@ -226,6 +286,7 @@ impl TaskStore {
                         "This project was renamed after the merge. Undo was not applied.",
                     ));
                 }
+                verify_assignments(&merge, &self.undo_state(p)?.1)?;
                 let backup = self
                     .root
                     .join("local/project-merges")
@@ -260,17 +321,18 @@ impl TaskStore {
                 }
                 Ok(())
             },
-            |_| {
-                if self.undo_dependencies()? != dependencies {
+            |before| {
+                let (current, assignments) = self.undo_state(before)?;
+                if current != dependencies {
                     return Err(invalid("Items changed before undo; reload and try again"));
                 }
-                Ok(())
+                verify_assignments(&before.merges[from], &assignments)
             },
         )
     }
-    fn undo_dependencies(&self) -> io::Result<String> {
+    fn undo_state(&self, projects: &Projects) -> io::Result<(String, BTreeMap<String, Value>)> {
         let meetings = scan()?;
-        let pipeline: BTreeMap<_, _> = super::load_pipeline(&meetings).into_iter().collect();
+        let pipeline = super::load_pipeline(&meetings);
         for m in &meetings {
             let path = m.folder.join("tasks.json");
             if path.try_exists()? {
@@ -279,8 +341,78 @@ impl TaskStore {
         }
         let sources: Vec<_> = meetings.iter().map(|m| (&m.id, &m.summary)).collect();
         let memory: MemoryFile = sync_state::load(&self.root, "memory/records.json")?;
-        digest(&(self.load_overrides()?, memory, sources, pipeline))
+        let overrides = self.load_overrides()?;
+        let assignments = raw_assignments(projects, &meetings, &pipeline, &overrides, &memory);
+        let pipeline: BTreeMap<_, _> = pipeline.into_iter().collect();
+        Ok((
+            digest(&(overrides, memory, sources, pipeline))?,
+            assignments,
+        ))
     }
+}
+fn verify_assignments(merge: &ProjectMerge, current: &BTreeMap<String, Value>) -> io::Result<()> {
+    let baseline = merge
+        .assignment_baseline
+        .as_ref()
+        .ok_or_else(|| invalid(MOVED_AFTER_MERGE))?;
+    if baseline
+        .iter()
+        .any(|(key, value)| current.get(key) != Some(value))
+    {
+        return Err(invalid(MOVED_AFTER_MERGE));
+    }
+    Ok(())
+}
+fn raw_assignments(
+    p: &Projects,
+    meetings: &[Meeting],
+    pipeline: &super::Pipeline,
+    overrides: &super::Overrides,
+    memory: &MemoryFile,
+) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    for meeting in meetings {
+        let file = pipeline.get(&meeting.id);
+        out.insert(
+            json!(["meeting", meeting.id]).to_string(),
+            json!([
+                p.meeting_projects.get(&meeting.id),
+                file.and_then(|f| f.meeting_project.as_ref())
+            ]),
+        );
+        for (index, todo) in meeting.summary.todo.iter().enumerate() {
+            let edit = overrides.get(&meeting.id, index);
+            out.insert(
+                json!(["task", meeting.id, index, todo.task]).to_string(),
+                json!([
+                    file.and_then(|f| f.tasks.iter().find(|t| t.i == index))
+                        .map(|t| &t.project),
+                    edit.and_then(|o| o.project.as_ref()),
+                    edit.filter(|o| o.project.is_some())
+                        .and_then(|o| o.task.as_ref())
+                ]),
+            );
+        }
+    }
+    for task in &overrides.manual {
+        out.insert(
+            json!(["manual", format!("manual/{}", task.id)]).to_string(),
+            json!(task.project),
+        );
+    }
+    for record in &memory.records {
+        out.insert(
+            json!(["memory", record.id]).to_string(),
+            json!(record.project),
+        );
+    }
+    for proposal in &memory.proposals {
+        out.insert(
+            json!(["proposal", proposal.proposal.id]).to_string(),
+            json!(proposal.proposal.project),
+        );
+    }
+    out
 }
 fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) -> io::Result<()> {

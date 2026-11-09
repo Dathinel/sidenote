@@ -58,6 +58,21 @@ fn peer_write(root: &Path) {
         .unwrap();
     copy(&peer.join("state"), &root.join("state"));
 }
+fn all_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    for entry in fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            files.extend(all_files(&entry.path()));
+        } else {
+            files.insert(
+                entry.path().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            );
+        }
+    }
+    files
+}
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     assert!(args.iter().any(|a| a == "--data-dir"));
@@ -152,6 +167,18 @@ fn main() {
         );
         write(&root.join("preview.json"), &preview);
         store.merge_projects(&preview).unwrap();
+        let p = store.load_projects().unwrap();
+        assert_eq!(
+            p.merges[FROM].assignment_baseline.as_ref().unwrap().len(),
+            8
+        );
+        let mut legacy = serde_json::to_value(&p.merges[FROM]).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("assignment_baseline");
+        let legacy: core::project_merge::ProjectMerge = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.assignment_baseline.is_none());
     } else if command == "merged" || command == "old" {
         let merged = command == "merged";
         let p = store.load_projects().unwrap();
@@ -245,6 +272,46 @@ fn main() {
                 .as_deref(),
             Some("Morgan")
         );
+    } else if command == "move-to-survivor" {
+        assert_eq!(store.load_projects().unwrap().resolve(FROM), INTO);
+        store
+            .update_override("1800000000000-1", 0, "Review the paper prototype", |o| {
+                o.project = Some(INTO.into())
+            })
+            .unwrap();
+        write(
+            &root.parent().unwrap().join("before-refused.json"),
+            &all_files(&root),
+        );
+    } else if command == "undo-refused" {
+        let before: BTreeMap<String, Vec<u8>> = serde_json::from_slice(
+            &fs::read(root.parent().unwrap().join("before-refused.json")).unwrap(),
+        )
+        .unwrap();
+        let p = store.load_projects().unwrap();
+        let error = store
+            .undo_project_merge(FROM, &p.merges[FROM].id)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Some items were moved after the merge, so Undo would not restore them. Move them back by hand or keep the merge."
+        );
+        assert_eq!(
+            store
+                .load_overrides()
+                .unwrap()
+                .get("1800000000000-1", 0)
+                .unwrap()
+                .project
+                .as_deref(),
+            Some(INTO)
+        );
+        assert_eq!(
+            all_files(&root),
+            before,
+            "Refused Undo changed an app-owned file"
+        );
+        println!("{error}");
     } else if command == "undo" {
         let p = store.load_projects().unwrap();
         store.undo_project_merge(FROM, &p.merges[FROM].id).unwrap();
