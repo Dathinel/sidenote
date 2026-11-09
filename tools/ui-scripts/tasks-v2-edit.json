@@ -16,17 +16,17 @@
       "text": "Fold the sample pack"
     },
     {
-      "t": 3,
+      "t": 4.5,
       "type": "tap",
       "key": "subtask-add"
     },
     {
-      "t": 5,
+      "t": 7,
       "type": "tap",
       "key": "status-Review"
     },
     {
-      "t": 7,
+      "t": 9.5,
       "type": "mark",
       "name": "end"
     }

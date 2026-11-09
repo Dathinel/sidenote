@@ -6,37 +6,37 @@
       "key": "team-name"
     },
     {
-      "t": 0.7,
+      "t": 1,
       "type": "type",
       "text": "Support"
     },
     {
-      "t": 1,
+      "t": 3,
       "type": "tap",
       "key": "team-members"
     },
     {
-      "t": 1.2,
+      "t": 3.5,
       "type": "type",
       "text": "Sam Reed"
     },
     {
-      "t": 1.5,
+      "t": 5.5,
       "type": "tap",
       "key": "team-aliases"
     },
     {
-      "t": 1.7,
+      "t": 6,
       "type": "type",
       "text": "Sam R = Sam Reed"
     },
     {
-      "t": 2,
+      "t": 9,
       "type": "tap",
       "key": "team-save"
     },
     {
-      "t": 4,
+      "t": 12,
       "type": "mark",
       "name": "end"
     }
