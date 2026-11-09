@@ -392,7 +392,8 @@ pub(super) fn raw_assignments(
                         .map(|t| &t.project),
                     edit.and_then(|o| o.project.as_ref()),
                     edit.filter(|o| o.project.is_some())
-                        .and_then(|o| o.task.as_ref())
+                        .and_then(|o| o.task.as_ref()),
+                    file.and_then(|f| f.meeting_project.as_ref())
                 ]),
             );
         }

@@ -96,7 +96,10 @@ pub fn task_baseline(t: &TaskItem, pipeline: &Pipeline, overrides: &super::Overr
             .map(|tag| &tag.project),
         edit.and_then(|o| o.project.as_ref()),
         edit.filter(|o| o.project.is_some())
-            .and_then(|o| o.task.as_ref())
+            .and_then(|o| o.task.as_ref()),
+        pipeline
+            .get(&t.meeting_id)
+            .and_then(|f| f.meeting_project.as_ref())
     ])
 }
 pub fn project_id(name: &str) -> String {
