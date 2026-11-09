@@ -12,8 +12,107 @@ use std::{
 };
 use velopack::{
     UpdateCheck, UpdateManager, VelopackAsset,
-    sources::{FileSource, HttpSource, UpdateSource},
+    sources::{FileSource, UpdateSource},
 };
+
+// Velopack's HttpSource constructs an unbounded default agent internally.
+#[derive(Clone)]
+struct HttpSource {
+    base: String,
+    agent: ureq::Agent,
+    feed_deadline: Duration,
+    download_deadline: Duration,
+}
+impl HttpSource {
+    fn new(base: &str) -> Self {
+        Self {
+            base: format!("{}/", base.trim_end_matches('/')),
+            agent: ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(10)))
+                .timeout_recv_response(Some(Duration::from_secs(20)))
+                .timeout_recv_body(Some(Duration::from_secs(300)))
+                .build()
+                .into(),
+            feed_deadline: Duration::from_secs(30),
+            download_deadline: Duration::from_secs(300),
+        }
+    }
+    fn url(&self, name: &str) -> Result<url::Url, velopack::Error> {
+        Ok(url::Url::parse(&self.base)?.join(name)?)
+    }
+    fn get(
+        &self,
+        url: &url::Url,
+        deadline: Duration,
+    ) -> Result<ureq::http::Response<ureq::Body>, velopack::Error> {
+        self.agent
+            .get(url.as_str())
+            .config()
+            .timeout_global(Some(deadline))
+            .build()
+            .call()
+            .map_err(|error| {
+                velopack::Error::Generic(format!("Update request failed: {error}. Try again."))
+            })
+    }
+}
+impl UpdateSource for HttpSource {
+    fn get_release_feed(
+        &self,
+        channel: &str,
+        app: &velopack::bundle::Manifest,
+        id: &str,
+    ) -> Result<velopack::VelopackAssetFeed, velopack::Error> {
+        let mut url = self.url(&format!("releases.{channel}.json"))?;
+        url.query_pairs_mut()
+            .append_pair("localVersion", &app.version.to_string())
+            .append_pair("id", &app.id)
+            .append_pair("stagingId", id);
+        let json = self
+            .get(&url, self.feed_deadline)?
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| {
+                velopack::Error::Generic(format!("Update feed failed: {error}. Try again."))
+            })?;
+        let feed: velopack::VelopackAssetFeed = serde_json::from_str(&json)?;
+        if !feed.Assets.iter().all(valid_asset) {
+            return Err(velopack::Error::Generic("Invalid public feed asset".into()));
+        }
+        Ok(feed)
+    }
+    fn download_release_entry(
+        &self,
+        asset: &VelopackAsset,
+        destination: &str,
+        progress: Option<mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        if !valid_asset(asset) {
+            return Err(velopack::Error::Generic("Invalid public feed asset".into()));
+        }
+        let mut response = self.get(&self.url(&asset.FileName)?, self.download_deadline)?;
+        let mut reader = response.body_mut().as_reader();
+        let mut output = File::create(destination)?;
+        let mut bytes = [0u8; 128 * 1024];
+        let mut copied = 0u64;
+        loop {
+            let count = reader.read(&mut bytes)?;
+            if count == 0 {
+                break;
+            }
+            output.write_all(&bytes[..count])?;
+            copied += count as u64;
+            if let Some(tx) = &progress {
+                let _ = tx.send((copied.saturating_mul(100) / asset.Size.max(1)).min(100) as i16);
+            }
+        }
+        output.sync_all()?;
+        Ok(())
+    }
+    fn clone_boxed(&self) -> Box<dyn UpdateSource> {
+        Box::new(self.clone())
+    }
+}
 
 #[derive(Clone)]
 struct LocalSource(PathBuf);
@@ -304,8 +403,8 @@ pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
         status.phase = Phase::Error;
         status.error = Some(error);
     }
-    save(&status).map_err(|_| "Could not save update status.")?;
     publish(status.clone());
+    save(&status).map_err(|_| "Could not save update status.")?;
     Ok(status)
 }
 pub fn exclusive(name: &str) -> io::Result<File> {
@@ -737,6 +836,87 @@ mod window_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The stalled peer exits when the operation returns; no detached request or worker remains.
+    fn with_stalled_server(headers: bool, test: impl FnOnce(HttpSource)) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut source = HttpSource::new(&format!("http://{}", listener.local_addr().unwrap()));
+        source.agent = ureq::Agent::config_builder().proxy(None).build().into();
+        source.feed_deadline = Duration::from_secs(1);
+        source.download_deadline = Duration::from_secs(1);
+        let (tx, rx) = mpsc::channel();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(8);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= until
+                            || rx.try_recv() != Err(mpsc::TryRecvError::Empty)
+                        {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("Local accept failed: {error}"),
+                }
+            };
+            if headers {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n{")
+                    .unwrap();
+            }
+            let _ = rx.recv_timeout(Duration::from_secs(5));
+        });
+        let started = Instant::now();
+        test(source);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = tx.send(());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn public_feed_expires_while_waiting_for_headers_or_body() {
+        for headers in [false, true] {
+            with_stalled_server(headers, |source| {
+                let error = source
+                    .get_release_feed("win", &velopack::bundle::Manifest::default(), "test")
+                    .unwrap_err();
+                assert!(error.to_string().contains("Try again"), "{error}");
+            });
+        }
+    }
+
+    #[test]
+    fn public_download_expires_and_releases_the_destination() {
+        with_stalled_server(true, |source| {
+            let root = std::env::temp_dir().join(format!("update-timeout-{}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let destination = root.join("sidenote.nupkg");
+            let asset = VelopackAsset {
+                PackageId: "sidenote".into(),
+                FileName: "sidenote.nupkg".into(),
+                SHA256: "a".repeat(64),
+                Size: 10000,
+                ..Default::default()
+            };
+            let error = source
+                .download_release_entry(&asset, destination.to_str().unwrap(), None)
+                .unwrap_err();
+            assert!(
+                destination.exists(),
+                "Request failed before download started: {error}"
+            );
+            assert!(
+                error.to_string().to_lowercase().contains("timeout"),
+                "{error}"
+            );
+            // Windows refuses this rename if a timed-out writer still owns the file.
+            fs::rename(&destination, root.join("retry.nupkg")).unwrap();
+            fs::remove_dir_all(root).unwrap();
+        });
+    }
 
     #[test]
     fn focus_checks_wait_more_than_thirty_minutes_since_the_attempt() {
