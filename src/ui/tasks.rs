@@ -508,9 +508,7 @@ impl State {
     pub fn set_task_owner(&mut self, id: &str, index: usize, owner: &str) {
         let owner = owner.trim().to_string();
         self.apply_override(id, index, super::edit_worker::Field::Owner, |o| {
-            if !owner.is_empty() {
-                o.mine = Some(false);
-            }
+            o.mine = (!owner.is_empty()).then_some(false);
             o.owner = (!owner.is_empty()).then_some(owner);
         });
     }

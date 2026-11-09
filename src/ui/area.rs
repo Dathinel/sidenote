@@ -140,8 +140,7 @@ impl State {
                     core::area_ops::proof_boundary(&store.root, "activity-worker")?;
                     running.extend(core::areas::running_meetings(&store.root).unwrap_or_default());
                     let mut catalog = projects.area_catalog()?;
-                    let unreadable=store.unreadable_items()?;
-                    if unreadable>0 {catalog.problems.push(format!("Could not read {unreadable} stored items or files. They were kept for review."));}
+                    catalog.problems.extend(store.catalog_problems());
                     let alias_names = projects
                         .projects
                         .iter()
@@ -156,8 +155,12 @@ impl State {
                         )
                         .collect();
                     let own_device = core::DeviceSettings::load()?.id;
-                    let mut checked=checked;
-                    for m in &meetings {checked.entry(m.id.clone()).or_insert_with(||store.load_ticks(&m.id));}
+                    let mut checked = checked;
+                    for m in &meetings {
+                        checked
+                            .entry(m.id.clone())
+                            .or_insert_with(|| store.load_ticks(&m.id));
+                    }
                     let tasks =
                         core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
                     let kept = core::without_cleared(tasks.clone(), cutoff);
@@ -193,17 +196,55 @@ impl State {
                         &running,
                         chrono::Utc::now(),
                     )?;
-                    let mut meeting_projects = super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
-                    for (id,target) in &activity.meetings { if let Some(chip)=meeting_projects.get_mut(id) {chip.name=target.project_id.as_ref().and_then(|id|catalog.projects.get(id)).map(|p|p.name.clone());} }
-                    let receipts=projects.area_receipts()?;
-                    let merge_undo_available = projects.merges.iter().filter(|(from, merge)| merge.active && store.local_project_merge_backup(from, merge).is_ok()).map(|(_, merge)| merge.id.clone()).collect();
-                    let undo_available=receipts.iter().filter(|(id,r)|core::area_ops::receipt_backup(&store.root,id,r,&own_device).is_ok()).map(|(id,_)|id.clone()).collect();
-                    let receipt_devices=receipts.values().map(|r|(r.device.clone(),core::area_version::device_name(&store.root,&r.device))).collect();
+                    let mut meeting_projects =
+                        super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
+                    for (id, target) in &activity.meetings {
+                        if let Some(chip) = meeting_projects.get_mut(id) {
+                            chip.name = target
+                                .project_id
+                                .as_ref()
+                                .and_then(|id| catalog.projects.get(id))
+                                .map(|p| p.name.clone());
+                        }
+                    }
+                    let receipts = projects.area_receipts()?;
+                    let merge_undo_available = projects
+                        .merges
+                        .iter()
+                        .filter(|(from, merge)| {
+                            merge.active && store.local_project_merge_backup(from, merge).is_ok()
+                        })
+                        .map(|(_, merge)| merge.id.clone())
+                        .collect();
+                    let undo_available = receipts
+                        .iter()
+                        .filter(|(id, r)| {
+                            core::area_ops::receipt_backup(&store.root, id, r, &own_device).is_ok()
+                        })
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    let receipt_devices = receipts
+                        .values()
+                        .map(|r| {
+                            (
+                                r.device.clone(),
+                                core::area_version::device_name(&store.root, &r.device),
+                            )
+                        })
+                        .collect();
                     Ok(Completion::Refreshed(Box::new(Snapshot {
                         mutation_generation,
-                        revision:blake3::hash(&serde_json::to_vec(&projects)?).to_hex().to_string(),
-                        inventory:if migration_open {Some(store.area_references()?)} else {None},
-                        undo_available, merge_undo_available, receipt_devices,
+                        revision: blake3::hash(&serde_json::to_vec(&projects)?)
+                            .to_hex()
+                            .to_string(),
+                        inventory: if migration_open {
+                            Some(store.area_references()?)
+                        } else {
+                            None
+                        },
+                        undo_available,
+                        merge_undo_available,
+                        receipt_devices,
                         meeting_projects,
                         project_labels,
                         alias_names,

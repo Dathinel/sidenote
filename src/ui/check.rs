@@ -214,7 +214,7 @@ fn load_handled(report: &DailyCheck, today: NaiveDate) -> Result<HashMap<String,
         let store = TriageStore::default();
         let file = store.load().map_err(|_| ())?;
         for (i, f) in report.content.findings.iter().enumerate() {
-            let status = store.status_for(f, today).map_err(|_| ())?;
+            let status = file.status_for(f, today);
             if status == TriageStatus::Open {
                 continue;
             }

@@ -119,6 +119,12 @@ impl Default for TriageFile {
         }
     }
 }
+impl TriageFile {
+    /// Resolve every finding against the same loaded snapshot without further IO.
+    pub fn status_for(&self, finding: &Finding, today: NaiveDate) -> TriageStatus {
+        effective_status(self.findings.get(&finding.id), finding, today)
+    }
+}
 #[derive(Clone, Debug)]
 pub struct TriageStore {
     pub root: PathBuf,
@@ -179,11 +185,7 @@ impl TriageStore {
         Ok(entry)
     }
     pub fn status_for(&self, finding: &Finding, today: NaiveDate) -> io::Result<TriageStatus> {
-        Ok(effective_status(
-            self.load()?.findings.get(&finding.id),
-            finding,
-            today,
-        ))
+        Ok(self.load()?.status_for(finding, today))
     }
     /// Compatibility adapter for the current page. New screens can use status_for directly.
     pub fn marks_for_report(&self, report: &DailyCheck, today: NaiveDate) -> io::Result<Marks> {
@@ -191,7 +193,7 @@ impl TriageStore {
         let mut marks = Marks::new();
         for (index, finding) in report.content.findings.iter().enumerate() {
             let entry = file.findings.get(&finding.id);
-            let status = match effective_status(entry, finding, today) {
+            let status = match file.status_for(finding, today) {
                 TriageStatus::Open => continue,
                 TriageStatus::Applied => Status::Applied,
                 TriageStatus::Dismissed | TriageStatus::Snoozed => Status::Dismissed,
@@ -224,5 +226,50 @@ fn effective_status(
         TriageStatus::Open
     } else {
         entry.status
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn loaded_triage_resolves_missing_changed_and_snoozed_findings() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+        let mut finding: Finding = serde_json::from_value(json!({
+            "id":"test-finding", "kind":"other", "severity":"low",
+            "title":"Review", "explanation":"Review the evidence", "evidence":[],
+            "evidence_keys":["evidence-one"]
+        }))
+        .unwrap();
+        let mut file = TriageFile::default();
+        assert_eq!(file.status_for(&finding, today), TriageStatus::Open);
+        file.findings.insert(
+            finding.id.clone(),
+            TriageEntry {
+                finding_id: finding.id.clone(),
+                status: TriageStatus::Dismissed,
+                updated_at: "2026-11-09T00:00:00Z".into(),
+                snooze_until: None,
+                evidence_fingerprint: evidence_fingerprint(&finding),
+                evidence_keys: finding.evidence_keys.clone(),
+                note: None,
+            },
+        );
+        assert_eq!(file.status_for(&finding, today), TriageStatus::Dismissed);
+        finding.evidence_keys.push("evidence-two".into());
+        assert_eq!(file.status_for(&finding, today), TriageStatus::Open);
+        finding.evidence_keys.pop();
+        let entry = file.findings.get_mut(&finding.id).unwrap();
+        entry.status = TriageStatus::Snoozed;
+        entry.snooze_until = today.succ_opt();
+        assert_eq!(file.status_for(&finding, today), TriageStatus::Snoozed);
+        assert_eq!(
+            file.status_for(&finding, today.succ_opt().unwrap()),
+            TriageStatus::Open
+        );
+        file.findings.get_mut(&finding.id).unwrap().status = TriageStatus::Applied;
+        assert_eq!(file.status_for(&finding, today), TriageStatus::Applied);
     }
 }

@@ -313,7 +313,7 @@ impl TaskStore {
     fn overrides_path(&self) -> PathBuf {
         self.root.join("task-overrides.json")
     }
-    /// A missing file is empty. A malformed one is an error, so it is never overwritten.
+    /// Strict diagnostics for callers that need every store to be readable.
     pub fn unreadable_items(&self) -> io::Result<usize> {
         Ok(
             super::sync_state::diagnostics::<Projects>(&self.root, "projects.json")?
@@ -323,6 +323,41 @@ impl TaskStore {
                     "memory/records.json",
                 )?,
         )
+    }
+    /// Diagnostics are advisory; one unhealthy store must not hide the healthy inputs.
+    pub fn catalog_problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        let mut unreadable = 0;
+        for (name, result) in [
+            (
+                "Projects",
+                super::sync_state::diagnostics::<Projects>(&self.root, "projects.json"),
+            ),
+            (
+                "Tasks",
+                super::sync_state::diagnostics::<Overrides>(&self.root, "task-overrides.json"),
+            ),
+            (
+                "Memory",
+                super::sync_state::diagnostics::<super::memory::MemoryFile>(
+                    &self.root,
+                    "memory/records.json",
+                ),
+            ),
+        ] {
+            match result {
+                Ok(count) => unreadable += count,
+                Err(_) => problems.push(format!(
+                    "Could not read {name} data. It was kept for review."
+                )),
+            }
+        }
+        if unreadable > 0 {
+            problems.push(format!(
+                "Could not read {unreadable} stored items or files. They were kept for review."
+            ));
+        }
+        problems
     }
     pub fn load_projects(&self) -> io::Result<Projects> {
         super::sync_state::load(&self.root, "projects.json")
@@ -1179,4 +1214,64 @@ pub fn task_source(m: &Meeting, index: usize) -> TaskSource {
     }
     out.decision = best.map(|(_, p)| p.clone());
     out
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn memory_diagnostic_error_keeps_healthy_tasks_and_projects() {
+        let root = std::env::temp_dir().join(format!(
+            "sidenote-catalog-{}",
+            super::super::device::random_id().unwrap()
+        ));
+        let owner = "0123456789abcdef0123456789abcdef";
+        let state = root.join("state").join(owner);
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            root.join("device.json"),
+            serde_json::to_vec(&serde_json::json!({"id":owner,"name":"test-device"})).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(root.join("projects.json"), br#"{"projects":["Launch"]}"#).unwrap();
+        let overrides = Overrides {
+            manual: vec![ManualTask {
+                id: "test-task".into(),
+                task: "Healthy task".into(),
+                project: Some("Launch".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        std::fs::write(
+            root.join("task-overrides.json"),
+            serde_json::to_vec(&overrides).unwrap(),
+        )
+        .unwrap();
+        // A file where Memory's journal directory belongs forces an IO error for Memory only.
+        let blocked = state.join(blake3::hash(b"memory/records.json").to_hex().as_str());
+        std::fs::write(&blocked, b"retained").unwrap();
+        let store = TaskStore::new(root.clone());
+        let problems = store.catalog_problems();
+        assert_eq!(
+            problems,
+            ["Could not read Memory data. It was kept for review."]
+        );
+        let projects = store.load_projects().unwrap();
+        let mut catalog = projects.area_catalog().unwrap();
+        catalog.problems.extend(problems);
+        assert!(catalog.project(&projects, "Launch").is_some());
+        let tasks = build_tasks(
+            &[],
+            &Pipeline::default(),
+            &projects,
+            &store.load_overrides().unwrap(),
+            &HashMap::new(),
+        );
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task, "Healthy task");
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"retained");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
