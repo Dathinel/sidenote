@@ -512,7 +512,7 @@ fn no_agent(s: &State, p: Palette) -> El {
         .min_w(0.0)
         .gap(2.0)
         .child(roles::CONTROL.wrap(
-            "Ask needs an agent: install Claude Code, Codex or OpenCode",
+            "Ask needs a helper: install Claude Code, Codex or OpenCode",
             p.ink,
         ));
     if s.agents_rechecked {

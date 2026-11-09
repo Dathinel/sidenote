@@ -1432,7 +1432,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
     if [
         "ai notes",
         "helper",
-        "agent instructions",
+        "instructions",
         "privacy",
         "claude",
         "codex",
@@ -1814,7 +1814,7 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
         .child(roles::SMALL.wrap("Meetings and notes, Ask, and Hex settings.", p.soft))
         .child(
             roles::meta(
-                "Meeting to-dos stay visible. Turning a feature off keeps its data.",
+                "Meeting tasks stay visible. Turning a feature off keeps its data.",
                 p,
             )
             .mb(12.0),

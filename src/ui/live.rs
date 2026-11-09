@@ -800,7 +800,7 @@ fn stop_pill(s: &State, p: Palette, starting: bool) -> El {
     match why {
         None => b
             .label("Stop recording")
-            .help("Stop recording and make notes")
+            .help("Stop recording and write a summary")
             .preserve_focus_on_press(true)
             .on_press(|s: &mut State| s.hex_record_stop()),
         Some(reason) => b.label(format!("Stop ({reason})")).help(reason).dim(0.45),

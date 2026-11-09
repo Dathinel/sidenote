@@ -121,7 +121,7 @@ impl Snapshot {
                 .map_err(|_| LOAD_ERROR.to_string())?,
             found: notes::detect(),
             store: instructions::load(root).map_err(|_| {
-                "Could not read agent instructions. Your saved text was kept.".to_string()
+                "Could not read instructions. Your saved text was kept.".to_string()
             })?,
         })
     }
@@ -295,7 +295,7 @@ impl State {
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
                 self.notes_editor_loaded(index, entry, reset);
-                self.ai_notes.notice = Some("Agent instructions saved.".into());
+                self.ai_notes.notice = Some("Instructions saved.".into());
             }
             Ok(Completion::Tested(index, result)) => {
                 let text = match result {
@@ -596,13 +596,13 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .child(button(if a.privacy_open { "Hide details" } else { "Details" }, "notes-privacy-details", p).self_start().on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open));
     if a.privacy_open {
         privacy = privacy
-            .child(roles::SMALL.wrap("Nothing is sent until you turn on AI notes. After that, Sidenote sends a meeting when it ends, if automatic notes are on. Make notes and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
+            .child(roles::SMALL.wrap("Nothing is sent until you turn on AI notes. After that, Sidenote sends a meeting when it ends, if automatic notes are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
             .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved notes and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected. Summaries are written in English.", p.soft));
     }
     c = c.child(privacy);
-    c = c.child(roles::TITLE.wrap("Make notes with", p.ink));
+    c = c.child(roles::TITLE.wrap("Write summary with", p.ink));
     for (index, h) in HELPERS.iter().copied().enumerate() {
         let found = a.found.contains(&(h, true));
         let offered = helper_unavailable_reason(h).is_none();
@@ -747,11 +747,11 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     }),
             ),
     );
-    c = c.child(card(p).key("notes-options").child(roles::NAME.wrap("Make notes automatically when a meeting ends", p.ink))
-        .child(Switch::new(settings.auto).label("Make notes automatically").on_toggle(|s: &mut State| {
+    c = c.child(card(p).key("notes-options").child(roles::NAME.wrap("Write summary automatically when a meeting ends", p.ink))
+        .child(Switch::new(settings.auto).label("Write summary automatically").on_toggle(|s: &mut State| {
             if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic notes..."); }
         }).build(k).key("notes-auto"))
-        .child(roles::SMALL.wrap("When this is off, use Make notes on each meeting.", p.soft))
+        .child(roles::SMALL.wrap("When this is off, use Write summary on each meeting.", p.soft))
         .child(roles::NAME.wrap("Your name (optional)", p.ink))
         .child(field(&a.name, "Your name").on_edit(|s: &mut State| &mut s.ai_notes.name).build(k).key("notes-name").w_full())
         .child(roles::META.wrap("Used to mark tasks that are yours. Stored on this PC and included when a meeting is sent to your helper.", p.soft))
@@ -759,8 +759,8 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             if let Some(mut settings) = s.ai_notes.settings.clone() { settings.your_name = s.ai_notes.name.text.trim().into(); s.notes_work(Work::Settings(settings), "Saving your name..."); }
         })));
     c.child(col().key("agent-instructions").w_full().gap(16.0)
-        .child(roles::SECTION.wrap("Agent instructions", p.ink))
-        .child(roles::SMALL.wrap("Change the base instructions for each agent. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
+        .child(roles::SECTION.wrap("How notes are written", p.ink))
+        .child(roles::SMALL.wrap("Change the base instructions for your helper. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
         .child(editor(s, 0, p)).child(editor(s, 1, p)))
         .child(roles::SMALL.wrap("Teams: when no teams are set up, notes leave the team blank.", p.soft))
         .children(s.config.features.tasks.then(|| button("Open Tasks for teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
@@ -777,7 +777,7 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
         return None;
     }
     let helper = HELPERS.into_iter().find(|h| a.found.contains(&(*h, true)));
-    let text = helper.map(|h| format!("{} is installed. Sidenote can use it to write notes for your meetings.", h.name())).unwrap_or_else(|| "Sidenote writes notes with an AI helper you already use: Claude Code, Codex or OpenCode. None was found on this PC.".into());
+    let text = helper.map(|h| format!("{} is installed. Sidenote can use it to write notes for your meetings.", h.name())).unwrap_or_else(|| "Sidenote writes notes with an helper you already use: Claude Code, Codex or OpenCode. None was found on this PC.".into());
     Some(card(p).key("today-ai-notes").mb(16.0)
         .child(roles::TITLE.wrap("Turn on AI notes", p.ink)).child(roles::SMALL.wrap(text, p.soft))
         .child(roles::SMALL.wrap("Your meeting text goes to the helper's AI provider under your account after you turn notes on.", p.soft))

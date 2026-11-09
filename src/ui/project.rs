@@ -244,7 +244,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     }
     trigger_row = trigger_row
         .child(
-            rune::text(display_name.unwrap_or_else(|| "Add to an area or project".into()))
+            rune::text(display_name.unwrap_or_else(|| "Add to an project".into()))
                 .font(roles::META.medium().style())
                 .color(if mp.name.is_some() { name_ink } else { p.faint })
                 .truncate()

@@ -99,7 +99,7 @@ pub fn settings(s: &mut State, mode: &str) {
         "edited" => {
             let e = &mut s.ai_notes.editors[0];
             e.text = TextEdit::new(
-                "Keep exact decisions and numbers. Give each to-do a clear owner. Use short sentences.",
+                "Keep exact decisions and numbers. Give each task a clear owner. Use short sentences.",
             );
             e.saved = e.text.text.clone();
             e.edited_at = Some("2026-11-10T04:00:00Z".into());

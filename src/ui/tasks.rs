@@ -1981,7 +1981,7 @@ fn empty_note(s: &State, p: Palette) -> El {
     let (head, body) = if s.tasks.items.is_empty() {
         (
             "No tasks yet",
-            "To-dos from your meeting summaries appear here. Press N to add one by hand.",
+            "Tasks from your meeting summaries appear here. Press N to add one by hand.",
         )
     } else {
         (

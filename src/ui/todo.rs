@@ -110,7 +110,7 @@ pub fn section(s: &State, m: &Meeting, p: Palette) -> El {
     out.child(
         roles::meta(
             if s.config.features.tasks {
-                "Ticks are saved on this computer and show in Tasks too."
+                "Checked tasks are saved here and also appear on the Tasks page."
             } else {
                 "Ticks are saved on this computer."
             },

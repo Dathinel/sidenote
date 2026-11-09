@@ -78,7 +78,7 @@ fn counts(m: &Meeting, p: Palette) -> El {
             p.ok,
             "sec-decisions",
         ),
-        (m.summary.todo.len(), "to do", p.accent, "sec-todo"),
+        (m.summary.todo.len(), "tasks", p.accent, "sec-todo"),
         (
             m.summary.to_settle.len(),
             "still open",
@@ -645,7 +645,7 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
 
     if !m.summary.todo.is_empty() {
         body = body
-            .child(heading("To do", Some(m.summary.todo.len()), "sec-todo", p))
+            .child(heading("Tasks", Some(m.summary.todo.len()), "sec-todo", p))
             .children(super::notes_status::tasks_notice(s, m, p))
             .child(todo::section(s, m, p));
     }
@@ -666,7 +666,7 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
                     let pt = plain_point(
                         "open",
                         &q.question,
-                        q.waits_on.as_ref().map(|w| format!("waits on {w}")),
+                        q.waits_on.as_ref().map(|w| format!("Waiting on: {w}")),
                     );
                     point_row(&pt, format!("settle-{i}"), None, false, p)
                 })

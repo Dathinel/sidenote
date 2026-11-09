@@ -32,7 +32,7 @@ pub(super) fn people_line(m: &Meeting) -> String {
         parts.push(plural(decided, "decision", "decisions"));
     }
     if !m.summary.todo.is_empty() {
-        parts.push(format!("{} to do", m.summary.todo.len()));
+        parts.push(format!("{} tasks", m.summary.todo.len()));
     }
     parts.retain(|p| !p.is_empty());
     parts.join(" \u{b7} ")
@@ -237,7 +237,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             s,
             k,
             42.0,
-            "Search titles, summaries, to-dos and transcripts",
+            "Search meetings, tasks and transcripts",
             p,
         ));
     let mut position = 0;

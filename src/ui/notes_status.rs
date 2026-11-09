@@ -54,15 +54,15 @@ pub fn is_failure(state: &JobState) -> bool {
 }
 pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
-    let name = helper.map(Helper::name).unwrap_or("The AI helper");
+    let name = helper.map(Helper::name).unwrap_or("The helper");
     match &job.state {
-        JobState::NoHelper => "No notes yet. Sidenote needs an AI helper to write notes. Your transcript is ready below.".into(),
-        JobState::NeedsClick => "Notes were not made for this meeting because it ended before AI notes were turned on, or automatic notes were off.".into(),
+        JobState::NoHelper => "No summary yet. Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
+        JobState::NeedsClick => "No summary yet. Sidenote only writes summaries automatically for meetings that end after you turn on AI notes. You can write this one now.".into(),
         JobState::Queued => "This meeting is waiting to have its notes written.".into(),
-        JobState::Running => format!("Writing notes with {name}. This can take a few minutes."),
+        JobState::Running => format!("Writing summary with {name}. This can take a few minutes."),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install it again, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
-            let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your AI helper" };
+            let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your helper" };
             let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
@@ -77,20 +77,20 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
 pub fn label(state: &JobState) -> &'static str {
     match state {
         JobState::NoHelper => "No notes yet",
-        JobState::NeedsClick => "Ready to make notes",
-        JobState::Queued => "Notes queued",
-        JobState::Running => "Writing notes",
-        JobState::HelperMissing => "AI helper not found",
-        JobState::BackendError { .. } => "AI helper stopped with an error",
-        JobState::TimedOut => "AI helper took too long",
-        JobState::BadOutput => "AI answer could not be read",
+        JobState::NeedsClick => "Ready to write a summary",
+        JobState::Queued => "Summary queued",
+        JobState::Running => "Writing summary",
+        JobState::HelperMissing => "helper not found",
+        JobState::BackendError { .. } => "helper stopped with an error",
+        JobState::TimedOut => "helper took too long",
+        JobState::BadOutput => "Helper reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for notes",
         JobState::Empty => "No speech heard",
-        JobState::Done { fallback: true, .. } => "Notes used default instructions",
+        JobState::Done { fallback: true, .. } => "Summary used default instructions",
         JobState::Done {
             tasks_failed: true, ..
-        } => "Tasks were not sorted",
-        JobState::Done { .. } => "Notes ready",
+        } => "Tasks not added to a project",
+        JobState::Done { .. } => "Summary ready",
     }
 }
 fn after_setup(state: JobState, configured: bool) -> JobState {
@@ -183,7 +183,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         JobState::NeedsClick => {
             buttons = buttons.child(request_button(
-                "Make notes",
+                "Write summary",
                 id,
                 Request::MakeNotes,
                 "notes-state-make",
@@ -227,7 +227,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         JobState::TooLong { .. } => {
             buttons = buttons.child(request_button(
-                "Make notes from the first 4 hours",
+                "Write summary from the first 4 hours",
                 id,
                 Request::FirstPart,
                 "notes-state-first-part",

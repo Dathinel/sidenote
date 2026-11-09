@@ -902,7 +902,7 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     let stop = match why {
         None => stop
             .label("Stop recording")
-            .help("Stop recording and make notes")
+            .help("Stop recording and write a summary")
             .hover(p.chip)
             .on_press(|s: &mut State| s.hex_record_stop()),
         Some(reason) => stop.label(format!("Stop ({reason})")).help(reason).dim(0.6),
