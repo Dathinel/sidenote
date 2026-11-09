@@ -252,10 +252,12 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     Some(c)
 }
 fn edit_button(p: Palette) -> El {
-    button("Edit instructions", "notes-state-edit", p).on_press(|s: &mut State| {
-        s.open_ai_notes();
-        super::scene_scroll(s, "agent-instructions");
-    })
+    button("Edit instructions", "notes-state-edit", p)
+        .min_w(148.0)
+        .on_press(|s: &mut State| {
+            s.open_ai_notes();
+            super::scene_scroll(s, "agent-instructions");
+        })
 }
 pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let j = job(s, m)?;
