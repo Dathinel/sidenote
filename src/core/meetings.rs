@@ -26,7 +26,14 @@ pub fn state_dir() -> PathBuf {
     if let Some(dir) = super::paths::data() {
         return dir;
     }
-    super::paths::appdata_dir("sidenote", "hex-meetings")
+    let root = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default());
+    let current = root.join("sidenote");
+    // An empty new folder would change which corpus an existing install opens.
+    if current.exists() {
+        current
+    } else {
+        root.join("hex-meetings")
+    }
 }
 
 /// Both background entry points use the same log without relocating an existing file.

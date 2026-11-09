@@ -120,7 +120,10 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 // TODO: Add a remote source at public release.
 
 /// Dropping the sender stops the six-hour worker after its current local copy.
-pub fn start(publish: impl Fn(Status) + Send + 'static) -> mpsc::Sender<()> {
+pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<()>> {
+    if !installed() {
+        return None;
+    }
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         loop {
@@ -135,13 +138,16 @@ pub fn start(publish: impl Fn(Status) + Send + 'static) -> mpsc::Sender<()> {
             }
         }
     });
-    tx
+    Some(tx)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Phase {
     #[default]
     Idle,
+    Manual,
+    Preparing,
+    StoppingListener,
     Checking,
     Available,
     Downloading,
@@ -158,16 +164,38 @@ pub struct Status {
     pub checked: Option<String>,
     pub error: Option<String>,
 }
+pub fn installed() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| {
+        std::env::var_os("LOCALAPPDATA").is_some()
+            && velopack::locator::auto_locate_app_manifest(
+                velopack::locator::LocationContext::FromCurrentExe,
+            )
+            .is_ok()
+    })
+}
+pub fn directory() -> PathBuf {
+    PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Sidenote/updates")
+}
 fn local(name: &str) -> PathBuf {
-    crate::core::state_dir().join("local").join(name)
+    directory().join(name)
 }
 pub fn load() -> Status {
+    if !installed() {
+        return Status {
+            phase: Phase::Manual,
+            ..Default::default()
+        };
+    }
     fs::read(local("updates.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 fn save(status: &Status) -> io::Result<()> {
+    if !installed() {
+        return Ok(());
+    }
     let path = local("updates.json");
     fs::create_dir_all(path.parent().unwrap())?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
@@ -192,6 +220,9 @@ fn manager() -> Result<UpdateManager, String> {
         .map_err(|_| "Updates need a Sidenote Setup install. Manual builds cannot update.".into())
 }
 pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
+    if !installed() {
+        return Ok(load());
+    }
     let _check = exclusive("update-check.lock").map_err(|_| "Another update check is running.")?;
     let mut status = Status {
         phase: Phase::Checking,
@@ -271,7 +302,10 @@ pub fn exclusive(name: &str) -> io::Result<File> {
         .open(local(name))
 }
 /// Shared readers represent work. Apply needs an exclusive writer of the same file.
-pub fn activity() -> io::Result<File> {
+pub fn activity() -> io::Result<Option<File>> {
+    if !installed() {
+        return Ok(None);
+    }
     if listener_stopping() {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
@@ -287,15 +321,20 @@ pub fn activity() -> io::Result<File> {
             .write(true)
             .open(&path);
     }
-    OpenOptions::new().read(true).share_mode(1).open(path)
+    OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(path)
+        .map(Some)
 }
 fn recording_idle() -> Result<(), String> {
     match crate::hex_engine::HexEngine::new().status() {
-        Ok(s) if s.recording.is_some() || s.dictating != Some(false) => {
-            Err("Finish recording before installing the update.".into())
-        }
-        Ok(_) | Err(crate::hex_engine::HexError::HexNotRunning) => Ok(()),
-        Err(_) => Err("Could not check recording status. Try again when Hex is idle.".into()),
+        Ok(s) if s.recording.is_none() && s.dictating == Some(false) && s.meeting_state == "idle" => Ok(()),
+        Ok(_) => Err("Finish recording before installing the update.".into()),
+        Err(_) => match crate::platform::hex_running() {
+            Ok(false) => Ok(()),
+            _ => Err("Hex is running but its recording status cannot be read. Treat it as recording and try again later.".into()),
+        },
     }
 }
 fn task() -> Result<String, String> {
@@ -314,8 +353,11 @@ fn task_command(run: bool) -> Result<(), String> {
         let data = crate::env_var("SIDENOTE_DATA_DIR")
             .ok_or("Proof task needs an isolated data folder.")?;
         format!(
-            "--listen --listener-isolated --data-dir \"{}\"",
-            data.to_string_lossy()
+            "--listen --listener-isolated --data-dir \"{}\" --listener-localappdata \"{}\"",
+            data.to_string_lossy(),
+            std::env::var_os("LOCALAPPDATA")
+                .ok_or("Proof task needs isolated LocalAppData.")?
+                .to_string_lossy()
         )
     } else {
         "--listen".into()
@@ -336,13 +378,93 @@ fn task_command(run: bool) -> Result<(), String> {
         Err("The listener task is missing or does not target this install. Configure a Sidenote task first.".into())
     }
 }
-pub fn listener_stopping() -> bool {
-    local("update-listener.stop").exists()
+#[derive(Serialize, Deserialize)]
+struct StopMarker {
+    pid: u32,
+    created: i64,
 }
-pub fn listener_lock() -> io::Result<File> {
-    exclusive("update-listener.lock")
+fn write_stop(pid: u32) -> io::Result<()> {
+    let temp = local("update-listener.stop.tmp");
+    fs::write(
+        &temp,
+        serde_json::to_vec(&StopMarker {
+            pid,
+            created: chrono::Utc::now().timestamp(),
+        })?,
+    )?;
+    crate::platform::replace_file(&temp, &local("update-listener.stop"))
+}
+pub fn listener_stopping() -> bool {
+    if !installed() {
+        return false;
+    }
+    let path = local("update-listener.stop");
+    let Ok(bytes) = fs::read(&path) else {
+        return false;
+    };
+    let current = serde_json::from_slice::<StopMarker>(&bytes)
+        .ok()
+        .is_some_and(|marker| {
+            let age = chrono::Utc::now().timestamp() - marker.created;
+            age < 600 && crate::platform::process_running(marker.pid)
+        });
+    if !current {
+        // Do not remove a fresh request that replaced the stale marker while it was read.
+        if fs::read(&path).ok().as_deref() == Some(bytes.as_slice()) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    current
+}
+pub fn window_lock() -> io::Result<Option<File>> {
+    if !installed() {
+        return Ok(None);
+    }
+    exclusive("update-window.lock").map(Some)
+}
+pub fn listener_lock() -> io::Result<Option<File>> {
+    if !installed() {
+        return Ok(None);
+    }
+    exclusive("update-listener.lock").map(Some)
+}
+pub fn ensure_listener() -> Result<(), String> {
+    if !installed() {
+        return Ok(());
+    }
+    if listener_stopping() {
+        return Ok(());
+    }
+    match listener_lock() {
+        Ok(lock) => {
+            drop(lock);
+            task_command(true)
+        }
+        Err(error) if error.raw_os_error() == Some(32) => Ok(()),
+        Err(_) => Err("Could not check whether the listener is running.".into()),
+    }
+}
+/// Runs on the window's worker, including recovery after a failed asynchronous apply.
+pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
+    if !installed() {
+        return Ok(());
+    }
+    let pending = manager()
+        .ok()
+        .and_then(|mgr| mgr.get_update_pending_restart());
+    ensure_listener()?;
+    if listener_stopping() {
+        return Ok(());
+    }
+    if pending.is_some() {
+        apply(true, Vec::new(), publish)?;
+    }
+    Ok(())
 }
 pub fn after_update() {
+    if !installed() {
+        return;
+    }
     if load().version == VERSION {
         let _ = save(&Status {
             checked: load().checked,
@@ -364,7 +486,18 @@ fn restart_listener() {
         }
     }
 }
-pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), String> {
+pub fn apply(
+    from_window: bool,
+    mut restart_args: Vec<String>,
+    mut publish: impl FnMut(Phase),
+) -> Result<(), String> {
+    if !installed() {
+        return Ok(());
+    }
+    if listener_stopping() {
+        return Err("An update is already being installed.".into());
+    }
+    publish(Phase::Preparing);
     let args: Vec<_> = std::env::args().skip(1).collect();
     for pair in args.windows(2).filter(|pair| {
         matches!(
@@ -372,14 +505,6 @@ pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), Str
             "--data-dir" | "--meetings-dir" | "--peers-dir"
         )
     }) {
-        if pair[0] == "--data-dir" {
-            let inherited = crate::env_var("SIDENOTE_DATA_DIR")
-                .or_else(|| crate::env_var("SIDENOTE_STATE_DIR"))
-                .and_then(|path| fs::canonicalize(PathBuf::from(path)).ok());
-            if inherited.is_none() || inherited != fs::canonicalize(crate::core::state_dir()).ok() {
-                return Err("Set SIDENOTE_DATA_DIR to this data folder in your launcher before installing. Update hooks must inherit the same folder.".into());
-            }
-        }
         restart_args.extend(pair.iter().cloned());
     }
     let _check =
@@ -402,7 +527,7 @@ pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), Str
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or("Check for updates to verify the downloaded package first.")?;
-    if verified.Version != asset.Version {
+    if verified.Version != asset.Version || verified.FileName != asset.FileName {
         return Err("Check for updates again before installing.".into());
     }
     verify(&verified)?;
@@ -410,8 +535,8 @@ pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), Str
     task_command(false)?;
     fs::write(local("update-listener.resume"), b"resume")
         .map_err(|_| "Could not save listener restart state.")?;
-    fs::write(local("update-listener.stop"), b"stop")
-        .map_err(|_| "Could not stop the listener.")?;
+    publish(Phase::StoppingListener);
+    write_stop(std::process::id()).map_err(|_| "Could not stop the listener.")?;
     let deadline = Instant::now() + Duration::from_secs(8);
     let stopped = loop {
         if let Ok(lock) = listener_lock() {
@@ -425,7 +550,12 @@ pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), Str
     let result = stopped.and_then(|_listener| {
         recording_idle().map_err(|_| "Recording started. Try again when it is finished.")?;
         mgr.wait_exit_then_apply_updates(&asset, true, true, restart_args)
-            .map_err(|_| "Could not start the update. Try again.")
+            .map_err(|_| "Could not start the update. Try again.")?;
+        let pid = crate::platform::updater_child()
+            .ok()
+            .flatten()
+            .ok_or("The updater did not stay running. Try again.")?;
+        write_stop(pid).map_err(|_| "Could not save updater restart state.")
     });
     if let Err(error) = result {
         restart_listener();
@@ -434,8 +564,15 @@ pub fn apply(from_window: bool, mut restart_args: Vec<String>) -> Result<(), Str
     std::process::exit(0)
 }
 pub fn cli(args: &[std::ffi::OsString]) -> i32 {
-    let result = if args.iter().any(|a| a == "--update-apply") {
-        apply(false, vec!["--update-status".into()]).map(|_| load())
+    let result = if args.iter().any(|a| a == "--update-window-start") {
+        window_start(|_| {}).map(|_| load())
+    } else if args.iter().any(|a| a == "--update-probe") {
+        recording_idle().map(|_| load())
+    } else if args.iter().any(|a| a == "--update-apply") {
+        apply(false, vec!["--update-status".into()], |phase| {
+            let _ = save(&Status { phase, ..load() });
+        })
+        .map(|_| load())
     } else if args.iter().any(|a| a == "--update-check") {
         check(|_| {})
     } else {
@@ -451,9 +588,11 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
     };
     let _ = save(&status);
     let report = serde_json::json!({"current_version":VERSION,"data_dir":crate::core::state_dir(),
-        "peers_dir":crate::core::peers_dir(),"feed":source_label(),"listener_task":task().ok(),"status":status});
-    let _ = fs::create_dir_all(local(""));
-    let _ = fs::write(local("update-report.json"), report.to_string());
+        "peers_dir":crate::core::peers_dir(),"feed":source_label(),"listener_task":task().ok(),"update_dir":directory(),"installed":installed(),"status":status});
+    if installed() {
+        let _ = fs::create_dir_all(local(""));
+        let _ = fs::write(local("update-report.json"), report.to_string());
+    }
     println!("{report}");
     i32::from(status.phase == Phase::Error)
 }

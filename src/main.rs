@@ -9,6 +9,19 @@ fn main() {
         .on_restarted(|_| sidenote::updates::restarted())
         .run();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.iter().any(|a| a == "--listener-isolated")
+        && let Some(pair) = args
+            .windows(2)
+            .find(|pair| pair[0] == "--listener-localappdata")
+    {
+        if !std::path::Path::new(&pair[1]).is_absolute() {
+            std::process::exit(2);
+        }
+        // The isolated task configures its own environment before any app worker starts.
+        unsafe {
+            std::env::set_var("LOCALAPPDATA", &pair[1]);
+        }
+    }
     if let Err(error) = sidenote::core::configure_paths(&args) {
         eprintln!("{error}");
         std::process::exit(2);
@@ -23,7 +36,13 @@ fn main() {
     if args.iter().any(|a| {
         matches!(
             a.to_str(),
-            Some("--update-check" | "--update-apply" | "--update-status")
+            Some(
+                "--update-check"
+                    | "--update-apply"
+                    | "--update-status"
+                    | "--update-window-start"
+                    | "--update-probe"
+            )
         )
     }) {
         std::process::exit(sidenote::updates::cli(&args));
@@ -107,18 +126,20 @@ fn main() {
     let _update_window = if headless || offscreen_bench {
         None
     } else {
-        match sidenote::updates::exclusive("update-window.lock") {
+        match sidenote::updates::window_lock() {
             Ok(guard) => Some(guard),
             Err(_) => return,
         }
     };
     if !headless && !offscreen_bench {
-        let _ = sidenote::updates::apply(true, Vec::new());
+        std::thread::spawn(|| {
+            let _ = sidenote::updates::window_start(|_| {});
+        });
     }
     let _updates = if headless || offscreen_bench {
         None
     } else {
-        Some(sidenote::updates::start(|_| {}))
+        sidenote::updates::start(|_| {})
     };
     if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
         rune::warm_gpu(Default::default());

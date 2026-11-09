@@ -59,6 +59,7 @@ fn log(message: &str) {
     }
 }
 fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
+    let activity = crate::updates::activity()?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
     {
@@ -70,7 +71,6 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
     }
     let script = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
         .join(".config/hex/scripts/hex-meeting-watch.ps1");
-    let activity = crate::updates::activity()?;
     let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
@@ -81,6 +81,27 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
         let _ = child.wait();
     });
     Ok(())
+}
+fn catch_up() -> io::Result<()> {
+    let _activity = crate::updates::activity()?;
+    if crate::core::meeting_router::jobs::configured() {
+        for entry in fs::read_dir(crate::core::meetings_dir())? {
+            let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+                continue;
+            }
+            let complete = fs::read(entry.path().join("manifest.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .is_some_and(|manifest| manifest["status"] == "complete");
+            if complete {
+                crate::core::meeting_router::jobs::enqueue(&id).map_err(io::Error::other)?;
+            }
+        }
+        crate::core::meeting_router::jobs::start_worker()?;
+    }
+    pipeline(None)
 }
 // A streaming HTTP body, with no TLS or proxy needed for the loopback API.
 struct Body {
@@ -233,6 +254,10 @@ pub fn run() -> ! {
             std::thread::sleep(Duration::from_millis(250));
         }
         std::process::exit(0);
+    }
+    // The watcher scans completed meetings even when the event API is unavailable.
+    if catch_up().is_err() {
+        log("startup catch-up could not start; retrying on the next connection");
     }
     std::thread::spawn(|| {
         while !crate::updates::listener_stopping() {

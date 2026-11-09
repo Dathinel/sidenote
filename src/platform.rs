@@ -8,6 +8,66 @@ use windows_sys::Win32::{
 fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
     s.encode_wide().chain(Some(0)).collect()
 }
+pub fn process_running(pid: u32) -> bool {
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return GetLastError() != 87;
+        }
+        let mut code = 0;
+        let running = GetExitCodeProcess(handle, &mut code) == 0 || code == 259;
+        CloseHandle(handle);
+        running
+    }
+}
+fn processes() -> io::Result<Vec<(u32, u32, String)>> {
+    use windows_sys::Win32::{Foundation::INVALID_HANDLE_VALUE, System::Diagnostics::ToolHelp::*};
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of_val(&entry) as u32;
+        let mut next = Process32FirstW(snapshot, &mut entry);
+        let mut found = Vec::new();
+        while next != 0 {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|c| *c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            found.push((
+                entry.th32ProcessID,
+                entry.th32ParentProcessID,
+                String::from_utf16_lossy(&entry.szExeFile[..end]),
+            ));
+            next = Process32NextW(snapshot, &mut entry);
+        }
+        let error = GetLastError();
+        CloseHandle(snapshot);
+        if error != 18 {
+            return Err(io::Error::from_raw_os_error(error as i32));
+        }
+        Ok(found)
+    }
+}
+pub fn hex_running() -> io::Result<bool> {
+    Ok(processes()?.iter().any(|(_, _, name)| {
+        name.eq_ignore_ascii_case("hex.exe") || name.eq_ignore_ascii_case("hex.com")
+    }))
+}
+pub fn updater_child() -> io::Result<Option<u32>> {
+    Ok(processes()?
+        .iter()
+        .find(|(_, parent, name)| {
+            *parent == std::process::id() && name.eq_ignore_ascii_case("Update.exe")
+        })
+        .map(|(pid, _, _)| *pid))
+}
 pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     move_file(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
 }

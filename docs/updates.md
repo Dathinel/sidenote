@@ -5,7 +5,9 @@ per-user .NET SDK 8.0.427. These builds are unsigned.
 
 Set `SIDENOTE_UPDATE_FEED` in the launching environment to an absolute local
 folder or UNC file share containing `releases.win.json` and its packages.
-There is no HTTP update source and no repository URL. A disconnected share
+There is no HTTP update source and no repository URL. Apply preparation makes
+loopback-only HTTP requests to Hex's local status API. There is no other network
+request from the updater; a UNC file share uses Windows file I/O. A missing feed
 produces a retryable error. An unset feed disables automatic checks.
 
 Run `tools/pack_release.ps1 -ReleaseNotes <markdown-file>` after changing the
@@ -17,14 +19,18 @@ corruption, but an unsigned feed does not authenticate its publisher.
 
 `--update-check` checks and downloads. `--update-status` reports the current
 version, isolated paths, source and last status in JSON and writes the same
-report to `local/update-report.json`. `--update-apply` follows the same safety
+report to `%LOCALAPPDATA%/Sidenote/updates/update-report.json`. `--update-apply` follows the same safety
 and listener path as the window, then restarts to `--update-status` for proof.
 No CLI helper silently applies a cached update. The normal window tries a
 verified pending package at its next startup. All apply paths recheck SHA256.
-Folder flags are preserved on restart. A custom `--data-dir` must also be set
-through `SIDENOTE_DATA_DIR` or `SIDENOTE_STATE_DIR` in the launcher, so Velopack's
-early callbacks use that same folder. Apply refuses a mismatch before stopping
-the listener.
+Folder flags are preserved on restart. All updater locks, status, markers and
+reports live under `%LOCALAPPDATA%/Sidenote/updates`, independently of meeting
+and app data. Update checks and hooks never create `%APPDATA%/sidenote`.
+If neither app-data root exists, the app defaults to the legacy `hex-meetings`
+root. An existing `sidenote` data root remains readable without creating a new one.
+A manual copy is detected before bookkeeping and quietly disables updates.
+Settings says "Updates are off for this manual install". Its listener, MCP and
+daily-check commands do not acquire updater locks.
 
 Create a per-user scheduled task named `Sidenote meeting listener` whose sole
 action is the stable installed `current/sidenote.exe` with `--listen`.
@@ -33,15 +39,33 @@ Apply refuses a task with another action or executable. It never edits a task.
 The listener watches a stop request, closes its event stream and exits before
 apply. The after-update hook keeps the resume marker. Only the restart hook starts
 the validated task, after Velopack's process cleanup. An OS-held lock
-allows only one listener per data folder. A stopped or missing task prevents
-installation until configured, rather than guessing a replacement.
+allows only one installed listener per user. The stop marker contains a PID and
+UTC timestamp. During preparation that PID is the app; after handoff it is the
+actual Velopack Update.exe child. Listeners delete and ignore markers whose PID
+is gone, whose timestamp is over ten minutes old, or whose contents are invalid.
+Every window start checks the listener lock and starts the configured task when
+no listener holds it. This also recovers after an asynchronous update failure.
+Missing or mismatched task definitions produce a plain error, never a guessed
+replacement task.
 
 Jobs hold shared OS file handles. Apply requires an exclusive handle and a fresh
 idle Hex status. Ask, routing, daily checks, runner jobs and listener-launched
 notes work participate. A second updater refuses an open window. Unknown Hex
-status blocks apply; an absent Hex is idle. Hex remains an external app and can
-start recording just after a status check, so the final check narrows that race
-but cannot atomically reserve Hex. No dictation setting is written.
+status blocks apply when a Hex process is present, including an unreadable or
+missing local status API. Failure to inspect the process list also blocks apply.
+An entirely absent Hex process is allowed. The recording probe is best effort:
+Hex can start recording after the final check because it does not participate
+in a reservation. The updater cannot eliminate that race.
+
+The listener therefore reconciles completed meetings on every start, before
+connecting to the event stream. It queues completed meetings for the configured
+Rust router and runs the normal idempotent notes watcher, which scans completed
+manifests and skips meetings that already have notes. A meeting that finishes
+while the listener is stopped is processed after restart, even if the event API
+is still unavailable. Existing pipeline retry and audio-size policies remain.
+No dictation setting is written. Apply preparation, checksum reads, status
+probes, task commands and listener-stop waits run on a worker. The window
+publishes "Preparing update" and "Stopping the listener" while staying usable.
 An idle MCP connection does not block installation. A memory proposal holds the
 job guard while it writes. Updates may disconnect idle MCP clients; reconnect
 them using the stable executable path.
