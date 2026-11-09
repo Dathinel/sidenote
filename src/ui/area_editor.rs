@@ -365,7 +365,7 @@ fn mapping_item(s: &State, index: usize, project: &str, area_name: &str, p: Pale
         .w_full()
         .gap(4.0)
         .py(6.0)
-        .child(roles::META.wrap(format!("{} ? {}", r.kind, r.label), p.soft))
+        .child(roles::META.wrap(format!("{}: {}", r.kind, r.label), p.soft))
         .child(menu.build(&k, &mut layer).self_start())
         .children(layer)
 }
@@ -459,7 +459,7 @@ fn preview_items(s: &State, p: Palette) -> El {
                             .preview
                             .as_ref()
                             .and_then(|p| p.references.get(i))
-                            .map(|r| roles::META.wrap(format!("{} ? {}", r.kind, r.label), p.soft))
+                            .map(|r| roles::META.wrap(format!("{}: {}", r.kind, r.label), p.soft))
                             .unwrap_or_else(col)
                     },
                 ),
