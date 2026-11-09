@@ -2045,12 +2045,18 @@ fn project_control(
             .clone()
             .unwrap_or_else(|| UNSORTED.to_string()),
     };
+    let current_label = task
+        .and_then(|task| task.area_id.as_ref())
+        .and_then(|id| s.areas.catalog.areas.get(id))
+        .filter(|_| current == UNSORTED)
+        .map(|area| area.name.clone())
+        .unwrap_or_else(|| s.tasks.projects.project_area_label(&current));
     let trigger = value_button(
         row()
             .gap(8.0)
             .items_center()
             .child(project_dot(&current, p))
-            .child(roles::CONTROL.wrap(&current, p.ink))
+            .child(roles::CONTROL.wrap(&current_label, p.ink))
             .child(caret(p)),
         pre,
         format!("Project: {current}"),
@@ -2088,10 +2094,10 @@ fn project_control(
         if let Some(task) = task {
             menu = menu.separator().group_label("Area-only work");
             for area in s.areas.catalog.areas.values() {
-                let (id,key) = (area.id.clone(),core::areas::task_key(task));
+                let (id, key) = (area.id.clone(), core::areas::task_key(task));
                 menu = menu.item(MenuItem::new(&area.name).on_select(move |s: &mut State| {
-                    s.tasks.ui.project_menu=false;
-                    s.assign_area(key.clone(),id.clone());
+                    s.tasks.ui.project_menu = false;
+                    s.assign_area(key.clone(), id.clone());
                 }));
             }
         }

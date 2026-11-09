@@ -3,6 +3,7 @@
 //! every task.
 mod area;
 mod area_editor;
+mod area_scene;
 mod ask;
 mod benchmark;
 mod check;
@@ -894,6 +895,7 @@ impl State {
                 steps: vec![first_step.into()],
             },
         );
+        self.refresh_areas();
     }
 
     pub fn clear_thread(&mut self) {
@@ -907,6 +909,7 @@ impl State {
     }
 
     fn finish_ask(&mut self, id: &str, run: AskRun, failure: Option<String>) {
+        self.refresh_areas();
         let outcome = match failure {
             Some(message) => Err(message),
             None => run
@@ -1916,6 +1919,22 @@ pub fn spec() -> AppSpec<State> {
                 project_merge::scene(s, "preview-expanded")
             }),
             ("merge-page", |s| project_merge::scene(s, "page")),
+            ("areas-page", |s| area_scene::scene(s, "page")),
+            ("areas-all", |s| area_scene::scene(s, "all")),
+            ("areas-project", |s| area_scene::scene(s, "project")),
+            ("areas-list", |s| area_scene::scene(s, "list")),
+            ("areas-migration", |s| area_scene::scene(s, "migration")),
+            ("areas-migration-empty", |s| {
+                area_scene::scene(s, "migration-empty")
+            }),
+            ("areas-convert", |s| area_scene::scene(s, "convert")),
+            ("areas-create", |s| area_scene::scene(s, "create")),
+            ("areas-rename", |s| area_scene::scene(s, "rename")),
+            ("areas-move", |s| area_scene::scene(s, "move")),
+            ("areas-assign", |s| area_scene::scene(s, "assign")),
+            ("areas-worker-proof", |s| {
+                area_scene::scene(s, "worker-proof")
+            }),
             ("merge-picker", |s| project_merge::scene(s, "picker")),
             ("merge-preview", |s| project_merge::scene(s, "preview")),
             ("merge-done", |s| project_merge::scene(s, "done")),

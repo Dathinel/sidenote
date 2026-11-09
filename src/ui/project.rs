@@ -180,7 +180,16 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     if !s.config.features.projects {
         return None;
     }
-    let mp = s.meeting_project(id)?;
+    let mut mp = s.meeting_project(id)?;
+    let target = s.areas.activity.meetings.get(id);
+    if target.is_some_and(|t| t.project_id.is_none()) {
+        mp.confirmed = true;
+    }
+    let display_name = target.map(|t| s.areas.catalog.label(t)).or_else(|| {
+        mp.name
+            .as_deref()
+            .map(|n| s.tasks.projects.project_area_label(n))
+    });
     let open = s.project_menu.as_deref() == Some(id);
     let chevron = rune::icon(
         if open {
@@ -212,7 +221,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     }
     trigger_row = trigger_row
         .child(
-            rune::text(mp.name.clone().unwrap_or_else(|| "Add to a project".into()))
+            rune::text(display_name.unwrap_or_else(|| "Add to an area or project".into()))
                 .font(roles::META.medium().style())
                 .color(if mp.name.is_some() { name_ink } else { p.faint })
                 .truncate()
@@ -259,6 +268,14 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             MenuItem::new("New project...")
                 .on_select(move |s: &mut State| s.start_project_form(&new_id)),
         );
+        menu = menu.separator().group_label("Area-only work");
+        for area in s.areas.catalog.areas.values() {
+            let (area_id, key) = (area.id.clone(), core::areas::meeting_key(id));
+            menu = menu.item(MenuItem::new(&area.name).on_select(move |s: &mut State| {
+                s.project_menu = None;
+                s.assign_area(key.clone(), area_id.clone());
+            }));
+        }
         if mp.name.is_some() {
             let id = id.to_string();
             menu = menu.separator().item(

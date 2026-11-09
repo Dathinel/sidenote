@@ -86,7 +86,7 @@ impl State {
                             &running,
                             chrono::Utc::now(),
                         )?,
-                        receipts: store.area_receipts()?,
+                        receipts: projects.area_receipts()?,
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
@@ -413,7 +413,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .key(format!("area-task-{count}"))
                 .hover(p.chip)
-                .on_press(move |s: &mut State| s.open_task(&id, index)),
+                .on_press(move |s: &mut State| {
+                    s.set_view(super::tasks::View::Tasks);
+                    s.open_task(&id, index);
+                }),
             );
         }
         if count == 0 {

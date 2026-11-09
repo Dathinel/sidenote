@@ -120,6 +120,7 @@ impl Projects {
             legacy_aliases: read_entries(self, "area-alias:")?,
             links: read_entries(self, "area-link:")?,
         };
+        let identities = catalog.projects.clone();
         catalog
             .projects
             .retain(|_, p| self.resolve(&p.name) == p.name);
@@ -144,6 +145,18 @@ impl Projects {
         }
         for p in catalog.projects.values_mut() {
             p.name = self.resolve(&p.name);
+        }
+        for link in catalog.links.values_mut() {
+            if let Some(id) = &link.target.project_id
+                && !catalog.projects.contains_key(id)
+                && let Some(old) = identities.get(id)
+                && let Some(project) = catalog
+                    .projects
+                    .values()
+                    .find(|p| p.name == self.resolve(&old.name))
+            {
+                link.target.project_id = Some(project.id.clone());
+            }
         }
         catalog.validate()?;
         Ok(catalog)
@@ -188,8 +201,18 @@ impl Catalog {
                 return Err(store_io::invalid("A project refers to a missing area"));
             }
         }
+        for alias in self.legacy_aliases.values() {
+            let LegacyAlias::Area { area_id } = alias;
+            if !self.areas.contains_key(area_id) {
+                return Err(store_io::invalid("A legacy alias refers to a missing area"));
+            }
+        }
         for link in self.links.values() {
-            self.validate_target(&link.target)?;
+            if self.current_target(&link.target).is_none() {
+                return Err(store_io::invalid(
+                    "An area assignment refers to a missing area or project",
+                ));
+            }
         }
         Ok(())
     }
@@ -231,7 +254,7 @@ impl Catalog {
         raw_project: &str,
     ) -> Option<Target> {
         if let Some(link) = self.links.get(key).filter(|l| &l.baseline == baseline) {
-            return Some(link.target.clone());
+            return self.current_target(&link.target);
         }
         if let Some(LegacyAlias::Area { area_id }) = self
             .legacy_aliases
@@ -256,6 +279,25 @@ impl Catalog {
                 project_id: Some(project.id.clone()),
             })
         }
+    }
+    fn current_target(&self, target: &Target) -> Option<Target> {
+        if let Some(id) = &target.project_id {
+            let project = self.projects.get(id)?;
+            return if let Some(area) = &project.converted_to {
+                Some(Target {
+                    area_id: area.clone(),
+                    project_id: None,
+                })
+            } else {
+                project.area_id.as_ref().map(|area| Target {
+                    area_id: area.clone(),
+                    project_id: Some(id.clone()),
+                })
+            };
+        }
+        self.areas
+            .contains_key(&target.area_id)
+            .then(|| target.clone())
     }
     pub fn label(&self, target: &Target) -> String {
         let area = &self.areas[&target.area_id].name;

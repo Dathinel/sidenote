@@ -212,6 +212,8 @@ fn main() {
                 "boundary",
                 "undo-boundary",
                 "legacy",
+                "child-move",
+                "raw-move",
             ] {
                 let data = root.join(scenario);
                 assert_eq!(child(&data, "prepare", None), 0);
@@ -222,12 +224,16 @@ fn main() {
                 assert_eq!(child(&data, "bytes", None), 0);
                 evidence.push(json!({"scenario":scenario,"passed":true,"data":data}));
             }
-            for stage in ["backup", "staged"] {
+            for stage in ["backup", "staged", "published"] {
                 let data = root.join(format!("crash-{stage}"));
                 assert_eq!(child(&data, "prepare", None), 0);
                 assert_eq!(child(&data, "batch", Some(stage)), 86);
-                assert_eq!(child(&data, "old", None), 0);
-                assert_eq!(child(&data, "batch", None), 0);
+                if stage == "published" {
+                    assert_eq!(child(&data, "new", None), 0);
+                } else {
+                    assert_eq!(child(&data, "old", None), 0);
+                    assert_eq!(child(&data, "batch", None), 0);
+                }
                 assert_eq!(child(&data, "undo", None), 0);
                 assert_eq!(child(&data, "bytes", None), 0);
                 evidence
@@ -382,6 +388,16 @@ fn main() {
             );
             assert!(store.area_receipts().unwrap().is_empty());
         }
+        "new" => {
+            let p = store.load_projects().unwrap();
+            let c = p.area_catalog().unwrap();
+            assert_eq!(c.areas.len(), 2);
+            assert_eq!(c.projects.len(), 3);
+            assert!(c.projects.values().all(|p| p.area_id.is_some()));
+            let receipts = store.area_receipts().unwrap();
+            assert_eq!(receipts.len(), 1);
+            write(&root.join("undo-id.json"), receipts.keys().next().unwrap());
+        }
         "undo" => {
             let id: String =
                 serde_json::from_slice(&fs::read(root.join("undo-id.json")).unwrap()).unwrap();
@@ -482,6 +498,85 @@ fn main() {
                 before,
                 serde_json::to_value(store.load_projects().unwrap()).unwrap()
             );
+        }
+        "child-move" | "raw-move" => {
+            apply(
+                &store,
+                Action::Migrate {
+                    rows: rows(&store, false),
+                },
+            );
+            let (source, child) = ids(&store);
+            let base = store
+                .preview_area(Action::Convert {
+                    project_id: source.clone(),
+                    area_name: "Supply".into(),
+                    children: Default::default(),
+                })
+                .unwrap();
+            let task = base
+                .references
+                .iter()
+                .find(|r| r.kind == "task")
+                .unwrap()
+                .key
+                .clone();
+            let memory = base
+                .references
+                .iter()
+                .find(|r| r.kind == "memory")
+                .unwrap()
+                .key
+                .clone();
+            let id = apply(
+                &store,
+                Action::Convert {
+                    project_id: source,
+                    area_name: "Supply".into(),
+                    children: BTreeMap::from([(task, child.clone()), (memory, child.clone())]),
+                },
+            );
+            assert_eq!(
+                core::memory::MemoryStore::new(root.clone())
+                    .list_records()
+                    .unwrap()[0]
+                    .project
+                    .as_deref(),
+                Some(CHILD)
+            );
+            if mode == "child-move" {
+                let p = store.load_projects().unwrap();
+                let area = p.area_catalog().unwrap().area_matches("Studio")[0]
+                    .id
+                    .clone();
+                apply(
+                    &store,
+                    Action::Move {
+                        project_id: child,
+                        area_id: area.clone(),
+                    },
+                );
+                let p = store.load_projects().unwrap();
+                let (m, e) = core::scan_sources(&core::meetings_dir(), &core::peers_dir());
+                assert!(e.is_empty());
+                let tasks = core::build_tasks(
+                    &m,
+                    &core::load_pipeline(&m),
+                    &p,
+                    &store.load_overrides().unwrap(),
+                    &Default::default(),
+                );
+                assert!(
+                    tasks
+                        .iter()
+                        .any(|t| t.project == CHILD && t.area_id.as_ref() == Some(&area))
+                );
+            } else {
+                store
+                    .update_manual("synthetic-done", |t| t.project = Some(CHILD.into()))
+                    .unwrap();
+            }
+            assert!(store.undo_area(&id).is_err());
         }
         "checksum" => {
             let id = apply(

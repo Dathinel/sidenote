@@ -220,6 +220,10 @@ $shots = @(
     @('hex-strip',              'hex-list',           '560x900',  $null,   @()),
     @('hex-recording-strip',    'hex-list-recording', '560x900',  $null,   @())
 )
+foreach ($areaScene in @('areas-page','areas-all','areas-project','areas-list','areas-migration','areas-migration-empty','areas-convert','areas-create','areas-rename','areas-move','areas-assign','areas-worker-proof')) {
+    $shots += ,@($areaScene, $areaScene, '1320x1100', $null, @())
+    $shots += ,@("$areaScene-560", $areaScene, '560x1400', $null, @())
+}
 # The screens from the Granola tour: meeting tabs, transcript panel, "..." menu, Today strip and
 # the Ctrl+K palette. They read the invented meetings in tools/ui-fixtures/screens. Each renders
 # wide, at 820 (the transcript covers the page) and at 560.

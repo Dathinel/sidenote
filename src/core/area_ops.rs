@@ -66,6 +66,8 @@ pub struct Preview {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Receipt {
     pub schema_version: u32,
+    #[serde(default)]
+    pub device: String,
     pub id: String,
     pub action: Action,
     pub backup: PathBuf,
@@ -267,6 +269,11 @@ fn simulate(p: &Projects, action: &Action, refs: &[Reference]) -> io::Result<Pro
     next.area_catalog()?;
     Ok(next)
 }
+impl Projects {
+    pub fn area_receipts(&self) -> io::Result<BTreeMap<String, Receipt>> {
+        read_entries(self, "area-operation:")
+    }
+}
 impl TaskStore {
     fn area_inventory(&self, p: &Projects) -> io::Result<(String, Vec<Reference>)> {
         let meetings = project_merge::scan()?;
@@ -438,7 +445,7 @@ impl TaskStore {
         })
     }
     pub fn apply_area(&self, preview: &Preview) -> io::Result<Projects> {
-        sync_state::update_checked_validated(
+        let projects = sync_state::update_checked_validated(
             &self.root,
             "projects.json",
             |p: &mut Projects| {
@@ -515,8 +522,18 @@ impl TaskStore {
                             .unwrap_or(Value::Null),
                     );
                 }
+                for link in p.area_catalog()?.links.values() {
+                    if let Some(id) = &link.target.project_id {
+                        let key = format!("area-project:{id}");
+                        project_baseline.insert(
+                            key.clone(),
+                            p.other.get(&key).cloned().unwrap_or(Value::Null),
+                        );
+                    }
+                }
                 let receipt = Receipt {
                     schema_version: 1,
+                    device: super::DeviceSettings::read_in(&self.root)?.id,
                     id: id.clone(),
                     action: preview.action.clone(),
                     backup,
@@ -539,12 +556,21 @@ impl TaskStore {
                 }
                 Ok(())
             },
-        )
+        )?;
+        proof_boundary(&self.root, "published")?;
+        Ok(projects)
     }
     pub fn area_receipts(&self) -> io::Result<BTreeMap<String, Receipt>> {
-        read_entries(&self.load_projects()?, "area-operation:")
+        self.load_projects()?.area_receipts()
     }
     pub fn undo_area(&self, id: &str) -> io::Result<Projects> {
+        let parts: Vec<_> = id.split('-').collect();
+        if parts.len() != 3
+            || !super::device::valid_id(parts[1])
+            || !super::device::valid_id(parts[2])
+        {
+            return Err(invalid("Invalid area operation. Reload before Undo."));
+        }
         let projects = self.load_projects()?;
         let dependencies = self.area_inventory(&projects)?.0;
         sync_state::update_checked_validated(
@@ -560,7 +586,10 @@ impl TaskStore {
                     .join("local/area-operations")
                     .join(id)
                     .join("backup.json");
-                if receipt.backup != backup {
+                if receipt.id != id
+                    || receipt.device != super::DeviceSettings::read_in(&self.root)?.id
+                    || receipt.backup != backup
+                {
                     return Err(invalid(
                         "This backup belongs to another device. Undo was not applied.",
                     ));

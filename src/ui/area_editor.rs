@@ -277,6 +277,17 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
         .border(1.0, p.line)
         .fill(p.card)
         .child(roles::TITLE.wrap(title(&e.action), p.ink));
+    if let Some(preview) = &s.areas.preview {
+        let count = |kind: &str| preview.references.iter().filter(|r| r.kind == kind).count();
+        card=card.child(roles::GROUP.wrap(format!("{} meetings · {} tasks · {} memory · {} proposals",count("meeting"),count("task"),count("memory"),count("proposal")),p.ink))
+            .child(roles::SMALL.wrap("One verified backup is saved before this change. Undo remains available after restart. Later moves can block Undo.",p.soft));
+        if matches!(e.action, Action::Migrate { .. }) {
+            card = card.child(roles::META.wrap(
+                format!("{} project rows reviewed", preview.project_count),
+                p.faint,
+            ));
+        }
+    }
     match &e.action {
         Action::Create { .. } | Action::Rename { .. } | Action::Convert { .. } => {
             card=card.child(roles::SMALL.wrap(if matches!(e.action,Action::Convert{..}) {"Choose an area name. Review every reference as area-only work or choose a child project below."}else{"Areas hold ongoing work. They do not have a finish date."},p.soft)).child(name_input(s,k,p));
@@ -389,15 +400,11 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                 card = card.child(item);
             }
         }
-        Action::Assign { key, target } => {
+        Action::Assign { target, .. } => {
             card=card.child(roles::SMALL.wrap(format!("File this item in {}. It will have no project. Review the count before applying.",s.areas.catalog.label(target)),p.soft));
-            card = card.child(roles::META.wrap(key, p.faint));
         }
     }
     if let Some(preview) = &s.areas.preview {
-        let count = |kind: &str| preview.references.iter().filter(|r| r.kind == kind).count();
-        card=card.child(roles::GROUP.wrap(format!("{} meetings · {} tasks · {} memory · {} proposals",count("meeting"),count("task"),count("memory"),count("proposal")),p.ink))
-            .child(roles::SMALL.wrap("One verified backup is saved before this change. Undo remains available after restart. Later moves can block Undo.",p.soft));
         if !matches!(e.action, Action::Convert { .. } | Action::Migrate { .. }) {
             for r in &preview.references {
                 card = card.child(roles::META.wrap(format!("{} · {}", r.kind, r.label), p.soft));

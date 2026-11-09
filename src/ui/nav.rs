@@ -152,6 +152,9 @@ impl State {
             return;
         }
         self.go_home();
+        if matches!(filter, Filter::Area(_)) {
+            self.areas.show_all = false;
+        }
         self.filter = filter;
         self.cursor = 0;
         self.refresh_list();
