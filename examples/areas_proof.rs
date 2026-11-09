@@ -201,11 +201,10 @@ fn main() {
     assert!(args.iter().any(|a| a == "--data-dir"));
     core::configure_paths(&args).unwrap();
     let root = core::state_dir();
-    let allowed = Path::new("E:/Personal-Projects/reviews/areas-proof");
     assert!(
-        root.starts_with(allowed)
-            && core::meetings_dir().starts_with(allowed)
-            && core::peers_dir().starts_with(allowed)
+        core::is_proof_path(&root, "areas-proof")
+            && core::is_proof_path(&core::meetings_dir(), "areas-proof")
+            && core::is_proof_path(&core::peers_dir(), "areas-proof")
     );
     let mode = args[0].to_string_lossy();
     let store = TaskStore::new(root.clone());

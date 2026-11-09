@@ -34,12 +34,7 @@ fn apply(s: &mut State, action: Action) {
     wait(s);
 }
 fn proof(s: &mut State) {
-    assert!(
-        s.tasks
-            .store
-            .root
-            .starts_with("E:/Personal-Projects/reviews/areas-proof")
-    );
+    assert!(core::is_proof_path(&s.tasks.store.root, "areas-proof"));
     let unreadable = s
         .tasks
         .store

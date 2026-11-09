@@ -7,7 +7,7 @@ use std::{
 
 pub(super) fn run(s: &mut State) {
     let root = &s.tasks.store.root;
-    assert!(root.starts_with("E:/Personal-Projects/reviews/project-merge-proof"));
+    assert!(sidenote::core::is_proof_path(root, "project-merge-proof"));
     let gate = root.join("local/proof-worker-pause");
     let before = serde_json::to_value(&s.tasks.projects).unwrap();
     let from = "Northwind Field Guide";

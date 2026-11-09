@@ -114,7 +114,7 @@ status is retained independently from this computed navigation view.
 No tests run locally. Build the `areas_proof` example offline, then invoke it with
 `run --data-dir <fresh folder> --meetings-dir <folder>/meetings --peers-dir
 <folder>/peers`. All three folders must be under
-`<proof-root>/areas-proof`. It starts separate processes for move,
+`%TEMP%/areas-proof`. It starts separate processes for move,
 conversion, batch migration, restart Undo, stale previews, later moves, peer
 edits, publication races, backup tampering and process stops around publication.
 It checks source bytes after each scenario and writes `results.json`.

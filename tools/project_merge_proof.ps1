@@ -1,7 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$Exe, [string]$Out = (Join-Path $PSScriptRoot '../artifacts/project-merge-proof'))
+param([Parameter(Mandatory=$true)][string]$Exe, [string]$Out = (Join-Path ([IO.Path]::GetTempPath()) 'project-merge-proof'))
 $ErrorActionPreference = 'Stop'
 (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
-$allowed = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../artifacts/project-merge-proof')).TrimEnd('\')
+$allowed = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'project-merge-proof')).TrimEnd('\')
 $out = [IO.Path]::GetFullPath($Out).TrimEnd('\')
 if ($out -ne $allowed -and -not $out.StartsWith($allowed + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Proof output must stay in the isolated proof root' }
 $run = Join-Path $out ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))

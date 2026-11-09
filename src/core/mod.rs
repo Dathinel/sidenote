@@ -15,7 +15,7 @@ pub mod daily_check;
 pub mod memory;
 mod paths;
 pub mod project_merge;
-pub use paths::configure_paths;
+pub use paths::{configure_paths, is_proof_path};
 pub mod agent_tools;
 mod device;
 pub mod file_reads;

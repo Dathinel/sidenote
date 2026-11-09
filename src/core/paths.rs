@@ -10,6 +10,40 @@ struct Paths {
 }
 static PATHS: OnceLock<Paths> = OnceLock::new();
 
+/// Confine synthetic proof paths, including fresh descendants, to a named OS temp folder.
+#[doc(hidden)]
+pub fn is_proof_path(path: &std::path::Path, name: &str) -> bool {
+    let Ok(temp) = std::env::temp_dir().canonicalize() else {
+        return false;
+    };
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return false;
+    }
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match ancestor.canonicalize() {
+            Ok(mut resolved) => {
+                for part in missing.into_iter().rev() {
+                    resolved.push(part);
+                }
+                return resolved.starts_with(temp.join(name));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(part), Some(parent)) = (ancestor.file_name(), ancestor.parent()) else {
+                    return false;
+                };
+                missing.push(part);
+                ancestor = parent;
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
 pub fn configure_paths(args: &[OsString]) -> Result<(), String> {
     let mut paths = Paths::default();
     let mut args = args.iter();
@@ -80,5 +114,29 @@ pub(super) fn prefer_legacy_path(current: PathBuf, old: PathBuf) -> PathBuf {
         old
     } else {
         current
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_proof_path;
+
+    #[test]
+    fn proof_paths_resolve_temp_aliases_and_confine_fresh_descendants() {
+        let temp = std::env::temp_dir();
+        for base in [temp.clone(), temp.canonicalize().unwrap()] {
+            assert!(is_proof_path(
+                &base.join("areas-proof/fresh/data"),
+                "areas-proof"
+            ));
+            assert!(!is_proof_path(
+                &base.join("areas-proof-other/data"),
+                "areas-proof"
+            ));
+            assert!(!is_proof_path(
+                &base.join("areas-proof/../outside"),
+                "areas-proof"
+            ));
+        }
     }
 }

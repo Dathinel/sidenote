@@ -1028,9 +1028,7 @@ fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {
 }
 /// Debug-only crash and peer-edit rendezvous, confined to the synthetic proof folder.
 pub fn proof_boundary(root: &Path, stage: &str) -> io::Result<()> {
-    if !cfg!(debug_assertions)
-        || !root.starts_with(Path::new("E:/Personal-Projects/reviews/areas-proof"))
-    {
+    if !cfg!(debug_assertions) || !super::is_proof_path(root, "areas-proof") {
         return Ok(());
     }
     if std::env::var("SIDENOTE_AREA_CRASH").ok().as_deref() == Some(stage) {

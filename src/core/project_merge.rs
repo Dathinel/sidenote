@@ -583,18 +583,12 @@ fn verify_backup(path: &Path, expected: &Backup) -> io::Result<()> {
 fn crash_requested(root: &Path) -> bool {
     // Deliberately unavailable in installed/release builds or outside the isolated proof folder.
     cfg!(debug_assertions)
-        && root.starts_with(Path::new(
-            "E:/Personal-Projects/reviews/project-merge-proof",
-        ))
+        && super::is_proof_path(root, "project-merge-proof")
         && std::env::var_os("SIDENOTE_MERGE_CRASH_AFTER_BACKUP").is_some()
 }
 /// Isolated debug proof rendezvous. Release builds and ordinary data folders never wait.
 pub fn proof_pause(root: &Path, stage: &str) -> io::Result<()> {
-    if !cfg!(debug_assertions)
-        || !root.starts_with(Path::new(
-            "E:/Personal-Projects/reviews/project-merge-proof",
-        ))
-    {
+    if !cfg!(debug_assertions) || !super::is_proof_path(root, "project-merge-proof") {
         return Ok(());
     }
     let gate = root.join(format!("local/proof-{stage}-pause"));

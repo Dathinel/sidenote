@@ -78,11 +78,10 @@ fn main() {
     assert!(args.iter().any(|a| a == "--data-dir"));
     core::configure_paths(&args).unwrap();
     let root = core::state_dir();
-    let allowed = Path::new("E:/Personal-Projects/reviews/project-merge-proof");
     assert!(
-        root.starts_with(allowed)
-            && core::meetings_dir().starts_with(allowed)
-            && core::peers_dir().starts_with(allowed)
+        core::is_proof_path(&root, "project-merge-proof")
+            && core::is_proof_path(&core::meetings_dir(), "project-merge-proof")
+            && core::is_proof_path(&core::peers_dir(), "project-merge-proof")
     );
     let command = args[0].to_string_lossy();
     let store = TaskStore::new(root.clone());
