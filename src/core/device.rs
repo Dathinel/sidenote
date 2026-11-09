@@ -45,6 +45,7 @@ impl DeviceSettings {
         if !valid_id(&settings.id) {
             return Err(store_io::invalid("Invalid local device id"));
         }
+        super::area_version::record(root, &settings)?;
         Ok(settings)
     }
 }

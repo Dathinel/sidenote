@@ -76,18 +76,20 @@ pub fn publish_file(from: &Path, to: &Path) -> io::Result<()> {
     move_file(from, to, MOVEFILE_WRITE_THROUGH)
 }
 fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
-    if unsafe {
-        MoveFileExW(
-            wide(from.as_os_str()).as_ptr(),
-            wide(to.as_os_str()).as_ptr(),
-            flags,
-        )
-    } == 0
-    {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    crate::core::store_io::retry_sharing_violation(|| {
+        if unsafe {
+            MoveFileExW(
+                wide(from.as_os_str()).as_ptr(),
+                wide(to.as_os_str()).as_ptr(),
+                flags,
+            )
+        } == 0
+        {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    })
 }
 pub struct Instance(HANDLE);
 /// All runner children die when their owning job closes, including on timeout.

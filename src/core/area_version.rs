@@ -1,0 +1,125 @@
+//! Area edits require all recently seen installations to understand assignment intent.
+use super::{DeviceSettings, device, store_io};
+use serde::{Deserialize, Serialize};
+use std::{fs, io, path::Path};
+const AREA_PROTOCOL: u32 = 2;
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Marker {
+    device: String,
+    name: String,
+    app_version: String,
+    area_protocol: u32,
+    seen_at: i64,
+}
+pub(super) fn record(root: &Path, own: &DeviceSettings) -> io::Result<()> {
+    let path = root.join("state").join(&own.id).join("device.json");
+    store_io::reject_reparse(&path)?;
+    let now = chrono::Utc::now().timestamp();
+    if let Ok(bytes) = store_io::read_bounded(&path, 4096)
+        && let Ok(marker) = serde_json::from_slice::<Marker>(&bytes)
+        && marker.app_version == env!("CARGO_PKG_VERSION")
+        && marker.area_protocol == AREA_PROTOCOL
+        && marker.name == own.name
+        && marker.seen_at > now - 3600
+    {
+        return Ok(());
+    }
+    store_io::write(
+        &path,
+        &Marker {
+            device: own.id.clone(),
+            name: own.name.chars().take(80).collect(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            area_protocol: AREA_PROTOCOL,
+            seen_at: now,
+        },
+    )
+}
+fn version(text: &str) -> Option<Vec<u64>> {
+    text.split('.')
+        .take(3)
+        .map(str::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+        .filter(|v| v.len() == 3)
+}
+pub fn ensure(root: &Path) -> io::Result<()> {
+    let own = DeviceSettings::load_in(root)?;
+    let now = chrono::Utc::now().timestamp();
+    let entries = fs::read_dir(root.join("state"))?;
+    for entry in entries {
+        let entry = entry?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !device::valid_id(&id) || id == own.id || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        store_io::reject_reparse(&entry.path())?;
+        let marker = store_io::read_bounded(&entry.path().join("device.json"), 4096)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
+            .filter(|m| m.device == id);
+        let mut seen = marker.as_ref().map_or(0, |m| m.seen_at);
+        // Old installations have no marker. Recent journal arrival still makes them visible.
+        for folder in fs::read_dir(entry.path())? {
+            let folder = folder?;
+            if !folder.file_type()?.is_dir() {
+                continue;
+            }
+            store_io::reject_reparse(&folder.path())?;
+            for file in fs::read_dir(folder.path())? {
+                let file = file?;
+                if file.path().extension().is_some_and(|e| e == "json") {
+                    seen = seen.max(
+                        file.metadata()?
+                            .modified()?
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64,
+                    );
+                }
+            }
+        }
+        if seen < now - 30 * 86400 {
+            continue;
+        }
+        if marker.as_ref().is_none_or(|m| {
+            m.area_protocol < AREA_PROTOCOL
+                || version(&m.app_version)
+                    .zip(version(env!("CARGO_PKG_VERSION")))
+                    .is_none_or(|(a, b)| a < b)
+        }) {
+            let name = marker
+                .as_ref()
+                .map(|m| m.name.as_str())
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or(&id);
+            return Err(store_io::invalid(&format!(
+                "Update Sidenote on {name} first"
+            )));
+        }
+    }
+    Ok(())
+}
+pub(super) fn guard_changes(
+    root: &Path,
+    store: &str,
+    changes: &[(
+        Vec<String>,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+    )],
+) -> io::Result<()> {
+    let area_edit = changes.iter().any(|(key, before, after)| {
+        (store == "projects.json"
+            && (key.first().is_some_and(|k| {
+                k.starts_with("area") || k.starts_with("assignment:") || k == "merges"
+            })))
+            || before.as_ref().and_then(|v| v.get("assignment"))
+                != after.as_ref().and_then(|v| v.get("assignment"))
+    });
+    if area_edit {
+        ensure(root)?;
+    }
+    Ok(())
+}

@@ -154,7 +154,7 @@ fn supported(store: &str) -> bool {
         )
 }
 fn read_journal(path: &Path, owner: &str, store: Option<&str>) -> io::Result<Journal> {
-    let bytes = fs::read(path)?;
+    let bytes = store_io::read_bounded(path, 4 * 1024 * 1024)?;
     let j: Journal = serde_json::from_slice(&bytes)?;
     if j.version != 2
         || j.device != owner
@@ -243,12 +243,9 @@ impl Session {
             read_only,
             view,
         };
-        if session.view.own_bad {
-            return Err(invalid(
-                "Own journal is unreadable; refusing to edit or import",
-            ));
+        if !session.view.own_bad {
+            session.import_legacy()?;
         }
-        session.import_legacy()?;
         Ok(session)
     }
     fn publish(&mut self, changes: Vec<Change>, sources: BTreeSet<String>) -> io::Result<()> {
@@ -302,9 +299,18 @@ impl Session {
                     .map_err(|_| invalid("Legacy memory is not UTF-8"))?;
                 json!({"documents": { hash(text.as_bytes()): text }})
             } else {
-                let value = parse(&bytes)?;
-                validate_legacy(&self.store, &value)?;
-                value
+                match parse(&bytes).and_then(|value| {
+                    validate_legacy(&self.store, &value)?;
+                    Ok(value)
+                }) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        self.view
+                            .warnings
+                            .push("Could not read a legacy state file; it was retained".into());
+                        continue;
+                    }
+                }
             };
             let values = legacy_items(
                 &self.store,
@@ -346,17 +352,33 @@ impl Session {
                 Some(_) => {}
                 None => store_io::publish(&backup, &bytes)?,
             }
+            let verified = store_io::read_bounded(&backup, 16 * 1024 * 1024)?;
+            if hash(&verified) != hash(&bytes) {
+                return Err(invalid("Migration backup verification failed"));
+            }
             self.publish(changes, BTreeSet::from([source]))?;
         }
         Ok(())
     }
-    fn value<T: Serialize + Default>(&self) -> io::Result<Value> {
-        inflate(
-            &self.store,
-            self.view.values(),
-            serde_json::to_value(T::default())?,
-        )
+    fn value<T: Serialize + DeserializeOwned + Default>(&self) -> io::Result<Value> {
+        let default = serde_json::to_value(T::default())?;
+        let mut valid = Items::new();
+        for (key, value) in self.view.values() {
+            let single = inflate(
+                &self.store,
+                BTreeMap::from([(key.clone(), value.clone())]),
+                default.clone(),
+            );
+            if single
+                .as_ref()
+                .is_ok_and(|v| serde_json::from_value::<T>(v.clone()).is_ok())
+            {
+                valid.insert(key, value);
+            }
+        }
+        inflate(&self.store, valid, default)
     }
+
     fn diff(&mut self, before: Items, after: Items) -> io::Result<()> {
         // Refresh the clock, without copying unrelated incoming values into this device's edits.
         let latest = read_view(&self.root, &self.store, &self.own)?;
@@ -368,6 +390,12 @@ impl Session {
     }
     fn publish_diff(&mut self, before: Items, after: Items, at: u64) -> io::Result<()> {
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
+        let edits: Vec<_> = keys
+            .iter()
+            .filter(|k| before.get(*k) != after.get(*k))
+            .map(|k| (k.clone(), before.get(k).cloned(), after.get(k).cloned()))
+            .collect();
+        super::area_version::guard_changes(&self.root, &self.store, &edits)?;
         let changes = keys
             .into_iter()
             .filter(|k| before.get(k) != after.get(k))
