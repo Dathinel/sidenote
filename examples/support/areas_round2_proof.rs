@@ -14,6 +14,7 @@ pub const CASES: &[&str] = &[
     "r2-resolver",
     "r2-store-load",
     "r2-backup-retention",
+    "r2-large-undo",
 ];
 fn catalog(store: &TaskStore) -> core::areas::Catalog {
     store.load_projects().unwrap().area_catalog().unwrap()
@@ -736,6 +737,55 @@ pub fn run(mode: &str, store: &TaskStore) {
             fs::write(dir.join("huge.json"), vec![b' '; 4 * 1024 * 1024 + 1]).unwrap();
             assert!(store.load_projects().is_ok());
             assert!(store.unreadable_items().unwrap() >= 2);
+        }
+        "r2-large-undo" => {
+            store
+                .update_overrides(|o| {
+                    for i in 0..800 {
+                        o.manual.push(core::ManualTask {
+                            id: format!("synthetic-large-{i:04}"),
+                            task: format!("Prepare synthetic paper sample {i:04}"),
+                            project: Some(SOURCE.into()),
+                            added: "2026-11-09".into(),
+                            ..Default::default()
+                        });
+                    }
+                })
+                .unwrap();
+            let before = references(store);
+            let id = apply(
+                store,
+                Action::Migrate {
+                    rows: rows(store, true),
+                },
+            );
+            let receipt = store.area_receipts().unwrap()[&id].clone();
+            assert!(
+                serde_json::to_vec(&receipt).unwrap().len() > 65536,
+                "Known receipt fields must be allowed beyond the unknown-field cap"
+            );
+            store.undo_area(&id).unwrap();
+            assert_eq!(
+                before,
+                references(store),
+                "All large migration references must restore exactly"
+            );
+            let before = store.load_projects().unwrap();
+            assert!(
+                store
+                    .update_projects(|p| {
+                        p.other.insert(
+                            "synthetic-too-large".into(),
+                            json!("x".repeat(4 * 1024 * 1024)),
+                        );
+                    })
+                    .is_err()
+            );
+            assert_eq!(
+                serde_json::to_value(before).unwrap(),
+                serde_json::to_value(store.load_projects().unwrap()).unwrap(),
+                "Oversized output must refuse before publishing an unreadable journal"
+            );
         }
         "r2-backup-retention" => {
             for i in 0..12 {

@@ -165,10 +165,23 @@ fn known_fields(prefix: &str) -> &'static [&'static str] {
         ],
         "area-link:" => &["schema_version", "target", "baseline"],
         "area-alias:" => &["kind", "area_id"],
+        "area-operation:" => &[
+            "schema_version",
+            "device",
+            "id",
+            "action",
+            "backup",
+            "checksum",
+            "after",
+            "baseline",
+            "project_baseline",
+            "active",
+            "skipped",
+        ],
         _ => &[],
     }
 }
-fn valid_item(prefix: &str, id: &str, value: &Value) -> bool {
+pub(super) fn valid_item(prefix: &str, id: &str, value: &Value) -> bool {
     let Some(obj) = value.as_object() else {
         return false;
     };

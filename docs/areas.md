@@ -74,7 +74,9 @@ that operation wrote. Changed references and registers stay as they are, with a
 count and item names in the result. New areas are retired rather than deleted,
 so late references still resolve. Missing references show Missing area. Invalid
 items are quarantined individually and counted. Only future area schemas make
-the entire catalog read-only. Unknown fields survive within a 64 KB per-item cap.
+the entire catalog read-only. Unknown fields survive within a 64 KB per-item cap. Shared journals are limited
+to 4 MB; larger changes refuse before publication. Known receipt fields have
+their own journal limit and do not consume the unknown-field allowance.
 
 Each device publishes `state/<device>/area-format.json`, a synced format marker. Area writes, migration, merging,
 Undo and assignment choices require every installation seen within thirty days

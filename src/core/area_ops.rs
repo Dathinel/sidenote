@@ -434,6 +434,7 @@ impl Projects {
                             valid_receipt_id(id, &r.device)
                                 && r.id == id
                                 && r.backup == PathBuf::from(id).join("backup.json")
+                                && valid_item("area-operation:", id, value)
                         })
                         .map(|receipt| (id.into(), receipt))
                 })

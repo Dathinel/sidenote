@@ -282,7 +282,13 @@ impl Session {
             .join(&self.own)
             .join(hash(self.store.as_bytes()))
             .join(format!("{}.json", j.id));
-        store_io::publish(&path, &serde_json::to_vec(&j)?)?;
+        let bytes = serde_json::to_vec(&j)?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(invalid(
+                "This change exceeds the 4 MB journal limit. Save smaller groups.",
+            ));
+        }
+        store_io::publish(&path, &bytes)?;
         self.view.merge(&j);
         Ok(())
     }
