@@ -1,6 +1,7 @@
 //! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
+mod ai_notes;
 mod area;
 mod area_editor;
 mod area_migration;
@@ -19,6 +20,7 @@ mod memory;
 mod models;
 mod more;
 mod nav;
+mod notes_status;
 mod project;
 mod project_merge;
 mod refresh;
@@ -87,6 +89,11 @@ fn default_runner(
 }
 
 pub enum Event {
+    AiNotes {
+        generation: u64,
+        worker: std::thread::ThreadId,
+        result: Result<ai_notes::Completion, String>,
+    },
     MemoryRefreshed {
         generation: u64,
         worker: std::thread::ThreadId,
@@ -233,6 +240,7 @@ pub struct State {
     pub filter: nav::Filter,
     pub nav: nav::NavCache,
     pub areas: area::AreaUi,
+    pub ai_notes: ai_notes::AiNotes,
     /// The recording's page. Nobody types a title: the heading is the start time, then the quick title.
     pub live: Option<live::Live>,
     pub live_open: bool,
@@ -407,6 +415,7 @@ impl State {
             filter: nav::Filter::All,
             nav: nav::NavCache::default(),
             areas: area::AreaUi::default(),
+            ai_notes: ai_notes::AiNotes::default(),
             live: None,
             live_open: false,
             live_notes: TextEdit::new(""),
@@ -974,6 +983,14 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::AiNotes {
+                generation,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.notes_finished(generation, result);
+            }
             Event::MemoryRefreshed {
                 generation,
                 worker,
@@ -1038,6 +1055,7 @@ impl State {
                     saved,
                     memory,
                     check,
+                    notes_jobs,
                     ..
                 } = *data;
                 refresh::retain_catalog(&self.meetings, &mut meetings, &retained);
@@ -1051,6 +1069,7 @@ impl State {
                     }
                     self.refresh_list();
                 }
+                self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
                 if let Some(projects) = projects {
                     content_changed |= different(&self.tasks.projects, &projects);
@@ -1186,6 +1205,7 @@ fn setup(s: &mut State, waker: Waker) {
         return;
     }
     s.waker = Some(waker.clone());
+    s.refresh_ai_notes();
     s.updates_start();
     s.hex_start(waker.clone());
     s.scan_tx = Some(refresh::start(waker, s.refresh_options()));
@@ -1215,6 +1235,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_)
                 if headless
                     && (s.asks.values().any(|r| r.live)
+                        || s.ai_notes.pending.is_some()
                         || s.edit_busy
                         || s.memory.refresh_pending
                         || s.areas.refresh_pending

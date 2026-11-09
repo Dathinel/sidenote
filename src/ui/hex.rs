@@ -320,6 +320,7 @@ impl State {
         self.hex.data_dirty = true;
         self.hex.select_open = None;
         self.hex_refresh_if_due();
+        self.refresh_ai_notes();
     }
 
     /// Runs `work` on its own thread and delivers the result to the UI.
@@ -1125,6 +1126,7 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
+    AiNotes,
     Updates,
     MeetingModels,
     Model,
@@ -1138,8 +1140,9 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 10] = [
+const SECTIONS: [Section; 11] = [
     Section::Features,
+    Section::AiNotes,
     Section::MeetingModels,
     Section::Model,
     Section::Vocabulary,
@@ -1153,10 +1156,11 @@ const SECTIONS: [Section; 10] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 10] = SECTIONS;
+    pub const ALL: [Section; 11] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::AiNotes => "AI notes",
             Self::Updates => "Updates",
             Self::MeetingModels => "Languages",
             Self::Features => "Features",
@@ -1172,6 +1176,7 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::AiNotes => "Choose a helper and the instructions it uses to write meeting notes.",
             Self::Updates => "Keep Sidenote up to date from your update folder.",
             Self::MeetingModels => "Choose spoken languages and download meeting models.",
             Self::Features => "Choose what appears on this device. Changes apply right away.",
@@ -1418,6 +1423,20 @@ fn fold(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, at: Place, items: &
 
 /// Every setting that matches the search, whichever section it is in.
 fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &str) -> El {
+    if [
+        "ai notes",
+        "helper",
+        "agent instructions",
+        "privacy",
+        "claude",
+        "codex",
+        "opencode",
+    ]
+    .iter()
+    .any(|term| term.contains(query))
+    {
+        return super::ai_notes::section(s, k, p);
+    }
     let h = &s.hex;
     let matches: Vec<&Setting> = h
         .settings
@@ -1489,6 +1508,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
 /// The page for one section.
 fn section_body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, section: Section) -> El {
     match section {
+        Section::AiNotes => super::ai_notes::section(s, k, p),
         Section::Updates => super::updates::section(s, p),
         Section::MeetingModels => {
             super::models::view(s, p, meeting_languages::section(s, k, p, layer))
