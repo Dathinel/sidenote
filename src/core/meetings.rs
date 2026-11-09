@@ -51,6 +51,7 @@ pub fn log_path() -> PathBuf {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Summary {
+    pub schema: u32,
     pub title: String,
     pub kind: String,
     pub people: Vec<String>,

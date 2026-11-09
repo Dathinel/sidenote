@@ -3,6 +3,17 @@ use super::{Overrides, Subtask, TaskItem, TaskOverride, TaskStore, Todo, Waiting
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io};
 
+pub fn needs_task_redo(meeting: &super::Meeting) -> bool {
+    meeting.device.is_none()
+        && (!meeting.summary.title.trim().is_empty() || !meeting.summary.todo.is_empty())
+        && (meeting.summary.schema < 2
+            || meeting
+                .summary
+                .todo
+                .iter()
+                .any(|t| t.id.is_empty() || t.title.is_empty()))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -982,5 +993,15 @@ mod tests {
             .edit_v2(&tasks[0], &f.meeting.folder, TaskV2Edit::Reset)
             .unwrap();
         assert_eq!(f.tasks(&view.value)[1].status, TaskStatus::Waiting);
+    }
+    #[test]
+    fn older_meeting_without_tasks_can_still_request_redo() {
+        let mut f = Fixture::new(json!([]));
+        assert!(needs_task_redo(&f.meeting));
+        f.meeting.summary.schema = 2;
+        assert!(!needs_task_redo(&f.meeting));
+        f.meeting.summary.schema = 0;
+        f.meeting.device = Some("Other PC".into());
+        assert!(!needs_task_redo(&f.meeting));
     }
 }

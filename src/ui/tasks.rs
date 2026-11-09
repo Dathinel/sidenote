@@ -97,6 +97,7 @@ pub struct TasksState {
     pub subtask_input: TextEdit,
     pub waiting_input: TextEdit,
     pub group_menu: bool,
+    pub redo_menu: bool,
     pub done: DoneFilter,
     pub who: Who,
     pub include_unassigned: bool,
@@ -178,6 +179,7 @@ impl TasksState {
             today: Local::now().date_naive(),
             grouping,
             group_menu: false,
+            redo_menu: false,
             done: DoneFilter::Open,
             who: Who::Everyone,
             include_unassigned: false,
@@ -218,6 +220,7 @@ impl TasksState {
 
     fn close_menus(&mut self) {
         self.group_menu = false;
+        self.redo_menu = false;
         self.cleared_menu = false;
         self.ui.project_menu = false;
         self.ui.owner_menu = false;
@@ -2874,6 +2877,7 @@ fn list_column(
         doc = doc.child(done_section(s, &v, lay, p));
     }
     doc = doc.child(cleared_line(s, k, p, layer));
+    doc = doc.child(redo_older_control(s, k, p, layer));
     if !narrow && t.panel.is_none() {
         doc = doc.child(key_hints(p));
     }
@@ -3056,14 +3060,10 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                 }
             }),
         );
-    if let Some(m) = s
-        .meetings
+    if s.meetings
         .iter()
-        .find(|m| m.id == t.meeting_id && m.device.is_none())
-        && m.summary
-            .todo
-            .iter()
-            .any(|t| t.id.is_empty() || t.title.is_empty())
+        .find(|m| m.id == t.meeting_id)
+        .is_some_and(core::needs_task_redo)
     {
         let id = t.meeting_id.clone();
         out = out.child(button("Redo tasks", "redo-tasks", false, p).on_press(
@@ -3074,4 +3074,49 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
         ));
     }
     out
+}
+
+fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let older: Vec<_> = s
+        .meetings
+        .iter()
+        .filter(|m| core::needs_task_redo(m))
+        .collect();
+    if older.is_empty() {
+        return el();
+    }
+    let mut menu = Menu::new("redo-older-tasks")
+        .trigger(
+            button("Redo tasks", "redo-meeting-open", false, p)
+                .label("Redo tasks from an older meeting")
+                .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
+        )
+        .open(s.tasks.redo_menu)
+        .placement(Placement::BottomStart)
+        .min_width(280.0);
+    if s.tasks.redo_menu {
+        menu = menu
+            .on_close(|s: &mut State| s.tasks.redo_menu = false)
+            .group_label("Choose an older meeting");
+        for m in older {
+            let id = m.id.clone();
+            let date = m
+                .started
+                .map(|d| d.format("%-d %b %Y").to_string())
+                .unwrap_or_default();
+            menu = menu.item(MenuItem::new(format!("{} ({date})", m.title)).on_select(
+                move |s: &mut State| {
+                    s.tasks.redo_menu = false;
+                    s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
+                    s.tasks.notice = Some("Tasks queued. Your changes will be kept.".into());
+                },
+            ));
+        }
+    }
+    col()
+        .w_full()
+        .gap(4.0)
+        .mt(12.0)
+        .child(roles::META.wrap("Update tasks from older meeting notes.", p.soft))
+        .child(menu.build(k, layer))
 }
