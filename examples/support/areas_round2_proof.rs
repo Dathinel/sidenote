@@ -91,6 +91,17 @@ fn memory_changes(store: &TaskStore, changes: Value) {
         &json!({"version":2,"device":device,"id":id,"store":"memory/records.json","changes":changes,"sources":[],"checksum":checksum}),
     );
 }
+fn junction(link: &Path, target: &Path) {
+    use std::os::windows::process::CommandExt;
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:SIDENOTE_PROOF_LINK -Target $env:SIDENOTE_PROOF_TARGET | Out-Null"])
+        .env("SIDENOTE_PROOF_LINK", link)
+        .env("SIDENOTE_PROOF_TARGET", target)
+        .creation_flags(0x08000000)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "Synthetic junction creation failed: {}", String::from_utf8_lossy(&output.stderr));
+}
 pub fn run(mode: &str, store: &TaskStore) {
     let root = &store.root;
     match mode {
@@ -254,12 +265,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             let dir = root.join("local/area-operations").join(&id);
             let saved = root.join("synthetic-backup-copy");
             fs::rename(&dir, &saved).unwrap();
-            let status=Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:SIDENOTE_PROOF_LINK -Target $env:SIDENOTE_PROOF_TARGET | Out-Null"]).env("SIDENOTE_PROOF_LINK",&dir).env("SIDENOTE_PROOF_TARGET",&saved).output().unwrap();
-            assert!(
-                status.status.success(),
-                "Synthetic junction creation failed: {}",
-                String::from_utf8_lossy(&status.stderr)
-            );
+            junction(&dir, &saved);
             assert!(
                 store.undo_area(&id).is_err(),
                 "A backup reached through a junction must be rejected"
@@ -360,15 +366,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             let dir = receipt.backup.parent().unwrap();
             let saved = dir.with_extension("saved");
             fs::rename(dir, &saved).unwrap();
-            assert!(
-                Command::new("cmd")
-                    .args(["/C", "mklink", "/J"])
-                    .arg(dir)
-                    .arg(&saved)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            junction(dir, &saved);
             assert!(store.local_project_merge_backup(SOURCE, &receipt).is_err());
             assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
             fs::remove_dir(dir).unwrap();
