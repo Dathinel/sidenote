@@ -162,11 +162,12 @@ impl TaskStore {
                         t,
                     )?;
                 } else {
-                    let key = if stable_id.is_empty() {
-                        index.to_string()
-                    } else {
-                        format!("id:{stable_id}")
-                    };
+                    let key = super::task_override_key(
+                        row,
+                        &stable_id,
+                        mine["task"].as_str().unwrap_or_default(),
+                        index,
+                    );
                     let initial = o
                         .match_task(
                             row,

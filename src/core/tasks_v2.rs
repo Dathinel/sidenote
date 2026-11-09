@@ -61,6 +61,15 @@ pub fn subtask_tick_key(parent: &str, id: &str) -> String {
     // Length delimiters keep user and agent ids from aliasing each other.
     format!("sub:{}:{parent}:{}:{id}", parent.len(), id.len())
 }
+pub fn task_override_key(meeting: &str, id: &str, text: &str, index: usize) -> String {
+    if !id.is_empty() {
+        return format!("id:{id}");
+    }
+    // Old summaries lack ids. A guarded compatibility id keeps new edits out of numeric slots.
+    let value = serde_json::json!([meeting, text, index]).to_string();
+    format!("id:legacy-{}", blake3::hash(value.as_bytes()).to_hex())
+}
+
 impl Overrides {
     pub fn match_task(
         &self,
@@ -71,8 +80,9 @@ impl Overrides {
     ) -> Option<&TaskOverride> {
         let entries = self.tasks.get(meeting)?;
         let guarded = |o: &&TaskOverride| o.task.as_deref() == Some(text);
-        if !id.is_empty()
-            && let Some(o) = entries.get(&format!("id:{id}")).filter(guarded)
+        if let Some(o) = entries
+            .get(&task_override_key(meeting, id, text, index))
+            .filter(guarded)
         {
             return Some(o);
         }
@@ -296,11 +306,7 @@ impl TaskStore {
             .or_else(|| summary.todo.iter().find(|t| t.text() == expected_text))
             .filter(|t| t.text() == expected_text)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, super::live_edit::MOVED))?;
-        let key = if todo.id.is_empty() {
-            index.to_string()
-        } else {
-            format!("id:{}", todo.id)
-        };
+        let key = task_override_key(meeting, &todo.id, todo.text(), index);
         let added_id = if matches!(edit, TaskV2Edit::AddSubtask(_)) {
             super::sync_state::new_id(&self.root)?
         } else {
@@ -1022,5 +1028,31 @@ mod tests {
         let next = f.tasks(&view.value);
         assert_eq!(next[0].status, TaskStatus::Waiting);
         assert!(next[0].waiting_on.is_none());
+    }
+    #[test]
+    fn new_legacy_status_edits_use_guarded_compatibility_ids() {
+        let f = Fixture::new(json!([{"task":"Read proof"}]));
+        let store = f.store();
+        store
+            .update_override(&f.meeting.id, 0, "Read proof", |o| {
+                o.owner = Some("Alex".into())
+            })
+            .unwrap();
+        let task = f.tasks(&store.load_overrides().unwrap()).remove(0);
+        let view = store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Status(TaskStatus::Review, None),
+            )
+            .unwrap();
+        assert!(
+            view.value.tasks[&f.meeting.id]
+                .keys()
+                .any(|key| key.starts_with("id:legacy-"))
+        );
+        let tasks = f.tasks(&view.value);
+        assert_eq!(tasks[0].status, TaskStatus::Review);
+        assert_eq!(tasks[0].owner.as_deref(), Some("Alex"));
     }
 }
