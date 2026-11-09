@@ -409,23 +409,14 @@ impl State {
         if name.is_empty() {
             return None;
         }
-        let known = self
-            .tasks
-            .names
-            .iter()
-            .find(|n| n.to_lowercase() == name.to_lowercase())
-            .cloned();
-        let name = known.clone().unwrap_or_else(|| name.to_string());
-        if known.is_none() && name != UNSORTED {
-            match self.tasks.store.add_project(&name) {
-                Ok(p) => self.tasks.projects = p,
-                Err(_) => {
-                    self.tasks.notice = Some(SAVE_FAILED.into());
-                    return None;
-                }
-            }
+        if name == UNSORTED {
+            return Some(name.into());
         }
-        Some(name)
+        if let Some(name) = self.tasks.projects.choose_existing(name) {
+            return Some(name);
+        }
+        self.tasks.notice = Some("Choose an existing project or click Create first.".into());
+        None
     }
 
     pub fn set_task_project(&mut self, id: &str, index: usize, name: &str) {
@@ -516,13 +507,18 @@ impl State {
         if typed.is_empty() || typed == r.from {
             return;
         }
-        let target = self
-            .tasks
-            .names
-            .iter()
-            .find(|n| **n != r.from && n.to_lowercase() == typed.to_lowercase())
-            .cloned()
-            .unwrap_or(typed);
+        let matches = self.tasks.projects.matches(&typed);
+        if matches.len() > 1 {
+            self.tasks.notice =
+                Some("More than one project matches. Choose a survivor with Merge into.".into());
+            return;
+        }
+        let target = matches.first().cloned().unwrap_or(typed);
+        if self.tasks.names.contains(&target) && target != r.from {
+            self.start_project_merge(&r.from);
+            self.preview_project_merge(&target);
+            return;
+        }
         match self.tasks.store.rename_project(&r.from, &target) {
             Ok(p) => {
                 self.tasks.projects = p;
@@ -660,6 +656,11 @@ impl State {
     fn commit_new_project(&mut self) -> bool {
         if let Some((id, index)) = self.panel_task().map(|t| (t.meeting_id.clone(), t.index)) {
             let typed = self.tasks.inputs.project.text.trim().to_string();
+            if self.tasks.projects.choose_existing(&typed).is_none() {
+                self.tasks.notice =
+                    Some("Choose an existing project or click Create first.".into());
+                return false;
+            }
             self.tasks.ui.new_project = false;
             self.tasks.inputs.project = TextEdit::default();
             if !typed.is_empty() {
@@ -725,7 +726,13 @@ impl State {
         } else {
             t.add_project.clone()
         };
-        let project = project_typed.and_then(|p| self.known_project(&p));
+        let project = match project_typed {
+            Some(p) => match self.known_project(&p) {
+                Some(p) => Some(p),
+                None => return,
+            },
+            None => None,
+        };
         // An empty owner is the owner of this tracker.
         let task = ManualTask {
             task: title,
@@ -1484,6 +1491,16 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
     let mut head = row().w_full().h(32.0).gap(6.0).items_center().child(toggle);
     match &g.kind {
         GroupKind::Project(name) if name != UNSORTED => {
+            let merge_name = name.clone();
+            head = head.child(
+                pressable(roles::META.medium().wrap("Merge into...", p.faint))
+                    .key(format!("tmerge-{n}"))
+                    .px(6.0)
+                    .py(2.0)
+                    .radius(6.0)
+                    .hover(p.chip)
+                    .on_press(move |s: &mut State| s.start_project_merge(&merge_name)),
+            );
             let name = name.clone();
             head = head.child(
                 pressable(roles::META.medium().wrap("Rename", p.faint))
@@ -1950,6 +1967,60 @@ fn project_control(
         ("add-project", "add-project-new")
     };
     if t.ui.new_project {
+        let typed = t.inputs.project.text.trim().to_string();
+        let matches = t.projects.matches(&typed);
+        let mut choices = col()
+            .w_full()
+            .gap(4.0)
+            .child(roles::GROUP.wrap("Use an existing project", p.soft));
+        for name in if matches.is_empty() {
+            &t.names
+        } else {
+            &matches
+        } {
+            let target = task.map(|x| (x.meeting_id.clone(), x.index));
+            let name = name.clone();
+            choices = choices.child(
+                pressable(roles::CONTROL.wrap(&name, p.accent))
+                    .py(4.0)
+                    .on_press(move |s: &mut State| {
+                        s.tasks.ui.new_project = false;
+                        s.tasks.inputs.project = TextEdit::default();
+                        if let Some((id, i)) = &target {
+                            s.set_task_project(id, *i, &name);
+                        } else {
+                            s.tasks.add_project = Some(name.clone());
+                        }
+                    }),
+            );
+        }
+        if !typed.is_empty() && matches.is_empty() {
+            let target = task.map(|x| (x.meeting_id.clone(), x.index));
+            choices = choices.child(
+                pressable(
+                    roles::CONTROL
+                        .bold()
+                        .wrap(format!("Create {typed}"), p.accent),
+                )
+                .key("task-project-create")
+                .py(6.0)
+                .on_press(move |s: &mut State| {
+                    match s.tasks.store.add_project(&typed) {
+                        Ok(p) => {
+                            s.tasks.projects = p;
+                            s.tasks.ui.new_project = false;
+                            s.tasks.inputs.project = TextEdit::default();
+                            if let Some((id, i)) = &target {
+                                s.set_task_project(id, *i, &typed);
+                            } else {
+                                s.tasks.add_project = Some(s.tasks.projects.resolve(&typed));
+                            }
+                        }
+                        Err(e) => s.tasks.notice = Some(e.to_string()),
+                    }
+                }),
+            );
+        }
         return col()
             .w_full()
             .gap(4.0)
@@ -1964,14 +2035,7 @@ fn project_control(
                 )
                 .w_full(),
             )
-            .child(roles::META.wrap(
-                if task.is_some() {
-                    "Enter moves the task. The project is added to the list."
-                } else {
-                    "The project is added to the list."
-                },
-                p.faint,
-            ));
+            .child(choices);
     }
     let current = match task {
         Some(x) => x.project.clone(),

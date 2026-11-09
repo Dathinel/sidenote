@@ -15,6 +15,7 @@ mod models;
 mod more;
 mod nav;
 mod project;
+mod project_merge;
 mod roles;
 mod tasks;
 mod theme;
@@ -220,6 +221,7 @@ pub struct State {
     pub project_menu: Option<String>,
     pub project_form: Option<String>,
     pub project_input: TextEdit,
+    pub project_merge: project_merge::MergeUi,
     /// Meetings, or every task.
     pub view: tasks::View,
     /// The Daily check page, shown in place of the home list.
@@ -378,6 +380,7 @@ impl State {
             project_menu: None,
             project_form: None,
             project_input: TextEdit::new(""),
+            project_merge: project_merge::MergeUi::default(),
             view: tasks::View::Meetings,
             check_open: false,
             check_back: false,
@@ -1861,6 +1864,18 @@ pub fn spec() -> AppSpec<State> {
                 s.config.features.memory = false;
                 s.config.features.daily_check = false;
                 s.open_finder();
+            }),
+            ("merge-page", |s| project_merge::scene(s, "page")),
+            ("merge-picker", |s| project_merge::scene(s, "picker")),
+            ("merge-preview", |s| project_merge::scene(s, "preview")),
+            ("merge-done", |s| project_merge::scene(s, "done")),
+            ("project-choices", |s| {
+                project::scene(s, "suggest");
+                let id = s.meetings[0].id.clone();
+                s.start_project_form(&id);
+                s.project_input = TextEdit::new("Harbor research");
+                s.selected = Some(id);
+                s.load_saved();
             }),
             ("audio-project-meeting", |s| project::scene(s, "meeting")),
             ("audio-project-existing", |s| project::scene(s, "existing")),

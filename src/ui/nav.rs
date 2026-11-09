@@ -84,9 +84,28 @@ impl State {
             if m.device.is_some() {
                 cache.peers += 1;
             }
-            let project = items
-                .get(m.id.as_str())
-                .and_then(|v| core::dominant_project(v.iter().copied()));
+            let project = self
+                .tasks
+                .projects
+                .meeting_projects
+                .get(&m.id)
+                .map(|n| self.tasks.projects.resolve(n))
+                .or_else(|| {
+                    items
+                        .get(m.id.as_str())
+                        .and_then(|v| core::dominant_project(v.iter().copied()))
+                })
+                .or_else(|| {
+                    self.tasks
+                        .pipeline
+                        .get(&m.id)
+                        .and_then(|f| f.meeting_project.as_ref())
+                        .and_then(|n| {
+                            let names = self.tasks.projects.matches(n);
+                            (names.len() == 1).then(|| names[0].clone())
+                        })
+                })
+                .filter(|n| n != core::UNSORTED);
             if let Some(name) = project {
                 *cache.project_counts.entry(name.clone()).or_default() += 1;
                 if let Some(started) = m.started {

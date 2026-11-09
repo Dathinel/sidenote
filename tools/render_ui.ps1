@@ -5,6 +5,7 @@ param(
     [string[]]$Only = @(),
     # Themes to render; dark first is enough for a quick look.
     [string[]]$Themes = @('dark', 'light')
+    , [string]$StateRoot = ""
 )
 # Renders the UI headlessly, dark and light, into artifacts/ui. Each scene gets its own empty
 # state folder, so ticks, task edits, project renames and Ask threads never touch the real
@@ -19,6 +20,18 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('merge-page', 'merge-page', '1320x1000', $null, @()),
+    @('merge-page-560', 'merge-page', '560x1100', $null, @()),
+    @('merge-picker', 'merge-picker', '1320x1000', $null, @()),
+    @('merge-picker-560', 'merge-picker', '560x1100', $null, @()),
+    @('merge-preview', 'merge-preview', '1320x1300', $null, @()),
+    @('merge-preview-560', 'merge-preview', '560x1600', $null, @()),
+    @('merge-done', 'merge-done', '1320x1100', $null, @()),
+    @('merge-done-560', 'merge-done', '560x1300', $null, @()),
+    @('project-choices', 'project-choices', '1320x1100', $null, @()),
+    @('project-choices-560', 'project-choices', '560x1300', $null, @()),
+    @('project-before-560', 'home-project', '560x1100', $null, @()),
+    @('suggestion-before-560', 'audio-project-new', '560x1100', $null, @()),
     @('updates-manual', 'updates-manual', '1320x1000', $null, @()),
     @('updates-manual-narrow', 'updates-manual', '560x1100', $null, @()),
     @('updates-preparing', 'updates-preparing', '1320x1000', $null, @()),
@@ -269,8 +282,12 @@ foreach ($theme in $Themes) {
     foreach ($shot in $shots) {
         $name, $scene, $size, $script, $extra = $shot
         if ($Only.Count -gt 0 -and $Only -notcontains $name) { continue }
-        $state = Join-Path ([IO.Path]::GetTempPath()) "meetings-ui-state-$name-$theme"
-        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        $stateBase = if ($StateRoot) { $StateRoot } else { [IO.Path]::GetTempPath() }
+        New-Item -ItemType Directory -Force -Path $stateBase | Out-Null
+        # Device journals add two long identity/hash directories. Keep custom roots short.
+        $stateName = if ($StateRoot) { [IO.Path]::GetRandomFileName() } else { "meetings-ui-state-$name-$theme" }
+        $state = Join-Path $stateBase $stateName
+        $tempRoot = [IO.Path]::GetFullPath($stateBase).TrimEnd('\') + '\'
         $state = [IO.Path]::GetFullPath($state)
         if (-not $state.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Render state must stay inside the temporary folder" }
         Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction SilentlyContinue
@@ -281,6 +298,16 @@ foreach ($theme in $Themes) {
         } else { @('Northwind Atlas', 'Northwind Field Guide') }
         @{ projects = $projects; aliases = @{} } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/projects.json"
+        if ($scene -like 'merge-*') {
+            New-Item -ItemType Directory -Force -Path "$state/memory" | Out-Null
+            @{ schema_version = 1; records = @(@{
+                id = 'synthetic-merge-memory'; type = 'project'; text = 'Use paper cards for the Northwind workshop.';
+                project = 'Northwind Field Guide'; sources = @(); first_seen = $null; last_confirmed = $null;
+                status = 'active'; basis = 'owner_confirmed'; supersedes = $null;
+                updated_at = '2026-11-09T00:00:00Z'; source_fingerprint = 'synthetic'
+            }); proposals = @(); events = @(); migration = $null } |
+                ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "$state/memory/records.json"
+        }
         $enabled = $scene -notlike 'features-off-*' -and $scene -ne 'features-settings' -and $scene -ne 'features-tasks-only'
         @{ version = 1; features = @{ tasks = ($enabled -or $scene -eq 'features-tasks-only'); memory = $enabled; daily_check = $enabled; projects = $enabled; other_devices = $enabled } } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/config.json"

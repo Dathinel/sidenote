@@ -54,6 +54,7 @@ pub enum Ask {
 }
 
 pub struct MemState {
+    pub projects: sidenote::core::Projects,
     pub records: Vec<MemoryRecord>,
     pub proposals: Vec<PendingProposal>,
     pub events: Vec<MemoryEvent>,
@@ -83,6 +84,7 @@ pub struct MemState {
 impl Default for MemState {
     fn default() -> Self {
         Self {
+            projects: sidenote::core::Projects::default(),
             records: Vec::new(),
             proposals: Vec::new(),
             events: Vec::new(),
@@ -242,6 +244,10 @@ impl MemState {
         self.today = Local::now().date_naive();
         self.notice = None;
         let store = MemoryStore::default();
+        if let Ok(projects) = sidenote::core::TaskStore::default().load_projects() {
+            self.projects = projects;
+            self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
+        }
         if full && let Err(e) = store.list_pending_proposals() {
             self.notice = Some(format!("Could not read the memory proposals. {e}."));
         }
@@ -318,7 +324,7 @@ impl MemState {
                     || text.to_lowercase().contains(&q)
                     || r.project
                         .as_deref()
-                        .is_some_and(|p| p.to_lowercase().contains(&q))
+                        .is_some_and(|p| self.projects.project_matches_query(p, &q))
                     || r.people.iter().any(|p| p.to_lowercase().contains(&q))
             }
     }

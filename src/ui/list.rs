@@ -219,6 +219,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .on_press(|s: &mut State| s.go_meetings())
         }))
         .children(super::today::strip(s, p))
+        .children(super::project_merge::panel(s, k, p, layer))
         .child(search_box(
             s,
             k,

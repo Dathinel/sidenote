@@ -2,7 +2,7 @@
 //! guess (from `tasks.json`) shows as a suggestion until the owner accepts or changes it.
 //! Both write the same per-task overrides the Tasks view writes, in one file write.
 use super::{State, roles, theme::Palette, widgets::pressable};
-use rune::{El, Key, KeyEvent, TextEdit, Tx, row};
+use rune::{El, Key, KeyEvent, TextEdit, Tx, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{self, TaskOverride, UNSORTED};
 
@@ -31,6 +31,12 @@ impl State {
         if !self.config.features.projects {
             return None;
         }
+        if let Some(name) = self.tasks.projects.meeting_projects.get(id) {
+            return Some(MeetingProject {
+                name: (name != UNSORTED).then(|| self.tasks.projects.resolve(name)),
+                confirmed: true,
+            });
+        }
         let items: Vec<_> = self
             .tasks
             .all
@@ -38,7 +44,17 @@ impl State {
             .filter(|t| t.meeting_id == id)
             .collect();
         if items.is_empty() {
-            return None;
+            let name = self
+                .tasks
+                .pipeline
+                .get(id)
+                .and_then(|f| f.meeting_project.as_ref())
+                .map(|n| self.tasks.projects.resolve(n))
+                .filter(|n| !n.is_empty() && n != UNSORTED);
+            return Some(MeetingProject {
+                name,
+                confirmed: false,
+            });
         }
         let mut candidates: Vec<_> = items.iter().map(|t| (*t).clone()).collect();
         for t in &mut candidates {
@@ -73,22 +89,13 @@ impl State {
         if name.is_empty() {
             return;
         }
-        let known = self
-            .tasks
-            .names
-            .iter()
-            .find(|n| n.to_lowercase() == name.to_lowercase())
-            .cloned();
-        let name = known.clone().unwrap_or_else(|| name.to_string());
-        if known.is_none() && name != UNSORTED {
-            match self.tasks.store.add_project(&name) {
-                Ok(p) => self.tasks.projects = p,
-                Err(_) => {
-                    self.tasks.notice = Some(super::tasks::SAVE_FAILED.into());
-                    return;
-                }
-            }
+        let known = self.tasks.projects.choose_existing(name);
+        if name != UNSORTED && known.is_none() {
+            self.start_project_form(id);
+            self.project_input = TextEdit::new(name);
+            return;
         }
+        let name = known.unwrap_or_else(|| name.into());
         let from = self
             .meeting_project(id)
             .and_then(|m| m.name)
@@ -128,9 +135,24 @@ impl State {
         match result {
             Ok(o) => {
                 self.tasks.overrides = o;
+                match self.tasks.store.assign_meeting(id, &name) {
+                    Ok(p) => self.tasks.projects = p,
+                    Err(e) => self.tasks.notice = Some(e.to_string()),
+                }
                 self.rebuild_tasks();
             }
             Err(_) => self.tasks.notice = Some(super::tasks::SAVE_FAILED.into()),
+        }
+    }
+
+    fn create_meeting_project(&mut self, id: &str, name: &str) {
+        match self.tasks.store.add_project(name) {
+            Ok(p) => {
+                self.tasks.projects = p;
+                self.project_form = None;
+                self.set_meeting_project(id, name);
+            }
+            Err(e) => self.tasks.notice = Some(e.to_string()),
         }
     }
 
@@ -223,7 +245,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     if open {
         menu = menu
             .on_close(|s: &mut State| s.project_menu = None)
-            .group_label("Move this meeting's to-dos to");
+            .group_label("Choose an existing project");
         for n in &s.tasks.names {
             let (id, n_owned) = (id.to_string(), n.clone());
             menu = menu.item(
@@ -280,7 +302,13 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             .px(8.0)
             .radius(999.0)
             .hover(p.okbg)
-            .on_press(move |s: &mut State| s.set_meeting_project(&id, &name)),
+            .on_press(move |s: &mut State| {
+                if new_project {
+                    s.create_meeting_project(&id, &name);
+                } else {
+                    s.set_meeting_project(&id, &name);
+                }
+            }),
         );
         wrap = wrap.child(
             pressable(roles::meta("Dismiss", p))
@@ -323,32 +351,73 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .fill(p.card)
         .grow(1.0)
         .min_w(0.0);
+    let matches = s.tasks.projects.matches(&s.project_input.text);
+    let typed = s.project_input.text.trim().to_string();
+    let mut choices = col()
+        .w_full()
+        .gap(6.0)
+        .mt(8.0)
+        .child(roles::GROUP.wrap("Use an existing project", p.soft));
+    for name in if matches.is_empty() {
+        &s.tasks.names
+    } else {
+        &matches
+    } {
+        let (id, name) = (id.to_string(), name.clone());
+        choices = choices.child(
+            pressable(roles::CONTROL.wrap(&name, p.accent))
+                .py(4.0)
+                .on_press(move |s: &mut State| {
+                    s.project_form = None;
+                    s.set_meeting_project(&id, &name);
+                }),
+        );
+    }
+    if !typed.is_empty() && matches.is_empty() {
+        let id = id.to_string();
+        choices = choices.child(
+            pressable(
+                roles::CONTROL
+                    .bold()
+                    .wrap(format!("Create {typed}"), p.accent),
+            )
+            .key("project-create")
+            .py(6.0)
+            .on_press(move |s: &mut State| s.create_meeting_project(&id, &typed)),
+        );
+    }
     Some(
-        row()
+        col()
             .w_full()
             .max_w(460.0)
-            .gap(8.0)
-            .items_center()
-            .mt(8.0)
-            .child(input)
             .child(
-                pressable(roles::CONTROL.bold().wrap("Save", p.card))
-                    .key("project-save")
-                    .px(14.0)
-                    .py(6.0)
-                    .radius(8.0)
-                    .fill(p.accent)
-                    .on_press(|s: &mut State| s.commit_project_form()),
+                row()
+                    .w_full()
+                    .max_w(460.0)
+                    .gap(8.0)
+                    .items_center()
+                    .mt(8.0)
+                    .child(input)
+                    .children((matches.len() == 1).then(|| {
+                        pressable(roles::CONTROL.bold().wrap("Use project", p.card))
+                            .key("project-save")
+                            .px(14.0)
+                            .py(6.0)
+                            .radius(8.0)
+                            .fill(p.accent)
+                            .on_press(|s: &mut State| s.commit_project_form())
+                    }))
+                    .child(
+                        pressable(roles::CONTROL.wrap("Cancel", p.soft))
+                            .key("project-cancel")
+                            .px(10.0)
+                            .py(6.0)
+                            .radius(8.0)
+                            .hover(p.chip)
+                            .on_press(|s: &mut State| s.project_form = None),
+                    ),
             )
-            .child(
-                pressable(roles::CONTROL.wrap("Cancel", p.soft))
-                    .key("project-cancel")
-                    .px(10.0)
-                    .py(6.0)
-                    .radius(8.0)
-                    .hover(p.chip)
-                    .on_press(|s: &mut State| s.project_form = None),
-            ),
+            .child(choices),
     )
 }
 
@@ -389,7 +458,7 @@ pub fn scene(s: &mut State, action: &str) {
         s.rebuild_tasks();
     }
     match action {
-        "create" => s.set_meeting_project(&id, "Website launch"),
+        "create" => s.create_meeting_project(&id, "Website launch"),
         "dismiss" => s.set_meeting_project(&id, UNSORTED),
         _ => (),
     }
