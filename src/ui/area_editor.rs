@@ -540,70 +540,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
             }
             card = card.child(menu.build(k, layer).self_start());
         }
-        Action::Migrate { .. } => {
-            card=card.child(roles::SMALL.wrap("Review every current project. Enter the area for each row. Shared area names create one area. Turn a broad label into an area only when you choose it.",p.soft));
-            for (i, r) in e.rows.iter().enumerate() {
-                let project = s.areas.catalog.projects.get(&r.project_id)?;
-                let input = TextInput::new(&r.area)
-                    .plain()
-                    .placeholder("Enter proposed area")
-                    .on_edit(move |s: &mut State| {
-                        match s.areas.editor.as_mut().and_then(|e| e.rows.get_mut(i)) {
-                            Some(r) => &mut r.area,
-                            None => &mut s.areas.input_sink,
-                        }
-                    })
-                    .on_change(|s: &mut State, _| s.areas.preview = None)
-                    .height(36.0)
-                    .build(k)
-                    .key(format!("migration-area-{i}"))
-                    .label(format!("Proposed area for {}", project.name))
-                    .w_full()
-                    .min_w(0.0)
-                    .border(1.0, p.line)
-                    .radius(6.0)
-                    .fill(p.bg)
-                    .disabled(busy);
-                let mut item = col()
-                    .w_full()
-                    .gap(6.0)
-                    .py(10.0)
-                    .child(roles::NAME.wrap(&project.name, p.ink))
-                    .child(input)
-                    .child(
-                        area::button(
-                            if r.convert {
-                                "Turn into area ✓"
-                            } else {
-                                "Keep as project"
-                            },
-                            &format!("migration-kind-{i}"),
-                            p,
-                        )
-                        .self_start()
-                        .disabled(busy)
-                        .on_press(move |s: &mut State| {
-                            if let Some(e) = &mut s.areas.editor {
-                                e.rows[i].convert = !e.rows[i].convert;
-                                e.rows[i].children.clear();
-                                s.areas.preview = None;
-                            }
-                        }),
-                    );
-                if r.convert {
-                    item = item.child(mapping(
-                        s,
-                        k,
-                        p,
-                        layer,
-                        &r.project_id,
-                        &r.area.text,
-                        Some(i),
-                    ));
-                }
-                card = card.child(item);
-            }
-        }
+        Action::Migrate { .. } => return None,
         Action::ResolveName { name, .. } => {
             card = card.child(roles::SMALL.wrap(
                 format!("Keep the project name {name}. Its identity and work stay together."),

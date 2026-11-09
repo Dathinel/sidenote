@@ -20,6 +20,16 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('areas-refresh-error', 'areas-refresh-error', '1320x900', $null, @()),
+    @('areas-refresh-error-560', 'areas-refresh-error', '560x1000', $null, @()),
+    @('areas-large-reconcile', 'areas-large-reconcile', '1320x900', $null, @()),
+    @('areas-large-reconcile-560', 'areas-large-reconcile', '560x1000', $null, @()),
+    @('areas-large-empty', 'areas-large-empty', '1320x900', $null, @()),
+    @('areas-large-empty-560', 'areas-large-empty', '560x1000', $null, @()),
+    @('areas-large-page', 'areas-large-page', '1320x1100', $null, @()),
+    @('areas-large-page-560', 'areas-large-page', '560x1400', $null, @()),
+    @('areas-large-convert', 'areas-large-convert', '1320x1100', $null, @()),
+    @('areas-large-convert-560', 'areas-large-convert', '560x1400', $null, @()),
     @('merge-worker-proof', 'merge-worker-proof', '1320x1000', $null, @()),
     @('merge-preparing', 'merge-preparing', '1320x1000', $null, @()),
     @('merge-preparing-560', 'merge-preparing', '560x1100', $null, @()),

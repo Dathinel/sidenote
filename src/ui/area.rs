@@ -788,6 +788,59 @@ fn area_tasks(s: &State, area: &str, p: Palette) -> El {
                 ),
         )
 }
+fn area_meetings(s: &State, area: &str, p: Palette) -> El {
+    let ids: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(
+        s.meetings
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                s.areas
+                    .activity
+                    .meetings
+                    .get(&m.id)
+                    .is_some_and(|t| t.area_id == area && t.project_id.is_none())
+            })
+            .map(|(i, _)| i)
+            .collect(),
+    );
+    if ids.is_empty() {
+        return roles::SMALL.wrap("No area-only meetings.", p.faint);
+    }
+    let keys = ids.clone();
+    col()
+        .w_full()
+        .h((ids.len() as f32 * 56.0).min(280.0))
+        .min_h(0.0)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(
+            col()
+                .w_full()
+                .growth(rune::GrowthSpec::default())
+                .virtual_rows(
+                    ids.len(),
+                    56.0,
+                    move |s: &State, i| {
+                        keys.get(i)
+                            .and_then(|j| s.meetings.get(*j))
+                            .map(|m| m.id.as_str())
+                            .unwrap_or("missing-meeting")
+                            .into()
+                    },
+                    move |s: &State, i| {
+                        let Some(m) = ids.get(i).and_then(|j| s.meetings.get(*j)) else {
+                            return col();
+                        };
+                        let id = m.id.clone();
+                        pressable(roles::SMALL.wrap(&m.title, p.ink))
+                            .py(10.0)
+                            .hover(p.chip)
+                            .on_press_tx(move |s: &mut State, tx| s.select(&id, tx))
+                    },
+                ),
+        )
+}
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     if s.areas
         .editor
@@ -862,21 +915,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         doc = doc.child(roles::section("Area-only work", None, p));
         doc = doc.child(area_tasks(s, &area.id, p));
         doc = doc.child(roles::section("Area-only meetings", None, p));
-        for meeting in s.meetings.iter().filter(|m| {
-            s.areas
-                .activity
-                .meetings
-                .get(&m.id)
-                .is_some_and(|t| t.area_id == area.id && t.project_id.is_none())
-        }) {
-            let id = meeting.id.clone();
-            doc = doc.child(
-                pressable(roles::SMALL.wrap(&meeting.title, p.ink))
-                    .py(10.0)
-                    .hover(p.chip)
-                    .on_press_tx(move |s: &mut State, tx| s.select(&id, tx)),
-            );
-        }
+        doc = doc.child(area_meetings(s, &area.id, p));
     } else {
         doc = doc.child(
             row()
