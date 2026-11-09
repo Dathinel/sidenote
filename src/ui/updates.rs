@@ -94,12 +94,6 @@ impl State {
         {
             return;
         }
-        if updates::feed().is_none() {
-            self.updates.status.phase = Phase::Error;
-            self.updates.status.error =
-                Some("Choose an update folder with SIDENOTE_UPDATE_FEED, then try again.".into());
-            return;
-        }
         if let Some(service) = &self.updates.service {
             self.updates.status.phase = Phase::Checking;
             self.updates.status.error = None;
@@ -372,19 +366,17 @@ pub fn section(s: &State, p: Palette) -> El {
         p.soft,
     ));
     body = body
-        .child(roles::GROUP.wrap("Update folder", p.soft))
+        .child(roles::GROUP.wrap("Update source", p.soft))
         .child(roles::SMALL.wrap(if s.updates.scene {
                 "E:\\Sidenote updates".into()
             } else {
                 updates::source_label()
             }, p.ink))
-        .child(roles::SMALL.wrap("Anyone who can change files in this folder can change what gets installed. Use a folder only you can write to.", p.soft));
-    if updates::feed().is_none() && !s.updates.scene {
-        body = body.child(roles::META.wrap(
-            "Set SIDENOTE_UPDATE_FEED in your launcher to choose a folder or file share.",
-            p.soft,
-        ));
-    }
+        .child(roles::SMALL.wrap(if updates::feed().is_some() {
+            "Anyone who can change files in this folder can change what gets installed. Use a folder only you can write to."
+        } else {
+            "Updates download from Sidenote's public GitHub Releases over HTTPS."
+        }, p.soft));
     if !busy(status) {
         body = body.child(
             link("Check for updates", p)
