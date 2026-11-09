@@ -31,6 +31,8 @@ jobs:
             target
           key: windows-gnu-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}
       - run: cargo fmt --all --check
+      - name: Verify reproducible dependency notices
+        run: powershell.exe -NoProfile -NonInteractive -File tools/dependency_notices_proof.ps1
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Build Sidenote and domain crate
         run: cargo build --workspace --locked

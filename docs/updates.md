@@ -39,8 +39,18 @@ feeds: hashes detect corruption but do not authenticate an unsigned publisher.
 The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
 the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,
 copyright and notice files under `dependency-notices/<crate>-<version>/`.
-Notices come from the locked offline Cargo cache, including optional dependencies;
-packing fails if a dependency has no cached notice files. For Git workspace
+Notices cover the locked offline Cargo inventory, including optional dependencies.
+For crates that omit licence files, `tools/dependency_notices.ps1` generates a
+notice from the crate's name, version, authors (or repository) and complete
+declared licence expression. The common permissive texts committed under
+`tools/licenses` are copied once under `dependency-notices/standard-licenses`.
+The generated notice supplies its own metadata attribution; it does not borrow
+the cached text donor's copyright holder. Unknown or non-permissive identifiers,
+licence exceptions and missing attribution stay uncovered. The packer writes
+`DEPENDENCY_NOTICE_COVERAGE.json` and refuses every uncovered dependency before
+building or packing. `tools/dependency_notices_proof.ps1` checks both generated
+notices and refusal cases in fresh OS temp folders, and runs in CI.
+For Git workspace
 dependencies, shared notices are collected from the checkout root. Original relative paths
 are preserved. Fetch the locked sources before the offline packaging step.
 
