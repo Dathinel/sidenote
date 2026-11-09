@@ -100,10 +100,28 @@ pub const SECTION_TOP: f32 = 40.0;
 pub const SECTION_GAP: f32 = 12.0;
 /// Space above a group label inside a section.
 pub const GROUP_TOP: f32 = 20.0;
+/// Space between a title and its meta line.
+pub const META_GAP: f32 = 2.0;
+
+/// The " · " that joins facts on one meta line.
+pub const DOT: &str = "  \u{b7}  ";
 
 /// Meta text in the scanning grey.
 pub fn meta(s: impl Into<String>, p: Palette) -> El {
     META.wrap(s, p.faint)
+}
+
+/// Several facts on one quiet line, joined by " · ". Empty parts are left out. Each fact keeps
+/// its words together, so a narrow window breaks the line only between facts.
+pub fn meta_line<S: AsRef<str>>(parts: &[S], p: Palette) -> El {
+    let joined = parts
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace(' ', "\u{a0}"))
+        .collect::<Vec<_>>()
+        .join(DOT);
+    META.wrap(joined, p.faint)
 }
 
 /// A section heading: the role, the shared spacing and an optional count pill.

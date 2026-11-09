@@ -1,7 +1,7 @@
 use super::{
     Event, State, hex, roles,
     theme::Palette,
-    widgets::{hairline, label, link, pressable},
+    widgets::{link, pressable},
 };
 use rune::{El, col, row};
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
@@ -204,12 +204,11 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
         let selected = models.languages.iter().any(|l| l == id);
         languages = languages.child(
             pressable(
-                label(
-                    name,
-                    13.0,
-                    if selected { 600.0 } else { 500.0 },
-                    if selected { p.accent } else { p.soft },
-                )
+                if selected {
+                    roles::NAME.wrap(name, p.accent)
+                } else {
+                    roles::CONTROL.wrap(name, p.soft)
+                }
                 .px(10.0)
                 .py(5.0)
                 .radius(8.0)
@@ -230,7 +229,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
     }
     body = body.child(languages).child(routing);
     if let Some(e) = &models.preference_error {
-        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
     // English is Hex's Parakeet: nothing to download. Speech models show for the other chosen
     // languages; language detection shows once a second language is chosen (ADR 0009 (b)).
@@ -262,78 +261,46 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
         .filter(|m| m.size_tier() == SizeTier::Default && !models.installed.contains(m.id))
         .map(|m| m.bytes())
         .sum();
-    body = body
-        .child(roles::SMALL.bold().wrap(
-            if total == 0 {
-                "Everything recommended for these languages is downloaded.".to_string()
-            } else {
-                format!(
-                    "Recommended for these languages: {:.0} MB to download",
-                    total as f64 / 1_000_000.0
-                )
-            },
-            p.ink,
-        ))
-        .child(roles::META.wrap(
-            "Models run on this computer. Each download is your choice.",
-            p.soft,
-        ));
+    body = body.child(
+        col()
+            .w_full()
+            .gap(roles::META_GAP)
+            .mt(roles::GROUP_TOP - 12.0)
+            .child(roles::NAME.wrap(
+                if total == 0 {
+                    "Everything recommended for these languages is downloaded.".to_string()
+                } else {
+                    format!(
+                        "Recommended for these languages: {:.0} MB to download",
+                        total as f64 / 1_000_000.0
+                    )
+                },
+                p.ink,
+            ))
+            .child(roles::meta(
+                "Models run on this computer. Each download is your choice.",
+                p,
+            )),
+    );
     if models.installed.is_empty() && models.progress.is_empty() {
-        body = body.child(roles::META.wrap("No meeting models downloaded yet.", p.soft));
+        body = body.child(roles::meta("No meeting models downloaded yet.", p));
     }
     for m in visible {
         let id = m.id;
-        let mut card = col()
-            .w_full()
-            .gap(5.0)
-            .py(12.0)
-            .child(hairline(p))
-            .child(roles::TITLE.wrap(m.name, p.ink));
-        let tier = if m.size_tier() == SizeTier::Default {
-            "Recommended"
-        } else {
-            "Optional"
-        };
-        let langs = if m.languages.len() > 4 {
-            format!("{} languages", m.languages.len())
-        } else {
-            m.languages
-                .iter()
-                .map(|l| {
-                    LANGUAGES
-                        .iter()
-                        .find(|(id, _)| id == l)
-                        .map_or(*l, |(_, name)| *name)
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        card = card.child(roles::META.wrap(
-            format!(
-                "{langs} · {} licence · {}",
-                m.licence,
-                if m.runtime == Runtime::Hex {
-                    "Managed by Hex"
-                } else {
-                    tier
-                }
-            ),
-            p.faint,
-        ));
+        // Name, one line of facts, then what it does and the action. Space, not lines,
+        // separates the cards.
+        let mut card = col().w_full().gap(6.0).pt(roles::GROUP_TOP).child(
+            col()
+                .w_full()
+                .gap(roles::META_GAP)
+                .child(roles::TITLE.wrap(m.name, p.ink))
+                .child(model_facts(m, p)),
+        );
         if m.runtime == Runtime::Hex {
-            card = card.child(roles::META.wrap(m.runtime_note, p.soft));
+            card = card.child(roles::SMALL.wrap(m.runtime_note, p.soft));
         } else {
-            card = card.child(roles::META.wrap(
-                format!("{:.1} MB download", m.bytes() as f64 / 1_000_000.0),
-                p.faint,
-            ));
-            if let Some(memory) = m.minimum_ram_mb {
-                card = card.child(
-                    roles::META.wrap(format!("Measured model memory: {memory} MB"), p.faint),
-                );
-            }
             if m.role == model_catalog::Role::LanguageId {
-                card = card.child(roles::META.wrap("Tells English from Hindi in each part of the meeting, so each part goes to the right model.", p.soft));
+                card = card.child(roles::SMALL.wrap("Tells English from Hindi in each part of the meeting, so each part goes to the right model.", p.soft));
             }
             if let Some(progress) = models.progress.get(id) {
                 if models.jobs.get(id).is_some_and(|job| job.removing) {
@@ -413,8 +380,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 && !models.installed.contains(id)
                 && !models.progress.contains_key(id)
             {
-                card =
-                    card.child(roles::META.wrap("Partial download saved on this device.", p.soft));
+                card = card.child(roles::meta("Partial download saved on this device.", p));
                 card = card.child(
                     link("Remove partial download", p)
                         .key(format!("model-clear-partial-{id}"))
@@ -422,12 +388,45 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 );
             }
             if let Some(error) = models.errors.get(id) {
-                card = card.child(roles::META.medium().wrap(error, p.warn).role("alert"));
+                card = card.child(roles::SMALL.medium().wrap(error, p.warn).role("alert"));
             }
         }
         body = body.child(card);
     }
-    body.child(roles::META.wrap("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", p.soft))
+    body.child(roles::meta("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", p).mt(roles::GROUP_TOP))
+}
+
+/// A model's facts on one quiet line: languages, licence, tier, download size and memory.
+fn model_facts(m: &model_catalog::Model, p: Palette) -> El {
+    let langs = if m.languages.len() > 4 {
+        format!("{} languages", m.languages.len())
+    } else {
+        m.languages
+            .iter()
+            .map(|l| {
+                LANGUAGES
+                    .iter()
+                    .find(|(id, _)| id == l)
+                    .map_or(*l, |(_, name)| *name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let tier = if m.runtime == Runtime::Hex {
+        "Managed by Hex"
+    } else if m.size_tier() == SizeTier::Default {
+        "Recommended"
+    } else {
+        "Optional"
+    };
+    let mut facts = vec![langs, format!("{} licence", m.licence), tier.to_string()];
+    if m.runtime != Runtime::Hex {
+        facts.push(format!("{:.1} MB download", m.bytes() as f64 / 1_000_000.0));
+        if let Some(memory) = m.minimum_ram_mb {
+            facts.push(format!("Measured model memory {memory} MB"));
+        }
+    }
+    roles::meta_line(&facts, p)
 }
 pub fn scene(s: &mut State, name: &str) {
     hex::scene(s, false);

@@ -68,7 +68,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         })
         .build(k, layer);
     let mut body=col().w_full().gap(6.0).py(10.0)
-        .child(roles::SMALL.bold().wrap("Language handling", p.ink)).child(control)
+        .child(roles::NAME.wrap("Language handling", p.ink)).child(control)
         .child(roles::META.wrap("Experimental: English and Hindi only. English only adds no detector or Hindi model. Always mixed uses the mixed Hindi-English model for every part.", p.soft).w_full().min_w(0.0));
     if !cfg!(feature = "asr-runtime") {
         body = body.child(roles::META.line(
@@ -77,7 +77,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         ));
     }
     if let Some(error) = &s.feature_error {
-        body = body.child(roles::META.medium().line(error, p.warn).role("alert"));
+        body = body.child(roles::SMALL.medium().line(error, p.warn).role("alert"));
     }
     body
 }
