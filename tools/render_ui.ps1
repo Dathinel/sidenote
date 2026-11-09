@@ -19,6 +19,12 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('updates-manual', 'updates-manual', '1320x1000', $null, @()),
+    @('updates-manual-narrow', 'updates-manual', '560x1100', $null, @()),
+    @('updates-preparing', 'updates-preparing', '1320x1000', $null, @()),
+    @('updates-preparing-narrow', 'updates-preparing', '560x1100', $null, @()),
+    @('updates-stopping', 'updates-stopping', '1320x1000', $null, @()),
+    @('updates-stopping-narrow', 'updates-stopping', '560x1100', $null, @()),
     @('updates-later', 'updates-ready', '560x1100', 'updates-later.json', @('--at', 'mark:end')),
     @('updates-notes', 'updates-available', '560x1100', 'updates-notes.json', @('--at', 'mark:end')),
     @('updates-none', 'updates-none', '1320x1000', $null, @()),

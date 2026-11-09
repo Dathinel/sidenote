@@ -1117,7 +1117,6 @@ pub enum Section {
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
 const SECTIONS: [Section; 10] = [
     Section::Features,
-    Section::Updates,
     Section::MeetingModels,
     Section::Model,
     Section::Vocabulary,
@@ -1126,6 +1125,7 @@ const SECTIONS: [Section; 10] = [
     Section::Meetings,
     Section::Shortcuts,
     Section::Advanced,
+    Section::Updates,
 ];
 
 impl Section {
@@ -1254,7 +1254,7 @@ fn section_tab(section: Section, active: bool, p: Palette) -> El {
     ))
     .key(format!("hex-tab-{}", section.name()))
     .label(format!("{} settings", section.name()))
-    .px(14.0)
+    .px(8.0)
     .py(6.0)
     .radius(999.0)
     .fill(if active { p.chip } else { p.bg })

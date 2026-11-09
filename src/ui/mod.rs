@@ -79,6 +79,7 @@ fn default_runner(
 
 pub enum Event {
     Update(sidenote::updates::Status),
+    UpdateFinished(Result<sidenote::updates::Status, String>),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -935,6 +936,7 @@ impl State {
     fn apply_event(&mut self, event: Event) {
         match event {
             Event::Update(status) => self.update_status(status),
+            Event::UpdateFinished(result) => self.update_finished(result),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::MigrationPrepared(result) => {
@@ -1049,7 +1051,7 @@ fn setup(s: &mut State, waker: Waker) {
         return;
     }
     s.waker = Some(waker.clone());
-    s.updates_start(waker.clone());
+    s.updates_start();
     s.hex_start(waker.clone());
     let (tx, rx) = mpsc::channel::<()>();
     s.scan_tx = Some(tx);
@@ -1675,6 +1677,16 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("updates-settings", updates::settings_scene),
+            ("updates-manual", |s| {
+                updates::scene(s, sidenote::updates::Phase::Manual)
+            }),
+            ("updates-preparing", |s| {
+                updates::scene(s, sidenote::updates::Phase::Preparing)
+            }),
+            ("updates-stopping", |s| {
+                updates::scene(s, sidenote::updates::Phase::StoppingListener)
+            }),
             ("updates-none", |s| {
                 updates::scene(s, sidenote::updates::Phase::Idle)
             }),
