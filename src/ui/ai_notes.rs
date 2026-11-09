@@ -719,7 +719,6 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .children(s.config.features.tasks.then(|| button("Open Tasks for teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
             s.hex.section = super::hex::Section::Teams;
             s.hex.filter = TextEdit::default();
-            s.hex.select_open = None;
             s.nav_done();
             super::scene_scroll(s, "hex-head-Teams");
         })))
