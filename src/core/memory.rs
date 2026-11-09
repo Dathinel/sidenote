@@ -593,7 +593,8 @@ impl MemoryStore {
             },
         )?;
         if file.value.migration.is_some() {
-            self.export(&file.value)?;
+            let text = render(&self.resolve_projects(file.value.clone())?);
+            self.export(&text)?;
         }
         Ok(super::EditView {
             value: file
