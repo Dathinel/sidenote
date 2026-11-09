@@ -1,0 +1,570 @@
+use super::{
+    helper::{Failure, Run},
+    *,
+};
+use crate::core::{
+    agent_instructions::{self, Agent},
+    store_io,
+};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+struct Temp(PathBuf);
+impl Temp {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "sidenote-engine-test-{}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+struct Fake {
+    available: bool,
+    replies: VecDeque<Result<String, Failure>>,
+    calls: Vec<(String, Duration)>,
+}
+impl Fake {
+    fn new(replies: Vec<Result<String, Failure>>) -> Self {
+        Self {
+            available: true,
+            replies: replies.into(),
+            calls: Vec::new(),
+        }
+    }
+}
+impl Run for Fake {
+    fn installed(&self, _: Helper) -> bool {
+        self.available
+    }
+    fn run(
+        &mut self,
+        _: Helper,
+        _: &str,
+        prompt: String,
+        timeout: Duration,
+    ) -> Result<String, Failure> {
+        self.calls.push((prompt, timeout));
+        self.replies.pop_front().expect("unexpected helper call")
+    }
+}
+const ID: &str = "1793946600000-123";
+const PRIVATE: &str = "The confidential fixture sentence must never appear in logs.";
+fn settings_fixture() -> NotesSettings {
+    NotesSettings {
+        helper: Some(Helper::Claude),
+        enabled_at_ms: Some(1),
+        ..NotesSettings::default()
+    }
+}
+fn meeting(root: &Path, text: &str) -> PathBuf {
+    let folder = root.join("meetings").join(ID);
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("manifest.json"),serde_json::json!({"status":"complete","title":"Delivery planning","created_at_ms":1793946600000_i64,"duration_ms":300000}).to_string()).unwrap();
+    fs::write(
+        folder.join("transcript.ndjson"),
+        serde_json::json!({"start_ms":1000,"end_ms":2000,"source":"microphone","text":text})
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        folder.join("quick-title.json"),
+        r#"{"title":"Delivery planning"}"#,
+    )
+    .unwrap();
+    folder
+}
+fn summary() -> String {
+    serde_json::json!({"title":"Plan the delivery","context":[],"topics":[],"todo":[{"ref":"t1","title":"Send the report","description":"Share final figures.","owner":"You","at":["00:00:01"]}],"to_settle":[]}).to_string()
+}
+fn sorted() -> String {
+    r#"{"meeting_project":null,"tasks":[{"i":0,"project":"Delivery","new":true}]}"#.into()
+}
+fn enqueue(root: &Path, settings: &NotesSettings, mode: Option<Request>) {
+    queue::enqueue_in(root, &root.join("meetings"), ID, mode, settings).unwrap();
+}
+fn drain(root: &Path, settings: &NotesSettings, fake: &mut Fake) {
+    queue::drain(root, &root.join("meetings"), fake, || Ok(settings.clone())).unwrap();
+}
+fn state(root: &Path) -> JobState {
+    queue::read(root, ID).unwrap().unwrap().state
+}
+
+#[test]
+fn no_helper_or_no_consent_writes_transcript_without_any_call() {
+    for s in [
+        NotesSettings::default(),
+        NotesSettings {
+            enabled_at_ms: None,
+            ..settings_fixture()
+        },
+    ] {
+        let root = Temp::new();
+        let folder = meeting(&root.0, PRIVATE);
+        enqueue(&root.0, &s, None);
+        let mut fake = Fake::new(vec![]);
+        drain(&root.0, &s, &mut fake);
+        assert_eq!(state(&root.0), JobState::NoHelper);
+        assert!(fake.calls.is_empty());
+        assert!(
+            fs::read_to_string(folder.join("english-transcript.md"))
+                .unwrap()
+                .contains(PRIVATE)
+        );
+    }
+}
+#[test]
+fn old_meeting_and_auto_off_need_click() {
+    for s in [
+        NotesSettings {
+            enabled_at_ms: Some(i64::MAX),
+            ..settings_fixture()
+        },
+        NotesSettings {
+            auto: false,
+            ..settings_fixture()
+        },
+    ] {
+        let root = Temp::new();
+        meeting(&root.0, PRIVATE);
+        enqueue(&root.0, &s, None);
+        let mut fake = Fake::new(vec![]);
+        drain(&root.0, &s, &mut fake);
+        assert_eq!(state(&root.0), JobState::NeedsClick);
+        assert!(fake.calls.is_empty());
+    }
+}
+#[test]
+fn explicit_click_allows_an_old_meeting_and_success_has_v2_and_mine() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = NotesSettings {
+        enabled_at_ms: Some(i64::MAX),
+        ..settings_fixture()
+    };
+    enqueue(&root.0, &s, Some(Request::MakeNotes));
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&fs::read(folder.join("english-summary.json")).unwrap()).unwrap();
+    assert_eq!(summary["schema"], 2);
+    assert_eq!(summary["todo"][0]["task"], summary["todo"][0]["title"]);
+    assert_eq!(summary["todo"][0]["id"].as_str().unwrap().len(), 12);
+    assert_eq!(summary["made_by"]["instructions"], "default");
+    let tasks: crate::core::TasksFile =
+        serde_json::from_slice(&fs::read(folder.join("tasks.json")).unwrap()).unwrap();
+    assert_eq!(tasks.tasks[0].mine, Some(true));
+    assert_eq!(fake.calls.len(), 2);
+    assert_eq!(fake.calls[0].1, helper::NOTES_TIMEOUT);
+    assert_eq!(fake.calls[1].1, helper::TASKS_TIMEOUT);
+}
+#[test]
+fn default_instructions_stop_after_two_invalid_answers() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok("bad".into()), Ok("bad again".into())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(state(&root.0), JobState::BadOutput);
+    assert_eq!(fake.calls.len(), 2);
+    assert!(
+        fake.calls[1]
+            .0
+            .contains("Your last answer could not be read:")
+    );
+    assert!(!folder.join("english-summary.json").exists());
+}
+#[test]
+fn custom_ladder_falls_back_on_third_and_keeps_notes_on_tasks_failure() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    agent_instructions::save(&root.0, Agent::Notes, "CUSTOM NOTES").unwrap();
+    agent_instructions::save(&root.0, Agent::Tasks, "CUSTOM TASKS").unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![
+        Ok("bad".into()),
+        Ok("bad".into()),
+        Ok(summary()),
+        Ok("bad".into()),
+        Ok("bad".into()),
+        Ok("bad".into()),
+    ]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(fake.calls.len(), 6);
+    assert!(fake.calls[0].0.contains("CUSTOM NOTES"));
+    assert!(fake.calls[1].0.contains("CUSTOM NOTES"));
+    assert!(!fake.calls[2].0.contains("CUSTOM NOTES"));
+    assert!(fake.calls[3].0.contains("CUSTOM TASKS"));
+    assert!(!fake.calls[5].0.contains("CUSTOM TASKS"));
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: true,
+            tasks_failed: true
+        }
+    );
+    assert!(folder.join("english-summary.json").is_file());
+    assert!(!folder.join("tasks.json").exists());
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().instructions,
+        "default-fallback"
+    );
+}
+#[test]
+fn too_long_does_not_call_helper_and_keeps_full_transcript() {
+    let root = Temp::new();
+    let text = "x".repeat(prompt::TRANSCRIPT_CAP + 1);
+    let folder = meeting(&root.0, &text);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::TooLong { .. }));
+    assert!(fake.calls.is_empty());
+    assert!(
+        fs::read_to_string(folder.join("english-transcript.md"))
+            .unwrap()
+            .len()
+            > prompt::TRANSCRIPT_CAP
+    );
+}
+#[test]
+fn first_part_is_explicit_and_caps_only_the_sent_material() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, &"x".repeat(prompt::TRANSCRIPT_CAP + 1));
+    let s = settings_fixture();
+    enqueue(&root.0, &s, Some(Request::FirstPart));
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    assert!(
+        fs::read_to_string(folder.join("english-transcript.md"))
+            .unwrap()
+            .len()
+            > prompt::TRANSCRIPT_CAP
+    );
+}
+#[test]
+fn summary_is_never_overwritten_or_requeued_automatically() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::write(folder.join("english-summary.json"), b"keep existing").unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    assert!(queue::read(&root.0, ID).unwrap().is_none());
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        b"keep existing"
+    );
+}
+#[test]
+fn one_worker_at_a_time() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let lock = store_io::lock(&root.0.join("local/notes-jobs/worker.lock")).unwrap();
+    let mut fake = Fake::new(vec![]);
+    drain(&root.0, &s, &mut fake);
+    assert!(fake.calls.is_empty());
+    assert_eq!(state(&root.0), JobState::Queued);
+    drop(lock);
+}
+#[test]
+fn backend_retry_delays_are_fifteen_then_sixty_minutes_then_manual() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    for (attempt, delay) in [(1, Some(15 * 60_000)), (2, Some(60 * 60_000)), (3, None)] {
+        let mut fake = Fake::new(vec![Err(Failure::Backend { exit: Some(1) })]);
+        let before = chrono::Utc::now().timestamp_millis();
+        drain(&root.0, &s, &mut fake);
+        let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+        assert_eq!(job.attempts, attempt);
+        let JobState::BackendError { next_try_ms, exit } = job.state else {
+            panic!("expected backend error")
+        };
+        assert_eq!(exit, Some(1));
+        match delay {
+            Some(delay) => {
+                assert!(
+                    (before + delay..=chrono::Utc::now().timestamp_millis() + delay)
+                        .contains(&next_try_ms.unwrap())
+                );
+                job.state = JobState::BackendError {
+                    next_try_ms: Some(0),
+                    exit,
+                };
+                job.next_try_at = Some(0);
+                store_io::write(&root.0.join(format!("local/notes-jobs/{ID}.json")), &job).unwrap();
+            }
+            None => assert!(next_try_ms.is_none()),
+        }
+    }
+}
+#[test]
+fn timeout_and_missing_helper_do_not_retry_automatically() {
+    for available in [true, false] {
+        let root = Temp::new();
+        meeting(&root.0, PRIVATE);
+        let s = settings_fixture();
+        enqueue(&root.0, &s, None);
+        let mut fake = Fake::new(if available {
+            vec![Err(Failure::TimedOut)]
+        } else {
+            vec![]
+        });
+        fake.available = available;
+        drain(&root.0, &s, &mut fake);
+        assert_eq!(
+            state(&root.0),
+            if available {
+                JobState::TimedOut
+            } else {
+                JobState::HelperMissing
+            }
+        );
+        let calls = fake.calls.len();
+        drain(&root.0, &s, &mut fake);
+        assert_eq!(fake.calls.len(), calls);
+    }
+}
+#[test]
+fn empty_transcript_is_terminal() {
+    let root = Temp::new();
+    meeting(&root.0, "");
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(state(&root.0), JobState::Empty);
+    assert!(fake.calls.is_empty());
+}
+#[test]
+fn privacy_failure_logs_never_include_meeting_or_helper_output() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(PRIVATE.into()), Ok(PRIVATE.into())]);
+    drain(&root.0, &s, &mut fake);
+    for path in [
+        root.0.join("sidenote.log"),
+        root.0.join(format!("local/notes-jobs/{ID}.json")),
+    ] {
+        assert!(!fs::read_to_string(path).unwrap().contains(PRIVATE));
+    }
+}
+#[test]
+fn migration_keeps_existing_scripts_and_new_users_start_without_consent() {
+    let root = Temp::new();
+    let script = root.0.join("watch.ps1");
+    let fresh = migrated_settings(&script);
+    assert_eq!(fresh.engine(), Engine::App);
+    assert!(fresh.helper.is_none());
+    assert!(fresh.enabled_at_ms.is_none());
+    fs::write(&script, b"unused test fixture").unwrap();
+    let migrated = migrated_settings(&script);
+    assert_eq!(migrated.engine(), Engine::Scripts(script));
+}
+#[test]
+fn scripts_and_off_never_enqueue_and_ids_cannot_escape_the_root() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    for engine in ["scripts", "off"] {
+        let s = NotesSettings {
+            engine: engine.into(),
+            ..settings_fixture()
+        };
+        enqueue(&root.0, &s, None);
+        assert!(queue::read(&root.0, ID).unwrap().is_none());
+    }
+    for id in ["../escape", "..\\escape", "C:\\temp", "", "abc"] {
+        assert!(
+            queue::enqueue_in(
+                &root.0,
+                &root.0.join("meetings"),
+                id,
+                None,
+                &settings_fixture()
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+fn settings_save_sets_consent_time_and_preserves_other_config_fields() {
+    let root = Temp::new();
+    fs::write(
+        root.0.join("config.json"),
+        r#"{"version":1,"features":{},"untouched":"value"}"#,
+    )
+    .unwrap();
+    let mut s = settings_fixture();
+    let before = chrono::Utc::now().timestamp_millis();
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    let saved = crate::core::Config::load_in(&root.0)
+        .unwrap()
+        .notes
+        .unwrap();
+    assert!(saved.enabled_at_ms.unwrap() >= before);
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    assert_eq!(
+        crate::core::Config::load_in(&root.0)
+            .unwrap()
+            .notes
+            .unwrap()
+            .enabled_at_ms,
+        saved.enabled_at_ms
+    );
+    let raw: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.0.join("config.json")).unwrap()).unwrap();
+    assert_eq!(raw["untouched"], "value");
+    s.engine = "off".into();
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    assert!(
+        crate::core::Config::load_in(&root.0)
+            .unwrap()
+            .notes
+            .unwrap()
+            .enabled_at_ms
+            .is_none()
+    );
+}
+#[test]
+fn sort_again_keeps_notes_bytes_and_updates_only_tasks() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let original = summary();
+    fs::write(folder.join("english-summary.json"), &original).unwrap();
+    enqueue(&root.0, &s, Some(Request::SortAgain));
+    let mut fake = Fake::new(vec![Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fs::read_to_string(folder.join("english-summary.json")).unwrap(),
+        original
+    );
+    assert!(folder.join("tasks.json").exists());
+    assert_eq!(fake.calls.len(), 1);
+}
+#[test]
+fn quick_title_failure_never_blocks_notes() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::remove_file(folder.join("quick-title.json")).unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Err(Failure::TimedOut), Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(fake.calls[0].1, helper::TITLE_TIMEOUT);
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+}
+
+#[test]
+fn disabling_or_switching_helper_revokes_the_next_call() {
+    let root = Temp::new();
+    let mut s = settings_fixture();
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    assert!(helper::authorized(&root.0, Helper::Claude));
+    assert!(!helper::authorized(&root.0, Helper::Codex));
+    s.engine = "off".into();
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    assert!(!helper::authorized(&root.0, Helper::Claude));
+}
+#[test]
+fn oldest_meeting_runs_first_and_running_jobs_recover_after_a_crash() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let older_id = "1793946000000-123";
+    let older = root.0.join("meetings").join(older_id);
+    fs::create_dir_all(&older).unwrap();
+    for name in ["manifest.json", "transcript.ndjson"] {
+        fs::copy(folder.join(name), older.join(name)).unwrap();
+    }
+    fs::write(
+        older.join("quick-title.json"),
+        r#"{"title":"Older meeting"}"#,
+    )
+    .unwrap();
+    enqueue(&root.0, &s, None);
+    queue::enqueue_in(&root.0, &root.0.join("meetings"), older_id, None, &s).unwrap();
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    job.state = JobState::Running;
+    store_io::write(&root.0.join(format!("local/notes-jobs/{ID}.json")), &job).unwrap();
+    let mut fake = Fake::new(vec![
+        Ok(summary()),
+        Ok(sorted()),
+        Ok(summary()),
+        Ok(sorted()),
+    ]);
+    drain(&root.0, &s, &mut fake);
+    assert!(fake.calls[0].0.contains("Title: Older meeting"));
+    assert!(fake.calls[2].0.contains("Title: Delivery planning"));
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+}
+#[test]
+fn external_summary_published_during_a_call_is_preserved() {
+    struct Race {
+        folder: PathBuf,
+        calls: usize,
+    }
+    impl Run for Race {
+        fn installed(&self, _: Helper) -> bool {
+            true
+        }
+        fn run(&mut self, _: Helper, _: &str, _: String, _: Duration) -> Result<String, Failure> {
+            self.calls += 1;
+            fs::write(self.folder.join("english-summary.json"), b"external notes").unwrap();
+            Ok(summary())
+        }
+    }
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut race = Race {
+        folder: folder.clone(),
+        calls: 0,
+    };
+    queue::drain(&root.0, &root.0.join("meetings"), &mut race, || {
+        Ok(s.clone())
+    })
+    .unwrap();
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        b"external notes"
+    );
+    assert_eq!(race.calls, 1);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+}

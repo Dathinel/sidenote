@@ -295,7 +295,8 @@ struct Sorting {
 struct SortTag {
     i: usize,
     project: String,
-    new: bool,
+    #[serde(rename = "new")]
+    _new: bool,
 }
 pub(super) fn sorting(
     raw: &str,
@@ -326,9 +327,7 @@ pub(super) fn sorting(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(fallback)
                 .to_string();
-            let new = tag.map(|t| t.new).unwrap_or(!projects.contains(&project))
-                && project != crate::core::UNSORTED
-                && !projects.contains(&project);
+            let new = project != crate::core::UNSORTED && !projects.contains(&project);
             crate::core::TaskTag {
                 i,
                 project,
@@ -425,7 +424,10 @@ mod tests {
         assert_eq!(t.subtasks.len(), 7);
         assert!(t.subtasks.iter().all(|s| !s.done));
         assert!(t.title.chars().count() <= 60);
-        assert!(t.title.ends_with("detailed"));
+        assert_eq!(
+            t.title,
+            "Send the extremely comprehensive finalized consolidated"
+        );
     }
     #[test]
     fn stable_ids_collisions_and_blocker_refs() {

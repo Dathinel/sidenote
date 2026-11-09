@@ -90,6 +90,7 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
+    Consent,
     Missing,
     TimedOut,
     Backend { exit: Option<i32> },
@@ -99,6 +100,9 @@ pub(super) enum Failure {
 /// The test seam never launches a CLI or inspects the host's helper installation.
 pub(super) trait Run {
     fn installed(&self, helper: Helper) -> bool;
+    fn glossary(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn run(
         &mut self,
         helper: Helper,
@@ -107,7 +111,19 @@ pub(super) trait Run {
         timeout: Duration,
     ) -> Result<String, Failure>;
 }
-pub(super) struct Cli;
+pub(super) struct Cli {
+    pub root: Option<PathBuf>,
+}
+pub(super) fn authorized(root: &std::path::Path, helper: Helper) -> bool {
+    crate::core::Config::load_in(root)
+        .ok()
+        .and_then(|c| c.notes)
+        .is_some_and(|s| {
+            s.engine() == super::Engine::App
+                && s.helper == Some(helper)
+                && s.enabled_at_ms.is_some()
+        })
+}
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 impl Scratch {
@@ -131,6 +147,15 @@ impl Run for Cli {
     fn installed(&self, helper: Helper) -> bool {
         runners::installed(&runner(helper, ""))
     }
+    fn glossary(&self) -> Vec<String> {
+        crate::hex_engine::HexEngine::new()
+            .vocabulary_list()
+            .unwrap_or_default()
+            .into_iter()
+            .take(1000)
+            .map(|entry| entry.term.chars().take(200).collect())
+            .collect()
+    }
     fn run(
         &mut self,
         helper: Helper,
@@ -138,6 +163,11 @@ impl Run for Cli {
         prompt: String,
         timeout: Duration,
     ) -> Result<String, Failure> {
+        if let Some(root) = &self.root
+            && !authorized(root, helper)
+        {
+            return Err(Failure::Consent);
+        }
         if !self.installed(helper) {
             return Err(Failure::Missing);
         }
