@@ -946,18 +946,19 @@ fn cleanup_backups(root: &Path, p: &Projects) -> io::Result<()> {
             continue;
         }
         store_io::reject_reparse(&entry.path())?;
-        folders.push((id, entry.path()));
+        folders.push((entry.metadata()?.modified()?,id, entry.path()));
     }
     folders.sort();
     let keep: std::collections::BTreeSet<_> = folders
         .iter()
         .rev()
-        .filter(|(id, _)| receipts.contains_key(id))
+        .filter(|(_,id, _)| receipts.contains_key(id))
         .take(10)
-        .map(|(id, _)| id.clone())
+        .map(|(_,id, _)| id.clone())
         .collect();
-    for (id, path) in folders {
-        if !keep.contains(&id) {
+    for (_,id, path) in folders {
+        let orphan_old=!receipts.contains_key(&id) && path.metadata()?.modified()?.elapsed().is_ok_and(|age|age>std::time::Duration::from_secs(3600));
+        if (!keep.contains(&id) && receipts.contains_key(&id)) || orphan_old {
             let _ = fs::remove_file(path.join("backup.json"));
             let _ = fs::remove_dir(path);
         }

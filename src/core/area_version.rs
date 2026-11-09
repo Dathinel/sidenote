@@ -2,14 +2,14 @@
 use super::{DeviceSettings, device, store_io};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
-const AREA_PROTOCOL: u32 = 2;
+const AREA_FORMAT: u32 = 1;
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Marker {
     device: String,
     name: String,
     app_version: String,
-    area_protocol: u32,
+    area_format: u32,
     seen_at: i64,
 }
 pub(super) fn record(root: &Path, own: &DeviceSettings) -> io::Result<()> {
@@ -19,7 +19,7 @@ pub(super) fn record(root: &Path, own: &DeviceSettings) -> io::Result<()> {
     if let Ok(bytes) = store_io::read_bounded(&path, 4096)
         && let Ok(marker) = serde_json::from_slice::<Marker>(&bytes)
         && marker.app_version == env!("CARGO_PKG_VERSION")
-        && marker.area_protocol == AREA_PROTOCOL
+        && marker.area_format == AREA_FORMAT
         && marker.name == own.name
         && marker.seen_at > now - 3600
     {
@@ -31,18 +31,10 @@ pub(super) fn record(root: &Path, own: &DeviceSettings) -> io::Result<()> {
             device: own.id.clone(),
             name: own.name.chars().take(80).collect(),
             app_version: env!("CARGO_PKG_VERSION").into(),
-            area_protocol: AREA_PROTOCOL,
+            area_format: AREA_FORMAT,
             seen_at: now,
         },
     )
-}
-fn version(text: &str) -> Option<Vec<u64>> {
-    text.split('.')
-        .take(3)
-        .map(str::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()
-        .filter(|v| v.len() == 3)
 }
 pub fn ensure(root: &Path) -> io::Result<()> {
     let own = DeviceSettings::load_in(root)?;
@@ -69,7 +61,8 @@ pub fn ensure(root: &Path) -> io::Result<()> {
             store_io::reject_reparse(&folder.path())?;
             for file in fs::read_dir(folder.path())? {
                 let file = file?;
-                if file.path().extension().is_some_and(|e| e == "json") {
+                if file.path().extension().is_some_and(|e| e == "json") && file.file_type()?.is_file() {
+                    store_io::reject_reparse(&file.path())?;
                     seen = seen.max(
                         file.metadata()?
                             .modified()?
@@ -83,12 +76,7 @@ pub fn ensure(root: &Path) -> io::Result<()> {
         if seen < now - 30 * 86400 {
             continue;
         }
-        if marker.as_ref().is_none_or(|m| {
-            m.area_protocol < AREA_PROTOCOL
-                || version(&m.app_version)
-                    .zip(version(env!("CARGO_PKG_VERSION")))
-                    .is_none_or(|(a, b)| a < b)
-        }) {
+        if marker.as_ref().is_none_or(|m|m.area_format < AREA_FORMAT) {
             let name = marker
                 .as_ref()
                 .map(|m| m.name.as_str())
