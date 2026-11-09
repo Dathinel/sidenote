@@ -3,7 +3,11 @@ use sidenote::core::{self, TaskStore, memory::MemoryStore};
 use std::{
     fs,
     path::Path,
-    time::{Duration, Instant},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 fn copy_tree(source: &Path, target: &Path) {
@@ -49,12 +53,13 @@ fn boundary<T>(root: &Path, incoming: &Path, operation: impl FnOnce() -> T) -> T
     fs::write(&gate, b"pause").unwrap();
     let target = root.join("state");
     let incoming = incoming.to_owned();
+    let finished = Arc::new(AtomicBool::new(false));
+    let operation_finished = finished.clone();
     let writer = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
         while !reached.exists() {
             assert!(
-                Instant::now() < deadline,
-                "Publication did not reach the rendezvous"
+                !operation_finished.load(Ordering::Acquire),
+                "Operation finished without reaching the publication rendezvous"
             );
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -62,6 +67,7 @@ fn boundary<T>(root: &Path, incoming: &Path, operation: impl FnOnce() -> T) -> T
         fs::remove_file(gate).unwrap();
     });
     let result = operation();
+    finished.store(true, Ordering::Release);
     writer.join().unwrap();
     result
 }
