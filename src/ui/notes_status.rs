@@ -115,7 +115,7 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
         .get(&m.id)
         .cloned()
         .or_else(|| {
-            (!m.has_summary()).then(|| Job {
+            (!m.has_summary()).then_some(Job {
                 state: if configured {
                     JobState::NeedsClick
                 } else {
