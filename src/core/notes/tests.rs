@@ -362,6 +362,36 @@ fn backend_retry_delays_are_fifteen_then_sixty_minutes_then_manual() {
         }
     }
 }
+
+#[test]
+fn future_retry_releases_worker_and_runs_when_due_on_next_drain() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Err(Failure::Backend { exit: None })]);
+    drain(&root.0, &s, &mut fake);
+    let path = root.0.join("local/notes-jobs/worker.lock");
+    drop(store_io::lock(&path).expect("idle worker released its lock"));
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    let retry = job.next_try_at.unwrap();
+    assert!(retry > chrono::Utc::now().timestamp_millis());
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(fake.calls.len(), 1);
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().next_try_at,
+        Some(retry)
+    );
+    job.state = JobState::BackendError {
+        next_try_ms: Some(0),
+        exit: None,
+    };
+    job.next_try_at = Some(0);
+    store_io::write(&root.0.join(format!("local/notes-jobs/{ID}.json")), &job).unwrap();
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+}
 #[test]
 fn timeout_and_missing_helper_do_not_retry_automatically() {
     for available in [true, false] {

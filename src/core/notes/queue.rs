@@ -631,35 +631,14 @@ pub fn run_pending() -> io::Result<()> {
         Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
         Err(e) => return Err(e),
     };
-    loop {
-        drain_locked(
-            &root,
-            &meetings,
-            &mut helper::Cli {
-                root: Some(root.clone()),
-            },
-            super::settings,
-        )?;
-        let mut next = None;
-        for entry in fs::read_dir(jobs(&root))? {
-            let path = entry?.path();
-            let Some(id) = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .filter(|id| valid_id(id))
-            else {
-                continue;
-            };
-            if let Some(at) = read(&root, id)?.and_then(|j| j.next_try_at) {
-                next = Some(next.map_or(at, |n: i64| n.min(at)));
-            }
-        }
-        let Some(at) = next else {
-            return Ok(());
-        };
-        // Wake for new jobs while retaining the single worker's persisted retry schedule.
-        std::thread::sleep(Duration::from_millis((at - now()).clamp(1, 5_000) as u64));
-    }
+    drain_locked(
+        &root,
+        &meetings,
+        &mut helper::Cli {
+            root: Some(root.clone()),
+        },
+        super::settings,
+    )
 }
 
 fn existing_summary(raw: &str) -> io::Result<schema::Summary> {

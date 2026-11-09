@@ -326,6 +326,9 @@ pub fn run() -> ! {
     std::thread::spawn(|| {
         loop {
             let _ = crate::core::meeting_router::jobs::start_worker();
+            if crate::core::notes::queue::start_worker().is_err() {
+                log("notes worker could not start; retrying on the next drain");
+            }
             std::thread::sleep(Duration::from_secs(30));
         }
     });
