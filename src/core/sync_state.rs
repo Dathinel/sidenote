@@ -176,6 +176,7 @@ fn read_journal(path: &Path, owner: &str, store: Option<&str>) -> io::Result<Jou
     Ok(j)
 }
 fn entries(path: &Path) -> io::Result<Vec<fs::DirEntry>> {
+    store_io::reject_reparse(path)?;
     match fs::read_dir(path) {
         Ok(e) => e.collect(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(vec![]),
@@ -189,7 +190,15 @@ fn read_view(root: &Path, store: &str, own: &str) -> io::Result<View> {
         if !device::valid_id(&name) || !owner.file_type()?.is_dir() {
             continue;
         }
-        for entry in entries(&owner.path().join(hash(store.as_bytes())))? {
+        let files = match entries(&owner.path().join(hash(store.as_bytes()))) {
+            Ok(files) => files,
+            Err(_) => {
+                view.warnings
+                    .push("Could not read a device store folder; it was kept for review".into());
+                continue;
+            }
+        };
+        for entry in files {
             if entry.path().extension().is_none_or(|e| e != "json") {
                 continue;
             }
