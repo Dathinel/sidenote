@@ -19,6 +19,18 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('updates-later', 'updates-ready', '560x1100', 'updates-later.json', @('--at', 'mark:end')),
+    @('updates-notes', 'updates-available', '560x1100', 'updates-notes.json', @('--at', 'mark:end')),
+    @('updates-none', 'updates-none', '1320x1000', $null, @()),
+    @('updates-none-narrow', 'updates-none', '560x1100', $null, @()),
+    @('updates-available', 'updates-available', '1320x1000', $null, @()),
+    @('updates-available-narrow', 'updates-available', '560x1100', $null, @()),
+    @('updates-downloading', 'updates-downloading', '1320x1000', $null, @()),
+    @('updates-downloading-narrow', 'updates-downloading', '560x1100', $null, @()),
+    @('updates-ready', 'updates-ready', '1320x1000', $null, @()),
+    @('updates-ready-narrow', 'updates-ready', '560x1100', $null, @()),
+    @('updates-error', 'updates-error', '1320x1000', $null, @()),
+    @('updates-error-narrow', 'updates-error', '560x1100', $null, @()),
     @('routing-settings', 'routing-settings', '1320x1000', $null, @()),
     @('routing-settings-narrow', 'routing-settings', '560x1100', $null, @()),
     @('routing-original', 'routing-original', '1320x900', $null, @()),

@@ -19,6 +19,7 @@ mod tasks;
 mod theme;
 mod today;
 mod todo;
+mod updates;
 mod widgets;
 
 use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
@@ -77,6 +78,7 @@ fn default_runner(
 }
 
 pub enum Event {
+    Update(sidenote::updates::Status),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -143,6 +145,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub updates: updates::Updates,
     pub models: models::Models,
     pub config: core::Config,
     pub feature_error: Option<String>,
@@ -323,6 +326,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let prefs = core::UiPrefs::load(&store.root);
         let mut s = Self {
+            updates: updates::Updates::default(),
             models: models::Models::load(&store.root),
             config,
             feature_error,
@@ -930,6 +934,7 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::Update(status) => self.update_status(status),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::MigrationPrepared(result) => {
@@ -1044,6 +1049,7 @@ fn setup(s: &mut State, waker: Waker) {
         return;
     }
     s.waker = Some(waker.clone());
+    s.updates_start(waker.clone());
     s.hex_start(waker.clone());
     let (tx, rx) = mpsc::channel::<()>();
     s.scan_tx = Some(tx);
@@ -1669,6 +1675,21 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("updates-none", |s| {
+                updates::scene(s, sidenote::updates::Phase::Idle)
+            }),
+            ("updates-available", |s| {
+                updates::scene(s, sidenote::updates::Phase::Available)
+            }),
+            ("updates-downloading", |s| {
+                updates::scene(s, sidenote::updates::Phase::Downloading)
+            }),
+            ("updates-ready", |s| {
+                updates::scene(s, sidenote::updates::Phase::Ready)
+            }),
+            ("updates-error", |s| {
+                updates::scene(s, sidenote::updates::Phase::Error)
+            }),
             ("models-empty", |s| models::scene(s, "empty")),
             ("models-downloading", |s| models::scene(s, "downloading")),
             ("models-installed", |s| models::scene(s, "installed")),

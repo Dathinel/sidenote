@@ -131,16 +131,6 @@ fn main() {
             Err(_) => return,
         }
     };
-    if !headless && !offscreen_bench {
-        std::thread::spawn(|| {
-            let _ = sidenote::updates::window_start(|_| {});
-        });
-    }
-    let _updates = if headless || offscreen_bench {
-        None
-    } else {
-        sidenote::updates::start(|_| {})
-    };
     if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
         rune::warm_gpu(Default::default());
     }

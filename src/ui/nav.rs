@@ -585,6 +585,10 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
     };
 
     let status = hex_line(s, p, wide);
+    let mut footer = col().w_full();
+    if let Some(notice) = super::updates::footer(s, p, wide) {
+        footer = footer.child(notice);
+    }
     let mut pane = col()
         .key("nav")
         .w(if wide { WIDE } else { RAIL })
@@ -596,6 +600,7 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         .child(top)
         .child(middle)
         .child(hairline(p))
+        .child(footer)
         .child(col().w_full().py(8.0).child(status));
     if !wide {
         pane = pane.items_center();
