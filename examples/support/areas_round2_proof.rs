@@ -157,6 +157,14 @@ pub fn run(mode: &str, store: &TaskStore) {
             let c = catalog(store);
             assert_eq!(c.projects[&id].area_id, before.area_id);
             assert_eq!(c.projects[&id].converted_to, before.converted_to);
+            let p = store.load_projects().unwrap();
+            assert_eq!(c.project(&p, "Outcome Q").unwrap().id, id);
+            assert_eq!(c.project(&p, "Outcome S").unwrap().id, id);
+            assert!(
+                !c.projects
+                    .contains_key(&core::areas::project_id("Outcome Q")),
+                "A conflicting name must not synthesize a second identity"
+            );
             assert!(
                 c.name_conflicts[&id].contains("Outcome Q")
                     && c.name_conflicts[&id].contains("Outcome S")

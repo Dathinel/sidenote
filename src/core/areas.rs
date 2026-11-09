@@ -386,11 +386,7 @@ impl Projects {
             }
         }
         for name in super::project_names(self, &[]) {
-            if !catalog
-                .projects
-                .values()
-                .any(|p| self.resolve(&p.name) == name)
-            {
+            if catalog.project(self, &name).is_none() {
                 let id = project_id(&name);
                 catalog.projects.insert(
                     id.clone(),
@@ -585,6 +581,26 @@ impl Catalog {
         self.problems.dedup();
     }
     pub fn project<'a>(&'a self, p: &Projects, name: &str) -> Option<&'a Project> {
+        let resolved = p.resolve(name);
+        for candidate in [name, resolved.as_str()] {
+            if let Some(id) = p
+                .other
+                .get(&format!("area-identity:{candidate}"))
+                .and_then(Value::as_str)
+            {
+                let mut id = id;
+                let mut seen = BTreeSet::new();
+                while seen.insert(id) {
+                    let Some(next) = self.redirects.get(id) else {
+                        break;
+                    };
+                    id = next;
+                }
+                if let Some(project) = self.projects.get(id) {
+                    return Some(project);
+                }
+            }
+        }
         self.projects
             .values()
             .find(|v| p.resolve(&v.name) == p.resolve(name))
