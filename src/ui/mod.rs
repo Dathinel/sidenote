@@ -87,6 +87,11 @@ fn default_runner(
 }
 
 pub enum Event {
+    MemoryRefreshed {
+        generation: u64,
+        worker: std::thread::ThreadId,
+        result: Result<Box<memory::Snapshot>, String>,
+    },
     Area {
         generation: u64,
         refresh: bool,
@@ -322,7 +327,7 @@ impl State {
                     }
                 }
                 if self.config.features.memory {
-                    self.memory.refresh(true);
+                    self.refresh_memory(true);
                 }
                 if self.config.features.daily_check {
                     self.check.refresh();
@@ -443,7 +448,7 @@ impl State {
             s.check.refresh();
         }
         if s.config.features.memory {
-            s.memory.refresh(true);
+            s.refresh_memory(true);
         }
         s
     }
@@ -729,7 +734,7 @@ impl State {
             self.go_home();
             self.memory_open = true;
             if self.config.features.memory {
-                self.memory.refresh(false);
+                self.refresh_memory(false);
             }
             self.pending_thread = key.map(|key| PendingScroll {
                 key,
@@ -967,6 +972,14 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::MemoryRefreshed {
+                generation,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.memory_refreshed(generation, result.map(|s| *s));
+            }
             Event::Edited(result) => self.edit_finished(result),
             Event::Area {
                 generation,
@@ -992,7 +1005,7 @@ impl State {
             Event::MigrationPrepared(result) => {
                 self.memory.preview_running = false;
                 if self.config.features.memory {
-                    self.memory.refresh(false);
+                    self.refresh_memory(false);
                 }
                 if let Err(error) = result {
                     self.memory.errors.insert("migration".into(), error);
@@ -1039,7 +1052,9 @@ impl State {
                 self.scan_errors = errors;
                 if let Some(projects) = projects {
                     content_changed |= different(&self.tasks.projects, &projects);
-                    self.memory.projects = projects.clone();
+                    if !self.memory.refresh_pending {
+                        self.memory.projects = projects.clone();
+                    }
                     self.tasks.projects = projects;
                 }
                 if let Some(overrides) = overrides {
@@ -1062,7 +1077,9 @@ impl State {
                     content_changed |= self.saved != *saved;
                     self.saved = saved.clone();
                 }
-                if let Some(file) = memory {
+                if let Some(file) = memory
+                    && !self.memory.refresh_pending
+                {
                     let pending: Vec<_> = file
                         .proposals
                         .iter()
@@ -1197,6 +1214,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
                 if headless
                     && (s.asks.values().any(|r| r.live)
                         || s.edit_busy
+                        || s.memory.refresh_pending
                         || s.areas.refresh_pending
                         || s.areas.pending.is_some()) =>
             {
@@ -1798,6 +1816,7 @@ fn scene_check_apply(s: &mut State) {
 
 fn scene_memory(s: &mut State) {
     s.open_memory();
+    sync_scene::settle(s);
 }
 
 /// The Memory page with the panel on the first row of the current list.
