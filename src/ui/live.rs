@@ -1,6 +1,6 @@
 //! "New meeting": the live page. Starting a meeting starts a Hex recording and opens a page with
 //! a heading ("Meeting at 14:30"), a recording mark, the elapsed time and a large Stop button.
-//! After Stop it says "Making notes" until the normal pipeline has written the meeting, then
+//! After Stop it says "Writing summary" until the normal pipeline has written the meeting, then
 //! opens the notes.
 //!
 //! While recording, the page is a calm notes editor (plain text, saved to the meeting folder's
@@ -14,7 +14,7 @@
 //! transcript activity: they lift while new words keep arriving and rest in a slow, gentle idle
 //! otherwise.
 //!
-//! After Stop it says "Making notes" (with the user's notes beside it) until the normal pipeline
+//! After Stop it says "Writing summary" (with the user's notes beside it) until the normal pipeline
 //! has written the meeting, then opens it. Nobody types a title: a cheap model names the meeting
 //! seconds after Stop (quick-title.json, read here while the notes are made), and the notes' own
 //! title replaces it.
@@ -23,7 +23,6 @@ use super::{
     ask::{self, EASE_IN, raised, rise},
     hex,
     list::text_title,
-    nav::icon_stop,
     roles,
     theme::Palette,
     widgets::{dot, hairline, label, link, pressable, quiet_button, scroll, spaced_caps},
@@ -777,36 +776,6 @@ impl State {
 
 // ---- the page ---------------------------------------------------------------------------------
 
-/// Stop, inside the recording pill. It is a second way to stop: the top right keeps its own.
-fn stop_pill(s: &State, p: Palette, starting: bool) -> El {
-    let why = if starting {
-        Some("Starting the recording")
-    } else {
-        hex::stop_blocked(s)
-    };
-    let b = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(icon_stop(10.0, p.card))
-            .child(roles::CONTROL.bold().wrap("Stop", p.card)),
-    )
-    .key("live-stop")
-    .pl(14.0)
-    .pr(16.0)
-    .py(8.0)
-    .radius(999.0)
-    .fill(p.ink);
-    match why {
-        None => b
-            .label("Stop recording")
-            .help("Stop recording and make notes")
-            .preserve_focus_on_press(true)
-            .on_press(|s: &mut State| s.hex_record_stop()),
-        Some(reason) => b.label(format!("Stop ({reason})")).help(reason).dim(0.45),
-    }
-}
-
 /// The recording pill: dot, voice bars, timer, chevron, and Stop. The first four are one button
 /// that opens the live transcript above the bar.
 fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
@@ -814,7 +783,6 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
         return el();
     };
     let starting = live.phase == Phase::Starting;
-    let clock = hex::recording_clock(s).unwrap_or_else(|| "0:00".into());
     let (busy, words) = {
         let f = live.feed.lock().unwrap_or_else(|e| e.into_inner());
         (f.busy() && !starting, f.words)
@@ -853,15 +821,15 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
     let mut group = row()
         .gap(10.0)
         .items_center()
-        .child(
-            row()
-                .key("live-indicator")
-                .role("status")
-                .label(if starting { "Starting" } else { "Recording" })
-                .child(dot(9.0, if starting { p.faint } else { p.warn })),
-        )
         .child(bars)
-        .child(roles::NAME.wrap(clock, p.ink).key("live-timer"));
+        .child(roles::CONTROL.wrap(
+            if open {
+                "Hide live transcript"
+            } else {
+                "Show live transcript"
+            },
+            p.accent,
+        ));
     if !starting {
         group = group.child(rune::icon(chevron, 14.0).color(p.faint));
     }
@@ -883,24 +851,11 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
         .py(8.0)
         .radius(999.0)
         .hover(p.chip);
-    let group = if starting {
+    if starting {
         group.dim(0.8)
     } else {
         group.on_press(|s: &mut State| s.live_toggle_panel())
-    };
-    row()
-        .key("live-pill")
-        .gap(2.0)
-        .items_center()
-        .pr(5.0)
-        .pl(2.0)
-        .py(4.0)
-        .radius(999.0)
-        .fill(p.card)
-        .border(1.0, p.line)
-        .shadow(3.0, 16.0, p.shadow)
-        .child(group)
-        .child(stop_pill(s, p, starting))
+    }
 }
 
 /// "1:05" or "1:02:05" for a line in the live transcript.
@@ -1022,7 +977,7 @@ fn bar(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El 
         .as_ref()
         .filter(|l| l.panel_open && l.phase == Phase::Recording)
         .map(|_| transcript_panel(s, p));
-    ask::overlay_with(s, k, p, narrow, layer, Some(rec_pill(s, k, p)), panel)
+    ask::overlay_with(s, k, p, narrow, layer, None, panel)
 }
 
 /// The notes editor: plain text, several lines, under the "Meeting at HH:MM" heading.
@@ -1051,7 +1006,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     let hint = if starting {
         "Starting the recording. You can start writing now."
     } else {
-        "Notes save as you type. Your transcript is ready after the meeting."
+        "Your typed notes save as you type. The transcript is added when you stop."
     };
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
@@ -1068,39 +1023,69 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .w_full()
         .items_start()
         .gap(if narrow { 10.0 } else { 12.0 })
-        .child(head)
-        .child(roles::META.wrap(hint, p.faint));
-    if let Some(Saving::Failed(why)) = saving {
+        .child(head);
+    if let Some(Saving::Failed(_)) = saving {
+        let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
+        let warning = save_warning(s.hex_recording(), recovered);
         c = c.child(
             col()
-                .gap(8.0)
-                .child(roles::SMALL.medium().wrap(why, p.warn).role("alert"))
+                .key("live-save-warning")
+                .w_full()
+                .padding(16.0)
+                .radius(10.0)
+                .border(1.0, p.warn)
+                .fill(p.warnbg)
+                .gap(12.0)
+                .role("alert")
+                .child(roles::NAME.wrap("!  Your notes need saving", p.warn))
+                .child(roles::SMALL.wrap(warning, p.ink))
                 .child(
                     row()
-                        .gap(16.0)
+                        .flex_wrap()
+                        .gaps(8.0, 8.0)
                         .child(
-                            link("Retry save and close", p)
-                                .key("live-close-retry")
+                            super::area::button("Copy notes", "live-copy-notes", p)
+                                .fill(p.accent)
+                                .color(p.card)
                                 .on_press_tx(|s: &mut State, tx| {
-                                    if s.live_close() {
-                                        tx.quit();
-                                    }
+                                    tx.copy(s.live_notes.text.clone());
                                 }),
                         )
-                        .child(link("Copy notes", p).key("live-copy-notes").on_press_tx(
-                            |s: &mut State, tx| {
-                                tx.copy(s.live_notes.text.clone());
-                            },
-                        )),
+                        .child(
+                            super::area::button("Try saving again", "live-save-retry", p)
+                                .key("live-close-retry")
+                                .on_press(|s: &mut State| {
+                                    s.live_flush();
+                                }),
+                        ),
                 ),
         );
+    } else {
+        c = c.child(roles::META.wrap(hint, p.faint));
     }
+    c = c.children((!starting).then(|| rec_pill(s, k, p)));
     c.child(
         col()
             .key("live-notes")
             .w_full()
             .mt(if narrow { 4.0 } else { 10.0 })
             .child(rune::auto_grow(field, if narrow { 8 } else { 12 }, 400)),
+    )
+}
+
+fn save_warning(recording: bool, recovered: bool) -> String {
+    let saved = if recovered {
+        "Sidenote saved a backup copy, but could not save your notes in the meeting folder."
+    } else {
+        "Sidenote could not save your notes, even to a backup copy."
+    };
+    let status = if recording {
+        " The meeting is still recording."
+    } else {
+        ""
+    };
+    format!(
+        "{saved}{status} Copy your notes now, then try saving again. Do not close Sidenote yet."
     )
 }
 
@@ -1224,7 +1209,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         )
         .child(
             roles::SECTION
-                .wrap(if slow { "Notes are taking a while" } else { "Making notes" }, p.ink)
+                .wrap(if slow { "The summary is taking a while" } else { "Writing summary" }, p.ink)
                 .mt(if narrow { 6.0 } else { 18.0 })
                 .role("status"),
         )
@@ -1234,15 +1219,15 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                 .gap(6.0)
                 .mt(4.0)
                 .child(step(true, "Recording saved"))
-                .child(step(false, "Writing the notes")),
+                .child(step(false, "Writing the summary")),
         )
         .child(
             roles::SMALL
                 .wrap(
                     if slow {
-                        "They will appear in Sidenote when they are ready. You do not need to wait here."
+                        "The summary will appear in Sidenote when it is ready. You do not need to wait here."
                     } else {
-                        "This usually takes a minute or two. The notes open here when they are ready."
+                        "This usually takes a minute or two. The summary opens here when it is ready."
                     },
                     p.soft,
                 )
@@ -1352,6 +1337,19 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn save_warning_tells_the_truth_about_recording_and_backups() {
+        for recording in [false, true] {
+            for recovered in [false, true] {
+                let warning = save_warning(recording, recovered);
+                assert_eq!(warning.contains("still recording"), recording);
+                assert_eq!(warning.contains("saved a backup copy"), recovered);
+                assert!(warning.contains("Copy your notes now"));
+                assert!(warning.contains("Do not close Sidenote yet"));
+            }
+        }
+    }
 
     #[test]
     fn close_requires_the_latest_text_to_be_durable_and_the_queue_drained() {

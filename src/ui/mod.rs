@@ -1411,7 +1411,8 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
     row()
         .key("top-bar")
         .w_full()
-        .h(52.0)
+        .min_h(52.0)
+        .py(6.0)
         .px(if narrow { 10.0 } else { 14.0 })
         .gap(12.0)
         .items_center()
@@ -1485,8 +1486,23 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .min_h(0.0)
         .fill(p.bg)
         .child(top_bar(s, p, narrow));
-    if let Some(notice) = updates::listener_notice(s, p) {
-        main = main.child(notice);
+    let on_list = home
+        && !on_check
+        && !on_memory
+        && !on_hex
+        && !on_live
+        && !(s.config.features.projects
+            && matches!(s.filter, nav::Filter::Area(_) | nav::Filter::Areas));
+    if !on_list && let Some(notice) = updates::listener_notice(s, p) {
+        main = main.child(
+            col().w_full().items_center().child(
+                col()
+                    .w_full()
+                    .max_w(860.0)
+                    .px(if narrow { 16.0 } else { 40.0 })
+                    .child(notice),
+            ),
+        );
     }
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);
@@ -1949,6 +1965,40 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("notes-today-first-open", notes_scene::first_open),
+            ("notes-today-hex-missing", |s| {
+                notes_scene::first_open(s);
+                s.hex.status = Some(Err(sidenote::hex_engine::HexError::HexNotRunning));
+            }),
+            ("notes-settings-privacy", |s| {
+                notes_scene::settings(s, "privacy")
+            }),
+            ("notes-settings-model", |s| {
+                notes_scene::settings(s, "helpers");
+                s.ai_notes.model_open = true;
+            }),
+            ("notes-settings-saved-codex", |s| {
+                notes_scene::settings(s, "saved-codex")
+            }),
+            ("notes-settings-saved-opencode", |s| {
+                notes_scene::settings(s, "saved-opencode")
+            }),
+            ("notes-meeting-error-details", |s| {
+                notes_scene::meeting(s, "backend-error");
+                s.ai_notes.details.insert(s.selected.clone().unwrap());
+            }),
+            ("tasks-v2-rebuild-confirm", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Project, None);
+                s.tasks.redo_confirm = s
+                    .meetings
+                    .iter()
+                    .find(|m| core::needs_task_redo(m))
+                    .map(|m| m.id.clone());
+            }),
+            ("tasks-v2-waiting-edit", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, Some(1));
+                s.tasks.ui.waiting_text = true;
+            }),
             ("notes-meeting-after-setup", |s| {
                 notes_scene::meeting(s, "no-helper");
                 s.ai_notes.settings.as_mut().unwrap().helper = Some(core::notes::Helper::Claude);

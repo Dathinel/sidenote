@@ -57,6 +57,44 @@ pub fn hairline(p: Palette) -> El {
     el().w_full().h(1.0).fill(p.line)
 }
 
+#[derive(Clone, Copy)]
+pub enum BannerKind {
+    Info,
+    Working,
+    Problem,
+}
+
+/// Shared page-column notices. Actions and optional details are added by the caller.
+pub fn banner(title: &str, body: impl Into<String>, kind: BannerKind, p: Palette) -> El {
+    let problem = matches!(kind, BannerKind::Problem);
+    let ink = if problem { p.warn } else { p.ink };
+    let mark = match kind {
+        BannerKind::Problem => roles::NAME.wrap("!", ink),
+        BannerKind::Info => roles::NAME.wrap("i", p.soft),
+        BannerKind::Working => rune_kit::Spinner::new()
+            .size(16.0)
+            .color(p.accent)
+            .build(&super::theme::kit(&p)),
+    };
+    col()
+        .w_full()
+        .min_w(0.0)
+        .padding(16.0)
+        .gap(12.0)
+        .radius(10.0)
+        .fill(if problem { p.warnbg } else { p.card })
+        .border(1.0, if problem { p.warn } else { p.line })
+        .role(if problem { "alert" } else { "status" })
+        .child(
+            row()
+                .gap(10.0)
+                .items_center()
+                .child(mark)
+                .child(roles::NAME.wrap(title, ink).grow(1.0).min_w(0.0)),
+        )
+        .child(roles::SMALL.wrap(body, p.ink))
+}
+
 pub fn scroll(content: El, key: &str) -> El {
     col()
         .key(key.to_string())
@@ -129,7 +167,7 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
 pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     let first = at.first()?.clone();
     let origin = origin.to_string();
-    let shown = core::short(&first).to_string();
+    let shown = format!("at {}", core::short(&first));
     Some(
         pressable(
             text(shown.clone())
@@ -137,7 +175,8 @@ pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
                 .color(p.faint),
         )
         .key(format!("stamp-{origin}"))
-        .label(format!("Open the transcript at {shown}"))
+        .label(format!("Open the transcript {shown}"))
+        .help("Time in the recording. Open the transcript.")
         .px(5.0)
         .py(1.0)
         .radius(4.0)
@@ -174,9 +213,9 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
     }
     let mut stamp_link = None;
     if let Some(at) = pt.at.first() {
-        content.push_str("  ");
+        content.push('\u{a0}');
         let start = content.len();
-        content.push_str(core::short(at));
+        content.push_str(&format!("at\u{a0}{}", core::short(at)));
         let range = start..content.len();
         spans.push(
             Span::new(range.start, range.end)

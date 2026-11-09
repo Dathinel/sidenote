@@ -75,9 +75,9 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
             section: "Actions",
             title: "Ask".into(),
             detail: if s.selected.is_some() {
-                "Ask your agent about this meeting".into()
+                "Ask your helper about this meeting".into()
             } else {
-                "Ask your agent about your meetings".into()
+                "Ask your helper about your meetings".into()
             },
             hit: None,
             target: Target::Ask,
@@ -92,13 +92,9 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         hit: None,
         target,
     };
-    let mut pages = vec![page(
-        "Meetings",
-        "Every summarised meeting",
-        Target::Meetings,
-    )];
+    let mut pages = vec![page("Meetings", "Every meeting", Target::Meetings)];
     if f.tasks {
-        pages.push(page("Tasks", "To-dos from your meetings", Target::Tasks));
+        pages.push(page("Tasks", "Tasks from your meetings", Target::Tasks));
     }
     if f.memory {
         pages.push(page(
@@ -418,7 +414,7 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
             roles::SMALL
                 .wrap(
                     if s.has_agent() {
-                        "Nothing matches. Press Tab to ask your agent."
+                        "Nothing matches. Press Tab to ask your helper."
                     } else {
                         "Nothing matches."
                     },
@@ -436,7 +432,7 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
         .py(9.0)
         .child(hint("Enter", "Open", p));
     if s.has_agent() {
-        foot = foot.child(hint("Tab", "Ask your agent", p));
+        foot = foot.child(hint("Tab", "Ask your helper", p));
     }
     foot = foot.child(hint("Esc", "Close", p));
     let card = col()

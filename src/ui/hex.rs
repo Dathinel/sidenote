@@ -794,7 +794,7 @@ fn indicator(s: &State, p: Palette) -> (Color, String) {
                 },
             ),
             (None, Some(true)) => (p.open, "Dictating".into()),
-            (None, _) => (p.ok, "Idle".into()),
+            (None, _) => (p.ok, "Ready".into()),
         },
     }
 }
@@ -841,9 +841,11 @@ pub fn recording_start(s: &State) -> Option<(chrono::DateTime<chrono::Local>, bo
 pub fn start_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
     if !super::updates::listener_ready(s) {
-        Some("Meeting listener is not ready. Use Try again beside the recording controls")
+        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+    } else if h.status.is_none() || h.caps_loading {
+        Some("Checking for Hex. This takes a few seconds.")
     } else if !h.running() {
-        Some("Hex is not running")
+        Some("Open Hex, then try New meeting again.")
     } else if h.recording().is_some() {
         Some("Already recording")
     } else if h.record_busy {
@@ -851,7 +853,7 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
     } else if h.lacks(Feature::RecordStart) {
         Some("This Hex build cannot record")
     } else if !h.can(Feature::RecordStart) {
-        Some("Checking what Hex supports")
+        Some("Checking for Hex. This takes a few seconds.")
     } else {
         None
     }
@@ -1143,8 +1145,8 @@ pub enum Section {
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
 const SECTIONS: [Section; 12] = [
     Section::Features,
-    Section::Teams,
     Section::AiNotes,
+    Section::Teams,
     Section::MeetingModels,
     Section::Model,
     Section::Vocabulary,
@@ -1430,7 +1432,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
     if [
         "ai notes",
         "helper",
-        "agent instructions",
+        "instructions",
         "privacy",
         "claude",
         "codex",
@@ -1812,7 +1814,7 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
         .child(roles::SMALL.wrap("Meetings and notes, Ask, and Hex settings.", p.soft))
         .child(
             roles::meta(
-                "Meeting to-dos stay visible. Turning a feature off keeps its data.",
+                "Meeting tasks stay visible. Turning a feature off keeps its data.",
                 p,
             )
             .mb(12.0),

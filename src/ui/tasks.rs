@@ -51,6 +51,7 @@ pub enum Panel {
 #[derive(Default)]
 pub struct PanelUi {
     pub waiting_menu: bool,
+    pub waiting_text: bool,
     pub project_menu: bool,
     pub owner_menu: bool,
     /// "New project..." swaps the project menu for a text box.
@@ -99,6 +100,8 @@ pub struct TasksState {
     pub waiting_input: TextEdit,
     pub group_menu: bool,
     pub redo_menu: bool,
+    pub redo_confirm: Option<String>,
+    pub redo_problem: Option<String>,
     pub done: DoneFilter,
     pub who: Who,
     pub include_unassigned: bool,
@@ -175,6 +178,8 @@ impl TasksState {
             grouping_loaded: false,
             group_menu: false,
             redo_menu: false,
+            redo_confirm: None,
+            redo_problem: None,
             done: DoneFilter::Open,
             who: Who::Everyone,
             include_unassigned: false,
@@ -1420,15 +1425,19 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             s.tasks.close_menus();
         },
     );
-    let mut bar = row()
+    let filters = row()
         .w_full()
         .flex_wrap()
         .items_center()
         .gaps(8.0, 8.0)
-        .child(search)
         .child(who)
         .child(done)
         .child(group_menu(s, k, p, layer));
+    let mut bar = col()
+        .w_full()
+        .gap(8.0)
+        .child(search.w_full())
+        .child(filters);
     if t.who == Who::Mine {
         bar = bar.child(
             pressable(
@@ -1475,20 +1484,28 @@ fn owner_name(t: &TaskItem) -> Option<(String, bool)> {
 }
 
 fn avatar(name: &str, me: bool, size: f32, p: Palette) -> El {
-    let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
+    let initial: String = if me {
+        "Me".into()
+    } else {
+        name.chars().take(1).flat_map(char::to_uppercase).collect()
+    };
     let (fill, ink) = if me {
         (p.accent, p.card)
     } else {
-        (p.line, p.soft)
+        (p.card, p.soft)
     };
     col()
-        .size(size, size)
+        .w(if me { size + 12.0 } else { size })
+        .h(size)
         .radius(size / 2.0)
         .center()
         .fill(fill)
+        .border(1.0, if me { p.accent } else { p.faint })
+        .label(name)
+        .help(name)
         .child(
             text(initial)
-                .font(TextStyle::new(size * 0.55, 700.0).lh(size * 0.7))
+                .font(TextStyle::new(12.0, 600.0).lh(size))
                 .color(ink),
         )
 }
@@ -1582,13 +1599,21 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .gap(3.0)
             .child(title)
             .children(
-                (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none())
-                    .then(|| roles::META.wrap(t.status_label(), p.accent)),
+                (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none()).then(
+                    || {
+                        roles::META
+                            .wrap(t.status_label(), p.soft)
+                            .px(6.0)
+                            .radius(4.0)
+                            .fill(p.chip)
+                            .self_start()
+                    },
+                ),
             )
             .children(
                 t.waiting_label
                     .as_ref()
-                    .map(|label| roles::META.wrap(format!("Waiting on {label}"), p.soft)),
+                    .map(|label| roles::META.wrap(format!("Waiting on: {label}"), p.soft)),
             )
             .children((!t.subtasks.is_empty()).then(|| roles::META.wrap(t.progress(), p.soft))),
     )
@@ -1604,8 +1629,10 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 .w(lay.project_w)
                 .items_center()
                 .gap(6.0)
+                .help(&t.project)
+                .label(format!("Project: {}", t.project))
                 .child(project_dot(&t.project, p))
-                .child(roles::META.line(&t.project, p.faint)),
+                .children((lay.project_w > 30.0).then(|| roles::META.line(&t.project, p.faint))),
         );
     }
     props = props
@@ -1616,7 +1643,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 .items_center()
                 .child(due_chip(t, tasks.today, p).unwrap_or_else(el)),
         )
-        .child(row().w(22.0).center().child(match owner_name(t) {
+        .child(row().w(34.0).center().child(match owner_name(t) {
             Some((name, mine)) => avatar(&name, mine, 20.0, p),
             None => el(),
         }));
@@ -1981,7 +2008,7 @@ fn empty_note(s: &State, p: Palette) -> El {
     let (head, body) = if s.tasks.items.is_empty() {
         (
             "No tasks yet",
-            "To-dos from your meeting summaries appear here. Press N to add one by hand.",
+            "Tasks from your meeting summaries appear here. Press N to add one by hand.",
         )
     } else {
         (
@@ -1993,7 +2020,7 @@ fn empty_note(s: &State, p: Palette) -> El {
         .w_full()
         .gap(6.0)
         .pt(40.0)
-        .items_center()
+        .items_start()
         .child(roles::SECTION.wrap(head, p.ink))
         .child(roles::SMALL.wrap(body, p.soft))
 }
@@ -2468,12 +2495,12 @@ fn panel_top(title: &str, overlay: bool, p: Palette) -> El {
     } else {
         title
     };
-    top.child(
+    let top = top.child(
         spaced_caps(caption, p)
             .ml(if overlay { 0.0 } else { 8.0 })
             .grow(1.0),
-    )
-    .child(close)
+    );
+    if overlay { top } else { top.child(close) }
 }
 
 /// Where the task came from: the meeting, the transcript lines at its timestamp and the
@@ -2513,16 +2540,6 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
             .hover(p.chip)
             .on_press_tx(move |s: &mut State, tx| s.open_meeting(&id, tx)),
     );
-    if source.lines.is_empty() {
-        panel = panel.child(roles::META.wrap(
-            if m.lines.is_empty() || m.timed() {
-                "The summary gave no transcript time for this task."
-            } else {
-                "This meeting's transcript has no times, so there is no excerpt for this task."
-            },
-            p.faint,
-        ));
-    }
     for &i in &source.lines {
         let Some(l) = m.lines.get(i) else { continue };
         let main = source.at == Some(i);
@@ -2843,14 +2860,23 @@ fn list_column(
     };
     // Rows give the title what is left after the properties. The project column is narrower
     // beside the panel and gone when grouping by project, where the heading says it.
-    let project_w =
-        if !s.config.features.projects || t.grouping == TaskGrouping::Project || list_w < 620.0 {
-            0.0
-        } else if list_w < 700.0 {
-            104.0
-        } else {
-            176.0
-        };
+    let several_projects = t
+        .items
+        .first()
+        .is_some_and(|first| t.items.iter().any(|item| item.project != first.project));
+    let project_w = if !s.config.features.projects
+        || !several_projects
+        || t.grouping == TaskGrouping::Project
+        || list_w < 620.0
+    {
+        0.0
+    } else if t.grouping == TaskGrouping::Status {
+        14.0
+    } else if list_w < 700.0 {
+        104.0
+    } else {
+        176.0
+    };
     let lay = RowLayout { project_w };
     let v = t.arranged();
     let mut doc = col()
@@ -2861,6 +2887,7 @@ fn list_column(
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0)
         .child(title_row(narrow, p))
+        .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(summary_line(s, p).mb(16.0))
         .child(toolbar(s, k, p, layer).mb(10.0));
     if v.groups.is_empty() && v.done.is_empty() {
@@ -2872,8 +2899,9 @@ fn list_column(
     if !v.done.is_empty() {
         doc = doc.child(done_section(s, &v, lay, p));
     }
-    doc = doc.child(cleared_line(s, k, p, layer));
-    doc = doc.child(redo_older_control(s, k, p, layer));
+    if !t.items.is_empty() || t.cutoff.is_some() {
+        doc = doc.child(cleared_line(s, k, p, layer));
+    }
     if !narrow && t.panel.is_none() {
         doc = doc.child(key_hints(p));
     }
@@ -2886,9 +2914,6 @@ fn list_column(
 fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El {
     let mut out = col().w_full().gap(10.0);
     out = out.child(roles::META.wrap(format!("Team: {}", t.team), p.soft));
-    if let Some(wait) = &t.waiting_label {
-        out = out.child(roles::SMALL.wrap(format!("Waiting on {wait}"), p.soft));
-    }
     out = out.child(roles::GROUP.wrap(if t.done { "Status: Done" } else { "Status" }, p.ink));
     let mut choices = row().w_full().gap(6.0).flex_wrap();
     for status in [
@@ -2922,57 +2947,61 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     }
     out = out.child(choices);
     if t.status == core::TaskStatus::Waiting {
-        out = out.child(
-            TextInput::new(&s.tasks.waiting_input)
-                .placeholder("Person or event")
-                .on_edit(|s: &mut State| &mut s.tasks.waiting_input)
-                .height(34.0)
-                .build(k)
-                .key("waiting-text")
-                .w_full(),
-        );
-        let (id, index) = (t.meeting_id.clone(), t.index);
-        out = out.child(
-            button("Set person or event", "waiting-save", false, p).on_press(
-                move |s: &mut State| {
-                    let text = s.tasks.waiting_input.text.trim().to_string();
-                    if !text.is_empty() {
-                        s.edit_task_v2(
-                            &id,
-                            index,
-                            core::TaskV2Edit::Status(
-                                core::TaskStatus::Waiting,
-                                Some(core::WaitingOn {
-                                    task_id: None,
-                                    text: Some(text),
-                                }),
-                            ),
-                        );
-                    }
-                },
-            ),
-        );
-        let linked: Vec<_> = s
-            .tasks
-            .all
-            .iter()
-            .filter(|l| {
-                l.meeting_id == t.meeting_id && !l.stable_id.is_empty() && l.index != t.index
-            })
-            .collect();
-        if !linked.is_empty() {
+        if s.tasks.ui.waiting_text {
+            let (id, index) = (t.meeting_id.clone(), t.index);
+            let submit_id = id.clone();
+            out = out.child(
+                row()
+                    .w_full()
+                    .gap(6.0)
+                    .items_center()
+                    .child(
+                        TextInput::new(&s.tasks.waiting_input)
+                            .placeholder("Person or event")
+                            .on_edit(|s: &mut State| &mut s.tasks.waiting_input)
+                            .on_submit(move |s: &mut State, _| s.save_waiting(&submit_id, index))
+                            .height(34.0)
+                            .build(k)
+                            .key("waiting-text")
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(
+                        button("Save", "waiting-save", true, p)
+                            .on_press(move |s: &mut State| s.save_waiting(&id, index)),
+                    ),
+            );
+        } else {
             let mut menu = Menu::new("waiting-tasks")
                 .trigger(
-                    button("Choose a task", "waiting-choose", false, p).on_press(
-                        |s: &mut State| s.tasks.ui.waiting_menu = !s.tasks.ui.waiting_menu,
-                    ),
+                    super::area::button(
+                        format!(
+                            "Waiting on: {}",
+                            t.waiting_label
+                                .as_deref()
+                                .unwrap_or("choose a person, event or task")
+                        ),
+                        "waiting-choose",
+                        p,
+                    )
+                    .label("Waiting on: choose a person, event or task")
+                    .on_press(|s: &mut State| s.tasks.ui.waiting_menu = !s.tasks.ui.waiting_menu),
                 )
                 .open(s.tasks.ui.waiting_menu)
                 .placement(Placement::BottomStart)
                 .min_width(240.0);
             if s.tasks.ui.waiting_menu {
-                menu = menu.on_close(|s: &mut State| s.tasks.ui.waiting_menu = false);
-                for linked in linked {
+                menu = menu
+                    .on_close(|s: &mut State| s.tasks.ui.waiting_menu = false)
+                    .item(
+                        MenuItem::new("Person or event...").on_select(|s: &mut State| {
+                            s.tasks.ui.waiting_menu = false;
+                            s.tasks.ui.waiting_text = true;
+                        }),
+                    );
+                for linked in s.tasks.all.iter().filter(|l| {
+                    l.meeting_id == t.meeting_id && !l.stable_id.is_empty() && l.index != t.index
+                }) {
                     let (id, index, target) =
                         (t.meeting_id.clone(), t.index, linked.stable_id.clone());
                     menu = menu.item(
@@ -3002,14 +3031,18 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
         }
     }
 
-    out = out.child(roles::GROUP.wrap(
-        if t.subtasks.is_empty() {
-            "Sub-tasks".into()
-        } else {
-            format!("Sub-tasks {}", t.progress())
-        },
-        p.ink,
-    ));
+    out = out.child(
+        roles::GROUP
+            .wrap(
+                if t.subtasks.is_empty() {
+                    "Sub-tasks".into()
+                } else {
+                    format!("Sub-tasks {}", t.progress())
+                },
+                p.ink,
+            )
+            .mt(16.0),
+    );
     for sub in &t.subtasks {
         let (id, index, key, done) = (
             t.meeting_id.clone(),
@@ -3043,37 +3076,29 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
         );
     }
     let (id, index) = (t.meeting_id.clone(), t.index);
-    out = out
-        .child(
-            TextInput::new(&s.tasks.subtask_input)
-                .placeholder("Add a sub-task")
-                .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
-                .height(34.0)
-                .build(k)
-                .key("subtask-title")
-                .w_full(),
-        )
-        .child(
-            button("Add sub-task", "subtask-add", false, p).on_press(move |s: &mut State| {
-                let title = s.tasks.subtask_input.text.trim().to_string();
-                if !title.is_empty() {
-                    s.edit_task_v2(&id, index, core::TaskV2Edit::AddSubtask(title));
-                }
-            }),
-        );
-    if s.meetings
-        .iter()
-        .find(|m| m.id == t.meeting_id)
-        .is_some_and(core::needs_task_redo)
-    {
-        let id = t.meeting_id.clone();
-        out = out.child(button("Redo tasks", "redo-tasks", false, p).on_press(
-            move |s: &mut State| {
-                s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
-                s.tasks.notice = Some("Tasks queued. Your changes will be kept.".into());
-            },
-        ));
-    }
+    let submit_id = id.clone();
+    out = out.child(
+        row()
+            .w_full()
+            .gap(6.0)
+            .items_center()
+            .child(
+                TextInput::new(&s.tasks.subtask_input)
+                    .placeholder("Add a sub-task")
+                    .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
+                    .on_submit(move |s: &mut State, _| s.add_panel_subtask(&submit_id, index))
+                    .height(34.0)
+                    .build(k)
+                    .key("subtask-title")
+                    .grow(1.0)
+                    .min_w(0.0),
+            )
+            .child(
+                button("Add", "subtask-add", true, p)
+                    .on_press(move |s: &mut State| s.add_panel_subtask(&id, index)),
+            ),
+    );
+
     out
 }
 
@@ -3088,8 +3113,8 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     }
     let mut menu = Menu::new("redo-older-tasks")
         .trigger(
-            button("Redo tasks", "redo-meeting-open", false, p)
-                .label("Redo tasks from an older meeting")
+            super::area::button("Task list options", "redo-meeting-open", p)
+                .label("Rebuild tasks from old summaries")
                 .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
         )
         .open(s.tasks.redo_menu)
@@ -3098,7 +3123,7 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     if s.tasks.redo_menu {
         menu = menu
             .on_close(|s: &mut State| s.tasks.redo_menu = false)
-            .group_label("Choose an older meeting");
+            .group_label("Rebuild tasks from old summaries");
         for m in older {
             let id = m.id.clone();
             let date = m
@@ -3108,16 +3133,77 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
             menu = menu.item(MenuItem::new(format!("{} ({date})", m.title)).on_select(
                 move |s: &mut State| {
                     s.tasks.redo_menu = false;
-                    s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
-                    s.tasks.notice = Some("Tasks queued. Your changes will be kept.".into());
+                    s.tasks.redo_confirm = Some(id.clone());
+                    s.tasks.redo_problem = None;
                 },
             ));
         }
     }
-    col()
+    let mut out = col()
         .w_full()
-        .gap(4.0)
-        .mt(12.0)
-        .child(roles::META.wrap("Update tasks from older meeting notes.", p.soft))
-        .child(menu.build(k, layer))
+        .gap(10.0)
+        .mb(12.0)
+        .child(menu.build(k, layer).self_start());
+    if let Some(problem) = &s.tasks.redo_problem {
+        out = out.child(
+            super::widgets::banner(
+                "Tasks were not rebuilt",
+                problem,
+                super::widgets::BannerKind::Problem,
+                p,
+            )
+            .child(
+                button("Dismiss", "redo-problem-dismiss", false, p)
+                    .on_press(|s: &mut State| s.tasks.redo_problem = None),
+            ),
+        );
+    }
+    if let Some(id) = &s.tasks.redo_confirm {
+        let title = s
+            .meetings
+            .iter()
+            .find(|m| m.id == *id)
+            .map(|m| m.title.as_str())
+            .unwrap_or("this meeting");
+        let id = id.clone();
+        out = out.child(super::widgets::banner("Rebuild tasks?", format!("Rebuild tasks for {title}? The transcript, summary and your typed notes go to your helper again. Your changes are kept only when tasks can be matched."), super::widgets::BannerKind::Info, p)
+            .child(row().flex_wrap().gaps(8.0, 8.0)
+                .child(button("Keep tasks", "redo-cancel", true, p).on_press(|s: &mut State| s.tasks.redo_confirm = None))
+                .child(button("Rebuild tasks", "redo-confirm", false, p).on_press(move |s: &mut State| {
+                    s.tasks.redo_confirm = None;
+                    if let Some(problem) = s.notes_request_problem() {
+                        s.tasks.redo_problem = Some(problem);
+                        return;
+                    }
+                    s.publish_edit(super::edit_worker::Job::Redo { id: id.clone() });
+                    s.tasks.notice = Some("Tasks queued. Edits are kept where tasks can be matched.".into());
+                }))));
+    }
+    out
+}
+
+impl State {
+    fn add_panel_subtask(&mut self, id: &str, index: usize) {
+        let title = self.tasks.subtask_input.text.trim().to_string();
+        if !title.is_empty() {
+            self.edit_task_v2(id, index, core::TaskV2Edit::AddSubtask(title));
+        }
+    }
+    fn save_waiting(&mut self, id: &str, index: usize) {
+        let text = self.tasks.waiting_input.text.trim().to_string();
+        if !text.is_empty() {
+            self.tasks.ui.waiting_text = false;
+            self.edit_task_v2(
+                id,
+                index,
+                core::TaskV2Edit::Status(
+                    core::TaskStatus::Waiting,
+                    Some(core::WaitingOn {
+                        task_id: None,
+                        text: Some(text),
+                    }),
+                ),
+            );
+        }
+    }
 }

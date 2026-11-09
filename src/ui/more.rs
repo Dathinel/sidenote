@@ -40,7 +40,7 @@ impl Part {
         match self {
             Self::Notes => "notes",
             Self::Decisions => "decisions",
-            Self::Todos => "to-dos",
+            Self::Todos => "tasks",
         }
     }
 }
@@ -184,7 +184,7 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
                 "None in this meeting",
             ))
             .item(copy(
-                "Copy to-dos",
+                "Copy tasks",
                 Part::Todos,
                 has_todos,
                 "None in this meeting",

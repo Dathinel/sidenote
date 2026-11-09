@@ -466,6 +466,11 @@ fn toggle(s: &State, p: Palette) -> El {
 
 fn hex_line(s: &State, p: Palette, wide: bool) -> El {
     let (ink, words) = hex::short_status(s, p);
+    let words = if s.hex_recording() {
+        "Recording".into()
+    } else {
+        words
+    };
     let recording = s.hex_recording();
     let help = if recording {
         format!("Hex: {words}. Open the live meeting")
@@ -829,7 +834,7 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         return recording_pill(s, p, narrow);
     }
     let blocked = hex::start_blocked(s);
-    let ink = p.card;
+    let ink = if blocked.is_some() { p.soft } else { p.card };
     let b = pressable(
         row().gap(8.0).items_center().child(icon_plus(ink)).child(
             roles::CONTROL
@@ -842,7 +847,7 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
     .py(7.0)
     .radius(999.0)
     .fill(p.accent);
-    match blocked {
+    let action = match blocked {
         None => b
             .label("New meeting")
             .help("Start recording a meeting")
@@ -850,8 +855,20 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         Some(reason) => b
             .label(format!("New meeting ({reason})"))
             .help(reason)
-            .dim(0.5),
-    }
+            .fill(p.chip)
+            .color(p.soft)
+            .focusable(false),
+    };
+    col()
+        .items_end()
+        .gap(2.0)
+        .child(action)
+        .children(blocked.map(|reason| {
+            roles::META
+                .wrap(reason, p.soft)
+                .max_w(if narrow { 300.0 } else { 440.0 })
+                .role("status")
+        }))
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
@@ -897,7 +914,7 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     let stop = match why {
         None => stop
             .label("Stop recording")
-            .help("Stop recording and make notes")
+            .help("Stop recording and write a summary")
             .hover(p.chip)
             .on_press(|s: &mut State| s.hex_record_stop()),
         Some(reason) => stop.label(format!("Stop ({reason})")).help(reason).dim(0.6),
