@@ -74,6 +74,7 @@ impl State {
     }
 
     pub fn rebuild_nav(&mut self) {
+        let catalog = self.tasks.projects.area_catalog().ok();
         let mut items: HashMap<&str, Vec<&core::TaskItem>> = HashMap::new();
         for t in self.tasks.all.iter().filter(|t| !t.manual) {
             items.entry(t.meeting_id.as_str()).or_default().push(t);
@@ -107,7 +108,31 @@ impl State {
                             (names.len() == 1).then(|| names[0].clone())
                         })
                 })
-                .filter(|n| n != core::UNSORTED);
+                .filter(|n| n != core::UNSORTED)
+                .and_then(|name| {
+                    let Some(catalog) = &catalog else {
+                        return Some(name);
+                    };
+                    let baseline = serde_json::json!([
+                        self.tasks.projects.meeting_projects.get(&m.id),
+                        self.tasks
+                            .pipeline
+                            .get(&m.id)
+                            .and_then(|f| f.meeting_project.as_ref())
+                    ]);
+                    match catalog.target(
+                        &self.tasks.projects,
+                        &core::areas::meeting_key(&m.id),
+                        &baseline,
+                        &name,
+                    ) {
+                        Some(target) => target
+                            .project_id
+                            .and_then(|id| catalog.projects.get(&id))
+                            .map(|p| p.name.clone()),
+                        None => Some(name),
+                    }
+                });
             if let Some(name) = project {
                 *cache.project_counts.entry(name.clone()).or_default() += 1;
                 if let Some(started) = m.started {

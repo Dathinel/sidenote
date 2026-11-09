@@ -142,16 +142,22 @@ fn convert(
     move_project(p, id, area)?;
     let c = p.area_catalog()?;
     let mut project = c.projects[id].clone();
-    for (key, child) in children {
-        let reference = refs
+    if children.keys().any(|key| {
+        !refs
             .iter()
-            .find(|r| r.key == *key && r.project_id.as_deref() == Some(id))
-            .ok_or_else(|| invalid("A conversion choice no longer matches this project"))?;
+            .any(|r| r.key == *key && r.project_id.as_deref() == Some(id))
+    }) {
+        return Err(invalid(
+            "A conversion choice no longer matches this project",
+        ));
+    }
+    for reference in refs.iter().filter(|r| r.project_id.as_deref() == Some(id)) {
+        let child = children.get(&reference.key);
         let target = Target {
             area_id: area.into(),
-            project_id: Some(child.clone()),
+            project_id: child.cloned(),
         };
-        if child == id {
+        if child.is_some_and(|child| child == id) {
             return Err(invalid(
                 "Choose a child project, not the project being converted",
             ));
@@ -160,7 +166,7 @@ fn convert(
         put(
             p,
             "area-link:",
-            key,
+            &reference.key,
             &Link {
                 target,
                 baseline: reference.baseline.clone(),

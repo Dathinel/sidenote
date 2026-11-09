@@ -330,7 +330,7 @@ fn main() {
             let key = base
                 .references
                 .iter()
-                .find(|r| r.kind == "task")
+                .find(|r| r.key.starts_with("[\"task\","))
                 .unwrap()
                 .key
                 .clone();
@@ -368,6 +368,22 @@ fn main() {
                 3
             );
             assert_eq!(c.projects[&child].area_id, c.projects[&id].converted_to);
+            let activity = core::areas::activity(
+                &p,
+                &m,
+                &core::load_pipeline(&m),
+                &tasks,
+                &Default::default(),
+                chrono::Utc::now(),
+            )
+            .unwrap();
+            assert_eq!(activity.meetings.len(), 3);
+            assert!(
+                activity
+                    .meetings
+                    .values()
+                    .all(|target| target.project_id.is_none())
+            );
         }
         "batch" => {
             let rows = rows(&store, true);
