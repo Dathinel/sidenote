@@ -466,6 +466,7 @@ fn toggle(s: &State, p: Palette) -> El {
 
 fn hex_line(s: &State, p: Palette, wide: bool) -> El {
     let (ink, words) = hex::short_status(s, p);
+    let words = if s.hex_recording() { "Recording".into() } else { words };
     let recording = s.hex_recording();
     let help = if recording {
         format!("Hex: {words}. Open the live meeting")

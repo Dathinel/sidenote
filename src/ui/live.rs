@@ -23,7 +23,6 @@ use super::{
     ask::{self, EASE_IN, raised, rise},
     hex,
     list::text_title,
-    nav::icon_stop,
     roles,
     theme::Palette,
     widgets::{dot, hairline, label, link, pressable, quiet_button, scroll, spaced_caps},
@@ -777,36 +776,6 @@ impl State {
 
 // ---- the page ---------------------------------------------------------------------------------
 
-/// Stop, inside the recording pill. It is a second way to stop: the top right keeps its own.
-fn stop_pill(s: &State, p: Palette, starting: bool) -> El {
-    let why = if starting {
-        Some("Starting the recording")
-    } else {
-        hex::stop_blocked(s)
-    };
-    let b = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(icon_stop(10.0, p.card))
-            .child(roles::CONTROL.bold().wrap("Stop", p.card)),
-    )
-    .key("live-stop")
-    .pl(14.0)
-    .pr(16.0)
-    .py(8.0)
-    .radius(999.0)
-    .fill(p.ink);
-    match why {
-        None => b
-            .label("Stop recording")
-            .help("Stop recording and write a summary")
-            .preserve_focus_on_press(true)
-            .on_press(|s: &mut State| s.hex_record_stop()),
-        Some(reason) => b.label(format!("Stop ({reason})")).help(reason).dim(0.45),
-    }
-}
-
 /// The recording pill: dot, voice bars, timer, chevron, and Stop. The first four are one button
 /// that opens the live transcript above the bar.
 fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
@@ -814,7 +783,6 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
         return el();
     };
     let starting = live.phase == Phase::Starting;
-    let clock = hex::recording_clock(s).unwrap_or_else(|| "0:00".into());
     let (busy, words) = {
         let f = live.feed.lock().unwrap_or_else(|e| e.into_inner());
         (f.busy() && !starting, f.words)
@@ -850,18 +818,8 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
     } else {
         k.glyph.chevron_up
     };
-    let mut group = row()
-        .gap(10.0)
-        .items_center()
-        .child(
-            row()
-                .key("live-indicator")
-                .role("status")
-                .label(if starting { "Starting" } else { "Recording" })
-                .child(dot(9.0, if starting { p.faint } else { p.warn })),
-        )
-        .child(bars)
-        .child(roles::NAME.wrap(clock, p.ink).key("live-timer"));
+    let mut group = row().gap(10.0).items_center().child(bars)
+        .child(roles::CONTROL.wrap(if open { "Hide live transcript" } else { "Show live transcript" }, p.accent));
     if !starting {
         group = group.child(rune::icon(chevron, 14.0).color(p.faint));
     }
@@ -888,19 +846,7 @@ fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
     } else {
         group.on_press(|s: &mut State| s.live_toggle_panel())
     };
-    row()
-        .key("live-pill")
-        .gap(2.0)
-        .items_center()
-        .pr(5.0)
-        .pl(2.0)
-        .py(4.0)
-        .radius(999.0)
-        .fill(p.card)
-        .border(1.0, p.line)
-        .shadow(3.0, 16.0, p.shadow)
-        .child(group)
-        .child(stop_pill(s, p, starting))
+    group
 }
 
 /// "1:05" or "1:02:05" for a line in the live transcript.
@@ -1022,7 +968,7 @@ fn bar(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El 
         .as_ref()
         .filter(|l| l.panel_open && l.phase == Phase::Recording)
         .map(|_| transcript_panel(s, p));
-    ask::overlay_with(s, k, p, narrow, layer, Some(rec_pill(s, k, p)), panel)
+    ask::overlay_with(s, k, p, narrow, layer, None, panel)
 }
 
 /// The notes editor: plain text, several lines, under the "Meeting at HH:MM" heading.
@@ -1111,6 +1057,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     } else {
         c = c.child(roles::META.wrap(hint, p.faint));
     }
+    c = c.children((!starting).then(|| rec_pill(s, k, p)));
     c.child(
         col()
             .key("live-notes")
