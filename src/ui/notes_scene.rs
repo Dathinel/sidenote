@@ -36,6 +36,12 @@ pub fn settings(s: &mut State, mode: &str) {
     s.hex_open = true;
     s.hex.section = hex::Section::AiNotes;
     match mode {
+        "claude-only" => s.ai_notes.found = HELPERS.map(|h| (h, h == Helper::Claude)).into(),
+        "instructions-fallback" => {
+            let mut store = agent_instructions::Store::default();
+            store.using_defaults_after_error = true;
+            s.ai_notes.error = super::ai_notes::instructions_warning(&store);
+        }
         "saved-codex" => s.ai_notes.settings.as_mut().unwrap().helper = Some(Helper::Codex),
         "saved-opencode" => s.ai_notes.settings.as_mut().unwrap().helper = Some(Helper::OpenCode),
         "privacy" => s.ai_notes.privacy_open = true,

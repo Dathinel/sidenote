@@ -130,7 +130,7 @@ pub struct Snapshot {
 }
 const INSTRUCTIONS_LOAD_ERROR: &str = "Sidenote could not read your instructions. Your saved text was kept. Press Reload helper status. If it fails again, restart Sidenote.";
 
-fn instructions_warning(store: &instructions::Store) -> Option<String> {
+pub(super) fn instructions_warning(store: &instructions::Store) -> Option<String> {
     store
         .using_defaults_after_error
         .then(|| INSTRUCTIONS_LOAD_ERROR.to_owned())
@@ -904,7 +904,6 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 mod tests {
     use super::*;
     #[test]
-
     fn instruction_fallback_reaches_existing_banner_without_blocking_settings() {
         assert!(instructions_warning(&instructions::Store::default()).is_none());
         let mut store = instructions::Store::default();
@@ -915,7 +914,6 @@ mod tests {
         );
     }
     #[test]
-
     fn summary_and_rebuild_requests_require_an_offered_helper_and_consent() {
         assert!(request_problem(None).is_some());
         let mut settings = NotesSettings::default();

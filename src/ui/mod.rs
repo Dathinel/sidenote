@@ -1970,6 +1970,12 @@ pub fn spec() -> AppSpec<State> {
                 notes_scene::first_open(s);
                 s.hex.status = Some(Err(sidenote::hex_engine::HexError::HexNotRunning));
             }),
+            ("notes-settings-claude-only", |s| {
+                notes_scene::settings(s, "claude-only")
+            }),
+            ("notes-settings-instructions-fallback", |s| {
+                notes_scene::settings(s, "instructions-fallback")
+            }),
             ("notes-settings-privacy", |s| {
                 notes_scene::settings(s, "privacy")
             }),
