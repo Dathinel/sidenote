@@ -344,18 +344,25 @@ impl TaskStore {
                 return Err(super::store_io::invalid("Choose an existing project"));
             }
             p.add(name.trim());
+            p.retain_project_identity()?;
             Ok(())
         })
     }
     /// Renames a project by writing an alias `old -> new`. Naming an existing project merges.
     pub fn rename_project(&self, old: &str, new: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            p.retain_project_identity()?;
             if !p.matches(new).is_empty() && p.resolve(old) != p.resolve(new) {
                 return Err(super::store_io::invalid(
                     "Use Merge into to preview this change",
                 ));
             }
+            let identity = p.area_catalog()?.project(p, old).cloned();
             p.rename(old.trim(), new.trim());
+            if let Some(mut identity) = identity {
+                identity.name = new.trim().into();
+                super::areas::put(p, "area-project:", &identity.id, &identity)?;
+            }
             Ok(())
         })
     }
@@ -461,6 +468,7 @@ pub struct TaskItem {
     /// The first transcript timestamp the summary gave.
     pub stamp: Option<String>,
     pub project: String,
+    pub area_id: Option<String>,
     pub mine: Option<bool>,
     pub done: bool,
     /// The user has edited this task.
@@ -507,6 +515,7 @@ pub fn build_tasks(
             due_default: false,
             stamp: None,
             project: projects.resolve(project),
+            area_id: None,
             mine: m.mine,
             done: m.done,
             edited: false,
@@ -566,6 +575,7 @@ pub fn build_tasks(
                 due_default,
                 stamp: todo.at.first().cloned(),
                 project: projects.resolve(&project),
+                area_id: None,
                 mine: edit
                     .and_then(|o| o.mine)
                     .or_else(|| tag.and_then(|t| t.mine)),
@@ -573,6 +583,22 @@ pub fn build_tasks(
                 edited: edit.is_some(),
                 manual: false,
             });
+        }
+    }
+    if let Ok(catalog) = projects.area_catalog() {
+        for task in &mut out {
+            if let Some(target) = catalog.target(
+                projects,
+                &super::areas::task_key(task),
+                &super::areas::task_baseline(task, pipeline, overrides),
+                &task.project,
+            ) {
+                task.area_id = Some(target.area_id);
+                task.project = target
+                    .project_id
+                    .and_then(|id| catalog.projects.get(&id))
+                    .map_or_else(|| UNSORTED.into(), |p| p.name.clone());
+            }
         }
     }
     out

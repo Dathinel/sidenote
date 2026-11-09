@@ -55,12 +55,12 @@ struct Backup {
 fn invalid(message: &str) -> io::Error {
     store_io::invalid(message)
 }
-fn digest(value: &impl Serialize) -> io::Result<String> {
+pub(super) fn digest(value: &impl Serialize) -> io::Result<String> {
     Ok(blake3::hash(&serde_json::to_vec(value)?)
         .to_hex()
         .to_string())
 }
-fn scan() -> io::Result<Vec<Meeting>> {
+pub(super) fn scan() -> io::Result<Vec<Meeting>> {
     let (meetings, errors) = super::scan_sources(&super::meetings_dir(), &super::peers_dir());
     if !errors.is_empty() {
         return Err(invalid(
@@ -330,7 +330,10 @@ impl TaskStore {
             },
         )
     }
-    fn undo_state(&self, projects: &Projects) -> io::Result<(String, BTreeMap<String, Value>)> {
+    pub(super) fn undo_state(
+        &self,
+        projects: &Projects,
+    ) -> io::Result<(String, BTreeMap<String, Value>)> {
         let meetings = scan()?;
         let pipeline = super::load_pipeline(&meetings);
         for m in &meetings {
@@ -363,7 +366,7 @@ fn verify_assignments(merge: &ProjectMerge, current: &BTreeMap<String, Value>) -
     }
     Ok(())
 }
-fn raw_assignments(
+pub(super) fn raw_assignments(
     p: &Projects,
     meetings: &[Meeting],
     pipeline: &super::Pipeline,
@@ -414,7 +417,7 @@ fn raw_assignments(
     }
     out
 }
-fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
+pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) -> io::Result<()> {
         if !dir.try_exists()? {
             return Ok(());

@@ -458,6 +458,10 @@ pub(super) fn update_checked_validated<T: Serialize + DeserializeOwned + Default
     // Compare versions and choose the timestamp from this exact view. Never refresh past it.
     let at = latest.next_time()?;
     validate(&serde_json::from_value(before.clone())?)?;
+    let final_view = read_view(root, store, &session.own)?;
+    if final_view.own_bad || final_view.items != registers {
+        return Err(invalid("Project state changed; review a fresh preview"));
+    }
     session.publish_diff(
         flatten(store, before)?,
         flatten(store, serde_json::to_value(&value)?)?,
