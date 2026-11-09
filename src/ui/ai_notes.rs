@@ -717,7 +717,11 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .child(editor(s, 0, p)).child(editor(s, 1, p)))
         .child(roles::SMALL.wrap("Teams: when no teams are set up, notes leave the team blank.", p.soft))
         .children(s.config.features.tasks.then(|| button("Open Tasks for teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
-            s.set_view(super::tasks::View::Tasks); s.nav_done();
+            s.hex.section = super::hex::Section::Teams;
+            s.hex.filter = TextEdit::default();
+            s.hex.select_open = None;
+            s.nav_done();
+            super::scene_scroll(s, "hex-head-Teams");
         })))
 }
 pub fn setup_card(s: &State, p: Palette) -> Option<El> {
