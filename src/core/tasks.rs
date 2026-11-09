@@ -117,12 +117,7 @@ impl Projects {
     pub fn matches(&self, name: &str) -> Vec<String> {
         let key = super::project_merge::normalized_name(name);
         let mut matches = BTreeSet::new();
-        for known in self
-            .projects
-            .iter()
-            .chain(self.aliases.keys())
-            .chain(self.merges.keys())
-        {
+        for known in self.projects.iter().chain(self.aliases.keys()) {
             if super::project_merge::normalized_name(known) == key {
                 matches.insert(self.resolve_exact(known));
             }
