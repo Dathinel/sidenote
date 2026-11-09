@@ -48,18 +48,20 @@ pub fn merge<T: Serialize + DeserializeOwned>(base: &T, mine: &T, theirs: &T) ->
             o.insert(key.clone(), mv.clone());
         }
     }
-    // A project and its retained assignment revision describe one owner choice.
-    if ["project", "assignment"]
-        .iter()
-        .any(|key| b.get(*key).unwrap_or(&Value::Null) != m.get(*key).unwrap_or(&Value::Null))
-    {
-        for key in ["project", "assignment"] {
-            match m.get(key).filter(|value| !value.is_null()) {
-                Some(value) => {
-                    o.insert(key.into(), value.clone());
-                }
-                None => {
-                    o.remove(key);
+    // Each pair records one choice, even when only one component changed.
+    for fields in [["project", "assignment"], ["owner", "mine"]] {
+        if fields
+            .iter()
+            .any(|key| b.get(*key).unwrap_or(&Value::Null) != m.get(*key).unwrap_or(&Value::Null))
+        {
+            for key in fields {
+                match m.get(key).filter(|value| !value.is_null()) {
+                    Some(value) => {
+                        o.insert(key.into(), value.clone());
+                    }
+                    None => {
+                        o.remove(key);
+                    }
                 }
             }
         }
@@ -81,17 +83,18 @@ pub fn advance_base(base: &mut Value, mine: &Value, saved: &Value) {
             }
         }
     }
-    if ["project", "assignment"]
-        .iter()
-        .any(|key| base.get(*key).unwrap_or(&Value::Null) != mine.get(*key).unwrap_or(&Value::Null))
-    {
-        for key in ["project", "assignment"] {
-            match saved.get(key) {
-                Some(value) => {
-                    next.insert(key.into(), value.clone());
-                }
-                None => {
-                    next.remove(key);
+    for fields in [["project", "assignment"], ["owner", "mine"]] {
+        if fields.iter().any(|key| {
+            base.get(*key).unwrap_or(&Value::Null) != mine.get(*key).unwrap_or(&Value::Null)
+        }) {
+            for key in fields {
+                match saved.get(key) {
+                    Some(value) => {
+                        next.insert(key.into(), value.clone());
+                    }
+                    None => {
+                        next.remove(key);
+                    }
                 }
             }
         }
@@ -195,5 +198,78 @@ impl TaskStore {
             },
             identity,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_choice_replaces_a_peers_mine_flag_and_rebases_both_fields() {
+        let base = TaskOverride {
+            mine: Some(false),
+            ..Default::default()
+        };
+        let mine = TaskOverride {
+            owner: Some("Alex".into()),
+            ..base.clone()
+        };
+        let theirs = TaskOverride {
+            mine: Some(true),
+            due: Some("2026-11-12".into()),
+            ..base.clone()
+        };
+        let saved = merge(&base, &mine, &theirs).unwrap();
+        assert_eq!(saved.owner.as_deref(), Some("Alex"));
+        assert_eq!(saved.mine, Some(false));
+        assert_eq!(saved.due, theirs.due);
+
+        let mut rebased = serde_json::to_value(&base).unwrap();
+        advance_base(
+            &mut rebased,
+            &serde_json::to_value(&mine).unwrap(),
+            &serde_json::to_value(&saved).unwrap(),
+        );
+        assert_eq!(rebased["owner"], "Alex");
+        assert_eq!(rebased["mine"], false);
+        assert!(rebased.get("due").is_none());
+    }
+
+    #[test]
+    fn mine_choice_and_owner_reset_replace_the_whole_pair() {
+        let base = ManualTask {
+            owner: Some("Alex".into()),
+            mine: Some(false),
+            ..Default::default()
+        };
+        let theirs = ManualTask {
+            owner: Some("Sam".into()),
+            ..base.clone()
+        };
+        let mine = ManualTask {
+            mine: Some(true),
+            ..base.clone()
+        };
+        let saved = merge(&base, &mine, &theirs).unwrap();
+        assert_eq!(saved.owner, base.owner);
+        assert_eq!(saved.mine, Some(true));
+
+        let reset = ManualTask {
+            owner: None,
+            mine: None,
+            ..base.clone()
+        };
+        let saved = merge(&base, &reset, &theirs).unwrap();
+        assert_eq!(saved.owner, None);
+        assert_eq!(saved.mine, None);
+        let mut rebased = serde_json::to_value(&base).unwrap();
+        advance_base(
+            &mut rebased,
+            &serde_json::to_value(&reset).unwrap(),
+            &serde_json::to_value(&saved).unwrap(),
+        );
+        assert!(rebased.get("owner").is_none());
+        assert!(rebased.get("mine").is_none());
     }
 }
