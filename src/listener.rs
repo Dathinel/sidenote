@@ -69,7 +69,19 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
             log("routing remains queued for the next drain");
         }
     }
-    let script = crate::core::live::notes_pipeline();
+    let script = match crate::core::notes::settings()?.engine() {
+        crate::core::notes::Engine::App => {
+            if let Some(id) = meeting_id {
+                crate::core::notes::queue::enqueue(id)?;
+                crate::core::notes::queue::start_worker()?;
+            } else {
+                crate::core::notes::queue::catch_up()?;
+            }
+            return Ok(());
+        }
+        crate::core::notes::Engine::Scripts(script) => script,
+        crate::core::notes::Engine::Off => return Ok(()),
+    };
     if !script.is_file() {
         log(crate::core::live::NOTES_UNAVAILABLE);
         return Ok(());

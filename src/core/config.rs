@@ -138,10 +138,16 @@ impl Config {
         let path = root.join("config.json");
         match std::fs::read(&path) {
             Ok(bytes) => {
-                let config: Self =
+                let mut config: Self =
                     serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
                 if config.version != 1 {
                     return Err(store_io::invalid("Unsupported config.json version"));
+                }
+                if config.notes.is_none() {
+                    config.notes = Some(super::notes::migrated_settings(
+                        &super::live::notes_pipeline(),
+                    ));
+                    store_io::write(&path, &config)?;
                 }
                 Ok(config)
             }
@@ -211,6 +217,9 @@ impl Config {
             }
         }
         Ok(Self {
+            notes: Some(super::notes::migrated_settings(
+                &super::live::notes_pipeline(),
+            )),
             features: Features {
                 tasks: !tasks.is_empty()
                     || !overrides.tasks.is_empty()
@@ -229,5 +238,37 @@ impl Config {
             },
             ..Self::default()
         })
+    }
+
+    pub(crate) fn save_notes(root: &Path, notes: &super::notes::NotesSettings) -> io::Result<()> {
+        // Re-read under the lock so another settings card's changes survive this save.
+        let _lock = store_io::lock(&root.join("local/config.lock"))?;
+        let path = root.join("config.json");
+        let mut config: Self = match std::fs::read(&path) {
+            Ok(bytes) => {
+                serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e),
+        };
+        if config.version != 1 {
+            return Err(store_io::invalid("Unsupported config.json version"));
+        }
+        let mut notes = notes.clone();
+        let was_on = config
+            .notes
+            .as_ref()
+            .is_some_and(|s| s.engine == "app" && s.helper.is_some() && s.enabled_at_ms.is_some());
+        if notes.engine == "app" && notes.helper.is_some() {
+            if !was_on {
+                notes.enabled_at_ms = Some(chrono::Utc::now().timestamp_millis());
+            } else {
+                notes.enabled_at_ms = config.notes.as_ref().and_then(|s| s.enabled_at_ms);
+            }
+        } else {
+            notes.enabled_at_ms = None;
+        }
+        config.notes = Some(notes);
+        store_io::write(&path, &config)
     }
 }
