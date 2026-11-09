@@ -149,7 +149,19 @@ pub fn run(root: &Path, command: &str) {
             store.merge_projects(preview.as_ref().unwrap())
         }
     });
-    assert!(result.is_err(), "A stale operation published");
+    let error = result.expect_err("A stale operation published").to_string();
+    let dependency_changed = command.ends_with("task") || command.ends_with("memory");
+    let reason = if dependency_changed {
+        if undo {
+            "Items changed before undo"
+        } else {
+            "Items changed before publication"
+        }
+    } else {
+        "Project state changed"
+    };
+    assert!(error.contains(reason), "Unexpected refusal: {error}");
+    println!("refused: {error}");
     assert_eq!(
         own_project_journals(root),
         before,
