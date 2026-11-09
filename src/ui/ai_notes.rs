@@ -278,7 +278,7 @@ impl State {
                         "Worked in {} s. Only fixed sample text was sent.",
                         duration.as_secs().max(1)
                     ),
-                    Err(error) => error,
+                    Err(error) => test_error(&error),
                 };
                 self.ai_notes.test_results.insert(index, text);
             }
@@ -329,6 +329,13 @@ impl State {
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
         self.notes_work(Work::Request(id, mode), "Adding notes to the queue...");
+    }
+}
+pub(super) fn test_error(message: &str) -> String {
+    if message.to_ascii_lowercase().contains("json") {
+        "The helper's test answer could not be read. Try Test again or check its setup.".into()
+    } else {
+        message.into()
     }
 }
 pub fn valid_instructions(text: &str) -> bool {
@@ -731,6 +738,15 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unreadable_test_answers_use_plain_words() {
+        assert!(!test_error("The helper test returned invalid JSON").contains("JSON"));
+        assert_eq!(
+            test_error("The helper was not found on this PC"),
+            "The helper was not found on this PC"
+        );
+    }
+
     #[test]
     fn instruction_limit_counts_unicode_and_refuses_nul() {
         assert!(valid_instructions(&"\u{e9}".repeat(16_000)));

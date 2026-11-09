@@ -70,6 +70,11 @@ pub fn settings(s: &mut State, mode: &str) {
                 .test_results
                 .insert(0, "Worked in 8 s. Only fixed sample text was sent.".into());
         }
+        "test-bad-answer" => {
+            s.ai_notes
+                .test_results
+                .insert(0, super::ai_notes::test_error("invalid JSON"));
+        }
         "test-error" => {
             s.ai_notes
                 .test_results
@@ -128,7 +133,10 @@ pub fn settings(s: &mut State, mode: &str) {
     if matches!(mode, "tasks" | "fixed-tasks") {
         super::scene_scroll(s, "instructions-1");
     }
-    if matches!(mode, "worked" | "test-error" | "testing" | "switch") {
+    if matches!(
+        mode,
+        "worked" | "test-error" | "test-bad-answer" | "testing" | "switch"
+    ) {
         super::scene_scroll(s, "notes-helper-0");
     }
 }

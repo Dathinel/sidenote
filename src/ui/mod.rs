@@ -1934,6 +1934,9 @@ pub fn spec() -> AppSpec<State> {
                 notes_scene::meeting(s, "no-helper");
                 s.ai_notes.settings.as_mut().unwrap().helper = Some(core::notes::Helper::Claude);
             }),
+            ("notes-settings-test-bad-answer", |s| {
+                notes_scene::settings(s, "test-bad-answer")
+            }),
             ("notes-settings-last-error", |s| {
                 notes_scene::settings(s, "last-error")
             }),
