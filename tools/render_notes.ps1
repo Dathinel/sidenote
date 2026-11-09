@@ -24,17 +24,28 @@ try {
     $env:SIDENOTE_STATE_DIR = $state
     $source = Get-Content "$root/src/ui/mod.rs" -Raw
     $scenes = [regex]::Matches($source, '"(notes-(?:settings|meeting|live|today|list)-[^" ]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
-    foreach ($scene in $scenes) {
-        if ($Only.Count -gt 0 -and $Only -notcontains $scene) { continue }
+    $shots = @($scenes | ForEach-Object { [PSCustomObject]@{ Name = $_; Scene = $_; Script = $null } })
+    foreach ($interaction in @(
+        @('notes-click-dismiss', 'notes-meeting-fallback', 'notes-dismiss.json'),
+        @('notes-click-reset', 'notes-settings-edited', 'notes-reset-confirm.json'),
+        @('notes-click-type', 'notes-settings-edited', 'notes-type.json'),
+        @('notes-click-fixed', 'notes-settings-tasks', 'notes-show-fixed.json'),
+        @('notes-click-privacy', 'notes-today-found', 'notes-privacy.json')
+    )) { $shots += [PSCustomObject]@{ Name = $interaction[0]; Scene = $interaction[1]; Script = $interaction[2] } }
+    foreach ($shot in $shots) {
+        $name = $shot.Name
+        $scene = $shot.Scene
+        if ($Only.Count -gt 0 -and $Only -notcontains $name) { continue }
         foreach ($theme in $Themes) {
             foreach ($width in @(1320, 560)) {
-                $height = if ($scene -like 'notes-settings-fixed-*') { 3000 } elseif ($scene -like 'notes-list-*') { 1500 } elseif ($scene -like 'notes-settings-*') { 1400 } else { 1000 }
-                $png = Join-Path $Out "$scene-$width-$theme.png"
-                $log = Join-Path $Out "$scene-$width-$theme.log"
+                $height = if ($scene -like 'notes-settings-fixed-*' -or $name -eq 'notes-click-fixed') { 3000 } elseif ($scene -like 'notes-list-*') { 1500 } elseif ($scene -like 'notes-settings-*') { 1400 } else { 1000 }
+                $png = Join-Path $Out "$name-$width-$theme.png"
+                $log = Join-Path $Out "$name-$width-$theme.log"
                 $arguments = @('--data-dir', $state, '--meetings-dir', "$root/tools/ui-fixtures/screens/meetings", '--peers-dir', "$state/peers", '--snap', $png, '--scene', $scene, '--theme', $theme, '--size', "${width}x${height}", '--scale', '1')
+                if ($shot.Script) { $arguments += @('--script', "$root/tools/ui-scripts/$($shot.Script)", '--at', 'mark:end') }
                 $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError $log -Wait -PassThru
                 if ($process.ExitCode -ne 0) { throw "Render $scene-$width-$theme failed with exit $($process.ExitCode), see $log" }
-                $rows += [PSCustomObject]@{ Scene = $scene; Width = $width; Theme = $theme; Path = $png }
+                $rows += [PSCustomObject]@{ Scene = $name; Width = $width; Theme = $theme; Path = $png }
                 Write-Output $png
             }
         }
