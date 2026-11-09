@@ -28,6 +28,16 @@ $shots = @(
     @('sync-footer-age', 'sync-footer-age', '1320x900', $null, @()),
     @('sync-footer-off', 'sync-footer-off', '1320x900', $null, @()),
 
+    @('areas-refresh-error', 'areas-refresh-error', '1320x900', $null, @()),
+    @('areas-refresh-error-560', 'areas-refresh-error', '560x1000', $null, @()),
+    @('areas-large-reconcile', 'areas-large-reconcile', '1320x900', $null, @()),
+    @('areas-large-reconcile-560', 'areas-large-reconcile', '560x1000', $null, @()),
+    @('areas-large-empty', 'areas-large-empty', '1320x900', $null, @()),
+    @('areas-large-empty-560', 'areas-large-empty', '560x1000', $null, @()),
+    @('areas-large-page', 'areas-large-page', '1320x1100', $null, @()),
+    @('areas-large-page-560', 'areas-large-page', '560x1400', $null, @()),
+    @('areas-large-convert', 'areas-large-convert', '1320x1100', $null, @()),
+    @('areas-large-convert-560', 'areas-large-convert', '560x1400', $null, @()),
     @('merge-worker-proof', 'merge-worker-proof', '1320x1000', $null, @()),
     @('merge-preparing', 'merge-preparing', '1320x1000', $null, @()),
     @('merge-preparing-560', 'merge-preparing', '560x1100', $null, @()),
@@ -228,6 +238,14 @@ $shots = @(
     @('hex-strip',              'hex-list',           '560x900',  $null,   @()),
     @('hex-recording-strip',    'hex-list-recording', '560x900',  $null,   @())
 )
+foreach ($areaScene in @('areas-page','areas-all','areas-project','areas-list','areas-migration','areas-migration-empty','areas-convert','areas-create','areas-rename','areas-move','areas-assign','areas-worker-proof')) {
+    $shots += ,@($areaScene, $areaScene, '1320x1100', $null, @())
+    $shots += ,@("$areaScene-560", $areaScene, '560x1400', $null, @())
+}
+foreach ($areaScene in @('areas-large-migration','areas-large-review','areas-large-expanded')) {
+    $shots += ,@($areaScene, $areaScene, '1320x900', $null, @())
+    $shots += ,@("$areaScene-560", $areaScene, '560x1000', $null, @())
+}
 # The screens from the Granola tour: meeting tabs, transcript panel, "..." menu, Today strip and
 # the Ctrl+K palette. They read the invented meetings in tools/ui-fixtures/screens. Each renders
 # wide, at 820 (the transcript covers the page) and at 560.
@@ -309,12 +327,26 @@ foreach ($theme in $Themes) {
         if (-not $state.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Render state must stay inside the temporary folder" }
         Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $state | Out-Null
-        $projects = if ($scene -like 'sidebar-*') {
+        $projects = if ($scene -like 'areas-large-*') { @(1..14 | ForEach-Object { 'Example project {0:00}' -f $_ }) } elseif ($scene -like 'sidebar-*') {
             @('Northwind Atlas', 'Northwind Field Guide', 'Harbor pricing study', 'Orchard onboarding', 'Lighthouse hiring',
               'Quarterly planning', 'Supplier review', 'Website refresh', 'Volunteer program', 'Field kit redesign')
         } else { @('Northwind Atlas', 'Northwind Field Guide') }
         @{ projects = $projects; aliases = @{} } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/projects.json"
+        if ($scene -like 'areas-large-*') {
+            $utf8 = New-Object System.Text.UTF8Encoding($false)
+            for ($projectIndex = 0; $projectIndex -lt 14; $projectIndex++) {
+                $id = '{0}-1' -f (1800000010000L + $projectIndex)
+                $folder = Join-Path "$state/large-meetings" $id
+                New-Item -ItemType Directory -Force $folder | Out-Null
+                $count = if ($projectIndex -lt 2) { 58 } else { 57 }
+                $todos = @(for ($taskIndex = 0; $taskIndex -lt $count; $taskIndex++) { @{ task = ('Synthetic task {0:00}.{1:00}: review the paper sample' -f ($projectIndex + 1), ($taskIndex + 1)) } })
+                $tags = @(for ($taskIndex = 0; $taskIndex -lt $count; $taskIndex++) { @{ i = $taskIndex; project = $projects[$projectIndex]; mine = $true; new = $false } })
+                [IO.File]::WriteAllText("$folder/english-summary.json", (@{ title = ('Example planning {0:00}' -f ($projectIndex + 1)); kind = 'Synthetic meeting'; people = @('Alex','Morgan'); todo = $todos } | ConvertTo-Json -Depth 8), $utf8)
+                [IO.File]::WriteAllText("$folder/tasks.json", (@{ meeting_project = $projects[$projectIndex]; tasks = $tags } | ConvertTo-Json -Depth 8), $utf8)
+                [IO.File]::WriteAllText("$folder/manifest.json", (@{ created_at_ms = 1800000010000L + $projectIndex } | ConvertTo-Json), $utf8)
+            }
+        }
         if ($scene -like 'merge-*') {
             New-Item -ItemType Directory -Force -Path "$state/memory" | Out-Null
             @{ schema_version = 1; records = @(@{
@@ -337,7 +369,7 @@ foreach ($theme in $Themes) {
         if ($scene -eq 'home-ask') { Copy-Item "$root/tools/ui-fixtures/ask-all-answer.json" "$state/all.json" }
         $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
-        $fixtureMeetings = if ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
+        $fixtureMeetings = if ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/render.log"

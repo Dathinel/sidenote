@@ -130,6 +130,9 @@ impl Projects {
     }
     /// An explicit choice of an exact displayed name disambiguates a normalized collision.
     pub fn choose_existing(&self, name: &str) -> Option<String> {
+        if self.is_area_alias(name) {
+            return None;
+        }
         if self.projects.iter().any(|p| self.resolve_exact(p) == name) {
             return Some(name.into());
         }
@@ -172,6 +175,8 @@ impl Projects {
 #[serde(default)]
 pub struct TaskOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<super::areas::ProjectChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mine: Option<bool>,
@@ -189,7 +194,11 @@ pub struct TaskOverride {
 }
 impl TaskOverride {
     fn is_empty(&self) -> bool {
-        self.project.is_none() && self.mine.is_none() && self.owner.is_none() && self.due.is_none()
+        self.assignment.is_none()
+            && self.project.is_none()
+            && self.mine.is_none()
+            && self.owner.is_none()
+            && self.due.is_none()
     }
 }
 /// The meeting id that hand-added tasks carry. Real meeting ids are `digits-digits`.
@@ -199,6 +208,8 @@ pub const MANUAL: &str = "manual";
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ManualTask {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<super::areas::ProjectChoice>,
     /// Numeric legacy metadata, never used for merge/edit/delete identity.
     #[serde(skip_serializing_if = "is_zero")]
     pub n: usize,
@@ -227,6 +238,7 @@ impl ManualTask {
     /// The same edit paths as a meeting task: change a `TaskOverride` view of it, then copy back.
     pub fn edit(&mut self, change: impl FnOnce(&mut TaskOverride)) {
         let mut o = TaskOverride {
+            assignment: self.assignment.clone(),
             project: self.project.clone(),
             mine: self.mine,
             owner: self.owner.clone(),
@@ -235,6 +247,7 @@ impl ManualTask {
         };
         change(&mut o);
         self.project = o.project.filter(|p| !p.trim().is_empty());
+        self.assignment = o.assignment;
         self.mine = o.mine;
         self.owner = o.owner.filter(|p| !p.trim().is_empty());
         self.due = o.due.filter(|d| !d.trim().is_empty());
@@ -301,6 +314,16 @@ impl TaskStore {
         self.root.join("task-overrides.json")
     }
     /// A missing file is empty. A malformed one is an error, so it is never overwritten.
+    pub fn unreadable_items(&self) -> io::Result<usize> {
+        Ok(
+            super::sync_state::diagnostics::<Projects>(&self.root, "projects.json")?
+                + super::sync_state::diagnostics::<Overrides>(&self.root, "task-overrides.json")?
+                + super::sync_state::diagnostics::<super::memory::MemoryFile>(
+                    &self.root,
+                    "memory/records.json",
+                )?,
+        )
+    }
     pub fn load_projects(&self) -> io::Result<Projects> {
         super::sync_state::load(&self.root, "projects.json")
     }
@@ -344,16 +367,23 @@ impl TaskStore {
     /// Adds a project name to the list the pipeline reads.
     pub fn add_project(&self, name: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            if p.is_area_alias(name) {
+                return Err(super::store_io::invalid(
+                    "This name belongs to an area. Choose a project inside it.",
+                ));
+            }
             if p.choose_existing(name).is_none() && p.matches(name).len() > 1 {
                 return Err(super::store_io::invalid("Choose an existing project"));
             }
             p.add(name.trim());
+            p.retain_project_identity()?;
             Ok(())
         })
     }
     /// Renames a project by writing an alias `old -> new`. Naming an existing project merges.
     pub fn rename_project(&self, old: &str, new: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            p.retain_project_identity()?;
             if !p.matches(new).is_empty() && p.resolve(old) != p.resolve(new) {
                 return Err(super::store_io::invalid(
                     "Use Merge into to preview this change",
@@ -364,6 +394,7 @@ impl TaskStore {
         })
     }
     pub fn assign_meeting(&self, id: &str, name: &str) -> io::Result<Projects> {
+        let revision = super::sync_state::new_id(&self.root)?;
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
             if name != UNSORTED && p.choose_existing(name).is_none() {
                 return Err(super::store_io::invalid(
@@ -371,6 +402,10 @@ impl TaskStore {
                 ));
             }
             p.meeting_projects.insert(id.into(), p.resolve(name));
+            p.other.insert(
+                format!("assignment:{}", super::areas::meeting_key(id)),
+                serde_json::json!({"project":p.resolve(name),"revision":revision}),
+            );
             Ok(())
         })
     }
@@ -465,6 +500,7 @@ pub struct TaskItem {
     /// The first transcript timestamp the summary gave.
     pub stamp: Option<String>,
     pub project: String,
+    pub area_id: Option<String>,
     pub mine: Option<bool>,
     pub done: bool,
     /// The user has edited this task.
@@ -511,6 +547,7 @@ pub fn build_tasks(
             due_default: false,
             stamp: None,
             project: projects.resolve(project),
+            area_id: None,
             mine: m.mine,
             done: m.done,
             edited: false,
@@ -570,6 +607,7 @@ pub fn build_tasks(
                 due_default,
                 stamp: todo.at.first().cloned(),
                 project: projects.resolve(&project),
+                area_id: None,
                 mine: edit
                     .and_then(|o| o.mine)
                     .or_else(|| tag.and_then(|t| t.mine)),
@@ -577,6 +615,55 @@ pub fn build_tasks(
                 edited: edit.is_some(),
                 manual: false,
             });
+        }
+    }
+    if let Ok(catalog) = projects.area_catalog() {
+        let manual_baselines: BTreeMap<_, _> = overrides
+            .manual
+            .iter()
+            .map(|m| {
+                (
+                    format!("manual/{}", m.id),
+                    (
+                        super::areas::assignment_baseline(
+                            serde_json::json!(m.project),
+                            m.assignment.as_ref(),
+                        ),
+                        m.assignment.as_ref(),
+                    ),
+                )
+            })
+            .collect();
+        for task in &mut out {
+            let baseline = if task.manual {
+                manual_baselines
+                    .get(&task.meeting_id)
+                    .map(|(b, _)| b.clone())
+                    .unwrap_or(Value::Null)
+            } else {
+                super::areas::task_baseline(task, pipeline, overrides)
+            };
+            let retained = if task.manual {
+                manual_baselines.get(&task.meeting_id).and_then(|(_, a)| *a)
+            } else {
+                overrides
+                    .get(&task.meeting_id, task.index)
+                    .filter(|o| o.task.as_deref().is_none_or(|t| t == task.task))
+                    .and_then(|o| o.assignment.as_ref())
+            };
+            if let Some(target) = catalog.resolve_target(
+                projects,
+                &super::areas::task_key(task),
+                &baseline,
+                retained.map(|a| super::areas::Assignment::Project(&a.project)),
+                &task.project,
+            ) {
+                task.area_id = (!target.area_id.is_empty()).then_some(target.area_id);
+                task.project = target
+                    .project_id
+                    .and_then(|id| catalog.projects.get(&id))
+                    .map_or_else(|| UNSORTED.into(), |p| p.name.clone());
+            }
         }
     }
     out
@@ -622,7 +709,7 @@ pub fn project_names(projects: &Projects, _tasks: &[TaskItem]) -> Vec<String> {
         .projects
         .iter()
         .map(|p| projects.resolve(p))
-        .filter(|p| !p.is_empty() && p != UNSORTED)
+        .filter(|p| !p.is_empty() && p != UNSORTED && !projects.is_area_alias(p))
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();

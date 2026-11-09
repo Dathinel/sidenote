@@ -1,4 +1,7 @@
 //! Meeting data and background work, with no Rune or other UI dependencies.
+pub mod area_ops;
+pub mod area_version;
+pub mod areas;
 pub mod ask;
 pub mod ask_all;
 pub mod asr;
@@ -19,7 +22,7 @@ pub mod file_reads;
 pub mod live_edit;
 pub use sync_state::{EditView, mutation_generation};
 mod memory_migration;
-mod store_io;
+pub(crate) mod store_io;
 mod sync_state;
 pub use daily_check::{apply_action, company_memory, latest_check, list_checks, load_check};
 pub use device::DeviceSettings;
@@ -44,3 +47,7 @@ pub use ui_prefs::UiPrefs;
 
 pub mod model_catalog;
 mod model_catalog_data;
+
+pub fn validation_message(error: &std::io::Error) -> Option<&str> {
+    store_io::message(error)
+}

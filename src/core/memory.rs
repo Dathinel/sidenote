@@ -67,6 +67,8 @@ pub fn source_fingerprint(sources: &[MemorySource]) -> String {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<super::areas::Target>,
     pub id: String,
     #[serde(rename = "type")]
     pub record_type: RecordType,
@@ -214,15 +216,41 @@ impl MemoryStore {
     }
     fn resolve_projects(&self, mut file: MemoryFile) -> io::Result<MemoryFile> {
         let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
+        let catalog = projects.area_catalog()?;
+        let project = |kind: &str,
+                       id: &str,
+                       raw: &Option<String>,
+                       retained: Option<&super::areas::Target>| {
+            let baseline = super::areas::assignment_baseline(serde_json::json!(raw), retained);
+            match catalog.resolve_target(
+                &projects,
+                &serde_json::json!([kind, id]).to_string(),
+                &baseline,
+                retained.map(super::areas::Assignment::Target),
+                raw.as_deref().unwrap_or(super::UNSORTED),
+            ) {
+                Some(target) => target
+                    .project_id
+                    .and_then(|id| catalog.projects.get(&id))
+                    .map(|p| p.name.clone()),
+                None => raw.as_deref().map(|p| projects.resolve(p)),
+            }
+        };
         for record in &mut file.records {
-            record.project = record.project.as_deref().map(|p| projects.resolve(p));
+            record.project = project(
+                "memory",
+                &record.id,
+                &record.project,
+                record.assignment.as_ref(),
+            );
         }
         for pending in &mut file.proposals {
-            pending.proposal.project = pending
-                .proposal
-                .project
-                .as_deref()
-                .map(|p| projects.resolve(p));
+            pending.proposal.project = project(
+                "proposal",
+                &pending.proposal.id,
+                &pending.proposal.project,
+                None,
+            );
         }
         Ok(file)
     }
@@ -432,6 +460,15 @@ impl MemoryStore {
             return Err(invalid("Proposal was already decided"));
         }
         let proposal = file.proposals[index].proposal.clone();
+        let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
+        let catalog = projects.area_catalog()?;
+        let assignment = catalog.resolve_target(
+            &projects,
+            &serde_json::json!(["proposal", proposal.id]).to_string(),
+            &serde_json::json!(proposal.project),
+            None,
+            proposal.project.as_deref().unwrap_or(super::UNSORTED),
+        );
         if accept {
             // The owner is confirming the claim here; automated report ingestion still requires evidence.
             validate_reviewable_proposal(&proposal)?;
@@ -475,10 +512,18 @@ impl MemoryStore {
             let record_id = if matches!(proposal.op, ProposalOp::Add | ProposalOp::Supersede) {
                 let record_id = format!("memory-{}", proposal.id);
                 file.records.push(MemoryRecord {
+                    assignment: assignment.clone(),
                     id: record_id.clone(),
                     record_type: proposal.record_type,
                     text: Some(proposal.text.clone()),
-                    project: proposal.project.clone(),
+                    project: match &assignment {
+                        Some(target) => target
+                            .project_id
+                            .as_ref()
+                            .and_then(|id| catalog.projects.get(id))
+                            .map(|p| p.name.clone()),
+                        None => proposal.project.clone(),
+                    },
                     people: proposal.people.clone(),
                     sources: proposal.sources.clone(),
                     first_seen: Some(Local::now().to_rfc3339()),
@@ -582,6 +627,7 @@ impl MemoryStore {
         let forgotten_sources = record.source_fingerprints.clone();
         record.text = None;
         record.project = None;
+        record.assignment = None;
         record.people.clear();
         record.sources.clear();
         record.status = RecordStatus::Forgotten;
@@ -830,6 +876,7 @@ pub(super) fn migration_preview(original: &str) -> MigrationPreview {
             .any(|s| claim.contains(s));
         preview.candidates.push(MigrationCandidate {
             record: MemoryRecord {
+                assignment: None,
                 id: format!(
                     "legacy-{}",
                     fingerprint([start.to_string(), paragraph.clone()])

@@ -7,7 +7,7 @@ fn isolated() {
     assert!(super::isolated(), "Sync scenes need isolated render state");
 }
 pub(super) fn settle(s: &mut State) {
-    while s.edit_busy {
+    while s.edit_busy || s.areas.refresh_pending || s.areas.pending.is_some() {
         let event = s
             .events_rx
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -35,6 +35,7 @@ fn task(s: &mut State) -> (String, String) {
         .unwrap();
     s.tasks.overrides = o;
     s.rebuild_tasks();
+    settle(s);
     let row = format!("manual/{id}");
     s.open_task(&row, 0);
     (row, id)

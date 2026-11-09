@@ -1,6 +1,10 @@
 //! The Sidenote window: a sidebar that folds to a rail (the five places, the projects, the Hex
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
+mod area;
+mod area_editor;
+mod area_migration;
+mod area_scene;
 mod ask;
 mod benchmark;
 mod check;
@@ -83,6 +87,12 @@ fn default_runner(
 }
 
 pub enum Event {
+    Area {
+        generation: u64,
+        refresh: bool,
+        worker: std::thread::ThreadId,
+        result: Result<area::Completion, String>,
+    },
     ProjectMerge {
         generation: u64,
         worker: std::thread::ThreadId,
@@ -217,6 +227,7 @@ pub struct State {
     /// What the home list shows, and the per-meeting lookups the sidebar's counts need.
     pub filter: nav::Filter,
     pub nav: nav::NavCache,
+    pub areas: area::AreaUi,
     /// The recording's page. Nobody types a title: the heading is the start time, then the quick title.
     pub live: Option<live::Live>,
     pub live_open: bool,
@@ -289,7 +300,10 @@ impl State {
                     self.go_meetings();
                 }
                 if (!self.config.features.projects
-                    && matches!(self.filter, nav::Filter::Project(_)))
+                    && matches!(
+                        self.filter,
+                        nav::Filter::Project(_) | nav::Filter::Area(_) | nav::Filter::Areas
+                    ))
                     || (!self.config.features.other_devices && self.filter == nav::Filter::Peers)
                 {
                     self.filter = nav::Filter::All;
@@ -386,6 +400,7 @@ impl State {
             drawer_open: Cell::new(false),
             filter: nav::Filter::All,
             nav: nav::NavCache::default(),
+            areas: area::AreaUi::default(),
             live: None,
             live_open: false,
             live_notes: TextEdit::new(""),
@@ -421,6 +436,7 @@ impl State {
             waker: None,
         };
         s.rebuild_nav();
+        s.refresh_areas();
         s.refresh_list();
         s.load_saved();
         if s.config.features.daily_check {
@@ -885,6 +901,7 @@ impl State {
                 steps: vec![first_step.into()],
             },
         );
+        self.refresh_areas();
     }
 
     pub fn clear_thread(&mut self) {
@@ -898,6 +915,7 @@ impl State {
     }
 
     fn finish_ask(&mut self, id: &str, run: AskRun, failure: Option<String>) {
+        self.refresh_areas();
         let outcome = match failure {
             Some(message) => Err(message),
             None => run
@@ -950,6 +968,15 @@ impl State {
     fn apply_event(&mut self, event: Event) {
         match event {
             Event::Edited(result) => self.edit_finished(result),
+            Event::Area {
+                generation,
+                refresh,
+                worker,
+                result,
+            } => {
+                debug_assert_ne!(worker, std::thread::current().id());
+                self.area_finished(generation, refresh, result);
+            }
             Event::ProjectMerge {
                 generation,
                 worker,
@@ -1166,7 +1193,13 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
                 changed = true;
             }
             // A headless render has no event loop to wake, so it waits for a running Ask.
-            Err(_) if headless && s.asks.values().any(|r| r.live) => {
+            Err(_)
+                if headless
+                    && (s.asks.values().any(|r| r.live)
+                        || s.edit_busy
+                        || s.areas.refresh_pending
+                        || s.areas.pending.is_some()) =>
+            {
                 if let Ok(event) = s.events_rx.recv_timeout(Duration::from_secs(600)) {
                     s.apply_event(event);
                     changed = true;
@@ -1395,6 +1428,11 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         hex::pane(s, &k, p, narrow, &mut layer)
     } else if on_live {
         live::pane(s, &k, p, narrow, &mut layer)
+    } else if home
+        && s.config.features.projects
+        && matches!(s.filter, nav::Filter::Area(_) | nav::Filter::Areas)
+    {
+        area::pane(s, &k, p, narrow, &mut layer)
     } else if home {
         list::home(s, &k, p, narrow, &mut layer)
     } else {
@@ -1420,6 +1458,22 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .px(24.0)
                 .py(8.0)
                 .fill(p.warnbg),
+        );
+    }
+    if let Some(error) = s.areas.error.as_ref().or(s.areas.notice.as_ref()) {
+        main = main.child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .px(16.0)
+                .py(8.0)
+                .child(roles::SMALL.wrap(error, p.warn).grow(1.0).role("alert"))
+                .child(area::button("Dismiss", "area-global-dismiss", p).on_press(
+                    |s: &mut State| {
+                        s.areas.error = None;
+                        s.areas.notice = None;
+                    },
+                )),
         );
     }
     let main = main.child(content);
@@ -1993,6 +2047,42 @@ pub fn spec() -> AppSpec<State> {
                 project_merge::scene(s, "preview-expanded")
             }),
             ("merge-page", |s| project_merge::scene(s, "page")),
+            ("areas-page", |s| area_scene::scene(s, "page")),
+            ("areas-large-migration", |s| {
+                area_scene::scene(s, "large-migration")
+            }),
+            ("areas-large-review", |s| {
+                area_scene::scene(s, "large-review")
+            }),
+            ("areas-large-expanded", |s| {
+                area_scene::scene(s, "large-expanded")
+            }),
+            ("areas-all", |s| area_scene::scene(s, "all")),
+            ("areas-project", |s| area_scene::scene(s, "project")),
+            ("areas-list", |s| area_scene::scene(s, "list")),
+            ("areas-migration", |s| area_scene::scene(s, "migration")),
+            ("areas-migration-empty", |s| {
+                area_scene::scene(s, "migration-empty")
+            }),
+            ("areas-convert", |s| area_scene::scene(s, "convert")),
+            ("areas-create", |s| area_scene::scene(s, "create")),
+            ("areas-rename", |s| area_scene::scene(s, "rename")),
+            ("areas-move", |s| area_scene::scene(s, "move")),
+            ("areas-assign", |s| area_scene::scene(s, "assign")),
+            ("areas-refresh-error", |s| {
+                area_scene::scene(s, "refresh-error")
+            }),
+            ("areas-large-reconcile", |s| {
+                area_scene::scene(s, "large-reconcile")
+            }),
+            ("areas-large-empty", |s| area_scene::scene(s, "large-empty")),
+            ("areas-large-page", |s| area_scene::scene(s, "large-page")),
+            ("areas-large-convert", |s| {
+                area_scene::scene(s, "large-convert")
+            }),
+            ("areas-worker-proof", |s| {
+                area_scene::scene(s, "worker-proof")
+            }),
             ("merge-picker", |s| project_merge::scene(s, "picker")),
             ("merge-preview", |s| project_merge::scene(s, "preview")),
             ("merge-done", |s| project_merge::scene(s, "done")),

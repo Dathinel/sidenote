@@ -162,6 +162,9 @@ fn home_row(
         r = r.fill(p.chip);
     }
     let mut out = col().w_full().child(r);
+    if narrow && let Some(chip) = project::chip(s, k, &m.id, p, layer) {
+        out = out.child(chip.self_start().ml(56.0).mb(6.0));
+    }
     if let Some(form) = project::form(s, k, &m.id, p) {
         out = out.child(form.ml(56.0).mb(6.0));
     }
@@ -220,6 +223,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         }))
         .children(super::today::strip(s, p))
         .children(super::project_merge::panel(s, k, p, layer))
+        .children(super::area::project_tools(s, k, p, layer))
         .child(search_box(
             s,
             k,

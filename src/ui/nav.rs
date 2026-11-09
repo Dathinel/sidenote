@@ -39,6 +39,8 @@ pub enum Filter {
     All,
     /// Meetings whose to-dos mostly sit in this project.
     Project(String),
+    Area(String),
+    Areas,
     /// Meetings that came from another device.
     Peers,
 }
@@ -72,10 +74,6 @@ impl State {
     }
 
     pub fn rebuild_nav(&mut self) {
-        let mut items: HashMap<&str, Vec<&core::TaskItem>> = HashMap::new();
-        for t in self.tasks.all.iter().filter(|t| !t.manual) {
-            items.entry(t.meeting_id.as_str()).or_default().push(t);
-        }
         let mut cache = NavCache {
             show_all: self.nav.show_all,
             ..NavCache::default()
@@ -85,27 +83,10 @@ impl State {
                 cache.peers += 1;
             }
             let project = self
-                .tasks
-                .projects
+                .areas
                 .meeting_projects
                 .get(&m.id)
-                .map(|n| self.tasks.projects.resolve(n))
-                .or_else(|| {
-                    items
-                        .get(m.id.as_str())
-                        .and_then(|v| core::dominant_project(v.iter().copied()))
-                })
-                .or_else(|| {
-                    self.tasks
-                        .pipeline
-                        .get(&m.id)
-                        .and_then(|f| f.meeting_project.as_ref())
-                        .and_then(|n| {
-                            let names = self.tasks.projects.matches(n);
-                            (names.len() == 1).then(|| names[0].clone())
-                        })
-                })
-                .filter(|n| n != core::UNSORTED);
+                .and_then(|v| v.name.clone());
             if let Some(name) = project {
                 *cache.project_counts.entry(name.clone()).or_default() += 1;
                 if let Some(started) = m.started {
@@ -131,17 +112,28 @@ impl State {
         match &self.filter {
             Filter::All => true,
             Filter::Project(name) => self.nav.meeting_project.get(&meeting.id) == Some(name),
+            Filter::Area(id) => self
+                .areas
+                .activity
+                .meetings
+                .get(&meeting.id)
+                .is_some_and(|t| t.area_id == *id),
+            Filter::Areas => true,
             Filter::Peers => meeting.device.is_some(),
         }
     }
 
     pub fn set_filter(&mut self, filter: Filter) {
-        if matches!(filter, Filter::Project(_)) && !self.config.features.projects
+        if matches!(filter, Filter::Project(_) | Filter::Area(_) | Filter::Areas)
+            && !self.config.features.projects
             || filter == Filter::Peers && !self.config.features.other_devices
         {
             return;
         }
         self.go_home();
+        if matches!(filter, Filter::Area(_)) {
+            self.areas.show_all = false;
+        }
         self.filter = filter;
         self.cursor = 0;
         self.refresh_list();
@@ -684,15 +676,17 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         // The rail has no room for names, so one folder opens the sidebar on them.
         let more = Place {
             key: "nav-projects",
-            name: "Projects",
+            name: "Areas",
             help: if projects_on {
-                "Projects. Open the sidebar"
+                "Areas. Open the sidebar"
             } else {
                 "Other devices. Open the sidebar"
             }
             .into(),
-            active: matches!(s.filter, Filter::Project(_) | Filter::Peers)
-                && s.page() == Page::Meetings,
+            active: matches!(
+                s.filter,
+                Filter::Project(_) | Filter::Area(_) | Filter::Areas | Filter::Peers
+            ) && s.page() == Page::Meetings,
             icon: |c, _| icon_folder(c),
             flag: None,
             press: |s| s.set_sidebar(true),
@@ -756,89 +750,72 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
     pane
 }
 
-impl State {
-    /// Projects, most recently met first: by each one's newest meeting, then by name.
-    fn recent_projects(&self) -> Vec<&String> {
-        let mut names: Vec<&String> = self.tasks.names.iter().collect();
-        names.sort_by(|a, b| {
-            let newest = |n: &String| self.nav.project_latest.get(n).copied();
-            newest(b)
-                .cmp(&newest(a))
-                .then_with(|| a.to_lowercase().cmp(&b.to_lowercase()))
-        });
-        names
-    }
-}
-
-/// The Projects section: a quiet label, then the six most recently active projects as filters
-/// for the meeting list, and "Show all" for the rest. The choice lasts for the session.
+/// Active areas use the same quiet rows as the old project navigation.
 fn projects(s: &State, p: Palette) -> El {
-    let chosen = match &s.filter {
-        Filter::Project(name) if s.page() == Page::Meetings => Some(name),
-        _ => None,
-    };
     let mut list = col().w_full().gap(2.0).pb(8.0).child(
         roles::GROUP
-            .wrap("Projects", p.soft)
+            .wrap("Areas", p.soft)
             .px(PAD)
             .mt(roles::GROUP_TOP)
             .mb(4.0),
     );
-    let names = s.recent_projects();
-    if names.is_empty() {
+    let mut areas: Vec<_> = s
+        .areas
+        .catalog
+        .areas
+        .values()
+        .filter(|a| {
+            a.status != core::areas::Status::Retired && s.areas.activity.areas.contains(&a.id)
+        })
+        .collect();
+    areas.sort_by_key(|a| a.name.to_lowercase());
+    if areas.is_empty() {
         list = list.child(
             roles::META
-                .wrap("Projects you add meetings to appear here.", p.faint)
+                .wrap(
+                    if s.areas.refresh_pending {
+                        "Loading areas..."
+                    } else {
+                        "No active areas yet."
+                    },
+                    p.faint,
+                )
                 .pl(PAD + FOLDER_INDENT)
                 .pr(PAD),
         );
     }
-    let all = s.nav.show_all || names.len() <= RECENT;
-    for (i, name) in names.iter().enumerate() {
-        let active = chosen == Some(*name);
-        // A chosen project stays in sight even when it is not among the recent ones.
-        if !all && i >= RECENT && !active {
-            continue;
-        }
-        let target = (*name).clone();
+    for (i, area) in areas.iter().take(RECENT).enumerate() {
+        let id = area.id.clone();
         list = list.child(
-            folder_row(format!("nav-project-{i}"), name, active, p)
-                .on_press(move |s: &mut State| s.set_filter(Filter::Project(target.clone()))),
+            folder_row(
+                format!("nav-area-{i}"),
+                &area.name,
+                s.filter == Filter::Area(id.clone()),
+                p,
+            )
+            .label(format!("Open area {}", area.name))
+            .on_press(move |s: &mut State| s.set_filter(Filter::Area(id.clone()))),
         );
     }
-    if names.len() > RECENT {
-        let (words, help) = if s.nav.show_all {
-            (
-                "Show fewer",
-                "Show only the six most recent projects".to_string(),
-            )
-        } else {
-            ("Show all", format!("Show all {} projects", names.len()))
-        };
-        list = list.child(
-            pressable(
-                row()
-                    .w_full()
-                    .h(FOLDER_H)
-                    .items_center()
-                    .pl(PAD + FOLDER_INDENT)
-                    .pr(PAD)
-                    .child(roles::SMALL.line(words, p.faint)),
-            )
-            .key("nav-projects-all")
-            .label(help)
-            .radius(6.0)
-            .hover(p.chip)
-            .on_press(|s: &mut State| s.nav.show_all = !s.nav.show_all),
-        );
-    }
+    list = list.child(
+        folder_row(
+            "nav-areas-all".into(),
+            "Show all",
+            s.filter == Filter::Areas,
+            p,
+        )
+        .label("Show all areas, projects and migration")
+        .on_press(|s: &mut State| {
+            s.areas.show_all = true;
+            s.set_filter(Filter::Areas);
+        }),
+    );
     col()
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .child(scroll(list, "nav-scroll"))
 }
-
 /// The sidebar scene with every project shown.
 pub fn scene_all(s: &mut State) {
     s.nav.show_all = true;

@@ -31,6 +31,9 @@ pub enum Target {
     Settings(Option<hex::Section>),
     NewMeeting,
     Ask,
+    Area(String),
+    Project(String),
+    Areas,
 }
 
 pub struct Entry {
@@ -121,6 +124,37 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
     }
 
     let mut meetings = Vec::new();
+    if f.projects && typed {
+        if contains("Areas project migration", &q) {
+            pages.push(page(
+                "Areas",
+                "All areas and project migration",
+                Target::Areas,
+            ));
+        }
+        for area in s
+            .areas
+            .catalog
+            .areas
+            .values()
+            .filter(|a| contains(&a.name, &q) || a.aliases.iter().any(|n| contains(n, &q)))
+        {
+            pages.push(page(&area.name, "Area", Target::Area(area.id.clone())));
+        }
+        for project in s
+            .areas
+            .catalog
+            .projects
+            .values()
+            .filter(|p| p.converted_to.is_none() && contains(&p.name, &q))
+        {
+            pages.push(page(
+                &project.name,
+                "Project",
+                Target::Project(project.name.clone()),
+            ));
+        }
+    }
     if typed {
         for hit in core::search(&s.meetings, query.trim())
             .into_iter()
@@ -255,6 +289,9 @@ impl State {
             }
             Target::NewMeeting => self.new_meeting(),
             Target::Ask => self.focus_ask(""),
+            Target::Area(id) => self.set_filter(super::nav::Filter::Area(id)),
+            Target::Project(name) => self.set_filter(super::nav::Filter::Project(name)),
+            Target::Areas => self.set_filter(super::nav::Filter::Areas),
         }
     }
 

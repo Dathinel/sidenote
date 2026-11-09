@@ -26,7 +26,7 @@
 (?i)*.p12
 (?i)id_rsa*
 (?i)id_ed25519*
-// Only immutable device journals sync. Earlier exclusions still take precedence.
+// Device journals and format markers sync. Earlier exclusions still take precedence.
 !/state
 !/state/**
 *

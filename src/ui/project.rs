@@ -7,11 +7,61 @@ use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{self, TaskOverride, UNSORTED};
 
 /// What the chip shows.
+#[derive(Clone)]
 pub struct MeetingProject {
     /// None when every to-do is unsorted.
     pub name: Option<String>,
     /// Every to-do in that project was placed there by the owner, not only by the pipeline.
     pub confirmed: bool,
+}
+pub fn cache(
+    projects: &core::Projects,
+    pipeline: &core::Pipeline,
+    overrides: &core::Overrides,
+    tasks: &[core::TaskItem],
+    meetings: &[core::Meeting],
+) -> std::collections::BTreeMap<String, MeetingProject> {
+    let mut grouped: std::collections::HashMap<&str, Vec<&core::TaskItem>> = Default::default();
+    for task in tasks.iter().filter(|t| !t.manual) {
+        grouped.entry(&task.meeting_id).or_default().push(task);
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for meeting in meetings {
+        let id = &meeting.id;
+        let value = if let Some(name) = projects.meeting_projects.get(id) {
+            MeetingProject {
+                name: (name != UNSORTED).then(|| projects.resolve(name)),
+                confirmed: true,
+            }
+        } else {
+            let items = grouped.get(id.as_str());
+            let mut candidates: Vec<_> =
+                items.into_iter().flatten().map(|t| (**t).clone()).collect();
+            let file = pipeline.get(id);
+            let mut confirmed = std::collections::BTreeMap::new();
+            for task in &mut candidates {
+                let edit = overrides
+                    .get(id, task.index)
+                    .filter(|o| o.task.as_deref().is_none_or(|text| text == task.task));
+                let overridden =
+                    edit.is_some_and(|o| o.assignment.is_some() || o.project.is_some());
+                *confirmed.entry(task.project.clone()).or_insert(true) &= overridden;
+            }
+            let name = core::dominant_project(candidates.iter()).or_else(|| {
+                file.and_then(|f| f.meeting_project.as_deref())
+                    .map(|n| projects.resolve(n))
+                    .filter(|n| !n.is_empty() && n != UNSORTED)
+            });
+            MeetingProject {
+                confirmed: name
+                    .as_ref()
+                    .is_some_and(|n| confirmed.get(n) == Some(&true)),
+                name,
+            }
+        };
+        out.insert(id.clone(), value);
+    }
+    out
 }
 
 impl State {
@@ -31,56 +81,18 @@ impl State {
         if !self.config.features.projects {
             return None;
         }
-        if let Some(name) = self.tasks.projects.meeting_projects.get(id) {
-            return Some(MeetingProject {
-                name: (name != UNSORTED).then(|| self.tasks.projects.resolve(name)),
-                confirmed: true,
-            });
-        }
-        let items: Vec<_> = self
-            .tasks
-            .all
-            .iter()
-            .filter(|t| t.meeting_id == id)
-            .collect();
-        if items.is_empty() {
-            let name = self
-                .tasks
-                .pipeline
-                .get(id)
-                .and_then(|f| f.meeting_project.as_ref())
-                .map(|n| self.tasks.projects.resolve(n))
-                .filter(|n| !n.is_empty() && n != UNSORTED);
-            return Some(MeetingProject {
-                name,
-                confirmed: false,
-            });
-        }
-        let mut candidates: Vec<_> = items.iter().map(|t| (*t).clone()).collect();
-        for t in &mut candidates {
-            let overridden = self.tasks.overrides.get(id, t.index).is_some_and(|o| {
-                o.project.is_some() && o.task.as_deref().is_none_or(|text| text == t.task)
-            });
-            if !overridden && let Some(name) = self.suggested_task_project(id, t.index) {
-                t.project = name;
-            }
-        }
-        let name = core::dominant_project(candidates.iter());
-        let confirmed = name.as_ref().is_some_and(|n| {
-            candidates.iter().filter(|t| &t.project == n).all(|t| {
-                self.tasks
-                    .overrides
-                    .get(id, t.index)
-                    .is_some_and(|o| o.project.is_some() && o.task.as_deref() == Some(&t.task))
-            })
-        });
-        Some(MeetingProject { name, confirmed })
+        self.areas.meeting_projects.get(id).cloned()
     }
 
     /// Moves the to-dos that sit in the meeting's project (or every to-do, when none is
     /// set) to `name`. To-dos the owner filed elsewhere one by one stay where they are.
     /// Accepting a suggestion is the same call with the suggested name.
     pub fn set_meeting_project(&mut self, id: &str, name: &str) {
+        if self.areas.pending.is_some() {
+            self.tasks.notice =
+                Some("Wait for the area change to finish before editing projects.".into());
+            return;
+        }
         if !self.config.features.projects {
             return;
         }
@@ -89,7 +101,7 @@ impl State {
         if name.is_empty() {
             return;
         }
-        let known = self.tasks.projects.choose_existing(name);
+        let known = self.cached_project(name);
         if name != UNSORTED && known.is_none() {
             self.start_project_form(id);
             self.project_input = TextEdit::new(name);
@@ -129,6 +141,13 @@ impl State {
                     *entry = TaskOverride::default();
                 }
                 entry.project = Some(name.clone());
+                entry.assignment = Some(core::areas::ProjectChoice {
+                    project: name.clone(),
+                    revision: format!(
+                        "meeting-choice-{}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                    ),
+                });
                 entry.task = Some(task.clone());
             }
         });
@@ -180,7 +199,20 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     if !s.config.features.projects {
         return None;
     }
-    let mp = s.meeting_project(id)?;
+    let mut mp = s.meeting_project(id)?;
+    let target = s.areas.activity.meetings.get(id);
+    if target.is_some_and(|t| t.project_id.is_none()) {
+        mp.confirmed = true;
+    }
+    let display_name = target.map(|t| s.areas.catalog.label(t)).or_else(|| {
+        mp.name.as_deref().map(|n| {
+            s.areas
+                .project_labels
+                .get(n)
+                .cloned()
+                .unwrap_or_else(|| n.into())
+        })
+    });
     let open = s.project_menu.as_deref() == Some(id);
     let chevron = rune::icon(
         if open {
@@ -212,7 +244,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
     }
     trigger_row = trigger_row
         .child(
-            rune::text(mp.name.clone().unwrap_or_else(|| "Add to a project".into()))
+            rune::text(display_name.unwrap_or_else(|| "Add to an area or project".into()))
                 .font(roles::META.medium().style())
                 .color(if mp.name.is_some() { name_ink } else { p.faint })
                 .truncate()
@@ -259,6 +291,14 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
             MenuItem::new("New project...")
                 .on_select(move |s: &mut State| s.start_project_form(&new_id)),
         );
+        menu = menu.separator().group_label("Area-only work");
+        for area in s.areas.catalog.areas.values() {
+            let (area_id, key) = (area.id.clone(), core::areas::meeting_key(id));
+            menu = menu.item(MenuItem::new(&area.name).on_select(move |s: &mut State| {
+                s.project_menu = None;
+                s.assign_area(key.clone(), area_id.clone());
+            }));
+        }
         if mp.name.is_some() {
             let id = id.to_string();
             menu = menu.separator().item(
@@ -351,13 +391,24 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .fill(p.card)
         .grow(1.0)
         .min_w(0.0);
-    let matches = s.tasks.projects.matches(&s.project_input.text);
+    let area_alias = s
+        .areas
+        .alias_names
+        .contains(&core::project_merge::normalized_name(&s.project_input.text));
+    let matches = if area_alias {
+        Vec::new()
+    } else {
+        s.tasks.projects.matches(&s.project_input.text)
+    };
     let typed = s.project_input.text.trim().to_string();
     let mut choices = col()
         .w_full()
         .gap(6.0)
         .mt(8.0)
         .child(roles::GROUP.wrap("Use an existing project", p.soft));
+    if area_alias {
+        choices=choices.child(roles::SMALL.wrap("This name belongs to an area. Choose Area-only work in the meeting picker, or choose a project below.",p.soft));
+    }
     for name in if matches.is_empty() {
         &s.tasks.names
     } else {
@@ -373,7 +424,7 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
                 }),
         );
     }
-    if !typed.is_empty() && matches.is_empty() {
+    if !typed.is_empty() && matches.is_empty() && !area_alias {
         let id = id.to_string();
         choices = choices.child(
             pressable(
@@ -474,6 +525,7 @@ pub fn scene(s: &mut State, action: &str) {
         .load_overrides()
         .expect("render overrides readable");
     s.rebuild_tasks();
+    super::area_scene::wait(s);
     let project = s.meeting_project(&id).expect("render meeting has tasks");
     match action {
         "create" => {

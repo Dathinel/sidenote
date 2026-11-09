@@ -143,7 +143,7 @@ impl TasksState {
                 core::TasksSettings::default()
             })
             .cutoff();
-        let mut s = Self {
+        Self {
             store,
             pipeline: core::load_pipeline(meetings),
             projects,
@@ -180,34 +180,7 @@ impl TasksState {
             keyboard: false,
             collapsed: BTreeSet::new(),
             done_open: false,
-        };
-        s.rebuild(meetings);
-        s
-    }
-
-    /// Recomputes the list from the loaded files. Ticks of a meeting seen for the first time
-    /// are read from disk; later ones arrive through `State::toggle_task_at`.
-    pub fn rebuild(&mut self, meetings: &[Meeting]) {
-        for m in meetings.iter().filter(|m| !m.summary.todo.is_empty()) {
-            if !self.checked.contains_key(&m.id) {
-                self.checked
-                    .insert(m.id.clone(), self.store.load_ticks(&m.id));
-            }
         }
-        self.today = Local::now().date_naive();
-        let all = core::build_tasks(
-            meetings,
-            &self.pipeline,
-            &self.projects,
-            &self.overrides,
-            &self.checked,
-        );
-        let kept = core::without_cleared(all.clone(), self.cutoff);
-        // The counts and the nav badge follow the cutoff even while the cleared tasks show.
-        self.counts = core::count_tasks(&kept);
-        self.names = core::project_names(&self.projects, &all);
-        self.items = if self.show_cleared { all.clone() } else { kept };
-        self.all = all;
     }
 
     fn item(&self, id: &str, index: usize) -> Option<&TaskItem> {
@@ -297,11 +270,21 @@ fn due_text(d: NaiveDate) -> String {
 }
 
 impl State {
+    pub fn cached_project(&self, name: &str) -> Option<String> {
+        if let Some(exact) = self.tasks.names.iter().find(|n| n.as_str() == name) {
+            return Some(exact.clone());
+        }
+        let key = core::project_merge::normalized_name(name);
+        let mut matches = self
+            .tasks
+            .names
+            .iter()
+            .filter(|n| core::project_merge::normalized_name(n) == key);
+        let first = matches.next()?.clone();
+        matches.next().is_none().then_some(first)
+    }
     pub fn rebuild_tasks(&mut self) {
-        self.tasks.rebuild(&self.meetings);
-        // The sidebar's project counts and the home filter read the same tasks.
-        self.rebuild_nav();
-        self.refresh_list();
+        self.refresh_areas();
     }
 
     /// Clears the tasks of meetings older than `days` days, or keeps all. Only the page changes;
@@ -488,7 +471,7 @@ impl State {
         if name == UNSORTED {
             return Some(name.into());
         }
-        if let Some(name) = self.tasks.projects.choose_existing(name) {
+        if let Some(name) = self.cached_project(name) {
             return Some(name);
         }
         self.tasks.notice = Some("Choose an existing project or click Create first.".into());
@@ -497,8 +480,19 @@ impl State {
 
     pub fn set_task_project(&mut self, id: &str, index: usize, name: &str) {
         if let Some(name) = self.known_project(name) {
+            let revision = match core::areas::new_assignment_revision(&self.tasks.store.root) {
+                Ok(revision) => revision,
+                Err(e) => {
+                    self.tasks.notice = Some(e.to_string());
+                    return;
+                }
+            };
             self.apply_override(id, index, super::edit_worker::Field::Project, |o| {
-                o.project = Some(name)
+                o.project = Some(name.clone());
+                o.assignment = Some(core::areas::ProjectChoice {
+                    project: name,
+                    revision,
+                });
             });
         }
     }
@@ -626,6 +620,9 @@ impl State {
             return false;
         }
         let Some(title) = self.tasks.item(id, index).map(|t| t.task.clone()) else {
+            if self.areas.refresh_pending {
+                self.areas.open_task_after_refresh = Some((id.into(), index));
+            }
             return false;
         };
         let t = &mut self.tasks;
@@ -818,7 +815,7 @@ impl State {
     fn commit_new_project(&mut self) -> bool {
         if let Some((id, index)) = self.panel_task().map(|t| (t.meeting_id.clone(), t.index)) {
             let typed = self.tasks.inputs.project.text.trim().to_string();
-            if self.tasks.projects.choose_existing(&typed).is_none() {
+            if self.cached_project(&typed).is_none() {
                 self.tasks.notice =
                     Some("Choose an existing project or click Create first.".into());
                 return false;
@@ -2223,12 +2220,24 @@ fn project_control(
             .clone()
             .unwrap_or_else(|| UNSORTED.to_string()),
     };
+    let current_label = task
+        .and_then(|task| task.area_id.as_ref())
+        .and_then(|id| s.areas.catalog.areas.get(id))
+        .filter(|_| current == UNSORTED)
+        .map(|area| area.name.clone())
+        .unwrap_or_else(|| {
+            s.areas
+                .project_labels
+                .get(&current)
+                .cloned()
+                .unwrap_or_else(|| current.clone())
+        });
     let trigger = value_button(
         row()
             .gap(8.0)
             .items_center()
             .child(project_dot(&current, p))
-            .child(roles::CONTROL.wrap(&current, p.ink))
+            .child(roles::CONTROL.wrap(&current_label, p.ink))
             .child(caret(p)),
         pre,
         format!("Project: {current}"),
@@ -2262,6 +2271,16 @@ fn project_control(
                     .checked(*name == current)
                     .on_select(pick(name.clone())),
             );
+        }
+        if let Some(task) = task {
+            menu = menu.separator().group_label("Area-only work");
+            for area in s.areas.catalog.areas.values() {
+                let (id, key) = (area.id.clone(), core::areas::task_key(task));
+                menu = menu.item(MenuItem::new(&area.name).on_select(move |s: &mut State| {
+                    s.tasks.ui.project_menu = false;
+                    s.assign_area(key.clone(), id.clone());
+                }));
+            }
         }
         menu = menu
             .separator()

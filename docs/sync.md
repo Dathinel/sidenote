@@ -196,13 +196,14 @@ device. The exact file is:
 (?i)*.p12
 (?i)id_rsa*
 (?i)id_ed25519*
-// Only immutable device journals sync. Earlier exclusions still take precedence.
+// Device journals and format markers sync. Earlier exclusions still take precedence.
 !/state
 !/state/**
 *
 ```
 
-The final allow rules include only immutable journals. Legacy root files, `memory`, `checks`,
+The final allow rules include immutable journals and device-owned `area-format.json` markers.
+Legacy root files, `memory`, `checks`,
 configuration, local projections and all backups stay local. Never ignore
 `*.sync-conflict-*` globally: valid leftover journal copies are read idempotently without
 being rewritten or moved. Supported legacy conflict copies are backed up and imported.

@@ -35,6 +35,10 @@ pub struct ProjectMerge {
     pub previous: Option<Box<ProjectMerge>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_baseline: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub area_changes: BTreeMap<String, (Option<Value>, Option<Value>)>,
 }
 const MOVED_AFTER_MERGE: &str = "Some items were moved after the merge, so Undo would not restore them. Move them back by hand or keep the merge.";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -55,12 +59,12 @@ struct Backup {
 fn invalid(message: &str) -> io::Error {
     store_io::invalid(message)
 }
-fn digest(value: &impl Serialize) -> io::Result<String> {
+pub(super) fn digest(value: &impl Serialize) -> io::Result<String> {
     Ok(blake3::hash(&serde_json::to_vec(value)?)
         .to_hex()
         .to_string())
 }
-fn scan() -> io::Result<Vec<Meeting>> {
+pub(super) fn scan() -> io::Result<Vec<Meeting>> {
     let (meetings, errors) = super::scan_sources(&super::meetings_dir(), &super::peers_dir());
     if !errors.is_empty() {
         return Err(invalid(
@@ -71,6 +75,7 @@ fn scan() -> io::Result<Vec<Meeting>> {
 }
 impl TaskStore {
     pub fn preview_merge(&self, from: &str, into: &str) -> io::Result<MergePreview> {
+        super::area_version::ensure(&self.root)?;
         self.merge_inventory(&self.load_projects()?, from, into)
     }
     fn merge_inventory(&self, p: &Projects, from: &str, into: &str) -> io::Result<MergePreview> {
@@ -86,9 +91,11 @@ impl TaskStore {
         let from = p.resolve(from);
         let into = p.resolve(into);
         let names = super::project_names(p, &[]);
-        if from == into || !names.contains(&from) || !names.contains(&into) {
+        if from == into || p.area_catalog()?.project(p, &from).is_none() || !names.contains(&into) {
             return Err(invalid("Choose two different existing projects"));
         }
+        let mut planned = p.clone();
+        planned.prepare_area_merge(&from, &into)?;
         let meetings = scan()?;
         let pipeline = super::load_pipeline(&meetings);
         // A malformed tag file must never be mistaken for an empty inventory.
@@ -235,6 +242,24 @@ impl TaskStore {
                     ));
                 }
                 let previous = p.merges.get(&preview.from).cloned().map(Box::new);
+                let prior = p.other.clone();
+                p.prepare_area_merge(&preview.from, &preview.into)?;
+                let keys: std::collections::BTreeSet<_> = prior
+                    .keys()
+                    .chain(p.other.keys())
+                    .filter(|k| !k.starts_with("area-identity:"))
+                    .cloned()
+                    .collect();
+                let area_changes = keys
+                    .into_iter()
+                    .filter(|k| prior.get(k) != p.other.get(k))
+                    .map(|k| {
+                        (
+                            k.clone(),
+                            (prior.get(&k).cloned(), p.other.get(&k).cloned()),
+                        )
+                    })
+                    .collect();
                 p.aliases.insert(preview.from.clone(), preview.into.clone());
                 p.merges.insert(
                     preview.from.clone(),
@@ -246,6 +271,8 @@ impl TaskStore {
                         backup,
                         previous,
                         assignment_baseline: Some(assignments),
+                        baseline_version: Some(2),
+                        area_changes,
                     },
                 );
                 Ok(())
@@ -287,6 +314,15 @@ impl TaskStore {
                     ));
                 }
                 verify_assignments(&merge, &self.undo_state(p)?.1)?;
+                if merge
+                    .area_changes
+                    .iter()
+                    .any(|(key, (_, after))| p.other.get(key) != after.as_ref())
+                {
+                    return Err(invalid(
+                        "Area assignments changed after the merge. Undo was not applied.",
+                    ));
+                }
                 let backup = self
                     .root
                     .join("local/project-merges")
@@ -319,6 +355,16 @@ impl TaskStore {
                         p.merges.remove(from);
                     }
                 }
+                for (key, (before, _)) in merge.area_changes {
+                    match before {
+                        Some(value) => {
+                            p.other.insert(key, value);
+                        }
+                        None => {
+                            p.other.remove(&key);
+                        }
+                    }
+                }
                 Ok(())
             },
             |before| {
@@ -330,7 +376,10 @@ impl TaskStore {
             },
         )
     }
-    fn undo_state(&self, projects: &Projects) -> io::Result<(String, BTreeMap<String, Value>)> {
+    pub(super) fn undo_state(
+        &self,
+        projects: &Projects,
+    ) -> io::Result<(String, BTreeMap<String, Value>)> {
         let meetings = scan()?;
         let pipeline = super::load_pipeline(&meetings);
         for m in &meetings {
@@ -355,15 +404,25 @@ fn verify_assignments(merge: &ProjectMerge, current: &BTreeMap<String, Value>) -
         .assignment_baseline
         .as_ref()
         .ok_or_else(|| invalid(MOVED_AFTER_MERGE))?;
-    if baseline
-        .iter()
-        .any(|(key, value)| current.get(key) != Some(value))
-    {
+    if baseline.iter().any(|(key, value)| {
+        let Some(current) = current.get(key) else {
+            return true;
+        };
+        if merge.baseline_version.unwrap_or(1) == 1
+            && key.starts_with("[\"task\",")
+            && value.as_array().is_some_and(|v| v.len() == 3)
+        {
+            return current
+                .as_array()
+                .is_none_or(|v| v.len() < 3 || &v[..3] != value.as_array().unwrap().as_slice());
+        }
+        current != value
+    }) {
         return Err(invalid(MOVED_AFTER_MERGE));
     }
     Ok(())
 }
-fn raw_assignments(
+pub(super) fn raw_assignments(
     p: &Projects,
     meetings: &[Meeting],
     pipeline: &super::Pipeline,
@@ -375,35 +434,36 @@ fn raw_assignments(
         let file = pipeline.get(&meeting.id);
         out.insert(
             json!(["meeting", meeting.id]).to_string(),
-            json!([
-                p.meeting_projects.get(&meeting.id),
-                file.and_then(|f| f.meeting_project.as_ref())
-            ]),
+            super::areas::meeting_baseline(p, pipeline, &meeting.id),
         );
         for (index, todo) in meeting.summary.todo.iter().enumerate() {
             let edit = overrides.get(&meeting.id, index);
             out.insert(
                 json!(["task", meeting.id, index, todo.task]).to_string(),
-                json!([
-                    file.and_then(|f| f.tasks.iter().find(|t| t.i == index))
-                        .map(|t| &t.project),
-                    edit.and_then(|o| o.project.as_ref()),
-                    edit.filter(|o| o.project.is_some())
-                        .and_then(|o| o.task.as_ref())
-                ]),
+                super::areas::assignment_baseline(
+                    json!([
+                        file.and_then(|f| f.tasks.iter().find(|t| t.i == index))
+                            .map(|t| &t.project),
+                        edit.and_then(|o| o.project.as_ref()),
+                        edit.filter(|o| o.project.is_some())
+                            .and_then(|o| o.task.as_ref()),
+                        file.and_then(|f| f.meeting_project.as_ref())
+                    ]),
+                    edit.and_then(|o| o.assignment.as_ref()),
+                ),
             );
         }
     }
     for task in &overrides.manual {
         out.insert(
             json!(["manual", format!("manual/{}", task.id)]).to_string(),
-            json!(task.project),
+            super::areas::assignment_baseline(json!(task.project), task.assignment.as_ref()),
         );
     }
     for record in &memory.records {
         out.insert(
             json!(["memory", record.id]).to_string(),
-            json!(record.project),
+            super::areas::assignment_baseline(json!(record.project), record.assignment.as_ref()),
         );
     }
     for proposal in &memory.proposals {
@@ -414,31 +474,41 @@ fn raw_assignments(
     }
     out
 }
-fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
+pub(super) fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) -> io::Result<()> {
-        if !dir.try_exists()? {
+        if store_io::reject_reparse(dir).is_err() {
             return Ok(());
         }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                visit(root, &entry.path(), out)?;
-            } else if entry.file_type()?.is_file()
-                && entry.path().extension().is_some_and(|e| e == "json")
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            if !entry.file_type()?.is_file() || entry.path().extension().is_none_or(|e| e != "json")
             {
-                let bytes = fs::read(entry.path())?;
-                let value: serde_json::Value =
-                    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
-                if value.get("store").and_then(|s| s.as_str()) == Some("projects.json") {
-                    out.insert(
-                        entry
-                            .path()
-                            .strip_prefix(root)
-                            .map_err(|_| invalid("Invalid backup source"))?
-                            .into(),
-                        bytes,
-                    );
-                }
+                continue;
+            }
+            let Ok(bytes) = store_io::read_bounded(&entry.path(), 4 * 1024 * 1024) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<Value>(
+                bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes),
+            ) else {
+                continue;
+            };
+            if value.get("store").and_then(Value::as_str) == Some("projects.json") {
+                out.insert(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .map_err(|_| invalid("Invalid backup source"))?
+                        .into(),
+                    bytes,
+                );
             }
         }
         Ok(())
@@ -449,7 +519,9 @@ fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
         let project_store = blake3::hash(b"projects.json").to_hex().to_string();
         for owner in fs::read_dir(state)? {
             let owner = owner?;
-            if owner.file_type()?.is_dir() {
+            if owner.file_type()?.is_dir()
+                && super::device::valid_id(&owner.file_name().to_string_lossy())
+            {
                 visit(root, &owner.path().join(&project_store), &mut out)?;
             }
         }
@@ -459,8 +531,13 @@ fn project_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {
         let name = entry.file_name().to_string_lossy().into_owned();
         if entry.file_type()?.is_file()
             && (name == "projects.json" || name.starts_with("projects.sync-conflict-"))
+            && let Ok(bytes) = store_io::read_bounded(&entry.path(), 16 * 1024 * 1024)
+            && serde_json::from_slice::<Value>(
+                bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes),
+            )
+            .is_ok()
         {
-            out.insert(PathBuf::from(name), fs::read(entry.path())?);
+            out.insert(PathBuf::from(name), bytes);
         }
     }
     Ok(out)

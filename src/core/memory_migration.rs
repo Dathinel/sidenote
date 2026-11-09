@@ -220,6 +220,7 @@ fn validate(input: &Input, group: Group) -> Result<Vec<MigrationCandidate>, Stri
             .map(|s| memory::source_fingerprint(std::slice::from_ref(s)))
             .collect();
         let record = MemoryRecord {
+            assignment: None,
             id,
             text: Some(claim.text),
             record_type: claim.kind,

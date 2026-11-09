@@ -48,6 +48,22 @@ pub fn merge<T: Serialize + DeserializeOwned>(base: &T, mine: &T, theirs: &T) ->
             o.insert(key.clone(), mv.clone());
         }
     }
+    // A project and its retained assignment revision describe one owner choice.
+    if ["project", "assignment"]
+        .iter()
+        .any(|key| b.get(*key).unwrap_or(&Value::Null) != m.get(*key).unwrap_or(&Value::Null))
+    {
+        for key in ["project", "assignment"] {
+            match m.get(key).filter(|value| !value.is_null()) {
+                Some(value) => {
+                    o.insert(key.into(), value.clone());
+                }
+                None => {
+                    o.remove(key);
+                }
+            }
+        }
+    }
     Ok(serde_json::from_value(out)?)
 }
 /// Rebase only saved fields. Drafts in the other boxes still use their edit-start values.
@@ -61,6 +77,21 @@ pub fn advance_base(base: &mut Value, mine: &Value, saved: &Value) {
                     next.insert(key, value.clone());
                 } else {
                     next.remove(&key);
+                }
+            }
+        }
+    }
+    if ["project", "assignment"]
+        .iter()
+        .any(|key| base.get(*key).unwrap_or(&Value::Null) != mine.get(*key).unwrap_or(&Value::Null))
+    {
+        for key in ["project", "assignment"] {
+            match saved.get(key) {
+                Some(value) => {
+                    next.insert(key.into(), value.clone());
+                }
+                None => {
+                    next.remove(key);
                 }
             }
         }
@@ -147,7 +178,8 @@ impl TaskStore {
                         "updated_at".into(),
                         Value::String(chrono::Utc::now().to_rfc3339()),
                     );
-                    if t.project.is_none()
+                    if t.assignment.is_none()
+                        && t.project.is_none()
                         && t.owner.is_none()
                         && t.due.is_none()
                         && t.mine.is_none()
