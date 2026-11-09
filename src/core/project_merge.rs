@@ -35,7 +35,7 @@ pub struct ProjectMerge {
     pub previous: Option<Box<ProjectMerge>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment_baseline: Option<BTreeMap<String, Value>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub area_changes: BTreeMap<String, (Option<Value>, Option<Value>)>,
 }
 const MOVED_AFTER_MERGE: &str = "Some items were moved after the merge, so Undo would not restore them. Move them back by hand or keep the merge.";
