@@ -585,6 +585,7 @@ impl MemoryStore {
         let forgotten_sources = record.source_fingerprints.clone();
         record.text = None;
         record.project = None;
+        record.assignment = None;
         record.people.clear();
         record.sources.clear();
         record.status = RecordStatus::Forgotten;

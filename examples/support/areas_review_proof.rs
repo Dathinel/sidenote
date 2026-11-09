@@ -418,6 +418,17 @@ pub fn run(mode: &str, store: &TaskStore) {
                 Some(&child_id)
             );
             write(&root.join("accepted-record.json"), record);
+            let memory = core::memory::MemoryStore::new(root.clone());
+            memory.forget_record("memory-synthetic-proposal").unwrap();
+            let file = memory.load().unwrap();
+            let forgotten = file
+                .records
+                .iter()
+                .find(|r| r.id == "memory-synthetic-proposal")
+                .unwrap();
+            assert!(forgotten.assignment.is_none());
+            assert!(forgotten.project.is_none());
+            assert!(forgotten.text.is_none());
         }
         "review-schema" => {
             apply(
