@@ -384,6 +384,18 @@ pub(super) fn load<T: Serialize + DeserializeOwned + Default>(
     let session = Session::open_mode(root, store, super::paths::read_only())?;
     Ok(serde_json::from_value(session.value::<T>()?)?)
 }
+/// When each present item of a store was last written, in nanoseconds since 1970, read the same
+/// way as `load`. Values imported from a legacy file carry no time and read as 0.
+pub(super) fn stamps(root: &Path, store: &str) -> io::Result<BTreeMap<Key, u64>> {
+    let session = Session::open_mode(root, store, super::paths::read_only())?;
+    Ok(session
+        .view
+        .items
+        .iter()
+        .filter(|(_, r)| r.value.is_some())
+        .map(|(k, r)| (k.clone(), r.at & !(1 << 63)))
+        .collect())
+}
 pub(super) fn update<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,

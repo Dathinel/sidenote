@@ -79,6 +79,24 @@ impl StateStore {
         checked_path(&self.root, id)?;
         super::sync_state::update(&self.root, &format!("{id}.json"), change)
     }
+    /// When each task of one meeting was ticked, by task text. Read only. Ticks imported from
+    /// an old file have no time and are left out.
+    pub fn tick_times(
+        &self,
+        id: &str,
+    ) -> io::Result<std::collections::BTreeMap<String, chrono::DateTime<chrono::Utc>>> {
+        checked_path(&self.root, id)?;
+        let stamps = super::sync_state::stamps(&self.root, &format!("{id}.json"))?;
+        Ok(stamps
+            .into_iter()
+            .filter_map(|(key, at)| match key.as_slice() {
+                [field, task] if field == "checked" && at > 0 => i64::try_from(at)
+                    .ok()
+                    .map(|ns| (task.clone(), chrono::DateTime::from_timestamp_nanos(ns))),
+                _ => None,
+            })
+            .collect())
+    }
     pub fn set_tick(&self, id: &str, task: &str, checked: bool) -> io::Result<Saved> {
         self.update(id, |s| {
             if checked {

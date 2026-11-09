@@ -1,8 +1,8 @@
 //! The left sidebar and the top-right actions.
 //!
-//! The sidebar holds three places (Meetings, Tasks, Memory), the most recent projects as
-//! filters for the meeting list, and a footer with Check, Settings and a compact Hex status
-//! line. It folds to a rail of icons.
+//! The sidebar holds the places (Meetings, Tasks, Memory, Diary), the most recent projects as
+//! filters for the meeting list, and a footer with Settings and a compact Hex status line. It
+//! folds to a rail of icons.
 //! The top right holds one primary "New meeting" button, which becomes "Recording 12:34 | Stop"
 //! while Hex records, so the owner can get back to the live page or stop from anywhere.
 //! All icons are drawn here from plain shapes.
@@ -233,7 +233,7 @@ fn icon_memory(c: Color) -> El {
     )
 }
 
-/// A calendar page: two pegs, a header rule and a day.
+/// A calendar page: two pegs, a header rule and a day. The Diary's icon.
 fn icon_check(c: Color, _bg: Color) -> El {
     slot().child(
         el().size(16.0, 18.0)
@@ -320,13 +320,13 @@ const FOLDER_H: f32 = 32.0;
 /// The open sidebar's side padding, and how far a project sits in from its label.
 const PAD: f32 = 10.0;
 const FOLDER_INDENT: f32 = 12.0;
-/// Check and Settings share one footer line.
+/// Settings and any other tool share one footer line.
 const TOOL_W: f32 = (WIDE - 2.0 * PAD - 4.0) / 2.0;
 /// Projects shown before "Show all".
 const RECENT: usize = 6;
 
 /// The one quiet mark for something that waits on the user: memory proposals to review, high
-/// check findings. Counts live on those pages.
+/// findings of the daily check in the Diary. Counts live on those pages.
 fn signal(c: Color) -> El {
     dot(7.0, c)
 }
@@ -349,7 +349,7 @@ fn place_name(name: &str, active: bool, p: Palette) -> El {
     }
 }
 
-/// One of the three places in the open sidebar: an icon and a name on a 40-point row.
+/// One of the places in the open sidebar: an icon and a name on a 40-point row.
 fn main_row(place: Place, icon: El, p: Palette) -> El {
     let mut r = row()
         .w_full()
@@ -372,7 +372,7 @@ fn main_row(place: Place, icon: El, p: Palette) -> El {
         .on_press(place.press)
 }
 
-/// A tool in the footer (Check, Settings, other devices): shorter than a place, same type.
+/// A tool in the footer (Settings, other devices): shorter than a place, same type.
 fn tool_row(place: Place, icon: El, p: Palette) -> El {
     let mut r = row()
         .h(TOOL_H)
@@ -508,7 +508,7 @@ impl Place {
     }
 }
 
-/// The places (Meetings, Tasks, Memory), the tools (Check, Settings) and the filter for
+/// The places (Meetings, Tasks, Memory, Diary), the tools (Settings) and the filter for
 /// meetings from other devices, when there are any.
 fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
     let page = s.page();
@@ -560,15 +560,16 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
             },
         });
     }
-    let mut tools = Vec::new();
+    // The Diary is read every day like the other places, so it sits with them, not in the
+    // footer with the tools.
     if features.daily_check {
-        tools.push(Place {
+        places.push(Place {
             key: "view-check",
-            name: "Check",
+            name: "Diary",
             help: if high > 0 {
-                format!("Daily check, {high} open high-severity findings")
+                format!("Diary, {high} open high-severity findings")
             } else {
-                "Daily check".into()
+                "Diary".into()
             },
             active: page == Page::Check,
             icon: icon_check,
@@ -579,7 +580,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
             },
         });
     }
-    tools.push(Place {
+    let tools = vec![Place {
         key: "view-hex",
         name: "Settings",
         help: "Settings".into(),
@@ -590,7 +591,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
             s.open_hex();
             s.nav_done();
         },
-    });
+    }];
     let peers = (features.other_devices && s.nav.peers > 0).then(|| Place {
         key: "nav-peers",
         name: "Other devices",
@@ -608,10 +609,10 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
 
 /// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
 ///
-/// Three tiers: the places (Meetings, Tasks, Memory) on 40-point rows with icons; the projects
-/// as lighter 32-point rows under a quiet label; the tools (Check, Settings) and Hex's status in
-/// the footer. Routine counts live on their pages. Two dots remain, because each waits on the
-/// user: memory proposals to review, and high findings in the daily check.
+/// Three tiers: the places (Meetings, Tasks, Memory, Diary) on 40-point rows with icons; the
+/// projects as lighter 32-point rows under a quiet label; Settings and Hex's status in the
+/// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
+/// memory proposals to review, and high findings of the daily check in the Diary.
 pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
     let (places, tools, peers) = places(s, p);
 

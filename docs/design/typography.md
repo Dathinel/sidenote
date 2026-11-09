@@ -77,18 +77,33 @@ they now use `sel`, the accent at 10% over the page (#e8ebed light, #262a2c dark
 
 Three tiers, told apart by height, weight, icons and indent (`src/ui/nav.rs`):
 
-- **Places** (Meetings, Tasks, Memory): 40-point rows with an icon, `CONTROL` in `soft`;
+- **Places** (Meetings, Tasks, Memory, Diary): 40-point rows with an icon, `CONTROL` in `soft`;
   the active one is `NAME` in `ink` on `sel`.
 - **Projects**: a `GROUP` label in `soft`, then 32-point rows in `SMALL` (400, `soft`),
   indented 12 under the label, with no icon and no count. The six most recently met come
   first; "Show all" lists the rest for the session. A chosen project is `SMALL.medium()` in
   `ink` on `sel`, and stays listed even when it is not among the six.
-- **Footer**: other devices (only when there are any), then Check and Settings side by
-  side on 36-point rows, then Hex's status.
+- **Footer**: other devices (only when there are any), then Settings on a 36-point row,
+  then Hex's status. The Diary used to sit here as "Check"; it moved up with the places
+  because it is read every day, like them, not used now and then like a tool.
 
 Routine counts live on their pages. A 7-point dot marks the two things that wait on the
 user: memory proposals to review (`accent`) and open high findings in the daily check
 (`warn`). The rail shows the same dots on the icon's corner.
+
+## The Diary
+
+One entry per day, newest first, in the reading column (760). Days with nothing are left out.
+
+- The day: `CAPTION` in `accent` for Today or Yesterday, then the date in `SECTION`.
+- The summary: one or two sentences in `READ`, counted from what the entry lists below it.
+- A meeting: its time in `META` (`faint`) in a 44-point column, its title in `TITLE` (a
+  link to the meeting), its facts on a `meta_line`, its context line in `SMALL` `soft`, then
+  "Decided" and "For you" as 12 px 500 captions over `SMALL` rows. At 560 px the time joins
+  the facts line and the column goes.
+- Done, Memory and Needs your attention: `GROUP` labels with `SMALL` rows. The newest check's
+  open high and medium findings use the compact finding row; lows are counted. An older
+  day's check is one `SMALL` `soft` line with an Open link to its full report.
 
 ## When to use what
 

@@ -4,6 +4,7 @@
 mod ask;
 mod benchmark;
 mod check;
+mod diary;
 mod finder;
 mod hex;
 mod list;
@@ -1522,10 +1523,14 @@ fn scene_meeting(s: &mut State) {
     }
 }
 
-/// The Check page with the newest report. Scenes that act on it run only against the isolated
-/// state folder, where `tools/prepare_check_fixture.py` put a copy of a report.
+/// The full report of the newest check, opened from the Diary. Scenes that act on it run only
+/// against the isolated state folder, where `tools/prepare_check_fixture.py` put a copy of a
+/// report.
 fn scene_check(s: &mut State) {
     s.open_check();
+    if let Some(date) = s.check.dates.first().copied() {
+        s.open_report(date);
+    }
 }
 
 /// The key of the first open finding with a proposed action.

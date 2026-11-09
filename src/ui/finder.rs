@@ -105,7 +105,7 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         ));
     }
     if f.daily_check {
-        pages.push(page("Daily check", "The latest report", Target::Check));
+        pages.push(page("Diary", "Your days, newest first", Target::Check));
     }
     pages.push(page("Settings", "Hex and this app", Target::Settings(None)));
     if typed {
