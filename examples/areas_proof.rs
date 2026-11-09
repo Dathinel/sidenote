@@ -64,6 +64,10 @@ fn seed(root: &Path, store: &TaskStore) {
         };
         let folder = base.join(format!("180000000000{i}-1"));
         write(
+            &folder.join("manifest.json"),
+            &json!({"created_at_ms":1800000000000_i64+i}),
+        );
+        write(
             &folder.join("english-summary.json"),
             &json!({"title":format!("Synthetic supplier meeting {i}"), "todo": if todo { json!([{"task":"Compare paper samples"}]) } else { json!([]) }}),
         );

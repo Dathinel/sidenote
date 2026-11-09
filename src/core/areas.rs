@@ -106,6 +106,13 @@ pub fn project_id(name: &str) -> String {
     format!("project-{}", blake3::hash(name.as_bytes()).to_hex())
 }
 impl Projects {
+    pub fn is_area_alias(&self, name: &str) -> bool {
+        let normalized = normalized_name(name);
+        self.other
+            .keys()
+            .filter_map(|k| k.strip_prefix("area-alias:"))
+            .any(|n| normalized_name(n) == normalized)
+    }
     pub fn area_catalog(&self) -> io::Result<Catalog> {
         let mut catalog = Catalog {
             areas: read_entries(self, "area:")?,
@@ -226,6 +233,17 @@ impl Catalog {
         if let Some(link) = self.links.get(key).filter(|l| &l.baseline == baseline) {
             return Some(link.target.clone());
         }
+        if let Some(LegacyAlias::Area { area_id }) = self
+            .legacy_aliases
+            .iter()
+            .find(|(name, _)| normalized_name(name) == normalized_name(raw_project))
+            .map(|(_, alias)| alias)
+        {
+            return Some(Target {
+                area_id: area_id.clone(),
+                project_id: None,
+            });
+        }
         let project = self.project(p, raw_project)?;
         if let Some(area_id) = &project.converted_to {
             Some(Target {
@@ -291,10 +309,12 @@ pub fn activity(
             p.meeting_projects.get(&meeting.id),
             file.and_then(|f| f.meeting_project.as_ref())
         ]);
-        if let Some(target) = raw
-            .as_deref()
-            .and_then(|n| catalog.target(p, &meeting_key(&meeting.id), &baseline, n))
-        {
+        if let Some(target) = catalog.target(
+            p,
+            &meeting_key(&meeting.id),
+            &baseline,
+            raw.as_deref().unwrap_or(super::UNSORTED),
+        ) {
             if meeting.started.is_some_and(|s| {
                 s.with_timezone(&chrono::Utc) >= now - chrono::Duration::days(30)
                     && s.with_timezone(&chrono::Utc) <= now
@@ -303,8 +323,9 @@ pub fn activity(
                 if let Some(id) = &target.project_id {
                     out.projects.insert(id.clone());
                 }
-                // A recent area-only meeting is activity too, including meetings without tasks.
-                out.areas.insert(target.area_id.clone());
+                if target.project_id.is_some() || running_meetings.contains(&meeting.id) {
+                    out.areas.insert(target.area_id.clone());
+                }
             }
             out.meetings.insert(meeting.id.clone(), target);
         } else if let Some(project) = raw.as_deref().and_then(|n| catalog.project(p, n))
@@ -327,4 +348,35 @@ pub fn activity(
         }
     }
     Ok(out)
+}
+
+pub fn running_meetings(root: &std::path::Path) -> io::Result<BTreeSet<String>> {
+    let path = root.join("local/router-work");
+    let entries = match std::fs::read_dir(path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(e),
+    };
+    let mut active = BTreeSet::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let marker = entry.path().join("active.json");
+        let bytes = match std::fs::read(marker) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let value: Value = serde_json::from_slice(&bytes)?;
+        if value["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .is_some_and(crate::platform::process_running)
+        {
+            active.insert(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    Ok(active)
 }

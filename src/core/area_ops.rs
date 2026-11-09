@@ -384,6 +384,7 @@ impl TaskStore {
         refs.sort_by(|a, b| a.key.cmp(&b.key));
         let sources: Vec<_> = meetings.iter().map(|m| (&m.id, &m.summary)).collect();
         let pipeline: BTreeMap<_, _> = pipeline.into_iter().collect();
+        let checked: BTreeMap<_, _> = checked.into_iter().collect();
         Ok((
             digest(&(
                 p,

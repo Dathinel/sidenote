@@ -126,6 +126,9 @@ impl Projects {
     }
     /// An explicit choice of an exact displayed name disambiguates a normalized collision.
     pub fn choose_existing(&self, name: &str) -> Option<String> {
+        if self.is_area_alias(name) {
+            return None;
+        }
         if self.projects.iter().any(|p| self.resolve_exact(p) == name) {
             return Some(name.into());
         }
@@ -340,6 +343,11 @@ impl TaskStore {
     /// Adds a project name to the list the pipeline reads.
     pub fn add_project(&self, name: &str) -> io::Result<Projects> {
         super::sync_state::update_checked(&self.root, "projects.json", |p: &mut Projects| {
+            if p.is_area_alias(name) {
+                return Err(super::store_io::invalid(
+                    "This name belongs to an area. Choose a project inside it.",
+                ));
+            }
             if p.choose_existing(name).is_none() && p.matches(name).len() > 1 {
                 return Err(super::store_io::invalid("Choose an existing project"));
             }
@@ -644,7 +652,7 @@ pub fn project_names(projects: &Projects, _tasks: &[TaskItem]) -> Vec<String> {
         .projects
         .iter()
         .map(|p| projects.resolve(p))
-        .filter(|p| !p.is_empty() && p != UNSORTED)
+        .filter(|p| !p.is_empty() && p != UNSORTED && !projects.is_area_alias(p))
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
     names.dedup();

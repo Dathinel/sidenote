@@ -214,15 +214,28 @@ impl MemoryStore {
     }
     fn resolve_projects(&self, mut file: MemoryFile) -> io::Result<MemoryFile> {
         let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
+        let catalog = projects.area_catalog()?;
+        let project = |kind: &str, id: &str, raw: &Option<String>| {
+            let target = catalog.target(
+                &projects,
+                &serde_json::json!([kind, id]).to_string(),
+                &serde_json::json!(raw),
+                raw.as_deref().unwrap_or(super::UNSORTED),
+            );
+            match target {
+                Some(target) => target
+                    .project_id
+                    .and_then(|id| catalog.projects.get(&id))
+                    .map(|p| p.name.clone()),
+                None => raw.as_deref().map(|p| projects.resolve(p)),
+            }
+        };
         for record in &mut file.records {
-            record.project = record.project.as_deref().map(|p| projects.resolve(p));
+            record.project = project("memory", &record.id, &record.project);
         }
         for pending in &mut file.proposals {
-            pending.proposal.project = pending
-                .proposal
-                .project
-                .as_deref()
-                .map(|p| projects.resolve(p));
+            pending.proposal.project =
+                project("proposal", &pending.proposal.id, &pending.proposal.project);
         }
         Ok(file)
     }
