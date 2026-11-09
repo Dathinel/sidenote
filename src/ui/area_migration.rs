@@ -410,7 +410,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
             },
         );
     if e.visible_projects.is_empty() {
-        rows = rows.child(roles::SMALL.wrap("No projects match this search.", p.soft));
+        rows = roles::SMALL
+            .wrap("No projects match this search.", p.soft)
+            .key("migration-empty-search");
     }
     let mut footer = col()
         .w_full()

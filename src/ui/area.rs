@@ -454,7 +454,6 @@ impl State {
             }
             Err(error) => {
                 self.areas.preview = None;
-                self.notice = Some(error.clone());
                 self.areas.error = Some(error);
             }
         }
@@ -576,18 +575,6 @@ pub fn notices(s: &State, p: Palette) -> El {
     }
     if let Some(pending) = s.areas.pending {
         content = content.child(roles::SMALL.wrap(pending, p.soft).role("status"));
-    }
-    if let Some(error) = &s.areas.error {
-        content = content
-            .child(roles::SMALL.wrap(error, p.warn).role("alert"))
-            .child(
-                button("Dismiss", "area-error-dismiss", p)
-                    .self_start()
-                    .on_press(|s: &mut State| {
-                        s.areas.error = None;
-                        s.notice = None;
-                    }),
-            );
     }
     content
 }
