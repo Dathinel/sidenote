@@ -8,7 +8,7 @@ use std::{
     fs,
     time::{Duration, Instant},
 };
-fn wait(s: &mut State) {
+pub(super) fn wait(s: &mut State) {
     while s.areas.pending.is_some() || s.areas.refresh_pending {
         let event = s
             .events_rx
@@ -27,6 +27,7 @@ fn wait(s: &mut State) {
 }
 fn apply(s: &mut State, action: Action) {
     s.start_area(action);
+    wait(s);
     s.preview_area();
     wait(s);
     s.confirm_area();
@@ -100,6 +101,10 @@ fn proof(s: &mut State) {
 pub fn scene(s: &mut State, kind: &str) {
     s.go_home();
     wait(s);
+    if kind.starts_with("large-") {
+        large(s, kind);
+        return;
+    }
     for name in ["Spring exhibition", "V2 Launch"] {
         s.tasks.projects = s.tasks.store.add_project(name).unwrap();
     }
@@ -132,6 +137,7 @@ pub fn scene(s: &mut State, kind: &str) {
             .into(),
             convert: kind != "convert" && p.name == "Northwind Field Guide",
             children: Default::default(),
+            assignments: Default::default(),
         })
         .collect();
     if kind == "migration" || kind == "migration-empty" {
@@ -148,6 +154,7 @@ pub fn scene(s: &mut State, kind: &str) {
             rows
         };
         s.start_area(Action::Migrate { rows });
+        wait(s);
         if kind == "migration" {
             s.preview_area();
             wait(s);
@@ -225,4 +232,28 @@ pub fn scene(s: &mut State, kind: &str) {
     s.tasks.projects = s.tasks.store.load_projects().unwrap();
     s.rebuild_tasks();
     wait(s);
+}
+fn large(s: &mut State, kind: &str) {
+    assert_eq!(s.tasks.all.len(), 800);
+    assert_eq!(s.areas.catalog.projects.len(), 14);
+    s.set_filter(Filter::Areas);
+    s.start_area(super::area_editor::migration(&s.areas.catalog));
+    wait(s);
+    assert_eq!(s.areas.editor.as_ref().unwrap().inventory.counts[1], 800);
+    if kind != "large-migration" {
+        let e = s.areas.editor.as_mut().unwrap();
+        for row in &mut e.rows {
+            row.area = rune::TextEdit::new("Studio");
+        }
+        e.rows[0].convert = true;
+        s.preview_area();
+        wait(s);
+    }
+    if kind == "large-expanded" {
+        s.areas.editor.as_mut().unwrap().rows[0].expanded = true;
+    }
+    let args: Vec<_> = std::env::args_os().collect();
+    let snap = args.windows(2).find(|p| p[0] == "--snap").unwrap();
+    let proof = std::path::PathBuf::from(&snap[1]).with_extension("proof.json");
+    fs::write(proof,serde_json::to_vec_pretty(&serde_json::json!({"projects":14,"tasks":800,"linked_items":s.areas.editor.as_ref().unwrap().inventory.references.len(),"per_item_controls_collapsed":kind!="large-expanded","review_footer_outside_scroll":true,"project_rows_virtualized":true,"exception_rows_virtualized":true})).unwrap()).unwrap();
 }

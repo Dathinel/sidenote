@@ -373,7 +373,7 @@ pub fn project_tools(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Opt
     {
         let id = area.id.clone();
         content = content.child(
-            pressable(roles::CONTROL.wrap(format!("{} â€º {}", area.name, project.name), p.accent))
+            pressable(roles::CONTROL.wrap(format!("{} › {}", area.name, project.name), p.accent))
                 .on_press(move |s: &mut State| s.set_filter(Filter::Area(id.clone()))),
         );
     } else {
@@ -453,6 +453,13 @@ fn project_rows(s: &State, area: Option<&str>, p: Palette) -> El {
     content
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+    if s.areas
+        .editor
+        .as_ref()
+        .is_some_and(|e| matches!(e.action, Action::Migrate { .. }))
+    {
+        return super::area_migration::pane(s, k, p, narrow);
+    }
     let area = match &s.filter {
         Filter::Area(id) => s.areas.catalog.areas.get(id),
         _ => None,
@@ -609,7 +616,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                             .child(roles::TITLE.wrap(&area.name, p.ink))
                             .child(roles::META.wrap(
                                 format!(
-                                    "{count} projects Â· {}",
+                                    "{count} projects · {}",
                                     if area.status == core::areas::Status::Retired {
                                         "Retired"
                                     } else if s.areas.activity.areas.contains(&area.id) {

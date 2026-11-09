@@ -3,6 +3,7 @@
 //! every task.
 mod area;
 mod area_editor;
+mod area_migration;
 mod area_scene;
 mod ask;
 mod benchmark;
@@ -1925,6 +1926,15 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("merge-page", |s| project_merge::scene(s, "page")),
             ("areas-page", |s| area_scene::scene(s, "page")),
+            ("areas-large-migration", |s| {
+                area_scene::scene(s, "large-migration")
+            }),
+            ("areas-large-review", |s| {
+                area_scene::scene(s, "large-review")
+            }),
+            ("areas-large-expanded", |s| {
+                area_scene::scene(s, "large-expanded")
+            }),
             ("areas-all", |s| area_scene::scene(s, "all")),
             ("areas-project", |s| area_scene::scene(s, "project")),
             ("areas-list", |s| area_scene::scene(s, "list")),

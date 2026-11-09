@@ -39,8 +39,10 @@ keys through their existing unknown-field map. Legacy project names, aliases,
 meeting assignments, source files, overrides and memory files remain intact.
 Older UI versions still show the original project labels.
 
-Legacy project IDs are deterministic on first read and persisted before an edit.
-Rename preserves the identity. Move never changes it. Conversion retains the
+Legacy project IDs are deterministic on first read. Separate `area-identity:`
+seeds retain identity across renames. Seeds never publish default mutable project
+metadata. Ordinary add and rename leave parent and conversion registers alone.
+Move never changes identity. Conversion retains the
 old identity with `converted_to`; its legacy aliases have explicit `kind: area`.
 Per-reference links bind to original assignment values and task text. Later raw
 assignment edits take precedence. Child links follow the child's stable ID if
@@ -61,6 +63,32 @@ cross-store write to recover. Undo checks the originating device's backup and
 current assignments, then publishes one journal restoring only touched registers.
 It refuses changed backups, later moves, peer conflicts and dangling references.
 It preserves unrelated later edits and records that the operation was undone.
+
+Undo retires a newly created area instead of deleting it. Its name and stable ID
+remain readable when a late peer reference arrives. Such work appears with a
+conflict notice and a Restore area action. Known new dependencies block Undo.
+Missing references get a `Missing area` entry without blocking the rest of the
+catalog. Unknown fields survive writes. A newer or unreadable schema makes area
+operations read-only while the available catalog stays readable.
+
+Task overrides and manual tasks have one `assignment` field holding a project
+choice and a revision. Choosing the same project again still records new intent
+and supersedes an older area-only link. The raw project field stays for older
+readers. Accepted memory proposals store the effective stable target in the new
+record's own `assignment` field. These are whole fields for the parallel
+field-level three-way merge; that stack is not included here.
+
+The migration editor starts with one default for each project's references.
+Area-only work turns the old project into an area alias. Exceptions are optional,
+searchable and virtualized, as are the project rows. Review and Confirm stay
+outside the scroll area. Changing a parent or conversion default clears invalid
+child choices and requires a fresh review. Final-plan validation rejects a child
+that is itself converted, in either row order.
+
+The refresh worker builds tasks, chip lookups, labels, activity and reference
+indexes. Meeting chips do no catalog rebuild or full task scan in the UI. Manual
+task baselines are indexed once. The large render fixture has 14 projects and
+800 tasks and writes a sibling proof receipt.
 
 Activity, inventory, backup, apply and Undo run on workers. An open effective
 task, a linked meeting in the past 30 days or a running linked Ask/router job
