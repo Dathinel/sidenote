@@ -5,7 +5,8 @@ use super::{
     State,
     check::{copy_row, prose, source_row},
     list::text_title,
-    tasks::{button, one_line, pill, prop_row},
+    roles,
+    tasks::{button, pill, prop_row},
     theme::Palette,
     widgets::{
         badge, dot, hairline, label, list_and_panel, notice_bar, panel_frame, panel_top, pressable,
@@ -594,18 +595,13 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
         let mut meta = row().gap(8.0).items_center().min_w(0.0);
         if !project.is_empty() {
             meta = meta
-                .child(one_line(&project, 12.5, 400.0, p.faint))
-                .child(label("\u{b7}", 12.5, 400.0, p.faint));
+                .child(roles::META.line(&project, p.faint))
+                .child(roles::META.wrap("\u{b7}", p.faint));
         }
         meta = meta
-            .child(label(
-                confirmed_text(r),
-                12.5,
-                400.0,
-                if review { p.open } else { p.faint },
-            ))
-            .child(label("\u{b7}", 12.5, 400.0, p.faint))
-            .child(label(sources, 12.5, 400.0, p.faint));
+            .child(roles::META.wrap(confirmed_text(r), if review { p.open } else { p.faint }))
+            .child(roles::META.wrap("\u{b7}", p.faint))
+            .child(roles::META.wrap(sources, p.faint));
         row()
             .w_full()
             .h(54.0)
@@ -616,7 +612,7 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(one_line(&claim, 14.0, 500.0, ink))
+                    .child(roles::SMALL.medium().line(&claim, ink))
                     .child(meta),
             )
             .child(status_badge(r.status, p))
@@ -626,7 +622,7 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
             .h(38.0)
             .gap(10.0)
             .items_center()
-            .child(one_line(&claim, 14.0, 500.0, ink).grow(1.0));
+            .child(roles::SMALL.medium().line(&claim, ink).grow(1.0));
         if lay.project {
             cells = cells.child(
                 row()
@@ -638,7 +634,7 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
                     } else {
                         dot(7.0, p.soft)
                     })
-                    .child(one_line(&project, 12.5, 400.0, p.faint)),
+                    .child(roles::META.line(&project, p.faint)),
             );
         }
         cells
@@ -659,7 +655,7 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
                     .w(76.0)
                     .justify_end()
                     .items_center()
-                    .child(label(sources, 12.5, 400.0, p.faint)),
+                    .child(roles::META.wrap(sources, p.faint)),
             )
     };
     row_shell(
@@ -692,8 +688,8 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                     .grow(1.0)
                     .min_w(0.0)
                     .gap(2.0)
-                    .child(one_line(&claim, 14.0, 500.0, p.ink))
-                    .child(one_line(
+                    .child(roles::SMALL.medium().line(&claim, p.ink))
+                    .child(roles::META.line(
                         format!(
                             "{} \u{b7} {sources}",
                             if project.is_empty() {
@@ -702,8 +698,6 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                                 &project
                             }
                         ),
-                        12.5,
-                        400.0,
                         p.faint,
                     )),
             )
@@ -719,7 +713,7 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                 p.accent,
                 Some(p.chip),
             )))
-            .child(one_line(&claim, 14.0, 500.0, p.ink).grow(1.0));
+            .child(roles::SMALL.medium().line(&claim, p.ink).grow(1.0));
         if lay.project {
             cells = cells.child(
                 row()
@@ -731,7 +725,7 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                     } else {
                         dot(7.0, p.soft)
                     })
-                    .child(one_line(&project, 12.5, 400.0, p.faint)),
+                    .child(roles::META.line(&project, p.faint)),
             );
         }
         cells
@@ -740,14 +734,17 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                     .w(76.0)
                     .justify_end()
                     .items_center()
-                    .child(label(sources, 12.5, 400.0, p.faint)),
+                    .child(roles::META.wrap(sources, p.faint)),
             )
-            .child(row().w(64.0).justify_end().items_center().child(label(
-                parse_day(&pp.created_at).map_or(String::new(), |d| d.format("%-d %b").to_string()),
-                12.5,
-                400.0,
-                p.faint,
-            )))
+            .child(
+                row().w(64.0).justify_end().items_center().child(
+                    roles::META.wrap(
+                        parse_day(&pp.created_at)
+                            .map_or(String::new(), |d| d.format("%-d %b").to_string()),
+                        p.faint,
+                    ),
+                ),
+            )
     };
     row_shell(
         content,
@@ -778,14 +775,14 @@ fn candidate_row(
     if c.uncited {
         tags = tags.child(badge("No citation", p.warn, Some(p.warnbg)));
     }
-    let line_no = label(format!("Line {}", c.line), 12.5, 400.0, p.faint);
+    let line_no = roles::META.wrap(format!("Line {}", c.line), p.faint);
     let content = if lay.compact {
         row().w_full().h(54.0).gap(10.0).items_center().child(
             col()
                 .grow(1.0)
                 .min_w(0.0)
                 .gap(2.0)
-                .child(one_line(&claim, 14.0, 500.0, p.ink))
+                .child(roles::SMALL.medium().line(&claim, p.ink))
                 .child(row().gap(8.0).items_center().child(line_no).child(tags)),
         )
     } else {
@@ -794,7 +791,7 @@ fn candidate_row(
             .h(38.0)
             .gap(10.0)
             .items_center()
-            .child(one_line(&claim, 14.0, 500.0, p.ink).grow(1.0))
+            .child(roles::SMALL.medium().line(&claim, p.ink).grow(1.0))
             .child(row().items_center().child(tags))
             .child(row().w(56.0).justify_end().child(line_no))
     };
@@ -818,8 +815,8 @@ fn group_head(name: &str, n: usize, p: Palette) -> El {
         .items_center()
         .radius(6.0)
         .fill(p.side)
-        .child(label(name, 13.5, 600.0, p.ink))
-        .child(label(n.to_string(), 12.5, 500.0, p.faint))
+        .child(roles::GROUP.wrap(name, p.ink))
+        .child(roles::META.medium().wrap(n.to_string(), p.faint))
 }
 
 // ---- the top of the page -------------------------------------------------------------------
@@ -854,7 +851,7 @@ fn summary_line(s: &State, p: Palette) -> El {
         }
         format!("{}.", parts.join(", "))
     };
-    label(text_, 14.0, 400.0, p.soft)
+    roles::SMALL.wrap(text_, p.soft)
 }
 
 fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
@@ -931,13 +928,8 @@ fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
         .py(14.0)
         .radius(12.0)
         .fill(p.warnbg)
-        .child(label("Memory has not moved to the new format yet", 15.0, 600.0, p.ink))
-        .child(label(
-            "The new format keeps one claim per row, with its sources, so you can confirm, edit or retire each one. Nothing changes until you accept. Your current text stays exactly as it is in company.legacy.md.",
-            13.5,
-            400.0,
-            p.soft,
-        ))
+        .child(roles::TITLE.wrap("Memory has not moved to the new format yet", p.ink))
+        .child(roles::META.wrap("The new format keeps one claim per row, with its sources, so you can confirm, edit or retire each one. Nothing changes until you accept. Your current text stays exactly as it is in company.legacy.md.", p.soft))
         .child(counts)
         .child(
             row()
@@ -950,10 +942,8 @@ fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
                     .on_press(|s: &mut State| s.migration_prepare(true))),
         );
     if m.preview_running {
-        card = card.child(label(
+        card = card.child(roles::META.wrap(
             "Splitting and typing the claims in the background. You can keep using Meetings.",
-            13.5,
-            400.0,
             p.soft,
         ));
     }
@@ -962,19 +952,17 @@ fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
         ("Kept the original paragraph", &v.fallbacks),
     ] {
         for issue in issues {
-            card = card.child(label(
+            card = card.child(roles::META.wrap(
                 format!(
                     "{title}, line {}: {}\n{}",
                     issue.line, issue.reason, issue.text
                 ),
-                13.5,
-                400.0,
                 p.warn,
             ));
         }
     }
     if let Some(e) = m.errors.get("migration") {
-        card = card.child(label(e, 13.5, 500.0, p.warn).role("alert"));
+        card = card.child(roles::META.medium().wrap(e, p.warn).role("alert"));
     }
     card
 }
@@ -1068,8 +1056,8 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             row()
                 .gap(6.0)
                 .items_center()
-                .child(label("Project", 13.0, 400.0, p.faint))
-                .child(label(shown.clone(), 13.0, 600.0, p.ink))
+                .child(roles::META.wrap("Project", p.faint))
+                .child(roles::GROUP.wrap(shown.clone(), p.ink))
                 .child(label("\u{25be}", 10.0, 400.0, p.faint)),
         )
         .key("mem-project")
@@ -1126,8 +1114,8 @@ fn empty_note(head: &str, body: &str, p: Palette) -> El {
         .gap(6.0)
         .pt(36.0)
         .items_center()
-        .child(label(head, 17.0, 650.0, p.ink))
-        .child(label(body, 14.0, 400.0, p.soft))
+        .child(roles::SECTION.wrap(head, p.ink))
+        .child(roles::SMALL.wrap(body, p.soft))
 }
 
 fn record_list(s: &State, lay: Lay, p: Palette) -> El {
@@ -1183,12 +1171,7 @@ fn proposal_list(s: &State, lay: Lay, p: Palette) -> El {
     let mut g = col().w_full().mt(10.0).gap(1.0);
     if !m.migrated {
         g = g.child(
-            label(
-                "Accept the migration first. Proposals cannot be accepted until memory is in the new format.",
-                13.5,
-                500.0,
-                p.warn,
-            )
+            roles::META.medium().wrap("Accept the migration first. Proposals cannot be accepted until memory is in the new format.", p.warn)
             .mb(6.0),
         );
     }
@@ -1196,13 +1179,12 @@ fn proposal_list(s: &State, lay: Lay, p: Palette) -> El {
         g = g.child(proposal_row(s, pp, lay, p));
     }
     g.child(
-        label(
-            "Nothing changes until you accept. Rejecting leaves memory as it is.",
-            12.5,
-            400.0,
-            p.faint,
-        )
-        .mt(10.0),
+        roles::META
+            .wrap(
+                "Nothing changes until you accept. Rejecting leaves memory as it is.",
+                p.faint,
+            )
+            .mt(10.0),
     )
 }
 
@@ -1289,15 +1271,10 @@ fn list_column(
             .count();
         if forgotten > 0 && m.tab != Tab::Review {
             doc = doc.child(
-                label(
-                    format!(
+                roles::META.wrap(format!(
                         "{} forgotten. Their text is gone from memory, and the same sources will not recreate them.",
                         plural(forgotten, "claim is", "claims are")
-                    ),
-                    12.5,
-                    400.0,
-                    p.faint,
-                )
+                    ), p.faint)
                 .mt(16.0),
             );
         }
@@ -1316,10 +1293,8 @@ fn legacy_text(s: &State, k: &Kit, p: Palette) -> El {
         .gap(6.0)
         .child(spaced_caps("Current memory text", p));
     if m.legacy.trim().is_empty() {
-        return c.child(label(
+        return c.child(roles::SMALL.wrap(
             "There is no company memory yet. New memory needs owner approval.",
-            15.0,
-            400.0,
             p.soft,
         ));
     }
@@ -1335,7 +1310,7 @@ fn source_block(s: &State, sources: &[MemorySource], key: &str, p: Palette) -> E
         .gap(2.0)
         .child(spaced_caps("Sources", p).mb(2.0));
     if sources.is_empty() {
-        c = c.child(label("No source recorded.", 13.0, 400.0, p.faint));
+        c = c.child(roles::META.wrap("No source recorded.", p.faint));
     }
     for (n, src) in sources.iter().enumerate() {
         match src {
@@ -1348,15 +1323,13 @@ fn source_block(s: &State, sources: &[MemorySource], key: &str, p: Palette) -> E
                         .w_full()
                         .gap(0.0)
                         .child(copy_row(s, path, format!("{key}-kb-{n}"), p))
-                        .child(label(
+                        .child(roles::META.wrap(
                             match revision {
                                 Some(r) => {
                                     format!("KB revision {}", r.chars().take(7).collect::<String>())
                                 }
                                 None => "KB revision not recorded".to_string(),
                             },
-                            12.0,
-                            400.0,
                             p.faint,
                         )),
                 );
@@ -1364,13 +1337,12 @@ fn source_block(s: &State, sources: &[MemorySource], key: &str, p: Palette) -> E
         }
     }
     c.child(
-        label(
-            "A source shows where a claim came from. It does not prove the claim.",
-            12.5,
-            400.0,
-            p.faint,
-        )
-        .mt(4.0),
+        roles::META
+            .wrap(
+                "A source shows where a claim came from. It does not prove the claim.",
+                p.faint,
+            )
+            .mt(4.0),
     )
 }
 
@@ -1430,12 +1402,7 @@ fn history_block(s: &State, r: &MemoryRecord, p: Palette) -> El {
         ));
     }
     if lines.is_empty() {
-        c = c.child(label(
-            "No changes recorded since it was added.",
-            13.0,
-            400.0,
-            p.faint,
-        ));
+        c = c.child(roles::META.wrap("No changes recorded since it was added.", p.faint));
     }
     for (when, what) in lines.into_iter().rev() {
         c = c.child(
@@ -1443,8 +1410,8 @@ fn history_block(s: &State, r: &MemoryRecord, p: Palette) -> El {
                 .w_full()
                 .gap(10.0)
                 .items_start()
-                .child(label(when, 12.5, 500.0, p.faint).w(78.0))
-                .child(label(what, 13.0, 400.0, p.soft).grow(1.0).min_w(0.0)),
+                .child(roles::META.medium().wrap(when, p.faint).w(78.0))
+                .child(roles::META.wrap(what, p.soft).grow(1.0).min_w(0.0)),
         );
     }
     c
@@ -1501,38 +1468,37 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
                 .items_center()
                 .min_h(24.0)
                 .child(dot(7.0, p.soft))
-                .child(label(pr, 13.5, 500.0, p.ink)),
+                .child(roles::CONTROL.wrap(pr, p.ink)),
             p,
         ));
     }
     if !r.people.is_empty() {
         props = props.child(prop_row(
             "People",
-            label(r.people.join(", "), 13.5, 400.0, p.ink).mt(2.0),
+            roles::SMALL.wrap(r.people.join(", "), p.ink).mt(2.0),
             p,
         ));
     }
     props = props
         .child(prop_row(
             "Basis",
-            label(basis_name(r.basis), 13.5, 400.0, p.ink).mt(2.0),
+            roles::SMALL.wrap(basis_name(r.basis), p.ink).mt(2.0),
             p,
         ))
         .child(prop_row(
             "First seen",
-            label(
-                r.first_seen
-                    .as_deref()
-                    .map_or_else(|| "Not recorded".to_string(), day_text),
-                13.5,
-                400.0,
-                if r.first_seen.is_some() {
-                    p.ink
-                } else {
-                    p.faint
-                },
-            )
-            .mt(2.0),
+            roles::META
+                .wrap(
+                    r.first_seen
+                        .as_deref()
+                        .map_or_else(|| "Not recorded".to_string(), day_text),
+                    if r.first_seen.is_some() {
+                        p.ink
+                    } else {
+                        p.faint
+                    },
+                )
+                .mt(2.0),
             p,
         ))
         .child(prop_row(
@@ -1550,12 +1516,7 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         ));
     body = body.child(props);
     if review && r.status == RecordStatus::Active {
-        body = body.child(label(
-            "Suggested for review: it has not been confirmed in the last 90 days. Age does not make a claim wrong.",
-            12.5,
-            400.0,
-            p.soft,
-        ));
+        body = body.child(roles::META.wrap("Suggested for review: it has not been confirmed in the last 90 days. Age does not make a claim wrong.", p.soft));
     }
     body = body
         .child(hairline(p))
@@ -1563,7 +1524,7 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         .child(hairline(p))
         .child(history_block(s, r, p));
     if let Some(e) = m.errors.get(&r.id) {
-        body = body.child(label(e, 13.5, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
     }
 
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
@@ -1571,24 +1532,14 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         Some(Ask::Forget) => {
             let kk = id.clone();
             foot = foot
-                .child(label(
-                    "Forget this claim?",
-                    14.0,
-                    600.0,
-                    p.ink,
-                ))
-                .child(label(
-                    "Its text is removed from memory, and the same sources will not bring it back. Old daily check reports, the legacy backup and your meetings may still contain it.",
-                    13.0,
-                    400.0,
-                    p.soft,
-                ))
+                .child(roles::SMALL.bold().wrap("Forget this claim?", p.ink))
+                .child(roles::META.wrap("Its text is removed from memory, and the same sources will not bring it back. Old daily check reports, the legacy backup and your meetings may still contain it.", p.soft))
                 .child(
                     row()
                         .gap(8.0)
                         .items_center()
                         .child(
-                            pressable(label("Forget it", 13.5, 650.0, p.card))
+                            pressable(roles::CONTROL.wrap("Forget it", p.card))
                                 .key("mem-forget-go")
                                 .px(14.0)
                                 .py(6.0)
@@ -1602,13 +1553,8 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         Some(Ask::Retire) => {
             let kk = id.clone();
             foot = foot
-                .child(label("Retire this claim?", 14.0, 600.0, p.ink))
-                .child(label(
-                    "It leaves the active list and the memory the daily check reads. Its text stays here as history, under Retired.",
-                    13.0,
-                    400.0,
-                    p.soft,
-                ))
+                .child(roles::SMALL.bold().wrap("Retire this claim?", p.ink))
+                .child(roles::META.wrap("It leaves the active list and the memory the daily check reads. Its text stays here as history, under Retired.", p.soft))
                 .child(
                     row()
                         .gap(8.0)
@@ -1634,14 +1580,13 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
                         },
                     ))
                     .child(
-                        label(
-                            "Saving counts as your confirmation of the new wording.",
-                            12.0,
-                            400.0,
-                            p.faint,
-                        )
-                        .grow(1.0)
-                        .min_w(0.0),
+                        roles::META
+                            .wrap(
+                                "Saving counts as your confirmation of the new wording.",
+                                p.faint,
+                            )
+                            .grow(1.0)
+                            .min_w(0.0),
                     ),
             );
         }
@@ -1664,15 +1609,13 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
                             .on_press(|s: &mut State| s.memory.ask = Some(Ask::Retire)),
                     );
             } else {
-                buttons = buttons.child(label(
+                buttons = buttons.child(roles::META.wrap(
                     format!("{}. Its text stays here as history.", status_name(r.status)),
-                    13.0,
-                    400.0,
                     p.soft,
                 ));
             }
             buttons = buttons.child(el().grow(1.0)).child(
-                pressable(label("Forget", 13.5, 500.0, p.warn))
+                pressable(roles::META.medium().wrap("Forget", p.warn))
                     .key("mem-forget")
                     .label("Forget this claim")
                     .px(10.0)
@@ -1705,7 +1648,7 @@ fn before_after_block(before: Option<(&str, String)>, after: (&str, String), p: 
                 .radius(10.0)
                 .fill(p.side)
                 .child(spaced_caps(name, p))
-                .child(label(text_, 14.0, 400.0, p.soft).selectable(true)),
+                .child(roles::SMALL.wrap(text_, p.soft).selectable(true)),
         );
     }
     c.child(
@@ -1717,7 +1660,7 @@ fn before_after_block(before: Option<(&str, String)>, after: (&str, String), p: 
             .radius(10.0)
             .fill(p.okbg)
             .child(spaced_caps(after.0, p))
-            .child(label(after.1, 14.0, 500.0, p.ink).selectable(true)),
+            .child(roles::CONTROL.wrap(after.1, p.ink).selectable(true)),
     )
 }
 
@@ -1762,7 +1705,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
         .px(20.0)
         .pt(4.0)
         .pb(24.0)
-        .child(label(title, 19.0, 600.0, p.ink).w_full())
+        .child(roles::SECTION.wrap(title, p.ink).w_full())
         .child(
             row()
                 .flex_wrap()
@@ -1780,7 +1723,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 .w_full()
                 .gap(4.0)
                 .child(spaced_caps("Why the check suggests it", p))
-                .child(label(&pr.rationale, 14.0, 400.0, p.ink)),
+                .child(roles::SMALL.wrap(&pr.rationale, p.ink)),
         );
     let stale = target.is_some_and(|t| {
         pr.target_updated_at
@@ -1788,36 +1731,28 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
             .is_some_and(|u| u != t.updated_at)
     });
     if pr.op != ProposalOp::Add && target.is_none() {
-        body = body.child(label(
+        body = body.child(roles::META.medium().wrap(
             "The claim this refers to is gone or no longer active. Accepting will refuse.",
-            13.0,
-            500.0,
             p.warn,
         ));
     } else if stale {
-        body = body.child(label(
-            "This claim changed after the check suggested the update. Accepting will refuse. Reject it and let the next check look again.",
-            13.0,
-            500.0,
-            p.warn,
-        ));
+        body = body.child(roles::META.medium().wrap("This claim changed after the check suggested the update. Accepting will refuse. Reject it and let the next check look again.", p.warn));
     }
     body = body
         .child(hairline(p))
         .child(source_block(s, &pr.sources, &format!("pp-{}", pr.id), p));
     if let Some(e) = m.errors.get(&pr.id) {
-        body = body.child(label(e, 13.5, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(e, p.warn).role("alert"));
     }
     let id = pr.id.clone();
     let id2 = pr.id.clone();
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
     if !m.migrated {
-        foot = foot.child(label(
-            "Accept the migration first, then accept this.",
-            13.0,
-            500.0,
-            p.warn,
-        ));
+        foot = foot.child(
+            roles::META
+                .medium()
+                .wrap("Accept the migration first, then accept this.", p.warn),
+        );
     }
     let accept = if m.migrated {
         button("Accept", "prop-accept", true, p)
@@ -1836,7 +1771,8 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                     .on_press(move |s: &mut State| s.proposal_reject(&id2)),
             )
             .child(
-                label("Nothing changes until you accept.", 12.0, 400.0, p.faint)
+                roles::META
+                    .wrap("Nothing changes until you accept.", p.faint)
                     .grow(1.0)
                     .min_w(0.0),
             ),
@@ -1898,29 +1834,24 @@ fn candidate_panel(
                 .items_center()
                 .min_h(24.0)
                 .child(dot(7.0, p.soft))
-                .child(label(n, 13.5, 500.0, p.ink)),
+                .child(roles::CONTROL.wrap(n, p.ink)),
             p,
         ));
     }
     props = props.child(prop_row(
         "Old text",
-        label(format!("Line {} of company.md", c.line), 13.5, 400.0, p.ink).mt(2.0),
+        roles::SMALL
+            .wrap(format!("Line {} of company.md", c.line), p.ink)
+            .mt(2.0),
         p,
     ));
     body = body
         .child(props)
         .child(hairline(p))
         .child(source_block(s, &r.sources, &format!("mc-{}", r.id), p))
-        .child(label(
-            "Imported dates stay unknown unless the old text states them. Approving the migration does not say each claim is freshly confirmed.",
-            12.5,
-            400.0,
-            p.faint,
-        ));
-    let foot = row().w_full().px(16.0).py(12.0).child(label(
+        .child(roles::META.wrap("Imported dates stay unknown unless the old text states them. Approving the migration does not say each claim is freshly confirmed.", p.faint));
+    let foot = row().w_full().px(16.0).py(12.0).child(roles::META.wrap(
         "This is a candidate. Nothing is saved until you accept the migration.",
-        12.5,
-        400.0,
         p.soft,
     ));
     panel_frame(

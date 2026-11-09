@@ -20,6 +20,14 @@ impl Role {
         }
     }
 
+    /// The same size at 500, for controls and names that need a little weight.
+    pub const fn medium(self) -> Role {
+        Role {
+            weight: 500.0,
+            ..self
+        }
+    }
+
     pub fn style(self) -> TextStyle {
         TextStyle::new(self.size, self.weight).lh(self.lh)
     }

@@ -3,6 +3,7 @@
 use super::{
     PendingScroll, State,
     list::text_title,
+    roles,
     theme::Palette,
     widgets::{hairline, label, pressable, scroll, spaced_caps},
 };
@@ -939,14 +940,14 @@ fn status_dot(on: bool, size: f32, p: Palette) -> El {
 
 pub(super) fn button(name: &str, key: &str, primary: bool, p: Palette) -> El {
     if primary {
-        pressable(label(name, 13.5, 650.0, p.card))
+        pressable(roles::CONTROL.wrap(name, p.card))
             .key(key.to_string())
             .px(14.0)
             .py(6.0)
             .radius(8.0)
             .fill(p.accent)
     } else {
-        pressable(label(name, 13.5, 500.0, p.soft))
+        pressable(roles::CONTROL.wrap(name, p.soft))
             .key(key.to_string())
             .px(10.0)
             .py(6.0)
@@ -1041,26 +1042,20 @@ fn summary_line(s: &State, p: Palette) -> El {
             .count()
     };
     let (late, today) = (count(DueBucket::Overdue), count(DueBucket::Today));
-    let mut line = row().flex_wrap().items_center().gaps(2.0, 6.0).child(label(
-        format!("{day}."),
-        14.0,
-        600.0,
-        p.ink,
-    ));
+    let mut line = row()
+        .flex_wrap()
+        .items_center()
+        .gaps(2.0, 6.0)
+        .child(roles::SMALL.bold().wrap(format!("{day}."), p.ink));
     if late > 0 {
-        line = line.child(label(format!("{late} overdue,"), 14.0, 600.0, p.warn));
+        line = line.child(roles::SMALL.bold().wrap(format!("{late} overdue,"), p.warn));
     }
     if today > 0 {
-        line = line.child(label(format!("{today} due today."), 14.0, 400.0, p.soft));
+        line = line.child(roles::SMALL.wrap(format!("{today} due today."), p.soft));
     } else if late == 0 {
-        line = line.child(label("Nothing due today.", 14.0, 400.0, p.soft));
+        line = line.child(roles::SMALL.wrap("Nothing due today.", p.soft));
     }
-    line.child(label(
-        format!("{} open.", t.counts.open),
-        14.0,
-        400.0,
-        p.faint,
-    ))
+    line.child(roles::SMALL.wrap(format!("{} open.", t.counts.open), p.faint))
 }
 
 fn title_row(narrow: bool, p: Palette) -> El {
@@ -1068,7 +1063,7 @@ fn title_row(narrow: bool, p: Palette) -> El {
         row()
             .gap(8.0)
             .items_center()
-            .child(label("+  Add task", 13.5, 600.0, p.accent))
+            .child(roles::CONTROL.wrap("+  Add task", p.accent))
             .child(cap("N", p)),
     )
     .key("task-add")
@@ -1102,8 +1097,8 @@ fn group_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         row()
             .gap(6.0)
             .items_center()
-            .child(label("Group", 13.0, 400.0, p.faint))
-            .child(label(group_label(t.grouping), 13.0, 600.0, p.ink))
+            .child(roles::META.wrap("Group", p.faint))
+            .child(roles::GROUP.wrap(group_label(t.grouping), p.ink))
             .child(label("\u{25be}", 10.0, 400.0, p.faint)),
     )
     .key("group-by")
@@ -1202,7 +1197,7 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                     .gap(8.0)
                     .items_center()
                     .child(check_box(t.include_unassigned, p))
-                    .child(label("Include unassigned", 13.0, 400.0, p.ink)),
+                    .child(roles::SMALL.wrap("Include unassigned", p.ink)),
             )
             .key("include-unassigned")
             .role("checkbox")
@@ -1278,7 +1273,7 @@ fn due_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
         Urgency::Calm => (p.faint, 400.0, None),
     };
     let chip = text(shown)
-        .font(TextStyle::new(12.5, weight).lh(18.0))
+        .font(TextStyle::new(12.0, weight).lh(18.0))
         .color(ink)
         .px(8.0)
         .py(1.0)
@@ -1320,7 +1315,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         .radius(13.0)
         .on_press(move |s: &mut State| s.toggle_row(&id, index))
     };
-    let title = one_line(&t.task, 14.0, 400.0, if on { p.faint } else { p.ink });
+    let title = roles::SMALL.line(&t.task, if on { p.faint } else { p.ink });
     let title = if on {
         title.strike(0, t.task.len(), None)
     } else {
@@ -1344,7 +1339,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 .items_center()
                 .gap(6.0)
                 .child(project_dot(&t.project, p))
-                .child(one_line(&t.project, 12.5, 400.0, p.faint)),
+                .child(roles::META.line(&t.project, p.faint)),
         );
     }
     props = props
@@ -1459,10 +1454,10 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
         .items_center()
         .min_w(0.0)
         .child(chevron(open, p))
-        .child(one_line(&g.label, 13.5, 600.0, ink))
-        .child(label(g.rows.len().to_string(), 12.5, 500.0, p.faint));
+        .child(roles::GROUP.line(&g.label, ink))
+        .child(roles::META.medium().wrap(g.rows.len().to_string(), p.faint));
     if let Some(d) = &g.detail {
-        fold = fold.child(label(d, 12.5, 400.0, p.faint).ml(4.0));
+        fold = fold.child(roles::META.wrap(d, p.faint).ml(4.0));
     }
     let toggle = pressable(fold)
         .key(format!("tgroup-fold-{n}"))
@@ -1494,7 +1489,7 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
         GroupKind::Project(name) if name != UNSORTED => {
             let name = name.clone();
             head = head.child(
-                pressable(label("Rename", 12.5, 500.0, p.faint))
+                pressable(roles::META.medium().wrap("Rename", p.faint))
                     .key(format!("trename-{n}"))
                     .label(format!("Rename the project {name}"))
                     .px(6.0)
@@ -1508,7 +1503,7 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
         GroupKind::Meeting(id) if id != MANUAL => {
             let id = id.clone();
             head = head.child(
-                pressable(label("Open", 12.5, 500.0, p.accent))
+                pressable(roles::META.medium().wrap("Open", p.accent))
                     .key(format!("tgroup-open-{n}"))
                     .label(format!("Open the meeting {}", g.label))
                     .px(6.0)
@@ -1552,8 +1547,8 @@ fn done_section(s: &State, v: &TaskView, lay: RowLayout, p: Palette) -> El {
             .gap(8.0)
             .items_center()
             .child(chevron(open, p))
-            .child(label("Done", 13.5, 600.0, p.soft))
-            .child(label(n.to_string(), 12.5, 500.0, p.faint)),
+            .child(roles::GROUP.wrap("Done", p.soft))
+            .child(roles::META.medium().wrap(n.to_string(), p.faint)),
     )
     .key("tasks-done-toggle")
     .label(format!(
@@ -1595,7 +1590,7 @@ fn cutoff_text(day: NaiveDate, today: NaiveDate) -> String {
 fn cleared_line(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let t = &s.tasks;
     let link = |text: &str, key: &str, help: String| {
-        pressable(label(text, 12.5, 600.0, p.accent))
+        pressable(roles::CAPTION.wrap(text, p.accent))
             .key(key.to_string())
             .label(help)
             .px(6.0)
@@ -1622,7 +1617,7 @@ fn cleared_line(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 "Show them",
             )
         };
-        line = line.child(label(said, 12.5, 400.0, p.faint)).child(
+        line = line.child(roles::META.wrap(said, p.faint)).child(
             link(
                 action,
                 "cleared-toggle",
@@ -1685,8 +1680,8 @@ fn empty_note(s: &State, p: Palette) -> El {
         .gap(6.0)
         .pt(40.0)
         .items_center()
-        .child(label(head, 18.0, 650.0, p.ink))
-        .child(label(body, 14.0, 400.0, p.soft))
+        .child(roles::SECTION.wrap(head, p.ink))
+        .child(roles::SMALL.wrap(body, p.soft))
 }
 
 fn key_hints(p: Palette) -> El {
@@ -1695,7 +1690,7 @@ fn key_hints(p: Palette) -> El {
         for k in keys {
             r = r.child(cap(k, p));
         }
-        r.child(label(what, 12.0, 400.0, p.faint).ml(2.0))
+        r.child(roles::META.wrap(what, p.faint).ml(2.0))
     };
     row()
         .key("tasks-keys")
@@ -1719,7 +1714,7 @@ pub(super) fn prop_row(name: &str, control: El, p: Palette) -> El {
         .gap(12.0)
         .items_start()
         .min_h(36.0)
-        .child(label(name, 12.5, 500.0, p.faint).w(68.0).mt(8.0))
+        .child(roles::META.medium().wrap(name, p.faint).w(68.0).mt(8.0))
         .child(control.grow(1.0).min_w(0.0))
 }
 
@@ -1815,7 +1810,7 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
         }
         if !x.manual && t.overrides.get(&id, index).is_some_and(|o| o.due.is_some()) {
             c = c.child(
-                pressable(label("Use the meeting's date", 12.5, 600.0, p.accent))
+                pressable(roles::CAPTION.wrap("Use the meeting's date", p.accent))
                     .key("pdue-reset")
                     .self_start()
                     .px(4.0)
@@ -1827,7 +1822,7 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
         }
     }
     if let Some(msg) = &t.ui.due_error {
-        c = c.child(label(msg, 13.0, 500.0, p.warn).role("alert"));
+        c = c.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
     }
     c
 }
@@ -1860,14 +1855,12 @@ fn owner_control(
                 )
                 .w_full(),
             )
-            .child(label(
+            .child(roles::META.wrap(
                 if task.is_some() {
                     "Enter saves. Leave it empty to use the owner from the meeting."
                 } else {
                     "Leave it empty to keep the task yours."
                 },
-                12.5,
-                400.0,
                 p.faint,
             ));
     }
@@ -1886,12 +1879,7 @@ fn owner_control(
             .gap(8.0)
             .items_center()
             .child(face)
-            .child(label(
-                &name,
-                13.5,
-                500.0,
-                if has_owner { p.ink } else { p.soft },
-            ))
+            .child(roles::CONTROL.wrap(&name, if has_owner { p.ink } else { p.soft }))
             .child(caret(p)),
         pre,
         format!("Owner: {name}"),
@@ -1973,14 +1961,12 @@ fn project_control(
                 )
                 .w_full(),
             )
-            .child(label(
+            .child(roles::META.wrap(
                 if task.is_some() {
                     "Enter moves the task. The project is added to the list."
                 } else {
                     "The project is added to the list."
                 },
-                12.5,
-                400.0,
                 p.faint,
             ));
     }
@@ -1996,7 +1982,7 @@ fn project_control(
             .gap(8.0)
             .items_center()
             .child(project_dot(&current, p))
-            .child(label(&current, 13.5, 500.0, p.ink))
+            .child(roles::CONTROL.wrap(&current, p.ink))
             .child(caret(p)),
         pre,
         format!("Project: {current}"),
@@ -2057,7 +2043,7 @@ fn panel_top(title: &str, overlay: bool, p: Palette) -> El {
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
         top = top.child(
-            pressable(label("\u{2039}  Tasks", 13.5, 500.0, p.soft))
+            pressable(roles::CONTROL.wrap("\u{2039}  Tasks", p.soft))
                 .key("panel-back")
                 .label("Back to the task list (Escape)")
                 .px(10.0)
@@ -2093,20 +2079,16 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
             .meeting_date
             .map(|d| format!(" on {}", d.format("%-d %b")))
             .unwrap_or_default();
-        return panel.child(spaced_caps("Source", p)).child(label(
-            format!("Added by hand{when}. It did not come from a meeting."),
-            13.5,
-            400.0,
-            p.soft,
-        ));
+        return panel
+            .child(spaced_caps("Source", p))
+            .child(roles::META.wrap(
+                format!("Added by hand{when}. It did not come from a meeting."),
+                p.soft,
+            ));
     }
     let Some(m) = s.meetings.iter().find(|m| m.id == t.meeting_id) else {
-        return panel.child(label(
-            "The meeting is no longer on this computer.",
-            13.5,
-            400.0,
-            p.faint,
-        ));
+        return panel
+            .child(roles::META.wrap("The meeting is no longer on this computer.", p.faint));
     };
     let source = core::task_source(m, t.index);
     let date = m
@@ -2115,7 +2097,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
         .unwrap_or_default();
     let id = m.id.clone();
     panel = panel.child(spaced_caps("From the meeting", p)).child(
-        pressable(label(format!("{}{date}", m.title), 13.5, 600.0, p.accent))
+        pressable(roles::CONTROL.wrap(format!("{}{date}", m.title), p.accent))
             .key(format!("tsrc-meet-{}-{}", t.meeting_id, t.index))
             .label(format!("Open the meeting {}", m.title))
             .self_start()
@@ -2126,14 +2108,12 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
             .on_press_tx(move |s: &mut State, tx| s.open_meeting(&id, tx)),
     );
     if source.lines.is_empty() {
-        panel = panel.child(label(
+        panel = panel.child(roles::META.wrap(
             if m.lines.is_empty() || m.timed() {
                 "The summary gave no transcript time for this task."
             } else {
                 "This meeting's transcript has no times, so there is no excerpt for this task."
             },
-            13.0,
-            400.0,
             p.faint,
         ));
     }
@@ -2152,7 +2132,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
                     .items_center()
                     .child(
                         text(l.who.clone())
-                            .font(TextStyle::new(12.5, 600.0).lh(18.0))
+                            .font(roles::CAPTION.style())
                             .color(p.soft)
                             .truncate()
                             .min_w(0.0)
@@ -2166,7 +2146,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
             )
             .child(
                 text(l.text.clone())
-                    .font(TextStyle::new(13.5, 400.0).lh(20.0))
+                    .font(roles::SMALL.style())
                     .color(if main { p.ink } else { p.soft })
                     .wrap(),
             );
@@ -2179,7 +2159,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
         let id = t.meeting_id.clone();
         let index = t.index;
         panel = panel.child(
-            pressable(label("Read on in the transcript", 13.0, 600.0, p.accent))
+            pressable(roles::CONTROL.wrap("Read on in the transcript", p.accent))
                 .key(format!("tsrc-jump-{}-{}", t.meeting_id, t.index))
                 .self_start()
                 .px(4.0)
@@ -2200,7 +2180,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
                 row()
                     .gap(8.0)
                     .child(label("\u{2713}", 13.5, 700.0, p.ok))
-                    .child(label(said, 13.5, 400.0, p.ink).grow(1.0).min_w(0.0)),
+                    .child(roles::SMALL.wrap(said, p.ink).grow(1.0).min_w(0.0)),
             );
     }
     panel
@@ -2221,7 +2201,9 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         )
         .w_full()
     } else {
-        label(&t.task, 19.0, 600.0, if t.done { p.soft } else { p.ink }).w_full()
+        roles::SECTION
+            .wrap(&t.task, if t.done { p.soft } else { p.ink })
+            .w_full()
     };
     let status = {
         let (id, on) = (id.clone(), t.done);
@@ -2230,7 +2212,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                 .gap(8.0)
                 .items_center()
                 .child(status_dot(on, 16.0, p))
-                .child(label(if on { "Done" } else { "Open" }, 13.5, 500.0, p.ink)),
+                .child(roles::CONTROL.wrap(if on { "Done" } else { "Open" }, p.ink)),
             "pstatus",
             if on {
                 "Status: done. Press to reopen".to_string()
@@ -2252,7 +2234,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
     if t.manual
         && let Some(msg) = &tasks.ui.error
     {
-        body = body.child(label(msg, 13.0, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
     }
     body = body
         .child(
@@ -2289,7 +2271,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
     if t.manual {
         let id = t.meeting_id.clone();
         foot = foot.child(el().grow(1.0)).child(
-            pressable(label("Delete task", 13.5, 500.0, p.warn))
+            pressable(roles::META.medium().wrap("Delete task", p.warn))
                 .key("pdelete")
                 .px(10.0)
                 .py(6.0)
@@ -2327,7 +2309,7 @@ fn add_panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> (El, El) {
         .pb(28.0)
         .child(title);
     if let Some(msg) = &t.ui.error {
-        body = body.child(label(msg, 13.0, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(msg, p.warn).role("alert"));
     }
     body = body
         .child(
@@ -2343,12 +2325,7 @@ fn add_panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> (El, El) {
                 )
                 .child(prop_row("Owner", owner_control(s, k, None, p, layer), p)),
         )
-        .child(label(
-            "Added by hand, kept on this computer.",
-            12.5,
-            400.0,
-            p.faint,
-        ));
+        .child(roles::META.wrap("Added by hand, kept on this computer.", p.faint));
     let foot = row()
         .w_full()
         .px(16.0)
@@ -2363,7 +2340,8 @@ fn add_panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> (El, El) {
             }),
         )
         .child(
-            label("Enter adds, Escape cancels", 12.5, 400.0, p.faint)
+            roles::META
+                .wrap("Enter adds, Escape cancels", p.faint)
                 .grow(1.0)
                 .min_w(0.0),
         );
@@ -2428,7 +2406,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .gap(12.0)
                 .items_center()
                 .fill(p.warnbg)
-                .child(label(note, 13.5, 500.0, p.warn).grow(1.0))
+                .child(roles::META.medium().wrap(note, p.warn).grow(1.0))
                 .child(
                     button("Dismiss", "tasks-notice-dismiss", false, p)
                         .on_press(|s: &mut State| s.tasks.notice = None),

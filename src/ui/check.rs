@@ -8,6 +8,7 @@ use super::{
     ask::{cite_time, link_citations},
     list::text_title,
     meeting::COLUMN,
+    roles,
     tasks::{button, cap, chevron, one_line, pill, prop_row, value_button},
     theme::{BODY_LH, Palette},
     widgets::{
@@ -830,7 +831,7 @@ fn picker(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         return el();
     };
     if c.dates.len() < 2 {
-        return label("Only one check so far", 13.0, 400.0, p.faint);
+        return roles::META.wrap("Only one check so far", p.faint);
     }
     let chevron = if c.picker_open {
         k.glyph.chevron_up
@@ -841,7 +842,7 @@ fn picker(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         row()
             .gap(4.0)
             .items_center()
-            .child(label("Earlier days", 13.5, 500.0, p.soft))
+            .child(roles::CONTROL.wrap("Earlier days", p.soft))
             .child(rune::icon(chevron, 13.0).color(p.faint)),
     )
     .key("check-picker")
@@ -880,7 +881,7 @@ fn kb_when(at: &str) -> String {
 fn fact(name: &str, value: String, p: Palette) -> El {
     let content = format!("{name}  {value}");
     text(content)
-        .font(TextStyle::new(13.5, 400.0).lh(22.0))
+        .font(roles::META.style())
         .color(p.soft)
         .wrap()
         .spans(vec![Span::new(0, name.len()).color(p.faint).weight(500.0)])
@@ -909,7 +910,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
             ))
             .child(picker(s, k, p, layer).pb(4.0)),
     );
-    head = head.child(label(day, 15.0, 600.0, p.ink).key("check-date"));
+    head = head.child(roles::TITLE.wrap(day, p.ink).key("check-date"));
     let cov = &r.content.coverage;
     let (meetings, tasks) = if is_v2(r) {
         (cov.meeting_count, cov.task_count)
@@ -950,7 +951,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
             .flex_wrap()
             .items_center()
             .gaps(2.0, 8.0)
-            .child(label(line, 13.5, 400.0, p.soft))
+            .child(roles::META.wrap(line, p.soft))
             .child(details),
     );
     if s.check.details_open {
@@ -976,12 +977,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
     }
     if r.kb.stale {
         head = head.child(
-            label(
-                "The KB snapshot is stale. The refresh failed, so this check used the last saved copy. Its date is not today's verification.",
-                13.5,
-                500.0,
-                p.warn,
-            )
+            roles::META.medium().wrap("The KB snapshot is stale. The refresh failed, so this check used the last saved copy. Its date is not today's verification.", p.warn)
             .px(12.0)
             .py(8.0)
             .radius(10.0)
@@ -993,7 +989,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
         if w.starts_with("KB refresh failed") || !seen.insert(w.clone()) {
             continue;
         }
-        head = head.child(label(w, 13.0, 500.0, p.warn));
+        head = head.child(roles::META.medium().wrap(w, p.warn));
     }
     head
 }
@@ -1083,7 +1079,7 @@ fn brief(s: &State, k: &Kit, r: &DailyCheck, p: Palette) -> El {
         if let Some(Some(key)) = targets.get(n) {
             let key = key.clone();
             line_row = line_row.child(
-                pressable(label("Open \u{203a}", 13.0, 600.0, p.accent))
+                pressable(roles::CONTROL.wrap("Open \u{203a}", p.accent))
                     .key(format!("brief-open-{n}"))
                     .label(format!("Open the finding for line {}", n + 1))
                     .px(6.0)
@@ -1118,7 +1114,7 @@ fn due_chip(due: NaiveDate, today: NaiveDate, p: Palette) -> El {
         (p.soft, None, 500.0)
     };
     let chip = text(format!("Due {}", due.format("%-d %b")))
-        .font(TextStyle::new(12.5, weight).lh(18.0))
+        .font(TextStyle::new(12.0, weight).lh(18.0))
         .color(ink)
         .px(8.0)
         .py(1.0)
@@ -1151,16 +1147,15 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
     let project_name = f.project.clone().unwrap_or_default();
     let open_key = key.clone();
     let mut line = if lay.compact {
-        let mut meta = row().gap(8.0).items_center().min_w(0.0).child(one_line(
-            kind_short(&f.kind),
-            12.5,
-            400.0,
-            p.faint,
-        ));
+        let mut meta = row()
+            .gap(8.0)
+            .items_center()
+            .min_w(0.0)
+            .child(roles::META.line(kind_short(&f.kind), p.faint));
         if !project_name.is_empty() {
             meta = meta
-                .child(label("\u{b7}", 12.5, 400.0, p.faint))
-                .child(one_line(&project_name, 12.5, 400.0, p.faint));
+                .child(roles::META.wrap("\u{b7}", p.faint))
+                .child(roles::META.line(&project_name, p.faint));
         }
         if let Some(d) = due {
             meta = meta.child(due_chip(d, c.today, p));
@@ -1193,12 +1188,12 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
             .items_center()
             .child(mark)
             .child(one_line(&f.title, 14.0, weight, ink).grow(1.0))
-            .child(row().w(150.0).items_center().child(one_line(
-                kind_short(&f.kind),
-                12.5,
-                400.0,
-                p.faint,
-            )));
+            .child(
+                row()
+                    .w(150.0)
+                    .items_center()
+                    .child(roles::META.line(kind_short(&f.kind), p.faint)),
+            );
         if lay.project {
             cells = cells.child(
                 row()
@@ -1210,7 +1205,7 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
                     } else {
                         dot(7.0, p.soft)
                     })
-                    .child(one_line(&project_name, 12.5, 400.0, p.faint)),
+                    .child(roles::META.line(&project_name, p.faint)),
             );
         }
         cells = cells
@@ -1259,8 +1254,8 @@ fn group_head(name: &str, n: usize, ink: rune::Color, p: Palette) -> El {
         .radius(6.0)
         .fill(p.side)
         .child(dot(8.0, ink))
-        .child(label(name, 13.5, 600.0, p.ink))
-        .child(label(n.to_string(), 12.5, 500.0, p.faint))
+        .child(roles::GROUP.wrap(name, p.ink))
+        .child(roles::META.medium().wrap(n.to_string(), p.faint))
 }
 
 fn filter_pills(s: &State, r: &DailyCheck, p: Palette) -> El {
@@ -1316,8 +1311,8 @@ fn project_menu(s: &State, k: &Kit, r: &DailyCheck, p: Palette, layer: &mut Vec<
         row()
             .gap(6.0)
             .items_center()
-            .child(label("Project", 13.0, 400.0, p.faint))
-            .child(label(shown.clone(), 13.0, 600.0, p.ink))
+            .child(roles::META.wrap("Project", p.faint))
+            .child(roles::GROUP.wrap(shown.clone(), p.ink))
             .child(label("\u{25be}", 10.0, 400.0, p.faint)),
     )
     .key("check-project")
@@ -1368,12 +1363,7 @@ fn attention(s: &State, k: &Kit, r: &DailyCheck, lay: Lay, p: Palette, layer: &m
     }
     out = out.child(bar.mb(8.0));
     if r.content.findings.is_empty() {
-        return out.child(label(
-            "This check found nothing to flag.",
-            15.0,
-            400.0,
-            p.soft,
-        ));
+        return out.child(roles::SMALL.wrap("This check found nothing to flag.", p.soft));
     }
     let shown = rows(s);
     if shown.is_empty() {
@@ -1383,7 +1373,7 @@ fn attention(s: &State, k: &Kit, r: &DailyCheck, lay: Lay, p: Palette, layer: &m
             Filter::Dismissed => "Nothing is dismissed.",
             Filter::Applied => "Nothing has been applied.",
         };
-        return out.child(label(text_, 14.0, 400.0, p.soft).py(10.0));
+        return out.child(roles::SMALL.wrap(text_, p.soft).py(10.0));
     }
     for (sev, ink) in [
         (Severity::High, p.warn),
@@ -1431,7 +1421,7 @@ fn changed_section(s: &State, r: &DailyCheck, p: Palette) -> El {
                 "check-changed-head",
                 p,
             ))
-            .child(label(note, 14.0, 400.0, p.soft));
+            .child(roles::SMALL.wrap(note, p.soft));
     };
     out = out.child(heading(
         &format!("Changed since {}", base.format("%a %-d %b")),
@@ -1497,12 +1487,7 @@ fn changed_section(s: &State, r: &DailyCheck, p: Palette) -> El {
     out = out.child(chips);
     if !cmp.complete {
         out = out.child(
-            label(
-                "The comparison is incomplete. This check or the one before it had warnings, so a finding that is missing is not necessarily resolved.",
-                13.5,
-                500.0,
-                p.warn,
-            )
+            roles::META.medium().wrap("The comparison is incomplete. This check or the one before it had warnings, so a finding that is missing is not necessarily resolved.", p.warn)
             .mt(8.0),
         );
     }
@@ -1522,9 +1507,9 @@ fn changed_section(s: &State, r: &DailyCheck, p: Palette) -> El {
             .py(10.0)
             .radius(10.0)
             .fill(p.side);
-        list = list.child(label(note, 13.0, 400.0, p.soft));
+        list = list.child(roles::META.wrap(note, p.soft));
         if ids.is_empty() {
-            list = list.child(label("None.", 13.5, 400.0, p.faint));
+            list = list.child(roles::META.wrap("None.", p.faint));
         }
         for id in ids {
             let title = c
@@ -1541,9 +1526,9 @@ fn changed_section(s: &State, r: &DailyCheck, p: Palette) -> El {
             let mut item = col()
                 .w_full()
                 .gap(1.0)
-                .child(label(title, 14.0, 600.0, p.ink));
+                .child(roles::SMALL.bold().wrap(title, p.ink));
             if let Some(w) = why.filter(|_| g == Gone::Resolved) {
-                item = item.child(label(w, 13.0, 400.0, p.soft));
+                item = item.child(roles::META.wrap(w, p.soft));
             }
             list = list.child(item);
         }
@@ -1601,12 +1586,12 @@ fn claim_column(
         .border(1.0, p.line)
         .child(spaced_caps(title, p));
     if claim.text.trim().is_empty() {
-        c = c.child(label("Nothing on record.", 14.0, 400.0, p.faint));
+        c = c.child(roles::SMALL.wrap("Nothing on record.", p.faint));
     } else {
-        c = c.child(label(&claim.text, 14.5, 400.0, p.ink).selectable(true));
+        c = c.child(roles::SMALL.wrap(&claim.text, p.ink).selectable(true));
     }
     if claim.sources.is_empty() {
-        c = c.child(label("No source cited.", 12.5, 400.0, p.faint));
+        c = c.child(roles::META.wrap("No source cited.", p.faint));
     }
     for (n, src) in claim.sources.iter().enumerate() {
         c = c.child(source_row(s, src, format!("{key}-src-{n}"), p));
@@ -1620,7 +1605,7 @@ fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -
     if !is_v2(r) {
         out = out.child(heading("Story by project", None, "check-story-head", p));
         if r.content.story.trim().is_empty() {
-            return out.child(label("This report has no story.", 14.0, 400.0, p.soft));
+            return out.child(roles::SMALL.wrap("This report has no story.", p.soft));
         }
         out = out.child(
             link(
@@ -1653,12 +1638,7 @@ fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -
         p,
     ));
     if all.is_empty() {
-        return out.child(label(
-            "This check made no story comparison.",
-            14.0,
-            400.0,
-            p.soft,
-        ));
+        return out.child(roles::SMALL.wrap("This check made no story comparison.", p.soft));
     }
     let mut list = col().w_full().gap(1.0);
     for (n, a) in all.iter().enumerate() {
@@ -1673,7 +1653,7 @@ fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -
                 .items_center()
                 .child(chevron(open, p))
                 .child(dot(7.0, p.soft))
-                .child(one_line(&a.project, 14.0, 600.0, p.ink).grow(1.0))
+                .child(roles::SMALL.bold().line(&a.project, p.ink).grow(1.0))
                 .child(status_pill(a.status, p)),
         )
         .key(format!("story-row-{n}"))
@@ -1724,7 +1704,7 @@ fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -
                         .w_full()
                         .gap(8.0)
                         .child(label("?", 14.0, 700.0, p.open))
-                        .child(label(&a.question, 14.0, 500.0, p.ink).grow(1.0).min_w(0.0)),
+                        .child(roles::CONTROL.wrap(&a.question, p.ink).grow(1.0).min_w(0.0)),
                 );
             }
             item = item.child(body);
@@ -1754,12 +1734,13 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
             .py(8.0)
             .radius(10.0)
             .items_center()
-            .child(label(name.clone(), 12.0, 500.0, p.faint));
+            .child(roles::META.medium().wrap(name.clone(), p.faint));
         match d.counts {
             Some((total, new)) => {
                 cell = cell
                     .child(
-                        label(total.to_string(), 20.0, 600.0, p.ink)
+                        rune::text(total.to_string())
+                            .color(p.ink)
                             .font(TextStyle::new(20.0, 600.0).lh(26.0)),
                     )
                     .child(label(
@@ -1795,13 +1776,12 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
         strip = strip.child(cell);
     }
     out.child(strip).child(
-        label(
-            "Each box is one day. A box that says No check is a day when no check ran.",
-            12.5,
-            400.0,
-            p.faint,
-        )
-        .mt(8.0),
+        roles::META
+            .wrap(
+                "Each box is one day. A box that says No check is a day when no check ran.",
+                p.faint,
+            )
+            .mt(8.0),
     )
 }
 
@@ -1829,7 +1809,7 @@ pub fn source_row(s: &State, e: &str, key: String, p: Palette) -> El {
         let ink = if known { p.accent } else { p.faint };
         let mut content = row().gap(6.0).items_center().child(
             rune::text(title)
-                .font(TextStyle::new(13.5, 500.0).lh(20.0))
+                .font(roles::CONTROL.style())
                 .color(ink)
                 .truncate()
                 .min_w(0.0)
@@ -1838,7 +1818,7 @@ pub fn source_row(s: &State, e: &str, key: String, p: Palette) -> El {
         if let Some(t) = at {
             content = content.child(
                 rune::text(format!("\u{b7} {t}"))
-                    .font(TextStyle::new(13.5, 500.0).lh(20.0))
+                    .font(roles::CONTROL.style())
                     .color(ink),
             );
         }
@@ -1873,7 +1853,7 @@ pub fn copy_row(s: &State, value: &str, key: String, p: Palette) -> El {
         .items_center()
         .child(
             rune::text(value.to_string())
-                .font(TextStyle::new(12.5, 400.0).mono().lh(19.0))
+                .font(TextStyle::new(12.0, 400.0).mono().lh(18.0))
                 .color(p.soft)
                 .wrap()
                 .selectable(true)
@@ -1910,7 +1890,7 @@ fn snooze_menu(s: &State, k: &Kit, key: &str, p: Palette, layer: &mut Vec<El>) -
         row()
             .gap(8.0)
             .items_center()
-            .child(label("Snooze", 13.5, 500.0, p.ink))
+            .child(roles::CONTROL.wrap("Snooze", p.ink))
             .child(label("\u{25be}", 10.0, 400.0, p.faint)),
         "snooze",
         "Snooze this finding (S)".to_string(),
@@ -1988,7 +1968,7 @@ fn snooze_pick_row(s: &State, k: &Kit, p: Palette) -> El {
             ),
     );
     if let Some(e) = &c.snooze_error {
-        out = out.child(label(e, 13.0, 500.0, p.warn).role("alert"));
+        out = out.child(roles::META.medium().wrap(e, p.warn).role("alert"));
     }
     out
 }
@@ -2060,7 +2040,7 @@ fn finding_panel(
                 .items_center()
                 .min_h(24.0)
                 .child(dot(7.0, p.soft))
-                .child(label(n, 13.5, 500.0, p.ink)),
+                .child(roles::CONTROL.wrap(n, p.ink)),
             p,
         ));
     }
@@ -2070,20 +2050,16 @@ fn finding_panel(
         } else {
             format!("{} to {}", a.format("%-d %b"), b.format("%-d %b"))
         };
-        props = props.child(prop_row("Seen", label(seen, 13.5, 400.0, p.ink).mt(2.0), p));
+        props = props.child(prop_row("Seen", roles::SMALL.wrap(seen, p.ink).mt(2.0), p));
     }
     if let Some(d) = finding_due(s, f) {
         props = props.child(prop_row("Due", due_chip(d, c.today, p), p));
     }
     props = props.child(prop_row(
         "Sources",
-        label(
-            plural(f.evidence.len(), "citation", "citations"),
-            13.5,
-            400.0,
-            p.ink,
-        )
-        .mt(2.0),
+        roles::SMALL
+            .wrap(plural(f.evidence.len(), "citation", "citations"), p.ink)
+            .mt(2.0),
         p,
     ));
 
@@ -2093,7 +2069,7 @@ fn finding_panel(
         .px(20.0)
         .pt(4.0)
         .pb(24.0)
-        .child(label(&f.title, 19.0, 600.0, p.ink).w_full())
+        .child(roles::SECTION.wrap(&f.title, p.ink).w_full())
         .child(badges)
         .child(props)
         .child(hairline(p))
@@ -2109,19 +2085,18 @@ fn finding_panel(
         .gap(1.0)
         .child(spaced_caps("Citations", p).mb(2.0));
     if f.evidence.is_empty() {
-        ev = ev.child(label("No citation.", 13.0, 400.0, p.faint));
+        ev = ev.child(roles::META.wrap("No citation.", p.faint));
     }
     for (n, e) in f.evidence.iter().enumerate() {
         ev = ev.child(source_row(s, e, format!("ev-{i}-{n}"), p));
     }
     ev = ev.child(
-        label(
-            "A citation shows where this came from. It does not prove the finding.",
-            12.5,
-            400.0,
-            p.faint,
-        )
-        .mt(4.0),
+        roles::META
+            .wrap(
+                "A citation shows where this came from. It does not prove the finding.",
+                p.faint,
+            )
+            .mt(4.0),
     );
     body = body.child(ev);
 
@@ -2147,9 +2122,14 @@ fn finding_panel(
                 },
                 p,
             ))
-            .child(label(describe(a), 14.5, 600.0, p.ink).selectable(true));
+            .child(
+                roles::SMALL
+                    .bold()
+                    .wrap(describe(a), p.ink)
+                    .selectable(true),
+            );
         let pair = |name: &str, value: String, ink: rune::Color, strike: bool| {
-            let mut v = label(value.clone(), 13.5, 500.0, ink);
+            let mut v = roles::CONTROL.wrap(value.clone(), ink);
             if strike {
                 v = v.strike(0, value.len(), None);
             }
@@ -2157,7 +2137,7 @@ fn finding_panel(
                 .w_full()
                 .gap(10.0)
                 .items_start()
-                .child(label(name, 12.5, 500.0, p.faint).w(48.0))
+                .child(roles::META.medium().wrap(name, p.faint).w(48.0))
                 .child(v.grow(1.0).min_w(0.0))
         };
         if let Some(b) = before {
@@ -2169,30 +2149,24 @@ fn finding_panel(
             if applied { p.ok } else { p.ink },
             false,
         ));
-        box_ = box_.child(label(
+        box_ = box_.child(roles::META.wrap(
             format!(
                 "In the meeting: {}",
                 meeting_title(&s.meetings, &a.meeting_id)
             ),
-            12.5,
-            400.0,
             p.soft,
         ));
         if let Some(w) = warn.filter(|_| !applied) {
-            box_ = box_.child(label(w, 13.0, 500.0, p.warn));
+            box_ = box_.child(roles::META.medium().wrap(w, p.warn));
         }
-        box_ = box_.child(label(
-            no_undo(a),
-            12.5,
-            400.0,
-            if applied { p.soft } else { p.warn },
-        ));
+        box_ = box_.child(roles::META.wrap(no_undo(a), if applied { p.soft } else { p.warn }));
         body = body.child(box_);
     }
     if let Some(h) = handled.filter(|h| h.status != TriageStatus::Applied || f.action.is_none()) {
         let (line, ink, bg) = status_line(h, v2, p);
         body = body.child(
-            label(line, 13.5, 500.0, ink)
+            roles::CONTROL
+                .wrap(line, ink)
                 .px(12.0)
                 .py(8.0)
                 .radius(10.0)
@@ -2200,7 +2174,7 @@ fn finding_panel(
         );
     }
     if let Some(err) = c.errors.get(&key) {
-        body = body.child(label(err, 13.5, 500.0, p.warn).role("alert"));
+        body = body.child(roles::META.medium().wrap(err, p.warn).role("alert"));
     }
 
     // The footer: what the owner can do with it.
@@ -2262,7 +2236,7 @@ fn hint_keys(keys: &[&str], what: &str, p: Palette) -> El {
     for k in keys {
         r = r.child(cap(k, p));
     }
-    r.child(label(what, 12.0, 400.0, p.faint).ml(2.0))
+    r.child(roles::META.wrap(what, p.faint).ml(2.0))
 }
 
 // ---- the page --------------------------------------------------------------------------------
@@ -2277,14 +2251,9 @@ fn empty(s: &State, narrow: bool, p: Palette) -> El {
         .w_full()
         .gap(12.0)
         .child(text_title("Daily check", if narrow { 26.0 } else { 30.0 }, p).mb(8.0))
-        .child(label("No check has run yet", 17.0, 600.0, p.ink))
-        .child(label(
-            "Every day at 08:30 the check reads your meetings and tasks, compares them with the company knowledge base, and lists what does not line up. The first report appears here when it has run.",
-            15.0,
-            400.0,
-            p.soft,
-        ))
-        .child(label("To run it now, paste this into PowerShell. It makes no window and takes a few minutes:", 15.0, 400.0, p.soft).mt(6.0))
+        .child(roles::SECTION.wrap("No check has run yet", p.ink))
+        .child(roles::SMALL.wrap("Every day at 08:30 the check reads your meetings and tasks, compares them with the company knowledge base, and lists what does not line up. The first report appears here when it has run.", p.soft))
+        .child(roles::SMALL.wrap("To run it now, paste this into PowerShell. It makes no window and takes a few minutes:", p.soft).mt(6.0))
         .child(
             col()
                 .w_full()
@@ -2294,7 +2263,7 @@ fn empty(s: &State, narrow: bool, p: Palette) -> El {
                 .fill(p.side)
                 .child(copy_row(s, &cmd, "copy-run".into(), p)),
         )
-        .child(label("Then reopen this page.", 15.0, 400.0, p.soft))
+        .child(roles::SMALL.wrap("Then reopen this page.", p.soft))
 }
 
 fn list_column(

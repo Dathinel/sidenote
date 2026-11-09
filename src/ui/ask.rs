@@ -9,8 +9,9 @@
 use super::{
     AskRun, State,
     meeting::COLUMN,
+    roles,
     theme::{BODY_LH, Palette},
-    widgets::{hairline, label, link, pressable, quiet_button, spaced_caps},
+    widgets::{hairline, link, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, TextStyle, Transition, Tx, col, el, row, text};
@@ -96,7 +97,7 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
     let from = s.back.as_deref() == Some(key.as_str());
     let user = m.role == "user";
     let body = if user {
-        label(&m.text, 15.0, 600.0, p.ink)
+        roles::TITLE.wrap(&m.text, p.ink)
     } else {
         let origin = key.clone();
         let all = s.selected.is_none();
@@ -179,9 +180,10 @@ fn progress(run: &AskRun, k: &Kit, p: Palette) -> El {
         .pt(4.0)
         .pb(14.0)
         .child(Spinner::new().size(14.0).color(p.faint).build(k))
-        .child(label(head, 13.5, 500.0, p.soft))
+        .child(roles::CONTROL.wrap(head, p.soft))
         .child(
-            label(step, 13.0, 400.0, p.faint)
+            roles::META
+                .wrap(step, p.faint)
                 .key("ask-step")
                 .role("status")
                 .min_w(0.0),
@@ -260,19 +262,20 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         && s.saved.messages.last().is_some_and(|m| m.role == "user");
     if unanswered {
         messages = messages.child(
-            label(
-                "No answer was saved for this question. Ask it again to retry.",
-                13.5,
-                400.0,
-                p.faint,
-            )
-            .px(8.0)
-            .pb(14.0),
+            roles::META
+                .wrap(
+                    "No answer was saved for this question. Ask it again to retry.",
+                    p.faint,
+                )
+                .px(8.0)
+                .pb(14.0),
         );
     }
     if let Some(e) = error {
         messages = messages.child(
-            label(format!("Could not answer. {e}"), 13.5, 500.0, p.warn)
+            roles::META
+                .medium()
+                .wrap(format!("Could not answer. {e}"), p.warn)
                 .role("alert")
                 .px(8.0)
                 .pb(14.0),
@@ -293,7 +296,7 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
 }
 
 fn recipe(i: usize, text: &'static str, p: Palette) -> El {
-    pressable(label(text, 13.0, 500.0, p.soft))
+    pressable(roles::CONTROL.wrap(text, p.soft))
         .key(format!("suggest-{i}"))
         // Pressing a chip must not take the keyboard from the box, or the chips would vanish
         // before the press landed.
@@ -389,7 +392,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
             .items_center()
             .child(
                 text(shown.to_string())
-                    .font(TextStyle::new(12.5, 500.0).lh(18.0))
+                    .font(roles::META.medium().style())
                     .color(p.faint)
                     .truncate()
                     .min_w(0.0),
@@ -504,17 +507,17 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
 
 /// What the pill says when no agent CLI is on this machine.
 fn no_agent(s: &State, p: Palette) -> El {
-    let mut note = col().grow(1.0).min_w(0.0).gap(2.0).child(label(
-        "Ask needs an agent: install Claude Code, Codex or OpenCode",
-        14.0,
-        500.0,
-        p.ink,
-    ));
+    let mut note = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(2.0)
+        .child(roles::CONTROL.wrap(
+            "Ask needs an agent: install Claude Code, Codex or OpenCode",
+            p.ink,
+        ));
     if s.agents_rechecked {
-        note = note.child(label(
+        note = note.child(roles::META.wrap(
             "Still not found. If you just installed one, restart Sidenote.",
-            12.5,
-            400.0,
             p.faint,
         ));
     }
@@ -565,7 +568,7 @@ pub fn overlay_with(
     if s.back.is_some() {
         stack = stack.child(
             row().w_full().justify_end().child(
-                pressable(label(
+                pressable(roles::CONTROL.wrap(
                     if s.check_back {
                         "\u{2039} Back to the check"
                     } else if s.cite_back.is_some() {
@@ -573,8 +576,6 @@ pub fn overlay_with(
                     } else {
                         "\u{2191} Back to the summary point"
                     },
-                    13.5,
-                    600.0,
                     p.card,
                 ))
                 .key("back-to-summary")
@@ -634,7 +635,9 @@ pub fn overlay_with(
     // The pill lines up with the thread above it when there is one.
     let wide = focused || pending || !empty || !s.saved.messages.is_empty();
     let model = match &s.runner_error {
-        Some(e) => label(format!("Runners are not set up. {e}"), 12.5, 500.0, p.warn)
+        Some(e) => roles::META
+            .medium()
+            .wrap(format!("Runners are not set up. {e}"), p.warn)
             .px(8.0)
             .max_w(260.0),
         None => runner_choice(s, k, p, narrow, layer),
