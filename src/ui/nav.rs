@@ -491,25 +491,7 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
                 .py(8.0)
                 .child(dot(8.0, ink))
                 .child(roles::META.wrap("Hex", p.faint))
-                .child(
-                    col()
-                        .grow(1.0)
-                        .child(roles::CONTROL.line(words, p.ink))
-                        .child(match s.last_updated {
-                            Some(at) => {
-                                let minutes = at.elapsed().as_secs() / 60;
-                                let text = if minutes == 0 {
-                                    "Updated just now".into()
-                                } else {
-                                    format!("Updated {minutes} min ago")
-                                };
-                                roles::META
-                                    .wrap(text, p.faint)
-                                    .help("Last refresh applied in this window")
-                            }
-                            None => el(),
-                        }),
-                ),
+                .child(col().grow(1.0).child(roles::CONTROL.line(words, p.ink))),
         )
         .key("hex-status")
         .label(help.clone())
@@ -526,6 +508,27 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
             .hover(p.chip)
             .on_press(on_press)
     }
+}
+
+fn updated(s: &State, p: Palette) -> El {
+    let Some(at) = s.last_updated else {
+        return el();
+    };
+    let minutes = at.elapsed().as_secs() / 60;
+    let words = if minutes == 0 {
+        "Updated just now".into()
+    } else if minutes < 60 {
+        format!("Updated {minutes} min ago")
+    } else {
+        format!("Updated {} h ago", minutes / 60)
+    };
+    roles::META
+        .wrap(words.clone(), p.faint)
+        .key("refresh-status")
+        .label(words)
+        .role("status")
+        .help("Last content change applied in this window")
+        .px(PAD)
 }
 
 /// A place or a tool: what it is called, where it goes and the one signal it may carry.
@@ -731,6 +734,9 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         }
     }
     footer = footer.child(hex_line(s, p, wide));
+    if wide {
+        footer = footer.child(updated(s, p));
+    }
 
     let mut pane = col()
         .key("nav")

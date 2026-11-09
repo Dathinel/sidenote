@@ -253,14 +253,14 @@ impl MemState {
             self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
         }
         if full && let Err(e) = store.list_pending_proposals() {
-            self.notice = Some(format!("Could not read the memory proposals. {e}."));
+            self.notice = Some(super::edit_worker::SaveError::from(&e).message().into());
         }
         match store.load() {
             Ok(file) => {
                 self.apply_file(file);
             }
             Err(e) => {
-                self.notice = Some(format!("Could not read the company memory. {e}."));
+                self.notice = Some(super::edit_worker::SaveError::from(&e).message().into());
             }
         }
         if self.migrated {
@@ -471,6 +471,10 @@ impl State {
     }
 
     pub fn cancel_memory_edit(&mut self) {
+        if let Some(id) = &self.memory.cursor {
+            self.memory.errors.remove(id);
+        }
+        self.memory.notice = None;
         self.memory.editor_generation += 1;
         self.memory.editing = false;
         self.memory.edit = TextEdit::default();
@@ -563,7 +567,7 @@ impl State {
             let result = MemoryStore::default()
                 .prepare_migration(force)
                 .map(|_| ())
-                .map_err(|e| e.to_string());
+                .map_err(|e| super::edit_worker::SaveError::from(&e).message().into());
             let _ = events.send(super::Event::MigrationPrepared(result));
             if let Some(waker) = waker {
                 waker();

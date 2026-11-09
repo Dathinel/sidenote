@@ -665,9 +665,10 @@ impl State {
         }
         self.check.errors.remove(key);
         if let Err(e) = core::apply_action(&action) {
-            self.check
-                .errors
-                .insert(key.to_string(), format!("Not applied. {e}."));
+            self.check.errors.insert(
+                key.to_string(),
+                super::edit_worker::SaveError::from(&e).message().into(),
+            );
             return;
         }
         self.set_triage(key, TriageStatus::Applied, None);

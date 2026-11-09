@@ -73,8 +73,8 @@ The app refreshes on focus and every 10 seconds while the window is visible. No 
 runs while it is hidden or minimized. One worker compares file names, sizes and modified
 times before parsing changes. Peer reads skip reparse points and non-regular files and use
 size limits (4 MB journals, 16 MB summaries and the existing transcript limit). Errors skip
-the affected entry and are counted. Refresh memory and entry counts are bounded, and each
-file is read at most once in a refresh. Results from before a local mutation are ignored.
+the affected entry and are counted. Each folder has an 8,192-entry limit and each logical store has a 256 MB total limit.
+An incomplete read keeps that store's last good data. Each file is read at most once in a refresh. Results from before a local mutation are ignored.
 The footer's timer shows when a refresh was last applied; it does not confirm peer delivery.
 
 No compaction or journal deletion is performed. Keep every journal, including tombstones,
@@ -89,7 +89,8 @@ they are not authentication against a malicious device allowed to rewrite and re
 
 ## Migration and backup
 
-Migration happens automatically on load or the watcher, focus or 60-second fallback refresh. It reads
+Migration runs at startup and on Save. Refresh reads stores without writing; incoming
+changes are read on focus or the 10-second visible refresh. Migration reads
 legacy per-meeting JSON, `all.json`, task overrides, projects, task settings, memory records,
 legacy company memory, triage and daily reports. It never overwrites, deletes or renames a
 legacy input. Existing supported `*.sync-conflict-*` copies are also read as legacy inputs.

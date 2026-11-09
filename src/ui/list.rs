@@ -244,14 +244,6 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if position == 0 {
         doc = doc.child(roles::SMALL.wrap(empty_text(s), p.soft).mt(24.0).px(10.0));
     }
-    if !s.scan_errors.is_empty() {
-        doc = doc.child(
-            roles::META
-                .wrap(s.scan_errors.join(" "), p.warn)
-                .mt(20.0)
-                .px(10.0),
-        );
-    }
     // "meeting-pane" is the key the Ask thread measures to size itself.
     let mut pane = col()
         .key("meeting-pane")
