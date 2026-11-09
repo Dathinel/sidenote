@@ -25,7 +25,11 @@ fn read_json<T: Default + DeserializeOwned>(path: &Path) -> io::Result<T> {
     match super::file_reads::read(path, super::file_reads::JOURNAL_MAX) {
         Ok(bytes) => {
             let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-            serde_json::from_slice(body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            serde_json::from_slice(body).map_err(|e| {
+                let error = io::Error::new(io::ErrorKind::InvalidData, e);
+                super::file_reads::error(path, &error);
+                error
+            })
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(T::default()),
         Err(e) => Err(e),
