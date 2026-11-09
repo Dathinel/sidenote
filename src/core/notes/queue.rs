@@ -113,6 +113,11 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Invalid meeting id"));
     }
     if settings.engine() != Engine::App {
+        if mode.is_some() {
+            return Err(store_io::invalid(
+                "Turn on built-in AI notes in Settings first",
+            ));
+        }
         return Ok(());
     }
     let folder = meetings.join(id);
@@ -120,7 +125,7 @@ pub(super) fn enqueue_in(
     if !complete(&folder) {
         return Err(store_io::invalid("Meeting is not complete"));
     }
-    let sorting = mode == Some(Request::SortAgain);
+    let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
     if folder.join("english-summary.json").exists() && !sorting {
         return Ok(());
     }
@@ -222,7 +227,7 @@ fn process(
             "meeting is not complete",
         );
     }
-    let sort_only = job.request == Some(Request::SortAgain);
+    let sort_only = matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
     if folder.join("english-summary.json").exists() && !sort_only {
         return write(
             root,
@@ -315,15 +320,28 @@ fn process(
         .and_then(chrono::DateTime::from_timestamp_millis)
         .map(|d| d.with_timezone(&chrono::Local).date_naive())
         .ok_or_else(|| store_io::invalid("Missing meeting date"))?;
+    if job.request == Some(Request::RedoTasks) {
+        return redo_tasks(
+            job,
+            run,
+            Redo {
+                root,
+                folder: &folder,
+                id,
+                settings,
+                transcript: &transcript,
+                date,
+                teams: &teams,
+                projects: &projects,
+            },
+        );
+    }
     let (summary, fallback) = if sort_only {
         let raw = text(
             &folder.join("english-summary.json"),
             file_reads::SUMMARY_MAX,
         )?;
-        (
-            schema::object::<schema::Summary>(&raw).map_err(store_io::invalid)?,
-            false,
-        )
+        (existing_summary(&raw)?, false)
     } else {
         if !folder.join("quick-title.json").exists() {
             let title_model = if helper == Helper::Claude {
@@ -623,4 +641,103 @@ pub fn run_pending() -> io::Result<()> {
         // Wake for new jobs while retaining the single worker's persisted retry schedule.
         std::thread::sleep(Duration::from_millis((at - now()).clamp(1, 5_000) as u64));
     }
+}
+
+fn existing_summary(raw: &str) -> io::Result<schema::Summary> {
+    let mut value: serde_json::Value = serde_json::from_str(raw)?;
+    for todo in value["todo"].as_array_mut().into_iter().flatten() {
+        if todo.get("title").is_none() {
+            todo["title"] = todo["task"].clone();
+        }
+    }
+    // Older notes omitted empty sections.
+    for key in ["context", "topics", "todo", "to_settle"] {
+        if value.get(key).is_none() {
+            value[key] = serde_json::json!([]);
+        }
+    }
+    serde_json::from_value(value).map_err(io::Error::from)
+}
+struct Redo<'a> {
+    root: &'a Path,
+    folder: &'a Path,
+    id: &'a str,
+    settings: &'a NotesSettings,
+    transcript: &'a str,
+    date: chrono::NaiveDate,
+    teams: &'a [schema::Team],
+    projects: &'a [String],
+}
+fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<()> {
+    let Redo {
+        root,
+        folder,
+        id,
+        settings,
+        transcript,
+        date,
+        teams,
+        projects,
+    } = redo;
+    let path = folder.join("english-summary.json");
+    let raw = text(&path, file_reads::SUMMARY_MAX)?;
+    let mut source: serde_json::Value = serde_json::from_str(&raw)?;
+    let old: core::Summary = serde_json::from_value(source.clone())?;
+    let material = format!(
+        "Extract the tasks from this meeting. Only redo the tasks.\nTeams: {}\nTranscript:\n{}\nExisting notes:\n{}",
+        serde_json::to_string(teams)?,
+        transcript,
+        raw
+    );
+    let helper = settings
+        .helper
+        .ok_or_else(|| store_io::invalid("No helper selected"))?;
+    let model = if settings.model.trim().is_empty() {
+        helper.default_model()
+    } else {
+        &settings.model
+    };
+    let call = prompt::Call {
+        root,
+        helper,
+        model,
+        timeout: helper::TASKS_TIMEOUT,
+    };
+    let answer = match call.ladder_output(run,Agent::Tasks,&material,|raw| {
+        let tasks: serde_json::Value = schema::object(raw)?;
+        let todo = tasks.get("todo").filter(|v| v.is_array()).ok_or("missing tasks list")?;
+        let value = serde_json::json!({"title":"Tasks", "context":[], "topics":[], "to_settle":[], "todo":todo});
+        schema::parse(&value.to_string(),id,date,transcript,teams)
+    },Some(include_str!("tasks_redo_tail.txt"))) {
+        Ok(answer) => answer,
+        Err(e) => return failure(root,id,job,e),
+    };
+    source["todo"] = serde_json::to_value(&answer.value.todo)?;
+    // Do not overwrite notes that changed while the helper was running.
+    if text(&path, file_reads::SUMMARY_MAX)? != raw {
+        return Err(store_io::invalid("Notes changed while tasks were running"));
+    }
+    let new: core::Summary = serde_json::from_value(source.clone())?;
+    core::TaskStore::new(root.to_owned()).preserve_redo(id, &old.todo, &new.todo)?;
+    store_io::write(&path, &source)?;
+    let sorted = call.ladder(
+        run,
+        Agent::Tasks,
+        &prompt::task_material(&answer.value, projects)?,
+        |raw| schema::sorting(raw, &answer.value, projects, &settings.your_name),
+    );
+    let tasks_failed = match sorted {
+        Ok(sorted) => store_io::write(&folder.join("tasks.json"), &sorted.value).is_err(),
+        Err(_) => true,
+    };
+    write(
+        root,
+        id,
+        job,
+        JobState::Done {
+            fallback: answer.fallback,
+            tasks_failed,
+        },
+        "tasks redone",
+    )
 }

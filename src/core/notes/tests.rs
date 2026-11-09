@@ -568,3 +568,61 @@ fn external_summary_published_during_a_call_is_preserved() {
     assert_eq!(race.calls, 1);
     assert!(matches!(state(&root.0), JobState::Done { .. }));
 }
+
+#[test]
+fn redo_tasks_only_replaces_todos_and_retains_unknown_note_fields() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let original = serde_json::json!({"title":"Keep this title","context":["Keep this context"],"topics":[],"todo":[{"task":"Send the report","owner":"You"}],"to_settle":[],"future":{"keep":true}});
+    fs::write(folder.join("english-summary.json"), original.to_string()).unwrap();
+    let store = crate::core::TaskStore::new(root.0.clone());
+    store
+        .update_override(ID, 0, "Send the report", |o| {
+            o.status = Some(crate::core::TaskStatus::Review);
+            o.owner = Some("Alex".into());
+        })
+        .unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, Some(Request::RedoTasks));
+    let mut fake=Fake::new(vec![Ok(serde_json::json!({"todo":[{"title":"Send the report","description":"Share the figures","subtasks":[{"title":"Read the figures"}]}]}).to_string()),Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    let updated: serde_json::Value =
+        serde_json::from_slice(&fs::read(folder.join("english-summary.json")).unwrap()).unwrap();
+    let mut expected = original;
+    expected["todo"] = updated["todo"].clone();
+    assert_eq!(updated, expected);
+    assert_eq!(fake.calls.len(), 2);
+    assert!(
+        fake.calls
+            .iter()
+            .all(|(_, limit)| *limit == helper::TASKS_TIMEOUT)
+    );
+    let id = updated["todo"][0]["id"].as_str().unwrap();
+    let overrides = store.load_overrides().unwrap();
+    let edit = overrides.match_task(ID, id, "Send the report", 0).unwrap();
+    assert_eq!(edit.status, Some(crate::core::TaskStatus::Review));
+    assert_eq!(edit.owner.as_deref(), Some("Alex"));
+    assert!(matches!(
+        state(&root.0),
+        JobState::Done {
+            tasks_failed: false,
+            ..
+        }
+    ));
+}
+#[test]
+fn failed_redo_keeps_original_summary_and_overrides() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let original = summary();
+    fs::write(folder.join("english-summary.json"), &original).unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, Some(Request::RedoTasks));
+    let mut fake = Fake::new(vec![Ok("bad".into()), Ok("bad again".into())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fs::read_to_string(folder.join("english-summary.json")).unwrap(),
+        original
+    );
+    assert_eq!(state(&root.0), JobState::BadOutput);
+}

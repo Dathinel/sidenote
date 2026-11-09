@@ -2,11 +2,7 @@ use chrono::{Datelike, Days, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Team {
-    pub name: String,
-    pub members: Vec<String>,
-}
+pub type Team = crate::core::Team;
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct Summary {
@@ -231,21 +227,11 @@ pub(super) fn parse(
             );
             child.done = false;
         }
-        let matching: Vec<_> = teams
-            .iter()
-            .filter(|team| {
-                todo.owner
-                    .as_ref()
-                    .is_some_and(|owner| team.members.contains(owner))
-            })
-            .collect();
-        todo.team = if matching.len() == 1 {
-            Some(matching[0].name.clone())
-        } else {
-            todo.team
-                .take()
-                .filter(|name| teams.iter().any(|t| &t.name == name))
-        };
+        let resolved = crate::core::Teams {
+            teams: teams.to_vec(),
+        }
+        .resolve(todo.owner.as_deref(), todo.team.as_deref());
+        todo.team = (resolved != "No team").then_some(resolved);
         if todo
             .due
             .as_ref()
@@ -461,6 +447,7 @@ mod tests {
         let teams = vec![Team {
             name: "Delivery".into(),
             members: vec!["You".into()],
+            ..Default::default()
         }];
         let n = parse(&v.to_string(), "1-2", NaiveDate::MIN, TRANSCRIPT, &teams).unwrap();
         assert_eq!(n.todo[0].team.as_deref(), Some("Delivery"));

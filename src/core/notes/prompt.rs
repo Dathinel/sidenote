@@ -26,12 +26,22 @@ pub(super) fn escape(text: &str, tag: &str) -> String {
     out.push_str(rest);
     out
 }
+#[cfg(test)]
 pub(super) fn assemble(agent: Agent, base: &str, material: &str, reason: Option<&str>) -> String {
+    assemble_output(agent, base, material, reason, None)
+}
+fn assemble_output(
+    agent: Agent,
+    base: &str,
+    material: &str,
+    reason: Option<&str>,
+    output: Option<&str>,
+) -> String {
     let mut prompt = format!(
         "{}\n{}\n{}\n",
         instructions::core_head(agent),
         base,
-        instructions::core_tail(agent)
+        output.unwrap_or_else(|| instructions::core_tail(agent))
     );
     if let Some(reason) = reason {
         prompt.push_str(&format!(
@@ -75,7 +85,18 @@ pub(super) fn material(
     } else {
         teams
             .iter()
-            .map(|t| format!("- {}: {}", t.name, t.members.join(", ")))
+            .map(|t| {
+                format!(
+                    "- {}: {}. Other spellings: {}",
+                    t.name,
+                    t.members.join(", "),
+                    t.aliases
+                        .iter()
+                        .map(|(a, m)| format!("{a} = {m}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -134,17 +155,28 @@ impl Call<'_> {
         material: &str,
         validate: impl Fn(&str) -> Result<T, &'static str>,
     ) -> Result<Answer<T>, Failure> {
+        self.ladder_output(run, agent, material, validate, None)
+    }
+    pub fn ladder_output<T>(
+        &self,
+        run: &mut impl Run,
+        agent: Agent,
+        material: &str,
+        validate: impl Fn(&str) -> Result<T, &'static str>,
+        output: Option<&str>,
+    ) -> Result<Answer<T>, Failure> {
         let (base, custom) =
             instructions::base(self.root, agent).map_err(|_| Failure::Backend { exit: None })?;
         let default = instructions::default_base(agent);
         let mut reason = None;
         for attempt in 0..if custom { 3 } else { 2 } {
             let fallback = attempt == 2;
-            let prompt = assemble(
+            let prompt = assemble_output(
                 agent,
                 if fallback { default } else { &base },
                 material,
                 if attempt == 1 { reason } else { None },
+                output,
             );
             let raw = run.run(self.helper, self.model, prompt, self.timeout)?;
             match validate(&raw) {

@@ -53,6 +53,7 @@ pub enum Request {
     TryAgain,
     FirstPart,
     SortAgain,
+    RedoTasks,
 }
 
 /// `engine` is app/scripts/off on disk; `script` is retained when switching engines.
