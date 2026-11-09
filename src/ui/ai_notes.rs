@@ -720,7 +720,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             s.hex.section = super::hex::Section::Teams;
             s.hex.filter = TextEdit::default();
             s.nav_done();
-            super::scene_scroll(s, "hex-head-Teams");
+            super::scene_scroll(s, "hex-top");
         })))
 }
 pub fn setup_card(s: &State, p: Palette) -> Option<El> {
