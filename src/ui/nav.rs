@@ -1,7 +1,8 @@
 //! The left sidebar and the top-right actions.
 //!
-//! The sidebar holds the five places (Meetings, Tasks, Memory, Check, Hex), the projects as
-//! filters for the meeting list, and a compact Hex status line. It folds to a rail of icons.
+//! The sidebar holds three places (Meetings, Tasks, Memory), the most recent projects as
+//! filters for the meeting list, and a footer with Check, Settings and a compact Hex status
+//! line. It folds to a rail of icons.
 //! The top right holds one primary "New meeting" button, which becomes "Recording 12:34 | Stop"
 //! while Hex records, so the owner can get back to the live page or stop from anywhere.
 //! All icons are drawn here from plain shapes.
@@ -11,6 +12,7 @@ use super::{
     theme::Palette,
     widgets::{dot, hairline, pressable, scroll, sidebar_icon},
 };
+use chrono::{DateTime, Local};
 use rune::{Color, El, TextStyle, col, el, row, text};
 use sidenote::core::{self, UiPrefs};
 use std::collections::HashMap;
@@ -41,13 +43,17 @@ pub enum Filter {
     Peers,
 }
 
-/// Looked up once per rebuild, not per frame: each meeting's project and the counts the
-/// sidebar shows beside the filters.
+/// Looked up once per rebuild, not per frame: each meeting's project, how many meetings and
+/// the newest meeting in each project, and the meetings from other devices.
 #[derive(Default)]
 pub struct NavCache {
     pub meeting_project: HashMap<String, String>,
     pub project_counts: HashMap<String, usize>,
+    /// When each project last met, to list the most recent ones first.
+    pub project_latest: HashMap<String, DateTime<Local>>,
     pub peers: usize,
+    /// "Show all" under Projects. Kept across rebuilds for the session, never saved.
+    pub show_all: bool,
 }
 
 impl State {
@@ -70,7 +76,10 @@ impl State {
         for t in self.tasks.all.iter().filter(|t| !t.manual) {
             items.entry(t.meeting_id.as_str()).or_default().push(t);
         }
-        let mut cache = NavCache::default();
+        let mut cache = NavCache {
+            show_all: self.nav.show_all,
+            ..NavCache::default()
+        };
         for m in &self.meetings {
             if m.device.is_some() {
                 cache.peers += 1;
@@ -80,6 +89,10 @@ impl State {
                 .and_then(|v| core::dominant_project(v.iter().copied()));
             if let Some(name) = project {
                 *cache.project_counts.entry(name.clone()).or_default() += 1;
+                if let Some(started) = m.started {
+                    let newest = cache.project_latest.entry(name.clone()).or_insert(started);
+                    *newest = (*newest).max(started);
+                }
                 cache.meeting_project.insert(m.id.clone(), name);
             }
         }
@@ -300,71 +313,127 @@ pub fn icon_stop(size: f32, c: Color) -> El {
 
 // ---- the sidebar ------------------------------------------------------------------------------
 
-fn pill(n: usize, ink: Color, bg: Color) -> El {
-    roles::META
-        .bold()
-        .wrap(n.to_string(), ink)
-        .px(7.0)
-        .radius(999.0)
-        .fill(bg)
+/// Row heights: the three places, the tools in the footer, and a project under its label.
+const MAIN_H: f32 = 40.0;
+const TOOL_H: f32 = 36.0;
+const FOLDER_H: f32 = 32.0;
+/// The open sidebar's side padding, and how far a project sits in from its label.
+const PAD: f32 = 10.0;
+const FOLDER_INDENT: f32 = 12.0;
+/// Check and Settings share one footer line.
+const TOOL_W: f32 = (WIDE - 2.0 * PAD - 4.0) / 2.0;
+/// Projects shown before "Show all".
+const RECENT: usize = 6;
+
+/// The one quiet mark for something that waits on the user: memory proposals to review, high
+/// check findings. Counts live on those pages.
+fn signal(c: Color) -> El {
+    dot(7.0, c)
 }
 
-/// One of the five places, or a filter, in the open sidebar.
-fn row_item(
-    key: String,
-    icon: El,
-    name: &str,
-    tail: Option<El>,
-    active: bool,
-    help: String,
-    p: Palette,
-) -> El {
+/// The fill and the hover fill. A selected row keeps its fill under the pointer.
+fn fills(active: bool, p: Palette) -> (Color, Color) {
+    if active {
+        (p.sel, p.sel)
+    } else {
+        (p.side, p.chip)
+    }
+}
+
+/// A place's name: 600 in `ink` when active, 500 in `soft` otherwise.
+fn place_name(name: &str, active: bool, p: Palette) -> El {
+    if active {
+        roles::NAME.line(name, p.ink)
+    } else {
+        roles::CONTROL.line(name, p.soft)
+    }
+}
+
+/// One of the three places in the open sidebar: an icon and a name on a 40-point row.
+fn main_row(place: Place, icon: El, p: Palette) -> El {
     let mut r = row()
         .w_full()
+        .h(MAIN_H)
         .gap(10.0)
         .items_center()
-        .px(10.0)
-        .py(6.0)
-        .radius(8.0)
+        .px(PAD)
         .child(icon)
-        .child(
-            if active {
-                roles::NAME.line(name, p.ink)
-            } else {
-                roles::CONTROL.line(name, p.soft)
-            }
-            .grow(1.0),
-        );
-    if let Some(t) = tail {
-        r = r.child(t);
+        .child(place_name(place.name, place.active, p));
+    if let Some(c) = place.flag {
+        r = r.child(signal(c));
     }
+    let (bg, hover) = fills(place.active, p);
     pressable(r)
-        .key(key)
-        .label(help)
-        .fill(if active { p.chip } else { p.side })
-        .hover(p.chip)
+        .key(place.key)
+        .label(place.help)
+        .radius(8.0)
+        .fill(bg)
+        .hover(hover)
+        .on_press(place.press)
 }
 
-/// The same in the rail: the icon alone, with a dot where the open row has a count.
-fn rail_item(
-    key: String,
-    icon: El,
-    flag: Option<Color>,
-    active: bool,
-    help: String,
-    p: Palette,
-) -> El {
+/// A tool in the footer (Check, Settings, other devices): shorter than a place, same type.
+fn tool_row(place: Place, icon: El, p: Palette) -> El {
+    let mut r = row()
+        .h(TOOL_H)
+        .gap(8.0)
+        .items_center()
+        .px(PAD)
+        .child(icon)
+        .child(place_name(place.name, place.active, p));
+    if let Some(c) = place.flag {
+        r = r.child(signal(c));
+    }
+    let (bg, hover) = fills(place.active, p);
+    pressable(r)
+        .key(place.key)
+        .label(place.help.clone())
+        .help(place.help)
+        .radius(8.0)
+        .fill(bg)
+        .hover(hover)
+        .on_press(place.press)
+}
+
+/// A project: no icon and no count, lighter than a place, indented under its label.
+fn folder_row(key: String, name: &str, active: bool, p: Palette) -> El {
+    let words = if active {
+        roles::SMALL.medium().line(name, p.ink)
+    } else {
+        roles::SMALL.line(name, p.soft)
+    };
+    let (bg, hover) = fills(active, p);
+    pressable(
+        row()
+            .w_full()
+            .h(FOLDER_H)
+            .items_center()
+            .pl(PAD + FOLDER_INDENT)
+            .pr(PAD)
+            .child(words.grow(1.0)),
+    )
+    .key(key)
+    .label(format!("Show meetings in {name}"))
+    .radius(6.0)
+    .fill(bg)
+    .hover(hover)
+}
+
+/// A place or a tool in the rail: the icon alone, with the place's dot on its corner.
+fn rail_item(place: Place, icon: El, p: Palette) -> El {
     let mut b = col().w(40.0).h(36.0).center().child(icon);
-    if let Some(c) = flag {
+    if let Some(c) = place.flag {
         b = b.child(dot(8.0, c).absolute(24.0, 5.0).border(1.5, p.side));
     }
+    let (bg, hover) = fills(place.active, p);
     pressable(b)
-        .key(key)
-        .label(help.clone())
-        .help(help)
+        .key(place.key)
+        .label(place.help.clone())
+        .help(place.help)
         .radius(8.0)
-        .fill(if active { p.chip } else { p.side })
-        .hover(p.chip)
+        .fill(bg)
+        .hover(hover)
+        .on_press(place.press)
 }
 
 fn toggle(s: &State, p: Palette) -> El {
@@ -399,7 +468,7 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
                 .w_full()
                 .gap(8.0)
                 .items_center()
-                .px(10.0)
+                .px(PAD)
                 .py(8.0)
                 .child(dot(8.0, ink))
                 .child(roles::META.wrap("Hex", p.faint))
@@ -422,46 +491,42 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
     }
 }
 
-fn section_title(text_: &str, p: Palette) -> El {
-    roles::META
-        .bold()
-        .wrap(text_, p.faint)
-        .px(10.0)
-        .mt(roles::GROUP_TOP)
-        .mb(4.0)
+/// A place or a tool: what it is called, where it goes and the one signal it may carry.
+struct Place {
+    key: &'static str,
+    name: &'static str,
+    help: String,
+    active: bool,
+    icon: fn(Color, Color) -> El,
+    flag: Option<Color>,
+    press: fn(&mut State),
 }
 
-/// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
-pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
+impl Place {
+    fn icon(&self, p: Palette) -> El {
+        (self.icon)(if self.active { p.ink } else { p.soft }, p.side)
+    }
+}
+
+/// The places (Meetings, Tasks, Memory), the tools (Check, Settings) and the filter for
+/// meetings from other devices, when there are any.
+fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
     let page = s.page();
-    let on_meetings = page == Page::Meetings && s.filter == Filter::All;
-    let c = |on: bool| if on { p.ink } else { p.soft };
+    let features = &s.config.features;
     let open_tasks = s.tasks.counts.open;
     let proposals = s.memory.proposals.len();
     let high = s.check.latest.high;
-
-    struct Spec {
-        key: &'static str,
-        name: &'static str,
-        help: String,
-        active: bool,
-        icon: fn(Color, Color) -> El,
-        count: Option<El>,
-        flag: Option<Color>,
-        press: fn(&mut State),
-    }
-    let specs = [
-        Spec {
-            key: "nav-meetings",
-            name: "Meetings",
-            help: "Meetings".into(),
-            active: on_meetings,
-            icon: |c, _| icon_meetings(c),
-            count: None,
-            flag: None,
-            press: |s| s.go_meetings(),
-        },
-        Spec {
+    let mut places = vec![Place {
+        key: "nav-meetings",
+        name: "Meetings",
+        help: "Meetings".into(),
+        active: page == Page::Meetings && s.filter == Filter::All,
+        icon: |c, _| icon_meetings(c),
+        flag: None,
+        press: |s| s.go_meetings(),
+    }];
+    if features.tasks {
+        places.push(Place {
             key: "view-tasks",
             name: "Tasks",
             help: format!(
@@ -470,14 +535,15 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
             ),
             active: page == Page::Tasks,
             icon: |c, _| icon_tasks(c),
-            count: (open_tasks > 0).then(|| roles::META.wrap(open_tasks.to_string(), p.faint)),
             flag: None,
             press: |s| {
                 s.set_view(View::Tasks);
                 s.nav_done();
             },
-        },
-        Spec {
+        });
+    }
+    if features.memory {
+        places.push(Place {
             key: "view-memory",
             name: "Memory",
             help: if proposals > 0 {
@@ -487,14 +553,16 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
             },
             active: page == Page::Memory,
             icon: |c, _| icon_memory(c),
-            count: (proposals > 0).then(|| pill(proposals, p.card, p.accent)),
             flag: (proposals > 0).then_some(p.accent),
             press: |s| {
                 s.open_memory();
                 s.nav_done();
             },
-        },
-        Spec {
+        });
+    }
+    let mut tools = Vec::new();
+    if features.daily_check {
+        tools.push(Place {
             key: "view-check",
             name: "Check",
             help: if high > 0 {
@@ -504,54 +572,48 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
             },
             active: page == Page::Check,
             icon: icon_check,
-            count: (high > 0).then(|| pill(high, p.warn, p.warnbg)),
             flag: (high > 0).then_some(p.warn),
             press: |s| {
                 s.open_check();
                 s.nav_done();
             },
-        },
-        Spec {
-            key: "view-hex",
-            name: "Settings",
-            help: "Settings".into(),
-            active: page == Page::Hex,
-            icon: icon_hex,
-            count: None,
-            flag: None,
-            press: |s| {
-                s.open_hex();
-                s.nav_done();
-            },
-        },
-    ];
-
-    let mut top = col().w_full().gap(2.0);
-    for spec in specs {
-        if spec.key == "view-tasks" && !s.config.features.tasks
-            || spec.key == "view-memory" && !s.config.features.memory
-            || spec.key == "view-check" && !s.config.features.daily_check
-        {
-            continue;
-        }
-        let ink = c(spec.active);
-        let icon = (spec.icon)(ink, p.side);
-        top = top.child(if wide {
-            row_item(
-                spec.key.into(),
-                icon,
-                spec.name,
-                spec.count,
-                spec.active,
-                spec.help,
-                p,
-            )
-            .on_press(spec.press)
-        } else {
-            rail_item(spec.key.into(), icon, spec.flag, spec.active, spec.help, p)
-                .on_press(spec.press)
         });
     }
+    tools.push(Place {
+        key: "view-hex",
+        name: "Settings",
+        help: "Settings".into(),
+        active: page == Page::Hex,
+        icon: icon_hex,
+        flag: None,
+        press: |s| {
+            s.open_hex();
+            s.nav_done();
+        },
+    });
+    let peers = (features.other_devices && s.nav.peers > 0).then(|| Place {
+        key: "nav-peers",
+        name: "Other devices",
+        help: format!(
+            "Show the {} meetings recorded on another device",
+            s.nav.peers
+        ),
+        active: page == Page::Meetings && s.filter == Filter::Peers,
+        icon: |c, _| icon_device(c),
+        flag: None,
+        press: |s| s.set_filter(Filter::Peers),
+    });
+    (places, tools, peers)
+}
+
+/// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
+///
+/// Three tiers: the places (Meetings, Tasks, Memory) on 40-point rows with icons; the projects
+/// as lighter 32-point rows under a quiet label; the tools (Check, Settings) and Hex's status in
+/// the footer. Routine counts live on their pages. Two dots remain, because each waits on the
+/// user: memory proposals to review, and high findings in the daily check.
+pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
+    let (places, tools, peers) = places(s, p);
 
     let mut header = row().w_full().h(52.0).items_center().child(toggle(s, p));
     header = if wide {
@@ -564,111 +626,178 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         header.justify_center()
     };
 
-    let middle = if !s.config.features.projects && !s.config.features.other_devices {
-        col().grow(1.0)
-    } else if wide {
+    let mut top = col().w_full().gap(2.0);
+    for place in places {
+        let icon = place.icon(p);
+        top = top.child(if wide {
+            main_row(place, icon, p)
+        } else {
+            rail_item(place, icon, p)
+        });
+    }
+
+    let projects_on = s.config.features.projects;
+    let middle = if wide && projects_on {
         projects(s, p)
-    } else {
+    } else if !wide && (projects_on || peers.is_some()) {
         // The rail has no room for names, so one folder opens the sidebar on them.
-        let more = rail_item(
-            "nav-projects".into(),
-            icon_folder(p.soft),
-            None,
-            matches!(s.filter, Filter::Project(_) | Filter::Peers) && page == Page::Meetings,
-            if s.config.features.projects {
+        let more = Place {
+            key: "nav-projects",
+            name: "Projects",
+            help: if projects_on {
                 "Projects. Open the sidebar"
             } else {
                 "Other devices. Open the sidebar"
             }
             .into(),
-            p,
-        )
-        .on_press(|s: &mut State| s.set_sidebar(true));
+            active: matches!(s.filter, Filter::Project(_) | Filter::Peers)
+                && s.page() == Page::Meetings,
+            icon: |c, _| icon_folder(c),
+            flag: None,
+            press: |s| s.set_sidebar(true),
+        };
+        let icon = icon_folder(p.soft);
         col()
             .w_full()
             .grow(1.0)
             .min_h(0.0)
+            .items_center()
             .child(hairline(p).my(10.0))
-            .child(more)
+            .child(rail_item(more, icon, p))
+    } else {
+        col().grow(1.0)
     };
 
-    let status = hex_line(s, p, wide);
-    let mut footer = col().w_full();
-    if let Some(notice) = super::updates::footer(s, p, wide) {
-        footer = footer.child(notice);
+    let mut footer = col().w_full().gap(2.0).pt(6.0).pb(8.0);
+    if !wide {
+        footer = footer.items_center();
     }
+    if let Some(notice) = super::updates::footer(s, p, wide) {
+        footer = footer.child(if wide { notice.px(PAD) } else { notice });
+    }
+    if wide {
+        if let Some(place) = peers {
+            let icon = place.icon(p);
+            footer = footer.child(tool_row(place, icon, p).w_full());
+        }
+        let mut line = row().w_full().gap(4.0);
+        for place in tools {
+            let icon = place.icon(p);
+            line = line.child(tool_row(place, icon, p).w(TOOL_W));
+        }
+        footer = footer.child(line);
+    } else {
+        for place in tools {
+            let icon = place.icon(p);
+            footer = footer.child(rail_item(place, icon, p));
+        }
+    }
+    footer = footer.child(hex_line(s, p, wide));
+
     let mut pane = col()
         .key("nav")
         .w(if wide { WIDE } else { RAIL })
         .h_full()
         .min_h(0.0)
         .fill(p.side)
-        .px(if wide { 10.0 } else { 8.0 })
+        .px(if wide { PAD } else { 8.0 })
         .child(header)
         .child(top)
         .child(middle)
         .child(hairline(p))
-        .child(footer)
-        .child(col().w_full().py(8.0).child(status));
+        .child(footer);
     if !wide {
         pane = pane.items_center();
     }
     pane
 }
 
-/// The Projects section: every project as a filter for the meeting list, preceded by the
-/// meetings that came from another device, when there are any.
+impl State {
+    /// Projects, most recently met first: by each one's newest meeting, then by name.
+    fn recent_projects(&self) -> Vec<&String> {
+        let mut names: Vec<&String> = self.tasks.names.iter().collect();
+        names.sort_by(|a, b| {
+            let newest = |n: &String| self.nav.project_latest.get(n).copied();
+            newest(b)
+                .cmp(&newest(a))
+                .then_with(|| a.to_lowercase().cmp(&b.to_lowercase()))
+        });
+        names
+    }
+}
+
+/// The Projects section: a quiet label, then the six most recently active projects as filters
+/// for the meeting list, and "Show all" for the rest. The choice lasts for the session.
 fn projects(s: &State, p: Palette) -> El {
-    let page = s.page();
-    let mut list = col().w_full().gap(2.0).pb(8.0);
-    // Devices come first: a long project list would push this one out of sight.
-    if s.config.features.other_devices && s.nav.peers > 0 {
-        let active = page == Page::Meetings && s.filter == Filter::Peers;
-        list = list.child(section_title("Devices", p)).child(
-            row_item(
-                "nav-peers".into(),
-                icon_device(if active { p.ink } else { p.soft }),
-                "From other devices",
-                Some(roles::META.wrap(s.nav.peers.to_string(), p.faint)),
-                active,
-                "Show meetings recorded on another device".into(),
-                p,
-            )
-            .on_press(|s: &mut State| s.set_filter(Filter::Peers)),
+    let chosen = match &s.filter {
+        Filter::Project(name) if s.page() == Page::Meetings => Some(name),
+        _ => None,
+    };
+    let mut list = col().w_full().gap(2.0).pb(8.0).child(
+        roles::GROUP
+            .wrap("Projects", p.soft)
+            .px(PAD)
+            .mt(roles::GROUP_TOP)
+            .mb(4.0),
+    );
+    let names = s.recent_projects();
+    if names.is_empty() {
+        list = list.child(
+            roles::META
+                .wrap("Projects you add meetings to appear here.", p.faint)
+                .pl(PAD + FOLDER_INDENT)
+                .pr(PAD),
         );
     }
-    if s.config.features.projects {
-        list = list.child(section_title("Projects", p));
-        if s.tasks.names.is_empty() {
-            list = list.child(
-                roles::META
-                    .wrap("Projects you add meetings to appear here.", p.faint)
-                    .px(10.0),
-            );
+    let all = s.nav.show_all || names.len() <= RECENT;
+    for (i, name) in names.iter().enumerate() {
+        let active = chosen == Some(*name);
+        // A chosen project stays in sight even when it is not among the recent ones.
+        if !all && i >= RECENT && !active {
+            continue;
         }
-        for (i, name) in s.tasks.names.iter().enumerate() {
-            let active = page == Page::Meetings && s.filter == Filter::Project(name.clone());
-            let n = s.nav.project_counts.get(name).copied().unwrap_or(0);
-            let target = name.clone();
-            list = list.child(
-                row_item(
-                    format!("nav-project-{i}"),
-                    icon_folder(if active { p.ink } else { p.soft }),
-                    name,
-                    (n > 0).then(|| roles::META.wrap(n.to_string(), p.faint)),
-                    active,
-                    format!("Show meetings in {name}"),
-                    p,
-                )
+        let target = (*name).clone();
+        list = list.child(
+            folder_row(format!("nav-project-{i}"), name, active, p)
                 .on_press(move |s: &mut State| s.set_filter(Filter::Project(target.clone()))),
-            );
-        }
+        );
+    }
+    if names.len() > RECENT {
+        let (words, help) = if s.nav.show_all {
+            (
+                "Show fewer",
+                "Show only the six most recent projects".to_string(),
+            )
+        } else {
+            ("Show all", format!("Show all {} projects", names.len()))
+        };
+        list = list.child(
+            pressable(
+                row()
+                    .w_full()
+                    .h(FOLDER_H)
+                    .items_center()
+                    .pl(PAD + FOLDER_INDENT)
+                    .pr(PAD)
+                    .child(roles::SMALL.line(words, p.faint)),
+            )
+            .key("nav-projects-all")
+            .label(help)
+            .radius(6.0)
+            .hover(p.chip)
+            .on_press(|s: &mut State| s.nav.show_all = !s.nav.show_all),
+        );
     }
     col()
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .child(scroll(list, "nav-scroll"))
+}
+
+/// The sidebar scene with every project shown.
+pub fn scene_all(s: &mut State) {
+    s.nav.show_all = true;
 }
 
 // ---- the top right ----------------------------------------------------------------------------

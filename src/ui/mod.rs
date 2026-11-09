@@ -1409,6 +1409,17 @@ fn scene_tasks(s: &mut State) {
     s.set_view(tasks::View::Tasks);
 }
 
+/// The sidebar scenes: the open sidebar with every signal it can show. The render script writes
+/// a longer synthetic project list and a memory fixture with proposals; two high findings stand
+/// in for a check report that has some. `page` then moves to the page under test.
+fn scene_side(s: &mut State, page: fn(&mut State)) {
+    hex::scene(s, false);
+    page(s);
+    scene_filters(s);
+    scene_sidebar(s, true);
+    s.check.latest.high = 2;
+}
+
 /// Opens the panel on the first task, or on the first one with a transcript line.
 fn scene_panel(s: &mut State, with_source: bool) {
     scene_tasks(s);
@@ -2132,6 +2143,31 @@ pub fn spec() -> AppSpec<State> {
                 scene_filters(s);
                 scene_tasks(s);
                 scene_sidebar(s, true);
+            }),
+            // The sidebar beside each page it serves, with an update waiting, with a project
+            // chosen, with every project shown, and folded to its rail.
+            ("sidebar-meetings", |s| scene_side(s, |_| {})),
+            ("sidebar-meeting", |s| scene_side(s, scene_meeting)),
+            ("sidebar-tasks", |s| scene_side(s, scene_tasks)),
+            ("sidebar-memory", |s| scene_side(s, scene_memory)),
+            ("sidebar-check", |s| scene_side(s, scene_check)),
+            ("sidebar-settings", |s| scene_side(s, |s| s.open_hex())),
+            ("sidebar-update", |s| {
+                scene_side(s, |s| {
+                    updates::scene(s, sidenote::updates::Phase::Ready);
+                    s.go_meetings();
+                })
+            }),
+            ("sidebar-project", |s| {
+                scene_side(s, |_| {});
+                if let Some(name) = s.tasks.names.get(1).cloned() {
+                    s.set_filter(nav::Filter::Project(name));
+                }
+            }),
+            ("sidebar-all", |s| scene_side(s, nav::scene_all)),
+            ("sidebar-rail", |s| {
+                scene_side(s, |_| {});
+                scene_sidebar(s, false);
             }),
             // The end of the list, to see the last meetings clear the Ask bar.
             ("home-end", |s| {

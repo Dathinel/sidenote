@@ -217,6 +217,12 @@ foreach ($n in $sidebarScenes) {
 }
 # A phone-width window: the sidebar is a rail, and a drawer when opened.
 foreach ($n in 'home-open', 'live-recording', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-making-notes', 'meeting-your-notes', 'hex', 'hex-general', 'hex-dictation', 'hex-meetings', 'hex-vocabulary', 'ask-idle', 'ask-focused', 'ask-typed', 'ask-model-missing', 'ask-no-agent') { $shots += ,@("sb-$n-560", $n, '560x900', $null, @()) }
+# The sidebar on each page it serves, wide and at phone width (where it opens as a drawer).
+# These scenes read a longer invented project list and a memory fixture with proposals.
+foreach ($n in 'meetings', 'meeting', 'tasks', 'memory', 'check', 'settings', 'update', 'project', 'all', 'rail') {
+    $shots += ,@("sidebar-$n", "sidebar-$n", '1320x800', $null, @())
+    $shots += ,@("sidebar-$n-560", "sidebar-$n", '560x900', $null, @())
+}
 # The Ask bar on a meeting and across all meetings, answering, at phone width.
 $shots += ,@('ask-narrow',         'ask',              '560x900', $null, @())
 $shots += ,@('ask-running-narrow', 'ask-running',      '560x900', $null, @())
@@ -248,12 +254,17 @@ foreach ($theme in $Themes) {
         if (-not $state.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Render state must stay inside the temporary folder" }
         Remove-Item -LiteralPath $state -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $state | Out-Null
-        @{ projects = @('Northwind Atlas', 'Northwind Field Guide'); aliases = @{} } |
+        $projects = if ($scene -like 'sidebar-*') {
+            @('Northwind Atlas', 'Northwind Field Guide', 'Harbor pricing study', 'Orchard onboarding', 'Lighthouse hiring',
+              'Quarterly planning', 'Supplier review', 'Website refresh', 'Volunteer program', 'Field kit redesign')
+        } else { @('Northwind Atlas', 'Northwind Field Guide') }
+        @{ projects = $projects; aliases = @{} } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/projects.json"
         $enabled = $scene -notlike 'features-off-*' -and $scene -ne 'features-settings' -and $scene -ne 'features-tasks-only'
         @{ version = 1; features = @{ tasks = ($enabled -or $scene -eq 'features-tasks-only'); memory = $enabled; daily_check = $enabled; projects = $enabled; other_devices = $enabled } } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/config.json"
         if ($scene -eq 'ask') { Copy-Item "$root/tools/ui-fixtures/ask-answer.json" "$state/$meeting.json" }
+        if ($scene -like 'sidebar-*') { $checkFixture[$name] = $mem }
         if ($checkFixture.ContainsKey($name)) { & python "$root/tools/prepare_check_fixture.py" $state @($checkFixture[$name]); if ($LASTEXITCODE -ne 0) { throw "No check fixture for $name" } }
         if ($scene -like 'tasks-cleared*') { Set-Content -Encoding utf8 "$state/tasks-settings.json" '{"cleared_before": "2026-10-31"}' }
         Copy-Item "$root/tools/ui-fixtures/hex.json" "$state/hex-fixture.json"

@@ -73,6 +73,23 @@ they now use `sel`, the accent at 10% over the page (#e8ebed light, #262a2c dark
 - Hairlines only where rows hold controls that must line up (settings rows). Cards in a
   list (model cards) are separated by space alone.
 
+## The sidebar
+
+Three tiers, told apart by height, weight, icons and indent (`src/ui/nav.rs`):
+
+- **Places** (Meetings, Tasks, Memory): 40-point rows with an icon, `CONTROL` in `soft`;
+  the active one is `NAME` in `ink` on `sel`.
+- **Projects**: a `GROUP` label in `soft`, then 32-point rows in `SMALL` (400, `soft`),
+  indented 12 under the label, with no icon and no count. The six most recently met come
+  first; "Show all" lists the rest for the session. A chosen project is `SMALL.medium()` in
+  `ink` on `sel`, and stays listed even when it is not among the six.
+- **Footer**: other devices (only when there are any), then Check and Settings side by
+  side on 36-point rows, then Hex's status.
+
+Routine counts live on their pages. A 7-point dot marks the two things that wait on the
+user: memory proposals to review (`accent`) and open high findings in the daily check
+(`warn`). The rail shows the same dots on the icon's corner.
+
 ## When to use what
 
 - **Bold (600)** marks what you scan for: headings, names, decisions, the speaker. Never
