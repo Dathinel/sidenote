@@ -254,9 +254,11 @@ impl Session {
             read_only,
             view,
         };
-        if !session.view.own_bad {
-            session.import_legacy()?;
-        }
+        let read_only = session.read_only;
+        session.read_only |= session.view.own_bad;
+        let imported = session.import_legacy();
+        session.read_only = read_only;
+        imported?;
         Ok(session)
     }
     fn publish(&mut self, changes: Vec<Change>, sources: BTreeSet<String>) -> io::Result<()> {

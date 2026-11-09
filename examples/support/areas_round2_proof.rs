@@ -722,6 +722,26 @@ pub fn run(mode: &str, store: &TaskStore) {
             );
         }
         "r2-store-load" => {
+            let own_bad = TaskStore::new(root.join("own-bad-copy"));
+            core::areas::new_assignment_revision(&own_bad.root).unwrap();
+            fs::copy(
+                root.join("projects.json"),
+                own_bad.root.join("projects.json"),
+            )
+            .unwrap();
+            let own_dir = own_bad
+                .root
+                .join("state")
+                .join(own(&own_bad))
+                .join(blake3::hash(b"projects.json").to_hex().to_string());
+            fs::create_dir_all(&own_dir).unwrap();
+            fs::write(own_dir.join("bad.json"), b"{").unwrap();
+            assert_eq!(
+                own_bad.load_projects().unwrap().projects.len(),
+                3,
+                "An unreadable local journal must not hide readable legacy inputs"
+            );
+            assert!(own_bad.unreadable_items().unwrap() > 0);
             let peer_id = "b".repeat(32);
             let dir = root
                 .join("state")
