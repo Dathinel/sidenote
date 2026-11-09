@@ -264,6 +264,14 @@ fn text_page(text: &str, offset: Option<usize>, limit: Option<usize>) -> Result<
 
 /// Executes an operation against a fresh merged view; the return value is independent of MCP.
 pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
+    let _update_activity = if name == "propose_memory" {
+        Some(
+            crate::updates::activity()
+                .map_err(|_| "An update is being installed. Try again after restart.")?,
+        )
+    } else {
+        None
+    };
     if let Some(feature) = Feature::for_tool(name) {
         let config = Config::load().map_err(|e| format!("Could not read feature settings: {e}"))?;
         if !config.features.enabled(feature) {

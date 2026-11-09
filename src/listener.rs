@@ -70,11 +70,16 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
     }
     let script = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
         .join(".config/hex/scripts/hex-meeting-watch.ps1");
-    Command::new("powershell.exe")
+    let activity = crate::updates::activity()?;
+    let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)
         .creation_flags(HIDDEN)
         .spawn()?;
+    std::thread::spawn(move || {
+        let _activity = activity;
+        let _ = child.wait();
+    });
     Ok(())
 }
 // A streaming HTTP body, with no TLS or proxy needed for the loopback API.
@@ -128,6 +133,21 @@ fn listen() -> Result<(), Problem> {
     }
     let addr: SocketAddr = ([127, 0, 0, 1], config.port).into();
     let mut socket = TcpStream::connect_timeout(&addr, Duration::from_secs(60))?;
+    let (watch, stopped) = std::sync::mpsc::channel::<()>();
+    let _watch = watch;
+    if let Ok(control) = socket.try_clone() {
+        std::thread::spawn(move || {
+            while !crate::updates::listener_stopping() {
+                if matches!(
+                    stopped.recv_timeout(Duration::from_millis(250)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                ) {
+                    return;
+                }
+            }
+            let _ = control.shutdown(std::net::Shutdown::Both);
+        });
+    }
     socket.set_read_timeout(Some(Duration::from_secs(60)))?;
     socket.set_write_timeout(Some(Duration::from_secs(60)))?;
     write!(
@@ -202,6 +222,24 @@ fn listen() -> Result<(), Problem> {
     Ok(())
 }
 pub fn run() -> ! {
+    let _instance = match crate::updates::listener_lock() {
+        Ok(lock) if !crate::updates::listener_stopping() => lock,
+        _ => std::process::exit(0),
+    };
+    let isolated = std::env::args().any(|a| a == "--listener-isolated")
+        && std::env::args().any(|a| a == "--data-dir");
+    if isolated {
+        while !crate::updates::listener_stopping() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        std::process::exit(0);
+    }
+    std::thread::spawn(|| {
+        while !crate::updates::listener_stopping() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        std::process::exit(0);
+    });
     std::thread::spawn(|| {
         loop {
             let _ = crate::core::meeting_router::jobs::start_worker();

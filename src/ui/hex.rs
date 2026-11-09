@@ -887,8 +887,13 @@ fn note(text: &str, p: Palette) -> El {
 fn summary_line(s: &State, p: Palette) -> El {
     let (_, words) = indicator(s, p);
     let text = match s.hex.state() {
-        Some(st) => format!("Version {}. {}.", st.version, words),
-        None => format!("{words}."),
+        Some(st) => format!(
+            "Sidenote {}. Hex {}. {}.",
+            sidenote::updates::VERSION,
+            st.version,
+            words
+        ),
+        None => format!("Sidenote {}. {words}.", sidenote::updates::VERSION),
     };
     label(text, 14.0, 400.0, p.soft)
 }

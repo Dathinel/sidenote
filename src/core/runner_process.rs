@@ -220,6 +220,8 @@ pub(super) fn run_runner_with_timeout(
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
     runners::validate(runner)?;
+    let _update_activity = crate::updates::activity()
+        .map_err(|_| "An update is being installed. Try again after restart.")?;
     let harness = runners::kind(runner)?;
     let program = runners::executable(runner)?;
     let scratch = if runner.args.iter().any(|a| a.contains("{prompt_file}")) {

@@ -853,6 +853,7 @@ pub fn run_daily_check(
     execute(runner_name, dry_run, force).map_err(|e| e.to_string())
 }
 fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<DailyCheck>> {
+    let _update_activity = crate::updates::activity()?;
     if !super::Config::load()?.features.daily_check || !super::DeviceSettings::load()?.daily_check {
         return Ok(None);
     }

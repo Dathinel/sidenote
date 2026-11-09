@@ -370,6 +370,7 @@ pub fn run_one() -> Result<()> {
 }
 
 pub fn run_pending() -> Result<()> {
+    let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
     let automatic = args.iter().any(|arg| arg == "--automatic");

@@ -3,6 +3,11 @@ mod hex_probe;
 mod ui;
 use sidenote::{listener, platform};
 fn main() {
+    velopack::VelopackApp::build()
+        .set_auto_apply_on_startup(false)
+        .on_after_update_fast_callback(|_| sidenote::updates::after_update())
+        .on_restarted(|_| sidenote::updates::restarted())
+        .run();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if let Err(error) = sidenote::core::configure_paths(&args) {
         eprintln!("{error}");
@@ -11,6 +16,32 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
     }
+    if args.iter().any(|a| a == "--version") {
+        println!("Sidenote {}", sidenote::updates::VERSION);
+        return;
+    }
+    if args.iter().any(|a| {
+        matches!(
+            a.to_str(),
+            Some("--update-check" | "--update-apply" | "--update-status")
+        )
+    }) {
+        std::process::exit(sidenote::updates::cli(&args));
+    }
+    let helper = args.iter().any(|a| {
+        matches!(
+            a.to_str(),
+            Some("--transcribe-file" | "--route-one" | "--route-pending" | "--daily-check")
+        )
+    });
+    let _activity = if helper {
+        match sidenote::updates::activity() {
+            Ok(guard) => Some(guard),
+            Err(_) => std::process::exit(2),
+        }
+    } else {
+        None
+    };
     if args.iter().any(|a| a == "--transcribe-file") {
         std::process::exit(sidenote::core::meeting_router::run_cli(&args));
     }
@@ -72,6 +103,22 @@ fn main() {
             Ok(None) => return,
             Err(_) => return,
         }
+    };
+    let _update_window = if headless || offscreen_bench {
+        None
+    } else {
+        match sidenote::updates::exclusive("update-window.lock") {
+            Ok(guard) => Some(guard),
+            Err(_) => return,
+        }
+    };
+    if !headless && !offscreen_bench {
+        let _ = sidenote::updates::apply(true, Vec::new());
+    }
+    let _updates = if headless || offscreen_bench {
+        None
+    } else {
+        Some(sidenote::updates::start(|_| {}))
     };
     if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
         rune::warm_gpu(Default::default());

@@ -3,6 +3,7 @@ pub mod hex_engine;
 pub mod listener;
 pub mod mcp;
 pub mod platform;
+pub mod updates;
 
 /// Prefer the Sidenote name while accepting existing launchers and render tools.
 pub fn env_var(name: &str) -> Option<std::ffi::OsString> {

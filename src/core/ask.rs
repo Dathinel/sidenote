@@ -259,6 +259,15 @@ pub(super) fn spawn_job(
     let running = Running;
     std::thread::spawn(move || {
         let _running = running;
+        let _update_activity = match crate::updates::activity() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let _ = sender.send(Err(
+                    "An update is being installed. Try again after restart.".into(),
+                ));
+                return;
+            }
+        };
         CURRENT.with(|c| *c.borrow_mut() = Some(cancel));
         let result = job(&|event| {
             if !matches!(event, AskProgress::Finished | AskProgress::Failed { .. }) {
