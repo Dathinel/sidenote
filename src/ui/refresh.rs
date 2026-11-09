@@ -29,6 +29,8 @@ impl Default for Options {
 }
 pub(super) struct Data {
     pub meetings: Vec<Meeting>,
+    pub retained: Vec<PathBuf>,
+    pub temporary: bool,
     pub errors: Vec<String>,
     pub pipeline: core::Pipeline,
     pub shared: Option<bool>,
@@ -44,25 +46,33 @@ pub(crate) struct Result {
     pub(super) options: Options,
     pub(super) data: Option<Box<Data>>,
 }
+fn loaded<T>(result: std::io::Result<T>) -> Option<T> {
+    result
+        .inspect_err(|e| {
+            core::file_reads::error(&core::state_dir().join("state"), e);
+        })
+        .ok()
+}
 impl Data {
     pub(super) fn read(options: Options) -> Self {
         let scope = core::file_reads::Scope::begin();
         let device = core::DeviceSettings::load();
-        let shared = device.as_ref().ok().map(|d| {
+        let shared = device.as_ref().ok().and_then(|d| {
             core::file_reads::entries(&core::state_dir().join("state"))
-                .unwrap_or_default()
-                .iter()
-                .any(|e| {
-                    let name = e.file_name();
-                    let name = name.to_string_lossy();
-                    name != d.id
-                        && name.len() == 32
-                        && name.bytes().all(|c| c.is_ascii_hexdigit())
-                        && core::file_reads::directory(&e.path())
+                .ok()
+                .map(|entries| {
+                    entries.iter().any(|e| {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        name != d.id
+                            && name.len() == 32
+                            && name.bytes().all(|c| c.is_ascii_hexdigit())
+                            && core::file_reads::directory(&e.path())
+                    })
                 })
         });
         let device_error = device.is_err();
-        let (meetings, errors) = core::scan();
+        let (meetings, mut errors) = core::scan();
         let shared = shared.map(|seen| seen || meetings.iter().any(|m| m.device.is_some()));
         let pipeline = core::load_pipeline(&meetings);
         let store = core::TaskStore::default();
@@ -71,33 +81,42 @@ impl Data {
             .iter()
             .map(|m| m.id.as_str())
             .chain(std::iter::once(core::ALL_KEY))
-            .filter_map(|id| saved_store.load(id).ok().map(|s| (id.to_string(), s)))
+            .filter_map(|id| loaded(saved_store.load(id)).map(|s| (id.to_string(), s)))
             .collect();
-        let projects = store.load_projects().ok();
-        let overrides = store.load_overrides().ok();
-        let cutoff = store.load_settings().ok().map(|s| s.cutoff());
+        let projects = loaded(store.load_projects());
+        let overrides = loaded(store.load_overrides());
+        let cutoff = loaded(store.load_settings()).map(|s| s.cutoff());
         let memory = if options.memory {
-            core::memory::MemoryStore::default().load().ok()
+            loaded(core::memory::MemoryStore::default().load())
         } else {
             None
         };
         let check = options
             .check
-            .then(|| check::CheckState::read_refresh(options.check_date));
+            .then(|| check::CheckState::read_refresh(options.check_date))
+            .filter(|c| {
+                if let Some(notice) = &c.notice {
+                    errors.push(notice.clone());
+                    false
+                } else {
+                    true
+                }
+            });
 
         let reads = scope.stats();
-        let mut errors = errors;
         if device_error {
             errors.push("Device settings could not be read. Refresh will retry.".into());
         }
         if reads.skipped > 0 {
             errors.push(format!(
-                "Skipped {} unreadable or unsafe files. Refresh will retry.",
+                "Skipped {} unreadable or unsafe files. Previous data is kept where a read failed.",
                 reads.skipped
             ));
         }
         Self {
             meetings,
+            retained: scope.failed(),
+            temporary: reads.temporary,
             errors,
             pipeline,
             shared,
@@ -110,15 +129,27 @@ impl Data {
         }
     }
 }
+pub(super) fn retain_catalog(current: &[Meeting], incoming: &mut Vec<Meeting>, failed: &[PathBuf]) {
+    for old in current {
+        if failed
+            .iter()
+            .any(|p| old.folder.starts_with(p) || p.starts_with(&old.folder))
+            && !incoming.iter().any(|m| m.folder == old.folder)
+        {
+            incoming.push(old.clone());
+        }
+    }
+    incoming.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
+}
 #[derive(PartialEq, Eq)]
 pub(super) struct Metadata {
     files: Vec<(PathBuf, u64, Option<SystemTime>)>,
     pub skipped: usize,
-    visited: usize,
+    temporary: bool,
 }
 fn walk(path: &Path, out: &mut Metadata, depth: usize) {
     use std::os::windows::fs::MetadataExt;
-    if depth > 8 || out.visited >= core::file_reads::ENTRIES_MAX {
+    if depth > 8 {
         out.skipped += 1;
         return;
     }
@@ -130,17 +161,17 @@ fn walk(path: &Path, out: &mut Metadata, depth: usize) {
     }
     let entries = match std::fs::read_dir(path) {
         Ok(e) => e,
-        Err(_) => {
+        Err(e) => {
+            out.temporary |= matches!(e.raw_os_error(), Some(32 | 33));
             out.skipped += 1;
             return;
         }
     };
-    for e in entries {
-        if out.visited >= core::file_reads::ENTRIES_MAX {
+    for (n, e) in entries.enumerate() {
+        if n >= core::file_reads::ENTRIES_MAX {
             out.skipped += 1;
             break;
         }
-        out.visited += 1;
         let e = match e {
             Ok(e) => e,
             Err(_) => {
@@ -181,7 +212,7 @@ pub(super) fn metadata() -> Metadata {
     let mut out = Metadata {
         files: Vec::new(),
         skipped: 0,
-        visited: 0,
+        temporary: false,
     };
     let root = core::state_dir();
     for folder in [
@@ -240,6 +271,76 @@ impl Handle {
 fn visible() -> bool {
     super::hex::window_shown()
 }
+pub(super) fn updated_at(
+    previous: Option<Instant>,
+    shared: Option<bool>,
+    changed: bool,
+) -> Option<Instant> {
+    if shared == Some(false) {
+        None
+    } else if changed && shared == Some(true) {
+        Some(Instant::now())
+    } else {
+        previous
+    }
+}
+fn refresh_needed(force: bool, changed: bool, retry: &Retry) -> bool {
+    force || changed || retry.ready()
+}
+#[derive(Default)]
+struct Retry {
+    attempts: usize,
+    due: Option<Instant>,
+}
+impl Retry {
+    fn ready(&self) -> bool {
+        self.due.is_some_and(|d| Instant::now() >= d)
+    }
+    fn complete(&mut self, temporary: bool) {
+        if temporary {
+            self.failed();
+        } else {
+            self.clear();
+        }
+    }
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+    fn failed(&mut self) {
+        let delays = [10, 30, 60, 300];
+        self.due = Some(Instant::now() + Duration::from_secs(delays[self.attempts.min(3)]));
+        self.attempts = self.attempts.saturating_add(1);
+    }
+}
+static PANICS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn read_caught(options: Options) -> (Data, bool) {
+    read_caught_with(|| Data::read(options))
+}
+fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Data, bool) {
+    match std::panic::catch_unwind(read) {
+        Ok(data) => (data, false),
+        Err(_) => {
+            PANICS.fetch_add(1, Ordering::Relaxed);
+            (
+                Data {
+                    meetings: vec![],
+                    retained: vec![core::meetings_dir(), core::peers_dir()],
+                    temporary: false,
+                    errors: vec!["Refresh hit a problem and will retry".into()],
+                    pipeline: HashMap::new(),
+                    shared: None,
+                    projects: None,
+                    overrides: None,
+                    cutoff: None,
+                    saved: HashMap::new(),
+                    memory: None,
+                    check: None,
+                },
+                true,
+            )
+        }
+    }
+}
 pub(super) fn start(waker: Waker, initial: Options) -> Handle {
     let (tx, rx) = mpsc::sync_channel(1);
     let tx = Arc::new(tx);
@@ -251,6 +352,7 @@ pub(super) fn start(waker: Waker, initial: Options) -> Handle {
     let worker_dirty = dirty.clone();
     std::thread::spawn(move || {
         let mut previous = None;
+        let mut retry = Retry::default();
         let mut next = Instant::now();
         loop {
             if let Err(mpsc::RecvTimeoutError::Disconnected) =
@@ -266,14 +368,13 @@ pub(super) fn start(waker: Waker, initial: Options) -> Handle {
             let options = *worker_options.lock().unwrap();
             let changed = metadata();
             let force = worker_dirty.swap(false, Ordering::AcqRel);
-            let data = if force || previous.as_ref() != Some(&changed) {
-                Some(Box::new(Data::read(options)))
+            let data = if refresh_needed(force, previous.as_ref() != Some(&changed), &retry) {
+                let (data, panicked) = read_caught(options);
+                retry.complete(panicked || changed.temporary || data.temporary);
+                Some(Box::new(data))
             } else {
                 None
             };
-            if data.as_ref().is_some_and(|d| !d.errors.is_empty()) {
-                worker_dirty.store(true, Ordering::Release);
-            }
             previous = Some(changed);
             let result = Result {
                 generation,
@@ -299,3 +400,7 @@ pub(super) fn start(waker: Waker, initial: Options) -> Handle {
         dirty,
     }
 }
+
+#[cfg(test)]
+#[path = "final_refresh_proofs.rs"]
+mod final_refresh_proofs;

@@ -314,7 +314,9 @@ impl State {
                     self.check.refresh();
                 }
             }
-            Err(error) => self.feature_error = Some(format!("Could not save features: {error}")),
+            Err(error) => {
+                self.feature_error = Some(edit_worker::SaveError::from(&error).message().into())
+            }
         }
     }
 
@@ -336,7 +338,7 @@ impl State {
             Ok(config) => (config, None),
             Err(error) => (
                 core::Config::default(),
-                Some(format!("Could not read config.json: {error}")),
+                Some(edit_worker::SaveError::from(&error).message().into()),
             ),
         };
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
@@ -637,19 +639,12 @@ impl State {
             return;
         };
         let on = !self.saved.checked.contains(task);
-        match self.store.set_tick(&id, task, on) {
-            Ok(saved) => {
-                // The Tasks view reads the same ticks.
-                self.tasks.checked.insert(id, saved.checked.clone());
-                self.saved = saved;
-                self.rebuild_tasks();
-            }
-            Err(_) => {
-                self.notice = Some(
-                    "Could not save the tick. Check that the app data folder is writable.".into(),
-                )
-            }
-        }
+        self.publish_edit(edit_worker::Job::Tick {
+            store: self.store.clone(),
+            id,
+            task: task.into(),
+            on,
+        });
     }
 
     /// Opens the transcript at the line for `stamp`, lights it and its neighbours, and
@@ -990,7 +985,8 @@ impl State {
                     return;
                 };
                 let refresh::Data {
-                    meetings,
+                    mut meetings,
+                    retained,
                     errors,
                     pipeline,
                     shared,
@@ -1002,6 +998,8 @@ impl State {
                     check,
                     ..
                 } = *data;
+                refresh::retain_catalog(&self.meetings, &mut meetings, &retained);
+                let mut content_changed = !same_catalog(&self.meetings, &meetings);
                 if !same_catalog(&self.meetings, &meetings) {
                     self.meetings = meetings;
                     // An open meeting that has gone away returns to the home list.
@@ -1013,33 +1011,67 @@ impl State {
                 }
                 self.scan_errors = errors;
                 if let Some(projects) = projects {
+                    content_changed |= different(&self.tasks.projects, &projects);
                     self.memory.projects = projects.clone();
                     self.tasks.projects = projects;
                 }
                 if let Some(overrides) = overrides {
+                    content_changed |= different(&self.tasks.overrides, &overrides);
                     self.tasks.overrides = overrides;
                 }
                 if let Some(cutoff) = cutoff {
+                    content_changed |= self.tasks.cutoff != cutoff;
                     self.tasks.cutoff = cutoff;
                 }
                 for (id, saved) in &saved {
+                    content_changed |= self
+                        .tasks
+                        .checked
+                        .get(id)
+                        .map_or(!saved.checked.is_empty(), |old| *old != saved.checked);
                     self.tasks.checked.insert(id.clone(), saved.checked.clone());
                 }
                 if let Some(saved) = saved.get(&self.ask_key()) {
+                    content_changed |= self.saved != *saved;
                     self.saved = saved.clone();
                 }
                 if let Some(file) = memory {
+                    let pending: Vec<_> = file
+                        .proposals
+                        .iter()
+                        .filter(|p| p.status == core::memory::ProposalStatus::Pending)
+                        .collect();
+                    content_changed |= different(&self.memory.records, &file.records)
+                        || different(&self.memory.proposals, &pending)
+                        || different(&self.memory.events, &file.events)
+                        || self.memory.migrated != file.migration.is_some();
                     self.memory.apply_file(file);
                 }
+                let mut pipeline = pipeline;
+                for (id, old) in &self.tasks.pipeline {
+                    if !pipeline.contains_key(id)
+                        && self.meetings.iter().any(|m| {
+                            m.id == *id
+                                && retained
+                                    .iter()
+                                    .any(|p| m.folder.starts_with(p) || p.starts_with(&m.folder))
+                        })
+                    {
+                        pipeline.insert(id.clone(), old.clone());
+                    }
+                }
+                content_changed |= different(&self.tasks.pipeline, &pipeline);
                 self.tasks.pipeline = pipeline;
                 self.rebuild_tasks();
                 self.live_scanned();
                 if let Some(check) = check {
+                    content_changed |= different(&self.check.report, &check.report)
+                        || self.check.dates != check.dates
+                        || self.check.done_on != check.done_on
+                        || self.check.day_summaries != check.day_summaries;
                     self.check.apply_refresh(check);
                 }
-                if let Some(shared) = shared {
-                    self.last_updated = shared.then(Instant::now);
-                }
+                self.last_updated = refresh::updated_at(self.last_updated, shared, content_changed);
             }
             Event::Progress {
                 id,
@@ -1084,6 +1116,9 @@ impl State {
     }
 }
 
+fn different<T: serde::Serialize, U: serde::Serialize>(a: &T, b: &U) -> bool {
+    serde_json::to_value(a).ok() != serde_json::to_value(b).ok()
+}
 fn same_catalog(a: &[Meeting], b: &[Meeting]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
@@ -1375,6 +1410,17 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(top_bar(s, p, narrow));
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);
+    }
+    if !s.scan_errors.is_empty() {
+        main = main.child(
+            roles::CONTROL
+                .wrap(s.scan_errors.join(" "), p.warn)
+                .role("status")
+                .key("refresh-notice")
+                .px(24.0)
+                .py(8.0)
+                .fill(p.warnbg),
+        );
     }
     let main = main.child(content);
     let mut app = row()

@@ -356,29 +356,22 @@ impl State {
     /// Ticks a task. The To do panel writes the same tick file, so both stay in step.
     pub fn toggle_task_at(&mut self, id: &str, task: &str) {
         let on = !self.tasks.checked.get(id).is_some_and(|c| c.contains(task));
-        match self.store.set_tick(id, task, on) {
-            Ok(saved) => {
-                self.tasks
-                    .checked
-                    .insert(id.to_string(), saved.checked.clone());
-                if self.selected.as_deref() == Some(id) {
-                    self.saved = saved;
-                }
-                self.rebuild_tasks();
-            }
-            Err(_) => {
-                self.tasks.notice = Some(
-                    "Could not save the tick. Check that the app data folder is writable.".into(),
-                )
-            }
-        }
+        self.publish_edit(super::edit_worker::Job::Tick {
+            store: self.store.clone(),
+            id: id.into(),
+            task: task.into(),
+            on,
+        });
     }
 
     /// Ticks any row: a meeting task through its meeting's tick file, a hand-made one in
     /// the overrides file.
     pub fn toggle_row(&mut self, id: &str, index: usize) {
         if id == MANUAL || id.starts_with("manual/") {
-            self.change_manual(id, |m| m.done = !m.done);
+            self.publish_edit(super::edit_worker::Job::ManualTick {
+                store: self.tasks.store.clone(),
+                id: id.strip_prefix("manual/").unwrap_or(id).into(),
+            });
         } else if let Some(task) = self.tasks.item(id, index).map(|t| t.task.clone()) {
             self.toggle_task_at(id, &task);
         }
@@ -666,13 +659,16 @@ impl State {
         true
     }
 
-    fn keep_task_draft(&mut self) -> bool {
-        let keep = self.edit_busy
+    fn has_task_draft(&self) -> bool {
+        self.edit_busy
             || self.tasks.edit_failed
             || (matches!(self.tasks.panel, Some(Panel::Task(_)))
                 && (!self.tasks.inputs.owner.text.is_empty()
                     || !self.tasks.inputs.due.text.is_empty()
-                    || !self.tasks.inputs.project.text.is_empty()));
+                    || !self.tasks.inputs.project.text.is_empty()))
+    }
+    fn keep_task_draft(&mut self) -> bool {
+        let keep = self.has_task_draft();
         if keep && self.tasks.notice.is_none() {
             self.tasks.notice = Some("Your draft is kept. Save it before closing.".into());
         }
@@ -2488,9 +2484,9 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
     {
         body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
-    if tasks.edit_failed {
+    if s.has_task_draft() {
         body = body.child(
-            button("Discard", "task-discard", false, p).on_press(|s: &mut State| {
+            button("Discard my changes", "task-discard", false, p).on_press(|s: &mut State| {
                 s.discard_task();
             }),
         );

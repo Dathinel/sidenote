@@ -52,12 +52,14 @@ pub enum Field {
 }
 #[derive(Clone)]
 pub enum Target {
+    Tick,
     Task(String, usize, u64),
     Memory(String, u64),
 }
 impl Target {
     fn matches(&self, s: &State) -> bool {
         match self {
+            Self::Tick => true,
             Self::Memory(id, session) => {
                 s.memory.editor_generation == *session && s.memory.cursor.as_ref() == Some(id)
             }
@@ -69,6 +71,16 @@ impl Target {
     }
 }
 pub enum Job {
+    Tick {
+        store: core::StateStore,
+        id: String,
+        task: String,
+        on: bool,
+    },
+    ManualTick {
+        store: TaskStore,
+        id: String,
+    },
     Task {
         store: TaskStore,
         row: String,
@@ -91,6 +103,7 @@ pub enum Job {
 impl Job {
     fn target(&self) -> Target {
         match self {
+            Self::Tick { .. } | Self::ManualTick { .. } => Target::Tick,
             Self::Task {
                 row,
                 index,
@@ -102,6 +115,11 @@ impl Job {
     }
 }
 pub enum Completion {
+    Tick {
+        id: String,
+        result: Result<Box<core::EditView<core::Saved>>, SaveError>,
+    },
+    ManualTick(Result<Box<core::EditView<core::Overrides>>, SaveError>),
     Task {
         row: String,
         index: usize,
@@ -123,6 +141,7 @@ pub enum Completion {
 impl Completion {
     fn target(&self) -> Target {
         match self {
+            Self::Tick { .. } | Self::ManualTick(_) => Target::Tick,
             Self::Task {
                 row,
                 index,
@@ -173,6 +192,24 @@ impl State {
             .name("save-edit".into())
             .spawn(move || {
                 let completion = match job {
+                    Job::Tick {
+                        store,
+                        id,
+                        task,
+                        on,
+                    } => Completion::Tick {
+                        result: store
+                            .set_tick_view(&id, &task, on)
+                            .map(Box::new)
+                            .map_err(|e| SaveError::from(&e)),
+                        id,
+                    },
+                    Job::ManualTick { store, id } => Completion::ManualTick(
+                        store
+                            .toggle_manual_view(&id)
+                            .map(Box::new)
+                            .map_err(|e| SaveError::from(&e)),
+                    ),
                     Job::Task {
                         store,
                         row,
@@ -228,6 +265,32 @@ impl State {
             return;
         }
         match completion {
+            Completion::Tick { id, result } => match result {
+                Ok(view) => {
+                    if view.generation == core::mutation_generation() {
+                        self.tasks
+                            .checked
+                            .insert(id.clone(), view.value.checked.clone());
+                        if self.selected.as_deref() == Some(&id) {
+                            self.saved = view.value;
+                        }
+                        self.rebuild_tasks();
+                    }
+                }
+                Err(e) => self.notice = Some(e.message().into()),
+            },
+            Completion::ManualTick(result) => match result {
+                Ok(view) => {
+                    if view.generation == core::mutation_generation() {
+                        self.tasks.overrides = view.value;
+                        self.rebuild_tasks();
+                    }
+                }
+                Err(e) => self.notice = Some(e.message().into()),
+            },
+            Completion::Failed(Target::Tick) => {
+                self.notice = Some(SaveError::WorkerStopped.message().into())
+            }
             Completion::Task {
                 row,
                 index,
