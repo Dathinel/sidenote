@@ -313,6 +313,17 @@ fn process(
             );
         }
     }
+    let typed = text(&folder.join("notes.md"), file_reads::JOURNAL_MAX)?;
+    let glossary = run.glossary();
+    if !prompt::bounded_inputs(&typed, &glossary) {
+        return write(
+            root,
+            id,
+            job,
+            JobState::TooLong { minutes },
+            "meeting context exceeds size limit",
+        );
+    }
     let helper = settings
         .effective_helper()
         .ok_or_else(|| store_io::invalid("No helper selected"))?;
@@ -344,6 +355,7 @@ fn process(
                 id,
                 settings,
                 transcript: &transcript,
+                typed: &typed,
                 date,
                 teams: &teams,
                 projects: &projects,
@@ -387,7 +399,6 @@ fn process(
         let title = core::read_quick_title(&folder)
             .or_else(|| m["title"].as_str().map(str::to_owned))
             .unwrap_or_else(|| "not provided".into());
-        let typed = text(&folder.join("notes.md"), file_reads::JOURNAL_MAX)?;
         let material = prompt::material(
             prompt::Details {
                 title: &title,
@@ -398,7 +409,7 @@ fn process(
             &typed,
             &transcript,
             &teams,
-            &run.glossary(),
+            &glossary,
         );
         let call = prompt::Call {
             root,
@@ -513,6 +524,7 @@ fn drain_locked(
             return Ok(());
         }
         let mut ready = Vec::new();
+        let mut missing = Vec::new();
         for entry in fs::read_dir(jobs(root))? {
             let entry = entry?;
             let path = entry.path();
@@ -522,8 +534,44 @@ fn drain_locked(
             let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
-            if valid_id(id) && read(root, id)?.is_some_and(|j| j.ready(now())) {
-                ready.push(id.to_owned());
+            if !valid_id(id) {
+                continue;
+            }
+            match read(root, id) {
+                Ok(Some(job)) if job.ready(now()) => ready.push(id.to_owned()),
+                Ok(Some(job)) if job.state == JobState::HelperMissing => {
+                    missing.push((id.to_owned(), job))
+                }
+                Err(_) => {
+                    let target = path.with_extension(format!(
+                        "json.{}.quarantined",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                    ));
+                    let message = if fs::rename(&path, target).is_ok() {
+                        "unreadable job quarantined"
+                    } else {
+                        "unreadable job skipped; quarantine could not be written"
+                    };
+                    let _ = log(root, id, message);
+                }
+                _ => {}
+            }
+        }
+        if !missing.is_empty()
+            && !ready.is_empty()
+            && settings
+                .effective_helper()
+                .is_some_and(|h| run.installed(h))
+        {
+            for (id, mut job) in missing {
+                write(
+                    root,
+                    &id,
+                    &mut job,
+                    JobState::Queued,
+                    "rechecking helper for new meeting",
+                )?;
+                ready.push(id);
             }
         }
         ready.sort_by_key(|id| {
@@ -579,8 +627,9 @@ pub fn catch_up() -> io::Result<()> {
     for entry in fs::read_dir(core::meetings_dir())? {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
-        if valid_id(&id) && complete(&entry.path()) {
-            if enqueue_in(
+        if valid_id(&id)
+            && complete(&entry.path())
+            && enqueue_in(
                 &core::state_dir(),
                 &core::meetings_dir(),
                 &id,
@@ -588,9 +637,8 @@ pub fn catch_up() -> io::Result<()> {
                 &settings,
             )
             .is_err()
-            {
-                let _ = log(&core::state_dir(), &id, "could not enqueue notes");
-            }
+        {
+            let _ = log(&core::state_dir(), &id, "could not enqueue notes");
         }
     }
     start_worker()
@@ -661,6 +709,7 @@ struct Redo<'a> {
     id: &'a str,
     settings: &'a NotesSettings,
     transcript: &'a str,
+    typed: &'a str,
     date: chrono::NaiveDate,
     teams: &'a [schema::Team],
     projects: &'a [String],
@@ -672,6 +721,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         id,
         settings,
         transcript,
+        typed,
         date,
         teams,
         projects,
@@ -680,7 +730,6 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
     let raw = text(&path, file_reads::SUMMARY_MAX)?;
     let mut source: serde_json::Value = serde_json::from_str(&raw)?;
     let old: core::Summary = serde_json::from_value(source.clone())?;
-    let typed = text(&folder.join("notes.md"), file_reads::JOURNAL_MAX)?;
     let material = format!(
         "Extract the tasks from this meeting. Only redo the tasks.\nTeams: {}\nTranscript:\n{}\nExisting notes:\n{}\nUser notes:\n{}",
         serde_json::to_string(teams)?,

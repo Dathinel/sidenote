@@ -34,6 +34,7 @@ impl Drop for Temp {
 }
 struct Fake {
     available: bool,
+    glossary: Vec<String>,
     replies: VecDeque<Result<String, Failure>>,
     calls: Vec<(String, Duration)>,
 }
@@ -41,12 +42,16 @@ impl Fake {
     fn new(replies: Vec<Result<String, Failure>>) -> Self {
         Self {
             available: true,
+            glossary: Vec::new(),
             replies: replies.into(),
             calls: Vec::new(),
         }
     }
 }
 impl Run for Fake {
+    fn glossary(&self) -> Vec<String> {
+        self.glossary.clone()
+    }
     fn installed(&self, _: Helper) -> bool {
         self.available
     }
@@ -585,11 +590,187 @@ fn disabling_or_switching_helper_revokes_the_next_call() {
     let root = Temp::new();
     let mut s = settings_fixture();
     crate::core::Config::save_notes(&root.0, &s).unwrap();
-    assert!(helper::authorized(&root.0, Helper::Claude));
-    assert!(!helper::authorized(&root.0, Helper::Codex));
+    assert!(helper::authorized(&root.0, Helper::Claude).unwrap());
+    assert!(!helper::authorized(&root.0, Helper::Codex).unwrap());
     s.engine = "off".into();
     crate::core::Config::save_notes(&root.0, &s).unwrap();
-    assert!(!helper::authorized(&root.0, Helper::Claude));
+    assert!(!helper::authorized(&root.0, Helper::Claude).unwrap());
+}
+
+#[test]
+fn config_lock_clash_is_retryable_and_never_revokes_consent() {
+    let root = Temp::new();
+    crate::core::Config::save_notes(&root.0, &settings_fixture()).unwrap();
+    let lock = store_io::lock(&root.0.join("local/config.lock")).unwrap();
+    let error = helper::authorized(&root.0, Helper::Claude).unwrap_err();
+    assert_eq!(error, Failure::Backend { exit: None });
+    drop(lock);
+    assert!(helper::authorized(&root.0, Helper::Claude).unwrap());
+}
+
+#[test]
+fn corrupt_job_is_quarantined_without_stopping_healthy_work() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let path = root.0.join("local/notes-jobs/1-1.json");
+    fs::write(&path, b"private broken JSON").unwrap();
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    assert!(!path.exists());
+    let quarantined: Vec<_> = fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "quarantined")
+        })
+        .collect();
+    assert_eq!(quarantined.len(), 1);
+    assert_eq!(
+        fs::read(quarantined[0].path()).unwrap(),
+        b"private broken JSON"
+    );
+    assert!(
+        !fs::read_to_string(root.0.join("sidenote.log"))
+            .unwrap()
+            .contains("private broken JSON")
+    );
+}
+
+#[test]
+fn invalid_instructions_do_not_stop_notes_or_settings_loading() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    fs::write(root.0.join("agent-instructions.json"), b"invalid JSON").unwrap();
+    assert!(crate::core::Config::load_in(&root.0).is_ok());
+    assert!(
+        agent_instructions::load(&root.0)
+            .unwrap()
+            .using_defaults_after_error
+    );
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    assert!(
+        fake.calls[0]
+            .0
+            .contains(agent_instructions::default_base(Agent::Notes))
+    );
+}
+
+#[test]
+fn new_meeting_rechecks_previously_missing_helper() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![]);
+    fake.available = false;
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(state(&root.0), JobState::HelperMissing);
+    let new_id = "1793946900000-2";
+    let new = root.0.join("meetings").join(new_id);
+    fs::create_dir_all(&new).unwrap();
+    for name in ["manifest.json", "transcript.ndjson", "quick-title.json"] {
+        fs::copy(folder.join(name), new.join(name)).unwrap();
+    }
+    queue::enqueue_in(&root.0, &root.0.join("meetings"), new_id, None, &s).unwrap();
+    let mut fake = Fake::new(vec![
+        Ok(summary()),
+        Ok(sorted()),
+        Ok(summary()),
+        Ok(sorted()),
+    ]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    assert!(matches!(
+        queue::read(&root.0, new_id).unwrap().unwrap().state,
+        JobState::Done { .. }
+    ));
+    assert_eq!(fake.calls.len(), 4);
+}
+
+#[test]
+fn typed_notes_and_glossary_have_separate_character_caps_for_all_requests() {
+    for request in [None, Some(Request::FirstPart), Some(Request::RedoTasks)] {
+        for glossary in [false, true] {
+            let root = Temp::new();
+            let folder = meeting(&root.0, PRIVATE);
+            if request == Some(Request::RedoTasks) {
+                fs::write(folder.join("english-summary.json"), summary()).unwrap();
+            }
+            let s = settings_fixture();
+            let mut fake = Fake::new(vec![]);
+            if glossary {
+                fake.glossary = vec!["é".repeat(prompt::GLOSSARY_CAP + 1)];
+            } else {
+                fs::write(folder.join("notes.md"), "é".repeat(prompt::TYPED_CAP + 1)).unwrap();
+            }
+            enqueue(&root.0, &s, request);
+            drain(&root.0, &s, &mut fake);
+            assert!(matches!(state(&root.0), JobState::TooLong { .. }));
+            assert!(fake.calls.is_empty());
+        }
+    }
+    assert!(prompt::bounded_inputs(
+        &"é".repeat(prompt::TYPED_CAP),
+        &["é".repeat(prompt::GLOSSARY_CAP)]
+    ));
+}
+
+#[test]
+fn redo_sends_the_bounded_typed_notes_snapshot_even_if_the_file_changes() {
+    struct EditingHelper {
+        fake: Fake,
+        notes: PathBuf,
+    }
+    impl Run for EditingHelper {
+        fn installed(&self, _: Helper) -> bool {
+            fs::write(&self.notes, "UNBOUNDED EDIT".repeat(prompt::TYPED_CAP)).unwrap();
+            true
+        }
+        fn run(
+            &mut self,
+            helper: Helper,
+            model: &str,
+            prompt: String,
+            timeout: Duration,
+        ) -> Result<String, Failure> {
+            self.fake.run(helper, model, prompt, timeout)
+        }
+    }
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::write(folder.join("english-summary.json"), summary()).unwrap();
+    fs::write(folder.join("notes.md"), "Bounded snapshot").unwrap();
+    let s = settings_fixture();
+    enqueue(&root.0, &s, Some(Request::RedoTasks));
+    let mut helper = EditingHelper {
+        fake: Fake::new(vec![Ok(summary()), Ok(sorted())]),
+        notes: folder.join("notes.md"),
+    };
+    queue::drain(&root.0, &root.0.join("meetings"), &mut helper, || {
+        Ok(s.clone())
+    })
+    .unwrap();
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    assert!(helper.fake.calls[0].0.contains("Bounded snapshot"));
+    assert!(!helper.fake.calls[0].0.contains("UNBOUNDED EDIT"));
+    assert!(
+        fs::read_to_string(folder.join("notes.md"))
+            .unwrap()
+            .chars()
+            .count()
+            > prompt::TYPED_CAP
+    );
 }
 #[test]
 fn oldest_meeting_runs_first_and_running_jobs_recover_after_a_crash() {

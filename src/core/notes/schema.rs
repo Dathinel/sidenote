@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub type Team = crate::core::Team;
+const FIELD_CAP: usize = 16_000;
+const PROJECT_CAP: usize = 100;
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct Summary {
@@ -92,7 +94,22 @@ pub(super) fn object<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, &'s
         .rfind('}')
         .filter(|end| *end >= start)
         .ok_or("not a JSON object")?;
-    serde_json::from_str(&raw[start..=end]).map_err(|_| "missing field or wrong field type")
+    let value: serde_json::Value =
+        serde_json::from_str(&raw[start..=end]).map_err(|_| "missing field or wrong field type")?;
+    fn bounded(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(s) => s.chars().count() <= FIELD_CAP,
+            serde_json::Value::Array(values) => values.iter().all(bounded),
+            serde_json::Value::Object(values) => values
+                .iter()
+                .all(|(key, value)| key.chars().count() <= FIELD_CAP && bounded(value)),
+            _ => true,
+        }
+    }
+    if !bounded(&value) {
+        return Err("output field exceeds size limit");
+    }
+    serde_json::from_value(value).map_err(|_| "missing field or wrong field type")
 }
 
 pub(super) fn title(text: &str, cap: usize) -> String {
@@ -291,6 +308,17 @@ pub(super) fn sorting(
     your_name: &str,
 ) -> Result<crate::core::TasksFile, &'static str> {
     let sorted: Sorting = object(raw)?;
+    if sorted
+        .meeting_project
+        .as_ref()
+        .is_some_and(|name| name.chars().count() > PROJECT_CAP)
+        || sorted
+            .tasks
+            .iter()
+            .any(|tag| tag.project.chars().count() > PROJECT_CAP)
+    {
+        return Err("project name exceeds size limit");
+    }
     let mut tags = BTreeMap::new();
     for tag in sorted.tasks {
         if tag.i >= summary.todo.len() || tags.insert(tag.i, tag).is_some() {
@@ -361,6 +389,23 @@ mod tests {
                     "todo"
                 }
             );
+        }
+    }
+    #[test]
+    fn oversized_summary_fields_and_project_names_are_rejected() {
+        for field in ["context", "people", "verify"] {
+            let mut v = fixture();
+            v[field] = serde_json::json!(["é".repeat(FIELD_CAP + 1)]);
+            assert!(parse(&v.to_string(), "1-2", NaiveDate::MIN, TRANSCRIPT, &[]).is_err());
+        }
+        let mut v = fixture();
+        v["todo"][0]["description"] = serde_json::json!("x".repeat(FIELD_CAP + 1));
+        assert!(parse(&v.to_string(), "1-2", NaiveDate::MIN, TRANSCRIPT, &[]).is_err());
+        for raw in [
+            serde_json::json!({"meeting_project":"é".repeat(PROJECT_CAP + 1), "tasks":[]}),
+            serde_json::json!({"meeting_project":null, "tasks":[{"i":0,"project":"x".repeat(PROJECT_CAP + 1),"new":true}]}),
+        ] {
+            assert!(sorting(&raw.to_string(), &check(&fixture()), &[], "").is_err());
         }
     }
     #[test]

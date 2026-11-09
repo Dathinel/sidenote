@@ -118,16 +118,18 @@ pub(super) trait Run {
 pub(super) struct Cli {
     pub root: Option<PathBuf>,
 }
-pub(super) fn authorized(root: &std::path::Path, helper: Helper) -> bool {
-    helper.offered()
-        && crate::core::Config::load_in(root)
-            .ok()
-            .and_then(|c| c.notes)
-            .is_some_and(|s| {
-                s.engine() == super::Engine::App
-                    && s.helper == Some(helper)
-                    && s.enabled_at_ms.is_some()
-            })
+pub(super) fn authorized(root: &std::path::Path, helper: Helper) -> Result<bool, Failure> {
+    if !helper.offered() {
+        return Ok(false);
+    }
+    Ok(crate::core::Config::load_in(root)
+        .map_err(|_| Failure::Backend { exit: None })?
+        .notes
+        .is_some_and(|s| {
+            s.engine() == super::Engine::App
+                && s.helper == Some(helper)
+                && s.enabled_at_ms.is_some()
+        }))
 }
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
@@ -172,7 +174,7 @@ impl Run for Cli {
             return Err(Failure::Consent);
         }
         if let Some(root) = &self.root
-            && !authorized(root, helper)
+            && !authorized(root, helper)?
         {
             return Err(Failure::Consent);
         }

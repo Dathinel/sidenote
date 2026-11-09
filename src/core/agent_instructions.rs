@@ -22,6 +22,8 @@ pub struct Entry {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Store {
+    #[serde(skip)]
+    pub using_defaults_after_error: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<Entry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,9 +96,16 @@ pub fn default_base(a: Agent) -> &'static str {
     }
 }
 pub fn load(root: &Path) -> io::Result<Store> {
-    let store: Store = sync_state::load(root, STORE)?;
-    store.validate()?;
-    Ok(store)
+    match sync_state::load_report::<Store>(root, STORE) {
+        Ok((mut store, warning)) if store.validate().is_ok() => {
+            store.using_defaults_after_error = warning;
+            Ok(store)
+        }
+        _ => Ok(Store {
+            using_defaults_after_error: true,
+            ..Store::default()
+        }),
+    }
 }
 pub fn base(root: &Path, a: Agent) -> io::Result<(String, bool)> {
     let store = load(root)?;
@@ -197,6 +206,23 @@ mod tests {
         let mut bad = v;
         bad["notes"]["text"] = serde_json::json!("bad\0text");
         assert!(validate_store(&bad).is_err());
+    }
+    #[test]
+    fn invalid_synced_instructions_load_defaults_and_expose_warning() {
+        let root = Temp::new();
+        for raw in ["invalid JSON".to_owned(), serde_json::json!({"notes":{"text":"bad\u{0000}text","based_on":1,"edited_at":"2026-11-10T04:00:00Z"}}).to_string()] {
+            fs::write(root.0.join(STORE), &raw).unwrap();
+            let store = load(&root.0).unwrap();
+            assert!(store.using_defaults_after_error);
+            assert!(store.notes.is_none());
+            assert_eq!(base(&root.0, Agent::Notes).unwrap(), (default_base(Agent::Notes).into(), false));
+            assert_eq!(fs::read_to_string(root.0.join(STORE)).unwrap(), raw);
+        }
+        save(&root.0, Agent::Notes, "Repaired instructions").unwrap();
+        assert_eq!(
+            base(&root.0, Agent::Notes).unwrap(),
+            ("Repaired instructions".into(), true)
+        );
     }
     fn copy_tree(source: &Path, target: &Path) {
         fs::create_dir_all(target).unwrap();

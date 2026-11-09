@@ -288,18 +288,6 @@ fn listen() -> Result<(), Problem> {
     Ok(())
 }
 
-#[cfg(test)]
-mod pipeline_tests {
-    use super::*;
-    #[test]
-    fn enqueue_failure_is_reported_without_ending_event_handling() {
-        let mut messages = Vec::new();
-        for result in [Err(io::Error::other("private failure")), Ok(())] {
-            continue_after_pipeline(result, |message| messages.push(message.to_owned()));
-        }
-        assert_eq!(messages, ["could not queue notes; listening continues"]);
-    }
-}
 pub fn run() -> ! {
     let _instance = match crate::updates::listener_lock() {
         Ok(lock) if !crate::updates::listener_stopping() => lock,
@@ -343,5 +331,18 @@ pub fn run() -> ! {
             last = problem;
         }
         std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+    #[test]
+    fn enqueue_failure_is_reported_without_ending_event_handling() {
+        let mut messages = Vec::new();
+        for result in [Err(io::Error::other("private failure")), Ok(())] {
+            continue_after_pipeline(result, |message| messages.push(message.to_owned()));
+        }
+        assert_eq!(messages, ["could not queue notes; listening continues"]);
     }
 }
