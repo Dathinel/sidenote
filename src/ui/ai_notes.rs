@@ -13,7 +13,19 @@ use std::{
 };
 
 pub const HELPERS: [Helper; 3] = [Helper::Claude, Helper::Codex, Helper::OpenCode];
-pub const PRIVACY: &str = "When AI notes are on, Sidenote sends each meeting's text transcript and your typed notes to the helper you choose. The helper sends them to its AI provider under your own account. Audio never leaves this PC. Sidenote has no server of its own.";
+pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed notes to Claude Code. Audio stays on this PC.";
+
+// shortcut: local 0.0.1 policy, replace with the core helper availability API when E1 lands.
+pub fn helper_unavailable_reason(helper: Helper) -> Option<&'static str> {
+    match helper {
+        Helper::Claude => None,
+        Helper::Codex | Helper::OpenCode => Some("helper_not_offered"),
+    }
+}
+
+pub fn helper_fallback_message(helper: Helper) -> String {
+    format!("{} is coming in a later version. AI notes are off. Choose Claude Code below to turn them on.", helper.name())
+}
 
 pub struct Editor {
     pub text: TextEdit,
@@ -64,6 +76,8 @@ pub struct AiNotes {
     pub jobs: BTreeMap<String, super::notes_status::Job>,
     pub dismissed: BTreeSet<String>,
     pub details: BTreeSet<String>,
+    pub privacy_open: bool,
+    pub fallback: Option<Helper>,
     pub switch_confirm: Option<Helper>,
     pub generation: u64,
     pub scene: bool,
@@ -85,6 +99,8 @@ impl Default for AiNotes {
             jobs: BTreeMap::new(),
             dismissed: BTreeSet::new(),
             details: BTreeSet::new(),
+            privacy_open: false,
+            fallback: None,
             switch_confirm: None,
             generation: 0,
             scene: false,
@@ -166,6 +182,7 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                 true,
             ))
         }
+        Work::Test(index, _) if helper_unavailable_reason(HELPERS[index]).is_some() => Err(helper_fallback_message(HELPERS[index])),
         Work::Test(index, model) => Ok(Completion::Tested(
             index,
             notes::test_helper(HELPERS[index], &model),
@@ -245,8 +262,12 @@ impl State {
         self.ai_notes.pending = None;
         match result {
             Err(error) => self.ai_notes.error = Some(error),
-            Ok(Completion::Loaded(snapshot)) => {
+            Ok(Completion::Loaded(mut snapshot)) => {
                 let s = &mut self.ai_notes;
+                s.fallback = snapshot.settings.helper.filter(|h| helper_unavailable_reason(*h).is_some());
+                if s.fallback.is_some() {
+                    snapshot.settings.helper = None;
+                }
                 for (index, h) in HELPERS.iter().enumerate() {
                     s.models[index] = TextEdit::new(if snapshot.settings.helper == Some(*h) {
                         &snapshot.settings.model
@@ -315,7 +336,7 @@ impl State {
         let Some(mut settings) = self.ai_notes.settings.clone() else {
             return;
         };
-        if !self.ai_notes.found.contains(&(HELPERS[index], true)) {
+        if helper_unavailable_reason(HELPERS[index]).is_some() || !self.ai_notes.found.contains(&(HELPERS[index], true)) {
             return;
         }
         if settings.engine == "scripts" && self.ai_notes.switch_confirm != Some(HELPERS[index]) {
@@ -330,6 +351,11 @@ impl State {
         self.notes_work(Work::Settings(settings), "Saving AI notes...");
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
+        if let Some(helper) = self.ai_notes.settings.as_ref().and_then(|n| n.helper)
+            && helper_unavailable_reason(helper).is_some() {
+            self.ai_notes.error = Some(helper_fallback_message(helper));
+            return;
+        }
         self.notes_work(Work::Request(id, mode), "Adding notes to the queue...");
     }
 }
@@ -525,8 +551,11 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     let Some(settings) = &a.settings else {
         return c;
     };
+    if let Some(helper) = a.fallback.or(settings.helper.filter(|h| helper_unavailable_reason(*h).is_some())) {
+        c = c.child(super::widgets::banner("Choose a helper", helper_fallback_message(helper), super::widgets::BannerKind::Info, p));
+    }
     let status = match (settings.engine.as_str(), settings.helper) {
-        ("app", Some(h)) => format!(
+        ("app", Some(h)) if helper_unavailable_reason(h).is_none() => format!(
             "AI notes are on. Notes are written by {} ({}).",
             h.name(),
             if settings.model.is_empty() {
@@ -557,16 +586,25 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             p.warn,
         ));
     }
-    c = c.child(card(p).key("notes-privacy")
-        .child(roles::TITLE.wrap("What is sent", p.ink)).child(roles::SMALL.wrap(PRIVACY, p.ink))
-        .child(roles::SMALL.wrap("Text is sent only after you choose Use this, for meetings that end afterwards or when you click Make notes or Try again. Test sends only fixed sample text. With no helper, nothing is sent.", p.soft))
-        .child(roles::SMALL.wrap("Each request also includes the title, date, time, length, glossary, teams and members, projects, your name if set, and agent instructions. Other meetings, audio, keys and tokens are never included.", p.soft))
-        .child(roles::SMALL.wrap("Claude Code uses Anthropic with all tools off. Codex uses OpenAI, and OpenCode uses its configured provider. Both have read-only tools. A transcript could ask those tools to read a file and copy it into notes. Notes and transcripts stay on this PC and your synced devices. Job states stay on this PC. Logs hold no meeting text or helper output.", p.soft))
-        .child(roles::SMALL.wrap("Notes are written in English. Audio translation is not included in this version.", p.soft)));
+    let mut privacy = card(p).key("notes-privacy")
+        .child(roles::TITLE.wrap("What is sent", p.ink))
+        .child(roles::SMALL.wrap(PRIVACY, p.ink))
+        .child(roles::SMALL.wrap("Claude Code sends that text to Anthropic using your own account. It gets no tools and no MCP servers.", p.ink))
+        .child(roles::SMALL.wrap("Sidenote has no server of its own.", p.ink))
+        .child(button(if a.privacy_open { "Hide details" } else { "Details" }, "notes-privacy-details", p).self_start().on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open));
+    if a.privacy_open {
+        privacy = privacy
+            .child(roles::SMALL.wrap("Nothing is sent until you turn on AI notes. After that, Sidenote sends a meeting when it ends, if automatic notes are on. Make notes and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
+            .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
+            .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved notes and transcripts between your devices.", p.soft))
+            .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected. Summaries are written in English.", p.soft));
+    }
+    c = c.child(privacy);
     c = c.child(roles::TITLE.wrap("Make notes with", p.ink));
     for (index, h) in HELPERS.iter().copied().enumerate() {
         let found = a.found.contains(&(h, true));
-        let selected = settings.engine == "app" && settings.helper == Some(h);
+        let offered = helper_unavailable_reason(h).is_none();
+        let selected = offered && settings.engine == "app" && settings.helper == Some(h);
         let mut r = card(p)
             .key(format!("notes-helper-{index}"))
             .child(roles::TITLE.wrap(
@@ -580,7 +618,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             .child(roles::META.wrap(
                 format!(
                     "{}{}",
-                    if found { "Found" } else { "Not found" },
+                    if found { "Detected" } else { "Not detected" },
                     if selected { ". In use" } else { "" }
                 ),
                 p.soft,
@@ -601,6 +639,11 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 },
                 p.soft,
             ));
+        if !offered {
+            r = r.child(roles::SMALL.wrap("Coming in a later version", p.soft));
+            c = c.child(r);
+            continue;
+        }
         if h == Helper::OpenCode {
             r = r.child(roles::META.wrap(
                 "OpenCode uses its own configured model. Change it in OpenCode.",
@@ -618,14 +661,14 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         let mut actions = row().flex_wrap().gaps(8.0, 8.0);
         let use_this = button(
             if selected {
-                "Save model and use this"
+                "Use this helper"
             } else {
-                "Use this"
+                "Turn on with Claude Code"
             },
             &format!("notes-use-{index}"),
             p,
         );
-        let test = button("Test", &format!("notes-test-{index}"), p);
+        let test = button("Send a sample", &format!("notes-test-{index}"), p);
         if found && a.pending.is_none() {
             actions = actions
                 .child(use_this.on_press(move |s: &mut State| s.choose_notes_helper(index)))
