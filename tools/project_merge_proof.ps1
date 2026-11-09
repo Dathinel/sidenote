@@ -9,9 +9,11 @@ New-Item -ItemType Directory -Path $run | Out-Null
 $log = Join-Path $run 'proof.txt'
 function Invoke-Proof([string]$Name, [string]$Step, [int]$Expected = 0) {
     $base = Join-Path $run $Name
-    $result = & $Exe $Step --data-dir "$base/data" --meetings-dir "$base/meetings" --peers-dir "$base/peers" 2>&1
-    $code = $LASTEXITCODE
-    $result | Add-Content -LiteralPath $log
+    New-Item -ItemType Directory -Force -Path $base | Out-Null
+    $arguments = @($Step, '--data-dir', "`"$base/data`"", '--meetings-dir', "`"$base/meetings`"", '--peers-dir', "`"$base/peers`"")
+    $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput "$base/$Step.out" -RedirectStandardError "$base/$Step.err"
+    $code = $process.ExitCode
+    Get-Content -LiteralPath "$base/$Step.out", "$base/$Step.err" | Add-Content -LiteralPath $log
     if ($code -ne $Expected) { throw "$Name $Step exited $code instead of $Expected. See $log" }
     "$Name $Step exit=$code" | Tee-Object -FilePath $log -Append
 }
@@ -35,4 +37,10 @@ Invoke-Proof crash old
 Invoke-Proof stale prepare
 Invoke-Proof stale stale
 Invoke-Proof stale peer-kept
+$caseIndex = 0
+foreach ($scenario in @('boundary-merge', 'boundary-same-value', 'boundary-task', 'boundary-memory', 'undo-boundary-merge', 'undo-boundary-task', 'undo-boundary-memory', 'peer-rename')) {
+    $caseIndex++
+    Invoke-Proof "r$caseIndex" prepare
+    Invoke-Proof "r$caseIndex" $scenario
+}
 "PASS: separate-process merge, alias suggestion, peer edit, crash, retry and restart undo. $run" | Tee-Object -FilePath $log -Append

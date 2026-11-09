@@ -4,6 +4,8 @@ use sidenote::core::{self, TaskStore, memory::MemoryStore};
 use std::{collections::BTreeMap, fs, path::Path};
 const FROM: &str = "Northwind Field Guide";
 const INTO: &str = "Northwind Atlas";
+#[path = "support/project_merge_races.rs"]
+mod races;
 fn write(path: &Path, value: &impl serde::Serialize) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
@@ -256,6 +258,8 @@ fn main() {
         assert!(store.undo_project_merge(FROM, &merge.id).is_err());
         fs::write(&merge.backup, bytes).unwrap();
         assert_eq!(store.load_projects().unwrap().resolve(FROM), INTO);
+    } else if command.contains("boundary-") || command == "peer-rename" {
+        races::run(&root, &command);
     } else {
         panic!("Unknown proof command");
     }
