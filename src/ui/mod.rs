@@ -2725,7 +2725,8 @@ pub fn spec() -> AppSpec<State> {
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
-    let mut app = benchmark::configure(rune::App::new(spec()));
+    let mut app =
+        benchmark::configure(rune::App::new(spec())).on_close(|s: &mut State, _| s.live_flush());
     if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
         let mut done = false;
         app = app.on_frame_encoded(move |f| {
