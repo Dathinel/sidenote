@@ -35,6 +35,9 @@ impl DeviceSettings {
         Self::load_in(&state_dir())
     }
     pub(super) fn load_in(root: &Path) -> io::Result<Self> {
+        if super::file_reads::refreshing() {
+            return Self::read_in(root);
+        }
         let path = root.join("device.json");
         let _lock = store_io::lock(&path.with_extension("lock"))?;
         let mut settings: Self = store_io::read(&path)?;

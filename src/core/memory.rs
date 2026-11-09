@@ -650,7 +650,7 @@ fn active_record<'a>(file: &'a mut MemoryFile, id: &str) -> io::Result<&'a mut M
     file.records
         .iter_mut()
         .find(|r| r.id == id && r.status == RecordStatus::Active)
-        .ok_or_else(|| invalid("Target is not an active record"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Target is not an active record"))
 }
 fn event(file: &mut MemoryFile, id: &str, operation: &str, proposal: Option<&str>) {
     file.events.push(MemoryEvent {

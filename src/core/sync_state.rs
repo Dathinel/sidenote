@@ -185,16 +185,26 @@ fn read_journal(path: &Path, owner: &str, store: Option<&str>) -> io::Result<Jou
     Ok(j)
 }
 fn entries(path: &Path) -> io::Result<Vec<std::sync::Arc<fs::DirEntry>>> {
-    match super::file_reads::entries(path) {
-        Ok(e) => Ok(e),
-        Err(_) => {
-            super::file_reads::skipped();
-            Ok(vec![])
+    super::file_reads::entries(path).map_err(|e| {
+        if matches!(e.raw_os_error(), Some(32 | 33)) {
+            e
+        } else {
+            invalid("Could not read the saved data")
         }
-    }
+    })
 }
 fn read_view(root: &Path, store: &str, own: &str) -> io::Result<View> {
     let mut view = View::default();
+    let mut files = Vec::new();
+    let mut total = 0u64;
+    for path in legacy_sources(root, store)? {
+        if let Ok(meta) = super::file_reads::checked_metadata(&path) {
+            total = total
+                .checked_add(meta.len())
+                .filter(|n| *n <= super::file_reads::STORE_MAX)
+                .ok_or_else(|| invalid("Store byte limit exceeded"))?;
+        }
+    }
     for owner in entries(&root.join("state"))? {
         let name = owner.file_name().to_string_lossy().into_owned();
         if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
@@ -204,17 +214,28 @@ fn read_view(root: &Path, store: &str, own: &str) -> io::Result<View> {
             if entry.path().extension().is_none_or(|e| e != "json") {
                 continue;
             }
-            match read_journal(&entry.path(), &name, Some(store)) {
-                Ok(j) => view.merge(&j),
-                Err(_) => {
-                    view.own_bad |= name == own;
-                    view.warnings.push(format!("Unreadable or incomplete device state for {store}; original files were retained"));
-                }
+            if let Ok(meta) = super::file_reads::checked_metadata(&entry.path()) {
+                total = total
+                    .checked_add(meta.len())
+                    .filter(|n| *n <= super::file_reads::STORE_MAX)
+                    .ok_or_else(|| invalid("Store byte limit exceeded"))?;
+            }
+            files.push((entry.path(), name.clone()));
+        }
+    }
+    for (path, name) in files {
+        match read_journal(&path, &name, Some(store)) {
+            Ok(j) => view.merge(&j),
+            Err(e) => {
+                super::file_reads::error(&path, &e);
+                view.own_bad |= name == own;
+                view.warnings.push(format!("Unreadable or incomplete device state for {store}; original files were retained"));
             }
         }
     }
     Ok(view)
 }
+
 struct Session {
     root: PathBuf,
     store: String,
@@ -261,7 +282,9 @@ impl Session {
                 "Own journal is unreadable; refusing to edit or import",
             ));
         }
-        session.import_legacy()?;
+        if !super::file_reads::refreshing() {
+            session.import_legacy()?;
+        }
         Ok(session)
     }
     fn publish(&mut self, changes: Vec<Change>, sources: BTreeSet<String>) -> io::Result<()> {
@@ -398,13 +421,13 @@ pub(super) fn load<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,
 ) -> io::Result<T> {
-    let session = Session::open_mode(root, store, super::paths::read_only())?;
+    let session = Session::open_mode(root, store, true)?;
     Ok(serde_json::from_value(session.value::<T>()?)?)
 }
 /// When each present item of a store was last written, in nanoseconds since 1970, read the same
 /// way as `load`. Values imported from a legacy file carry no time and read as 0.
 pub(super) fn stamps(root: &Path, store: &str) -> io::Result<BTreeMap<Key, u64>> {
-    let session = Session::open_mode(root, store, super::paths::read_only())?;
+    let session = Session::open_mode(root, store, true)?;
     Ok(session
         .view
         .items

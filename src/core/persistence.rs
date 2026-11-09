@@ -97,6 +97,22 @@ impl StateStore {
             })
             .collect())
     }
+    pub fn set_tick_view(
+        &self,
+        id: &str,
+        task: &str,
+        checked: bool,
+    ) -> io::Result<super::EditView<Saved>> {
+        checked_path(&self.root, id)?;
+        super::sync_state::update_merged(&self.root, &format!("{id}.json"), |s: &mut Saved| {
+            if checked {
+                s.checked.insert(task.into());
+            } else {
+                s.checked.remove(task);
+            }
+            Ok(())
+        })
+    }
     pub fn set_tick(&self, id: &str, task: &str, checked: bool) -> io::Result<Saved> {
         self.update(id, |s| {
             if checked {

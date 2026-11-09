@@ -10,8 +10,7 @@ use std::{
 };
 pub const JOURNAL_MAX: u64 = 4 * 1024 * 1024;
 pub const SUMMARY_MAX: u64 = 16 * 1024 * 1024;
-const CACHE_MAX: usize = 64 * 1024 * 1024;
-const FILES_MAX: usize = 4096;
+pub const STORE_MAX: u64 = 256 * 1024 * 1024;
 pub const ENTRIES_MAX: usize = 8192;
 #[derive(Clone, Copy, Default)]
 pub struct Stats {
@@ -19,12 +18,14 @@ pub struct Stats {
     pub bytes: usize,
     pub skipped: usize,
     pub entries: usize,
+    pub temporary: bool,
 }
 #[derive(Default)]
 struct Cache {
     files: HashMap<PathBuf, Result<Arc<[u8]>, io::ErrorKind>>,
     dirs: HashMap<PathBuf, Vec<Arc<fs::DirEntry>>>,
     stats: Stats,
+    failed: Vec<PathBuf>,
 }
 thread_local! {static CACHE:RefCell<Option<Cache>>=const {RefCell::new(None)};}
 pub struct Scope(std::marker::PhantomData<std::rc::Rc<()>>);
@@ -36,6 +37,14 @@ impl Scope {
         });
         Self(Default::default())
     }
+    pub fn failed(&self) -> Vec<PathBuf> {
+        CACHE.with(|c| {
+            c.borrow()
+                .as_ref()
+                .map(|c| c.failed.clone())
+                .unwrap_or_default()
+        })
+    }
     pub fn stats(&self) -> Stats {
         CACHE.with(|c| c.borrow().as_ref().map(|c| c.stats).unwrap_or_default())
     }
@@ -44,6 +53,27 @@ impl Drop for Scope {
     fn drop(&mut self) {
         CACHE.with(|c| *c.borrow_mut() = None);
     }
+}
+pub fn refreshing() -> bool {
+    CACHE.with(|c| c.borrow().is_some())
+}
+pub fn not_refreshed(path: &Path) {
+    CACHE.with(|c| {
+        if let Some(c) = c.borrow_mut().as_mut()
+            && !c.failed.iter().any(|p| p == path)
+        {
+            c.failed.push(path.into());
+        }
+    });
+}
+pub fn error(path: &Path, error: &io::Error) {
+    not_refreshed(path);
+    CACHE.with(|c| {
+        if let Some(c) = c.borrow_mut().as_mut() {
+            c.stats.skipped += 1;
+            c.stats.temporary |= matches!(error.raw_os_error(), Some(32 | 33));
+        }
+    });
 }
 pub fn skipped() {
     CACHE.with(|c| {
@@ -90,20 +120,9 @@ pub fn read(path: &Path, cap: u64) -> io::Result<Arc<[u8]>> {
                 }
             });
     }
-    let remaining = CACHE.with(|c| {
-        c.borrow()
-            .as_ref()
-            .map(|c| CACHE_MAX.saturating_sub(c.stats.bytes))
-            .unwrap_or(CACHE_MAX)
-    });
-    let budget = CACHE.with(|c| {
-        c.borrow()
-            .as_ref()
-            .is_none_or(|c| c.files.len() < FILES_MAX)
-    });
     let result = (|| {
         let m = checked_metadata(path)?;
-        if !budget || m.len() > cap || m.len() > remaining as u64 {
+        if m.len() > cap {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Read budget exceeded",
@@ -118,9 +137,8 @@ pub fn read(path: &Path, cap: u64) -> io::Result<Arc<[u8]>> {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "File skipped"));
         }
         let mut bytes = Vec::new();
-        file.take(cap.min(remaining as u64) + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > cap || bytes.len() > remaining {
+        file.take(cap + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > cap {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "File grew past limit",
@@ -139,12 +157,16 @@ pub fn read(path: &Path, cap: u64) -> io::Result<Arc<[u8]>> {
                 .is_some_and(|e| e.kind() != io::ErrorKind::NotFound)
             {
                 c.stats.skipped += 1;
-            }
-            if budget
-                && !result
+                c.stats.temporary |= result
                     .as_ref()
                     .err()
-                    .is_some_and(|e| e.kind() == io::ErrorKind::NotFound)
+                    .is_some_and(|e| matches!(e.raw_os_error(), Some(32 | 33)));
+                c.failed.push(path.into());
+            }
+            if !result
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.kind() == io::ErrorKind::NotFound)
             {
                 c.files.insert(
                     path.into(),
@@ -165,48 +187,44 @@ pub fn entries(path: &Path) -> io::Result<Vec<Arc<fs::DirEntry>>> {
     {
         return Ok(cached);
     }
-    if !directory(path) {
-        if !path.try_exists()? {
-            return Ok(vec![]);
-        }
-        skipped();
-        return Ok(vec![]);
-    }
-    let mut out = Vec::new();
-    for e in fs::read_dir(path)?.take(ENTRIES_MAX + 1) {
-        let full = CACHE.with(|c| {
-            c.borrow()
-                .as_ref()
-                .is_some_and(|c| c.stats.entries >= ENTRIES_MAX)
-        });
-        if full || out.len() >= ENTRIES_MAX {
-            skipped();
-            break;
-        }
-        CACHE.with(|c| {
-            if let Some(c) = c.borrow_mut().as_mut() {
-                c.stats.entries += 1;
+    let result = (|| {
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(e),
+            Ok(m) if !m.is_dir() || m.file_attributes() & 0x400 != 0 => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Unsafe folder"));
             }
-        });
-        match e {
-            Ok(e) => match fs::symlink_metadata(e.path()) {
-                Ok(m) if m.file_attributes() & 0x400 == 0 && (m.is_file() || m.is_dir()) => {
-                    out.push(Arc::new(e))
-                }
-                _ => skipped(),
-            },
-            Err(_) => skipped(),
+            Ok(_) => {}
         }
+        let mut out = Vec::new();
+        for (n, e) in fs::read_dir(path)?.enumerate() {
+            if n >= ENTRIES_MAX {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Folder entry limit exceeded",
+                ));
+            }
+            let e = e?;
+            let m = fs::symlink_metadata(e.path())?;
+            if m.file_attributes() & 0x400 == 0 && (m.is_file() || m.is_dir()) {
+                out.push(Arc::new(e));
+            } else {
+                skipped();
+            }
+        }
+        out.sort_by_key(|e| e.file_name());
+        Ok(out)
+    })();
+    match &result {
+        Ok(out) => CACHE.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.stats.entries += out.len();
+                c.dirs.insert(path.into(), out.clone());
+            }
+        }),
+        Err(e) => error(path, e),
     }
-    out.sort_by_key(|e| e.file_name());
-    CACHE.with(|c| {
-        if let Some(c) = c.borrow_mut().as_mut()
-            && c.dirs.len() < FILES_MAX
-        {
-            c.dirs.insert(path.into(), out.clone());
-        }
-    });
-    Ok(out)
+    result
 }
 pub fn dir_iter(path: &Path) -> io::Result<impl Iterator<Item = io::Result<Arc<fs::DirEntry>>>> {
     Ok(entries(path)?.into_iter().map(Ok))

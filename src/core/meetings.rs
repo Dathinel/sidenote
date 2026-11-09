@@ -442,7 +442,9 @@ impl Meeting {
 }
 pub fn scan() -> (Vec<Meeting>, Vec<String>) {
     let (meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
-    errors.extend(super::sync_state::reconcile(&state_dir()));
+    if !super::file_reads::refreshing() {
+        errors.extend(super::sync_state::reconcile(&state_dir()));
+    }
     (meetings, errors)
 }
 
@@ -514,10 +516,13 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
                 {
                     match Meeting::load(&entry.path()) {
                         Ok(m) => meetings.push(m),
-                        Err(_) => errors.push(format!(
-                            "Could not read meeting {}",
-                            entry.file_name().to_string_lossy()
-                        )),
+                        Err(_) => {
+                            super::file_reads::not_refreshed(&entry.path());
+                            errors.push(format!(
+                                "Could not read meeting {}",
+                                entry.file_name().to_string_lossy()
+                            ));
+                        }
                     }
                 }
             }

@@ -45,7 +45,7 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 pub(super) fn read_only() -> bool {
-    PATHS.get().is_some_and(|p| p.read_only)
+    super::file_reads::refreshing() || PATHS.get().is_some_and(|p| p.read_only)
 }
 pub(super) fn data() -> Option<PathBuf> {
     PATHS

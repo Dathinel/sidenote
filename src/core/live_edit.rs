@@ -68,6 +68,17 @@ pub fn advance_base(base: &mut Value, mine: &Value, saved: &Value) {
     *base = Value::Object(next);
 }
 impl TaskStore {
+    pub fn toggle_manual_view(&self, id: &str) -> io::Result<super::EditView<Overrides>> {
+        sync_state::update_merged(&self.root, "task-overrides.json", |o: &mut Overrides| {
+            let task = o
+                .manual
+                .iter_mut()
+                .find(|m| m.id == id)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Task removed"))?;
+            task.done = !task.done;
+            Ok(())
+        })
+    }
     pub fn merge_task(
         &self,
         row: &str,
@@ -108,7 +119,7 @@ impl TaskStore {
                 if let Some(id) = row.strip_prefix("manual/") {
                     let t =
                         o.manual.iter_mut().find(|m| m.id == id).ok_or_else(|| {
-                            io::Error::other("Task removed. Your changes are kept.")
+                            io::Error::new(io::ErrorKind::NotFound, "Task removed")
                         })?;
                     *t = merge(
                         &serde_json::from_value::<ManualTask>(base.clone())?,
