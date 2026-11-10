@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from PIL import Image, ImageChops
 from render_people_review import OUT, render, tap, key
+from prepare_people_fixture import prepare
 
 
 def elements(name, width=1280, theme='light'):
@@ -31,6 +32,21 @@ def select_all(t):
 
 def scroll(t):
     return dict(type='scroll', key='hex-scroll', dy=-300, dur=.2, t=t)
+
+
+def verify_member_search(exe):
+    state = Path(tempfile.mkdtemp(prefix='many-members-', dir=OUT/'state'))
+    prepare(state)
+    path = state/'teams.json'
+    teams = json.loads(path.read_text())
+    teams['teams'][1]['members'] += [f'Extra {i:02}' for i in range(10)]
+    path.write_text(json.dumps(teams))
+    render(exe, 'many-members', 'people-team-editor', state=state)
+    nodes = elements('many-members')
+    assert any(n.get('key') == 'team-member-search' for n in nodes)
+    render(exe, 'member-search-result', 'people-team-editor', events=[tap('team-member-search'), text('Extra 09', .7), tap('team-member-extra 09', 2), tap('team-save', 2.5)], state=state)
+    assert json.loads(path.read_text())['teams'][0]['members'] == ['Alex Chen', 'Jamie Park', 'Extra 09']
+    print('PASS: member search appears above 12 people and saves a selected chip', flush=True)
 
 
 def main():
@@ -64,6 +80,11 @@ def main():
             assert any(n.get('text') == 'also Alex C' for n in ours)
             assert any(n.get('text') == 'People from older meetings appear when you meet them again.' for n in ours)
             assert len([n for n in elements('team-editor', width, theme) if n.get('key') == 'team-editor']) == 1
+            editor_nodes = elements('team-editor', width, theme)
+            assert keyed(editor_nodes, 'team-members')['role'] != 'textbox'
+            assert not any(n.get('key') == 'team-member-search' for n in editor_nodes)
+            assert keyed(editor_nodes, 'team-edit-0')['label'] == 'Close Design'
+            assert keyed(editor_nodes, 'team-member-alex chen')['fill'] != keyed(editor_nodes, 'team-member-morgan lee')['fill']
             assert not any(n.get('key') == 'team-name' for n in ours)
     for page, expectations in [('people-our-team', [('alex chen', 'Design', 3, 3), ('jamie park', 'Design', 2, 0), ('morgan lee', 'Delivery', 2, 1)]), ('people-external', [('dana ortiz', 'No team', 3, 2), ('leo park', 'No team', 1, 0)])]:
         nodes = elements(page)
@@ -113,6 +134,9 @@ def main():
     nodes, _ = shot('team-escape', 'people-team-editor', [tap('team-name'), key('Escape', .6)])
     assert not any(n.get('key') == 'team-editor' for n in nodes)
     assert any(n.get('key') == 'people-roster' for n in nodes)
+    nodes, _ = shot('team-close', 'people-team-editor', [tap('team-edit-0')])
+    assert not any(n.get('key') == 'team-editor' for n in nodes)
+    assert keyed(nodes, 'team-edit-0')['label'] == 'Open Design'
     nodes, _ = shot('team-one-editor', 'people-team-editor', [tap('team-edit-1')])
     assert len([n for n in nodes if n.get('key') == 'team-editor']) == 1
     field = keyed(nodes, 'team-name')
@@ -120,9 +144,9 @@ def main():
     nodes, state = shot('team-duplicate', 'people-team-editor', [tap('team-name'), select_all(.6), text('Delivery', .9), tap('team-save', 3)])
     assert any(n.get('text') == 'Use a different name for each team.' for n in nodes)
     assert [t['name'] for t in json.loads((state/'teams.json').read_text())['teams']] == ['Design', 'Delivery']
-    nodes, state = shot('team-added', events=[tap('team-add'), tap('team-name', .7), text('Support', 1), tap('team-members', 3), text('Sam Reed', 3.3), tap('team-advanced', 5), tap('team-aliases', 5.4), text('Sam R = Sam Reed', 5.7), scroll(7.3), tap('team-save', 8)])
+    nodes, state = shot('team-added', events=[tap('team-add'), tap('team-name', .7), text('Support', 1), tap('team-member-morgan lee', 3), tap('team-advanced', 5), tap('team-aliases', 5.4), text('Morgan M = Morgan Lee', 5.7), scroll(7.3), tap('team-save', 8)])
     teams = json.loads((state/'teams.json').read_text())['teams']
-    assert len(teams) == 3 and teams[2] == dict(name='Support', members=['Sam Reed'], aliases={'Sam R':'Sam Reed'}), teams
+    assert len(teams) == 3 and teams[2] == dict(name='Support', members=['Morgan Lee'], aliases={'Morgan M':'Morgan Lee'}), teams
     remove = [tap('team-advanced'), scroll(.6), tap('team-remove', 1)]
     nodes, state = shot('team-remove-prompt', 'people-team-editor', remove)
     assert any(n.get('key') == 'team-remove-confirm' for n in nodes)
@@ -148,6 +172,7 @@ def main():
     nodes, _ = shot('old-person-returns', 'people-external', state=state)
     assert persons(nodes) == {'person-old only'}
     assert any(n.get('text') == 'Side not set' for n in nodes)
+    verify_member_search(exe)
     (OUT/'validation.json').write_text(json.dumps(dict(result='pass', matrix_renders=24, pixel_identical_general=4, checks=['eligibility and new encounter', 'aliases and aggregate counts', 'side correction and restart', 'tab persistence and breadcrumb', 'search and Escape', 'one editor', 'rename and restart', 'Add with aliases', 'Cancel and Escape', 'duplicate rejection', 'remove confirmation']), indent=2))
     print('PASS: native persistence, side corrections, remembered tabs, alias/team search, one team editor, rename/add/Cancel/Escape and old-only eligibility', flush=True)
 

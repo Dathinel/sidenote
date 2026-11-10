@@ -12,6 +12,7 @@ pub struct TeamEditor {
     pub original: Option<core::Team>,
     pub advanced: bool,
     pub remove_confirm: bool,
+    pub member_search: TextEdit,
 }
 pub struct PeopleUi {
     pub tab: usize,
@@ -60,7 +61,10 @@ impl State {
         }
     }
 }
-fn side_control(person: &Person, k: &Kit) -> El {
+fn side_control(person: &Person, k: &Kit, p: Palette) -> El {
+    let mut selected_kit = k.clone();
+    selected_kit.c.bg_base = p.sel;
+    selected_kit.c.border_strong = p.accent;
     let name = person.name.clone();
     SegmentedControl::new(
         &["Our team", "External"],
@@ -78,7 +82,7 @@ fn side_control(person: &Person, k: &Kit) -> El {
             },
         )
     })
-    .build(k)
+    .build(&selected_kit)
     .key(format!("person-side-{}", core::people::key(&person.name)))
 }
 fn avatar(name: &str, p: Palette) -> El {
@@ -128,7 +132,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
             .key(format!("person-{id}"))
             .flex_wrap()
             .child(identity)
-            .child(side_control(person, k))
+            .child(side_control(person, k, p))
             .child(
                 roles::META
                     .wrap(
@@ -153,7 +157,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
             )
             .child(roles::META.line(date, p.soft).w(65.0))
             .child(roles::META.line(person.open.to_string(), p.soft).w(40.0))
-            .child(side_control(person, k))
+            .child(side_control(person, k, p))
     }
 }
 fn heading(compact: bool, p: Palette) -> El {

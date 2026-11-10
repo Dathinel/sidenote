@@ -18,12 +18,7 @@
     {
       "t": 3,
       "type": "tap",
-      "key": "team-members"
-    },
-    {
-      "t": 3.5,
-      "type": "type",
-      "text": "Sam Reed"
+      "key": "team-member-morgan lee"
     },
     {
       "t": 5.2,
@@ -38,7 +33,7 @@
     {
       "t": 6,
       "type": "type",
-      "text": "Sam R = Sam Reed"
+      "text": "M Lee = Morgan Lee"
     },
     {
       "t": 9,

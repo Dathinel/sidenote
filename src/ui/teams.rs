@@ -26,6 +26,7 @@ pub fn open(s: &mut State, original: Option<core::Team>) {
         original,
         advanced: false,
         remove_confirm: false,
+        member_search: TextEdit::default(),
     });
     super::scene_scroll(s, "team-editor");
 }
@@ -140,26 +141,36 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                 .key("team-name")
                 .w_full(),
         )
-        .child(roles::CONTROL.wrap("Members", p.soft))
-        .child(
-            TextInput::new(&s.tasks.team_members)
-                .placeholder("Names, separated by commas")
-                .on_edit(|s: &mut State| &mut s.tasks.team_members)
+        .child(roles::CONTROL.wrap("Members", p.soft));
+    let people = core::people::roster(&s.meetings, &s.tasks.teams, &s.tasks.all, &s.people.prefs);
+    let mut names = std::collections::BTreeMap::new();
+    for name in s.tasks.teams.teams.iter().flat_map(|t| &t.members).chain(
+        people
+            .iter()
+            .filter(|person| person.side == Some(core::people::Side::OurTeam))
+            .map(|p| &p.name),
+    ) {
+        names.insert(core::people::key(name), name.clone());
+    }
+    if names.len() > 12 {
+        out = out.child(
+            TextInput::new(&editor.member_search)
+                .placeholder("Find a member")
+                .leading_icon(&icons::SEARCH)
+                .leading_icon_size(16.0)
+                .on_edit(|s: &mut State| &mut s.people.team_editor.as_mut().unwrap().member_search)
                 .on_key(form_key)
-                .on_submit(|s: &mut State, _| save(s))
-                .disabled(s.edit_busy)
                 .height(36.0)
                 .build(k)
-                .key("team-members")
+                .key("team-member-search")
                 .w_full(),
         );
-    let people = core::people::roster(&s.meetings, &s.tasks.teams, &s.tasks.all, &s.people.prefs);
-    let mut choices = row().w_full().flex_wrap().gap(6.0);
-    for person in people
-        .iter()
-        .filter(|person| person.side == Some(core::people::Side::OurTeam))
-    {
-        let name = person.name.clone();
+    }
+    let mut choices = row().key("team-members").w_full().flex_wrap().gap(6.0);
+    for name in names.into_values().filter(|n| {
+        n.to_lowercase()
+            .contains(&editor.member_search.text.to_lowercase())
+    }) {
         let selected = s
             .tasks
             .team_members
@@ -174,6 +185,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                 p,
             )
             .border(1.0, if selected { p.accent } else { p.line })
+            .fill(if selected { p.sel } else { p.card })
             .role("checkbox")
             .checked(selected)
             .disabled(s.edit_busy)
@@ -313,6 +325,12 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             panel = panel.child(hairline(p));
         }
         let original = team.clone();
+        let opened = s
+            .people
+            .team_editor
+            .as_ref()
+            .and_then(|e| e.original.as_ref())
+            .is_some_and(|t| t.name == team.name);
         panel = panel.child(
             cards::row_shell()
                 .key(format!("team-row-{i}"))
@@ -327,14 +345,30 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                         row()
                             .gap(6.0)
                             .items_center()
-                            .child(icons::draw(&icons::CHEVRON_RIGHT, 16.0, p.soft))
-                            .child(roles::CONTROL.wrap("Open", p.soft)),
+                            .child(icons::draw(
+                                if opened {
+                                    &icons::CHEVRON_DOWN
+                                } else {
+                                    &icons::CHEVRON_RIGHT
+                                },
+                                16.0,
+                                p.soft,
+                            ))
+                            .child(
+                                roles::CONTROL.wrap(if opened { "Close" } else { "Open" }, p.soft),
+                            ),
                         &format!("team-edit-{i}"),
-                        format!("Open {}", team.name),
+                        format!("{} {}", if opened { "Close" } else { "Open" }, team.name),
                         p,
                     )
                     .disabled(s.edit_busy)
-                    .on_press(move |s: &mut State| open(s, Some(original.clone()))),
+                    .on_press(move |s: &mut State| {
+                        if opened {
+                            cancel(s)
+                        } else {
+                            open(s, Some(original.clone()))
+                        }
+                    }),
                 ),
         );
         if s.people
