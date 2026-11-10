@@ -106,6 +106,15 @@ impl Options {
         }
         if let Some(source) = &self.live {
             let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
+            let folder = folder.or_else(|| {
+                if source.hint.is_some() {
+                    return None;
+                }
+                let start = source.start_ms?;
+                let (_, recent) =
+                    recent_meeting_for(root, chrono::Local::now().timestamp_millis(), Some(start))?;
+                live::find_folder(root, recent.hint.as_deref(), recent.start_ms)
+            });
             prompt.push_str("\n<live_transcript>\n");
             if let Some(folder) = folder {
                 match live::read_rolling(&folder, None)
@@ -149,41 +158,112 @@ pub fn in_meeting(recording: bool, ended_ms: Option<i64>, now_ms: i64) -> bool {
 }
 /// Includes meetings whose summary has not been written yet. Ignores active and future records.
 pub fn recent_meeting(root: &Path, now_ms: i64) -> Option<(i64, LiveSource)> {
-    file_reads::entries(root)
-        .ok()?
-        .iter()
-        .filter_map(|entry| {
-            let folder = entry.path();
-            if !file_reads::directory(&folder) {
-                return None;
-            }
-            let bytes = file_reads::read(&folder.join("manifest.json"), 1024 * 1024).ok()?;
-            let m: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-            if matches!(m["status"].as_str(), Some("recording" | "starting")) {
-                return None;
-            }
-            let end = m["ended_at_ms"].as_i64().or_else(|| {
-                let duration = m["duration_ms"]
-                    .as_f64()
-                    .filter(|d| d.is_finite() && *d >= 0.0)?;
-                Some(m["created_at_ms"].as_i64()?.saturating_add(duration as i64))
-            })?;
-            in_meeting(false, Some(end), now_ms).then(|| {
-                (
-                    end,
-                    LiveSource {
-                        hint: Some(entry.file_name().to_string_lossy().into_owned()),
-                        start_ms: m["created_at_ms"].as_i64(),
-                    },
-                )
-            })
+    recent_meeting_for(root, now_ms, None)
+}
+fn recent_meeting_for(
+    root: &Path,
+    now_ms: i64,
+    start_ms: Option<i64>,
+) -> Option<(i64, LiveSource)> {
+    let entries = file_reads::entries(root).ok()?;
+    let mut meetings = entries.iter().filter_map(|entry| {
+        let folder = entry.path();
+        if !file_reads::directory(&folder) {
+            return None;
+        }
+        let bytes = file_reads::read(&folder.join("manifest.json"), 1024 * 1024).ok()?;
+        let m: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        if start_ms.is_some_and(|start| {
+            m["created_at_ms"]
+                .as_i64()
+                .is_none_or(|made| made.abs_diff(start) > 90_000)
+        }) {
+            return None;
+        }
+        if matches!(m["status"].as_str(), Some("recording" | "starting")) {
+            return None;
+        }
+        let end = m["ended_at_ms"].as_i64().or_else(|| {
+            let duration = m["duration_ms"]
+                .as_f64()
+                .filter(|d| d.is_finite() && *d >= 0.0)?;
+            Some(m["created_at_ms"].as_i64()?.saturating_add(duration as i64))
+        })?;
+        in_meeting(false, Some(end), now_ms).then(|| {
+            (
+                end,
+                LiveSource {
+                    hint: Some(entry.file_name().to_string_lossy().into_owned()),
+                    start_ms: m["created_at_ms"].as_i64(),
+                },
+            )
         })
-        .max_by_key(|(end, _)| *end)
+    });
+    if start_ms.is_some() {
+        let only = meetings.next()?;
+        meetings.next().is_none().then_some(only)
+    } else {
+        meetings.max_by_key(|(end, _)| *end)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn no_id_follow_up_uses_the_matching_finished_transcript_and_rejects_ambiguous_folders() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("ask-no-id-{}", std::process::id()));
+        let start = chrono::Local::now().timestamp_millis() - 120_000;
+        let make = |suffix| {
+            let folder = root.join(format!("{start}-{suffix}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("manifest.json"),
+                serde_json::json!({
+                    "status":"complete", "created_at_ms":start, "ended_at_ms":start+60_000
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(
+                folder.join("english-transcript.md"),
+                "[00:00:44] You: Check the draft",
+            )
+            .unwrap();
+        };
+        make(1);
+        let mut options = Options {
+            meeting: true,
+            live: Some(LiveSource {
+                hint: None,
+                start_ms: Some(start),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            options
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("Check the draft")
+        );
+        make(2);
+        assert!(
+            !options
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("Check the draft")
+        );
+        options.live.as_mut().unwrap().hint = Some("missing-1".into());
+        assert!(
+            !options
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("Check the draft")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn restart_finds_unsummarised_recent_meeting_and_prompt_reads_latest_transcript() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
