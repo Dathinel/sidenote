@@ -249,6 +249,12 @@ impl State {
                 };
             }
             Msg::Approved { id, approved } if self.annotation_job_current(id) => {
+                self.annotations.status =
+                    if generation::uses_frame_drafts(approved.approval.frames.len()) {
+                        "Writing frame drafts...".into()
+                    } else {
+                        "Writing the annotation note...".into()
+                    };
                 self.annotations.approved = Some(approved);
                 self.load_annotation_note_images();
             }
@@ -845,11 +851,16 @@ pub fn scene(s: &mut State, name: &str) {
             } else {
                 s.annotations.busy = true;
                 s.annotations.ticket = Some(s.annotations.epoch.begin());
-                s.annotations.status =
-                    "2 of 2 frame drafts ready. Writing the annotation note...".into();
-                s.annotations.drafts.insert(1,serde_json::json!({"summary":"The board shows navigation and paper prototype materials.","callouts":[{"mark_number":1,"explanation":"Choose the overview and use paper cards."},{"mark_number":2,"explanation":"Use paper cards and review them on Friday."}]}));
-                s.annotations.drafts.insert(2,serde_json::json!({"summary":"The Next review card shows Friday morning and Bring two versions.","callouts":[{"mark_number":3,"explanation":"The speaker says to review these on Friday. What these refers to is unclear."}]}));
-                s.annotations.stream=r#"{"title":"Workshop plan","summary":"The speaker reviews the workshop navigation and paper materials"#.into();
+                s.annotations.status = "Writing the annotation note...".into();
+                let summary = value["summary"].as_str().unwrap_or("");
+                let preview: String = summary.chars().take(135).collect();
+                s.annotations.stream = format!(
+                    "{{\"title\":{},\"summary\":{}",
+                    value["title"],
+                    serde_json::to_string(&preview)
+                        .unwrap()
+                        .trim_end_matches('"')
+                );
             }
         }
     }

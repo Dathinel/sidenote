@@ -555,8 +555,10 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
                 .get(&f.index)
                 .is_some_and(|i| i.size().is_some())
         });
-    let allowed =
-        frames.iter().any(|f| f.included) && images_ready && s.annotation_options().is_ok();
+    let allowed = frames.iter().any(|f| f.included)
+        && images_ready
+        && s.annotations.dragging.is_none()
+        && s.annotation_options().is_ok();
     let send = pressable(roles::CONTROL.wrap("Send for note", p.card))
         .key("annotation-send")
         .px(16.0)
@@ -567,13 +569,17 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         .child(if allowed {
             send.on_press(|s: &mut State| s.send_annotation(false))
         } else {
-            send.disabled(true).help(if !images_ready {
-                "Wait for the selected frame images to load, or untick unavailable frames.".into()
-            } else {
-                s.annotation_options()
-                    .err()
-                    .unwrap_or_else(|| "Choose at least one frame.".into())
-            })
+            send.disabled(true)
+                .help(if s.annotations.dragging.is_some() {
+                    "Finish drawing the black-out box before sending.".into()
+                } else if !images_ready {
+                    "Wait for the selected frame images to load, or untick unavailable frames."
+                        .into()
+                } else {
+                    s.annotation_options()
+                        .err()
+                        .unwrap_or_else(|| "Choose at least one frame.".into())
+                })
         })
         .child(
             link("Cancel", p)
@@ -622,7 +628,38 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
             })
             .build(&theme::kit(&p))
             .key(format!("review-include-{index}"));
-        page = page.child(toggle);
+        page = page.child(
+            row()
+                .w_full()
+                .items_center()
+                .gap(12.0)
+                .child(toggle)
+                .child(roles::META.wrap(
+                    format!(
+                        "{} black-out {}",
+                        review.masks.len(),
+                        if review.masks.len() == 1 {
+                            "box"
+                        } else {
+                            "boxes"
+                        }
+                    ),
+                    p.soft,
+                ))
+                .child(
+                    link("Undo box", p)
+                        .key(format!("review-undo-{index}"))
+                        .disabled(review.masks.is_empty())
+                        .on_press(move |s: &mut State| {
+                            if let Some(frames) = &mut s.annotations.review
+                                && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
+                            {
+                                frame.masks.pop();
+                            }
+                            s.prepare_annotation_preview();
+                        }),
+                ),
+        );
         if !included {
             continue;
         }
@@ -652,6 +689,7 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         canvas = canvas.on_drag(move |s: &mut State, d: &mut rune::Drag, _| {
             let Some(b) = media::box_from_display([d.start_x, d.start_y], [d.x, d.y], [d.w, d.h])
             else {
+                s.annotations.dragging = None;
                 return;
             };
             if d.phase == rune::Phase::Up {
@@ -669,21 +707,7 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
                 s.annotations.dragging = Some((index, b));
             }
         });
-        page = page
-            .child(canvas)
-            .child(roles::META.wrap(format!("{} black-out boxes", review.masks.len()), p.soft))
-            .child(
-                link("Undo box", p)
-                    .key(format!("review-undo-{index}"))
-                    .on_press(move |s: &mut State| {
-                        if let Some(frames) = &mut s.annotations.review
-                            && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
-                        {
-                            frame.masks.pop();
-                        }
-                        s.prepare_annotation_preview();
-                    }),
-            );
+        page = page.child(canvas);
         for (n, m) in c.data.marks.iter().enumerate() {
             if c.frame_for_mark(m).is_some_and(|f| f.index == index) {
                 page = page.child(callout(c, n + 1, m, p));
@@ -809,7 +833,10 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
                     .selectable(true),
             );
         }
-        if let Some(a) = &s.annotations.approved {
+        if let Some(a) = &s.annotations.approved
+            && (generation::uses_frame_drafts(a.approval.frames.len())
+                || !s.annotations.drafts.is_empty())
+        {
             for f in &a.approval.frames {
                 if let Some(d) = s.annotations.drafts.get(&f.index) {
                     page = page.child(hex::settings::card(
@@ -838,6 +865,14 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
                         p.soft,
                     ));
                 }
+            }
+        }
+        if let Some(a) = &s.annotations.approved
+            && !generation::uses_frame_drafts(a.approval.frames.len())
+            && s.annotations.drafts.is_empty()
+        {
+            for frame in &a.approval.frames {
+                page = page.child(note_image(s, frame.index, width, p));
             }
         }
         return page;

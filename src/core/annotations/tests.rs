@@ -282,7 +282,7 @@ fn real_claude_synthetic_note_matches_the_current_schema_and_evidence() {
             index: f.index,
             included: true,
             masks: if i == 0 {
-                vec![[0.0, 0.0, 0.15, 0.10]]
+                vec![super::media::SYNTHETIC_MASK]
             } else {
                 Vec::new()
             },
@@ -524,4 +524,36 @@ fn approval_seals_reviewed_bytes_and_send_pins_the_same_files() {
             .pin_images(&approved.images_for(&approved.approval.frames[0]))
             .is_err()
     );
+}
+
+#[test]
+fn prompts_request_plain_explanations_and_one_place_for_uncertainty() {
+    let temp = Temp::new();
+    let c = read_capture(&fixture()).unwrap();
+    let approved = super::media::approve(
+        &c,
+        &[super::media::ReviewFrame {
+            index: 1,
+            included: true,
+            masks: Vec::new(),
+        }],
+        &temp.0,
+    )
+    .unwrap();
+    for prompt in [
+        super::note::frame_prompt(&approved.approval.frames[0]),
+        super::note::notebook_prompt(&approved, &[]),
+    ] {
+        assert!(prompt.contains("2 to 4"));
+        assert!(prompt.contains("1 to 2"));
+        assert!(prompt.contains("uncertainty field to null"));
+        assert!(prompt.contains("once in open_questions"));
+        assert!(prompt.contains("Never invent names or numbers"));
+    }
+    assert_eq!(
+        super::media::downscale_to(&image::RgbaImage::new(3200, 1600), 1024).dimensions(),
+        (1024, 512)
+    );
+    assert!(!super::generation::uses_frame_drafts(3));
+    assert!(super::generation::uses_frame_drafts(4));
 }

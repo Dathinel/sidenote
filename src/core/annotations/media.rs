@@ -95,11 +95,14 @@ pub fn bake(image: &RgbaImage, masks: &[BoxNorm]) -> RgbaImage {
     out
 }
 pub fn downscale(image: &RgbaImage) -> RgbaImage {
+    downscale_to(image, LONG_EDGE)
+}
+pub fn downscale_to(image: &RgbaImage, limit: u32) -> RgbaImage {
     let edge = image.width().max(image.height());
-    if edge <= LONG_EDGE {
+    if edge <= limit {
         return image.clone();
     }
-    let ratio = LONG_EDGE as f64 / edge as f64;
+    let ratio = limit.max(1) as f64 / edge as f64;
     imageops::resize(
         image,
         (image.width() as f64 * ratio).round().max(1.0) as u32,
@@ -204,6 +207,14 @@ fn save_png(
 }
 /// Bake locally before review. This snapshot is not permission to send.
 pub fn prepare(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<ApprovedCapture> {
+    prepare_at_edge(c, review, root, LONG_EDGE)
+}
+pub(super) fn prepare_at_edge(
+    c: &Capture,
+    review: &[ReviewFrame],
+    root: &Path,
+    edge: u32,
+) -> io::Result<ApprovedCapture> {
     let indices: std::collections::BTreeSet<_> = c.data.keyframes.iter().map(|f| f.index).collect();
     if indices.len() != c.data.keyframes.len() {
         return Err(error(
@@ -246,7 +257,7 @@ pub fn prepare(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<A
         let original = image::load_from_memory_with_format(&bytes, ImageFormat::Png)
             .map_err(error)?
             .to_rgba8();
-        let redacted = bake(&downscale(&bake(&original, &r.masks)), &r.masks);
+        let redacted = bake(&downscale_to(&bake(&original, &r.masks), edge), &r.masks);
         let marks: Vec<_> = c
             .data
             .marks

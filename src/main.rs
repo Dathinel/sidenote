@@ -34,6 +34,22 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
     }
+    if let Some(variant) = args.windows(2).find(|a| a[0] == "--annotation-benchmark") {
+        let Some(output) = args
+            .windows(2)
+            .find(|a| a[0] == "--annotation-proof-output")
+        else {
+            std::process::exit(2);
+        };
+        if let Err(e) = sidenote::core::annotations::generation::benchmark(
+            &variant[1].to_string_lossy(),
+            std::path::Path::new(&output[1]),
+        ) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(model) = args.windows(2).find(|a| a[0] == "--annotation-live-proof") {
         let output = args
             .windows(2)
