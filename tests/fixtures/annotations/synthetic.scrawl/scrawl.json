@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "id": "synthetic",
+  "createdAtMs": 1794384000000,
+  "durationMs": 22000,
+  "target": {
+    "mode": "window",
+    "app": "Northwind Board",
+    "windowTitle": "Workshop plan: paper prototypes and the next review"
+  },
+  "transcript": {
+    "source": "synthetic",
+    "model": "none",
+    "text": "Before Choose the overview. Use paper cards. Review these on Friday. After",
+    "words": [
+      {
+        "t0": 0,
+        "t1": 0.5,
+        "text": "Before"
+      },
+      {
+        "t0": 2.9,
+        "t1": 3,
+        "text": "Choose"
+      },
+      {
+        "t0": 3.1,
+        "t1": 3.5,
+        "text": "the"
+      },
+      {
+        "t0": 4,
+        "t1": 4.5,
+        "text": "overview."
+      },
+      {
+        "t0": 7,
+        "t1": 7.5,
+        "text": "Use"
+      },
+      {
+        "t0": 8,
+        "t1": 8.5,
+        "text": "paper"
+      },
+      {
+        "t0": 9,
+        "t1": 9.5,
+        "text": "cards."
+      },
+      {
+        "t0": 11,
+        "t1": 11.5,
+        "text": "Review"
+      },
+      {
+        "t0": 12,
+        "t1": 12.5,
+        "text": "these"
+      },
+      {
+        "t0": 13,
+        "t1": 13.5,
+        "text": "on"
+      },
+      {
+        "t0": 14,
+        "t1": 14.5,
+        "text": "Friday."
+      },
+      {
+        "t0": 19,
+        "t1": 19.5,
+        "text": "After"
+      }
+    ],
+    "segments": [
+      {
+        "t0": 0,
+        "t1": 19.5,
+        "text": "Before Choose the overview. Use paper cards. Review these on Friday. After"
+      }
+    ]
+  },
+  "marks": [
+    {
+      "id": "overview",
+      "t0": 6,
+      "t1": 6.5,
+      "boxNorm": [
+        0.03,
+        0.19,
+        0.24,
+        0.73
+      ],
+      "shape": "box",
+      "description": "Workshop navigation",
+      "frame": 1
+    },
+    {
+      "id": "materials",
+      "t0": 8,
+      "t1": 9,
+      "boxNorm": [
+        0.31,
+        0.52,
+        0.3,
+        0.36
+      ],
+      "shape": "circle",
+      "description": "Paper prototype materials",
+      "frame": 1
+    },
+    {
+      "id": "review",
+      "t0": 12,
+      "t1": 14,
+      "boxNorm": [
+        0.64,
+        0.52,
+        0.32,
+        0.36
+      ],
+      "shape": "box",
+      "description": "The next review",
+      "frame": 2
+    }
+  ],
+  "keyframes": [
+    {
+      "index": 2,
+      "t": 12,
+      "reason": "Review marked",
+      "file": "frames/frame-02.png",
+      "event": "mark"
+    },
+    {
+      "index": 1,
+      "t": 6,
+      "reason": "Materials marked",
+      "file": "frames/frame-01.png",
+      "event": "mark"
+    }
+  ],
+  "strokes": [],
+  "video": "recording.mp4",
+  "audio": "audio.wav",
+  "futureField": {
+    "ignored": true
+  }
+}
