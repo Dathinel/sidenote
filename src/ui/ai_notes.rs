@@ -758,12 +758,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 "summary-template",
                 "Summary template",
                 "Edit the instructions used to write meeting summaries.",
-                button("Edit instructions", "summary-template-edit", p).on_press(
-                    |s: &mut State| {
+                button("Edit", "summary-template-edit", p)
+                    .label("Edit Meeting summary instructions")
+                    .on_press(|s: &mut State| {
                         s.hex.section = super::hex::Section::PromptLibrary;
                         super::scene_scroll(s, "agent-instructions");
-                    },
-                ),
+                    }),
                 false,
                 p,
             ));
@@ -1113,15 +1113,28 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         );
     }
     if part == Part::Identity {
-        c = c.child(card(p).key("notes-identity").fill(super::hex::settings::highlight(s,"notes-identity",p))
-        .child(roles::TITLE.wrap("Who you are in tasks", p.ink))
-        .child(super::hex::settings::icon_tile(&super::icons::PEOPLE,p))
-        .child(row().items_center().gap(8.0).child(roles::NAME.wrap("Your name (optional)", p.ink)).child(super::hex::settings::pc(p)))
-        .child(field(&a.name, "Your name").on_edit(|s: &mut State| &mut s.ai_notes.name).build(k).key("notes-name").w_full())
-        .child(roles::META.wrap("Used to mark tasks that are yours. Stored on this PC and included when a meeting is sent to your helper.", p.soft))
-        .child(button("Save name", "notes-save-name", p).self_start().on_press(|s: &mut State| {
-            if let Some(mut settings) = s.ai_notes.settings.clone() { settings.your_name = s.ai_notes.name.text.trim().into(); s.notes_work(Work::Settings(settings), "Saving your name..."); }
-        })));
+        let control = row()
+            .w(300.0)
+            .max_w(300.0)
+            .gap(8.0)
+            .items_center()
+            .child(
+                field(&a.name, "Your name")
+                    .on_edit(|s: &mut State| &mut s.ai_notes.name)
+                    .build(k)
+                    .key("notes-name")
+                    .grow(1.0)
+                    .min_w(80.0),
+            )
+            .child(
+                button("Save name", "notes-save-name", p).on_press(|s: &mut State| {
+                    if let Some(mut settings) = s.ai_notes.settings.clone() {
+                        settings.your_name = s.ai_notes.name.text.trim().into();
+                        s.notes_work(Work::Settings(settings), "Saving your name...");
+                    }
+                }),
+            );
+        c = c.child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your helper.",control,true,p).radius(10.0).border(1.0,p.line));
     }
     if part == Part::Prompts {
         c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)
