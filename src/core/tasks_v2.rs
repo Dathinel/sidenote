@@ -233,6 +233,8 @@ impl Teams {
 }
 #[derive(Clone, Debug)]
 pub enum TaskV2Edit {
+    Title(String),
+    Description(String),
     Reset,
     Status(TaskStatus, Option<WaitingOn>),
     SubtaskTick { key: String, done: bool },
@@ -280,6 +282,14 @@ impl TaskStore {
         source: &std::path::Path,
         edit: TaskV2Edit,
     ) -> io::Result<super::EditView<Overrides>> {
+        if let TaskV2Edit::Title(title) = &edit
+            && title.trim().is_empty()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A task needs some text.",
+            ));
+        }
         if task.manual {
             let added_id = if matches!(edit, TaskV2Edit::AddSubtask(_)) {
                 super::sync_state::new_id(&self.root)?
@@ -296,6 +306,10 @@ impl TaskStore {
                         .find(|m| m.id == task.stable_id)
                         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Task removed"))?;
                     match &edit {
+                        TaskV2Edit::Title(title) => manual.title = Some(title.trim().into()),
+                        TaskV2Edit::Description(description) => {
+                            manual.description = Some(description.clone())
+                        }
                         TaskV2Edit::Status(status, waiting) => {
                             manual.status = Some(*status);
                             manual.waiting_on = waiting.clone();
@@ -318,6 +332,8 @@ impl TaskStore {
                             });
                         }
                         TaskV2Edit::Reset => {
+                            manual.title = None;
+                            manual.description = None;
                             manual.status = None;
                             manual.waiting_on = None;
                             manual.subtasks.clear();
@@ -376,6 +392,10 @@ impl TaskStore {
                     return Ok(());
                 }
                 match &edit {
+                    TaskV2Edit::Title(title) => entry.title = Some(title.trim().into()),
+                    TaskV2Edit::Description(description) => {
+                        entry.description = Some(description.clone())
+                    }
                     TaskV2Edit::Reset => unreachable!(),
                     TaskV2Edit::Status(status, waiting) => {
                         entry.status = Some(*status);
@@ -620,6 +640,80 @@ mod tests {
         let texts = f.meeting.summary.texts().collect::<Vec<_>>();
         assert!(texts.contains(&"Use paper"));
         assert!(texts.contains(&"Read the proof"));
+    }
+    #[test]
+    fn display_edits_preserve_original_identity_and_source() {
+        let original = "Send the revised supplier tracker so that operations can confirm the next production batch";
+        let f = Fixture::new(json!([{"task":original,"due":"2026-11-12","due_default":true}]));
+        let source = fs::read(f.meeting.folder.join("english-summary.json")).unwrap();
+        let task = f.tasks(&Overrides::default()).remove(0);
+        assert_eq!(task.title, "Send the revised supplier tracker");
+        assert_eq!(task.description, original);
+        assert_eq!(task.task, original);
+        let key = task_override_key(&task.meeting_id, "", original, 0);
+        let store = f.store();
+        let title = store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Title("Check supplier progress".into()),
+            )
+            .unwrap();
+        let description = store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Description("Bring the lavender samples".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            title.value.tasks[&task.meeting_id][&key].task.as_deref(),
+            Some(original)
+        );
+        let persisted = store.load_overrides().unwrap();
+        let edited = f.tasks(&persisted).remove(0);
+        assert_eq!(edited.title, "Check supplier progress");
+        assert_eq!(edited.description, "Bring the lavender samples");
+        assert_eq!(edited.task, original);
+        assert!(edited.due_default);
+        assert_eq!(description.value.tasks[&task.meeting_id].len(), 1);
+        for query in ["progress", "lavender", "production"] {
+            assert!(
+                core::TaskFilter {
+                    query: query.into(),
+                    ..Default::default()
+                }
+                .passes(&edited)
+            );
+        }
+        let ticks = core::StateStore::new(f.root.clone())
+            .set_task_tick_view(&task.meeting_id, original, "", true)
+            .unwrap();
+        assert!(ticks.value.checked.contains(original));
+        assert!(!ticks.value.checked.contains(&edited.title));
+        assert_eq!(
+            fs::read(f.meeting.folder.join("english-summary.json")).unwrap(),
+            source
+        );
+        store
+            .edit_v2(
+                &edited,
+                &f.meeting.folder,
+                TaskV2Edit::Description(String::new()),
+            )
+            .unwrap();
+        assert_eq!(f.tasks(&store.load_overrides().unwrap())[0].description, "");
+    }
+    #[test]
+    fn notes_fields_win_independently_and_search_includes_descriptions() {
+        let f = Fixture::new(
+            json!([{"task":"Review the current production plan so that all departments can confirm the latest delivery dates", "title":"Review the plan", "description":"Include the orchid samples"}]),
+        );
+        let task = f.tasks(&Overrides::default()).remove(0);
+        assert_eq!(task.title, "Review the plan");
+        assert_eq!(task.description, "Include the orchid samples");
+        assert!(f.meeting.search_hit("orchid").is_some());
+        assert!(f.meeting.search_hit("production").is_some());
     }
     #[test]
     fn status_override_is_guarded_by_text_and_survives_empty_check() {

@@ -77,7 +77,7 @@ impl Summary {
             .chain(self.todo.iter().flat_map(|t| {
                 std::iter::once(t.text())
                     .chain(std::iter::once(t.title()))
-                    .chain(std::iter::once(t.description.as_str()))
+                    .chain(std::iter::once(t.description()))
                     .chain(t.subtasks.iter().map(|s| s.title.as_str()))
                     .chain(t.waiting_on.iter().filter_map(|w| w.text.as_deref()))
                     .chain(t.team.as_deref())
@@ -127,14 +127,21 @@ pub struct Todo {
 impl Todo {
     pub fn title(&self) -> &str {
         if self.title.trim().is_empty() {
-            &self.task
+            super::task_titles::split_title(&self.task).0
         } else {
             &self.title
         }
     }
+    pub fn description(&self) -> &str {
+        if self.description.trim().is_empty() {
+            super::task_titles::split_title(&self.task).1
+        } else {
+            &self.description
+        }
+    }
     pub fn text(&self) -> &str {
         if self.task.trim().is_empty() {
-            self.title()
+            &self.title
         } else {
             &self.task
         }

@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
+    pub show_full_titles: bool,
+    pub task_titles_notice_seen: bool,
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
 }

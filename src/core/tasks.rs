@@ -177,6 +177,10 @@ impl Projects {
 #[serde(default)]
 pub struct TaskOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<TaskStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<super::WaitingOn>,
@@ -204,7 +208,9 @@ pub struct TaskOverride {
 }
 impl TaskOverride {
     pub(super) fn is_empty(&self) -> bool {
-        self.status.is_none()
+        self.title.is_none()
+            && self.description.is_none()
+            && self.status.is_none()
             && self.waiting_on.is_none()
             && self.subtask_ticks.is_empty()
             && self.added_subtasks.is_empty()
@@ -238,6 +244,10 @@ pub struct ManualTask {
     pub id: String,
     pub task: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
@@ -260,6 +270,8 @@ impl ManualTask {
     /// The same edit paths as a meeting task: change a `TaskOverride` view of it, then copy back.
     pub fn edit(&mut self, change: impl FnOnce(&mut TaskOverride)) {
         let mut o = TaskOverride {
+            title: self.title.clone(),
+            description: self.description.clone(),
             assignment: self.assignment.clone(),
             project: self.project.clone(),
             mine: self.mine,
@@ -268,6 +280,8 @@ impl ManualTask {
             ..TaskOverride::default()
         };
         change(&mut o);
+        self.title = o.title;
+        self.description = o.description;
         self.project = o.project.filter(|p| !p.trim().is_empty());
         self.assignment = o.assignment;
         self.mine = o.mine;
@@ -619,8 +633,8 @@ pub fn build_tasks(
             index: 0,
             task: m.task.clone(),
             stable_id: m.id.clone(),
-            title: m.task.clone(),
-            description: String::new(),
+            title: m.title.clone().unwrap_or_else(|| m.task.clone()),
+            description: m.description.clone().unwrap_or_default(),
             status: m.status.unwrap_or_default(),
             waiting_on: m.waiting_on.clone(),
             waiting_label: None,
@@ -698,8 +712,12 @@ pub fn build_tasks(
                 index,
                 task: todo.text().into(),
                 stable_id: todo.id.clone(),
-                title: todo.title().into(),
-                description: todo.description.clone(),
+                title: edit
+                    .and_then(|o| o.title.clone())
+                    .unwrap_or_else(|| todo.title().into()),
+                description: edit
+                    .and_then(|o| o.description.clone())
+                    .unwrap_or_else(|| todo.description().into()),
                 status: edit
                     .and_then(|o| o.status)
                     .unwrap_or_else(|| TaskStatus::parse(&todo.status)),
@@ -892,7 +910,9 @@ impl TaskFilter {
             return true;
         }
         let hay = format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
+            t.title,
+            t.description,
             t.task,
             t.owner.as_deref().unwrap_or(""),
             t.project

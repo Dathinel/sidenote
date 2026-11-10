@@ -57,3 +57,5 @@ pub fn validation_message(error: &std::io::Error) -> Option<&str> {
 
 pub mod tasks_v2;
 pub use tasks_v2::*;
+
+pub mod task_titles;
