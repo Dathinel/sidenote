@@ -1428,8 +1428,9 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, available: f32) 
         .border(1.0, if t.search.focused { p.accent } else { p.line })
         .radius(8.0)
         .fill(p.card)
+        .w(200.0)
         .grow(1.0)
-        .min_w(72.0);
+        .min_w(200.0);
     let who = segmented(
         k,
         "seg-who",

@@ -794,7 +794,7 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
         }
         menu = menu
             .child(profile_item(
-                "Meeting summary instructions",
+                "Prompt library",
                 "profile-menu-item2",
                 &super::icons::PROMPTS,
                 p,
