@@ -72,7 +72,8 @@ block cutover. This prevents a journal/relay echo loop and whole-item overwrites
 
 Rollback: stop relay writers everywhere, preserve the relay database and backup,
 disable the authority marker and preview, restore the verified folder snapshot,
-then resume matching folder clients. Edits since the backup require an explicit
+then resume matching folder clients. Old whole-item winners cannot establish lost
+user intent; retain losing journal values for review. Edits since the backup require an explicit
 reviewed export of relay field deltas. Never merge a stale snapshot automatically.
 For slice 1 simply disable preview; it has not modified the folder task collection.
 
@@ -114,7 +115,7 @@ document bodies, keys or raw protocol payloads.
 
 Cloudflare Worker self-host guide outline for a later slice:
 1. Explain metadata exposure, full replicas, overlap and account quota costs.
-2. Install bun and Wrangler; use a separate owner's Cloudflare account.
+2. Install bun, Node 22+ for the pinned Wrangler, and Wrangler; use the owner's Cloudflare account.
 3. Configure the Worker name, Durable Object binding and SQLite migration.
 4. Run local bun tests and wrangler dev on numeric loopback first.
 5. Authenticate and deploy only with the owner's explicit deployment request.
@@ -160,3 +161,25 @@ bump the version, push, deploy or begin slice 2. Stop after 90 minutes if needed
    independent security review, revocation/rotation and packaging evidence.
 
 Only slice 1 is authorized for implementation here.
+
+## Slice 1 evidence and limits
+
+Implemented locally on feat/sync-relay. Automated checks are rung 4, not release
+qualification. The two-instance test launches the actual sidenote.exe twice with
+separate synthetic roots and a numeric-loopback Worker. It verifies delivery,
+owner/due edits while both sessions are stopped, convergence after both apps
+restart, deletion, and unchanged folder journal bytes after preview and rollback.
+
+The requested fmt, both strict clippy variants, both locked workspace test
+variants, locked build and MCP smoke passed locally. The workspace has 248
+top-level tests per feature variant, plus the nested restart proof process. The
+relay's bun suite passed 19 tests; its TypeScript check and the scanner's five
+tests also passed. Local relay tooling used the locked Wrangler 4.158.0 through
+its executable shim, not the older global 4.81.0 or the unsupported Bun JS runtime.
+
+No pairing UI or journal migration is implemented. The fixture provisions only
+synthetic memberships through the core API. Nested task collections and
+same-field conflict UI need later qualification. GUI interactions, MCP access
+while a GUI owns the preview replica, physical devices, a deployed self-hosted
+Worker, release packaging and independent security review remain unverified.
+No version bump, push, Cloudflare login or deployment was performed.
