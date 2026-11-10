@@ -283,7 +283,7 @@ fn tab_row(s: &State, k: &Kit, m: &Meeting, narrow: bool, p: Palette, layer: &mu
         tabs = tabs.child(
             tab_button(
                 "tab-notes",
-                "Your notes",
+                "Typed notes",
                 None,
                 tab == Tab::Notes && !covers,
                 false,

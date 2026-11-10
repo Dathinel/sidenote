@@ -40,7 +40,7 @@ pub fn palette(dark: bool) -> Palette {
             "#141413",
             "#e9e7e1",
             "#bcb9b0",
-            "#9a978e",
+            "#b0ada4",
             "#302f2c",
             "#8db5dc",
             "#69c995",
@@ -101,11 +101,14 @@ pub fn palette(dark: bool) -> Palette {
 
 /// Kit controls (text fields, the runner dropdown, Markdown) drawn from the same palette.
 pub fn kit(p: &Palette) -> Kit {
-    Kit::from_palette(PaletteSeed {
+    let mut kit = Kit::from_palette(PaletteSeed {
         bg: p.card,
         fg: p.ink,
         accent: p.accent,
-    })
+    });
+    kit.c.text_faint = p.faint;
+    kit.ty.small = super::roles::META.style();
+    kit
 }
 
 /// Reading text: summary points, to-dos and answers.

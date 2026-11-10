@@ -801,6 +801,9 @@ fn indicator(s: &State, p: Palette) -> (Color, String) {
 
 /// The dot and short words for the sidebar's Hex line.
 pub fn short_status(s: &State, p: Palette) -> (Color, String) {
+    if !super::updates::listener_ready(s) {
+        return (p.warn, "Recording off".into());
+    }
     match &s.hex.status {
         None => (p.faint, "Checking".into()),
         Some(Err(HexError::HexNotRunning)) => (p.faint, "Not running".into()),
@@ -1843,6 +1846,14 @@ fn features_section(s: &State, k: &Kit, p: Palette) -> El {
                             .child(roles::NAME.wrap(feature.name(), p.ink))
                             .child(roles::meta(feature.description(), p)),
                     )
+                    .child(roles::CONTROL.wrap(
+                        if s.config.features.enabled(feature) {
+                            "On"
+                        } else {
+                            "Off"
+                        },
+                        p.soft,
+                    ))
                     .child(
                         Switch::new(s.config.features.enabled(feature))
                             .label(feature.name())
