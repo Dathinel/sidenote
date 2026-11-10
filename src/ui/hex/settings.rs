@@ -1061,8 +1061,7 @@ pub fn scene(s: &mut State, name: &str) {
         _ => panic!("Unknown Settings scene"),
     };
     if page == Page::Updates {
-        s.updates.scene = true;
-        s.updates.status.phase = sidenote::updates::Phase::Idle;
+        super::super::updates::settings_fixture(s);
     }
     navigate(s, page, tab);
     if name.ends_with("-expanded") {

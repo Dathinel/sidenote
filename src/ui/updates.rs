@@ -496,6 +496,10 @@ pub fn scene(s: &mut State, phase: Phase) {
     }
     s.updates.notes_open = s.updates.status.phase == Phase::Ready;
 }
+pub(super) fn settings_fixture(s: &mut State) {
+    s.updates.scene = true;
+    s.updates.status.phase = Phase::Idle;
+}
 pub fn settings_scene(s: &mut State) {
     s.open_updates();
 }
