@@ -29,6 +29,9 @@ pub struct UiPrefs {
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
+            people_since_ms: None,
+            people_existing_meetings: None,
+            people_sides: Default::default(),
             show_full_titles: false,
             tasks_mine: false,
             tasks_include_unassigned: false,
@@ -66,6 +69,9 @@ mod tests {
         let mut prefs: UiPrefs =
             serde_json::from_str(r#"{"show_full_titles":true,"settings_tabs":{"Meetings":1}}"#)
                 .unwrap();
+        assert_eq!(prefs.people_since_ms, None);
+        assert_eq!(prefs.people_existing_meetings, None);
+        assert!(prefs.people_sides.is_empty());
         assert!(!prefs.tasks_mine);
         assert!(!prefs.tasks_include_unassigned);
         assert_eq!(prefs.tasks_done, super::super::DoneFilter::Open);

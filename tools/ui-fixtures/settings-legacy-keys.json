@@ -141,6 +141,22 @@
     ],
     "features.other_devices": [
       "feature-Other devices"
+    ],
+    "annotations.helper": [
+      "annotation-agent-Claude Code",
+      "annotation-agent-Codex"
+    ],
+    "annotations.model": [
+      "annotation-model-menu-trigger"
+    ],
+    "ask_models": [
+      "ask-settings-model-trigger"
+    ],
+    "ask_meeting_thinking": [
+      "ask-meeting-thinking-trigger"
+    ],
+    "ask_chat_thinking": [
+      "ask-chat-thinking-trigger"
     ]
   }
 }
