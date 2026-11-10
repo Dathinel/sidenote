@@ -133,7 +133,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
                 roles::META
                     .wrap(
                         format!(
-                            "{} ? {} meetings ? {} ? {} open",
+                            "{} \u{b7} {} meetings \u{b7} {} \u{b7} {} open",
                             person.team, person.meetings, date, person.open
                         ),
                         p.soft,
