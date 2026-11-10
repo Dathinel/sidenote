@@ -61,7 +61,7 @@ def check(folder):
 
         elements, keys = load("profile-editor")
         assert "instructions-input-0" in keys and "profile-menu-menu" not in keys
-        for scene in ("sidebar-meetings", "sb-home-open", "sb-home-collapsed"):
+        for scene in ("sidebar-meetings", "sb-home-open", "sb-home-collapsed", "sidebar-rail"):
             elements, keys = load(scene)
             texts = [e.get("text", "") for e in elements]
             assert not any(text in ("Areas", "No active areas yet.", "Show all") for text in texts)

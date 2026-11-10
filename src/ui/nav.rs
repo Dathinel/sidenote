@@ -576,7 +576,10 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
         row()
             .gap(7.0)
             .items_center()
-            .child(icon_stop(9.0, if why.is_some() { p.faint } else { p.ink }))
+            .children(
+                (!meetings_home(s))
+                    .then(|| icon_stop(9.0, if why.is_some() { p.faint } else { p.ink })),
+            )
             .child(
                 roles::CONTROL
                     .bold()
