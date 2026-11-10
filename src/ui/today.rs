@@ -162,9 +162,7 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
                     .px(14.0)
                     .py(9.0)
                     .child(words)
-                    .child(
-                        roles::CONTROL.icon_label(format!("{} \u{203a}", item.action), p.accent),
-                    ),
+                    .child(roles::CONTROL.wrap(item.action, p.accent)),
             )
             .key(item.key)
             .label(format!("{said}. {}", item.action))

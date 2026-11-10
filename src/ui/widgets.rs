@@ -108,7 +108,6 @@ pub fn scroll(content: El, key: &str) -> El {
         .child(content)
 }
 
-/// The sidebar toggle: a window outline with its left panel marked.
 pub fn sidebar_icon(open: bool, p: Palette) -> El {
     super::icons::draw(
         if open {
@@ -119,15 +118,6 @@ pub fn sidebar_icon(open: bool, p: Palette) -> El {
         16.0,
         p.soft,
     )
-}
-
-pub fn page_icon(p: Palette) -> El {
-    col()
-        .size(32.0, 32.0)
-        .radius(9.0)
-        .fill(p.side)
-        .center()
-        .child(super::icons::draw(&super::icons::MEETINGS, 16.0, p.faint))
 }
 
 /// The bullet column of a point. Colour carries the kind, the shape stays small.

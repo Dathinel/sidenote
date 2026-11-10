@@ -5,7 +5,7 @@
 //! File Explorer with the path as one argument, and an export is written into the app's
 //! `exports` folder, never into a meeting folder, so a meeting from another device is only read.
 use super::{
-    State,
+    State, roles,
     theme::Palette,
     widgets::{label, pressable},
 };
@@ -143,7 +143,12 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
     let key = format!("more-{scope}-{}", m.id);
     let open = s.more_menu.as_deref() == Some(key.as_str());
     let toggle = key.clone();
-    let trigger = pressable(label("\u{2026}", 18.0, 700.0, p.soft).px(8.0).pb(3.0))
+    let caption = if scope == "row" {
+        roles::CONTROL.wrap("More", p.soft)
+    } else {
+        label("\u{2026}", 18.0, 700.0, p.soft)
+    };
+    let trigger = pressable(caption.px(8.0).pb(3.0))
         .key(format!("{key}-button"))
         .label("More actions")
         .help("More actions")

@@ -252,7 +252,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
                 .min_w(0.0)
                 .max_w(190.0),
         )
-        .child(chevron);
+        .children((s.selected.is_some() || s.on_live()).then_some(chevron));
     let menu_id = id.to_string();
     let trigger = pressable(trigger_row)
         .label(match &mp.name {

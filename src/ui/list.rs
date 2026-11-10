@@ -5,7 +5,7 @@ use super::{
     nav::Filter,
     project, roles,
     theme::{Palette, display},
-    widgets::{dot, highlighted, keycap, link, notice_bar, page_icon, pressable, scroll},
+    widgets::{highlighted, keycap, link, notice_bar, pressable, scroll},
 };
 use rune::{El, Key, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
@@ -151,22 +151,12 @@ fn home_row(
         text_col = text_col.child(snippet(hit, p));
     }
     let id = m.id.clone();
-    let main = pressable(
-        row()
-            .gap(14.0)
-            .items_center()
-            .child(if problem {
-                col().size(32.0, 32.0).center().child(dot(8.0, p.warn))
-            } else {
-                page_icon(p)
-            })
-            .child(text_col),
-    )
-    .key(format!("meeting-{}", m.id))
-    .label(&m.title)
-    .grow(1.0)
-    .min_w(0.0)
-    .on_press_tx(move |s: &mut State, tx| s.select(&id, tx));
+    let main = pressable(row().gap(14.0).items_center().child(text_col))
+        .key(format!("meeting-{}", m.id))
+        .label(&m.title)
+        .grow(1.0)
+        .min_w(0.0)
+        .on_press_tx(move |s: &mut State, tx| s.select(&id, tx));
     let mut r = row()
         .w_full()
         .gap(12.0)
@@ -287,7 +277,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         )
         .children(super::updates::listener_notice(s, p))
         .children((s.filter != Filter::All).then(|| {
-            link("\u{2039} Show all meetings", p)
+            link("Show all meetings", p)
                 .key("filter-clear")
                 .self_start()
                 .mb(10.0)
