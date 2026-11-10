@@ -419,6 +419,13 @@ foreach ($scene in $settingsScenes) {
 }
 $shots += ,@('settings-review-sidebar-slash','settings-sidebar-open','1280x800','settings-review-slash.json',@('--at','mark:end'))
 $shots += ,@('settings-review-settings-slash','settings-recording','1280x800','settings-review-slash.json',@('--at','mark:end'))
+foreach ($scene in @('annotations-list', 'annotation-capture', 'annotations-empty', 'annotation-transcript')) {
+    foreach ($width in @(1280, 640)) {
+        $script = if ($width -eq 640) { 'dev3-close-drawer.json' } else { $null }
+        $extra = if ($script) { @('--at', 'mark:end') } else { @() }
+        $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
+    }
+}
 $priorAppData = $env:APPDATA
 $priorLocalAppData = $env:LOCALAPPDATA
 $priorState = $env:SIDENOTE_STATE_DIR
