@@ -1,11 +1,10 @@
 //! The left sidebar and the top-right actions.
 //!
-//! The sidebar holds the places (Meetings, Tasks, Memory, Diary), the most recent projects as
-//! filters for the meeting list, and a footer with Settings and a compact Hex status line. It
-//! folds to a rail of icons.
+//! The sidebar holds places and project filters, with one profile button at its foot.
+//! It folds to a recording rail during a call and hides fully otherwise.
 //! The top right holds one primary "New meeting" button, which becomes "Recording 12:34 | Stop"
 //! while Hex records, so the owner can get back to the live page or stop from anywhere.
-//! All icons are drawn here from plain shapes.
+//! Lucide entries live in icons.rs; the app mark keeps its original colours.
 use super::{
     State, hex, roles,
     tasks::View,
@@ -13,7 +12,8 @@ use super::{
     widgets::{dot, hairline, pressable, scroll, sidebar_icon},
 };
 use chrono::{DateTime, Local};
-use rune::{Color, El, TextStyle, col, el, row, text};
+use rune::{Color, El, col, el, row};
+use rune_kit::{Kit, Menu, MenuItem, Placement};
 use sidenote::core::{self, UiPrefs};
 use std::collections::HashMap;
 
@@ -56,6 +56,7 @@ pub struct NavCache {
     pub peers: usize,
     /// "Show all" under Projects. Kept across rebuilds for the session, never saved.
     pub show_all: bool,
+    pub profile_menu: bool,
 }
 
 impl State {
@@ -76,6 +77,7 @@ impl State {
     pub fn rebuild_nav(&mut self) {
         let mut cache = NavCache {
             show_all: self.nav.show_all,
+            profile_menu: self.nav.profile_menu,
             ..NavCache::default()
         };
         for m in &self.meetings {
@@ -163,9 +165,8 @@ impl State {
         }
         self.sidebar_open.set(open);
         if rune::tooling::headless_run().is_none() {
-            let prefs = UiPrefs {
-                sidebar_collapsed: Some(!open),
-            };
+            let mut prefs = UiPrefs::load(&self.store.root);
+            prefs.sidebar_collapsed = Some(!open);
             // A preference is not worth an error: failing to save only loses the memory of it.
             let _ = prefs.save(&self.store.root);
         }
@@ -185,7 +186,7 @@ impl State {
 /// The sidebar's width including its divider, for pages that size themselves from the window.
 pub fn width(s: &State) -> f32 {
     if s.narrow.get() || !s.sidebar_open.get() {
-        RAIL + 1.0
+        if s.hex_recording() { RAIL + 1.0 } else { 0.0 }
     } else {
         WIDE + 1.0
     }
@@ -193,146 +194,43 @@ pub fn width(s: &State) -> f32 {
 
 // ---- icons ------------------------------------------------------------------------------------
 
-fn glyph(g: &str, size: f32, weight: f32, ink: Color) -> El {
-    text(g.to_string())
-        .font(TextStyle::new(size, weight).lh(size + 2.0))
-        .color(ink)
-}
-
-fn slot() -> El {
-    col().size(20.0, 20.0).center()
-}
-
-/// A page with three lines.
 fn icon_meetings(c: Color) -> El {
-    let rule = |w: f32| el().w(w).h(1.5).radius(1.0).fill(c);
-    slot().child(
-        col()
-            .size(14.0, 17.0)
-            .radius(3.0)
-            .border(1.5, c)
-            .px(2.5)
-            .pt(4.0)
-            .gap(2.0)
-            .child(rule(6.0))
-            .child(rule(6.0))
-            .child(rule(4.0)),
-    )
+    super::icons::draw(&super::icons::MEETINGS, 18.0, c)
 }
-
-/// A box with a tick in it.
 fn icon_tasks(c: Color) -> El {
-    slot().child(
-        col()
-            .size(16.0, 16.0)
-            .radius(4.5)
-            .border(1.5, c)
-            .center()
-            .child(glyph("\u{2713}", 10.0, 700.0, c)),
-    )
+    super::icons::draw(&super::icons::TASKS, 18.0, c)
 }
-
-/// A ring with a dot in the middle.
 fn icon_memory(c: Color) -> El {
-    slot().child(
-        col()
-            .size(17.0, 17.0)
-            .radius(9.0)
-            .border(1.5, c)
-            .center()
-            .child(el().size(5.0, 5.0).radius(3.0).fill(c)),
-    )
+    super::icons::draw(&super::icons::MEMORY, 18.0, c)
 }
-
-/// A calendar page: two pegs, a header rule and a day. The Diary's icon.
-fn icon_check(c: Color, _bg: Color) -> El {
-    slot().child(
-        el().size(16.0, 18.0)
-            .child(el().absolute(3.5, 0.0).size(2.0, 4.5).radius(1.0).fill(c))
-            .child(el().absolute(10.5, 0.0).size(2.0, 4.5).radius(1.0).fill(c))
-            .child(
-                el().absolute(0.0, 2.0)
-                    .size(16.0, 15.0)
-                    .radius(3.5)
-                    .border(1.5, c),
-            )
-            .child(el().absolute(1.5, 6.5).size(13.0, 1.5).fill(c))
-            .child(el().absolute(5.5, 10.0).size(5.0, 4.0).radius(1.0).fill(c)),
-    )
+fn icon_check(c: Color, _: Color) -> El {
+    super::icons::draw(&super::icons::DIARY, 18.0, c)
 }
-
-/// Three sliders.
-fn icon_hex(c: Color, bg: Color) -> El {
-    let bar = |knob: f32| {
-        el().size(17.0, 5.0)
-            .child(el().absolute(0.0, 1.75).size(17.0, 1.5).radius(1.0).fill(c))
-            .child(
-                el().absolute(knob, 0.0)
-                    .size(5.0, 5.0)
-                    .radius(3.0)
-                    .border(1.5, c)
-                    .fill(bg),
-            )
-    };
-    slot().child(
-        col()
-            .gap(3.0)
-            .child(bar(10.0))
-            .child(bar(2.0))
-            .child(bar(7.0)),
-    )
+fn icon_hex(c: Color, _: Color) -> El {
+    super::icons::draw(&super::icons::SETTINGS, 18.0, c)
 }
-
-/// A folder.
 fn icon_folder(c: Color) -> El {
-    slot().child(
-        el().size(16.0, 13.0)
-            .child(el().absolute(0.0, 0.0).size(7.0, 4.0).radius(2.0).fill(c))
-            .child(
-                el().absolute(0.0, 2.5)
-                    .size(16.0, 10.5)
-                    .radius(3.0)
-                    .border(1.5, c),
-            ),
-    )
+    super::icons::draw(&super::icons::PROJECTS, 18.0, c)
 }
-
-/// A screen on a stand.
 fn icon_device(c: Color) -> El {
-    slot().child(
-        el().size(16.0, 15.0)
-            .child(
-                el().absolute(0.0, 0.0)
-                    .size(16.0, 11.0)
-                    .radius(2.5)
-                    .border(1.5, c),
-            )
-            .child(el().absolute(4.0, 13.0).size(8.0, 1.5).radius(1.0).fill(c)),
-    )
+    super::icons::draw(&super::icons::DEVICE, 18.0, c)
 }
-
 pub fn icon_plus(c: Color) -> El {
-    el().size(13.0, 13.0)
-        .child(el().absolute(0.0, 5.5).size(13.0, 2.0).radius(1.0).fill(c))
-        .child(el().absolute(5.5, 0.0).size(2.0, 13.0).radius(1.0).fill(c))
+    super::icons::draw(&super::icons::PLUS, 16.0, c)
 }
-
-/// The mark of Stop: a rounded square.
-pub fn icon_stop(size: f32, c: Color) -> El {
-    el().size(size, size).radius(size * 0.22).fill(c)
+pub fn icon_stop(_: f32, c: Color) -> El {
+    super::icons::draw(&super::icons::STOP, 16.0, c)
 }
 
 // ---- the sidebar ------------------------------------------------------------------------------
 
 /// Row heights: the three places, the tools in the footer, and a project under its label.
 const MAIN_H: f32 = 40.0;
-const TOOL_H: f32 = 36.0;
 const FOLDER_H: f32 = 32.0;
 /// The open sidebar's side padding, and how far a project sits in from its label.
 const PAD: f32 = 10.0;
 const FOLDER_INDENT: f32 = 12.0;
 /// Settings and any other tool share one footer line.
-const TOOL_W: f32 = (WIDE - 2.0 * PAD - 4.0) / 2.0;
 /// Projects shown before "Show all".
 const RECENT: usize = 6;
 
@@ -383,29 +281,6 @@ fn main_row(place: Place, icon: El, p: Palette) -> El {
         .on_press(place.press)
 }
 
-/// A tool in the footer (Settings, other devices): shorter than a place, same type.
-fn tool_row(place: Place, icon: El, p: Palette) -> El {
-    let mut r = row()
-        .h(TOOL_H)
-        .gap(8.0)
-        .items_center()
-        .px(PAD)
-        .child(icon)
-        .child(place_name(place.name, place.active, p));
-    if let Some(c) = place.flag {
-        r = r.child(signal(c));
-    }
-    let (bg, hover) = fills(place.active, p);
-    pressable(r)
-        .key(place.key)
-        .label(place.help.clone())
-        .help(place.help)
-        .radius(8.0)
-        .fill(bg)
-        .hover(hover)
-        .on_press(place.press)
-}
-
 /// A project: no icon and no count, lighter than a place, indented under its label.
 fn folder_row(key: String, name: &str, active: bool, p: Palette) -> El {
     let words = if active {
@@ -450,9 +325,9 @@ fn rail_item(place: Place, icon: El, p: Palette) -> El {
 fn toggle(s: &State, p: Palette) -> El {
     let open = s.sidebar_is_open();
     let name = if open {
-        "Hide the sidebar (Ctrl+B)"
+        "Hide sidebar (Ctrl+\\)"
     } else {
-        "Show the sidebar (Ctrl+B)"
+        "Show sidebar (Ctrl+\\)"
     };
     pressable(col().child(sidebar_icon(open, p)))
         .key("sidebar-toggle")
@@ -462,87 +337,6 @@ fn toggle(s: &State, p: Palette) -> El {
         .radius(8.0)
         .hover(p.chip)
         .on_press(|s: &mut State| s.toggle_sidebar())
-}
-
-fn hex_line(s: &State, p: Palette, wide: bool) -> El {
-    let (ink, words) = hex::short_status(s, p);
-    let recording = s.hex_recording() && super::updates::listener_ready(s);
-    let words = if recording { "Recording".into() } else { words };
-    let help = if recording {
-        format!("Hex: {words}. Open the live meeting")
-    } else {
-        format!("Hex: {words}. Open Hex settings")
-    };
-    let on_press = |s: &mut State| s.hex_line_press();
-    if wide {
-        pressable(
-            row()
-                .w_full()
-                .gap(8.0)
-                .items_center()
-                .px(PAD)
-                .py(8.0)
-                .child(dot(8.0, ink))
-                .child(roles::META.wrap("Hex", p.faint))
-                .child(col().grow(1.0).child(roles::CONTROL.line(words, p.ink))),
-        )
-        .key("hex-status")
-        .label(help.clone())
-        .help(help)
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press(on_press)
-    } else {
-        let short = if words == "Recording off" {
-            "Off"
-        } else if recording {
-            "Rec"
-        } else if words == "Ready" {
-            "Ready"
-        } else if words == "Checking" {
-            "Check"
-        } else if words == "Dictating" {
-            "Dict"
-        } else {
-            "Off"
-        };
-        pressable(
-            row()
-                .w(56.0)
-                .h(34.0)
-                .gap(3.0)
-                .center()
-                .child(dot(6.0, ink))
-                .child(roles::META.line(short, p.ink)),
-        )
-        .key("hex-status")
-        .label(help.clone())
-        .help(help)
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press(on_press)
-    }
-}
-
-fn updated(s: &State, p: Palette) -> El {
-    let Some(at) = s.last_updated else {
-        return el();
-    };
-    let minutes = at.elapsed().as_secs() / 60;
-    let words = if minutes == 0 {
-        "Updated just now".into()
-    } else if minutes < 60 {
-        format!("Updated {minutes} min ago")
-    } else {
-        format!("Updated {} h ago", minutes / 60)
-    };
-    roles::META
-        .wrap(words.clone(), p.faint)
-        .key("refresh-status")
-        .label(words)
-        .role("status")
-        .help("Last content change applied in this window")
-        .px(PAD)
 }
 
 /// A place or a tool: what it is called, where it goes and the one signal it may carry.
@@ -667,18 +461,36 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
 /// projects as lighter 32-point rows under a quiet label; Settings and Hex's status in the
 /// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
 /// memory proposals to review, and high findings of the daily check in the Diary.
-pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
-    let (places, tools, peers) = places(s, p);
+pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
+    if !wide && !s.hex_recording() {
+        return el().w(0.0).h_full();
+    }
+    let (places, _tools, peers) = places(s, p);
 
-    let mut header = row().w_full().h(52.0).items_center().child(toggle(s, p));
+    let mut header = row().w_full().h(52.0).gap(8.0).items_center().child(logo());
     header = if wide {
-        header.px(6.0).child(
-            roles::TITLE
-                .wrap("Sidenote", p.ink)
-                .help("Local-first meeting notes on top of Hex"),
-        )
+        header
+            .px(6.0)
+            .child(roles::TITLE.wrap("Sidenote", p.ink).grow(1.0))
+            .child(toggle(s, p))
+            .child(
+                pressable(super::icons::draw(&super::icons::SEARCH, 16.0, p.soft))
+                    .key("nav-search")
+                    .label("Search (Ctrl+K)")
+                    .padding(5.0)
+                    .radius(6.0)
+                    .hover(p.chip)
+                    .on_press(|s: &mut State| s.toggle_finder()),
+            )
     } else {
-        header.justify_center()
+        col()
+            .w_full()
+            .h(88.0)
+            .gap(8.0)
+            .items_center()
+            .pt(12.0)
+            .child(logo())
+            .child(toggle(s, p))
     };
 
     let mut top = col().w_full().gap(2.0);
@@ -725,33 +537,24 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         col().grow(1.0)
     };
 
-    let mut footer = col().w_full().gap(2.0).pt(6.0).pb(8.0);
-    if !wide {
-        footer = footer.items_center();
+    if wide && let Some(place) = peers {
+        let icon = place.icon(p);
+        top = top.child(main_row(place, icon, p));
     }
-    if let Some(notice) = super::updates::footer(s, p, wide) {
-        footer = footer.child(if wide { notice.px(PAD) } else { notice });
-    }
-    if wide {
-        if let Some(place) = peers {
-            let icon = place.icon(p);
-            footer = footer.child(tool_row(place, icon, p).w_full());
-        }
-        let mut line = row().w_full().gap(4.0);
-        for place in tools {
-            let icon = place.icon(p);
-            line = line.child(tool_row(place, icon, p).w(TOOL_W));
-        }
-        footer = footer.child(line);
-    } else {
-        for place in tools {
-            let icon = place.icon(p);
-            footer = footer.child(rail_item(place, icon, p));
-        }
-    }
-    footer = footer.child(hex_line(s, p, wide));
-    if wide {
-        footer = footer.child(updated(s, p));
+    let mut footer = col()
+        .w_full()
+        .pt(6.0)
+        .pb(8.0)
+        .child(profile(s, k, p, wide, layer));
+    if !wide && s.hex_recording() {
+        footer = footer.child(
+            pressable(super::icons::draw(&super::icons::MIC, 18.0, p.warn))
+                .key("rail-recording")
+                .label("Recording. Open live meeting")
+                .help("Recording")
+                .padding(8.0)
+                .on_press(|s: &mut State| s.hex_line_press()),
+        );
     }
 
     let mut pane = col()
@@ -764,7 +567,6 @@ pub fn sidebar(s: &State, p: Palette, wide: bool) -> El {
         .child(header)
         .child(top)
         .child(middle)
-        .child(hairline(p))
         .child(footer);
     if !wide {
         pane = pane.items_center();
@@ -931,7 +733,7 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     let stop = match why {
         None => stop
             .label("Stop recording")
-            .help("Stop recording and write a summary")
+            .help("Stop recording and write the summary")
             .hover(p.chip)
             .on_press(|s: &mut State| s.hex_record_stop()),
         Some(reason) => stop.label(format!("Stop ({reason})")).help(reason).dim(0.6),
@@ -945,4 +747,188 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
         .child(open)
         .child(el().w(1.0).h(18.0).fill(p.line))
         .child(stop)
+}
+
+fn logo() -> El {
+    let mut mark = el().size(20.0, 20.0);
+    static PART_0: rune::Icon = rune::Icon {
+        name: "sidenote-logo-0",
+        view: 20.0,
+        body: r#"<rect x="0" y="0" width="20" height="20" rx="4.5" fill="currentColor"/>"#,
+    };
+    mark = mark.child(
+        rune::icon(&PART_0, 20.0)
+            .color(rune::color::hex("#bcb9b0").expect("logo colour"))
+            .absolute(0.0, 0.0),
+    );
+    static PART_1: rune::Icon = rune::Icon {
+        name: "sidenote-logo-1",
+        view: 20.0,
+        body: r#"<rect x="1" y="1" width="18" height="18" rx="3.5" fill="currentColor"/>"#,
+    };
+    mark = mark.child(
+        rune::icon(&PART_1, 20.0)
+            .color(rune::color::hex("#1e1e1c").expect("logo colour"))
+            .absolute(0.0, 0.0),
+    );
+    static PART_2: rune::Icon = rune::Icon {
+        name: "sidenote-logo-2",
+        view: 20.0,
+        body: r#"<path d="M5 6 H7 V7 H5 Z M4 7 H8 V8 H4 Z M3 8 H5 V9 H3 Z M7 8 H9 V9 H7 Z M3 9 H5 V10 H3 Z M7 9 H9 V10 H7 Z M3 10 H5 V11 H3 Z M8 10 H10 V11 H8 Z M3 11 H5 V12 H3 Z M8 11 H10 V12 H8 Z M12 11 H15 V12 H12 Z M3 12 H5 V13 H3 Z M9 12 H15 V13 H9 Z M10 13 H13 V14 H10 Z M11 14 H13 V15 H11 Z" fill="currentColor"/>"#,
+    };
+    mark = mark.child(
+        rune::icon(&PART_2, 20.0)
+            .color(rune::color::hex("#fcfbf8").expect("logo colour"))
+            .absolute(0.0, 0.0),
+    );
+    static PART_3: rune::Icon = rune::Icon {
+        name: "sidenote-logo-3",
+        view: 20.0,
+        body: r#"<path d="M15 11 H17 V12 H15 Z M15 12 H17 V13 H15 Z" fill="currentColor"/>"#,
+    };
+    mark = mark.child(
+        rune::icon(&PART_3, 20.0)
+            .color(rune::color::hex("#e3aa55").expect("logo colour"))
+            .absolute(0.0, 0.0),
+    );
+    mark
+}
+fn profile(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
+    let name = s
+        .ai_notes
+        .settings
+        .as_ref()
+        .map(|settings| settings.your_name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("You");
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('Y')
+        .to_uppercase()
+        .to_string();
+    let (_, status) = hex::short_status(s, p);
+    let helper_issue = s
+        .ai_notes
+        .settings
+        .as_ref()
+        .is_some_and(|settings| settings.engine == "app" && settings.helper.is_some())
+        && (s.ai_notes.error.is_some()
+            || s.ai_notes.test_results.values().any(|result| {
+                !result.starts_with("Worked in ") && !result.starts_with("Claude Code replied")
+            }));
+    let status = if helper_issue && matches!(status.as_str(), "Ready" | "Checking") {
+        "Meeting summary needs attention".into()
+    } else {
+        status
+    };
+    let update_ready = super::updates::footer(s, p, wide).is_some();
+    let attention = update_ready
+        || !matches!(
+            status.as_str(),
+            "Ready" | "Recording" | "Checking" | "Dictating"
+        ) && !s.hex_recording();
+    let avatar = || {
+        let mut avatar = col()
+            .size(28.0, 28.0)
+            .radius(14.0)
+            .fill(p.chip)
+            .center()
+            .child(roles::NAME.wrap(&initial, p.ink));
+        if attention {
+            avatar = avatar.child(dot(7.0, p.warn).absolute(21.0, 0.0));
+        }
+        avatar
+    };
+    let mut trigger = row().w_full().gap(8.0).items_center().child(avatar());
+    if wide {
+        trigger = trigger
+            .child(roles::CONTROL.line(name, p.ink).grow(1.0))
+            .child(super::icons::draw(
+                &super::icons::CHEVRONS_UP_DOWN,
+                16.0,
+                p.soft,
+            ));
+    }
+    let trigger = pressable(trigger.padding(6.0))
+        .key("profile-button")
+        .label("Profile and settings")
+        .radius(8.0)
+        .hover(p.chip)
+        .on_press(|s: &mut State| s.nav.profile_menu = !s.nav.profile_menu);
+    let sync = s.last_updated.map(|at| {
+        let minutes = at.elapsed().as_secs() / 60;
+        if minutes == 0 {
+            "Synced just now".to_string()
+        } else {
+            format!("Synced {minutes} min ago")
+        }
+    });
+    let device = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "This PC".into());
+    let mut menu = Menu::new("profile-menu")
+        .trigger(trigger)
+        .open(s.nav.profile_menu)
+        .placement(Placement::TopStart)
+        .min_width(260.0);
+    if s.nav.profile_menu {
+        menu = menu
+            .on_close(|s: &mut State| s.nav.profile_menu = false)
+            .item(MenuItem::new(name).lead(avatar()).disabled(true))
+            .item(
+                MenuItem::new(format!(
+                    "This PC: {device}{}",
+                    sync.as_ref()
+                        .map(|status| format!(". {status}"))
+                        .unwrap_or_default()
+                ))
+                .disabled(true),
+            );
+        if update_ready {
+            menu = menu.item(MenuItem::new("Update ready").on_select(|s: &mut State| {
+                s.nav.profile_menu = false;
+                super::updates::settings_scene(s);
+            }));
+        }
+        if attention && !update_ready {
+            menu = menu.item(MenuItem::new(format!("{status}. Fix")).on_select(
+                move |s: &mut State| {
+                    s.nav.profile_menu = false;
+                    if helper_issue {
+                        s.open_ai_notes();
+                    } else {
+                        s.open_hex();
+                    }
+                },
+            ));
+        }
+        menu = menu
+            .item(
+                MenuItem::new("Meeting summary instructions")
+                    .lead(super::icons::draw(&super::icons::PROMPTS, 16.0, p.soft))
+                    .on_select(|s: &mut State| {
+                        s.nav.profile_menu = false;
+                        s.open_ai_notes();
+                        super::scene_scroll(s, "agent-instructions");
+                    }),
+            )
+            .item(
+                MenuItem::new("Help")
+                    .lead(super::icons::draw(&super::icons::HELP, 16.0, p.soft))
+                    .on_select(|s: &mut State| {
+                        s.nav.profile_menu = false;
+                        s.open_hex();
+                        s.hex.section = super::hex::Section::Shortcuts;
+                    }),
+            )
+            .item(
+                MenuItem::new("Settings")
+                    .lead(super::icons::draw(&super::icons::SETTINGS, 16.0, p.soft))
+                    .shortcut("Ctrl+,")
+                    .on_select(|s: &mut State| {
+                        s.nav.profile_menu = false;
+                        s.open_hex();
+                    }),
+            );
+    }
+    menu.build(k, layer)
 }

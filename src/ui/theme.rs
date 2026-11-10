@@ -106,6 +106,24 @@ pub fn kit(p: &Palette) -> Kit {
         fg: p.ink,
         accent: p.accent,
     });
+    kit.glyph = rune_kit::Glyphs {
+        check: &super::icons::CHECK,
+        check_small: &super::icons::CHECK,
+        chevron_down: &super::icons::CHEVRON_DOWN,
+        chevron_up: &super::icons::CHEVRON_UP,
+        caret_right: &super::icons::CHEVRON_RIGHT,
+        triangle_down: &super::icons::CHEVRON_DOWN,
+        triangle_right: &super::icons::CHEVRON_RIGHT,
+        close: &super::icons::X,
+        clear: &super::icons::X,
+        copy: &super::icons::COPY,
+        search: &super::icons::SEARCH,
+        lock: &super::icons::LOCK,
+        eye: &super::icons::EYE,
+        eye_off: &super::icons::EYE_OFF,
+        circle_x: &super::icons::CIRCLE_X,
+        dash: &super::icons::DASH,
+    };
     kit.c.text_faint = p.faint;
     kit.ty.small = super::roles::META.style();
     kit

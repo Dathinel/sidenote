@@ -976,7 +976,7 @@ fn picker(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             .gap(4.0)
             .items_center()
             .child(roles::CONTROL.wrap("Earlier days", p.soft))
-            .child(rune::icon(chevron, 13.0).color(p.faint)),
+            .child(rune::icon(chevron, 16.0).color(p.faint)),
     )
     .key("check-picker")
     .role("combobox")
@@ -1217,7 +1217,7 @@ fn brief(s: &State, k: &Kit, r: &DailyCheck, p: Palette) -> El {
         if let Some(Some(key)) = targets.get(n) {
             let key = key.clone();
             line_row = line_row.child(
-                pressable(roles::CONTROL.wrap("Open \u{203a}", p.accent))
+                pressable(roles::CONTROL.icon_label("Open \u{203a}", p.accent))
                     .key(format!("brief-open-{n}"))
                     .label(format!("Open the finding for line {}", n + 1))
                     .px(6.0)

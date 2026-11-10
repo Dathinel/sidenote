@@ -45,6 +45,11 @@ impl Role {
         text(s).font(self.style()).color(ink).wrap()
     }
 
+    /// A control caption containing a disclosure, back arrow or status mark.
+    pub fn icon_label(self, s: impl Into<String>, ink: Color) -> El {
+        super::icons::styled(s, self.style(), ink)
+    }
+
     /// One line that ends in an ellipsis when it does not fit.
     pub fn line(self, s: impl Into<String>, ink: Color) -> El {
         text(s).font(self.style()).color(ink).truncate().min_w(0.0)

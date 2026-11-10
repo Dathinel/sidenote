@@ -1,0 +1,36 @@
+"""Regenerate embedded Lucide bodies from the pinned npm tarball. No full icon set is shipped."""
+from pathlib import Path
+import io
+import tarfile
+import urllib.request
+import xml.etree.ElementTree as ET
+
+VERSION = "1.61.0"
+ICONS = {'MEETINGS': 'notebook-pen', 'TASKS': 'circle-check', 'PROJECTS': 'folder', 'MEMORY': 'bookmark', 'DIARY': 'calendar', 'SETTINGS': 'settings', 'DEVICE': 'laptop', 'PLUS': 'plus', 'STOP': 'square', 'CHECK': 'check', 'CHEVRON_DOWN': 'chevron-down', 'CHEVRON_RIGHT': 'chevron-right', 'CHEVRON_LEFT': 'chevron-left', 'CHEVRONS_UP_DOWN': 'chevrons-up-down', 'ARROW_RIGHT': 'arrow-right', 'ARROW_UP': 'arrow-up', 'X': 'x', 'MORE': 'ellipsis', 'WARNING': 'triangle-alert', 'ERROR': 'circle-alert', 'HELP': 'circle-question-mark', 'INFO': 'info', 'SEARCH': 'search', 'PANEL_CLOSE': 'panel-left-close', 'PANEL_OPEN': 'panel-left-open', 'PROMPTS': 'sparkles', 'USER': 'user', 'MIC': 'mic', 'CIRCLE': 'circle', 'WAITING': 'circle-pause', 'BOT': 'bot', 'PALETTE': 'palette', 'REFRESH': 'refresh-cw', 'CHEVRON_UP': 'chevron-up', 'COPY': 'copy', 'LOCK': 'lock', 'EYE': 'eye', 'EYE_OFF': 'eye-off', 'CIRCLE_X': 'circle-x', 'DASH': 'minus'}
+ROOT = Path(__file__).resolve().parents[2]
+
+def main():
+    archive = tarfile.open(fileobj=io.BytesIO(urllib.request.urlopen(f"https://registry.npmjs.org/lucide-static/-/lucide-static-{VERSION}.tgz", timeout=30).read()))
+    path = ROOT / "src/ui/icons.rs"
+    current = path.read_text(encoding="utf-8")
+    header = current[:current.index("// Embedded entries")]
+    tail = current[current.index("/// Existing controls"):]
+    entries = []
+    for entry, name in ICONS.items():
+        root = ET.fromstring(archive.extractfile(f"package/icons/{name}.svg").read())
+        body = ""
+        for element in root:
+            tag = element.tag.split("}")[-1]
+            attributes = dict(element.attrib)
+            if tag in ("polyline", "polygon"):
+                points = attributes.pop("points")
+                attributes["d"] = "M" + points + ("Z" if tag == "polygon" else "")
+                tag = "path"
+            attributes.update({"fill": "none", "stroke": "currentColor", "stroke-width": "STROKE_WIDTH", "stroke-linecap": "round", "stroke-linejoin": "round"})
+            body += "<" + tag + " " + " ".join(key + '=\"' + value + '\"' for key, value in attributes.items()) + "/>"
+        entries.append(f'lucide!({entry}, "lucide-{name}", r#"{body}"#);')
+    path.write_text(header + "// Embedded entries\n" + "\n".join(entries) + "\n\n" + tail, encoding="utf-8")
+    (ROOT / "assets/licenses/lucide.txt").write_bytes(archive.extractfile("package/LICENSE").read())
+
+if __name__ == "__main__":
+    main()

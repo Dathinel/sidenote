@@ -508,7 +508,7 @@ fn picker(s: &State, k: &Kit, all: &[NaiveDate], p: Palette, layer: &mut Vec<El>
                     } else {
                         k.glyph.chevron_down
                     },
-                    13.0,
+                    16.0,
                 )
                 .color(p.faint),
             ),

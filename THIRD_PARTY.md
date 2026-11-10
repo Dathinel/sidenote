@@ -518,3 +518,5 @@ below are an inference from those terms and the package declarations.
 - Models are downloaded only on request. IndicConformer exports retain AI4Bharat's MIT terms; Oriserve Swift and CIIL Anuvani retain Apache-2.0. Source pages are pinned in the catalogue. Nemotron is a Hex-managed reference under OpenMDW-1.1; Sidenote does not redistribute its weights.
 
 The Mozilla certificate data in webpki-roots uses [CDLA-Permissive-2.0](https://cdla.dev/permissive-2-0/). The full text is retained in [assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt](assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt) and must accompany distributed certificate data. It is separate from the software licences above.
+
+Lucide 1.61.0 icons: ISC, with Feather-derived icons under MIT. Both notices are in `assets/licenses/lucide.txt`, included in the app package.

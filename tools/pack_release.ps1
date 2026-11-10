@@ -37,7 +37,7 @@ try {
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
     $notices = @('LICENSE', 'THIRD_PARTY.md', 'assets/fonts/Inter-LICENSE.txt',
-        'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt')
+        'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt', 'assets/licenses/lucide.txt')
     foreach ($notice in $notices) {
         $destination = Join-Path $stage $notice
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null

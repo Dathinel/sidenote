@@ -1184,7 +1184,7 @@ impl Section {
         match self {
             Self::Connect => "Connect AI apps",
             Self::Teams => "Teams",
-            Self::AiNotes => "AI notes",
+            Self::AiNotes => "Meeting summary",
             Self::Updates => "Updates",
             Self::MeetingModels => "Languages",
             Self::Features => "Features",
@@ -1202,7 +1202,9 @@ impl Section {
         match self {
             Self::Connect => "Connect an AI app to your local meeting knowledge.",
             Self::Teams => "Group tasks by the people who own them.",
-            Self::AiNotes => "Choose a helper and the instructions it uses to write meeting notes.",
+            Self::AiNotes => {
+                "Choose a helper and the instructions it uses to write meeting summaries."
+            }
             Self::Updates => "Keep Sidenote up to date from your update folder.",
             Self::MeetingModels => "Choose spoken languages and download meeting models.",
             Self::Features => "Choose what appears on this device. Changes apply right away.",
@@ -1300,11 +1302,29 @@ fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
 }
 
 fn section_tab(section: Section, active: bool, p: Palette) -> El {
-    pressable(if active {
-        roles::NAME.wrap(section.name(), p.ink)
-    } else {
-        roles::CONTROL.wrap(section.name(), p.soft)
-    })
+    let icon = match section {
+        Section::Connect => &*super::icons::DEVICE,
+        Section::Teams => &*super::icons::USER,
+        Section::AiNotes => &*super::icons::PROMPTS,
+        Section::Updates => &*super::icons::REFRESH,
+        Section::MeetingModels | Section::Model => &*super::icons::BOT,
+        Section::Features => &*super::icons::PALETTE,
+        Section::Vocabulary => &*super::icons::MEETINGS,
+        Section::General | Section::Advanced => &*super::icons::SETTINGS,
+        Section::Dictation | Section::Meetings => &*super::icons::MIC,
+        Section::Shortcuts => &*super::icons::HELP,
+    };
+    pressable(
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(super::icons::draw(icon, 18.0, p.soft))
+            .child(if active {
+                roles::NAME.wrap(section.name(), p.ink)
+            } else {
+                roles::CONTROL.wrap(section.name(), p.soft)
+            }),
+    )
     .key(format!("hex-tab-{}", section.name()))
     .label(format!("{} settings", section.name()))
     .px(8.0)
@@ -1417,7 +1437,7 @@ fn fold(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, at: Place, items: &
             .items_center()
             .px(8.0)
             .py(10.0)
-            .child(roles::CONTROL.wrap(chevron, p.soft).w(12.0))
+            .child(roles::CONTROL.icon_label(chevron, p.soft).w(12.0))
             .child(roles::TITLE.wrap(at.group_name(), p.ink))
             .child(roles::count(items.len(), p))
             .child(roles::META.line(blurb, p.faint).grow(1.0).ml(6.0)),
@@ -1450,7 +1470,7 @@ fn fold(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, at: Place, items: &
 /// Every setting that matches the search, whichever section it is in.
 fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &str) -> El {
     if [
-        "ai notes",
+        "meeting summary",
         "helper",
         "instructions",
         "privacy",

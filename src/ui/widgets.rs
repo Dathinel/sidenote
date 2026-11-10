@@ -9,10 +9,11 @@ use sidenote::core::{self, Point};
 /// A glyph or icon character (a tick, a chevron, a close cross) at its own size. Words use the
 /// roles in `roles.rs` instead.
 pub fn label(s: impl Into<String>, size: f32, weight: f32, ink: Color) -> El {
-    text(s)
-        .font(TextStyle::new(size, weight).lh((size * 1.55).round()))
-        .color(ink)
-        .wrap()
+    super::icons::styled(
+        s,
+        TextStyle::new(size, weight).lh((size * 1.55).round()),
+        ink,
+    )
 }
 
 pub fn spaced_caps(s: &str, p: Palette) -> El {
@@ -40,7 +41,7 @@ pub fn pressable(e: El) -> El {
 
 /// A text link with a quiet hover.
 pub fn link(s: impl Into<String>, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
+    pressable(roles::CONTROL.icon_label(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
 }
 
 /// A small text button for toolbars and headers.
@@ -69,7 +70,7 @@ pub fn banner(title: &str, body: impl Into<String>, kind: BannerKind, p: Palette
     let problem = matches!(kind, BannerKind::Problem);
     let ink = if problem { p.warn } else { p.ink };
     let mark = match kind {
-        BannerKind::Problem => roles::NAME.wrap("!", ink),
+        BannerKind::Problem => super::icons::draw(&super::icons::WARNING, 16.0, ink),
         BannerKind::Info => roles::NAME.wrap("i", p.soft),
         BannerKind::Working => rune_kit::Spinner::new()
             .size(16.0)
@@ -109,36 +110,24 @@ pub fn scroll(content: El, key: &str) -> El {
 
 /// The sidebar toggle: a window outline with its left panel marked.
 pub fn sidebar_icon(open: bool, p: Palette) -> El {
-    let frame = row().size(18.0, 15.0).radius(3.5).border(1.5, p.soft);
-    if open {
-        frame.child(el().w(6.0).h_full().fill(p.soft))
-    } else {
-        frame
-            .child(el().w(4.0).h_full())
-            .child(el().w(1.5).h_full().fill(p.soft))
-    }
+    super::icons::draw(
+        if open {
+            &super::icons::PANEL_CLOSE
+        } else {
+            &super::icons::PANEL_OPEN
+        },
+        16.0,
+        p.soft,
+    )
 }
 
-/// A meeting's mark in the home list: a page with three lines on a soft tile.
 pub fn page_icon(p: Palette) -> El {
-    let rule = |w: f32| el().w(w).h(1.5).radius(1.0).fill(p.faint);
     col()
         .size(32.0, 32.0)
         .radius(9.0)
         .fill(p.side)
         .center()
-        .child(
-            col()
-                .size(13.0, 16.0)
-                .radius(2.5)
-                .border(1.5, p.faint)
-                .px(2.5)
-                .pt(4.0)
-                .gap(2.0)
-                .child(rule(6.0))
-                .child(rule(6.0))
-                .child(rule(4.0)),
-        )
+        .child(super::icons::draw(&super::icons::MEETINGS, 16.0, p.faint))
 }
 
 /// The bullet column of a point. Colour carries the kind, the shape stays small.
@@ -150,9 +139,9 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
     };
     let mark = match (number, kind) {
         (Some(n), _) => glyph(&format!("{n}."), p.ok, 600.0),
-        (None, "decided") => glyph("\u{2713}", p.ok, 700.0),
-        (None, "concern") => glyph("!", p.warn, 800.0),
-        (None, "open") => glyph("?", p.open, 700.0),
+        (None, "decided") => super::icons::draw(&super::icons::CHECK, 16.0, p.ok),
+        (None, "concern") => super::icons::draw(&super::icons::WARNING, 16.0, p.warn),
+        (None, "open") => super::icons::draw(&super::icons::HELP, 16.0, p.open),
         (None, "response") => el()
             .size(6.0, 6.0)
             .radius(3.0)
@@ -357,7 +346,7 @@ pub fn panel_top(title: &str, back: &str, overlay: bool, close: fn(&mut State), 
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
         top = top.child(
-            pressable(roles::CONTROL.wrap(format!("\u{2039}  {back}"), p.soft))
+            pressable(roles::CONTROL.icon_label(format!("\u{2039}  {back}"), p.soft))
                 .key("panel-back")
                 .label(format!("Back to {back} (Escape)"))
                 .px(10.0)

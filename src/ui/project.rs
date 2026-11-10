@@ -221,7 +221,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         } else {
             k.glyph.chevron_down
         },
-        13.0,
+        16.0,
     )
     .color(p.faint);
     let new_project = !mp.confirmed

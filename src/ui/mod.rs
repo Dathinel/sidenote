@@ -13,6 +13,7 @@ mod diary;
 mod edit_worker;
 mod finder;
 mod hex;
+mod icons;
 mod list;
 mod live;
 mod mcp_connect;
@@ -208,7 +209,7 @@ pub struct State {
     pub meeting_tab: meeting::Tab,
     /// The key of the open "..." menu, so only one is ever open.
     pub more_menu: Option<String>,
-    /// A confirmation such as "Copied notes", and when it goes away.
+    /// A confirmation such as "Copied summary", and when it goes away.
     pub toast: Option<(String, Instant)>,
     /// The Ctrl+K palette, and what is typed in its box.
     pub finder: Option<finder::Finder>,
@@ -1325,6 +1326,14 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     };
     // Ctrl+K opens the palette from any page, and again closes it. While it is open it owns
     // Up, Down, Enter, Tab and Escape, even if a click took the focus from its box.
+    if e.is_command(',') {
+        s.open_hex();
+        return true;
+    }
+    if e.is_command('\\') {
+        s.toggle_sidebar();
+        return true;
+    }
     if e.is_command('k') {
         s.toggle_finder();
         return true;
@@ -1404,9 +1413,20 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
     use widgets::pressable;
     let mut left = row().gap(4.0).items_center().min_w(0.0);
+    if !s.sidebar_is_open() {
+        left = left.child(
+            pressable(widgets::sidebar_icon(false, p))
+                .key("sidebar-toggle")
+                .label("Show sidebar (Ctrl+\\)")
+                .padding(8.0)
+                .radius(8.0)
+                .hover(p.chip)
+                .on_press(|s: &mut State| s.toggle_sidebar()),
+        );
+    }
     if s.view == tasks::View::Meetings && s.selected.is_some() {
         left = left.child(
-            pressable(roles::CONTROL.wrap("\u{2039}  All meetings", p.soft))
+            pressable(roles::CONTROL.icon_label("\u{2039}  All meetings", p.soft))
                 .key("all-meetings")
                 .label("All meetings (Escape)")
                 .px(10.0)
@@ -1560,7 +1580,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // narrow window, where it is a drawer over it.
     let open = s.sidebar_is_open();
     app = app
-        .child(nav::sidebar(s, p, open && !window_narrow))
+        .child(nav::sidebar(s, &k, p, open && !window_narrow, &mut layer))
         .child(rune::el().w(1.0).h_full().fill(p.line))
         .child(main);
     if window_narrow && open {
@@ -1573,7 +1593,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                     .on_press(|s: &mut State| s.drawer_open.set(false)),
             )
             .child(
-                nav::sidebar(s, p, true)
+                nav::sidebar(s, &k, p, true, &mut layer)
                     .pin(Some(0.0), Some(0.0), None, Some(0.0))
                     .shadow(0.0, 32.0, p.shadow),
             );
@@ -2270,7 +2290,7 @@ pub fn spec() -> AppSpec<State> {
             ("screens-toast", |s| {
                 scene_screens(s);
                 s.toast = Some((
-                    "Copied notes".into(),
+                    "Copied summary".into(),
                     Instant::now() + Duration::from_secs(600),
                 ));
             }),
@@ -2707,6 +2727,11 @@ pub fn spec() -> AppSpec<State> {
                 s.hex.filter = TextEdit::new("shortcut");
             }),
             // The sidebar open and folded on the home list, with projects and a device filter.
+            ("profile-menu", |s| {
+                notes_scene::settings(s, "claude-only");
+                scene_sidebar(s, true);
+                s.nav.profile_menu = true;
+            }),
             ("home-open", |s| {
                 hex::scene(s, false);
                 scene_filters(s);
@@ -2759,6 +2784,7 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("sidebar-all", |s| scene_side(s, nav::scene_all)),
             ("sidebar-rail", |s| {
+                hex::scene(s, true);
                 scene_side(s, |_| {});
                 scene_sidebar(s, false);
             }),
@@ -2939,6 +2965,12 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("tasks-v2-due", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Due, None)
+            }),
+            ("tasks-v2-legacy-panel", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Owner, Some(6))
+            }),
+            ("tasks-v2-long-panel", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Owner, Some(4))
             }),
             ("tasks-v2-panel", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, Some(0))
