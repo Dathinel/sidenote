@@ -101,9 +101,15 @@ impl Options {
         self.prompt_in(prompt, &super::meetings_dir())
     }
     fn prompt_in(&self, mut prompt: String, root: &Path) -> Result<String, String> {
+        let boundary = prompt.find("\n\n").unwrap_or(prompt.len());
+        let mut instructions = String::new();
         if self.meeting {
-            prompt.push_str("\nDuring this meeting or its follow-up, answer in at most 5 lines. Lead with the answer. Use the live transcript so far when supplied.\n");
+            instructions.push_str("\nDuring this meeting or its follow-up, answer in at most 5 lines. Lead with the answer. Use the live transcript so far when supplied.");
         }
+        if self.live.is_some() {
+            instructions.push_str("\nIf the live transcript is empty, no speech is available yet. Do not infer the current meeting from older meetings.");
+        }
+        prompt.insert_str(boundary, &instructions);
         if let Some(source) = &self.live {
             let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
             let folder = folder.or_else(|| {
@@ -147,7 +153,7 @@ impl Options {
                     }
                 }
             }
-            prompt.push_str("</live_transcript>\nIf the live transcript is empty, no speech is available yet. Do not infer the current meeting from older meetings.\n");
+            prompt.push_str("</live_transcript>\n");
         }
         Ok(prompt)
     }

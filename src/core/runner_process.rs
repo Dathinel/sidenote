@@ -115,12 +115,13 @@ fn forward_stdout(stdout: impl Read, sender: mpsc::SyncSender<Stream>) {
     }
     let _ = sender.send(Stream::Done);
 }
-struct Output {
-    final_text: String,
-    streamed: String,
-    plain: String,
-    failed: bool,
-    tool_seen: std::collections::BTreeSet<String>,
+#[derive(Default)]
+pub(super) struct Output {
+    pub(super) final_text: String,
+    pub(super) streamed: String,
+    pub(super) plain: String,
+    pub(super) failed: bool,
+    pub(super) tool_seen: std::collections::BTreeSet<String>,
 }
 impl Output {
     fn text(&mut self, text: String, progress: &impl Fn(AskProgress)) {
@@ -129,7 +130,7 @@ impl Output {
             progress(AskProgress::Text { text });
         }
     }
-    fn line(
+    pub(super) fn line(
         &mut self,
         line: &str,
         harness: &str,

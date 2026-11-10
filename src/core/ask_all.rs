@@ -4,7 +4,7 @@
 use super::{
     AskProgress, Meeting, Message, Pipeline, Projects, TaskItem, UNSORTED,
     ask::{Cancel, chat, check_question, pick_runner, report, spawn_job},
-    dominant_project, run_runner, short,
+    dominant_project, short,
 };
 use chrono::NaiveDate;
 use serde_json::{Map, Value, json};
@@ -250,10 +250,10 @@ pub fn ask_with_options(
         std::fs::create_dir_all(&folder).map_err(|_| "Could not open app state folder")?;
         let runner = pick_runner(runner_name)?;
         let runner = options.runner(super::ask::read_only_runner(runner)?)?;
-        run_runner(
+        super::ask_session::run(
             &runner,
             options.prompt(prompt(context, history))?,
-            &folder,
+            super::ALL_KEY,
             &progress,
         )
     })();

@@ -150,6 +150,13 @@ pub(super) fn read_only_runner(mut runner: Runner) -> Result<Runner, String> {
     Ok(runner)
 }
 
+/// Prepares a transport without sending meeting content or making a model request.
+pub fn prewarm(runner: Runner, options: &super::ask_options::Options, chat: String) {
+    if let Ok(runner) = read_only_runner(runner).and_then(|r| options.runner(r)) {
+        super::ask_session::warm(runner, chat);
+    }
+}
+
 /// Sends the final progress event for a finished call and passes the result through.
 pub(super) fn report(
     result: Result<String, String>,
@@ -206,10 +213,10 @@ pub fn ask_with_options(
         std::fs::create_dir_all(&folder).map_err(|_| "Could not open app state folder")?;
         let runner = pick_runner(runner_name)?;
         let runner = options.runner(read_only_runner(runner)?)?;
-        super::run_runner(
+        super::ask_session::run(
             &runner,
             options.prompt(prompt(&meeting, history))?,
-            &folder,
+            meeting_id,
             &progress,
         )
     })();
@@ -255,8 +262,9 @@ pub(super) fn stop_requested() -> bool {
 /// has passed. Returns false on timeout. An Ask started afterwards stops at once.
 pub fn cancel_all(wait: Duration) -> bool {
     STOP.store(true, Ordering::SeqCst);
+    super::ask_session::close();
     let deadline = Instant::now() + wait;
-    while RUNNING.load(Ordering::SeqCst) > 0 {
+    while RUNNING.load(Ordering::SeqCst) > 0 || !super::ask_session::closed() {
         if Instant::now() >= deadline {
             return false;
         }

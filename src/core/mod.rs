@@ -6,6 +6,7 @@ pub mod areas;
 pub mod ask;
 pub mod ask_all;
 pub mod ask_options;
+pub mod ask_session;
 pub mod asr;
 pub mod check_state;
 pub mod config;
