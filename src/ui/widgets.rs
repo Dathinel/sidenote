@@ -163,11 +163,27 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
     col().w(22.0).items_center().child(mark)
 }
 
+/// Recording positions keep a minutes field even before the first minute.
+pub fn recording_time(at: &str) -> String {
+    let shown = if at.matches(':').count() == 2 {
+        core::short(at)
+    } else {
+        at
+    };
+    if shown.len() == 2 && !shown.contains(':') {
+        format!("0:{shown}")
+    } else if let Some(seconds) = shown.strip_prefix("00:") {
+        format!("0:{seconds}")
+    } else {
+        shown.to_string()
+    }
+}
+
 /// The timestamp that opens the transcript at its line.
 pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     let first = at.first()?.clone();
     let origin = origin.to_string();
-    let shown = format!("at {}", core::short(&first));
+    let shown = format!("\u{b7} {} in recording", recording_time(&first));
     Some(
         pressable(
             text(shown.clone())
@@ -175,7 +191,7 @@ pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
                 .color(p.faint),
         )
         .key(format!("stamp-{origin}"))
-        .label(format!("Open the transcript {shown}"))
+        .label(format!("Open the transcript at {}", recording_time(&first)))
         .help("Time in the recording. Open the transcript.")
         .px(5.0)
         .py(1.0)
@@ -215,7 +231,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
     if let Some(at) = pt.at.first() {
         content.push('\u{a0}');
         let start = content.len();
-        content.push_str(&format!("at\u{a0}{}", core::short(at)));
+        content.push_str(&format!("at\u{a0}{}", recording_time(at)));
         let range = start..content.len();
         spans.push(
             Span::new(range.start, range.end)
@@ -226,7 +242,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
         );
         stamp_link = Some(
             Link::new(range, format!("{key}\u{1f}{at}"))
-                .label(format!("Open the transcript at {}", core::short(at)))
+                .label(format!("Open the transcript at {}", recording_time(at)))
                 .help("Read this in the transcript")
                 .hover(LinkPaint::new().color(p.accent).bg(p.chip)),
         );
@@ -421,4 +437,22 @@ pub fn toast(text_: &str, p: Palette) -> El {
                 .child(label("\u{2713}", 13.0, 700.0, p.ok))
                 .child(roles::CONTROL.wrap(text_, p.ink)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recording_time;
+
+    #[test]
+    fn recording_times_keep_minutes_when_the_source_omits_hours() {
+        for (source, shown) in [
+            ("00:00:24", "0:24"),
+            ("00:24", "0:24"),
+            ("00:04:10", "04:10"),
+            ("04:10", "04:10"),
+            ("01:04:10", "01:04:10"),
+        ] {
+            assert_eq!(recording_time(source), shown);
+        }
+    }
 }

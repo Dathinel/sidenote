@@ -44,17 +44,20 @@ The answer reads at `READ` (16/27), the same as the summary under it. It used to
 a size used nowhere else, so it read as neither body nor small text. An answer is prose
 people read in full, so it gets the reading size; the question above it is `TITLE`.
 
-## Colour tokens and contrast (WCAG, checked 2026-11-09)
+## Colour tokens and contrast (WCAG, checked 2026-11-10)
 
 | Token | Light: page / card / sidebar / chip / sel / hit | Dark: page / card / sidebar / chip / sel / hit |
 |---|---|---|
 | `ink` | 16.1 / 16.7 / 14.9 / 14.3 / 13.9 / 15.0 | 14.1 / 12.6 / 14.9 / 11.6 / 11.7 / 10.7 |
 | `soft` | 6.6 / 6.8 / 6.1 / 5.8 / 5.7 / 6.1 | 8.9 / 7.9 / 9.4 / 7.3 / 7.4 / 6.7 |
-| `faint` | 5.4 / 5.6 / 5.0 / 4.8 / 4.6 / 5.0 | 6.0 / 5.3 / 6.3 / 4.9 / 5.0 / 4.5 |
+| `faint` | 5.4 / 5.6 / 5.0 / 4.8 / 4.6 / 5.0 | 7.8 / 6.9 / 8.2 / 6.4 / 6.5 / 5.9 |
 | `warn` | 5.4 / 5.6 / 5.0 / 4.8 / 4.7 / 5.0 | 8.4 / 7.5 / 8.9 / 7.0 / 7.0 / 6.4 |
 
 Every text token keeps 4.5:1 on every fill text sits on: the page, cards, the sidebar,
 hover (`chip`), the selected row (`sel`) and the search highlight (`hit`).
+
+Dev.4 raises dark captions and placeholders to #b0ada4. Kit captions use the shared
+12 px `META` role. Disabled instruction saves keep `soft` text at full opacity.
 
 Round 2 changes: dark `faint` #8f8c83 to #9a978e (was 4.3:1 on `chip`, 3.75:1 on `hit`),
 dark `soft` #b0ada4 to #bcb9b0 to keep a clear step above `faint`, dark `hit` #3a3317 to

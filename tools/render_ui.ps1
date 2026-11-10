@@ -7,6 +7,7 @@ param(
     [string[]]$Only = @(),
     # Themes to render; dark first is enough for a quick look.
     [string[]]$Themes = @('dark', 'light')
+    , [switch]$Trees
     , [string]$StateRoot = ""
 )
 # Renders the UI headlessly, dark and light, into artifacts/ui. Each scene gets its own empty
@@ -341,6 +342,7 @@ if ($Dev3) {
         }
     }
     foreach ($interaction in @(
+        @('notes-click-ask', 'notes-today-first-open', 'notes-ask.json'),
         @('notes-click-dismiss', 'notes-meeting-fallback', 'notes-dismiss.json'),
         @('notes-click-reset', 'notes-settings-edited', 'notes-reset-confirm.json'),
         @('notes-click-fixed', 'notes-settings-tasks', 'notes-show-fixed.json'),
@@ -447,7 +449,7 @@ foreach ($theme in $Themes) {
             if ($LASTEXITCODE -ne 0) { throw "Could not prepare tasks v2 fixture" }
         }
         $enabled = $scene -notlike 'features-off-*' -and $scene -ne 'features-settings' -and $scene -ne 'features-tasks-only'
-        @{ version = 1; features = @{ tasks = ($enabled -or $scene -eq 'features-tasks-only'); memory = $enabled; daily_check = $enabled; projects = $enabled; other_devices = $enabled } } |
+        @{ version = 1; features = @{ tasks = ($enabled -or $scene -in @('features-tasks-only', 'features-settings')); memory = $enabled; daily_check = $enabled; projects = $enabled; other_devices = $enabled } } |
             ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 "$state/config.json"
         if ($scene -eq 'ask') { Copy-Item "$root/tools/ui-fixtures/ask-answer.json" "$state/$meeting.json" }
         if ($scene -like 'sidebar-*') { $checkFixture[$name] = $mem }
@@ -463,6 +465,7 @@ foreach ($theme in $Themes) {
         # The live and notes scenes read an invented meeting folder, never real meetings.
         $fixtureMeetings = if ($scene -in @('notes-today-first-open', 'notes-today-hex-missing')) { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($scene -like 'notes-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } elseif ($scene -like 'tasks-v2-*') { @('--meetings-dir', "$state/tasks-v2-meetings") } elseif ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
         $arguments = $fixtureMeetings + @('--data-dir', $state, '--peers-dir', "$state/peers", '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
+        if ($Trees) { $arguments += @('--tree', "$out/$name-$theme.json") }
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/$name-$theme.log"
         $process = Start-Process -FilePath $Exe -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput "$log.out" -RedirectStandardError $log -PassThru

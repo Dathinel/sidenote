@@ -466,12 +466,8 @@ fn toggle(s: &State, p: Palette) -> El {
 
 fn hex_line(s: &State, p: Palette, wide: bool) -> El {
     let (ink, words) = hex::short_status(s, p);
-    let words = if s.hex_recording() {
-        "Recording".into()
-    } else {
-        words
-    };
-    let recording = s.hex_recording();
+    let recording = s.hex_recording() && super::updates::listener_ready(s);
+    let words = if recording { "Recording".into() } else { words };
     let help = if recording {
         format!("Hex: {words}. Open the live meeting")
     } else {
@@ -497,13 +493,34 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
         .hover(p.chip)
         .on_press(on_press)
     } else {
-        pressable(col().w(40.0).h(34.0).center().child(dot(9.0, ink)))
-            .key("hex-status")
-            .label(help.clone())
-            .help(help)
-            .radius(8.0)
-            .hover(p.chip)
-            .on_press(on_press)
+        let short = if words == "Recording off" {
+            "Off"
+        } else if recording {
+            "Rec"
+        } else if words == "Ready" {
+            "Ready"
+        } else if words == "Checking" {
+            "Check"
+        } else if words == "Dictating" {
+            "Dict"
+        } else {
+            "Off"
+        };
+        pressable(
+            row()
+                .w(56.0)
+                .h(34.0)
+                .gap(3.0)
+                .center()
+                .child(dot(6.0, ink))
+                .child(roles::META.line(short, p.ink)),
+        )
+        .key("hex-status")
+        .label(help.clone())
+        .help(help)
+        .radius(8.0)
+        .hover(p.chip)
+        .on_press(on_press)
     }
 }
 

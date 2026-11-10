@@ -14,12 +14,15 @@ use std::{
 
 pub const HELPERS: [Helper; 3] = [Helper::Claude, Helper::Codex, Helper::OpenCode];
 pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed notes to Claude Code. Audio stays on this PC.";
+pub const INSTALL_URL: &str = "https://code.claude.com/docs/en/setup";
+const SETUP_STEPS: &str =
+    "1. Install Claude Code. 2. Open a terminal, type claude, and sign in. 3. Press Check again.";
 pub const LOAD_ERROR: &str = "Sidenote could not load AI notes settings. Press Reload helper status. If it fails again, restart Sidenote.";
 pub const SAVE_ERROR: &str = "Sidenote could not save your instructions. Your text is still here. Try Save instructions again. If it fails twice, copy the text and restart Sidenote.";
 
 pub fn helper_fallback_message(helper: Helper) -> String {
     format!(
-        "{} is coming in a later version. AI notes are off. Choose Claude Code below to turn them on.",
+        "{} is coming in a later version. Choose Claude Code below to turn on AI notes.",
         helper.name()
     )
 }
@@ -92,6 +95,7 @@ pub struct AiNotes {
     pub details: BTreeSet<String>,
     pub privacy_open: bool,
     pub model_open: bool,
+    pub ask_setup_open: bool,
     pub fallback: Option<Helper>,
     pub switch_confirm: Option<Helper>,
     pub generation: u64,
@@ -116,6 +120,7 @@ impl Default for AiNotes {
             details: BTreeSet::new(),
             privacy_open: false,
             model_open: false,
+            ask_setup_open: false,
             fallback: None,
             switch_confirm: None,
             generation: 0,
@@ -258,7 +263,34 @@ impl State {
         }
     }
     pub fn refresh_ai_notes(&mut self) {
+        if !self.ai_notes.scene {
+            self.reload_runners();
+            self.agents_rechecked = !self.has_agent();
+        }
         self.notes_work(Work::Load, "Loading AI notes...");
+    }
+    fn open_notes_install_page(&mut self) {
+        if self.ai_notes.scene {
+            return;
+        }
+        use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+        let url: Vec<u16> = INSTALL_URL.encode_utf16().chain(Some(0)).collect();
+        // A null verb uses the registered default URL handler.
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as isize <= 32 {
+            self.ai_notes.error = Some(format!(
+                "Could not open your browser. Open {INSTALL_URL} to install Claude Code."
+            ));
+        }
     }
     pub fn open_ai_notes(&mut self) {
         if self.ai_notes.scene {
@@ -398,6 +430,12 @@ pub(super) fn test_error(message: &str) -> String {
         "The sample failed. Claude Code did not answer. Open a terminal, type claude, sign in, then press Send a sample.".into()
     }
 }
+fn needs_sign_in(found: bool, sample: Option<&str>) -> bool {
+    found
+        && !sample.is_some_and(|result| {
+            result.starts_with("Worked in ") || result.starts_with("Claude Code replied")
+        })
+}
 pub fn valid_instructions(text: &str) -> bool {
     text.chars().count() <= instructions::MAX_CHARS && !text.contains('\0')
 }
@@ -498,8 +536,11 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
     actions = actions.child(if editable && valid && e.dirty() {
         save.on_press(move |s: &mut State| s.notes_save_editor(index))
     } else {
-        save.dim(0.5)
+        save.color(p.soft).focusable(false)
     });
+    if index == 0 {
+        c = c.child(roles::SMALL.wrap("Summaries are written in English.", p.soft));
+    }
     let reset = button(
         "Reset to default",
         &format!("instructions-reset-{index}"),
@@ -601,7 +642,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .filter(|_| settings.helper_reason().is_some()))
     {
         c = c.child(super::widgets::banner(
-            "Choose a helper",
+            "Saved choice not available",
             helper_fallback_message(helper),
             super::widgets::BannerKind::Info,
             p,
@@ -646,7 +687,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     let mut privacy = card(p).key("notes-privacy")
         .child(roles::TITLE.wrap("What is sent", p.ink))
         .child(roles::SMALL.wrap(PRIVACY, p.ink))
-        .child(roles::SMALL.wrap("Claude Code sends that text to Anthropic using your own account. It gets no tools and no MCP servers.", p.ink))
+        .child(roles::SMALL.wrap("Claude Code sends that text to Anthropic using your own account. It gets no tools and no MCP servers, but it still loads your own CLAUDE.md and hooks.", p.ink))
         .child(roles::SMALL.wrap("Sidenote has no server of its own.", p.ink))
         .child(button(if a.privacy_open { "Hide details" } else { "Details" }, "notes-privacy-details", p).self_start().on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open));
     if a.privacy_open {
@@ -654,7 +695,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             .child(roles::SMALL.wrap("Nothing is sent until you turn on AI notes. After that, Sidenote sends a meeting when it ends, if automatic notes are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
             .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved notes and transcripts between your devices.", p.soft))
-            .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected. Summaries are written in English.", p.soft));
+            .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
     }
     c = c.child(privacy);
     c = c.child(roles::TITLE.wrap("Choose a helper", p.ink));
@@ -672,47 +713,51 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     if index == 0 { " (recommended)" } else { "" }
                 ),
                 p.ink,
-            ))
-            .child(roles::META.wrap(
-                format!(
-                    "{}{}",
-                    if found { "Detected" } else { "Not detected" },
-                    if selected { ". In use" } else { "" }
-                ),
-                if selected { p.ok } else { p.soft },
             ));
         if !offered {
             r = r.child(roles::SMALL.wrap("Coming in a later version", p.soft));
             c = c.child(r);
             continue;
         }
+        r = r.child(roles::META.wrap(
+            format!(
+                "{}{}",
+                if found { "Detected" } else { "Not detected" },
+                if selected { ". In use" } else { "" }
+            ),
+            if selected { p.ok } else { p.soft },
+        ));
         r = r.child(roles::SMALL.wrap(
             if found {
                 "Uses your Claude Code account. To sign in again, type claude in a terminal."
             } else {
-                "Install Claude Code, then open a terminal and type claude to sign in."
+                SETUP_STEPS
             },
             p.soft,
         ));
         if !found {
-            r = r
-                .child(roles::SMALL.wrap(
-                    "After installing Claude Code, open a terminal and type claude to sign in.",
-                    p.soft,
-                ))
-                .child(
-                    row()
-                        .flex_wrap()
-                        .gaps(8.0, 8.0)
-                        .child(
-                            button("Copy command: claude", "notes-copy-command", p)
-                                .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
-                        )
-                        .child(
-                            button("Check again", "notes-helper-check", p)
-                                .on_press(|s: &mut State| s.refresh_ai_notes()),
-                        ),
-                );
+            r = r.child(
+                row()
+                    .flex_wrap()
+                    .gaps(8.0, 8.0)
+                    .child(
+                        button("Open install page", "notes-install-page", p)
+                            .on_press(|s: &mut State| s.open_notes_install_page()),
+                    )
+                    .child(
+                        button("Check again", "notes-helper-check", p)
+                            .on_press(|s: &mut State| s.refresh_ai_notes()),
+                    ),
+            );
+            c = c.child(r);
+            continue;
+        }
+        if needs_sign_in(found, a.test_results.get(&index).map(String::as_str)) {
+            r = r.child(
+                button("Copy sign-in command: claude", "notes-copy-command", p)
+                    .self_start()
+                    .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
+            );
         }
         r = r.child(
             button(
@@ -744,11 +789,18 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                             s.ai_notes.models[index] = TextEdit::new(HELPERS[index].default_model())
                         }),
                 );
+            if selected && a.models[index].text.trim() != settings.model && a.pending.is_none() {
+                r = r.child(
+                    button("Save model", "notes-save-model", p)
+                        .self_start()
+                        .on_press(move |s: &mut State| s.choose_notes_helper(index)),
+                );
+            }
         }
         let mut actions = row().flex_wrap().gaps(8.0, 8.0);
         let use_this = button(
             if selected {
-                "Use this helper"
+                "In use"
             } else {
                 "Turn on with Claude Code"
             },
@@ -756,17 +808,28 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             p,
         );
         let test = button("Send a sample", &format!("notes-test-{index}"), p);
-        if found && a.pending.is_none() {
+        if a.pending.is_none() {
             actions = actions
-                .child(use_this.on_press(move |s: &mut State| s.choose_notes_helper(index)))
+                .child(if selected {
+                    use_this.color(p.ok).focusable(false)
+                } else {
+                    use_this.on_press(move |s: &mut State| s.choose_notes_helper(index))
+                })
                 .child(test.on_press(move |s: &mut State| {
                     let model = s.ai_notes.models[index].text.clone();
                     s.notes_work(Work::Test(index, model), "Testing fixed sample text...");
                 }));
         } else {
             actions = actions
-                .child(use_this.help("Install Claude Code first.").focusable(false))
-                .child(test.help("Install Claude Code first.").focusable(false));
+                .child(
+                    use_this
+                        .help("Wait for the current operation to finish.")
+                        .focusable(false),
+                )
+                .child(
+                    test.help("Wait for the current operation to finish.")
+                        .focusable(false),
+                );
         }
         r = r.child(actions);
         if a.testing == Some(index) && a.pending.is_some() {
@@ -817,11 +880,19 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 ),
         );
     }
+    let off = settings.engine != "scripts"
+        && (settings.engine != "app" || settings.effective_helper().is_none());
     c = c.child(
         card(p)
             .child(roles::TITLE.wrap("Off", p.ink))
             .child(roles::SMALL.wrap("Keep new meetings as transcripts only.", p.soft))
-            .child(
+            .child(if off {
+                button("Selected", "notes-off", p)
+                    .color(p.ok)
+                    .fill(p.sel)
+                    .self_start()
+                    .focusable(false)
+            } else {
                 button("Turn off AI notes", "notes-off", p)
                     .self_start()
                     .on_press(|s: &mut State| {
@@ -829,17 +900,17 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                             settings.engine = "off".into();
                             s.notes_work(Work::Settings(settings), "Turning off AI notes...");
                         }
-                    }),
-            ),
+                    })
+            }),
     );
     c = c.child(card(p).key("notes-options")
         .child(row().w_full().gap(12.0).items_center()
-            .child(roles::NAME.wrap("Write a summary when a meeting ends", p.ink).grow(1.0).min_w(0.0))
+            .child(roles::NAME.wrap("Write a summary when a meeting ends", if off { p.soft } else { p.ink }).grow(1.0).min_w(0.0))
             .child(roles::CONTROL.wrap(if settings.auto { "On" } else { "Off" }, p.soft))
-            .child(Switch::new(settings.auto).label("Write a summary when a meeting ends").hide_label().on_toggle(|s: &mut State| {
+            .child(Switch::new(settings.auto).disabled(off).label("Write a summary when a meeting ends").hide_label().on_toggle(|s: &mut State| {
                 if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic notes..."); }
             }).build(k).key("notes-auto")))
-        .child(roles::SMALL.wrap("When this is off, use Write summary on each meeting.", p.soft)))
+        .child(roles::SMALL.wrap(if off { "Only applies when AI notes are on." } else { "When this is off, use Write summary on each meeting." }, p.soft)))
         .child(card(p).key("notes-identity")
         .child(roles::TITLE.wrap("Who you are in tasks", p.ink))
         .child(roles::NAME.wrap("Your name (optional)", p.ink))
@@ -860,21 +931,32 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             super::scene_scroll(s, "hex-top");
         })))
 }
+pub fn setup_visible(s: &State) -> bool {
+    s.view == super::tasks::View::Meetings
+        && s.selected.is_none()
+        && !s.on_hex()
+        && !s.on_memory()
+        && !s.on_check()
+        && !s.on_live()
+        && s.filter == super::nav::Filter::All
+        && s.search.text.trim().is_empty()
+        && s.ai_notes.settings.as_ref().is_some_and(|settings| {
+            settings.engine != "scripts"
+                && (settings.engine != "app" || settings.effective_helper().is_none())
+        })
+}
 pub fn setup_card(s: &State, p: Palette) -> Option<El> {
-    let a = &s.ai_notes;
-    let settings = a.settings.as_ref()?;
-    if settings.engine == "scripts"
-        || (settings.engine == "app" && settings.effective_helper().is_some())
-    {
+    if !setup_visible(s) {
         return None;
     }
+    let a = &s.ai_notes;
     let helper = HELPERS
         .into_iter()
         .find(|h| h.offered() && a.found.contains(&(*h, true)));
     let text = if helper.is_some() {
         "Claude Code is installed. You can use your account to write meeting summaries."
     } else {
-        "Sidenote needs Claude Code to write meeting summaries. It was not detected on this PC. Install Claude Code, then open a terminal and type claude to sign in."
+        SETUP_STEPS
     };
     let mut card = card(p).key("today-ai-notes").mb(16.0)
         .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "AI notes need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
@@ -888,8 +970,8 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
                 .flex_wrap()
                 .gaps(8.0, 8.0)
                 .child(
-                    button("Copy command: claude", "today-notes-copy", p)
-                        .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
+                    button("Open install page", "today-notes-install", p)
+                        .on_press(|s: &mut State| s.open_notes_install_page()),
                 )
                 .child(
                     button("Check again", "today-notes-check", p)
@@ -903,6 +985,17 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {
+        assert!(!needs_sign_in(false, None));
+        assert!(needs_sign_in(true, None));
+        assert!(needs_sign_in(true, Some(&test_error("sign-in failed"))));
+        assert!(!needs_sign_in(
+            true,
+            Some("Worked in 8 s. Only fixed sample text was sent.")
+        ));
+        assert!(!needs_sign_in(true, Some(&test_error("invalid JSON"))));
+    }
     #[test]
     fn instruction_fallback_reaches_existing_banner_without_blocking_settings() {
         assert!(instructions_warning(&instructions::Store::default()).is_none());
@@ -950,7 +1043,7 @@ mod tests {
             .err()
             .unwrap();
             assert!(error.contains(helper.name()));
-            assert!(error.contains("AI notes are off"));
+            assert!(error.contains("coming in a later version"));
             assert!(error.contains("Choose Claude Code"));
         }
     }

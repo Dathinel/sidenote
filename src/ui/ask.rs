@@ -512,12 +512,12 @@ fn no_agent(s: &State, p: Palette) -> El {
         .min_w(0.0)
         .gap(2.0)
         .child(roles::CONTROL.wrap(
-            "Ask needs a helper: install Claude Code, Codex or OpenCode",
+            "Ask works with Claude Code, Codex or OpenCode. AI notes need Claude Code.",
             p.ink,
         ));
     if s.agents_rechecked {
         note = note.child(roles::META.wrap(
-            "Still not found. If you just installed one, restart Sidenote.",
+            "Still not found. If you just installed one, press Check again, or restart Sidenote if it still fails.",
             p.faint,
         ));
     }
@@ -535,8 +535,7 @@ fn no_agent(s: &State, p: Palette) -> El {
             link("Check again", p)
                 .key("ask-recheck")
                 .on_press(|s: &mut State| {
-                    s.reload_runners();
-                    s.agents_rechecked = !s.has_agent();
+                    s.refresh_ai_notes();
                 }),
         )
 }
@@ -595,8 +594,18 @@ pub fn overlay_with(
         stack = stack.child(panel);
     }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
-        // Without an agent there is nothing to type into: the pill says what to install.
-        let pill = raised(no_agent(s, p), p);
+        let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
+            raised(
+                link("Ask anything", p)
+                    .key("ask-open")
+                    .px(20.0)
+                    .py(10.0)
+                    .on_press(|s: &mut State| s.ai_notes.ask_setup_open = true),
+                p,
+            )
+        } else {
+            raised(no_agent(s, p), p)
+        };
         return dock(beside(stack, lead, pill, narrow), narrow, p);
     }
     let empty = s.question.text.trim().is_empty();
