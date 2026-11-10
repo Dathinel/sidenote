@@ -416,6 +416,16 @@ fn process(
             &glossary,
         );
         let call = prompt::Call {
+            base_override: crate::core::UiPrefs::load(root)
+                .meeting_summary_templates
+                .get(id)
+                .filter(|choice| choice.as_str() == "standard")
+                .map(|_| {
+                    (
+                        crate::core::agent_instructions::default_base(Agent::Notes).into(),
+                        false,
+                    )
+                }),
             root,
             helper,
             model,
@@ -465,6 +475,7 @@ fn process(
     // Preserve the exact summary on a sorting retry; only tasks.json is replaced.
     let material = prompt::task_material(&summary, &projects)?;
     let call = prompt::Call {
+        base_override: None,
         root,
         helper,
         model,
@@ -750,6 +761,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         &settings.model
     };
     let call = prompt::Call {
+        base_override: None,
         root,
         helper,
         model,

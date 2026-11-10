@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
+    pub meeting_tabs: bool,
+    pub meeting_summary_templates: std::collections::BTreeMap<String, String>,
     pub people_since_ms: Option<i64>,
     pub people_existing_meetings: Option<std::collections::BTreeSet<String>>,
     pub people_sides: std::collections::BTreeMap<String, super::people::Side>,
