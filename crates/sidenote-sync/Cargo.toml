@@ -1,0 +1,40 @@
+[package]
+name = "sidenote-sync"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+
+[dependencies]
+anyhow = "1"
+automerge = "=0.12.0"
+async-trait = "0.1"
+chacha20poly1305 = "0.10"
+curve25519-dalek = "4"
+flate2 = "1"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde_bytes = "0.11"
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+futures-util = { version = "0.3", features = ["sink"] }
+hex = "0.4"
+hkdf = "0.12"
+rand = "0.8"
+rusqlite = { version = "0.41", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
+spake2 = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "fs", "io-util", "process"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_JobObjects", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Diagnostics_Debug"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+tempfile = "3"
+
