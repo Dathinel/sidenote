@@ -241,6 +241,9 @@ fn approval_bakes_every_derivative_validates_schema_and_detects_changed_images()
     bad["figures"][0]["callouts"][0]["mark_number"] = serde_json::json!(999);
     assert!(note::validate(&bad, &approved).is_err());
     let mut bad = note.clone();
+    bad["figures"][0]["callouts"][0]["mark_number"] = serde_json::json!(1.0);
+    assert!(note::validate(&bad, &approved).is_err());
+    let mut bad = note.clone();
     bad["unexpected"] = serde_json::json!(true);
     assert!(note::validate(&bad, &approved).is_err());
     let mut bad = note.clone();
@@ -264,6 +267,33 @@ fn stale_job_and_cancel_cannot_publish_over_new_job() {
     let fresh = epochs.begin();
     epochs.invalidate();
     assert!(!fresh.current());
+}
+
+#[test]
+fn real_claude_synthetic_note_matches_the_current_schema_and_evidence() {
+    let temp = Temp::new();
+    let capture = read_capture(&fixture()).unwrap();
+    let review: Vec<_> = capture
+        .data
+        .keyframes
+        .iter()
+        .enumerate()
+        .map(|(i, f)| super::media::ReviewFrame {
+            index: f.index,
+            included: true,
+            masks: if i == 0 {
+                vec![[0.0, 0.0, 0.15, 0.10]]
+            } else {
+                Vec::new()
+            },
+        })
+        .collect();
+    let approved = super::media::approve(&capture, &review, &temp.0).unwrap();
+    let value = serde_json::from_str(include_str!(
+        "../../../tools/ui-fixtures/annotation-note.json"
+    ))
+    .unwrap();
+    super::note::validate(&value, &approved).unwrap();
 }
 
 #[test]

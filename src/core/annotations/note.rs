@@ -115,7 +115,9 @@ pub fn validate(value: &Value, approved: &ApprovedCapture) -> Result<(), String>
         }
         let mut seen = BTreeSet::new();
         for c in callouts {
-            let n = c["mark_number"].as_u64().unwrap();
+            let n = c["mark_number"]
+                .as_u64()
+                .ok_or("Callout numbers must be stored as whole unsigned integers.")?;
             if !seen.insert(n) {
                 return Err("A mark is repeated in the note.".into());
             }

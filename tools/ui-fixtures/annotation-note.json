@@ -1,0 +1,123 @@
+{
+  "figures": [
+    {
+      "app": "Northwind Board",
+      "callouts": [
+        {
+          "boxNorm": [
+            0.03,
+            0.19,
+            0.24,
+            0.73
+          ],
+          "description": "Workshop navigation",
+          "evidence_refs": [
+            "frame-1",
+            "synthetic:mark-1"
+          ],
+          "explanation": "Observed: the marked box covers the white Workshop sidebar listing Overview, Materials and Review. Speaker: \"Choose the overview.\" is said before the mark and \"Use paper cards.\" after it. The Overview item plausibly matches \"overview\", but the words do not confirm it.",
+          "label": "Workshop navigation",
+          "mark_id": "synthetic:mark-1",
+          "mark_number": 1,
+          "uncertainty": "The link between \"Choose the overview\" and the Overview item is inferred from timing. \"Use paper cards\" is spoken just after the mark and may refer to a different target."
+        },
+        {
+          "boxNorm": [
+            0.31,
+            0.52,
+            0.3,
+            0.36
+          ],
+          "description": "Paper prototype materials",
+          "evidence_refs": [
+            "frame-1",
+            "synthetic:mark-2"
+          ],
+          "explanation": "Observed: the marked box covers the Materials card with the text \"Paper and pencils\". Speaker: \"Use paper cards.\" then \"Review these on Friday.\" are said around the mark. The neighbouring Next review card shows \"Friday morning\".",
+          "label": "Paper prototype materials",
+          "mark_id": "synthetic:mark-2",
+          "mark_number": 2,
+          "uncertainty": "The speaker says \"paper cards\" but the card says \"Paper and pencils\". It is unclear whether \"these\" refers to the marked materials. Friday appears on the neighbouring card, not the marked one."
+        }
+      ],
+      "caption": "Workshop plan board with the Workshop sidebar (mark 1) and the Materials card (mark 2) marked.",
+      "capture_id": "synthetic",
+      "figure_id": "frame-1",
+      "keyframe_index": 1,
+      "keyframe_reason": "Materials marked",
+      "window_title": "Workshop plan: paper prototypes and the next review"
+    },
+    {
+      "app": "Northwind Board",
+      "callouts": [
+        {
+          "boxNorm": [
+            0.64,
+            0.52,
+            0.32,
+            0.36
+          ],
+          "description": "The next review",
+          "evidence_refs": [
+            "frame-2",
+            "synthetic:mark-3"
+          ],
+          "explanation": "Observed: the marked box covers the Next review card showing \"Friday morning\" and a green line \"Bring two versions\". Speaker: \"Review these on Friday.\" is said around the mark. The words do not name what \"these\" refers to and do not mention \"Bring two versions\".",
+          "label": "The next review",
+          "mark_id": "synthetic:mark-3",
+          "mark_number": 3,
+          "uncertainty": "The referent of \"these\" is not stated. The earlier word \"cards.\" may relate to the Paper prototype card text, but this is unconfirmed. The speaker says \"Friday\" while the card says \"Friday morning\"."
+        }
+      ],
+      "caption": "Workshop plan board with the Next review card (mark 3) marked.",
+      "capture_id": "synthetic",
+      "figure_id": "frame-2",
+      "keyframe_index": 2,
+      "keyframe_reason": "Review marked",
+      "window_title": "Workshop plan: paper prototypes and the next review"
+    }
+  ],
+  "open_questions": [
+    "Which sidebar item does the speaker mean by \"Choose the overview\"?",
+    "Does \"Use paper cards\" refer to the marked Materials card, the Paper prototype card, or something else?",
+    "Does the speaker treat \"paper cards\" and \"Paper and pencils\" as the same materials?",
+    "What does \"these\" refer to in \"Review these on Friday\": the paper cards, the two versions, the Materials card, or something else?",
+    "Does the speaker mean Friday morning as shown on the card, or only Friday?",
+    "Does the speaker intend the \"Bring two versions\" line to apply to what is reviewed?"
+  ],
+  "sections": [
+    {
+      "figure_refs": [
+        "frame-1"
+      ],
+      "heading": "Workshop sidebar and materials",
+      "paragraphs": [
+        "Observed: the board shows a Workshop sidebar listing Overview, Materials and Review, plus cards titled Paper prototype (\"Review the cards together\"), Materials (\"Paper and pencils\") and Next review (\"Friday morning\"). Mark 1 covers the sidebar and mark 2 covers the Materials card.",
+        "Speaker: the words near these marks are \"Choose the overview.\", then \"Use paper cards.\" Matching \"overview\" to the Overview sidebar item is a timing-based inference. The speaker says \"paper cards\" while the marked card says \"Paper and pencils\"."
+      ]
+    },
+    {
+      "figure_refs": [
+        "frame-2"
+      ],
+      "heading": "Next review",
+      "paragraphs": [
+        "Observed: mark 3 covers the Next review card, which shows \"Friday morning\" and \"Bring two versions\".",
+        "Speaker: the nearby words are \"Review these on Friday.\" The words do not say what \"these\" refers to, and the speaker does not mention \"Bring two versions\" in the supplied words."
+      ]
+    }
+  ],
+  "summary": "Two marked frames of a Northwind Board \"Workshop plan\" page show a Workshop sidebar (Overview, Materials, Review) and three cards: Paper prototype, Materials and Next review. The speaker says \"Choose the overview.\", \"Use paper cards.\" and \"Review these on Friday.\" Marks cover the sidebar, the Materials card and the Next review card. What \"these\" refers to, and how \"paper cards\" relates to the \"Paper and pencils\" text, is not clear from the words or images.",
+  "title": "Northwind Board workshop plan: paper prototypes and the next review",
+  "todos": [
+    {
+      "action": "Review these on Friday (the speaker's instruction; what \"these\" refers to is unclear)",
+      "due_date": null,
+      "evidence_refs": [
+        "synthetic:mark-2",
+        "synthetic:mark-3"
+      ],
+      "owner": null
+    }
+  ]
+}
