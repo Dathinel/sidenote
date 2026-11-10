@@ -322,27 +322,16 @@ fn advanced(s: &State, body: El, p: Palette) -> El {
     let page = current(s.hex.section).0.name();
     let open = s.hex.shell.advanced.contains(page) || s.hex.section == Section::Advanced;
     let mut out = col().w_full().mt(18.0).child(
-        pressable(
-            row()
-                .w_full()
-                .items_center()
-                .gap(8.0)
-                .py(12.0)
-                .child(roles::CONTROL.line(if open { "\u{25be}" } else { "\u{25b8}" }, p.soft))
-                .child(roles::NAME.line("Advanced", p.ink)),
-        )
-        .key("settings-advanced")
-        .label("Advanced")
-        .role("button")
-        .expanded(open)
-        .on_press(move |s: &mut State| {
-            if !s.hex.shell.advanced.remove(page) {
-                s.hex.shell.advanced.insert(page);
-            }
-            if s.hex.section == Section::Advanced {
-                s.hex.section = Section::Updates;
-            }
-        }),
+        crate::ui::cards::fold_control("Advanced", "settings-advanced", open, p).on_press(
+            move |s: &mut State| {
+                if !s.hex.shell.advanced.remove(page) {
+                    s.hex.shell.advanced.insert(page);
+                }
+                if s.hex.section == Section::Advanced {
+                    s.hex.section = Section::Updates;
+                }
+            },
+        ),
     );
     if open {
         out = out.child(body);

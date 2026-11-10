@@ -1293,11 +1293,9 @@ fn input_h(
 
 // ---- the top of the page -----------------------------------------------------------------
 
-/// "Friday 6 November. 1 overdue, 2 due today. 15 open." The day first, then what is
-/// pressing.
+/// Counts stay on one line so the header leaves room for the list.
 fn summary_line(s: &State, p: Palette) -> El {
     let t = &s.tasks;
-    let day = t.today.format("%A %-d %B").to_string();
     let count = |b: DueBucket| {
         t.items
             .iter()
@@ -1306,21 +1304,17 @@ fn summary_line(s: &State, p: Palette) -> El {
             })
             .count()
     };
-    let (late, today) = (count(DueBucket::Overdue), count(DueBucket::Today));
-    let mut line = row()
-        .flex_wrap()
-        .items_center()
-        .gaps(2.0, 6.0)
-        .child(roles::SMALL.bold().wrap(format!("{day}."), p.ink));
-    if late > 0 {
-        line = line.child(roles::SMALL.bold().wrap(format!("{late} overdue,"), p.warn));
-    }
-    if today > 0 {
-        line = line.child(roles::SMALL.wrap(format!("{today} due today."), p.soft));
-    } else if late == 0 {
-        line = line.child(roles::SMALL.wrap("Nothing due today.", p.soft));
-    }
-    line.child(roles::SMALL.wrap(format!("{} open.", t.counts.open), p.faint))
+    roles::SMALL
+        .line(
+            format!(
+                "{} overdue \u{b7} {} due today \u{b7} {} open",
+                count(DueBucket::Overdue),
+                count(DueBucket::Today),
+                t.counts.open
+            ),
+            p.soft,
+        )
+        .key("tasks-counts")
 }
 
 fn title_row(s: &State, k: &Kit, narrow: bool, p: Palette, layer: &mut Vec<El>) -> El {
@@ -1329,27 +1323,37 @@ fn title_row(s: &State, k: &Kit, narrow: bool, p: Palette, layer: &mut Vec<El>) 
             .gap(8.0)
             .items_center()
             .child(super::icons::draw(&super::icons::PLUS, 16.0, p.accent))
-            .child(roles::CONTROL.wrap("Add task", p.accent))
-            .child(cap("N", p)),
+            .child(roles::CONTROL.wrap("Add task", p.accent)),
     )
     .key("task-add")
     .label("Add a task by hand (N)")
     .px(10.0)
     .py(5.0)
     .radius(8.0)
+    .border(1.0, p.line)
+    .fill(p.card)
     .hover(p.chip)
     .on_press(|s: &mut State| s.open_add());
     row()
         .w_full()
-        .items_end()
+        .key("tasks-header")
+        .items_start()
+        .gap(12.0)
         .justify_between()
-        .mb(4.0)
-        .child(text_title("Tasks", if narrow { 26.0 } else { 30.0 }, p))
+        .mb(16.0)
+        .child(
+            col()
+                .grow(1.0)
+                .min_w(0.0)
+                .gap(4.0)
+                .child(text_title("Tasks", if narrow { 26.0 } else { 30.0 }, p))
+                .child(summary_line(s, p)),
+        )
         .child(
             row()
                 .gap(8.0)
                 .items_center()
-                .child(add.mb(2.0))
+                .child(add.mt(5.0))
                 .child(redo_older_menu(s, k, p, layer)),
         )
 }
@@ -1365,65 +1369,11 @@ fn group_label(by: TaskGrouping) -> &'static str {
     }
 }
 
-/// "Group: Due date" with a menu of the three ways to group.
-fn group_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
-    let t = &s.tasks;
-    let trigger = pressable(
-        row()
-            .gap(6.0)
-            .items_center()
-            .child(roles::META.wrap("Group", p.faint))
-            .child(roles::GROUP.wrap(group_label(t.grouping), p.ink))
-            .child(label("\u{25be}", 10.0, 400.0, p.faint)),
-    )
-    .key("group-by")
-    .label(format!("Group by: {}", group_label(t.grouping)))
-    .px(10.0)
-    .py(7.0)
-    .radius(8.0)
-    .border(1.0, p.line)
-    .fill(p.card)
-    .hover(p.chip)
-    .on_press(|s: &mut State| s.tasks.group_menu = !s.tasks.group_menu);
-    let mut menu = Menu::new("group-menu")
-        .trigger(trigger)
-        .open(t.group_menu)
-        .placement(Placement::BottomEnd)
-        .min_width(180.0);
-    if t.group_menu {
-        menu = menu.on_close(|s: &mut State| s.tasks.group_menu = false);
-        for by in [
-            TaskGrouping::Due,
-            TaskGrouping::Project,
-            TaskGrouping::Meeting,
-            TaskGrouping::Team,
-            TaskGrouping::Status,
-            TaskGrouping::Owner,
-        ] {
-            if by == TaskGrouping::Project && !s.config.features.projects {
-                continue;
-            }
-            menu = menu.item(
-                MenuItem::new(group_label(by))
-                    .checked(t.grouping == by)
-                    .on_select(move |s: &mut State| {
-                        s.tasks.grouping = by;
-                        s.tasks.grouping_loaded = true;
-                        s.tasks.group_menu = false;
-                        s.publish_edit(super::edit_worker::Job::Grouping {
-                            store: s.tasks.store.clone(),
-                            by,
-                        });
-                    }),
-            );
-        }
-    }
-    menu.build(k, layer)
-}
-
-fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, available: f32) -> El {
+fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let t = &s.tasks;
     let search = TextInput::new(&t.search)
+        .leading_icon(&super::icons::SEARCH)
+        .leading_icon_size(16.0)
         .plain()
         .placeholder("Search tasks")
         .on_edit(|s: &mut State| &mut s.tasks.search)
@@ -1434,36 +1384,20 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, available: f32) 
         .border(1.0, if t.search.focused { p.accent } else { p.line })
         .radius(8.0)
         .fill(p.card)
-        .w(200.0)
         .grow(1.0)
-        .min_w(200.0);
+        .min_w(80.0);
     let controls = row()
         .items_center()
         .gap(8.0)
         .child(status_filter(s, k, p, layer))
         .child(filters_menu(s, k, p, layer));
-    let fields = if available >= 470.0 {
-        row()
-            .key("task-toolbar")
-            .w_full()
-            .items_center()
-            .gap(8.0)
-            .child(search)
-            .child(controls)
-    } else {
-        col()
-            .key("task-toolbar")
-            .w_full()
-            .gap(8.0)
-            .child(search.w_full())
-            .child(controls)
-    };
-    col().w_full().gap(8.0).child(fields).child(
-        row()
-            .w_full()
-            .justify_end()
-            .child(group_menu(s, k, p, layer)),
-    )
+    row()
+        .key("task-toolbar")
+        .w_full()
+        .items_center()
+        .gap(8.0)
+        .child(search)
+        .child(controls)
 }
 
 fn menu_trigger(name: &str, key: &str, p: Palette) -> El {
@@ -1587,6 +1521,32 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                     }),
             );
         }
+        menu = menu.separator().group_label("Group by");
+        for by in [
+            TaskGrouping::Due,
+            TaskGrouping::Project,
+            TaskGrouping::Meeting,
+            TaskGrouping::Team,
+            TaskGrouping::Status,
+            TaskGrouping::Owner,
+        ] {
+            if by == TaskGrouping::Project && !s.config.features.projects {
+                continue;
+            }
+            menu = menu.item(
+                MenuItem::new(group_label(by))
+                    .checked(s.tasks.grouping == by)
+                    .on_select(move |s: &mut State| {
+                        s.tasks.filters_menu = false;
+                        s.tasks.grouping = by;
+                        s.tasks.grouping_loaded = true;
+                        s.publish_edit(super::edit_worker::Job::Grouping {
+                            store: s.tasks.store.clone(),
+                            by,
+                        });
+                    }),
+            );
+        }
     }
     menu.build(k, layer)
 }
@@ -1645,7 +1605,7 @@ fn avatar(name: &str, me: bool, size: f32, p: Palette) -> El {
 
 /// The due date as a short pill: late in amber, today in the accent. A date the summary
 /// guessed is drawn softer than one somebody chose.
-fn due_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
+fn date_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
     let (phrase, urgency) = core::due_phrase(t, today)?;
     let dated = if matches!(urgency, Urgency::Soon | Urgency::Calm) {
         t.due_date.map(due_text).unwrap_or_else(|| phrase.clone())
@@ -1682,12 +1642,34 @@ fn due_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
         Some(f) => chip.fill(f),
         None => chip,
     };
+    Some(chip)
+}
+
+fn due_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
     Some(
-        col()
-            .items_end()
-            .child(chip)
-            .children(guessed.then(|| roles::META.wrap("Guessed date", p.soft))),
+        col().items_end().child(date_chip(t, today, p)?).children(
+            t.due_default
+                .then(|| roles::META.wrap("Guessed date", p.soft)),
+        ),
     )
+}
+
+fn compact_meta(t: &TaskItem, today: NaiveDate, p: Palette) -> El {
+    let owner = owner_name(t)
+        .map(|(name, _)| name)
+        .unwrap_or_else(|| "No owner".into());
+    row()
+        .key(format!("task-meta-{}-{}", t.meeting_id, t.index))
+        .min_w(0.0)
+        .gap(4.0)
+        .items_center()
+        .child(roles::META.line(&owner, p.soft).max_w(144.0).help(&owner))
+        .child(roles::META.wrap("\u{b7}", p.faint))
+        .child(date_chip(t, today, p).unwrap_or_else(|| roles::META.line("No date", p.faint)))
+        .children(
+            (t.due_default && t.due_date.is_some())
+                .then(|| roles::META.line("\u{b7} guessed", p.soft)),
+        )
 }
 
 /// How much of the row the properties take, which depends on the room the list has.
@@ -1750,33 +1732,58 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     } else {
         &t.description
     };
-    let open_title = pressable(
-        col()
-            .min_w(0.0)
-            .gap(3.0)
-            .child(title)
-            .children((!preview.is_empty()).then(|| roles::META.line(preview, p.soft)))
-            .children((lay.compact).then(|| {
-                row()
-                    .flex_wrap()
-                    .gap(6.0)
-                    .items_center()
-                    .child(
-                        roles::META.line(
-                            owner_name(t)
-                                .map(|(name, _)| name)
-                                .unwrap_or_else(|| "No owner".into()),
-                            p.soft,
-                        ),
-                    )
-                    .children(due_chip(t, tasks.today, p))
-            })),
-    )
+    let open_title = pressable(col().min_w(0.0).gap(3.0).child(title).children(
+        (!preview.is_empty()).then(|| {
+            roles::META
+                .line(preview, p.soft)
+                .key(format!("task-preview-{id}-{index}"))
+        }),
+    ))
     .key(format!("ttask-{id}-{index}"))
     .label(format!("Open the task: {}", t.task))
-    .grow(1.0)
+    .w_full()
     .min_w(0.0)
     .on_press(open.clone());
+    let toggle = (!t.subtasks.is_empty()).then(|| {
+        let row_id = (id.clone(), index);
+        let expanded = tasks.expanded_subtasks.contains(&row_id);
+        pressable(
+            row()
+                .gap(4.0)
+                .items_center()
+                .child(chevron(expanded, p))
+                .child(roles::META.line(format!("Subtasks {}", t.progress()), p.soft)),
+        )
+        .key(format!("subtasks-toggle-{id}-{index}"))
+        .label(format!(
+            "{} subtasks: {}",
+            if expanded { "Hide" } else { "Show" },
+            t.title
+        ))
+        .expanded(expanded)
+        .self_start()
+        .on_press(move |s: &mut State| {
+            if !s.tasks.expanded_subtasks.remove(&row_id) {
+                s.tasks.expanded_subtasks.insert(row_id.clone());
+            }
+        })
+    });
+    let copy = col().grow(1.0).min_w(0.0).child(open_title);
+    let copy = if lay.compact {
+        copy.child(
+            row()
+                .key(format!("task-meta-line-{id}-{index}"))
+                .w_full()
+                .min_w(0.0)
+                .items_center()
+                .gap(8.0)
+                .mt(8.0)
+                .child(compact_meta(t, tasks.today, p).grow(1.0))
+                .children(toggle),
+        )
+    } else {
+        copy.children(toggle.map(|toggle| toggle.mt(8.0)))
+    };
     let mut props = row().h_full().items_center().gap(10.0);
     if lay.project_w > 0.0 {
         props = props.child(
@@ -1801,13 +1808,9 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 ),
             ),
         )
-        .child(
-            row()
-                .w(88.0)
-                .justify_end()
-                .items_center()
-                .child(due_chip(t, tasks.today, p).unwrap_or_else(el)),
-        );
+        .child(row().w(88.0).justify_end().items_center().child(
+            due_chip(t, tasks.today, p).unwrap_or_else(|| roles::META.line("No date", p.faint)),
+        ));
     let props = pressable(props)
         .key(format!("tmeta-{id}-{index}"))
         .focusable(false)
@@ -1816,7 +1819,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         .key(format!("trow-{id}-{index}"))
         .min_h(64.0)
         .child(tick)
-        .child(open_title)
+        .child(copy)
         .children((!lay.compact).then_some(props))
         .on_hover_change({
             let id = id.clone();
@@ -1844,32 +1847,6 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         line = line.fill(p.chip);
     }
     let mut out = col().w_full().child(line);
-    if !t.subtasks.is_empty() {
-        let row_id = (id.clone(), index);
-        let expanded = tasks.expanded_subtasks.contains(&row_id);
-        out = out.child(
-            pressable(
-                row()
-                    .gap(6.0)
-                    .items_center()
-                    .child(chevron(expanded, p))
-                    .child(roles::META.wrap(format!("Subtasks {}", t.progress()), p.soft)),
-            )
-            .key(format!("subtasks-toggle-{id}-{index}"))
-            .label(format!(
-                "{} subtasks: {}",
-                if expanded { "Hide" } else { "Show" },
-                t.title
-            ))
-            .ml(60.0)
-            .py(4.0)
-            .on_press(move |s: &mut State| {
-                if !s.tasks.expanded_subtasks.remove(&row_id) {
-                    s.tasks.expanded_subtasks.insert(row_id.clone());
-                }
-            }),
-        );
-    }
     for sub in t
         .subtasks
         .iter()
@@ -1892,7 +1869,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                     ),
             )
             .key(format!("subtick-{}-{}-{}", t.meeting_id, index, sub.id))
-            .label(format!("Sub-task: {}", sub.title))
+            .label(format!("Subtask: {}", sub.title))
             .role("checkbox")
             .checked(done)
             .ml(42.0)
@@ -3023,17 +3000,8 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         }))
         .child(v2_controls(s, k, t, p, layer))
         .child(
-            button(
-                if tasks.ui.advanced {
-                    "Hide advanced"
-                } else {
-                    "Advanced"
-                },
-                "task-advanced",
-                false,
-                p,
-            )
-            .on_press(|s: &mut State| s.tasks.ui.advanced = !s.tasks.ui.advanced),
+            cards::fold_control("Advanced", "task-advanced", tasks.ui.advanced, p)
+                .on_press(|s: &mut State| s.tasks.ui.advanced = !s.tasks.ui.advanced),
         )
         .children(tasks.ui.advanced.then(|| {
             col()
@@ -3328,7 +3296,7 @@ fn list_column(
     } else if t.panel.is_some() {
         24.0
     } else {
-        40.0
+        30.0
     };
     // Rows give the title what is left after the properties. The project column is narrower
     // beside the panel and gone when grouping by project, where the heading says it.
@@ -3359,48 +3327,11 @@ fn list_column(
         .w_full()
         .max_w(920.0)
         .px(side)
-        .pt(if narrow { 8.0 } else { 18.0 })
+        .pt(if narrow { 8.0 } else { 30.0 })
         .pb(56.0)
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
-        .children(t.titles_notice.then(|| {
-            row()
-                .w_full()
-                .flex_wrap()
-                .gap(8.0)
-                .items_center()
-                .child(
-                    roles::META
-                        .wrap(
-                            "Titles are shown short. Open a task for its full description.",
-                            p.soft,
-                        )
-                        .grow(1.0),
-                )
-                .child(
-                    button(
-                        if t.show_full_titles {
-                            "Short titles"
-                        } else {
-                            "Full titles"
-                        },
-                        "show-full-titles",
-                        false,
-                        p,
-                    )
-                    .on_press(|s: &mut State| s.toggle_full_titles()),
-                )
-                .child(
-                    button("Dismiss", "titles-notice-dismiss", false, p).on_press(
-                        |s: &mut State| {
-                            s.tasks.titles_notice = false;
-                            s.save_title_prefs();
-                        },
-                    ),
-                )
-        }))
-        .child(summary_line(s, p).mb(16.0))
-        .child(toolbar(s, k, p, layer, list_w.min(920.0) - 2.0 * side).mb(10.0));
+        .child(toolbar(s, k, p, layer).mb(10.0));
     if v.groups.is_empty() && v.done.is_empty() {
         doc = doc.child(empty_note(s, p));
     }
@@ -3520,9 +3451,9 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
         roles::GROUP
             .wrap(
                 if t.subtasks.is_empty() {
-                    "Sub-tasks".into()
+                    "Subtasks".into()
                 } else {
-                    format!("Sub-tasks {}", t.progress())
+                    format!("Subtasks {}", t.progress())
                 },
                 p.ink,
             )
@@ -3550,7 +3481,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                     ),
             )
             .key(format!("panel-sub-{}", sub.id))
-            .label(format!("Sub-task: {}", sub.title))
+            .label(format!("Subtask: {}", sub.title))
             .role("checkbox")
             .checked(done)
             .py(5.0)
@@ -3569,8 +3500,18 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     let (id, index) = (t.meeting_id.clone(), t.index);
     let submit_id = id.clone();
     out = out.child(
-        button("Add subtask", "subtask-add-open", false, p)
-            .on_press(|s: &mut State| s.tasks.ui.subtask_add = !s.tasks.ui.subtask_add),
+        value_button(
+            row()
+                .gap(6.0)
+                .items_center()
+                .child(super::icons::draw(&super::icons::PLUS, 16.0, p.accent))
+                .child(roles::CONTROL.wrap("Add subtask", p.accent)),
+            "subtask-add-open",
+            "Add subtask".into(),
+            p,
+        )
+        .expanded(s.tasks.ui.subtask_add)
+        .on_press(|s: &mut State| s.tasks.ui.subtask_add = !s.tasks.ui.subtask_add),
     );
     if s.tasks.ui.subtask_add {
         out = out.child(
@@ -3580,7 +3521,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                 .items_center()
                 .child(
                     TextInput::new(&s.tasks.subtask_input)
-                        .placeholder("Add a sub-task")
+                        .placeholder("Add a subtask")
                         .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
                         .on_key(panel_key)
                         .on_submit(move |s: &mut State, _| s.add_panel_subtask(&submit_id, index))
@@ -3607,9 +3548,13 @@ fn redo_older_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .collect();
     let mut menu = Menu::new("redo-older-tasks")
         .trigger(
-            super::area::button("...", "redo-meeting-open", p)
-                .label("Task list options")
-                .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
+            value_button(
+                super::icons::draw(&super::icons::MORE, 16.0, p.soft),
+                "redo-meeting-open",
+                "Task list options".into(),
+                p,
+            )
+            .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
         )
         .open(s.tasks.redo_menu)
         .placement(Placement::BottomStart)
@@ -3618,7 +3563,7 @@ fn redo_older_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         menu = menu
             .on_close(|s: &mut State| s.tasks.redo_menu = false)
             .item(
-                MenuItem::new("Show full titles")
+                MenuItem::new("Full titles")
                     .checked(s.tasks.show_full_titles)
                     .on_select(|s: &mut State| {
                         s.tasks.redo_menu = false;

@@ -35,3 +35,19 @@ pub fn copy(title: El, help: &str, p: Palette) -> El {
         .child(title)
         .child(roles::SMALL.wrap(help, p.soft))
 }
+
+pub fn fold_control(title: &str, key: &str, open: bool, p: Palette) -> El {
+    super::widgets::pressable(
+        row()
+            .w_full()
+            .items_center()
+            .gap(8.0)
+            .py(12.0)
+            .child(roles::CONTROL.line(if open { "\u{25be}" } else { "\u{25b8}" }, p.soft))
+            .child(roles::NAME.line(title, p.ink)),
+    )
+    .key(key)
+    .label(title)
+    .role("button")
+    .expanded(open)
+}
