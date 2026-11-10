@@ -1009,7 +1009,7 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
                         s.hex.shell.relay_error = None;
                         s.toast = Some(("Relay preview changed. Reopen Sidenote to refresh the task collection.".into(), Instant::now()));
                     }
-                    Err(_) => s.hex.shell.relay_error = Some("Could not save relay preview settings.".into()),
+                    Err(_) => s.feature_error = Some("Could not save relay preview settings.".into()),
                 }
             }).build(k), true, p)
 }
