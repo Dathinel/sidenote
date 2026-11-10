@@ -6,21 +6,22 @@ use super::{
     check::{copy_row, prose, source_row},
     list::text_title,
     roles,
-    tasks::{button, pill, prop_row},
+    tasks::{button, prop_row},
     theme::Palette,
     widgets::{
-        badge, dot, hairline, label, list_and_panel, notice_bar, panel_frame, panel_top, pressable,
+        badge, dot, hairline, list_and_panel, notice_bar, panel_frame, panel_top, pressable,
         scroll, spaced_caps, split_geometry,
     },
 };
 use chrono::{DateTime, Local, NaiveDate};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
-use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextArea, TextInput};
+use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use sidenote::core::memory::{
     Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview, PendingProposal,
     ProposalOp, RecordStatus, RecordType,
 };
 use std::{collections::HashMap, io};
+mod landing;
 
 /// A claim not confirmed for this many days is suggested for review. Information only: age
 /// never changes a claim.
@@ -54,6 +55,11 @@ pub enum Ask {
 }
 
 pub struct MemState {
+    pub browse: bool,
+    pub filters_open: bool,
+    pub comment_for: Option<String>,
+    pub comment: TextEdit,
+    pub result: Option<String>,
     pub projects: sidenote::core::Projects,
     pub records: Vec<MemoryRecord>,
     pub proposals: Vec<PendingProposal>,
@@ -91,6 +97,11 @@ pub struct MemState {
 impl Default for MemState {
     fn default() -> Self {
         Self {
+            browse: false,
+            filters_open: false,
+            comment_for: None,
+            comment: TextEdit::default(),
+            result: None,
             projects: sidenote::core::Projects::default(),
             records: Vec::new(),
             proposals: Vec::new(),
@@ -348,7 +359,7 @@ impl MemState {
             .collect();
     }
     pub fn typing(&self) -> bool {
-        self.search.focused || self.edit.focused
+        self.search.focused || self.edit.focused || self.comment.focused
     }
 
     fn has_target(&self, id: &str) -> bool {
@@ -387,15 +398,18 @@ impl MemState {
                 .project
                 .as_ref()
                 .is_none_or(|p| r.project.as_deref() == Some(p.as_str()))
-            && {
-                let q = self.search.text.trim().to_lowercase();
-                q.is_empty()
-                    || text.to_lowercase().contains(&q)
-                    || r.project
-                        .as_deref()
-                        .is_some_and(|p| self.projects.project_matches_query(p, &q))
-                    || r.people.iter().any(|p| p.to_lowercase().contains(&q))
-            }
+            && self.matches_query(r)
+    }
+    fn matches_query(&self, r: &MemoryRecord) -> bool {
+        let q = self.search.text.trim().to_lowercase();
+        q.is_empty()
+            || r.text
+                .as_deref()
+                .is_some_and(|text| text.to_lowercase().contains(&q))
+            || r.project
+                .as_deref()
+                .is_some_and(|p| self.projects.project_matches_query(p, &q))
+            || r.people.iter().any(|p| p.to_lowercase().contains(&q))
     }
 
     /// The ids of the rows on screen, in order.
@@ -520,6 +534,7 @@ impl State {
         }
         self.go_home();
         self.memory_open = true;
+        self.memory.browse = false;
         self.memory.panel = self.memory.editing;
         self.memory.prepare_after_refresh = true;
         self.refresh_memory(true);
@@ -562,7 +577,9 @@ impl State {
             Err(e) => {
                 self.memory.errors.insert(
                     key.to_string(),
-                    super::edit_worker::SaveError::from(&e).message().into(),
+                    sidenote::core::validation_message(&e)
+                        .unwrap_or_else(|| super::edit_worker::SaveError::from(&e).message())
+                        .into(),
                 );
                 false
             }
@@ -647,6 +664,20 @@ impl State {
     pub fn proposal_reject(&mut self, id: &str) {
         let r = MemoryStore::default().reject_proposal(id);
         self.memory_done(id, r);
+    }
+    pub fn memory_undo(&mut self, record: &str, at: &str, tx: &mut Tx) {
+        let result = MemoryStore::default().undo_event(record, at);
+        if self.memory_done(record, result) {
+            self.memory.result = None;
+            self.show_toast("Change undone. The previous memory is restored.", tx);
+        }
+    }
+    pub fn memory_comment_save(&mut self, id: &str) {
+        let result = MemoryStore::default().comment_proposal(id, &self.memory.comment.text);
+        if self.memory_done(id, result) {
+            self.memory.comment_for = None;
+            self.memory.result = Some("Comment saved for Sidenote's next check.".into());
+        }
     }
 
     pub fn migration_accept(&mut self) {
@@ -989,39 +1020,6 @@ fn group_head(name: &str, n: usize, p: Palette) -> El {
 
 // ---- the top of the page -------------------------------------------------------------------
 
-fn summary_line(s: &State, p: Palette) -> El {
-    let m = &s.memory;
-    let text_ = if !m.migrated {
-        match &m.preview {
-            Some(v) => format!(
-                "Showing the old memory text. {} are ready to import when you approve.",
-                plural(v.imported, "claim", "claims")
-            ),
-            None => "Showing the old memory text.".to_string(),
-        }
-    } else {
-        let active = m.count_kind(None);
-        let review = m
-            .records
-            .iter()
-            .filter(|r| needs_review(r, m.today))
-            .count();
-        let mut parts = vec![format!("{active} active")];
-        if review > 0 {
-            parts.push(format!("{review} to review"));
-        }
-        if !m.proposals.is_empty() {
-            parts.push(plural(
-                m.proposals.len(),
-                "proposal waiting",
-                "proposals waiting",
-            ));
-        }
-        format!("{}.", parts.join(", "))
-    };
-    roles::SMALL.wrap(text_, p.soft)
-}
-
 fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
     let m = &s.memory;
     let Some(v) = &m.preview else {
@@ -1133,138 +1131,6 @@ fn migration_banner(s: &State, narrow: bool, p: Palette) -> El {
         card = card.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
     card
-}
-
-fn tab_pills(s: &State, p: Palette) -> El {
-    let m = &s.memory;
-    let mut bar = row().w_full().flex_wrap().items_center().gaps(6.0, 6.0);
-    let n = m.proposals.len();
-    bar = bar.child(
-        pill(
-            &format!("Review {n}"),
-            "mtab-review",
-            m.tab == Tab::Review,
-            p,
-        )
-        .label("Proposals from the daily check")
-        .on_press(|s: &mut State| set_tab(s, Tab::Review)),
-    );
-    bar = bar.child(
-        pill(
-            &format!("All {}", m.count_kind(None)),
-            "mtab-all",
-            m.tab == Tab::All,
-            p,
-        )
-        .on_press(|s: &mut State| set_tab(s, Tab::All)),
-    );
-    for t in KINDS {
-        bar = bar.child(
-            pill(
-                &format!("{} {}", kind_label(t), m.count_kind(Some(t))),
-                &format!("mtab-{t:?}"),
-                m.tab == Tab::Kind(t),
-                p,
-            )
-            .on_press(move |s: &mut State| set_tab(s, Tab::Kind(t))),
-        );
-    }
-    bar
-}
-
-fn set_tab(s: &mut State, t: Tab) {
-    s.memory.tab = t;
-    s.close_record();
-    s.memory.cursor = None;
-}
-
-fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
-    let m = &s.memory;
-    let search = TextInput::new(&m.search)
-        .plain()
-        .placeholder("Search memory")
-        .on_edit(|s: &mut State| &mut s.memory.search)
-        .on_key(search_key)
-        .height(36.0)
-        .build(k)
-        .key("mem-search")
-        .border(1.0, if m.search.focused { p.accent } else { p.line })
-        .radius(8.0)
-        .fill(p.card)
-        .grow(1.0)
-        .min_w(72.0);
-    let scope = col().key("mem-scope").child(
-        SegmentedControl::new(
-            &["Active", "Needs review", "Retired"],
-            Some(match m.scope {
-                Scope::Active => 0,
-                Scope::NeedsReview => 1,
-                Scope::Retired => 2,
-            }),
-        )
-        .label("Show")
-        .width(Some(330.0))
-        .on_pick::<State>(|s, i, _| {
-            s.memory.scope = [Scope::Active, Scope::NeedsReview, Scope::Retired][i];
-            s.close_record();
-        })
-        .build(k),
-    );
-    let mut bar = row()
-        .w_full()
-        .flex_wrap()
-        .items_center()
-        .gaps(8.0, 8.0)
-        .child(search)
-        .child(scope);
-    let names = m.projects();
-    if names.len() > 1 {
-        let shown = m.project.clone().unwrap_or_else(|| "All projects".into());
-        let trigger = pressable(
-            row()
-                .gap(6.0)
-                .items_center()
-                .child(roles::META.wrap("Project", p.faint))
-                .child(roles::GROUP.wrap(shown.clone(), p.ink))
-                .child(label("\u{25be}", 10.0, 400.0, p.faint)),
-        )
-        .key("mem-project")
-        .label(format!("Project filter: {shown}"))
-        .px(10.0)
-        .py(7.0)
-        .radius(8.0)
-        .border(1.0, p.line)
-        .fill(p.card)
-        .hover(p.chip)
-        .on_press(|s: &mut State| s.memory.project_menu = !s.memory.project_menu);
-        let mut menu = Menu::new("mem-project-menu")
-            .trigger(trigger)
-            .open(m.project_menu)
-            .placement(Placement::BottomEnd)
-            .min_width(220.0);
-        if m.project_menu {
-            menu = menu.on_close(|s: &mut State| s.memory.project_menu = false);
-            menu = menu.item(
-                MenuItem::new("All projects")
-                    .checked(m.project.is_none())
-                    .on_select(|s: &mut State| {
-                        s.memory.project = None;
-                        s.memory.project_menu = false;
-                    }),
-            );
-            for n in names {
-                let on = m.project.as_deref() == Some(n.as_str());
-                menu = menu.item(MenuItem::new(n.clone()).checked(on).on_select(
-                    move |s: &mut State| {
-                        s.memory.project = Some(n.clone());
-                        s.memory.project_menu = false;
-                    },
-                ));
-            }
-        }
-        bar = bar.child(menu.build(k, layer));
-    }
-    bar
 }
 
 fn search_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
@@ -1392,6 +1258,9 @@ fn list_column(
     layer: &mut Vec<El>,
 ) -> El {
     let m = &s.memory;
+    if !m.browse {
+        return landing::column(s, k, p, narrow);
+    }
     let side = if narrow {
         16.0
     } else if m.panel {
@@ -1410,8 +1279,20 @@ fn list_column(
         .px(side)
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0)
-        .child(text_title("Memory", if narrow { 26.0 } else { 30.0 }, p).mb(4.0))
-        .child(summary_line(s, p).mb(14.0));
+        .child(
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .child(text_title("Memory", if narrow { 26.0 } else { 30.0 }, p).mb(4.0))
+                .child(button("Back to Memory", "memory-home", false, p).on_press(
+                    |s: &mut State| {
+                        s.close_record();
+                        s.memory.browse = false;
+                    },
+                )),
+        )
+        .child(landing::count(s, p).mb(14.0));
     if !m.migrated {
         doc = doc.child(migration_banner(s, narrow, p).mb(14.0));
         match m.before {
@@ -1423,10 +1304,7 @@ fn list_column(
             }
         }
     } else {
-        doc = doc.child(tab_pills(s, p).mb(10.0));
-        if m.tab != Tab::Review {
-            doc = doc.child(toolbar(s, k, p, layer).mb(6.0));
-        }
+        doc = doc.child(landing::toolbar(s, k, p, layer).mb(6.0));
         doc = doc.child(if m.tab == Tab::Review {
             proposal_list(s, lay, p)
         } else {
@@ -2077,6 +1955,24 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(note) = m.notice.as_ref().or(s.notice.as_ref()) {
         pane = pane.child(notice_bar(note, p));
     }
+    if let Some(result) = &m.result {
+        pane = pane.child(
+            row()
+                .w_full()
+                .px(24.0)
+                .py(8.0)
+                .gap(12.0)
+                .items_center()
+                .fill(p.chip)
+                .key("memory-result")
+                .role("status")
+                .child(roles::CONTROL.wrap(result, p.soft).grow(1.0))
+                .child(
+                    button("Dismiss", "memory-result-dismiss", false, p)
+                        .on_press(|s: &mut State| s.memory.result = None),
+                ),
+        );
+    }
     pane.child(list_and_panel(
         list_column(s, k, p, narrow, list_w, layer),
         shown,
@@ -2137,10 +2033,16 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.memory.ask = None;
             } else if s.memory.panel {
                 s.close_record();
+            } else if s.memory.comment_for.is_some() {
+                s.memory.comment_for = None;
+            } else if s.memory.filters_open {
+                s.memory.filters_open = false;
             } else if s.memory.project_menu {
                 s.memory.project_menu = false;
             } else if !s.memory.search.text.is_empty() {
                 s.memory.search = TextEdit::default();
+            } else if s.memory.browse {
+                s.memory.browse = false;
             } else {
                 s.go_home();
             }
