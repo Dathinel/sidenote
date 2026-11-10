@@ -93,11 +93,13 @@ pub enum Phase {
 }
 
 /// What the reader thread knows about the live transcript. The page reads it; only the thread
-/// (and the page's one-time hint) writes it.
+/// (and the page's recording hints) writes it.
 #[derive(Default)]
 pub struct Feed {
     /// The id Hex reports for the running recording, when it reports one.
     hint: Option<String>,
+    /// The start inferred from Hex's status, never the page's local startup time.
+    start_ms: Option<i64>,
     /// The meeting folder, once found.
     folder: Option<PathBuf>,
     pub lines: Vec<LiveLine>,
@@ -574,12 +576,12 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         if !watching.load(Ordering::Relaxed) {
             continue;
         }
-        let (mut folder, hint, last) = {
+        let (mut folder, hint, start_ms, last) = {
             let f = feed.lock().unwrap_or_else(|e| e.into_inner());
-            (f.folder.clone(), f.hint.clone(), f.stamp)
+            (f.folder.clone(), f.hint.clone(), f.start_ms, f.stamp)
         };
         if folder.is_none() {
-            folder = feed_io::find_folder(&root, hint.as_deref());
+            folder = feed_io::find_folder(&root, hint.as_deref(), start_ms);
         }
         let Some(folder) = folder else {
             continue;
@@ -646,6 +648,7 @@ impl State {
         let saved = self.live_saved();
         let visible = self.on_live() && hex::window_shown();
         let hint = hex::recording_id(self);
+        let start_ms = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
         let Some(live) = self.live.as_mut() else {
             return false;
         };
@@ -658,6 +661,9 @@ impl State {
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if feed.hint.is_none() {
                 feed.hint = hint;
+            }
+            if feed.start_ms.is_none() {
+                feed.start_ms = start_ms;
             }
             if live.folder.is_none() {
                 live.folder = feed.folder.clone();
@@ -718,6 +724,7 @@ impl State {
     fn live_save(&mut self) -> bool {
         let text = self.live_notes.text.clone();
         let hint = hex::recording_id(self);
+        let start_ms = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
         let Some(live) = self.live.as_mut() else {
             return false;
         };
@@ -733,8 +740,9 @@ impl State {
         live.saving = Saving::Pending;
         let wake = self.waker.clone();
         let queued = self.live_work(move || {
-            let folder = folder
-                .or_else(|| feed_io::find_folder(&sidenote::core::meetings_dir(), hint.as_deref()));
+            let folder = folder.or_else(|| {
+                feed_io::find_folder(&sidenote::core::meetings_dir(), hint.as_deref(), start_ms)
+            });
             let result = feed_io::preserve_notes(folder, &text, &recovery);
             results
                 .lock()

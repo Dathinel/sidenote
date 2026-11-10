@@ -115,12 +115,41 @@ pub fn read_rolling(folder: &Path, last: Option<Stamp>) -> io::Result<Read> {
     ))
 }
 
-/// Only Hex's recording id identifies a writable meeting folder. A timestamp guess can
-/// select the previous unfinished meeting while the new recording is still starting.
-pub fn find_folder(root: &Path, hint: Option<&str>) -> Option<PathBuf> {
-    let id = hint.filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_digit() || c == '-'))?;
-    let folder = root.join(id);
-    folder.is_dir().then_some(folder)
+/// Prefer Hex's recording id; without one, require a unique active manifest near its start.
+pub fn find_folder(root: &Path, hint: Option<&str>, start_ms: Option<i64>) -> Option<PathBuf> {
+    if let Some(id) = hint {
+        let id = Some(id)
+            .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_digit() || c == '-'))?;
+        let folder = root.join(id);
+        return folder.is_dir().then_some(folder);
+    }
+    let start_ms = start_ms?;
+    // Hex supplies both clocks; 90 s allows startup/poll delay and elapsed-second rounding.
+    const START_TOLERANCE_MS: u64 = 90_000;
+    let mut found = None;
+    for entry in fs::read_dir(root).ok()? {
+        let folder = entry.ok()?.path();
+        if !super::file_reads::directory(&folder) {
+            continue;
+        }
+        let Ok(raw) = super::file_reads::read(&folder.join("manifest.json"), 1024 * 1024) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<super::meetings::Manifest>(&raw) else {
+            continue;
+        };
+        if !matches!(manifest.status.as_deref(), Some("recording" | "starting"))
+            || manifest
+                .created_at_ms
+                .is_none_or(|made| made.abs_diff(start_ms) > START_TOLERANCE_MS)
+        {
+            continue;
+        }
+        if found.replace(folder).is_some() {
+            return None;
+        }
+    }
+    found
 }
 
 /// The notes in a meeting folder, or empty when there are none or the file cannot be read.
@@ -175,6 +204,136 @@ pub fn preserve_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const NOW_MS: i64 = 1_800_000_120_000;
+    const START_MS: i64 = NOW_MS - 120_000;
+
+    fn folder_fixture(name: &str) -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("live-folder-{name}-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn manifest(root: &Path, id: &str, status: &str, created_at_ms: i64) -> PathBuf {
+        let folder = root.join(id);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("manifest.json"),
+            serde_json::json!({"id": id, "status": status, "created_at_ms": created_at_ms})
+                .to_string(),
+        )
+        .unwrap();
+        folder
+    }
+
+    fn folder_from_no_id_status(root: &Path) -> Option<PathBuf> {
+        let status: serde_json::Value = serde_json::from_str(
+            r#"{"protocol":4,"meeting":{"state":"recording","title":null,"elapsed_seconds":120}}"#,
+        )
+        .unwrap();
+        let meeting = &status["meeting"];
+        let start_ms = NOW_MS - meeting["elapsed_seconds"].as_i64().unwrap() * 1000;
+        find_folder(root, meeting["id"].as_str(), Some(start_ms))
+    }
+
+    #[test]
+    fn no_id_status_finds_current_recording() {
+        let root = folder_fixture("current");
+        let current = manifest(&root, "1800000000000-45464", "recording", START_MS);
+        assert_eq!(folder_from_no_id_status(&root), Some(current));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_id_status_ignores_previous_unfinished_recording() {
+        let root = folder_fixture("unfinished");
+        let previous = manifest(
+            &root,
+            "1799996400000-45464",
+            "recording",
+            START_MS - 3_600_000,
+        );
+        write_notes(&previous, "previous notes").unwrap();
+        assert_eq!(folder_from_no_id_status(&root), None);
+        let current = manifest(&root, "1800000000000-45464", "recording", START_MS);
+        assert_eq!(folder_from_no_id_status(&root), Some(current));
+        assert_eq!(read_notes(&previous), "previous notes");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_id_status_ignores_completed_recording() {
+        let root = folder_fixture("completed");
+        manifest(&root, "1800000000000-45464", "complete", START_MS);
+        assert_eq!(folder_from_no_id_status(&root), None);
+        let current = manifest(&root, "1800000000001-45464", "recording", START_MS + 1);
+        assert_eq!(folder_from_no_id_status(&root), Some(current));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_id_status_rejects_two_candidates() {
+        let root = folder_fixture("ambiguous");
+        manifest(&root, "1800000000000-1", "recording", START_MS);
+        manifest(&root, "1800000000001-2", "starting", START_MS + 1);
+        assert_eq!(folder_from_no_id_status(&root), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recording_id_wins_over_start_time_candidates() {
+        let root = folder_fixture("id");
+        let current = manifest(&root, "1800000000000-1", "recording", START_MS);
+        manifest(&root, "1800000000001-2", "recording", START_MS + 1);
+        assert_eq!(
+            find_folder(&root, Some("1800000000000-1"), Some(START_MS)),
+            Some(current)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_id_status_accepts_starting_within_the_tolerance_only() {
+        let root = folder_fixture("tolerance");
+        for offset in [-90_001, -90_000, 90_000, 90_001] {
+            let current = manifest(&root, "1800000000000-1", "starting", START_MS + offset);
+            let expected = (offset.abs() <= 90_000).then(|| current.clone());
+            assert_eq!(folder_from_no_id_status(&root), expected, "offset {offset}");
+            fs::remove_dir_all(current).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_id_status_requires_a_valid_manifest_and_creation_time() {
+        let root = folder_fixture("invalid");
+        let folder = root.join("1800000000000-1");
+        fs::create_dir_all(&folder).unwrap();
+        assert_eq!(folder_from_no_id_status(&root), None);
+        for raw in [
+            "{",
+            r#"{"status":"recording"}"#,
+            r#"{"created_at_ms":1800000000000}"#,
+            r#"{"status":"recording","created_at_ms":"1800000000000"}"#,
+        ] {
+            fs::write(folder.join("manifest.json"), raw).unwrap();
+            assert_eq!(folder_from_no_id_status(&root), None);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn folder_lookup_requires_start_time_and_never_falls_back_from_an_explicit_id() {
+        let root = folder_fixture("no-guess");
+        manifest(&root, "1800000000000-1", "recording", START_MS);
+        assert_eq!(find_folder(&root, None, None), None);
+        for hint in ["", "../1800000000000-1", "1800000000001-1"] {
+            assert_eq!(find_folder(&root, Some(hint), Some(START_MS)), None);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_pipeline_failure_is_visible_until_a_summary_arrives() {
@@ -277,7 +436,7 @@ mod tests {
         write_notes(&previous, "meeting A notes").unwrap();
         let recovery = root.join("recovery/1800000060000.md");
         for hint in [None, Some("1800000060000-1"), Some("../1800000000000-1")] {
-            let folder = find_folder(&root, hint);
+            let folder = find_folder(&root, hint, None);
             assert_eq!(folder, None);
             assert!(
                 preserve_notes(folder, "meeting B draft", &recovery)
@@ -289,7 +448,7 @@ mod tests {
         }
         let current = root.join("1800000060000-1");
         fs::create_dir_all(&current).unwrap();
-        let folder = find_folder(&root, Some("1800000060000-1"));
+        let folder = find_folder(&root, Some("1800000060000-1"), None);
         assert_eq!(
             preserve_notes(folder, "meeting B draft", &recovery).unwrap(),
             Some(current.clone())
