@@ -464,6 +464,7 @@ impl State {
             footer_minute: 0,
             waker: None,
         };
+        s.load_annotation_options();
         s.rebuild_nav();
         s.refresh_areas();
         s.refresh_list();
@@ -602,6 +603,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        self.cancel_annotation_note();
         self.annotations.open = false;
         self.view = tasks::View::Meetings;
         self.check_open = false;
@@ -2052,6 +2054,15 @@ pub fn spec() -> AppSpec<State> {
         scenes: &[
             ("annotations-list", |s| {
                 annotations::scene(s, "annotations-list")
+            }),
+            ("annotation-review", |s| {
+                annotations::scene(s, "annotation-review")
+            }),
+            ("annotation-drafting", |s| {
+                annotations::scene(s, "annotation-drafting")
+            }),
+            ("annotation-note", |s| {
+                annotations::scene(s, "annotation-note")
             }),
             ("annotation-capture", |s| {
                 annotations::scene(s, "annotation-capture")

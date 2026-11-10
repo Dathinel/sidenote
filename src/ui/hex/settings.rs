@@ -1021,6 +1021,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
         (Page::People, _) => col().key("settings-teams").fill(group_highlight(s,"settings-teams",p)).w_full().child(card("Our team", super::super::teams::section(s,k,p).padding(14.0),p)),
         (Page::Helpers, 0) => col().w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
+            .child(super::super::annotations::agents_section(s,p))
             .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)),p)),
         (Page::Helpers, 1) => super::super::models::view(s,p,rune::el()).key("speech-models").fill(highlight(s,"speech-models",p)),
         (Page::Helpers, _) => col().key("helper-advanced").fill(group_highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))

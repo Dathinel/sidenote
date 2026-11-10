@@ -528,6 +528,9 @@ pub fn scene_all(s: &mut State) {
 
 /// "New meeting", or while Hex records, "Recording 12:34 | Stop".
 pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
+    if s.annotations.open {
+        return super::annotations::new_button(s, p);
+    }
     if s.hex_recording() {
         return recording_pill(s, p, narrow);
     }
