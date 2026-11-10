@@ -2076,6 +2076,7 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("tasks-v2-waiting-edit", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, Some(1));
+                s.tasks.ui.advanced = true;
                 s.tasks.ui.waiting_text = true;
             }),
             ("notes-meeting-after-setup", |s| {
@@ -3185,6 +3186,7 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("tasks-edit", |s| {
                 scene_panel(s, false);
+                s.tasks.ui.due_open = true;
                 s.tasks.inputs.due = rune::TextEdit::new("");
                 s.tasks.inputs.due.focused = true;
             }),
