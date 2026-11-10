@@ -1041,6 +1041,7 @@ pub fn scene(s: &mut State, name: &str) {
     s.ai_notes.name = TextEdit::new("Ravi Menon");
     if let Some(settings) = &mut s.ai_notes.settings {
         settings.your_name = "Ravi Menon".into();
+        settings.engine = "app".into();
     }
     let (page, tab) = match name.trim_end_matches("-expanded") {
         "settings-general" => (Page::General, 0),
@@ -1059,6 +1060,10 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-search" => (Page::Meetings, 0),
         _ => panic!("Unknown Settings scene"),
     };
+    if page == Page::Updates {
+        s.updates.scene = true;
+        s.updates.status.phase = sidenote::updates::Phase::Idle;
+    }
     navigate(s, page, tab);
     if name.ends_with("-expanded") {
         s.hex.shell.advanced.insert(page.name());

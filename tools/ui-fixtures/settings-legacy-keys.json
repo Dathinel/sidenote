@@ -1,0 +1,146 @@
+{
+  "baseline": "600e1c4 (dev.9)",
+  "keys": {
+    "meetings.audio_retention": [
+      "keep-audio"
+    ],
+    "labs.expire_meeting_audio": [
+      "keep-audio"
+    ],
+    "meetings.retention": [
+      "hs-meetings.retention"
+    ],
+    "general.launch_at_login": [
+      "hs-general.launch_at_login"
+    ],
+    "general.sound_effects": [
+      "hs-general.sound_effects"
+    ],
+    "dictation.shortcut": [
+      "hs-dictation.shortcut"
+    ],
+    "dictation.language": [
+      "hs-dictation.language"
+    ],
+    "dictation.max_seconds": [
+      "hs-dictation.max_seconds"
+    ],
+    "meetings.silence_threshold": [
+      "hs-meetings.silence_threshold"
+    ],
+    "meetings.output_folder": [
+      "hs-meetings.output_folder"
+    ],
+    "cloud.api_key": [
+      "hs-cloud.api_key"
+    ],
+    "about.build": [
+      "hs-about.build"
+    ],
+    "general.theme": [
+      "hs-general.theme"
+    ],
+    "dictation.paste_method": [
+      "hs-dictation.paste_method"
+    ],
+    "dictation.remove_filler_words": [
+      "hs-dictation.remove_filler_words"
+    ],
+    "meetings.auto_start": [
+      "hs-meetings.auto_start"
+    ],
+    "meetings.record_my_microphone": [
+      "hs-meetings.record_my_microphone"
+    ],
+    "shortcuts.paste_last": [
+      "hs-shortcuts.paste_last"
+    ],
+    "shortcuts.toggle_meeting": [
+      "hs-shortcuts.toggle_meeting"
+    ],
+    "labs.meeting_finished_event": [
+      "hs-labs.meeting_finished_event"
+    ],
+    "labs.live_captions": [
+      "hs-labs.live_captions"
+    ],
+    "labs.gpu_overlay": [
+      "hs-labs.gpu_overlay"
+    ],
+    "network.proxy": [
+      "hs-network.proxy"
+    ],
+    "diagnostics.log_level": [
+      "hs-diagnostics.log_level"
+    ],
+    "notes.engine": [
+      "notes-off",
+      "notes-scripts",
+      "notes-use-0"
+    ],
+    "notes.helper": [
+      "notes-use-0"
+    ],
+    "notes.model": [
+      "notes-model-0"
+    ],
+    "notes.auto": [
+      "notes-auto"
+    ],
+    "notes.your_name": [
+      "notes-name"
+    ],
+    "agent-instructions.notes": [
+      "instructions-input-0"
+    ],
+    "agent-instructions.tasks": [
+      "instructions-input-1"
+    ],
+    "teams.name": [
+      "team-name"
+    ],
+    "teams.members": [
+      "team-members"
+    ],
+    "teams.aliases": [
+      "team-aliases"
+    ],
+    "meeting_languages": [
+      "meeting-language-en",
+      "meeting-language-hi",
+      "meeting-language-bn",
+      "meeting-language-ta",
+      "meeting-language-te",
+      "meeting-language-mr"
+    ],
+    "pipeline.profile": [
+      "meeting-language-mode"
+    ],
+    "pipeline.language_mode": [
+      "meeting-language-mode"
+    ],
+    "hex.vocabulary": [
+      "hex-term",
+      "hex-sounds",
+      "hex-vocab-add"
+    ],
+    "hex.model": [
+      "hex-model-parakeet-v3"
+    ],
+    "features.tasks": [
+      "feature-Tasks"
+    ],
+    "features.memory": [
+      "feature-Memory"
+    ],
+    "features.daily_check": [
+      "feature-Daily check"
+    ],
+    "features.projects": [
+      "feature-Projects"
+    ],
+    "features.other_devices": [
+      "feature-Other devices"
+    ]
+  }
+}

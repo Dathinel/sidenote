@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "t": 0.2,
+      "type": "tap",
+      "key": "hex-filter"
+    },
+    {
+      "t": 0.4,
+      "type": "type",
+      "text": "silence"
+    },
+    {
+      "t": 1.0,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 1.6,
+      "type": "mark",
+      "name": "end"
+    }
+  ]
+}

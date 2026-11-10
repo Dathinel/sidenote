@@ -384,6 +384,39 @@ if ($Dev3) {
         $shots += ,@("tasks-v2-rebuild-blocked-$width", 'tasks-v2-rebuild-confirm', "${width}x1400", 'dev3-rebuild-blocked.json', @('--at', 'mark:end'))
     }
 }
+$settingsScenes = @(
+    'settings-general',
+    'settings-recording',
+    'settings-summaries',
+    'settings-tasks',
+    'settings-prompts',
+    'settings-people',
+    'settings-hex',
+    'settings-helpers',
+    'settings-speech',
+    'settings-helper-advanced',
+    'settings-appearance',
+    'settings-sync',
+    'settings-updates',
+    'settings-search',
+    'settings-sidebar-open',
+    'settings-sidebar-folded',
+    'settings-recording-expanded',
+    'settings-summaries-expanded',
+    'settings-tasks-expanded',
+    'settings-hex-expanded',
+    'settings-helper-advanced-expanded',
+    'settings-sync-expanded',
+    'settings-updates-expanded',
+    'settings-helpers-expanded'
+)
+foreach ($scene in $settingsScenes) {
+    foreach ($width in @(1280, 640)) {
+        $script = if ($scene -eq 'settings-search') { 'settings-search.json' } else { $null }
+        $extra = if ($script) { @('--at', 'mark:end') } else { @() }
+        $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
+    }
+}
 $priorAppData = $env:APPDATA
 $priorLocalAppData = $env:LOCALAPPDATA
 $priorState = $env:SIDENOTE_STATE_DIR
