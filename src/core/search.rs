@@ -10,6 +10,7 @@ pub struct Snippet {
 pub enum SearchSource {
     Title,
     Summary,
+    Notes,
     Transcript,
 }
 #[derive(Clone, Debug)]
@@ -89,6 +90,7 @@ impl Meeting {
                     .texts()
                     .map(|text| (text, SearchSource::Summary)),
             )
+            .chain(std::iter::once((self.notes.as_str(), SearchSource::Notes)))
             .chain(
                 self.lines
                     .iter()
