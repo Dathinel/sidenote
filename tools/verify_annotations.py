@@ -42,16 +42,18 @@ for scene in ("annotations-list", "annotation-capture", "annotations-empty", "an
             elif scene == "annotation-review":
                 assert "annotation-send" in keyed and "annotation-send-disclosure" in keyed, name
                 assert any("Sends: 2 original PNGs" in t and "3 marks" in t and "timed words" in t for t in texts), name
-                mask = keyed["review-mask-1-0"]["rect"]
-                px,py = int(mask[0]+mask[2]/2),int(mask[1]+mask[3]/2)
+                rect = keyed["review-image-1"]["rect"]
+                px,py = int(rect[0]+(.31+.45/2)*rect[2]),int(rect[1]+(.06+.08/2)*rect[3])
                 if 0 <= px < width and 0 <= py < 800:
                     assert Image.open(root / f"{name}.png").convert("RGB").getpixel((px,py)) == (0,0,0), (name,"Redaction preview is not opaque black")
                 assert keyed["review-include-1"]["role"] == "checkbox", name
+                assert "1 black-out box" in texts and "review-undo-1" in keyed, name
             elif scene == "annotation-drafting":
                 assert "annotation-draft-label" in keyed and "annotation-note-cancel" in keyed, name
                 assert "annotation-note-stream" in keyed, name
-                assert any("Frame 1 draft" in t for t in texts), name
-                assert any("Frame 2 draft" in t for t in texts), name
+                assert "Writing the annotation note..." in texts, name
+                assert "note-image-1" in keyed and "note-image-2" in keyed, name
+                assert not any("waiting for its draft" in t for t in texts), name
             elif scene == "annotation-note":
                 assert "annotation-note-title" in keyed and "annotation-note-summary" in keyed, name
                 assert "annotation-note-edit" in keyed and "annotation-draft-label" not in keyed, name
