@@ -34,7 +34,7 @@ impl TaskStatus {
         match self {
             Self::Todo => "To do",
             Self::Waiting => "Waiting on",
-            Self::Review => "Review",
+            Self::Review => "In review",
         }
     }
 }
@@ -187,8 +187,29 @@ impl Teams {
             .map(|t| t.name.clone())
             .unwrap_or_else(|| "No team".into())
     }
+    pub fn owner_name(&self, owner: &str) -> String {
+        let mut matches = self.teams.iter().flat_map(|team| {
+            team.members.iter().filter(move |member| {
+                name(member) == name(owner)
+                    || team.aliases.iter().any(|(alias, target)| {
+                        name(alias) == name(owner) && name(target) == name(member)
+                    })
+            })
+        });
+        let Some(first) = matches.next() else {
+            return owner.to_string();
+        };
+        if matches.any(|other| name(other) != name(first)) {
+            owner.to_string()
+        } else {
+            first.clone()
+        }
+    }
     pub fn apply(&self, tasks: &mut [TaskItem]) {
         for t in tasks {
+            if let Some(owner) = &t.owner {
+                t.owner = Some(self.owner_name(owner));
+            }
             t.team = self.resolve(t.owner.as_deref(), Some(&t.team));
         }
     }
@@ -713,6 +734,23 @@ mod tests {
         assert_eq!(teams.resolve(Some("Someone"), Some("delivery")), "Delivery");
         assert_eq!(teams.resolve(None, Some("Imaginary")), "No team");
         assert_eq!(teams.resolve(None, None), "No team");
+        assert_eq!(teams.owner_name(" alex c "), "Alex Chen");
+        assert_eq!(teams.owner_name("ALEX CHEN"), "Alex Chen");
+        assert_eq!(teams.owner_name("Robin"), "Robin");
+        let f = Fixture::new(
+            json!([{"id":"a","title":"First","owner":"Alex C"},{"id":"b","title":"Second","owner":"Alex Chen"}]),
+        );
+        let mut tasks = f.tasks(&Overrides::default());
+        teams.apply(&mut tasks);
+        let groups = core::group_tasks(
+            &tasks,
+            &core::TaskFilter::default(),
+            TaskGrouping::Owner,
+            chrono::NaiveDate::MIN,
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].label, "Alex Chen");
+        assert_eq!(groups[0].rows.len(), 2);
     }
     #[test]
     fn each_grouping_keeps_subtasks_with_parent() {
@@ -744,7 +782,7 @@ mod tests {
         );
         assert_eq!(
             status.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(),
-            ["Waiting on", "Review"]
+            ["Waiting on", "In review"]
         );
     }
     #[test]

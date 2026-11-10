@@ -1202,14 +1202,22 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             )
             .key("live-name"),
         )
-        .children(
-            quick
-                .is_none()
-                .then(|| roles::META.wrap("Naming\u{2026}", p.faint).key("live-naming").role("status")),
-        )
+        .children(quick.is_none().then(|| {
+            roles::META
+                .wrap("Naming\u{2026}", p.faint)
+                .key("live-naming")
+                .role("status")
+        }))
         .child(
             roles::SECTION
-                .wrap(if slow { "The summary is taking a while" } else { "Writing summary" }, p.ink)
+                .wrap(
+                    if slow {
+                        "The summary is taking a while"
+                    } else {
+                        "Writing summary"
+                    },
+                    p.ink,
+                )
                 .mt(if narrow { 6.0 } else { 18.0 })
                 .role("status"),
         )
@@ -1224,15 +1232,24 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .child(
             roles::SMALL
                 .wrap(
-                    if slow {
-                        "The summary will appear in Sidenote when it is ready. You do not need to wait here."
-                    } else {
-                        "This usually takes a minute or two. The summary opens here when it is ready."
-                    },
+                    super::notes_status::running_message(
+                        s.ai_notes
+                            .settings
+                            .as_ref()
+                            .and_then(|n| n.effective_helper())
+                            .map(|h| h.name())
+                            .unwrap_or("Claude Code"),
+                        chrono::Utc::now().timestamp_millis()
+                            - s.live
+                                .as_ref()
+                                .and_then(|l| l.stopped)
+                                .map(|t| t.elapsed().as_millis() as i64)
+                                .unwrap_or(0),
+                    ),
                     p.soft,
                 )
                 .max_w(460.0)
-            .mt(6.0),
+                .mt(6.0),
         );
     if !s.live_notes.text.trim().is_empty() {
         c = c.child(

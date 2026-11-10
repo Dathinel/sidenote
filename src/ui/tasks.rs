@@ -96,6 +96,7 @@ pub struct TasksState {
     pub team_members: TextEdit,
     pub team_aliases: TextEdit,
     pub teams_notice: Option<String>,
+    pub clear_confirm: Option<i64>,
     pub subtask_input: TextEdit,
     pub waiting_input: TextEdit,
     pub group_menu: bool,
@@ -162,6 +163,7 @@ impl TasksState {
             team_members: TextEdit::new(""),
             team_aliases: TextEdit::new(""),
             teams_notice: None,
+            clear_confirm: None,
             subtask_input: TextEdit::new(""),
             waiting_input: TextEdit::new(""),
             store,
@@ -1292,7 +1294,7 @@ fn summary_line(s: &State, p: Palette) -> El {
     line.child(roles::SMALL.wrap(format!("{} open.", t.counts.open), p.faint))
 }
 
-fn title_row(narrow: bool, p: Palette) -> El {
+fn title_row(s: &State, k: &Kit, narrow: bool, p: Palette, layer: &mut Vec<El>) -> El {
     let add = pressable(
         row()
             .gap(8.0)
@@ -1313,7 +1315,13 @@ fn title_row(narrow: bool, p: Palette) -> El {
         .justify_between()
         .mb(4.0)
         .child(text_title("Tasks", if narrow { 26.0 } else { 30.0 }, p))
-        .child(add.mb(2.0))
+        .child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .child(add.mb(2.0))
+                .child(redo_older_menu(s, k, p, layer)),
+        )
 }
 
 fn group_label(by: TaskGrouping) -> &'static str {
@@ -1973,12 +1981,12 @@ fn cleared_line(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         );
         "Change"
     } else {
-        "Clear old tasks"
+        "Hide unedited tasks from meetings older than..."
     };
     let trigger = link(
         change_text,
         "cleared-change",
-        "Choose which old tasks to clear".into(),
+        "Choose the meeting age for hiding unedited tasks".into(),
     )
     .on_press(|s: &mut State| s.tasks.cleared_menu = !s.tasks.cleared_menu);
     let mut menu = Menu::new("cleared-menu")
@@ -1989,19 +1997,39 @@ fn cleared_line(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     if t.cleared_menu {
         menu = menu.on_close(|s: &mut State| s.tasks.cleared_menu = false);
         for (name, days) in [
-            ("Last 7 days", Some(7)),
-            ("Last 14 days", Some(14)),
-            ("Last 30 days", Some(30)),
+            ("Older than 7 days", Some(7)),
+            ("Older than 14 days", Some(14)),
+            ("Older than 30 days", Some(30)),
             ("Keep all", None),
         ] {
             menu = menu.item(
                 MenuItem::new(name)
                     .checked(days.is_none() && t.cutoff.is_none())
-                    .on_select(move |s: &mut State| s.set_cutoff_days(days)),
+                    .on_select(move |s: &mut State| {
+                        s.tasks.cleared_menu = false;
+                        if let Some(days) = days {
+                            s.tasks.clear_confirm = Some(days);
+                        } else {
+                            s.set_cutoff_days(None);
+                        }
+                    }),
             );
         }
     }
-    line.child(menu.build(k, layer))
+    let mut out = col().w_full().child(line.child(menu.build(k, layer)));
+    if let Some(days) = t.clear_confirm {
+        let cutoff = t.today - Duration::days(days);
+        let count = t
+            .all
+            .iter()
+            .filter(|task| core::is_cleared(task, Some(cutoff)))
+            .count();
+        out = out.child(super::widgets::banner("Hide old tasks?", format!("Hide {count} unedited tasks from meetings older than {days} days? This includes open and finished tasks. Tasks added by hand or edited stay visible. You can show hidden tasks again here."), super::widgets::BannerKind::Info, p)
+            .child(row().gap(8.0).flex_wrap()
+                .child(button("Keep tasks", "clear-cancel", true, p).on_press(|s: &mut State| s.tasks.clear_confirm = None))
+                .child(button(format!("Hide {count} tasks"), "clear-confirm", false, p).on_press(move |s: &mut State| { s.tasks.clear_confirm = None; s.set_cutoff_days(Some(days)); }))));
+    }
+    out
 }
 
 fn empty_note(s: &State, p: Palette) -> El {
@@ -2886,7 +2914,7 @@ fn list_column(
         .px(side)
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0)
-        .child(title_row(narrow, p))
+        .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(summary_line(s, p).mb(16.0))
         .child(toolbar(s, k, p, layer).mb(10.0));
@@ -2913,7 +2941,14 @@ fn list_column(
 
 fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El {
     let mut out = col().w_full().gap(10.0);
-    out = out.child(roles::META.wrap(format!("Team: {}", t.team), p.soft));
+    out = out.child(roles::META.wrap(
+        if t.team == "No team" {
+            "Team: none".into()
+        } else {
+            format!("Team: {} (from owner)", t.team)
+        },
+        p.soft,
+    ));
     out = out.child(roles::GROUP.wrap(if t.done { "Status: Done" } else { "Status" }, p.ink));
     let mut choices = row().w_full().gap(6.0).flex_wrap();
     for status in [
@@ -2969,6 +3004,12 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                     .child(
                         button("Save", "waiting-save", true, p)
                             .on_press(move |s: &mut State| s.save_waiting(&id, index)),
+                    )
+                    .child(
+                        button("Back", "waiting-back", false, p).on_press(|s: &mut State| {
+                            s.tasks.ui.waiting_text = false;
+                            s.tasks.waiting_input = TextEdit::default();
+                        }),
                     ),
             );
         } else {
@@ -3102,7 +3143,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
     out
 }
 
-fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+fn redo_older_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let older: Vec<_> = s
         .meetings
         .iter()
@@ -3113,8 +3154,8 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     }
     let mut menu = Menu::new("redo-older-tasks")
         .trigger(
-            super::area::button("Task list options", "redo-meeting-open", p)
-                .label("Rebuild tasks from old summaries")
+            super::area::button("...", "redo-meeting-open", p)
+                .label("Task list options")
                 .on_press(|s: &mut State| s.tasks.redo_menu = !s.tasks.redo_menu),
         )
         .open(s.tasks.redo_menu)
@@ -3139,11 +3180,12 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
             ));
         }
     }
-    let mut out = col()
-        .w_full()
-        .gap(10.0)
-        .mb(12.0)
-        .child(menu.build(k, layer).self_start());
+    menu.build(k, layer)
+}
+
+fn redo_older_control(s: &State, _k: &Kit, p: Palette, _layer: &mut Vec<El>) -> El {
+    let mut out = col().w_full().gap(10.0);
+
     if let Some(problem) = &s.tasks.redo_problem {
         out = out.child(
             super::widgets::banner(
@@ -3151,6 +3193,10 @@ fn redo_older_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
                 problem,
                 super::widgets::BannerKind::Problem,
                 p,
+            )
+            .child(
+                super::area::button("Open AI notes settings", "redo-open-settings", p)
+                    .on_press(|s: &mut State| s.open_ai_notes()),
             )
             .child(
                 button("Dismiss", "redo-problem-dismiss", false, p)

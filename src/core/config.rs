@@ -255,11 +255,10 @@ impl Config {
             return Err(store_io::invalid("Unsupported config.json version"));
         }
         let mut notes = notes.clone();
-        let was_on = config
-            .notes
-            .as_ref()
-            .is_some_and(|s| s.engine == "app" && s.helper.is_some() && s.enabled_at_ms.is_some());
-        if notes.engine == "app" && notes.helper.is_some() {
+        let was_on = config.notes.as_ref().is_some_and(|s| {
+            s.engine == "app" && s.effective_helper().is_some() && s.enabled_at_ms.is_some()
+        });
+        if notes.engine == "app" && notes.effective_helper().is_some() {
             if !was_on {
                 notes.enabled_at_ms = Some(chrono::Utc::now().timestamp_millis());
             } else {

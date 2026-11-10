@@ -19,5 +19,5 @@ for t in todos:
     if 'title' in t:t['task']=t['title']
 write(folder/'english-summary.json',dict(title='Workshop planning',context=['Plan an invented paper workshop.'],todo=todos))
 write(folder/'manifest.json',dict(status='complete',created_at_ms=1794195000000,duration_ms=1800000))
-write(folder/'tasks.json',dict(meeting_project='Northwind Field Guide',tasks=[dict(i=i,project='Northwind Field Guide',mine=i%2==0) for i in range(len(todos))]))
+write(folder/'tasks.json',dict(meeting_project='Northwind Field Guide',tasks=[dict(i=i,project='Northwind Field Guide',mine=False) for i in range(len(todos))]))
 write(root/'teams.json',dict(teams=[dict(name='Design',members=['Alex Chen','Jamie Park'],aliases={'Alex C':'Alex Chen'}),dict(name='Delivery',members=['Morgan Lee'],aliases={'M Lee':'Morgan Lee'})]))
