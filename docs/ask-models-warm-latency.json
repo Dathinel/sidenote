@@ -1,0 +1,101 @@
+[
+  {
+    "first_text_s": 7.2625399000244215,
+    "result_s": 11.680288500036113,
+    "answer": "A stand-up is a short, recurring team meeting, usually daily and about 15 minutes, often held standing to keep it brief.\nEach person covers what they did, what they will do next, and what is blocking them, so the team stays aligned and blockers get cleared quickly.",
+    "error": null,
+    "model": "claude-opus-5-5",
+    "case": "warm-default",
+    "run": 1,
+    "ready_s": 7.318865400040522,
+    "total_s": 11.680288500036113
+  },
+  {
+    "first_text_s": 7.276109899976291,
+    "result_s": 9.806294500012882,
+    "answer": "A stand-up is a short, recurring team meeting, usually daily and about 15 minutes, often held standing to keep it brief.\nEach person shares what they did, what they plan next, and any blockers, so the team stays in sync and problems surface early.",
+    "error": null,
+    "model": "claude-opus-5-5",
+    "case": "warm-default",
+    "run": 2,
+    "ready_s": 7.318865400040522,
+    "total_s": 9.806294500012882
+  },
+  {
+    "first_text_s": 7.242323200101964,
+    "result_s": 9.102718700072728,
+    "answer": "A stand-up is a short, recurring team meeting, usually daily and about 15 minutes, often held standing to keep it brief.\nEach person shares what they did, what they plan next, and any blockers, so the team stays aligned and problems surface early.",
+    "error": null,
+    "model": "claude-opus-5-5",
+    "case": "warm-default",
+    "run": 3,
+    "ready_s": 7.318865400040522,
+    "total_s": 9.102718700072728
+  },
+  {
+    "first_text_s": 9.014168900088407,
+    "result_s": 11.16000710008666,
+    "answer": "A stand-up is a short daily meeting where a team briefly shares what they did yesterday, what they plan to do today, and any blockers in their way. Its purpose is to keep everyone aligned and surface problems early, usually in 15 minutes or less.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "cold-haiku",
+    "run": 1,
+    "ready_s": 4.222100400016643,
+    "total_s": 14.740531100076623
+  },
+  {
+    "first_text_s": 16.249870999949053,
+    "result_s": 18.711750599904917,
+    "answer": "A stand-up is a short daily meeting where a team briefly shares what they did yesterday, what they plan to do today, and any blockers. It keeps everyone aligned and surfaces problems early, and it's meant to stay under about 15 minutes.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "cold-haiku",
+    "run": 2,
+    "ready_s": 8.437142199953087,
+    "total_s": 22.370209999964572
+  },
+  {
+    "first_text_s": 8.62141179991886,
+    "result_s": 9.680624799919315,
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes or less, where each person shares what they did yesterday, what they plan to do today, and any blockers.\nIts purpose is to keep the team aligned and surface problems early, not to solve them in the meeting.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "cold-haiku",
+    "run": 3,
+    "ready_s": 3.8462479999288917,
+    "total_s": 11.998402399942279
+  },
+  {
+    "first_text_s": 11.298144500004128,
+    "result_s": 13.363307200022973,
+    "answer": "A stand-up is a short daily team meeting, held on your feet, where each person covers what they did, what they'll do next, and any blockers. It keeps the team aligned and surfaces problems early, usually in 15 minutes or less.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "warm-haiku",
+    "run": 1,
+    "ready_s": 3.8388900000136346,
+    "total_s": 13.363307200022973
+  },
+  {
+    "first_text_s": 6.970397399971262,
+    "result_s": 9.13878359994851,
+    "answer": "A stand-up is a short daily team meeting, held on your feet, where each person covers what they did, what they'll do next, and any blockers. It keeps the team aligned and surfaces problems early, usually in 15 minutes or less.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "warm-haiku",
+    "run": 2,
+    "ready_s": 3.8388900000136346,
+    "total_s": 9.13878359994851
+  },
+  {
+    "first_text_s": 5.724366199923679,
+    "result_s": 7.093535199994221,
+    "answer": "A stand-up is a short daily team meeting, held on your feet, where each person covers what they did, what they'll do next, and any blockers.\nIt keeps the team aligned and surfaces problems early, usually in 15 minutes or less.",
+    "error": null,
+    "model": "claude-haiku-5-5",
+    "case": "warm-haiku",
+    "run": 3,
+    "ready_s": 3.8388900000136346,
+    "total_s": 7.093535199994221
+  }
+]
