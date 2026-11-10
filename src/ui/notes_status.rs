@@ -226,7 +226,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     match job.state {
         JobState::NoHelper => {
             buttons = buttons.child(
-                button("Choose a agent", "notes-state-setup", p)
+                button("Choose an agent", "notes-state-setup", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
@@ -245,7 +245,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         JobState::HelperMissing => {
             buttons = buttons.child(
-                button("Choose a agent", "notes-state-settings", p)
+                button("Choose an agent", "notes-state-settings", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
@@ -260,7 +260,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     p,
                 ))
                 .child(
-                    button("Choose a agent", "notes-state-settings", p)
+                    button("Choose an agent", "notes-state-settings", p)
                         .on_press(|s: &mut State| s.open_ai_notes()),
                 )
         }

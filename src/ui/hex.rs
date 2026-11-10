@@ -1268,7 +1268,7 @@ impl Section {
             Self::Connect => "Connect an AI app to your local meeting knowledge.",
             Self::Teams => "Group tasks by the people who own them.",
             Self::AiNotes => {
-                "Choose a agent and the instructions it uses to write meeting summaries."
+                "Choose an agent and the instructions it uses to write meeting summaries."
             }
             Self::Updates => "Keep Sidenote up to date from your update folder.",
             Self::MeetingModels => "Choose spoken languages and download meeting models.",

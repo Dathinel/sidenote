@@ -1188,7 +1188,7 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
         SETUP_STEPS
     };
     let card = card(p).key("today-ai-notes").mb(16.0)
-        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need a agent" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
+        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need an agent" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
         .child(roles::SMALL.wrap("After you turn on Meeting summary, meeting text goes to Anthropic through your Claude Code account.", p.soft));
     let mut actions = row().flex_wrap().gaps(8.0, 8.0);
     if helper.is_none() {

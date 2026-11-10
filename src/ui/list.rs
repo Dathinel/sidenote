@@ -193,7 +193,7 @@ fn home_row(
                     {
                         "Turn on Meeting summary"
                     } else {
-                        "Choose a agent"
+                        "Choose an agent"
                     }
                 } else if matches!(job.state, core::notes::JobState::TooLong { .. }) {
                     "Use first 4 hours"

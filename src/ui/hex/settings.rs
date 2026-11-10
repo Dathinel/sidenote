@@ -109,7 +109,7 @@ impl Page {
             Self::Prompts => &icons::PROMPTS,
             Self::People => &icons::PEOPLE,
             Self::Hex => &icons::MIC,
-            Self::Helpers => &icons::BOT,
+            Self::Helpers => &icons::BRAIN,
             Self::Appearance => &icons::PALETTE,
             Self::Sync => &icons::DEVICE,
             Self::Updates => &icons::UPDATES,
@@ -1235,6 +1235,7 @@ mod tests {
             ("ask-chat-thinking-row", "lucide-message-square"),
         ];
         let mut seen = HashSet::new();
+        seen.insert(Page::Helpers.icon().name);
         assert_eq!(icons::STROKE_WIDTH, 2.25);
         for (key, name) in rows {
             let icon = row_icon(key);
