@@ -1,4 +1,6 @@
 //! Owner-controlled company claims. records.json is authoritative; Markdown is a projection.
+#[cfg(test)]
+mod undo_tests;
 use super::{
     state_dir,
     store_io::{self, fingerprint, invalid},
@@ -129,6 +131,15 @@ pub struct PendingProposal {
     pub status: ProposalStatus,
     pub created_at: String,
     pub decided_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MemoryUndo {
+    pub before: Vec<MemoryRecord>,
+    pub after: Vec<MemoryRecord>,
+    pub proposal_before: Option<PendingProposal>,
+    pub proposal_after: Option<PendingProposal>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryEvent {
@@ -136,6 +147,10 @@ pub struct MemoryEvent {
     pub operation: String,
     pub at: String,
     pub proposal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<MemoryUndo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_at: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationInfo {
@@ -558,6 +573,77 @@ impl MemoryStore {
             ProposalStatus::Rejected
         };
         file.proposals[index].decided_at = Some(Local::now().to_rfc3339());
+        capture_undo(&before, &mut file);
+        self.save(&before, &file)
+    }
+    pub fn comment_proposal(&self, id: &str, comment: &str) -> io::Result<()> {
+        if comment.trim().is_empty() || comment.chars().count() > 4000 {
+            return Err(invalid("Write a comment of up to 4000 characters"));
+        }
+        let _lock = store_io::lock(&self.path("records.lock"))?;
+        let mut file = self.load_locked()?;
+        let before = file.clone();
+        let proposal = file
+            .proposals
+            .iter_mut()
+            .find(|p| p.proposal.id == id && p.status == ProposalStatus::Pending)
+            .ok_or_else(|| invalid("This proposal is no longer waiting"))?;
+        proposal.comment = Some(comment.trim().into());
+        self.save(&before, &file)
+    }
+    pub fn undo_event(&self, record_id: &str, at: &str) -> io::Result<()> {
+        let _lock = store_io::lock(&self.path("records.lock"))?;
+        let mut file = self.load_locked()?;
+        let before = file.clone();
+        let index = file
+            .events
+            .iter()
+            .position(|e| e.record_id == record_id && e.at == at)
+            .ok_or_else(|| invalid("This change is no longer available"))?;
+        if file.events[index].undone_at.is_some() {
+            return Err(invalid("This change was already undone"));
+        }
+        let undo = file.events[index]
+            .undo
+            .clone()
+            .ok_or_else(|| invalid("This change has no saved previous state"))?;
+        if undo.before.iter().any(|r| blocked(&file, &r.sources))
+            || undo
+                .proposal_before
+                .as_ref()
+                .is_some_and(|p| blocked(&file, &p.proposal.sources))
+        {
+            return Err(invalid("Undo cannot restore a forgotten source"));
+        }
+        for expected in &undo.after {
+            let current = file.records.iter().find(|r| r.id == expected.id);
+            if serde_json::to_value(current)? != serde_json::to_value(Some(expected))? {
+                return Err(invalid(
+                    "Memory changed after this decision. Undo was not applied",
+                ));
+            }
+        }
+        if let Some(expected) = &undo.proposal_after {
+            let current = file
+                .proposals
+                .iter()
+                .find(|p| p.proposal.id == expected.proposal.id);
+            if serde_json::to_value(current)? != serde_json::to_value(Some(expected))? {
+                return Err(invalid(
+                    "The proposal changed after this decision. Undo was not applied",
+                ));
+            }
+        }
+        file.records
+            .retain(|r| !undo.after.iter().any(|a| a.id == r.id));
+        file.records.extend(undo.before);
+        if let Some(proposal) = undo.proposal_before {
+            file.proposals
+                .retain(|p| p.proposal.id != proposal.proposal.id);
+            file.proposals.push(proposal);
+        }
+        file.events[index].undone_at = Some(Local::now().to_rfc3339());
+        event(&mut file, record_id, "undo_decision", None);
         self.save(&before, &file)
     }
     pub fn edit_record(&self, id: &str, text: &str) -> io::Result<()> {
@@ -584,11 +670,13 @@ impl MemoryStore {
             &self.root,
             "memory/records.json",
             |file: &mut MemoryFile| {
+                let before = file.clone();
                 let current = active_record(file, &base.id)?;
                 *current = super::live_edit::merge(base, &mine, current)?;
                 current.basis = Basis::OwnerConfirmed;
                 current.updated_at = Local::now().to_rfc3339();
                 event(file, &base.id, "edit", None);
+                capture_undo(&before, file);
                 Ok(())
             },
         )?;
@@ -633,6 +721,23 @@ impl MemoryStore {
         record.sources.clear();
         record.status = RecordStatus::Forgotten;
         record.updated_at = Local::now().to_rfc3339();
+        // Forgetting also removes receipts containing the claim or its proposal text.
+        for event in &mut file.events {
+            if event.record_id == id
+                || event.undo.as_ref().is_some_and(|u| {
+                    u.before
+                        .iter()
+                        .chain(&u.after)
+                        .any(|r| r.id == id || r.source_fingerprint == forgotten)
+                        || u.proposal_before.iter().chain(&u.proposal_after).any(|p| {
+                            p.proposal.target_id.as_deref() == Some(id)
+                                || source_fingerprint(&p.proposal.sources) == forgotten
+                        })
+                })
+            {
+                event.undo = None;
+            }
+        }
         // Proposals can contain the same claim and rationale. Remove those copies in this store.
         file.proposals.retain(|p| {
             p.proposal.target_id.as_deref() != Some(id)
@@ -657,6 +762,7 @@ impl MemoryStore {
         change(record);
         record.updated_at = Local::now().to_rfc3339();
         event(&mut file, id, operation, None);
+        capture_undo(&before, &mut file);
         self.save(&before, &file)
     }
 }
@@ -688,6 +794,7 @@ fn merge_proposals(
                 status: ProposalStatus::Pending,
                 created_at: created_at.into(),
                 decided_at: None,
+                comment: None,
             });
         }
     }
@@ -705,7 +812,43 @@ fn event(file: &mut MemoryFile, id: &str, operation: &str, proposal: Option<&str
         operation: operation.into(),
         at: Local::now().to_rfc3339(),
         proposal_id: proposal.map(str::to_owned),
+        undo: None,
+        undone_at: None,
     });
+}
+fn capture_undo(before: &MemoryFile, file: &mut MemoryFile) {
+    let changed: Vec<_> = file
+        .records
+        .iter()
+        .filter(|after| {
+            let old = before.records.iter().find(|r| r.id == after.id);
+            serde_json::to_value(old).unwrap() != serde_json::to_value(Some(*after)).unwrap()
+        })
+        .cloned()
+        .collect();
+    let old = before
+        .records
+        .iter()
+        .filter(|r| changed.iter().any(|a| a.id == r.id))
+        .cloned()
+        .collect();
+    if let Some(event) = file.events.last_mut() {
+        let id = event.proposal_id.as_deref();
+        event.undo = Some(MemoryUndo {
+            before: old,
+            after: changed,
+            proposal_before: before
+                .proposals
+                .iter()
+                .find(|p| Some(p.proposal.id.as_str()) == id)
+                .cloned(),
+            proposal_after: file
+                .proposals
+                .iter()
+                .find(|p| Some(p.proposal.id.as_str()) == id)
+                .cloned(),
+        });
+    }
 }
 fn blocked(file: &MemoryFile, sources: &[MemorySource]) -> bool {
     let fingerprint = source_fingerprint(sources);
