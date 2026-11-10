@@ -9,6 +9,7 @@ param(
     [string[]]$Themes = @('dark', 'light')
     , [switch]$Trees
     , [string]$StateRoot = ""
+    , [ValidateRange(0.5, 3.0)][double]$Scale = 1.0
 )
 # Renders the UI headlessly, dark and light, into artifacts/ui. Each scene gets its own empty
 # state folder, so ticks, task edits, project renames and Ask threads never touch the real
