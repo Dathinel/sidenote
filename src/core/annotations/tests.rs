@@ -98,7 +98,7 @@ fn word_window_includes_overlapping_words_at_both_three_second_boundaries() {
         (2.0, 2.99, "before"),
         (2.9, 3.0, "left"),
         (6.0, 6.5, "during"),
-        (10.0, 10.2, "right"),
+        (9.9, 10.0, "right."),
         (10.01, 11.0, "after"),
     ]
     .into_iter()
@@ -113,14 +113,211 @@ fn word_window_includes_overlapping_words_at_both_three_second_boundaries() {
             .iter()
             .map(|w| w.text.as_str())
             .collect::<Vec<_>>(),
-        ["left", "during", "right"]
+        ["left", "during", "right."]
     );
     let early = Mark {
         t0: 0.2,
         t1: 0.3,
         ..Default::default()
     };
-    assert_eq!(c.words_for_mark(&early).len(), 2);
+    assert_eq!(c.words_for_mark(&early).len(), 3);
+}
+
+#[test]
+fn nearby_words_finish_a_sentence_or_segment_without_exceeding_eight_seconds() {
+    let mut c = read_capture(&fixture()).unwrap();
+    let words = c.words_for_mark(&c.data.marks[1]);
+    assert_eq!(words.last().unwrap().text, "Friday.");
+    c.data.transcript.words = vec![
+        Word {
+            t0: 2.0,
+            t1: 3.0,
+            text: "Start".into(),
+        },
+        Word {
+            t0: 8.0,
+            t1: 8.5,
+            text: "middle".into(),
+        },
+        Word {
+            t0: 12.0,
+            t1: 12.5,
+            text: "finish".into(),
+        },
+        Word {
+            t0: 15.5,
+            t1: 16.0,
+            text: "too late.".into(),
+        },
+    ];
+    c.data.transcript.segments = vec![Word {
+        t0: 2.0,
+        t1: 12.5,
+        text: "Start middle finish".into(),
+    }];
+    let mark = Mark {
+        t0: 5.0,
+        t1: 6.0,
+        ..Default::default()
+    };
+    assert_eq!(c.words_for_mark(&mark).last().unwrap().text, "finish");
+    c.data.transcript.segments.clear();
+    assert_eq!(c.words_for_mark(&mark).last().unwrap().text, "finish");
+    assert!(
+        c.words_for_mark(&mark)
+            .iter()
+            .all(|w| w.t1 <= mark.t1 + WORD_END_LIMIT_SECONDS)
+    );
+}
+
+#[test]
+fn redaction_crop_and_downscale_preserve_original_and_opaque_pixels() {
+    use super::media::*;
+    let original = image::RgbaImage::from_pixel(3200, 1600, image::Rgba([210, 40, 60, 77]));
+    let masks = [[0.25, 0.25, 0.5, 0.5]];
+    let sent = bake(&downscale(&bake(&original, &masks)), &masks);
+    assert_eq!((sent.width(), sent.height()), (1568, 784));
+    assert_eq!(sent.get_pixel(784, 392).0, [0, 0, 0, 255]);
+    for y in 196..588 {
+        for x in 392..1176 {
+            assert_eq!(sent.get_pixel(x, y).0, [0, 0, 0, 255]);
+        }
+    }
+    assert!(original.pixels().all(|p| p.0 == [210, 40, 60, 77]));
+    assert_eq!(original.get_pixel(1600, 800).0, [210, 40, 60, 77]);
+    assert_eq!(
+        crop_rect([0.2, 0.2, 0.4, 0.4], 1000, 500),
+        Some([140, 70, 520, 260])
+    );
+    assert_eq!(
+        crop_rect([0.0, 0.0, 1.0, 1.0], 100, 50),
+        Some([0, 0, 100, 50])
+    );
+    assert!(crop_rect([f32::NAN, 0.0, 0.5, 0.5], 100, 50).is_none());
+    assert_eq!(
+        downscale(&image::RgbaImage::new(20, 10)).dimensions(),
+        (20, 10)
+    );
+}
+
+#[test]
+fn approval_bakes_every_derivative_validates_schema_and_detects_changed_images() {
+    use super::{media::*, note};
+    let temp = Temp::new();
+    let c = read_capture(&fixture()).unwrap();
+    let original = fs::read(c.frame_path(&c.data.keyframes[0]).unwrap()).unwrap();
+    let reviewed = vec![
+        ReviewFrame {
+            index: 1,
+            included: true,
+            masks: vec![[0.0, 0.0, 1.0, 1.0]],
+        },
+        ReviewFrame {
+            index: 2,
+            included: false,
+            masks: Vec::new(),
+        },
+    ];
+    let approved = approve(&c, &reviewed, &temp.0).unwrap();
+    approved.verify().unwrap();
+    assert_eq!(approved.approval.frames.len(), 1);
+    for file in approved.approval.file_hashes.keys() {
+        let image = image::open(approved.folder.join(file)).unwrap().to_rgba8();
+        assert!(image.pixels().all(|p| p.0 == [0, 0, 0, 255]));
+    }
+    assert_eq!(
+        fs::read(c.frame_path(&c.data.keyframes[0]).unwrap()).unwrap(),
+        original
+    );
+    let frame = &approved.approval.frames[0];
+    let prompt = note::frame_prompt(frame);
+    assert!(prompt.contains("mark_number"));
+    assert!(prompt.contains("Workshop navigation"));
+    assert!(prompt.contains("Never invent names or numbers"));
+    let note = note::synthetic_note(&approved);
+    note::validate(&note, &approved).unwrap();
+    assert!(note::notebook_prompt(&approved, &[]).contains("keyframe_reason"));
+    let mut bad = note.clone();
+    bad["figures"][0]["callouts"][0]["mark_number"] = serde_json::json!(999);
+    assert!(note::validate(&bad, &approved).is_err());
+    let mut bad = note.clone();
+    bad["unexpected"] = serde_json::json!(true);
+    assert!(note::validate(&bad, &approved).is_err());
+    let mut bad = note.clone();
+    bad["figures"][0]["callouts"][0]["evidence_refs"] = serde_json::json!(["unknown"]);
+    assert!(note::validate(&bad, &approved).is_err());
+    fs::write(approved.folder.join(&frame.original), "changed").unwrap();
+    assert!(approved.verify().is_err());
+}
+
+#[test]
+fn stale_job_and_cancel_cannot_publish_over_new_job() {
+    let epochs = super::generation::Epoch::default();
+    let old = epochs.begin();
+    assert!(old.current());
+    let current = epochs.begin();
+    assert!(!old.current());
+    assert!(old.check().is_err());
+    assert!(current.current());
+    current.cancel.stop();
+    assert!(current.check().is_err());
+    let fresh = epochs.begin();
+    epochs.invalidate();
+    assert!(!fresh.current());
+}
+
+#[test]
+fn image_transports_use_chosen_model_and_actual_png_bytes() {
+    use super::{generation::*, media::*};
+    use crate::core::notes::Helper;
+    let path = fixture().join("frames/frame-01.png");
+    let input = claude_message("Only these approved pixels", std::slice::from_ref(&path)).unwrap();
+    let input: serde_json::Value = serde_json::from_str(&input).unwrap();
+    assert_eq!(
+        input["message"]["content"][2]["source"]["media_type"],
+        "image/png"
+    );
+    use base64::Engine;
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(
+                input["message"]["content"][2]["source"]["data"]
+                    .as_str()
+                    .unwrap()
+            )
+            .unwrap(),
+        fs::read(&path).unwrap()
+    );
+    let options = Options {
+        helper: Helper::Claude,
+        model: "chosen-model".into(),
+    };
+    let args = command_args(&options, "low", std::slice::from_ref(&path), false);
+    assert!(args.windows(2).any(|a| a == ["--model", "chosen-model"]));
+    assert!(args.windows(2).any(|a| a == ["--tools", ""]));
+    assert!(args.windows(2).any(|a| a == ["--effort", "low"]));
+    let args = command_args(
+        &Options {
+            helper: Helper::Codex,
+            model: "chosen-codex-model".into(),
+        },
+        "medium",
+        &[path],
+        true,
+    );
+    assert!(args.contains(&"--image".into()));
+    assert!(args.contains(&"--output-schema".into()));
+    assert_eq!(
+        super::generation::stream_preview(r#"{"title":"Workshop","summary":"Paper ca"#),
+        "Workshop\n\nPaper ca"
+    );
+    assert_eq!(LONG_EDGE, 1568);
+    let mut schema: serde_json::Value = serde_json::from_str(super::note::SCHEMA).unwrap();
+    schema.as_object_mut().unwrap().remove("$schema");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&super::note::cli_schema()).unwrap(),
+        schema
+    );
 }
 
 #[test]

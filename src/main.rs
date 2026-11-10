@@ -34,6 +34,24 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
     }
+    if let Some(model) = args.windows(2).find(|a| a[0] == "--annotation-live-proof") {
+        let output = args
+            .windows(2)
+            .find(|a| a[0] == "--annotation-proof-output")
+            .map(|a| std::path::PathBuf::from(&a[1]));
+        let Some(output) = output else {
+            eprintln!("Provide --annotation-proof-output for the synthetic proof.");
+            std::process::exit(2);
+        };
+        if let Err(error) = sidenote::core::annotations::generation::live_proof(
+            &model[1].to_string_lossy(),
+            &output,
+        ) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--version") {
         println!("Sidenote {}", sidenote::updates::VERSION);
         return;
