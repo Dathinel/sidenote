@@ -34,11 +34,6 @@ lucide!(
     r#"<path d="M13 5h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 12h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 17 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 7 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
 lucide!(
-    PROJECTS,
-    "lucide-folder",
-    r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
-);
-lucide!(
     MEMORY,
     "lucide-library",
     r#"<path d="m16 6 4 14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 6v14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8v12" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 4v16" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#

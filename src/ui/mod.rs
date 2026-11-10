@@ -1415,13 +1415,17 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
     let mut left = row().gap(4.0).items_center().min_w(0.0);
     if !s.sidebar_is_open() {
         left = left.child(
-            pressable(widgets::sidebar_icon(false, p))
-                .key("sidebar-toggle")
-                .label("Show sidebar (Ctrl+\\)")
-                .padding(8.0)
-                .radius(8.0)
-                .hover(p.chip)
-                .on_press(|s: &mut State| s.toggle_sidebar()),
+            pressable(if nav::meetings_home(s) {
+                roles::CONTROL.wrap("Show sidebar", p.soft)
+            } else {
+                widgets::sidebar_icon(false, p)
+            })
+            .key("sidebar-toggle")
+            .label("Show sidebar (Ctrl+\\)")
+            .padding(8.0)
+            .radius(8.0)
+            .hover(p.chip)
+            .on_press(|s: &mut State| s.toggle_sidebar()),
         );
     }
     if s.view == tasks::View::Meetings && s.selected.is_some() {
@@ -1580,7 +1584,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // narrow window, where it is a drawer over it.
     let open = s.sidebar_is_open();
     app = app
-        .child(nav::sidebar(s, &k, p, open && !window_narrow, &mut layer))
+        .child(nav::sidebar(s, p, open && !window_narrow, &mut layer))
         .child(rune::el().w(1.0).h_full().fill(p.line))
         .child(main);
     if window_narrow && open {
@@ -1593,7 +1597,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                     .on_press(|s: &mut State| s.drawer_open.set(false)),
             )
             .child(
-                nav::sidebar(s, &k, p, true, &mut layer)
+                nav::sidebar(s, p, true, &mut layer)
                     .pin(Some(0.0), Some(0.0), None, Some(0.0))
                     .shadow(0.0, 32.0, p.shadow),
             );

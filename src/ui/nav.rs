@@ -9,11 +9,10 @@ use super::{
     State, hex, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, hairline, pressable, scroll, sidebar_icon},
+    widgets::{dot, pressable, sidebar_icon},
 };
 use chrono::{DateTime, Local};
 use rune::{Color, El, col, el, row};
-use rune_kit::{Kit, Menu, MenuItem, Placement};
 use sidenote::core::{self, UiPrefs};
 use std::collections::HashMap;
 
@@ -206,12 +205,6 @@ fn icon_memory(c: Color) -> El {
 fn icon_check(c: Color, _: Color) -> El {
     super::icons::draw(&super::icons::DIARY, 18.0, c)
 }
-fn icon_hex(c: Color, _: Color) -> El {
-    super::icons::draw(&super::icons::SETTINGS, 18.0, c)
-}
-fn icon_folder(c: Color) -> El {
-    super::icons::draw(&super::icons::PROJECTS, 18.0, c)
-}
 fn icon_device(c: Color) -> El {
     super::icons::draw(&super::icons::DEVICE, 18.0, c)
 }
@@ -226,13 +219,8 @@ pub fn icon_stop(_: f32, c: Color) -> El {
 
 /// Row heights: the three places, the tools in the footer, and a project under its label.
 const MAIN_H: f32 = 40.0;
-const FOLDER_H: f32 = 32.0;
 /// The open sidebar's side padding, and how far a project sits in from its label.
 const PAD: f32 = 10.0;
-const FOLDER_INDENT: f32 = 12.0;
-/// Settings and any other tool share one footer line.
-/// Projects shown before "Show all".
-const RECENT: usize = 6;
 
 /// The one quiet mark for something that waits on the user: memory proposals to review, high
 /// findings of the daily check in the Diary. Counts live on those pages.
@@ -279,30 +267,6 @@ fn main_row(place: Place, icon: El, p: Palette) -> El {
         .fill(bg)
         .hover(hover)
         .on_press(place.press)
-}
-
-/// A project: no icon and no count, lighter than a place, indented under its label.
-fn folder_row(key: String, name: &str, active: bool, p: Palette) -> El {
-    let words = if active {
-        roles::SMALL.medium().line(name, p.ink)
-    } else {
-        roles::SMALL.line(name, p.soft)
-    };
-    let (bg, hover) = fills(active, p);
-    pressable(
-        row()
-            .w_full()
-            .h(FOLDER_H)
-            .items_center()
-            .pl(PAD + FOLDER_INDENT)
-            .pr(PAD)
-            .child(words.grow(1.0)),
-    )
-    .key(key)
-    .label(format!("Show meetings in {name}"))
-    .radius(6.0)
-    .fill(bg)
-    .hover(hover)
 }
 
 /// A place or a tool in the rail: the icon alone, with the place's dot on its corner.
@@ -358,7 +322,7 @@ impl Place {
 
 /// The places (Meetings, Tasks, Memory, Diary), the tools (Settings) and the filter for
 /// meetings from other devices, when there are any.
-fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
+fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
     let page = s.page();
     let features = &s.config.features;
     let open_tasks = s.tasks.counts.open;
@@ -428,18 +392,6 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
             },
         });
     }
-    let tools = vec![Place {
-        key: "view-hex",
-        name: "Settings",
-        help: "Settings".into(),
-        active: page == Page::Hex,
-        icon: icon_hex,
-        flag: None,
-        press: |s| {
-            s.open_hex();
-            s.nav_done();
-        },
-    }];
     let peers = (features.other_devices && s.nav.peers > 0).then(|| Place {
         key: "nav-peers",
         name: "Other devices",
@@ -452,7 +404,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
         flag: None,
         press: |s| s.set_filter(Filter::Peers),
     });
-    (places, tools, peers)
+    (places, peers)
 }
 
 /// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
@@ -461,11 +413,11 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
 /// projects as lighter 32-point rows under a quiet label; one profile button in the
 /// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
 /// memory proposals to review, and high findings of the daily check in the Diary.
-pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
+pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
     if !wide && !s.hex_recording() {
         return el().w(0.0).h_full();
     }
-    let (places, _tools, peers) = places(s, p);
+    let (places, peers) = places(s, p);
 
     let mut header = row().w_full().h(52.0).gap(8.0).items_center().child(logo());
     header = if wide {
@@ -503,39 +455,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) 
         });
     }
 
-    let projects_on = s.config.features.projects;
-    let middle = if wide && projects_on {
-        projects(s, p)
-    } else if !wide && (projects_on || peers.is_some()) {
-        // The rail has no room for names, so one folder opens the sidebar on them.
-        let more = Place {
-            key: "nav-projects",
-            name: "Areas",
-            help: if projects_on {
-                "Areas. Open the sidebar"
-            } else {
-                "Other devices. Open the sidebar"
-            }
-            .into(),
-            active: matches!(
-                s.filter,
-                Filter::Project(_) | Filter::Area(_) | Filter::Areas | Filter::Peers
-            ) && s.page() == Page::Meetings,
-            icon: |c, _| icon_folder(c),
-            flag: None,
-            press: |s| s.set_sidebar(true),
-        };
-        let icon = icon_folder(p.soft);
-        col()
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .items_center()
-            .child(hairline(p).my(10.0))
-            .child(rail_item(more, icon, p))
-    } else {
-        col().grow(1.0)
-    };
+    let middle = col().grow(1.0);
 
     if wide && let Some(place) = peers {
         let icon = place.icon(p);
@@ -545,7 +465,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) 
         .w_full()
         .pt(6.0)
         .pb(8.0)
-        .child(profile(s, k, p, wide, layer));
+        .child(profile(s, p, wide, layer));
     if !wide && s.hex_recording() {
         footer = footer.child(
             pressable(super::icons::draw(&super::icons::MIC, 18.0, p.warn))
@@ -574,72 +494,6 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) 
     pane
 }
 
-/// Active areas use the same quiet rows as the old project navigation.
-fn projects(s: &State, p: Palette) -> El {
-    let mut list = col().w_full().gap(2.0).pb(8.0).child(
-        roles::GROUP
-            .wrap("Areas", p.soft)
-            .px(PAD)
-            .mt(roles::GROUP_TOP)
-            .mb(4.0),
-    );
-    let mut areas: Vec<_> = s
-        .areas
-        .catalog
-        .areas
-        .values()
-        .filter(|a| {
-            a.status != core::areas::Status::Retired && s.areas.activity.areas.contains(&a.id)
-        })
-        .collect();
-    areas.sort_by_key(|a| a.name.to_lowercase());
-    if areas.is_empty() {
-        list = list.child(
-            roles::META
-                .wrap(
-                    if s.areas.refresh_pending {
-                        "Loading areas..."
-                    } else {
-                        "No active areas yet."
-                    },
-                    p.faint,
-                )
-                .pl(PAD + FOLDER_INDENT)
-                .pr(PAD),
-        );
-    }
-    for (i, area) in areas.iter().take(RECENT).enumerate() {
-        let id = area.id.clone();
-        list = list.child(
-            folder_row(
-                format!("nav-area-{i}"),
-                &area.name,
-                s.filter == Filter::Area(id.clone()),
-                p,
-            )
-            .label(format!("Open area {}", area.name))
-            .on_press(move |s: &mut State| s.set_filter(Filter::Area(id.clone()))),
-        );
-    }
-    list = list.child(
-        folder_row(
-            "nav-areas-all".into(),
-            "Show all",
-            s.filter == Filter::Areas,
-            p,
-        )
-        .label("Show all areas, projects and migration")
-        .on_press(|s: &mut State| {
-            s.areas.show_all = true;
-            s.set_filter(Filter::Areas);
-        }),
-    );
-    col()
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .child(scroll(list, "nav-scroll"))
-}
 /// The sidebar scene with every project shown.
 pub fn scene_all(s: &mut State) {
     s.nav.show_all = true;
@@ -655,11 +509,15 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
     let blocked = hex::start_blocked(s);
     let ink = if blocked.is_some() { p.soft } else { p.card };
     let b = pressable(
-        row().gap(8.0).items_center().child(icon_plus(ink)).child(
-            roles::CONTROL
-                .bold()
-                .wrap(if narrow { "New" } else { "New meeting" }, ink),
-        ),
+        row()
+            .gap(8.0)
+            .items_center()
+            .children((!meetings_home(s)).then(|| icon_plus(ink)))
+            .child(
+                roles::CONTROL
+                    .bold()
+                    .wrap(if narrow { "New" } else { "New meeting" }, ink),
+            ),
     )
     .key("new-meeting")
     .px(if narrow { 12.0 } else { 16.0 })
@@ -793,7 +651,7 @@ fn logo() -> El {
     );
     mark
 }
-fn profile(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
+fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
     let name = s
         .ai_notes
         .settings
@@ -865,46 +723,66 @@ fn profile(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> E
         }
     });
     let device = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "This PC".into());
-    let mut menu = Menu::new("profile-menu")
-        .trigger(trigger)
-        .open(s.nav.profile_menu)
-        .placement(Placement::TopStart)
-        .min_width(260.0);
     if s.nav.profile_menu {
-        menu = menu
-            .on_close(|s: &mut State| s.nav.profile_menu = false)
-            .item(MenuItem::new(name).lead(avatar()).disabled(true))
-            .item(
-                MenuItem::new(format!(
-                    "This PC: {device}{}",
-                    sync.as_ref()
-                        .map(|status| format!(". {status}"))
-                        .unwrap_or_default()
-                ))
-                .lead(super::icons::draw(
-                    if sync.is_some() {
-                        &super::icons::REFRESH
-                    } else {
-                        &super::icons::DEVICE
-                    },
-                    16.0,
-                    p.soft,
-                ))
-                .disabled(true),
+        let device_line = format!(
+            "This PC: {device}{}",
+            sync.as_ref()
+                .map(|status| format!(". {status}"))
+                .unwrap_or_default()
+        );
+        let mut menu = col()
+            .key("profile-menu-menu")
+            .role("menu")
+            .label("Profile menu")
+            .focus_group()
+            .w(WIDE - 2.0 * PAD)
+            .padding(6.0)
+            .gap(2.0)
+            .fill(p.card)
+            .border(1.0, p.line)
+            .radius(8.0)
+            .shadow(4.0, 16.0, p.shadow)
+            .child(
+                row()
+                    .h(MAIN_H)
+                    .px(PAD)
+                    .gap(10.0)
+                    .items_center()
+                    .child(avatar())
+                    .child(
+                        roles::NAME
+                            .line(name, p.ink)
+                            .key("profile-menu-name")
+                            .grow(1.0),
+                    ),
+            )
+            .child(
+                roles::SMALL
+                    .wrap(device_line, p.soft)
+                    .max_lines(2)
+                    .key("profile-menu-device")
+                    .px(PAD)
+                    .pb(8.0),
             );
         if update_ready {
-            menu = menu.item(
-                MenuItem::new("Update ready")
-                    .lead(super::icons::draw(&super::icons::UPDATES, 16.0, p.soft))
-                    .on_select(|s: &mut State| {
-                        s.nav.profile_menu = false;
-                        super::updates::settings_scene(s);
-                    }),
-            );
+            menu = menu.child(profile_item(
+                "Update ready",
+                "profile-update",
+                &super::icons::UPDATES,
+                p,
+                |s| {
+                    s.nav.profile_menu = false;
+                    super::updates::settings_scene(s);
+                },
+            ));
         }
         if attention && !update_ready {
-            menu = menu.item(MenuItem::new(format!("{status}. Fix")).on_select(
-                move |s: &mut State| {
+            menu = menu.child(profile_item(
+                &format!("{status}. Fix"),
+                "profile-fix",
+                &super::icons::WARNING,
+                p,
+                move |s| {
                     s.nav.profile_menu = false;
                     if helper_issue {
                         s.open_ai_notes();
@@ -915,33 +793,83 @@ fn profile(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> E
             ));
         }
         menu = menu
-            .item(
-                MenuItem::new("Meeting summary instructions")
-                    .lead(super::icons::draw(&super::icons::PROMPTS, 16.0, p.soft))
-                    .on_select(|s: &mut State| {
-                        s.nav.profile_menu = false;
-                        s.open_ai_notes();
-                        super::scene_scroll(s, "agent-instructions");
-                    }),
-            )
-            .item(
-                MenuItem::new("Help")
-                    .lead(super::icons::draw(&super::icons::HELP, 16.0, p.soft))
-                    .on_select(|s: &mut State| {
+            .child(profile_item(
+                "Meeting summary instructions",
+                "profile-menu-item2",
+                &super::icons::PROMPTS,
+                p,
+                |s| {
+                    s.nav.profile_menu = false;
+                    s.open_ai_notes();
+                    super::scene_scroll(s, "agent-instructions");
+                },
+            ))
+            .child(profile_item(
+                "Help",
+                "profile-menu-item3",
+                &super::icons::HELP,
+                p,
+                |s| {
+                    s.nav.profile_menu = false;
+                    s.open_hex();
+                    s.hex.section = super::hex::Section::Shortcuts;
+                },
+            ))
+            .child(
+                profile_item(
+                    "Settings",
+                    "profile-menu-item4",
+                    &super::icons::SETTINGS,
+                    p,
+                    |s| {
                         s.nav.profile_menu = false;
                         s.open_hex();
-                        s.hex.section = super::hex::Section::Shortcuts;
-                    }),
-            )
-            .item(
-                MenuItem::new("Settings")
-                    .lead(super::icons::draw(&super::icons::SETTINGS, 16.0, p.soft))
-                    .shortcut("Ctrl+,")
-                    .on_select(|s: &mut State| {
-                        s.nav.profile_menu = false;
-                        s.open_hex();
-                    }),
+                    },
+                )
+                .child(roles::META.line("Ctrl+,", p.soft)),
             );
+        layer.push(rune_kit::scrim("profile-menu-scrim", |s: &mut State| {
+            s.nav.profile_menu = false
+        }));
+        layer.push(
+            menu.anchored_fit("profile-button", rune::Side::Top, rune::Align::Start, 6.0)
+                .focus_return("profile-button")
+                .modal(true, |s: &mut State| s.nav.profile_menu = false),
+        );
     }
-    menu.build(k, layer)
+    trigger
+}
+
+fn profile_item(
+    name: &str,
+    key: &str,
+    icon: &'static rune::Icon,
+    p: Palette,
+    action: impl Fn(&mut State) + 'static,
+) -> El {
+    pressable(
+        row()
+            .w_full()
+            .h(MAIN_H)
+            .px(PAD)
+            .gap(10.0)
+            .items_center()
+            .child(super::icons::draw(icon, 18.0, p.soft))
+            .child(roles::CONTROL.line(name, p.soft).grow(1.0)),
+    )
+    .key(key.to_string())
+    .role("menuitem")
+    .label(name.to_string())
+    .help(name.to_string())
+    .radius(6.0)
+    .hover(p.chip)
+    .focus_ring(1.0, 0.0, p.accent)
+    .on_press(action)
+}
+
+pub fn meetings_home(s: &State) -> bool {
+    s.page() == Page::Meetings
+        && s.selected.is_none()
+        && !s.on_live()
+        && !matches!(s.filter, Filter::Area(_) | Filter::Areas)
 }
