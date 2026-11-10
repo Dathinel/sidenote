@@ -313,6 +313,7 @@ impl State {
             Ok(config) => {
                 self.config = config;
                 self.feature_error = None;
+                self.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                 let f = &self.config.features;
                 if (!f.tasks && self.view == tasks::View::Tasks)
                     || (!f.memory && (self.memory_open || self.memory_back))
@@ -1285,6 +1286,17 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     }
     changed |= s.live_tick();
     changed |= s.expire_toast();
+    changed |= hex::settings_tick(s);
+    if let Some(until) = s
+        .hex
+        .shell
+        .highlighted
+        .as_ref()
+        .map(|(_, until)| *until)
+        .or(s.hex.shell.saved)
+    {
+        tx.wake_after(until.saturating_duration_since(Instant::now()));
+    }
     if let Some(id) = s.live_ready.take() {
         s.select(&id, tx);
         changed = true;
@@ -1348,6 +1360,9 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.is_command('b') {
         s.toggle_sidebar();
         return true;
+    }
+    if s.on_hex() && (e.key == Key::Escape || (e.key == Key::Tab && e.mods.ctrl)) {
+        return hex::on_key(s, e, tx);
     }
     if typing {
         return false;
@@ -1517,7 +1532,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .h_full()
         .min_h(0.0)
         .fill(p.bg)
-        .child(top_bar(s, p, narrow));
+        .children((!on_hex).then(|| top_bar(s, p, narrow)));
     let on_list = home
         && !on_check
         && !on_memory
@@ -1584,10 +1599,14 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     // narrow window, where it is a drawer over it.
     let open = s.sidebar_is_open();
     app = app
-        .child(nav::sidebar(s, p, open && !window_narrow, &mut layer))
+        .child(if on_hex {
+            hex::settings_sidebar(s, &k, p)
+        } else {
+            nav::sidebar(s, p, open && !window_narrow, &mut layer)
+        })
         .child(rune::el().w(1.0).h_full().fill(p.line))
         .child(main);
-    if window_narrow && open {
+    if window_narrow && open && !on_hex {
         app = app
             .child(
                 rune::el()
@@ -2228,6 +2247,82 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("updates-error", |s| {
                 updates::scene(s, sidenote::updates::Phase::Error)
+            }),
+            ("settings-general", |s| {
+                hex::settings::scene(s, "settings-general")
+            }),
+            ("settings-recording", |s| {
+                hex::settings::scene(s, "settings-recording")
+            }),
+            ("settings-summaries", |s| {
+                hex::settings::scene(s, "settings-summaries")
+            }),
+            ("settings-tasks", |s| {
+                hex::settings::scene(s, "settings-tasks")
+            }),
+            ("settings-prompts", |s| {
+                hex::settings::scene(s, "settings-prompts")
+            }),
+            ("settings-people", |s| {
+                hex::settings::scene(s, "settings-people")
+            }),
+            ("settings-hex", |s| hex::settings::scene(s, "settings-hex")),
+            ("settings-helpers", |s| {
+                hex::settings::scene(s, "settings-helpers")
+            }),
+            ("settings-helpers-expanded", |s| {
+                hex::settings::scene(s, "settings-helpers-expanded")
+            }),
+            ("settings-speech", |s| {
+                hex::settings::scene(s, "settings-speech")
+            }),
+            ("settings-helper-advanced", |s| {
+                hex::settings::scene(s, "settings-helper-advanced")
+            }),
+            ("settings-appearance", |s| {
+                hex::settings::scene(s, "settings-appearance")
+            }),
+            ("settings-sync", |s| {
+                hex::settings::scene(s, "settings-sync")
+            }),
+            ("settings-updates", |s| {
+                hex::settings::scene(s, "settings-updates")
+            }),
+            ("settings-search", |s| {
+                hex::settings::scene(s, "settings-search")
+            }),
+            ("settings-recording-expanded", |s| {
+                hex::settings::scene(s, "settings-recording-expanded")
+            }),
+            ("settings-summaries-expanded", |s| {
+                hex::settings::scene(s, "settings-summaries-expanded")
+            }),
+            ("settings-tasks-expanded", |s| {
+                hex::settings::scene(s, "settings-tasks-expanded")
+            }),
+            ("settings-hex-expanded", |s| {
+                hex::settings::scene(s, "settings-hex-expanded")
+            }),
+            ("settings-helper-advanced-expanded", |s| {
+                hex::settings::scene(s, "settings-helper-advanced-expanded")
+            }),
+            ("settings-sync-expanded", |s| {
+                hex::settings::scene(s, "settings-sync-expanded")
+            }),
+            ("settings-updates-expanded", |s| {
+                hex::settings::scene(s, "settings-updates-expanded")
+            }),
+            ("settings-sidebar-open", |s| {
+                hex::scene(s, false);
+                s.go_home();
+                s.sidebar_open.set(true);
+                s.drawer_open.set(true);
+            }),
+            ("settings-sidebar-folded", |s| {
+                hex::scene(s, false);
+                s.go_home();
+                s.sidebar_open.set(false);
+                s.drawer_open.set(false);
             }),
             ("models-empty", |s| models::scene(s, "empty")),
             ("models-downloading", |s| models::scene(s, "downloading")),

@@ -323,9 +323,20 @@ pub fn section(s: &State, p: Palette) -> El {
         .gap(12.0)
         .pt(20.0)
         .child(roles::SECTION.wrap("Updates", p.ink))
-        .child(roles::CONTROL.wrap(
-            format!("Current version: Sidenote {}", updates::VERSION),
-            p.ink,
+        .child(super::hex::settings::setting_row(
+            s,
+            "update-version",
+            &format!("Sidenote {}", updates::VERSION),
+            "Check for a new version.",
+            if busy(status) {
+                roles::CONTROL.line("Checking...", p.soft)
+            } else {
+                link("Check now", p)
+                    .key("update-check")
+                    .on_press(|s: &mut State| s.check_updates())
+            },
+            false,
+            p,
         ));
     let title = match status.phase {
         Phase::Manual => "Updates are off for this manual install".into(),
@@ -428,7 +439,10 @@ pub fn section(s: &State, p: Palette) -> El {
         ),
         p.soft,
     ));
-    body = body
+    body.child(roles::META.wrap("Checks run when Sidenote opens, every 6 hours, and on focus if the last attempt was over 30 minutes ago. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
+}
+pub fn source(s: &State, p: Palette) -> El {
+    col().w_full()
         .child(roles::GROUP.wrap("Update source", p.soft))
         .child(roles::SMALL.wrap(if s.updates.scene {
                 "E:\\Sidenote updates".into()
@@ -439,15 +453,7 @@ pub fn section(s: &State, p: Palette) -> El {
             "Anyone who can change files in this folder can change what gets installed. Use a folder only you can write to."
         } else {
             "Updates download from Sidenote's public GitHub Releases over HTTPS."
-        }, p.soft));
-    if !busy(status) {
-        body = body.child(
-            link("Check for updates", p)
-                .key("update-check")
-                .on_press(|s: &mut State| s.check_updates()),
-        );
-    }
-    body.child(roles::META.wrap("Checks run when Sidenote opens, every 6 hours, and on focus if the last attempt was over 30 minutes ago. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
+        }, p.soft))
 }
 pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     let u = &s.updates;

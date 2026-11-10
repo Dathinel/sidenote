@@ -346,6 +346,8 @@ impl State {
             }
             Completion::Preferences { teams, result } => match result {
                 Ok(()) => {
+                    self.hex.shell.saved =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                     if let Some(teams) = teams {
                         self.tasks.teams = teams;
                         self.tasks.teams_notice = Some("Teams saved".into());

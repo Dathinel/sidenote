@@ -5,16 +5,16 @@
 //! No call here runs on the UI thread. Status comes from the engine's `StatusWatcher`, which a
 //! forwarder thread owns. Every other call runs on a short thread and comes back as a `Msg`.
 use super::{
-    Event, State,
-    list::text_title,
-    roles,
+    Event, State, roles,
     theme::Palette,
     widgets::{badge, hairline, link, pressable, scroll},
 };
 mod meeting_languages;
+pub(super) mod settings;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
+pub use settings::{sidebar as settings_sidebar, tick as settings_tick};
 use sidenote::hex_engine::{
     Capabilities, EngineState, Feature, HexEngine, HexError, ModelInfo, ModelState, Recording,
     Setting, Support, VocabularyEntry,
@@ -136,6 +136,7 @@ pub struct HexState {
     select_open: Option<String>,
     /// The section the page shows, and which Advanced groups the owner opened.
     pub section: Section,
+    pub shell: settings::Settings,
     open_groups: HashSet<&'static str>,
 }
 
@@ -171,13 +172,24 @@ impl Default for HexState {
             term: TextEdit::default(),
             sounds: TextEdit::default(),
             select_open: None,
-            section: Section::Model,
+            section: Section::Identity,
+            shell: settings::Settings::default(),
             open_groups: HashSet::new(),
         }
     }
 }
 
 impl HexState {
+    pub fn language_picker_open(&self) -> bool {
+        self.open_groups.contains("languages")
+    }
+    pub fn open_language_picker(&mut self) -> bool {
+        self.open_groups.insert("languages")
+    }
+    pub fn close_language_picker(&mut self) {
+        self.open_groups.remove("languages");
+    }
+
     pub fn typing(&self) -> bool {
         self.filter.focused
             || self.term.focused
@@ -315,6 +327,11 @@ impl State {
     }
 
     pub fn open_hex(&mut self) {
+        if !self.on_hex() {
+            settings::remember_back(self);
+            self.hex.shell.last_tabs =
+                sidenote::core::UiPrefs::load(&self.store.root).settings_tabs;
+        }
         self.go_home();
         self.hex_open = true;
         self.hex.data_dirty = true;
@@ -440,6 +457,9 @@ impl State {
             Msg::AudioSettings(result, settings) => {
                 self.hex.busy_keys.remove("meetings.audio_retention");
                 self.hex_set_settings(settings);
+                if result.is_ok() {
+                    self.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+                }
                 if let Err(e) = result {
                     self.hex
                         .row_errors
@@ -566,6 +586,7 @@ impl State {
                 self.hex.busy_keys.remove(&key);
                 match r {
                     Ok(()) => {
+                        self.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                         self.hex.fresh.insert(key);
                         self.hex_spawn(|e| Msg::Settings(e.settings_list()));
                     }
@@ -578,6 +599,7 @@ impl State {
                 self.hex.vocab_busy = false;
                 match r {
                     Ok(()) => {
+                        self.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                         self.hex.vocab_error = None;
                         self.hex_spawn(|e| Msg::Vocabulary(e.vocabulary_list()));
                     }
@@ -929,16 +951,23 @@ fn note(text: &str, p: Palette) -> El {
 
 fn summary_line(s: &State, p: Palette) -> El {
     let (_, words) = indicator(s, p);
-    let text = match s.hex.state() {
-        Some(st) => format!(
-            "Sidenote {}. Hex {}. {}.",
-            sidenote::updates::VERSION,
-            st.version,
-            words
-        ),
-        None => format!("Sidenote {}. {words}.", sidenote::updates::VERSION),
-    };
-    roles::SMALL.wrap(text, p.soft)
+    let status = s
+        .hex
+        .state()
+        .map_or(words.clone(), |st| format!("Hex {}. {words}", st.version));
+    settings::setting_row(
+        s,
+        "hex-status",
+        "Hex",
+        if s.hex.running() {
+            "Hex is running and records your meetings."
+        } else {
+            "Start Hex to record your meetings."
+        },
+        roles::CONTROL.wrap(status, p.soft),
+        false,
+        p,
+    )
 }
 
 fn model_section(s: &State, p: Palette) -> El {
@@ -1074,6 +1103,11 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
     let mut sec = col()
         .key("hex-vocabulary")
         .w_full()
+        .child(settings::icon_tile(&super::icons::SPELLING, p))
+        .child(roles::SMALL.wrap(
+            "Sidenote spells these right in transcripts and summaries.",
+            p.soft,
+        ))
         .child(section_head(
             Section::Vocabulary,
             Some(h.vocabulary.len()),
@@ -1157,41 +1191,45 @@ pub enum Section {
     Shortcuts,
     Advanced,
     Features,
+    Identity,
+    PromptLibrary,
+    Sync,
+    HelpersAdvanced,
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 13] = [
-    Section::Features,
-    Section::Connect,
-    Section::AiNotes,
-    Section::Teams,
-    Section::MeetingModels,
-    Section::Model,
-    Section::Vocabulary,
-    Section::General,
-    Section::Dictation,
+const SECTIONS: [Section; 9] = [
+    Section::Identity,
     Section::Meetings,
-    Section::Shortcuts,
-    Section::Advanced,
+    Section::PromptLibrary,
+    Section::Teams,
+    Section::Dictation,
+    Section::Connect,
+    Section::General,
+    Section::Sync,
     Section::Updates,
 ];
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 13] = SECTIONS;
+    pub const ALL: [Section; 9] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Connect => "Connect AI apps",
-            Self::Teams => "Teams",
+            Self::Identity => "General",
+            Self::PromptLibrary => "Prompt library",
+            Self::Sync => "Sync",
+            Self::HelpersAdvanced => "AI helpers advanced",
+            Self::Connect => "AI helpers",
+            Self::Teams => "People",
             Self::AiNotes => "Meeting summary",
             Self::Updates => "Updates",
             Self::MeetingModels => "Languages",
             Self::Features => "Features",
             Self::Model => "Model",
-            Self::Vocabulary => "Vocabulary",
-            Self::General => "General",
-            Self::Dictation => "Dictation",
+            Self::Vocabulary => "Names and terms",
+            Self::General => "Appearance and startup",
+            Self::Dictation => "Hex and dictation",
             Self::Meetings => "Meetings",
             Self::Shortcuts => "Shortcuts",
             Self::Advanced => "Advanced",
@@ -1200,6 +1238,10 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::Identity => "Your name and setup.",
+            Self::PromptLibrary => "Edit Meeting summary instructions.",
+            Self::Sync => "This PC and other devices.",
+            Self::HelpersAdvanced => "Helper models and language handling.",
             Self::Connect => "Connect an AI app to your local meeting knowledge.",
             Self::Teams => "Group tasks by the people who own them.",
             Self::AiNotes => {
@@ -1227,16 +1269,6 @@ enum Place {
     Labs,
     /// Under Advanced: read only, unavailable, hidden, or not one of the everyday kinds.
     Rare,
-}
-
-impl Place {
-    fn group_name(self) -> &'static str {
-        match self {
-            Self::In(s) => s.name(),
-            Self::Labs => "Experimental (Labs)",
-            Self::Rare => "Rarely used",
-        }
-    }
 }
 
 fn place(st: &Setting) -> Place {
@@ -1301,334 +1333,6 @@ fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
         .child(roles::SMALL.wrap(section.blurb(), p.soft))
 }
 
-fn section_tab(section: Section, active: bool, p: Palette) -> El {
-    let icon = match section {
-        Section::Connect => &*super::icons::CONNECTED,
-        Section::Teams => &*super::icons::PEOPLE,
-        Section::AiNotes => &*super::icons::SUMMARY,
-        Section::Updates => &*super::icons::UPDATES,
-        Section::MeetingModels | Section::Model => &*super::icons::BOT,
-        Section::Features => &*super::icons::PALETTE,
-        Section::Vocabulary => &*super::icons::SPELLING,
-        Section::General | Section::Advanced => &*super::icons::SETTINGS,
-        Section::Dictation | Section::Meetings => &*super::icons::MIC,
-        Section::Shortcuts => &*super::icons::HELP,
-    };
-    pressable(
-        row()
-            .gap(6.0)
-            .items_center()
-            .child(super::icons::draw(icon, 18.0, p.soft))
-            .child(if active {
-                roles::NAME.wrap(section.name(), p.ink)
-            } else {
-                roles::CONTROL.wrap(section.name(), p.soft)
-            }),
-    )
-    .key(format!("hex-tab-{}", section.name()))
-    .label(format!("{} settings", section.name()))
-    .px(8.0)
-    .py(6.0)
-    .radius(999.0)
-    .fill(if active { p.chip } else { p.bg })
-    .border(1.0, if active { p.line } else { p.bg })
-    .hover(p.chip)
-    .on_press(move |s: &mut State| {
-        s.hex.section = section;
-        s.hex.filter = TextEdit::default();
-        s.hex.select_open = None;
-    })
-}
-
-fn tabs(s: &State, p: Palette) -> El {
-    let searching = !s.hex.filter.text.trim().is_empty();
-    let mut r = row().key("hex-tabs").w_full().flex_wrap().gaps(4.0, 4.0);
-    for section in SECTIONS {
-        r = r.child(section_tab(
-            section,
-            !searching && s.hex.section == section,
-            p,
-        ));
-    }
-    r
-}
-
-fn search_box(s: &State, k: &Kit, p: Palette) -> El {
-    let h = &s.hex;
-    TextInput::new(&h.filter)
-        .plain()
-        .placeholder("Search all settings")
-        .label("Search all settings")
-        .on_edit(|s: &mut State| &mut s.hex.filter)
-        .on_key(|s: &mut State, e: &KeyEvent, tx: &mut Tx| {
-            if e.key == Key::Escape {
-                s.hex.filter = TextEdit::default();
-                tx.blur();
-                return true;
-            }
-            false
-        })
-        .height(38.0)
-        .build(k)
-        .key("hex-filter")
-        .border(1.0, if h.filter.focused { p.accent } else { p.line })
-        .radius(10.0)
-        .fill(p.card)
-        .w_full()
-}
-
-/// What stands in for the rows when there are none to show.
-fn empty_note(s: &State, p: Palette, text_: &'static str) -> Option<El> {
-    let h = &s.hex;
-    (h.running() && h.settings_note.is_none()).then(|| roles::SMALL.wrap(text_, p.soft).py(8.0))
-}
-
-fn state_notes(s: &State, p: Palette) -> Vec<El> {
-    let h = &s.hex;
-    let mut notes = Vec::new();
-    if h.lacks(Feature::SettingsSet) {
-        notes.push(note("This Hex build cannot change settings.", p));
-    }
-    if let Some(n) = h.settings_note.filter(|_| h.running()) {
-        notes.push(note(n, p));
-    }
-    notes
-}
-
-fn rows(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, items: &[&Setting]) -> El {
-    let mut list = col().w_full();
-    if items
-        .iter()
-        .any(|st| st.key == "meetings.audio_retention" || st.key == "labs.expire_meeting_audio")
-    {
-        list = list
-            .child(keep_audio_row(s, k, p, layer))
-            .child(hairline(p));
-    }
-    for st in items {
-        if matches!(
-            st.key.as_str(),
-            "meetings.audio_retention" | "labs.expire_meeting_audio"
-        ) {
-            continue;
-        }
-        list = list
-            .child(setting_row(s, k, st, place(st), p, layer))
-            .child(hairline(p));
-    }
-    list
-}
-
-/// A fold-away group under Advanced. Closed unless the owner opened it.
-fn fold(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, at: Place, items: &[&Setting]) -> El {
-    let (id, blurb) = match at {
-        Place::Labs => ("labs", "Unfinished features. They can change or go away."),
-        _ => (
-            "rare",
-            "Read only, hidden or unavailable here, and a few that need care.",
-        ),
-    };
-    let open = s.hex.open_groups.contains(id);
-    let chevron = if open { "\u{25be}" } else { "\u{25b8}" };
-    let header = pressable(
-        row()
-            .w_full()
-            .gap(10.0)
-            .items_center()
-            .px(8.0)
-            .py(10.0)
-            .child(roles::CONTROL.icon_label(chevron, p.soft).w(12.0))
-            .child(roles::TITLE.wrap(at.group_name(), p.ink))
-            .child(roles::count(items.len(), p))
-            .child(roles::META.line(blurb, p.faint).grow(1.0).ml(6.0)),
-    )
-    .key(format!("hex-fold-{id}"))
-    .label(format!(
-        "{}, {} settings. {}",
-        at.group_name(),
-        items.len(),
-        if open { "Collapse" } else { "Expand" }
-    ))
-    .radius(8.0)
-    .hover(p.chip)
-    .on_press(move |s: &mut State| {
-        if !s.hex.open_groups.remove(id) {
-            s.hex.open_groups.insert(id);
-        }
-    });
-    let mut g = col()
-        .key(format!("hex-group-{id}"))
-        .w_full()
-        .child(header)
-        .child(hairline(p));
-    if open {
-        g = g.child(rows(s, k, p, layer, items));
-    }
-    g
-}
-
-/// Every setting that matches the search, whichever section it is in.
-fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &str) -> El {
-    if [
-        "meeting summary",
-        "helper",
-        "instructions",
-        "privacy",
-        "claude",
-        "codex",
-        "opencode",
-    ]
-    .iter()
-    .any(|term| term.contains(query))
-    {
-        return super::ai_notes::section(s, k, p);
-    }
-    let h = &s.hex;
-    let matches: Vec<&Setting> = h
-        .settings
-        .iter()
-        .filter(|st| st.key != "labs.expire_meeting_audio")
-        .filter(|st| {
-            (st.key == "meetings.audio_retention" && "keep audio".contains(query))
-                || st.key.to_lowercase().contains(query)
-                || st.about.to_lowercase().contains(query)
-                || pretty(&st.key).to_lowercase().contains(query)
-        })
-        .collect();
-    let mut c = col().key("hex-results").w_full().gap(2.0).mt(18.0);
-    for n in state_notes(s, p) {
-        c = c.child(n);
-    }
-    if matches.is_empty() {
-        let text_ = if h.settings.is_empty() {
-            "No settings loaded."
-        } else {
-            "No settings match."
-        };
-        if let Some(n) = empty_note(s, p, text_) {
-            c = c.child(n);
-        }
-        return c;
-    }
-    c = c.child(roles::CONTROL.wrap(
-        format!(
-            "{} setting{} match",
-            matches.len(),
-            if matches.len() == 1 { "" } else { "s" }
-        ),
-        p.soft,
-    ));
-    for at in [
-        Place::In(Section::General),
-        Place::In(Section::Dictation),
-        Place::In(Section::Meetings),
-        Place::In(Section::Shortcuts),
-        Place::Labs,
-        Place::Rare,
-    ] {
-        let group: Vec<&Setting> = matches
-            .iter()
-            .copied()
-            .filter(|st| place(st) == at)
-            .collect();
-        if group.is_empty() {
-            continue;
-        }
-        let title = match at {
-            Place::In(_) => at.group_name().to_string(),
-            _ => format!("Advanced \u{b7} {}", at.group_name()),
-        };
-        c = c
-            .child(
-                roles::GROUP
-                    .wrap(title, p.soft)
-                    .mt(roles::GROUP_TOP + 8.0)
-                    .mb(4.0),
-            )
-            .child(hairline(p))
-            .child(rows(s, k, p, layer, &group));
-    }
-    c
-}
-
-/// The page for one section.
-fn section_body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, section: Section) -> El {
-    match section {
-        Section::Connect => super::mcp_connect::section(s, p),
-        Section::Teams => super::teams::section(s, k, p),
-        Section::AiNotes => super::ai_notes::section(s, k, p),
-        Section::Updates => super::updates::section(s, p),
-        Section::MeetingModels => {
-            super::models::view(s, p, meeting_languages::section(s, k, p, layer))
-        }
-        Section::Features => features_section(s, k, p),
-        Section::Model => model_section(s, p),
-        Section::Vocabulary => vocabulary_section(s, k, p),
-        Section::Advanced => {
-            let h = &s.hex;
-            let labs: Vec<&Setting> = h
-                .settings
-                .iter()
-                .filter(|st| place(st) == Place::Labs && st.key != "labs.expire_meeting_audio")
-                .collect();
-            let rare: Vec<&Setting> = h
-                .settings
-                .iter()
-                .filter(|st| place(st) == Place::Rare)
-                .collect();
-            let mut c =
-                col()
-                    .key("hex-advanced")
-                    .w_full()
-                    .child(section_head(Section::Advanced, None, p));
-            for n in state_notes(s, p) {
-                c = c.child(n);
-            }
-            if labs.is_empty()
-                && rare.is_empty()
-                && let Some(n) =
-                    empty_note(s, p, "Nothing here. Everything is in the other sections.")
-            {
-                c = c.child(n);
-            }
-            if !labs.is_empty() {
-                c = c.child(fold(s, k, p, layer, Place::Labs, &labs));
-            }
-            if !rare.is_empty() {
-                c = c.child(fold(s, k, p, layer, Place::Rare, &rare));
-            }
-            c
-        }
-        _ => {
-            let items: Vec<&Setting> = s
-                .hex
-                .settings
-                .iter()
-                .filter(|st| {
-                    place(st) == Place::In(section) && st.key != "meetings.audio_retention"
-                })
-                .collect();
-            let mut c = col()
-                .key(format!("hex-section-{}", section.name()))
-                .w_full()
-                .child(section_head(section, None, p));
-            for n in state_notes(s, p) {
-                c = c.child(n);
-            }
-            if section == Section::Meetings {
-                c = c.child(hairline(p)).child(keep_audio_row(s, k, p, layer));
-            }
-            if items.is_empty() {
-                if let Some(n) = empty_note(s, p, "No settings here on this build of Hex.") {
-                    c = c.child(n);
-                }
-                return c;
-            }
-            c.child(hairline(p)).child(rows(s, k, p, layer, &items))
-        }
-    }
-}
-
 fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let h = &s.hex;
     let audio = h.setting("meetings.audio_retention");
@@ -1658,7 +1362,10 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .min_w(220.0)
         .gap(2.0)
         .child(roles::NAME.wrap("Keep audio", p.ink))
-        .child(roles::META.line("Transcripts, notes and summaries stay.", p.faint));
+        .child(roles::META.line(
+            "Sidenote keeps the sound file next to the transcript.",
+            p.faint,
+        ));
     if let Some(reason) = h.page_note().or(h.settings_note) {
         text = text.child(roles::META.wrap(reason, p.faint));
     } else if !can && !busy {
@@ -1706,24 +1413,35 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .items_center()
         .gap(16.0)
         .py(14.0)
+        .child(settings::icon_tile(&super::icons::MIC, p))
         .child(text)
         .child(control)
 }
 
-fn setting_row(s: &State, k: &Kit, st: &Setting, at: Place, p: Palette, layer: &mut Vec<El>) -> El {
+fn setting_row(
+    s: &State,
+    k: &Kit,
+    st: &Setting,
+    _at: Place,
+    p: Palette,
+    layer: &mut Vec<El>,
+) -> El {
     let h = &s.hex;
     let key = st.key.clone();
-    let name = human(st, at);
+    let name = settings::setting_name(st);
     let can = editable(st) && h.can(Feature::SettingsSet) && !h.busy_keys.contains(&key);
-    let mut text = col()
-        .gap(2.0)
-        .grow(1.0)
-        .min_w(220.0)
-        .child(roles::NAME.wrap(name.clone(), p.ink));
+    let mut text = col().gap(2.0).grow(1.0).min_w(170.0).child(
+        row()
+            .items_center()
+            .flex_wrap()
+            .gap(8.0)
+            .child(roles::NAME.wrap(name.clone(), p.ink))
+            .children((settings::is_meeting_setting(st)).then(|| settings::pc(p))),
+    );
     if !st.about.is_empty() {
         text = text.child(
             roles::META
-                .line(one_line(&st.about), p.faint)
+                .wrap(settings::setting_help(st), p.soft)
                 .help_when_truncated(st.about.clone()),
         );
     }
@@ -1842,119 +1560,19 @@ fn setting_row(s: &State, k: &Kit, st: &Setting, at: Place, p: Palette, layer: &
         .flex_wrap()
         .items_center()
         .gaps(8.0, 16.0)
+        .child(settings::icon_tile(&super::icons::SETTINGS, p))
         .child(text)
         .child(control)
-}
-
-fn features_section(s: &State, k: &Kit, p: Palette) -> El {
-    let mut body = col()
-        .w_full()
-        .gap(8.0)
-        .child(section_head(Section::Features, None, p))
-        .child(roles::NAME.wrap("Always on", p.ink))
-        .child(roles::SMALL.wrap("Meetings and notes, Ask, and Hex settings.", p.soft))
-        .child(
-            roles::meta(
-                "Meeting tasks stay visible. Turning a feature off keeps its data.",
-                p,
-            )
-            .mb(12.0),
-        );
-    if let Some(error) = &s.feature_error {
-        body = body.child(
-            roles::SMALL
-                .medium()
-                .wrap(error.clone(), p.warn)
-                .role("alert"),
-        );
-    }
-    for feature in sidenote::core::Feature::ALL {
-        body = body
-            .child(
-                row()
-                    .w_full()
-                    .items_center()
-                    .gap(20.0)
-                    .py(12.0)
-                    .child(
-                        col()
-                            .grow(1.0)
-                            .min_w(0.0)
-                            .gap(roles::META_GAP)
-                            .child(roles::NAME.wrap(feature.name(), p.ink))
-                            .child(roles::meta(feature.description(), p)),
-                    )
-                    .child(roles::CONTROL.wrap(
-                        if s.config.features.enabled(feature) {
-                            "On"
-                        } else {
-                            "Off"
-                        },
-                        p.soft,
-                    ))
-                    .child(
-                        Switch::new(s.config.features.enabled(feature))
-                            .label(feature.name())
-                            .hide_label()
-                            .on_toggle(move |s: &mut State| s.toggle_feature(feature))
-                            .build(k)
-                            .key(format!("feature-{}", feature.name())),
-                    ),
-            )
-            .child(hairline(p));
-    }
-    body
+        .px(14.0)
+        .fill(settings::highlight(s, &format!("hs-{}", st.key), p))
 }
 
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
-    let side = if narrow { 16.0 } else { 40.0 };
-    let query = s.hex.filter.text.trim().to_lowercase();
-    let mut doc = col()
-        .key("hex-top")
-        .w_full()
-        .max_w(920.0)
-        .px(side)
-        .pt(if narrow { 8.0 } else { 18.0 })
-        .pb(56.0)
-        .child(text_title("Settings", if narrow { 26.0 } else { 30.0 }, p).mb(4.0))
-        .child(summary_line(s, p).mb(16.0));
-    if let Some(n) = s.hex.page_note() {
-        doc = doc.child(note(n, p));
-    }
-    doc = doc
-        .child(search_box(s, k, p).mb(12.0))
-        .child(tabs(s, p))
-        .child(if query.is_empty() {
-            section_body(s, k, p, layer, s.hex.section)
-        } else {
-            search_results(s, k, p, layer, &query)
-        });
-    col()
-        .key("hex-pane")
-        .grow(1.0)
-        .min_w(0.0)
-        .min_h(0.0)
-        .w_full()
-        .fill(p.bg)
-        .child(scroll(
-            col().w_full().items_center().child(doc),
-            "hex-scroll",
-        ))
+    settings::pane(s, k, p, narrow, layer)
 }
 
-/// The Hex page's keys. Letters only count while no text box has the keyboard.
-pub fn on_key(s: &mut State, e: &KeyEvent, _tx: &mut Tx) -> bool {
-    if e.key == Key::Escape {
-        if s.hex.select_open.is_some() {
-            s.hex.select_open = None;
-        } else if !s.hex.filter.text.is_empty() {
-            s.hex.filter = TextEdit::default();
-        } else {
-            s.go_home();
-        }
-        return true;
-    }
-    false
+pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    settings::on_key(s, e, tx)
 }
 
 // ---- render scenes --------------------------------------------------------------------------

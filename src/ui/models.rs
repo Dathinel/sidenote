@@ -4,6 +4,7 @@ use super::{
     widgets::{link, pressable},
 };
 use rune::{El, col, row};
+use rune_kit::{Kit, TextInput};
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
 use std::{
     collections::{HashMap, HashSet},
@@ -141,6 +142,7 @@ impl State {
         }
         self.models.languages = languages;
         self.models.preference_error = None;
+        self.hex.shell.saved = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
     }
     fn model_download(&mut self, id: &'static str, remove: bool) {
         if self.models.scene || self.models.jobs.contains_key(id) {
@@ -185,49 +187,154 @@ impl State {
         );
     }
 }
-pub fn view(s: &State, p: Palette, routing: El) -> El {
-    let models = &s.models;
-    let mut body = col()
+pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
+    let names = LANGUAGES
+        .iter()
+        .filter(|(id, _)| s.models.languages.iter().any(|language| language == id))
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = col()
+        .key("spoken-languages")
+        .fill(super::hex::settings::highlight(s, "spoken-languages", p))
         .w_full()
-        .gap(12.0)
-        .child(
-            roles::SECTION
-                .wrap("Meeting languages and models", p.ink)
-                .mt(10.0),
-        )
-        .child(roles::SMALL.wrap(
+        .padding(14.0)
+        .gap(8.0)
+        .child(super::hex::settings::setting_row(
+            s,
+            "languages-row",
+            "Languages you speak",
             "Choose the languages people speak in your meetings.",
-            p.soft,
+            pressable(roles::CONTROL.wrap(names, p.ink))
+                .key("languages-dropdown")
+                .label("Languages you speak")
+                .on_press(|s: &mut State| {
+                    if !s.hex.open_language_picker() {
+                        s.hex.close_language_picker();
+                    }
+                }),
+            true,
+            p,
         ));
-    let mut languages = row().w_full().flex_wrap().gap(8.0);
+    if s.hex.language_picker_open() {
+        out = out.child(language_column(s, k, p));
+    }
+    out
+}
+fn language_column(s: &State, k: &Kit, p: Palette) -> El {
+    let mut languages = col().w_full().gap(8.0).child(
+        TextInput::new(&s.hex.shell.language_query)
+            .placeholder("Search languages")
+            .label("Search languages")
+            .height(34.0)
+            .on_edit(|s: &mut State| &mut s.hex.shell.language_query)
+            .build(k)
+            .key("language-search")
+            .w_full(),
+    );
     for &(id, name) in LANGUAGES {
-        let selected = models.languages.iter().any(|l| l == id);
+        if !name.to_lowercase().contains(
+            s.hex
+                .shell
+                .language_query
+                .text
+                .trim()
+                .to_lowercase()
+                .as_str(),
+        ) {
+            continue;
+        }
+        let selected = s.models.languages.iter().any(|l| l == id);
         languages = languages.child(
             pressable(
-                if selected {
-                    roles::NAME.wrap(name, p.accent)
-                } else {
-                    roles::CONTROL.wrap(name, p.soft)
-                }
-                .px(10.0)
-                .py(5.0)
-                .radius(8.0)
-                .fill(if selected {
-                    p.accent.alpha(0.14)
-                } else {
-                    p.accent.alpha(0.0)
-                })
-                .border(1.0, if selected { p.accent } else { p.line }),
+                row()
+                    .w_full()
+                    .gap(8.0)
+                    .items_center()
+                    .child(
+                        roles::CONTROL
+                            .line(if selected { "\u{2611}" } else { "\u{2610}" }, p.accent),
+                    )
+                    .child(roles::CONTROL.line(name, p.ink)),
             )
             .key(format!("meeting-language-{id}"))
-            .label(format!(
-                "{name}, {}",
-                if selected { "selected" } else { "not selected" }
-            ))
+            .role("checkbox")
+            .checked(selected)
+            .label(name)
             .on_press(move |s: &mut State| s.model_language(id)),
         );
     }
-    body = body.child(languages).child(routing);
+    languages
+}
+pub fn view(s: &State, p: Palette, routing: El) -> El {
+    if !cfg!(feature = "asr-runtime") {
+        return super::hex::settings::setting_row(
+            s,
+            "speech-models",
+            "Transcribe with: Hex",
+            "Uses the speech model managed by Hex.",
+            roles::CONTROL.line("In use", p.ok),
+            false,
+            p,
+        );
+    }
+    let k = super::theme::kit(&p);
+    row()
+        .w_full()
+        .flex_wrap()
+        .gap(18.0)
+        .mt(16.0)
+        .child(
+            col()
+                .w(160.0)
+                .gap(10.0)
+                .child(roles::GROUP.wrap("Meeting languages", p.soft))
+                .child(language_column(s, &k, p)),
+        )
+        .child(catalog_view(s, p, routing, false).grow(1.0).min_w(240.0))
+}
+pub fn advanced(s: &State, p: Palette) -> El {
+    catalog_view(s, p, rune::el(), true)
+}
+fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
+    let k = super::theme::kit(&p);
+    let models = &s.models;
+    let mut body = col().w_full().gap(12.0).mt(16.0);
+    if !advanced {
+        body = body
+            .child(
+                row()
+                    .w_full()
+                    .flex_wrap()
+                    .gap(12.0)
+                    .child(
+                        TextInput::new(&s.hex.shell.model_query)
+                            .placeholder("Search speech models")
+                            .label("Search speech models")
+                            .height(34.0)
+                            .on_edit(|s: &mut State| &mut s.hex.shell.model_query)
+                            .build(&k)
+                            .key("model-search")
+                            .grow(1.0)
+                            .min_w(140.0),
+                    )
+                    .child(
+                        pressable(roles::CONTROL.line(
+                            if s.hex.shell.model_recommended {
+                                "Recommended \u{2713}"
+                            } else {
+                                "Recommended"
+                            },
+                            p.soft,
+                        ))
+                        .key("model-recommended")
+                        .on_press(|s: &mut State| {
+                            s.hex.shell.model_recommended = !s.hex.shell.model_recommended
+                        }),
+                    ),
+            )
+            .child(routing);
+    }
     if let Some(e) = &models.preference_error {
         body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
@@ -242,6 +349,28 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
     let visible: Vec<_> = model_catalog::catalog()
         .iter()
         .filter(|m| {
+            if advanced {
+                return m.role == model_catalog::Role::LanguageId || !cfg!(feature = "asr-runtime");
+            }
+            if m.role == model_catalog::Role::LanguageId {
+                return false;
+            }
+            if !m
+                .name
+                .to_lowercase()
+                .contains(s.hex.shell.model_query.text.trim().to_lowercase().as_str())
+            {
+                return false;
+            }
+            if s.hex.shell.model_recommended
+                && m.runtime != Runtime::Hex
+                && !model_catalog::PROVISIONAL_DEFAULT_IDS.contains(&m.id)
+            {
+                return false;
+            }
+            if m.runtime == Runtime::Hex {
+                return true;
+            }
             // Downloaded models stay listed so they can be removed after a language is dropped.
             if models.installed.contains(m.id) || models.progress.contains_key(m.id) {
                 return true;
@@ -256,51 +385,55 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
     if visible.is_empty() {
         return body.child(roles::SMALL.wrap("English uses Hex's own model. Nothing to download. Add another language to see its models.", p.soft));
     }
-    let total: u64 = visible
-        .iter()
-        .filter(|m| m.size_tier() == SizeTier::Default && !models.installed.contains(m.id))
-        .map(|m| m.bytes())
-        .sum();
-    body = body.child(
-        col()
-            .w_full()
-            .gap(roles::META_GAP)
-            .mt(roles::GROUP_TOP - 12.0)
-            .child(roles::NAME.wrap(
-                if total == 0 {
-                    "Everything recommended for these languages is downloaded.".to_string()
-                } else {
-                    format!(
-                        "Recommended for these languages: {:.0} MB to download",
-                        total as f64 / 1_000_000.0
-                    )
-                },
-                p.ink,
-            ))
-            .child(roles::meta(
-                "Models run on this computer. Each download is your choice.",
-                p,
-            )),
-    );
-    if models.installed.is_empty() && models.progress.is_empty() {
-        body = body.child(roles::meta("No meeting models downloaded yet.", p));
-    }
     for m in visible {
         let id = m.id;
-        // Name, one line of facts, then what it does and the action. Space, not lines,
-        // separates the cards.
-        let mut card = col().w_full().gap(6.0).pt(roles::GROUP_TOP).child(
-            col()
-                .w_full()
-                .gap(roles::META_GAP)
-                .child(roles::TITLE.wrap(m.name, p.ink))
-                .child(model_facts(m, p)),
-        );
+        let info = col()
+            .grow(1.0)
+            .min_w(160.0)
+            .gap(5.0)
+            .child(roles::NAME.wrap(m.name, p.ink))
+            .child(roles::SMALL.wrap(
+                if m.runtime == Runtime::Hex {
+                    "Uses the copy already in Hex. Nothing to download."
+                } else if m.role == model_catalog::Role::LanguageId {
+                    "Not available yet."
+                } else {
+                    "Transcribes the meeting languages listed below."
+                },
+                p.soft,
+            ))
+            .child(model_facts(m, p));
+        let mut card = col().gap(6.0).max_w(230.0);
         if m.runtime == Runtime::Hex {
-            card = card.child(roles::SMALL.wrap(m.runtime_note, p.soft));
+            card = card.child(roles::CONTROL.line("In Hex. In use", p.ok));
         } else {
             if m.role == model_catalog::Role::LanguageId {
-                card = card.child(roles::SMALL.wrap("Tells English from Hindi in each part of the meeting, so each part goes to the right model.", p.soft));
+                card = card.child(roles::SMALL.wrap(
+                    "Not available yet. The publisher's patched runtime is not bundled.",
+                    p.soft,
+                ));
+                if models.installed.contains(id) || models.partial.contains(id) {
+                    card = card.child(
+                        link("Remove", p)
+                            .key(format!("model-remove-{id}"))
+                            .on_press(move |s: &mut State| s.model_download(id, true)),
+                    );
+                }
+                body = body.child(
+                    row()
+                        .key(format!("speech-model-{id}"))
+                        .w_full()
+                        .flex_wrap()
+                        .items_center()
+                        .gaps(14.0, 10.0)
+                        .padding(14.0)
+                        .radius(8.0)
+                        .border(1.0, p.line)
+                        .fill(p.card)
+                        .child(info)
+                        .child(card),
+                );
+                continue;
             }
             if let Some(progress) = models.progress.get(id) {
                 if models.jobs.get(id).is_some_and(|job| job.removing) {
@@ -391,7 +524,20 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 card = card.child(roles::SMALL.medium().wrap(error, p.warn).role("alert"));
             }
         }
-        body = body.child(card);
+        body = body.child(
+            row()
+                .key(format!("speech-model-{id}"))
+                .w_full()
+                .flex_wrap()
+                .items_center()
+                .gaps(14.0, 10.0)
+                .padding(14.0)
+                .radius(8.0)
+                .border(1.0, p.line)
+                .fill(p.card)
+                .child(info)
+                .child(card),
+        );
     }
     body.child(roles::meta("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", p).mt(roles::GROUP_TOP))
 }

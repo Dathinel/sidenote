@@ -301,7 +301,7 @@ impl State {
         } else {
             self.open_hex();
         }
-        self.hex.section = super::hex::Section::AiNotes;
+        self.hex.section = super::hex::Section::Connect;
         self.hex.filter = TextEdit::default();
         self.nav_done();
         super::scene_scroll(self, "ai-notes-settings");
@@ -345,10 +345,14 @@ impl State {
                 self.config.notes = Some(settings.clone());
                 self.ai_notes.settings = Some(settings);
                 self.ai_notes.fallback = None;
+                self.hex.shell.saved =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Meeting summary settings saved.".into());
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
                 self.notes_editor_loaded(index, entry, reset);
+                self.hex.shell.saved =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Instructions saved.".into());
             }
             Ok(Completion::Tested(index, result)) => {
@@ -610,14 +614,36 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
     }
     c
 }
-pub fn section(s: &State, k: &Kit, p: Palette) -> El {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    Identity,
+    Summaries,
+    Helpers,
+    Advanced,
+    Scripts,
+    Prompts,
+}
+pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     let a = &s.ai_notes;
     let mut c = col()
         .key("ai-notes-settings")
+        .fill(super::hex::settings::highlight(s, "ai-notes-settings", p))
         .w_full()
-        .gap(16.0)
-        .mt(20.0)
-        .child(roles::SECTION.wrap("Meeting summary", p.ink));
+        .gap(if part == Part::Helpers { 10.0 } else { 16.0 })
+        .mt(12.0)
+        .children((part != Part::Helpers).then(|| {
+            roles::GROUP.wrap(
+                match part {
+                    Part::Identity => "You",
+                    Part::Helpers => "AI helpers",
+                    Part::Advanced => "Helper diagnostics and models",
+                    Part::Summaries => "Meeting summary",
+                    Part::Scripts => "Summary engine",
+                    Part::Prompts => "Meeting summary instructions",
+                },
+                p.soft,
+            )
+        }));
     if let Some(pending) = a.pending {
         c = c.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
@@ -634,11 +660,13 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if let Some(notice) = &a.notice {
         c = c.child(roles::SMALL.wrap(notice, p.ok).role("status"));
     }
-    c = c.child(
-        button("Reload helper status", "ai-notes-reload", p)
-            .self_start()
-            .on_press(|s: &mut State| s.refresh_ai_notes()),
-    );
+    if part == Part::Advanced || a.settings.is_none() {
+        c = c.child(
+            button("Reload helper status", "ai-notes-reload", p)
+                .self_start()
+                .on_press(|s: &mut State| s.refresh_ai_notes()),
+        );
+    }
     let Some(settings) = &a.settings else {
         return c;
     };
@@ -666,16 +694,18 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         ("scripts", _) => "Your own scripts write summaries on this PC.".into(),
         _ => "Meeting summaries are off. New meetings get a transcript only.".into(),
     };
-    c = c.child(
-        roles::SMALL
-            .medium()
-            .wrap(status, p.ink)
-            .self_start()
-            .px(10.0)
-            .py(6.0)
-            .radius(6.0)
-            .fill(p.chip),
-    );
+    if part == Part::Advanced {
+        c = c.child(
+            roles::SMALL
+                .medium()
+                .wrap(status, p.ink)
+                .self_start()
+                .px(10.0)
+                .py(6.0)
+                .radius(6.0)
+                .fill(p.chip),
+        );
+    }
     if let Some((_, job)) = a
         .jobs
         .iter()
@@ -689,185 +719,355 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             p,
         ));
     }
-    let mut privacy = card(p).key("notes-privacy")
-        .child(roles::TITLE.wrap("What is sent", p.ink))
-        .child(roles::SMALL.wrap(PRIVACY, p.ink))
-        .child(roles::SMALL.wrap("Claude Code sends that text to Anthropic using your own account. It gets no tools and no MCP servers, but it still loads your own CLAUDE.md and hooks.", p.ink))
-        .child(roles::SMALL.wrap("Sidenote has no server of its own.", p.ink))
-        .child(button(if a.privacy_open { "Hide details" } else { "Details" }, "notes-privacy-details", p).self_start().on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open));
-    if a.privacy_open {
-        privacy = privacy
+
+    let off = settings.engine != "scripts"
+        && (settings.engine != "app" || settings.effective_helper().is_none());
+    if part == Part::Summaries {
+        c = c
+            .child(super::hex::settings::setting_row(
+                s,
+                "notes-options",
+                "Write a meeting summary when a meeting ends",
+                if off {
+                    "Choose an AI helper to write meeting summaries."
+                } else if settings.engine == "scripts" {
+                    "Your configured script writes it when the meeting ends."
+                } else {
+                    "Claude Code writes it as soon as the meeting ends."
+                },
+                Switch::new(settings.auto)
+                    .disabled(off)
+                    .label("Write a meeting summary when a meeting ends")
+                    .hide_label()
+                    .on_toggle(|s: &mut State| {
+                        if let Some(mut settings) = s.ai_notes.settings.clone() {
+                            settings.auto = !settings.auto;
+                            s.notes_work(
+                                Work::Settings(settings),
+                                "Saving automatic meeting summaries...",
+                            );
+                        }
+                    })
+                    .build(k)
+                    .key("notes-auto"),
+                true,
+                p,
+            ))
+            .child(super::hex::settings::setting_row(
+                s,
+                "summary-template",
+                "Summary template",
+                "Sidenote picks one by meeting kind, and you can edit them in the Prompt library.",
+                button("Edit instructions", "summary-template-edit", p).on_press(
+                    |s: &mut State| {
+                        s.hex.section = super::hex::Section::PromptLibrary;
+                        super::scene_scroll(s, "agent-instructions");
+                    },
+                ),
+                false,
+                p,
+            ));
+        let mut privacy = card(p)
+            .key("notes-privacy")
+            .child(roles::TITLE.wrap("What is sent", p.ink))
+            .child(roles::SMALL.wrap(PRIVACY, p.ink))
+            .child(
+                button(
+                    if a.privacy_open {
+                        "Hide details"
+                    } else {
+                        "Details"
+                    },
+                    "notes-privacy-details",
+                    p,
+                )
+                .self_start()
+                .on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open),
+            );
+        if a.privacy_open {
+            privacy = privacy
             .child(roles::SMALL.wrap("Nothing is sent until you turn on Meeting summary. After that, Sidenote sends a meeting when it ends, if automatic meeting summaries are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
             .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
-    }
-    c = c.child(privacy);
-    c = c.child(roles::TITLE.wrap("Choose a helper", p.ink));
-    for (index, h) in HELPERS.iter().copied().enumerate() {
-        let found = a.found.contains(&(h, true));
-        let offered = h.offered();
-        let selected =
-            offered && settings.engine == "app" && settings.effective_helper() == Some(h);
-        let mut r = card(p)
-            .key(format!("notes-helper-{index}"))
-            .child(roles::TITLE.wrap(
-                format!(
-                    "{}{}",
-                    h.name(),
-                    if index == 0 { " (recommended)" } else { "" }
-                ),
-                p.ink,
-            ));
-        if !offered {
-            r = r.child(roles::SMALL.wrap("Coming in a later version", p.soft));
-            c = c.child(r);
-            continue;
         }
-        r = r.child(roles::META.wrap(
-            format!(
-                "{}{}",
-                if found { "Detected" } else { "Not detected" },
-                if selected { ". In use" } else { "" }
-            ),
-            if selected { p.ok } else { p.soft },
-        ));
-        r = r.child(roles::SMALL.wrap(
-            if found {
-                "Uses your Claude Code account. To sign in again, type claude in a terminal."
-            } else {
-                SETUP_STEPS
-            },
-            p.soft,
-        ));
-        if !found {
-            r = r.child(
+        c = c.child(privacy);
+    }
+    if matches!(part, Part::Helpers | Part::Advanced) {
+        if part == Part::Helpers {
+            c = c.child(
                 row()
+                    .w_full()
                     .flex_wrap()
-                    .gaps(8.0, 8.0)
+                    .gap(10.0)
                     .child(
-                        button("Open install page", "notes-install-page", p)
-                            .on_press(|s: &mut State| s.open_notes_install_page()),
+                        TextInput::new(&s.hex.shell.helper_query)
+                            .placeholder("Search helpers")
+                            .label("Search helpers")
+                            .height(34.0)
+                            .on_edit(|s: &mut State| &mut s.hex.shell.helper_query)
+                            .build(k)
+                            .key("helper-search")
+                            .grow(1.0),
                     )
                     .child(
-                        button("Check again", "notes-helper-check", p)
-                            .on_press(|s: &mut State| s.refresh_ai_notes()),
+                        button(
+                            if s.hex.shell.recommended {
+                                "Recommended \u{2713}"
+                            } else {
+                                "Recommended"
+                            },
+                            "helper-recommended",
+                            p,
+                        )
+                        .on_press(|s: &mut State| {
+                            s.hex.shell.recommended = !s.hex.shell.recommended
+                        }),
                     ),
             );
-            c = c.child(r);
-            continue;
         }
-        if needs_sign_in(found, a.test_results.get(&index).map(String::as_str)) {
-            r = r.child(
-                button("Copy sign-in command: claude", "notes-copy-command", p)
-                    .self_start()
-                    .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
-            );
-        }
-        r = r.child(
-            button(
-                if a.model_open {
-                    "Hide model"
+
+        for (index, h) in HELPERS.iter().copied().enumerate() {
+            let found = a.found.contains(&(h, true));
+            let offered = h.offered();
+            let selected =
+                offered && settings.engine == "app" && settings.effective_helper() == Some(h);
+            let mut r = card(p)
+                .key(format!("notes-helper-{index}"))
+                .child(roles::TITLE.wrap(
+                    format!(
+                        "{}{}",
+                        h.name(),
+                        if index == 0 { " (recommended)" } else { "" }
+                    ),
+                    p.ink,
+                ));
+            if part == Part::Helpers {
+                let query = s.hex.shell.helper_query.text.to_lowercase();
+                if !h.name().to_lowercase().contains(query.trim())
+                    || (s.hex.shell.recommended && index != 0)
+                {
+                    continue;
+                }
+                let help = if h == Helper::Codex {
+                    "Answers Ask, while summaries stay on Claude Code for now."
+                } else if h == Helper::OpenCode {
+                    "Answers Ask."
                 } else {
-                    "Change model"
+                    "Writes your meeting summaries and answers Ask."
+                };
+                let info = col()
+                    .grow(1.0)
+                    .min_w(170.0)
+                    .gap(5.0)
+                    .child(
+                        row()
+                            .flex_wrap()
+                            .gap(8.0)
+                            .child(roles::NAME.wrap(h.name(), p.ink))
+                            .children(
+                                (index == 0).then(|| roles::META.line("Recommended", p.accent)),
+                            )
+                            .children(selected.then(|| roles::META.line("In use", p.ok))),
+                    )
+                    .child(roles::SMALL.wrap(help, p.soft))
+                    .child(roles::META.wrap(
+                        if found {
+                            "Detected on this PC. Sign-in has not been checked."
+                        } else {
+                            "Not on this PC."
+                        },
+                        p.soft,
+                    ));
+                let action = if !offered {
+                    button("Ask only", &format!("notes-ask-only-{index}"), p).focusable(false)
+                } else if selected {
+                    button("In use", &format!("notes-use-{index}"), p)
+                        .color(p.ok)
+                        .focusable(false)
+                } else if !found {
+                    button("Set up", "notes-install-page", p)
+                        .on_press(|s: &mut State| s.open_notes_install_page())
+                } else {
+                    button("Use Claude Code", &format!("notes-use-{index}"), p)
+                        .on_press(move |s: &mut State| s.choose_notes_helper(index))
+                };
+                r = row()
+                    .key(format!("notes-helper-{index}"))
+                    .w_full()
+                    .flex_wrap()
+                    .gaps(12.0, 10.0)
+                    .items_center()
+                    .padding(14.0)
+                    .fill(p.card)
+                    .border(1.0, p.line)
+                    .radius(8.0)
+                    .child(super::hex::settings::icon_tile(&super::icons::BOT, p))
+                    .child(info)
+                    .child(action);
+                c = c.child(r);
+                if a.switch_confirm == Some(h) {
+                    c = c.child(card(p)
+                        .child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.",p.warn))
+                        .child(row().flex_wrap().gap(8.0)
+                            .child(button("Switch to built-in meeting summaries","notes-confirm-switch",p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
+                            .child(button("Keep scripts","notes-cancel-switch",p).on_press(|s: &mut State| s.ai_notes.switch_confirm=None))));
+                }
+                continue;
+            }
+            if !offered {
+                r = r.child(roles::SMALL.wrap("Coming in a later version", p.soft));
+                c = c.child(r);
+                continue;
+            }
+            r = r.child(roles::META.wrap(
+                format!(
+                    "{}{}",
+                    if found { "Detected" } else { "Not detected" },
+                    if selected { ". In use" } else { "" }
+                ),
+                if selected { p.ok } else { p.soft },
+            ));
+            r = r.child(roles::SMALL.wrap(
+                if found {
+                    "Uses your Claude Code account. To sign in again, type claude in a terminal."
+                } else {
+                    SETUP_STEPS
                 },
-                "notes-change-model",
-                p,
-            )
-            .self_start()
-            .on_press(|s: &mut State| s.ai_notes.model_open = !s.ai_notes.model_open),
-        );
-        if a.model_open {
-            r = r
-                .child(roles::META.wrap("Model name", p.soft))
-                .child(
-                    field(&a.models[index], "Model name")
-                        .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
-                        .build(k)
-                        .key(format!("notes-model-{index}"))
-                        .w_full(),
-                )
-                .child(
-                    button("Reset to recommended", "notes-model-reset", p)
-                        .self_start()
-                        .on_press(move |s: &mut State| {
-                            s.ai_notes.models[index] = TextEdit::new(HELPERS[index].default_model())
-                        }),
-                );
-            if selected && a.models[index].text.trim() != settings.model && a.pending.is_none() {
+                p.soft,
+            ));
+            if !found {
                 r = r.child(
-                    button("Save model", "notes-save-model", p)
+                    row()
+                        .flex_wrap()
+                        .gaps(8.0, 8.0)
+                        .child(
+                            button("Open install page", "notes-install-page", p)
+                                .on_press(|s: &mut State| s.open_notes_install_page()),
+                        )
+                        .child(
+                            button("Check again", "notes-helper-check", p)
+                                .on_press(|s: &mut State| s.refresh_ai_notes()),
+                        ),
+                );
+                c = c.child(r);
+                continue;
+            }
+            if needs_sign_in(found, a.test_results.get(&index).map(String::as_str)) {
+                r = r.child(
+                    button("Copy sign-in command: claude", "notes-copy-command", p)
                         .self_start()
-                        .on_press(move |s: &mut State| s.choose_notes_helper(index)),
+                        .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
                 );
             }
-        }
-        let mut actions = row().flex_wrap().gaps(8.0, 8.0);
-        let use_this = button(
-            if selected {
-                "In use"
-            } else {
-                "Turn on with Claude Code"
-            },
-            &format!("notes-use-{index}"),
-            p,
-        );
-        let test = button("Send a sample", &format!("notes-test-{index}"), p);
-        if a.pending.is_none() {
-            actions = actions
-                .child(if selected {
-                    use_this.color(p.ok).focusable(false)
-                } else {
-                    use_this.on_press(move |s: &mut State| s.choose_notes_helper(index))
-                })
-                .child(test.on_press(move |s: &mut State| {
-                    let model = s.ai_notes.models[index].text.clone();
-                    s.notes_work(Work::Test(index, model), "Testing fixed sample text...");
-                }));
-        } else {
-            actions = actions
-                .child(
-                    use_this
-                        .help("Wait for the current operation to finish.")
-                        .focusable(false),
-                )
-                .child(
-                    test.help("Wait for the current operation to finish.")
-                        .focusable(false),
-                );
-        }
-        r = r.child(actions);
-        if a.testing == Some(index) && a.pending.is_some() {
             r = r.child(
-                roles::SMALL
-                    .wrap("Testing fixed sample text...", p.soft)
-                    .role("status"),
-            );
-        }
-        if let Some(result) = a.test_results.get(&index) {
-            r = r.child(if result.starts_with("Worked in ") {
-                roles::SMALL.wrap(result, p.ok).role("status")
-            } else {
-                super::widgets::banner(
-                    "Sample did not finish",
-                    result,
-                    super::widgets::BannerKind::Problem,
+                button(
+                    if a.model_open {
+                        "Hide model"
+                    } else {
+                        "Change model"
+                    },
+                    "notes-change-model",
                     p,
                 )
-            });
-        }
-        if a.switch_confirm == Some(h) {
-            r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.", p.warn))
+                .self_start()
+                .on_press(|s: &mut State| s.ai_notes.model_open = !s.ai_notes.model_open),
+            );
+            if a.model_open {
+                r = r
+                    .child(roles::META.wrap("Model name", p.soft))
+                    .child(
+                        field(&a.models[index], "Model name")
+                            .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
+                            .build(k)
+                            .key(format!("notes-model-{index}"))
+                            .w_full(),
+                    )
+                    .child(
+                        button("Reset to recommended", "notes-model-reset", p)
+                            .self_start()
+                            .on_press(move |s: &mut State| {
+                                s.ai_notes.models[index] =
+                                    TextEdit::new(HELPERS[index].default_model())
+                            }),
+                    );
+                if selected && a.models[index].text.trim() != settings.model && a.pending.is_none()
+                {
+                    r = r.child(
+                        button("Save model", "notes-save-model", p)
+                            .self_start()
+                            .on_press(move |s: &mut State| s.choose_notes_helper(index)),
+                    );
+                }
+            }
+            let mut actions = row().flex_wrap().gaps(8.0, 8.0);
+            let use_this = button(
+                if selected {
+                    "In use"
+                } else {
+                    "Turn on with Claude Code"
+                },
+                &format!("notes-use-{index}"),
+                p,
+            );
+            let test = button("Send a sample", &format!("notes-test-{index}"), p);
+            if a.pending.is_none() {
+                actions = actions
+                    .child(if selected {
+                        use_this.color(p.ok).focusable(false)
+                    } else {
+                        use_this.on_press(move |s: &mut State| s.choose_notes_helper(index))
+                    })
+                    .child(test.on_press(move |s: &mut State| {
+                        let model = s.ai_notes.models[index].text.clone();
+                        s.notes_work(Work::Test(index, model), "Testing fixed sample text...");
+                    }));
+            } else {
+                actions = actions
+                    .child(
+                        use_this
+                            .help("Wait for the current operation to finish.")
+                            .focusable(false),
+                    )
+                    .child(
+                        test.help("Wait for the current operation to finish.")
+                            .focusable(false),
+                    );
+            }
+            r = r.child(actions);
+            if a.testing == Some(index) && a.pending.is_some() {
+                r = r.child(
+                    roles::SMALL
+                        .wrap("Testing fixed sample text...", p.soft)
+                        .role("status"),
+                );
+            }
+            if let Some(result) = a.test_results.get(&index) {
+                r = r.child(if result.starts_with("Worked in ") {
+                    roles::SMALL.wrap(result, p.ok).role("status")
+                } else {
+                    super::widgets::banner(
+                        "Sample did not finish",
+                        result,
+                        super::widgets::BannerKind::Problem,
+                        p,
+                    )
+                });
+            }
+            if a.switch_confirm == Some(h) {
+                r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.", p.warn))
                 .child(row().flex_wrap().gaps(8.0, 8.0)
                     .child(button("Switch to built-in meeting summaries", "notes-confirm-switch", p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
                     .child(button("Keep scripts", "notes-cancel-switch", p).on_press(|s: &mut State| s.ai_notes.switch_confirm = None)));
+            }
+            c = c.child(r);
         }
-        c = c.child(r);
     }
-    if settings.script.is_some() {
-        c = c.child(
+    if part == Part::Scripts {
+        if settings.script.is_some() {
+            c = c.child(
             card(p)
-                .key("notes-scripts-card")
+                .key("notes-scripts-card").fill(super::hex::settings::highlight(s,"notes-scripts-card",p))
                 .child(roles::TITLE.wrap("Your own scripts (advanced)", p.ink))
                 .child(roles::SMALL.wrap(
                     "Use your configured script. Built-in meeting summaries will stop starting new jobs.",
@@ -884,50 +1084,47 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                         }),
                 ),
         );
+        }
+        let off = settings.engine != "scripts"
+            && (settings.engine != "app" || settings.effective_helper().is_none());
+        c = c.child(
+            card(p)
+                .child(roles::TITLE.wrap("Off", p.ink))
+                .child(roles::SMALL.wrap("Keep new meetings as transcripts only.", p.soft))
+                .child(if off {
+                    button("Selected", "notes-off", p)
+                        .color(p.ok)
+                        .fill(p.sel)
+                        .self_start()
+                        .focusable(false)
+                } else {
+                    button("Turn off Meeting summary", "notes-off", p)
+                        .self_start()
+                        .on_press(|s: &mut State| {
+                            if let Some(mut settings) = s.ai_notes.settings.clone() {
+                                settings.engine = "off".into();
+                                s.notes_work(
+                                    Work::Settings(settings),
+                                    "Turning off Meeting summary...",
+                                );
+                            }
+                        })
+                }),
+        );
     }
-    let off = settings.engine != "scripts"
-        && (settings.engine != "app" || settings.effective_helper().is_none());
-    c = c.child(
-        card(p)
-            .child(roles::TITLE.wrap("Off", p.ink))
-            .child(roles::SMALL.wrap("Keep new meetings as transcripts only.", p.soft))
-            .child(if off {
-                button("Selected", "notes-off", p)
-                    .color(p.ok)
-                    .fill(p.sel)
-                    .self_start()
-                    .focusable(false)
-            } else {
-                button("Turn off Meeting summary", "notes-off", p)
-                    .self_start()
-                    .on_press(|s: &mut State| {
-                        if let Some(mut settings) = s.ai_notes.settings.clone() {
-                            settings.engine = "off".into();
-                            s.notes_work(
-                                Work::Settings(settings),
-                                "Turning off Meeting summary...",
-                            );
-                        }
-                    })
-            }),
-    );
-    c = c.child(card(p).key("notes-options")
-        .child(row().w_full().gap(12.0).items_center()
-            .child(roles::NAME.wrap("Write a meeting summary when a meeting ends", if off { p.soft } else { p.ink }).grow(1.0).min_w(0.0))
-            .child(roles::CONTROL.wrap(if settings.auto { "On" } else { "Off" }, p.soft))
-            .child(Switch::new(settings.auto).disabled(off).label("Write a meeting summary when a meeting ends").hide_label().on_toggle(|s: &mut State| {
-                if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic meeting summaries..."); }
-            }).build(k).key("notes-auto")))
-        .child(roles::SMALL.wrap(if off { "Only applies when Meeting summaries are on." } else { "When this is off, use Write summary on each meeting." }, p.soft)))
-        .child(card(p).key("notes-identity")
+    if part == Part::Identity {
+        c = c.child(card(p).key("notes-identity").fill(super::hex::settings::highlight(s,"notes-identity",p))
         .child(roles::TITLE.wrap("Who you are in tasks", p.ink))
-        .child(roles::NAME.wrap("Your name (optional)", p.ink))
+        .child(super::hex::settings::icon_tile(&super::icons::PEOPLE,p))
+        .child(row().items_center().gap(8.0).child(roles::NAME.wrap("Your name (optional)", p.ink)).child(super::hex::settings::pc(p)))
         .child(field(&a.name, "Your name").on_edit(|s: &mut State| &mut s.ai_notes.name).build(k).key("notes-name").w_full())
         .child(roles::META.wrap("Used to mark tasks that are yours. Stored on this PC and included when a meeting is sent to your helper.", p.soft))
         .child(button("Save name", "notes-save-name", p).self_start().on_press(|s: &mut State| {
             if let Some(mut settings) = s.ai_notes.settings.clone() { settings.your_name = s.ai_notes.name.text.trim().into(); s.notes_work(Work::Settings(settings), "Saving your name..."); }
         })));
-    c.child(col().key("agent-instructions").w_full().gap(16.0)
+    }
+    if part == Part::Prompts {
+        c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)
         .child(roles::SECTION.wrap("Meeting summary instructions", p.ink))
         .child(roles::SMALL.wrap("Change the base instructions for your helper. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
         .child(editor(s, 0, p)).child(editor(s, 1, p)))
@@ -937,7 +1134,9 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             s.hex.filter = TextEdit::default();
             s.nav_done();
             super::scene_scroll(s, "hex-top");
-        })))
+        })));
+    }
+    c
 }
 pub fn setup_visible(s: &State) -> bool {
     s.view == super::tasks::View::Meetings

@@ -341,7 +341,8 @@ fn edit_button(p: Palette) -> El {
     .hover(p.chip)
     .label("Open instructions")
     .on_press(|s: &mut State| {
-        s.open_ai_notes();
+        s.open_hex();
+        s.hex.section = super::hex::Section::PromptLibrary;
         super::scene_scroll(s, "agent-instructions");
     })
 }

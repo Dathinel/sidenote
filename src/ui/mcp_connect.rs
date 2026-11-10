@@ -1,11 +1,13 @@
-use super::{Event, State, area, roles, tasks::button, theme::Palette, widgets::hairline};
-use rune::{El, col, row};
+use super::{Event, State, area, roles, tasks::button, theme::Palette};
+use rune::{El, col};
 use sidenote::core::mcp_connect::{self, Client};
 
 #[derive(Default)]
 pub struct Connection {
     pub client: Client,
     pub busy: bool,
+    pub show_details: bool,
+    pub show_all: bool,
     pub result: Option<Result<String, String>>,
 }
 impl State {
@@ -29,11 +31,8 @@ impl State {
     }
 }
 pub fn section(s: &State, p: Palette) -> El {
-    let mut body = col().w_full().pt(24.0).gap(12.0)
-        .child(roles::SECTION.wrap("Connect AI apps", p.ink))
-        .child(roles::SMALL.wrap("Use your meeting knowledge in an AI app on this PC.", p.soft))
-        .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.", p.soft))
-        .child(roles::META.wrap("Feature switches change what Sidenote shows. They do not limit what connected apps can read through meetings.", p.soft));
+    let mut body = col().w_full().gap(8.0)
+        .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.",p.soft));
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(_) => {
@@ -43,37 +42,55 @@ pub fn section(s: &State, p: Palette) -> El {
             ));
         }
     };
-    body = body
-        .child(hairline(p))
-        .child(roles::NAME.wrap(
-            if sidenote::updates::installed() {
-                "Installed executable"
-            } else {
-                "Development build executable"
-            },
-            p.ink,
-        ))
-        .child(roles::SMALL.wrap(exe.to_string_lossy(), p.soft));
-    if !sidenote::updates::installed() {
-        body = body.child(roles::META.wrap("This is a dev build. Keep this file here, or reconnect using your installed copy after installing Sidenote.", p.soft));
-    }
-    let mut clients = row().w_full().flex_wrap().gaps(8.0, 8.0);
+    let mut clients = col().w_full();
     for client in Client::ALL {
-        clients = clients.child(
+        let found = client.config_path().is_file()
+            || (client == Client::ClaudeCode
+                && s.ai_notes
+                    .found
+                    .contains(&(sidenote::core::notes::Helper::Claude, true)));
+        if !found && !s.connection.show_all {
+            continue;
+        }
+        clients = clients.child(super::hex::settings::setting_row(
+            s,
+            &format!("connect-{}", client.name()),
+            client.name(),
+            "It can read your meetings through Sidenote.",
             button(
-                client.name(),
-                format!("connect-{}", client.name()),
-                s.connection.client == client,
+                "Set up",
+                format!("connect-{}-setup", client.name()),
+                false,
                 p,
             )
-            .on_press(move |s: &mut State| s.connection.client = client),
-        );
+            .on_press(move |s: &mut State| {
+                s.connection.client = client;
+                s.connection.show_details = true;
+            }),
+            false,
+            p,
+        ));
     }
+    body = body.child(clients).child(
+        button(
+            if s.connection.show_all {
+                "Hide other apps"
+            } else {
+                "Connect another app"
+            },
+            "connect-more",
+            false,
+            p,
+        )
+        .on_press(|s: &mut State| s.connection.show_all = !s.connection.show_all),
+    );
+    if !s.connection.show_details {
+        return body;
+    }
+    body = body.child(roles::META.wrap("Feature switches change what Sidenote shows. They do not limit what connected apps can read through meetings.",p.soft));
     let client = s.connection.client;
     let config = client.config(&exe);
-    body = body
-        .child(clients)
-        .child(roles::NAME.wrap(client.name(), p.ink));
+    body = body.child(roles::NAME.wrap(client.name(), p.ink));
     if client == Client::ClaudeCode {
         let mut add = button(
             if s.connection.busy {

@@ -795,7 +795,8 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 move |s| {
                     s.nav.profile_menu = false;
                     if helper_issue {
-                        s.open_ai_notes();
+                        s.open_hex();
+                        s.hex.section = hex::Section::Connect;
                     } else {
                         s.open_hex();
                     }
@@ -810,7 +811,8 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 p,
                 |s| {
                     s.nav.profile_menu = false;
-                    s.open_ai_notes();
+                    s.open_hex();
+                    s.hex.section = hex::Section::PromptLibrary;
                     super::scene_scroll(s, "agent-instructions");
                 },
             ))

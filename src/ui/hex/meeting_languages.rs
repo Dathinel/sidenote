@@ -59,6 +59,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
                 Ok(config) => {
                     s.config = config;
                     s.feature_error = None;
+                    s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                 }
                 Err(_) => {
                     s.feature_error = Some("Could not save language handling. Try again.".into())

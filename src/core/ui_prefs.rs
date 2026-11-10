@@ -12,6 +12,7 @@ pub struct UiPrefs {
     pub task_titles_notice_seen: bool,
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
+    pub settings_tabs: std::collections::BTreeMap<String, usize>,
 }
 
 fn path(root: &Path) -> PathBuf {
@@ -26,5 +27,25 @@ impl UiPrefs {
 
     pub fn save(&self, root: &Path) -> std::io::Result<()> {
         store_io::write(&path(root), self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn settings_tabs_round_trip_without_changing_existing_preferences() {
+        let mut prefs: UiPrefs = serde_json::from_str(
+            r#"{"show_full_titles":true,"task_titles_notice_seen":true,"sidebar_collapsed":false}"#,
+        )
+        .unwrap();
+        assert!(prefs.settings_tabs.is_empty());
+        prefs.settings_tabs.insert("Meetings".into(), 1);
+        prefs.settings_tabs.insert("AI helpers".into(), 2);
+        let round_trip: UiPrefs =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert_eq!(round_trip, prefs);
+        assert!(round_trip.show_full_titles && round_trip.task_titles_notice_seen);
+        assert_eq!(round_trip.sidebar_collapsed, Some(false));
     }
 }
