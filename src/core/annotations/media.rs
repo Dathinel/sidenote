@@ -12,7 +12,25 @@ use std::{
 pub const LONG_EDGE: u32 = 1568;
 pub const CROP_PADDING: f32 = 0.15;
 pub type BoxNorm = [f32; 4];
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Shared by every synthetic scene and live proof, in source-image coordinates.
+pub const SYNTHETIC_MASK: BoxNorm = [0.31, 0.06, 0.45, 0.08];
+/// Input points are local to the displayed image, never the containing page.
+pub fn box_from_display(start: [f32; 2], end: [f32; 2], size: [f32; 2]) -> Option<BoxNorm> {
+    if !size.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let x0 = start[0].min(end[0]).clamp(0.0, size[0]);
+    let y0 = start[1].min(end[1]).clamp(0.0, size[1]);
+    let x1 = start[0].max(end[0]).clamp(0.0, size[0]);
+    let y1 = start[1].max(end[1]).clamp(0.0, size[1]);
+    normalized_box([
+        x0 / size[0],
+        y0 / size[1],
+        (x1 - x0) / size[0],
+        (y1 - y0) / size[1],
+    ])
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReviewFrame {
     pub index: u64,
     pub included: bool,
@@ -184,8 +202,8 @@ fn save_png(
     hashes.insert(name.into(), blake3::hash(&bytes).to_hex().to_string());
     Ok(())
 }
-/// Called only by the explicit Send for note action (or the synthetic proof).
-pub fn approve(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<ApprovedCapture> {
+/// Bake locally before review. This snapshot is not permission to send.
+pub fn prepare(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<ApprovedCapture> {
     let indices: std::collections::BTreeSet<_> = c.data.keyframes.iter().map(|f| f.index).collect();
     if indices.len() != c.data.keyframes.len() {
         return Err(error(
@@ -212,7 +230,7 @@ pub fn approve(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<A
     let mut approval = Approval {
         capture_id: c.data.id.clone(),
         source_fingerprint: source,
-        approved_at_ms: chrono::Utc::now().timestamp_millis(),
+        approved_at_ms: 0,
         frames: Vec::new(),
         review: review.to_owned(),
         file_hashes: BTreeMap::new(),
@@ -285,15 +303,43 @@ pub fn approve(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<A
     )?;
     Ok(ApprovedCapture { folder, approval })
 }
+/// Seal the exact preview bytes; do not re-render or resize after approval.
+pub fn approve_preview(
+    c: &Capture,
+    mut preview: ApprovedCapture,
+    review: &[ReviewFrame],
+) -> io::Result<ApprovedCapture> {
+    preview.verify_preview()?;
+    if preview.approval.review != review
+        || source_fingerprint(c)? != preview.approval.source_fingerprint
+    {
+        return Err(error("Review changed. Review the baked images again."));
+    }
+    preview.approval.approved_at_ms = chrono::Utc::now().timestamp_millis();
+    store_io::atomic_write(
+        &preview.folder.join("approval.json"),
+        &serde_json::to_vec_pretty(&preview.approval)?,
+    )?;
+    preview.verify()?;
+    Ok(preview)
+}
+/// The synthetic proof uses the same preparation and sealing path as the UI.
+pub fn approve(c: &Capture, review: &[ReviewFrame], root: &Path) -> io::Result<ApprovedCapture> {
+    approve_preview(c, prepare(c, review, root)?, review)
+}
 impl ApprovedCapture {
     pub fn verify(&self) -> io::Result<()> {
+        if self.approval.approved_at_ms <= 0 {
+            return Err(error("These images have not been approved."));
+        }
+        self.verify_preview()
+    }
+    pub fn verify_preview(&self) -> io::Result<()> {
         let saved: Approval = serde_json::from_slice(&file_reads::read(
             &self.folder.join("approval.json"),
             16 * 1024 * 1024,
         )?)?;
-        if saved.approved_at_ms <= 0
-            || serde_json::to_value(&saved)? != serde_json::to_value(&self.approval)?
-        {
+        if serde_json::to_value(&saved)? != serde_json::to_value(&self.approval)? {
             return Err(error("Approval changed. Review and approve again."));
         }
         if self.approval.frames.is_empty() {
@@ -319,6 +365,39 @@ impl ApprovedCapture {
             }
         }
         Ok(())
+    }
+    pub fn pin_images(&self, images: &[PathBuf]) -> io::Result<Vec<fs::File>> {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+        self.verify()?;
+        images
+            .iter()
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| error("Invalid image"))?;
+                if path.parent() != Some(self.folder.as_path()) {
+                    return Err(error("Unapproved image folder"));
+                }
+                let expected = self
+                    .approval
+                    .file_hashes
+                    .get(name)
+                    .ok_or_else(|| error("Unapproved image"))?;
+                let mut file = fs::OpenOptions::new().read(true).share_mode(1).open(path)?;
+                let mut bytes = Vec::new();
+                (&mut file)
+                    .take(IMAGE_MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() as u64 > IMAGE_MAX_BYTES
+                    || blake3::hash(&bytes).to_hex().as_str() != expected
+                {
+                    return Err(error("The sent image differs from the baked review copy."));
+                }
+                Ok(file)
+            })
+            .collect()
     }
     pub fn images_for(&self, frame: &PreparedFrame) -> Vec<PathBuf> {
         std::iter::once(&frame.original)

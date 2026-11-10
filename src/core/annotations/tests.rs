@@ -469,3 +469,59 @@ fn scan_is_newest_first_and_does_not_open_audio_or_video() {
     assert!(scan.captures[0].data.transcript.words.is_empty());
     assert!(super::scan(&temp.0.join("missing")).captures.is_empty());
 }
+
+#[test]
+fn display_drag_at_two_sizes_bakes_exactly_the_same_source_pixels() {
+    use super::media::*;
+    let source = image::RgbaImage::from_pixel(800, 400, image::Rgba([90, 110, 130, 77]));
+    for [w, h] in [[1000.0, 500.0], [400.0, 200.0]] {
+        let b = box_from_display([w * 0.25, h * 0.25], [w * 0.75, h * 0.75], [w, h]).unwrap();
+        assert_eq!(b, [0.25, 0.25, 0.5, 0.5]);
+        let sent = bake(&source, &[b]);
+        for (x, y, p) in sent.enumerate_pixels() {
+            assert_eq!(
+                *p,
+                if (200..600).contains(&x) && (100..300).contains(&y) {
+                    image::Rgba([0, 0, 0, 255])
+                } else {
+                    *source.get_pixel(x, y)
+                }
+            );
+        }
+        assert!(source.pixels().all(|p| p.0 == [90, 110, 130, 77]));
+    }
+}
+#[test]
+fn approval_seals_reviewed_bytes_and_send_pins_the_same_files() {
+    use super::media::*;
+    let temp = Temp::new();
+    let c = read_capture(&fixture()).unwrap();
+    let review = vec![ReviewFrame {
+        index: 1,
+        included: true,
+        masks: vec![SYNTHETIC_MASK],
+    }];
+    let preview = prepare(&c, &review, &temp.0).unwrap();
+    assert!(preview.verify().is_err());
+    let before: Vec<_> = preview
+        .approval
+        .file_hashes
+        .keys()
+        .map(|n| (n.clone(), fs::read(preview.folder.join(n)).unwrap()))
+        .collect();
+    let approved = approve_preview(&c, preview, &review).unwrap();
+    let pinned = approved
+        .pin_images(&approved.images_for(&approved.approval.frames[0]))
+        .unwrap();
+    for (name, bytes) in &before {
+        assert_eq!(fs::read(approved.folder.join(name)).unwrap(), *bytes);
+        assert!(fs::write(approved.folder.join(name), b"changed").is_err());
+    }
+    drop(pinned);
+    fs::write(approved.folder.join(&before[0].0), b"changed").unwrap();
+    assert!(
+        approved
+            .pin_images(&approved.images_for(&approved.approval.frames[0]))
+            .is_err()
+    );
+}

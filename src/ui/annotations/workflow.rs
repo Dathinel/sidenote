@@ -257,6 +257,51 @@ impl State {
         );
         self.annotations.status.clear();
         self.annotations.editing.clear();
+        self.prepare_annotation_preview();
+    }
+    pub(super) fn prepare_annotation_preview(&mut self) {
+        self.annotations.preview = None;
+        self.annotations.preview_images.clear();
+        let Some(review) = &self.annotations.review else {
+            return;
+        };
+        if !review.iter().any(|f| f.included) {
+            return;
+        }
+        let Some(c) = self
+            .annotations
+            .captures
+            .iter()
+            .find(|c| Some(&c.folder) == self.annotations.selected.as_ref())
+        else {
+            return;
+        };
+        let result = (|| {
+            let preview = media::prepare(c, review, &self.store.root)?;
+            let cache = ImageCache::new(self.waker.clone().unwrap_or_else(|| Arc::new(|| {})));
+            for frame in &preview.approval.frames {
+                let bytes = file_reads::read(
+                    &preview.folder.join(&frame.marked),
+                    annotations::IMAGE_MAX_BYTES,
+                )?;
+                if blake3::hash(&bytes).to_hex().as_str()
+                    != preview.approval.file_hashes[&frame.marked]
+                {
+                    return Err(std::io::Error::other("Review image changed."));
+                }
+                let image = cache.load(bytes);
+                image
+                    .wait()
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                self.annotations.preview_images.insert(frame.index, image);
+            }
+            preview.verify_preview()?;
+            Ok::<_, std::io::Error>(preview)
+        })();
+        match result {
+            Ok(preview) => self.annotations.preview = Some(preview),
+            Err(e) => self.annotations.status = e.to_string(),
+        }
     }
     fn send_annotation(&mut self, retry: bool) {
         if rune::tooling::headless_run().is_some() {
@@ -288,6 +333,15 @@ impl State {
         } else {
             None
         };
+        let preview = self.annotations.preview.clone();
+        if previous.is_none()
+            && preview
+                .as_ref()
+                .is_none_or(|p| Some(&p.approval.review) != review.as_ref())
+        {
+            self.annotations.status = "Wait for the baked review images, then send again.".into();
+            return;
+        }
         if previous.is_none()
             && review
                 .as_ref()
@@ -310,7 +364,6 @@ impl State {
         self.annotations.drafts.clear();
         self.annotations.stream.clear();
         self.annotations.status = "Preparing the approved images...".into();
-        let root = self.store.root.clone();
         let sender = self.events_tx.clone();
         let wake = self.waker.clone();
         std::thread::spawn(move || {
@@ -329,12 +382,12 @@ impl State {
                 let approved = if let Some(a) = previous {
                     a
                 } else {
-                    media::approve(
+                    media::approve_preview(
                         &capture,
+                        preview.ok_or("Review the baked images before sending.")?,
                         review
                             .as_deref()
                             .ok_or("Review the frames before sending.")?,
-                        &root,
                     )
                     .map_err(|e| e.to_string())?
                 };
@@ -491,18 +544,25 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         page=page.child(roles::META.wrap(format!("Via {} using {}. Crops include 15% padding. PNGs are at most 1568 px on the long edge.",options.helper.name(),options.model),p.soft));
     }
     let mut controls = row().gap(12.0).items_center();
-    let images_ready = frames.iter().filter(|f| f.included).all(|f| {
-        c.data
-            .keyframes
-            .iter()
-            .position(|kf| kf.index == f.index)
-            .and_then(|i| s.annotations.images.get(i))
-            .and_then(|r| r.as_ref().ok())
-            .is_some_and(|image| image.size().is_some() && image.error().is_none())
-    });
+    let images_ready = s
+        .annotations
+        .preview
+        .as_ref()
+        .is_some_and(|preview| preview.approval.review == *frames)
+        && frames.iter().filter(|f| f.included).all(|f| {
+            s.annotations
+                .preview_images
+                .get(&f.index)
+                .is_some_and(|i| i.size().is_some())
+        });
     let allowed =
         frames.iter().any(|f| f.included) && images_ready && s.annotation_options().is_ok();
-    let send = super::super::area::button("Send for note", "annotation-send", p);
+    let send = pressable(roles::CONTROL.wrap("Send for note", p.card))
+        .key("annotation-send")
+        .px(16.0)
+        .py(9.0)
+        .radius(7.0)
+        .fill(p.accent);
     controls = controls
         .child(if allowed {
             send.on_press(|s: &mut State| s.send_annotation(false))
@@ -546,47 +606,38 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         };
         let index = frame.index;
         let included = review.included;
-        let toggle = pressable(
-            row()
-                .gap(8.0)
-                .items_center()
-                .child(roles::NAME.wrap(if included { "\u{2611}" } else { "\u{2610}" }, p.ink))
-                .child(roles::NAME.wrap(
-                    format!(
-                        "Frame {}: {}",
-                        i + 1,
-                        frame.reason.as_deref().unwrap_or("Captured frame")
-                    ),
-                    p.ink,
-                )),
-        )
-        .key(format!("review-include-{index}"))
-        .role("checkbox")
-        .checked(included)
-        .on_press(move |s: &mut State| {
-            if let Some(frames) = &mut s.annotations.review
-                && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
-            {
-                frame.included = !frame.included;
-            }
-        });
+        let toggle = rune_kit::Checkbox::new(included)
+            .label(format!(
+                "Frame {}: {}",
+                i + 1,
+                frame.reason.as_deref().unwrap_or("Captured frame")
+            ))
+            .on_toggle(move |s: &mut State| {
+                if let Some(frames) = &mut s.annotations.review
+                    && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
+                {
+                    frame.included = !frame.included;
+                }
+                s.prepare_annotation_preview();
+            })
+            .build(&theme::kit(&p))
+            .key(format!("review-include-{index}"));
         page = page.child(toggle);
         if !included {
             continue;
         }
-        let image = s.annotations.images.get(i).and_then(|r| r.as_ref().ok());
+        let image = s.annotations.preview_images.get(&index);
         let height = image
             .and_then(Image::size)
             .map_or(width * 0.5625, |[w, h]| width * h as f32 / w as f32);
-        let mut canvas = frame_image(s, c, i, frame, width, p).key(format!("review-image-{index}"));
-        for (n, b) in review.masks.iter().enumerate() {
-            canvas = canvas.child(
-                el().key(format!("review-mask-{index}-{n}"))
-                    .absolute(b[0] * width, b[1] * height)
-                    .w(b[2] * width)
-                    .h(b[3] * height)
-                    .fill(rune::Color::BLACK),
-            );
+        let mut canvas = el()
+            .key(format!("review-image-{index}"))
+            .w(width)
+            .h(height)
+            .role("img")
+            .label("Baked redacted frame with numbered marks");
+        if let Some(image) = image {
+            canvas = canvas.pixels(image.pixels());
         }
         if let Some((dragging, b)) = s.annotations.dragging
             && dragging == index
@@ -599,11 +650,10 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
             );
         }
         canvas = canvas.on_drag(move |s: &mut State, d: &mut rune::Drag, _| {
-            let x0 = d.start_x.min(d.x).clamp(0.0, d.w);
-            let y0 = d.start_y.min(d.y).clamp(0.0, d.h);
-            let x1 = d.start_x.max(d.x).clamp(0.0, d.w);
-            let y1 = d.start_y.max(d.y).clamp(0.0, d.h);
-            let b = [x0 / d.w, y0 / d.h, (x1 - x0) / d.w, (y1 - y0) / d.h];
+            let Some(b) = media::box_from_display([d.start_x, d.start_y], [d.x, d.y], [d.w, d.h])
+            else {
+                return;
+            };
             if d.phase == rune::Phase::Up {
                 if !d.cancelled()
                     && b[2] * d.w >= 3.0
@@ -614,21 +664,26 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
                     frame.masks.push(b);
                 }
                 s.annotations.dragging = None;
+                s.prepare_annotation_preview();
             } else {
                 s.annotations.dragging = Some((index, b));
             }
         });
-        page = page.child(canvas).child(
-            link("Undo last black box", p)
-                .key(format!("review-undo-{index}"))
-                .on_press(move |s: &mut State| {
-                    if let Some(frames) = &mut s.annotations.review
-                        && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
-                    {
-                        frame.masks.pop();
-                    }
-                }),
-        );
+        page = page
+            .child(canvas)
+            .child(roles::META.wrap(format!("{} black-out boxes", review.masks.len()), p.soft))
+            .child(
+                link("Undo box", p)
+                    .key(format!("review-undo-{index}"))
+                    .on_press(move |s: &mut State| {
+                        if let Some(frames) = &mut s.annotations.review
+                            && let Some(frame) = frames.iter_mut().find(|f| f.index == index)
+                        {
+                            frame.masks.pop();
+                        }
+                        s.prepare_annotation_preview();
+                    }),
+            );
         for (n, m) in c.data.marks.iter().enumerate() {
             if c.frame_for_mark(m).is_some_and(|f| f.index == index) {
                 page = page.child(callout(c, n + 1, m, p));

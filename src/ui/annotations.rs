@@ -39,6 +39,8 @@ pub struct Annotations {
     record_busy: bool,
     review: Option<Vec<ReviewFrame>>,
     dragging: Option<(u64, media::BoxNorm)>,
+    preview: Option<ApprovedCapture>,
+    preview_images: BTreeMap<u64, Image>,
     approved: Option<ApprovedCapture>,
     drafts: BTreeMap<u64, serde_json::Value>,
     note: Option<serde_json::Value>,
@@ -803,8 +805,11 @@ pub fn scene(s: &mut State, name: &str) {
         if name == "annotation-review" {
             s.review_annotation();
             if let Some(frames) = &mut s.annotations.review {
-                frames[0].masks.push([0.31, 0.06, 0.45, 0.08]);
+                frames[0].masks.push(media::SYNTHETIC_MASK);
             }
+        }
+        if name == "annotation-review" {
+            s.prepare_annotation_preview();
         }
         if matches!(name, "annotation-drafting" | "annotation-note") {
             let review: Vec<_> = c
@@ -816,7 +821,7 @@ pub fn scene(s: &mut State, name: &str) {
                     index: f.index,
                     included: true,
                     masks: if i == 0 {
-                        vec![[0.0, 0.0, 0.15, 0.10]]
+                        vec![media::SYNTHETIC_MASK]
                     } else {
                         Vec::new()
                     },

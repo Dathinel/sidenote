@@ -256,7 +256,7 @@ struct Input<'a> {
 }
 fn invoke(
     options: &Options,
-    folder: &Path,
+    approved: &ApprovedCapture,
     input: Input<'_>,
     ticket: &Ticket,
     delta: impl Fn(String),
@@ -268,6 +268,7 @@ fn invoke(
         final_note,
     } = input;
     ticket.check()?;
+    let _pinned_images = approved.pin_images(images).map_err(|e| e.to_string())?;
     let input = if options.helper == Helper::Claude {
         claude_message(&prompt, images)?
     } else {
@@ -275,7 +276,7 @@ fn invoke(
     };
     let mut child = Command::new(executable(options)?)
         .args(command_args(options, effort, images, final_note))
-        .current_dir(folder)
+        .current_dir(&approved.folder)
         .creation_flags(0x08000000)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -418,7 +419,7 @@ pub fn run(
                         approved.verify().map_err(|e| e.to_string())?;
                         let answer = invoke(
                             options,
-                            &approved.folder,
+                            approved,
                             Input {
                                 prompt: note::frame_prompt(frame),
                                 images: &approved.images_for(frame),
@@ -463,7 +464,7 @@ pub fn run(
         .collect();
     let answer = invoke(
         options,
-        &approved.folder,
+        approved,
         Input {
             prompt: note::notebook_prompt(approved, &drafts),
             images: &images,
@@ -536,7 +537,7 @@ pub fn live_proof(model: &str, root: &Path) -> Result<(), String> {
             index: f.index,
             included: true,
             masks: if i == 0 {
-                vec![[0.0, 0.0, 0.15, 0.10]]
+                vec![super::media::SYNTHETIC_MASK]
             } else {
                 Vec::new()
             },
