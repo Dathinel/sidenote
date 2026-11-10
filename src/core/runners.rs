@@ -24,6 +24,7 @@ fn tools_on() -> bool {
 pub enum AskProgress {
     Started { runner: String },
     Tool { name: String },
+    Text { text: String },
     Finished,
     Failed { message: String },
 }

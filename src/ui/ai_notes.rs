@@ -631,7 +631,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             roles::GROUP.wrap(
                 match part {
                     Part::Identity => "You",
-                    Part::Helpers => "AI helpers",
+                    Part::Helpers => "Models and agents",
                     Part::Advanced => "Helper diagnostics and models",
                     Part::Summaries => "Meeting summary",
                     Part::Scripts => "Summary engine",

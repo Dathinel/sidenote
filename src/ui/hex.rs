@@ -488,6 +488,13 @@ impl State {
                 self.hex_spawn(move |e| Msg::Caps(version, e.capabilities()));
             }
         }
+        if self.hex_recording() && r.as_ref().is_ok_and(|state| state.recording.is_none()) {
+            self.ask_settings.last_end_ms = Some(chrono::Local::now().timestamp_millis());
+            self.ask_settings.last_live = Some(sidenote::core::ask_options::LiveSource {
+                hint: recording_id(self),
+                start_ms: recording_start(self).map(|(at, _)| at.timestamp_millis()),
+            });
+        }
         self.hex.status = Some(r);
         self.live_sync();
         self.hex_refresh_if_due();
@@ -1218,8 +1225,8 @@ impl Section {
             Self::Identity => "General",
             Self::PromptLibrary => "Prompt library",
             Self::Sync => "Sync",
-            Self::HelpersAdvanced => "AI helpers advanced",
-            Self::Connect => "AI helpers",
+            Self::HelpersAdvanced => "Models and agents advanced",
+            Self::Connect => "Models and agents",
             Self::Teams => "People",
             Self::AiNotes => "Meeting summary",
             Self::Updates => "Updates",
