@@ -8,7 +8,7 @@ from PIL import Image
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("artifacts/annotations")
 fixture = json.loads((Path(__file__).resolve().parents[1] / "tests/fixtures/annotations/synthetic.scrawl/scrawl.json").read_text())
 checked = 0
-for scene in ("annotations-list", "annotation-capture", "annotations-empty", "annotation-transcript"):
+for scene in ("annotations-list", "annotation-capture", "annotations-empty", "annotation-transcript", "annotation-review", "annotation-drafting", "annotation-note"):
     for width in (1280, 640):
         for theme in ("light", "dark"):
             name = f"{scene}-{width}-{theme}"
@@ -19,6 +19,7 @@ for scene in ("annotations-list", "annotation-capture", "annotations-empty", "an
             keyed = {n["key"]: n for n in nodes if n.get("key")}
             texts = [n["text"] for n in nodes if n.get("text")]
             assert "annotations-pane" in keyed, name
+            assert "new-annotation" in keyed and "new-meeting" not in keyed, name
             if width == 1280:
                 assert "nav-annotations" in keyed, name
                 assert keyed["nav-meetings"]["rect"][1] < keyed["nav-annotations"]["rect"][1], name
@@ -38,8 +39,28 @@ for scene in ("annotations-list", "annotation-capture", "annotations-empty", "an
                 assert "annotation-transcript" in keyed, name
                 full = keyed["annotation-transcript-words-0"]["text"]
                 assert full == " ".join(w["text"] for w in fixture["transcript"]["words"]), name
+            elif scene == "annotation-review":
+                assert "annotation-send" in keyed and "annotation-send-disclosure" in keyed, name
+                assert any("Sends: 2 original PNGs" in t and "3 marks" in t and "timed words" in t for t in texts), name
+                mask = keyed["review-mask-1-0"]["rect"]
+                px,py = int(mask[0]+mask[2]/2),int(mask[1]+mask[3]/2)
+                if 0 <= px < width and 0 <= py < 800:
+                    assert Image.open(root / f"{name}.png").convert("RGB").getpixel((px,py)) == (0,0,0), (name,"Redaction preview is not opaque black")
+                assert keyed["review-include-1"]["role"] == "checkbox", name
+            elif scene == "annotation-drafting":
+                assert "annotation-draft-label" in keyed and "annotation-note-cancel" in keyed, name
+                assert "annotation-note-stream" in keyed, name
+                assert any("Frame 1 draft" in t for t in texts), name
+                assert any("Frame 2 draft" in t for t in texts), name
+            elif scene == "annotation-note":
+                assert "annotation-note-title" in keyed and "annotation-note-summary" in keyed, name
+                assert "annotation-note-edit" in keyed and "annotation-draft-label" not in keyed, name
+                assert "note-image-1" in keyed and "note-image-2" in keyed, name
+                assert all(f"note-callout-{n}" in keyed for n in (1,2,3)), name
+                assert "Open questions" in texts and "To-dos" in texts, name
             else:
                 assert "annotation-show-files" in keyed, name
+                assert "annotation-breadcrumb" in keyed and "annotation-write-note" in keyed, name
                 for number, mark in enumerate(fixture["marks"], 1):
                     image = keyed[f"annotation-image-{mark['frame']}"]["rect"]
                     box = keyed[f"annotation-box-{number}"]["rect"]
@@ -51,4 +72,4 @@ for scene in ("annotations-list", "annotation-capture", "annotations-empty", "an
                 assert keyed["annotation-frame-1"]["rect"][1] < keyed["annotation-frame-2"]["rect"][1], name
                 assert "Loading frame image..." not in texts, name
             checked += 1
-print(f"PASS: {checked} renders; both themes and sizes; three mapped marks, boxes, callouts, full transcript, list metadata and empty state.")
+print(f"PASS: {checked} renders; both themes and sizes; three mapped marks, boxes, callouts, full transcript, list metadata, empty state, opaque review, streaming drafts and editable note controls.")
