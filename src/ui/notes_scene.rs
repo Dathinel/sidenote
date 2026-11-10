@@ -58,7 +58,8 @@ pub fn settings(s: &mut State, mode: &str) {
                 Job {
                     state: state("backend-error"),
                     helper: Some(Helper::Claude),
-                    updated_at: 1,
+                    updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
+                    request: None,
                 },
             );
         }
@@ -189,6 +190,14 @@ pub fn state(name: &str) -> JobState {
             tasks_failed: false,
         },
         "too-long" => JobState::TooLong { minutes: 360 },
+        "typed-too-long" => JobState::ContextTooLong {
+            typed_notes: true,
+            glossary: false,
+        },
+        "glossary-too-long" => JobState::ContextTooLong {
+            typed_notes: false,
+            glossary: true,
+        },
         "empty" => JobState::Empty,
         "tasks-failed" => JobState::Done {
             fallback: false,
@@ -229,7 +238,8 @@ pub fn meeting(s: &mut State, name: &str) {
         Job {
             state: state(name),
             helper: Some(Helper::Claude),
-            updated_at: 1,
+            updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
+            request: None,
         },
     );
     if name == "no-notes" {
@@ -288,7 +298,8 @@ pub fn list(s: &mut State) {
                 Job {
                     state: state(name),
                     helper: Some(Helper::Claude),
-                    updated_at: 1,
+                    updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
+                    request: None,
                 },
             );
             m

@@ -2001,6 +2001,14 @@ pub fn spec() -> AppSpec<State> {
                     .find(|m| core::needs_task_redo(m))
                     .map(|m| m.id.clone());
             }),
+            ("tasks-v2-clear-confirm", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Project, None);
+                if let Some(date) = s.tasks.all.iter().find_map(|t| t.meeting_date) {
+                    s.tasks.today = date + chrono::Duration::days(8);
+                }
+                s.tasks.clear_confirm = Some(7);
+                scene_scroll(s, "tasks-cleared");
+            }),
             ("tasks-v2-waiting-edit", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, Some(1));
                 s.tasks.ui.waiting_text = true;
@@ -2132,6 +2140,12 @@ pub fn spec() -> AppSpec<State> {
                 notes_scene::meeting(s, "too-long")
             }),
             ("notes-live-too-long", |s| notes_scene::live(s, "too-long")),
+            ("notes-meeting-typed-too-long", |s| {
+                notes_scene::meeting(s, "typed-too-long")
+            }),
+            ("notes-meeting-glossary-too-long", |s| {
+                notes_scene::meeting(s, "glossary-too-long")
+            }),
             ("notes-meeting-empty", |s| notes_scene::meeting(s, "empty")),
             ("notes-live-empty", |s| notes_scene::live(s, "empty")),
             ("notes-meeting-tasks-failed", |s| {

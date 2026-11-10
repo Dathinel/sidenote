@@ -352,7 +352,7 @@ if ($Dev3) {
             $shots += ,@("$($interaction[0])-$width", $interaction[1], "${width}x${height}", $interaction[2], @('--at', 'mark:end'))
         }
     }
-    foreach ($scene in @('live-recording', 'live-starting', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-panel-closed', 'live-making-notes', 'live-making', 'live-naming', 'recording-away', 'meeting-your-notes', 'screens-summary', 'screens-transcript', 'screens-today-quiet', 'screens-today', 'screens-today-tasks', 'screens-finder', 'screens-finder-query', 'screens-finder-none', 'screens-finder-off', 'screens-more-menu', 'screens-home-more', 'ask-no-agent', 'ask-no-agent-again', 'features-settings', 'tasks-v2-rebuild-confirm', 'tasks-v2-waiting-edit')) {
+    foreach ($scene in @('live-recording', 'live-starting', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-panel-closed', 'live-making-notes', 'live-making', 'live-naming', 'recording-away', 'meeting-your-notes', 'screens-summary', 'screens-transcript', 'screens-today-quiet', 'screens-today', 'screens-today-tasks', 'screens-finder', 'screens-finder-query', 'screens-finder-none', 'screens-finder-off', 'screens-more-menu', 'screens-home-more', 'ask-no-agent', 'ask-no-agent-again', 'features-settings', 'tasks-v2-clear-confirm', 'tasks-v2-rebuild-confirm', 'tasks-v2-waiting-edit')) {
         foreach ($width in @(1320, 560)) {
             $closeDrawer = $scene -eq 'features-settings' -and $width -eq 560
             $script = if ($closeDrawer) { 'dev3-close-drawer.json' } else { $null }
