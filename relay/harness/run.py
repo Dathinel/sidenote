@@ -20,7 +20,7 @@ RELAY = Path(__file__).resolve().parents[1]
 ROOT = RELAY.parent
 EVIDENCE = RELAY / "evidence"
 LOCAL = RELAY / ".local-evidence"
-EXE = ROOT / "crates/sidenote-sync/target/x86_64-pc-windows-gnu/release/examples/local_e2e.exe"
+EXE = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "x86_64-pc-windows-gnu/release/examples/local_e2e.exe"
 
 
 def main() -> None:

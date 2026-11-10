@@ -1,6 +1,6 @@
 # Sidenote relay
 
-Decisions needed: none. The owner chose Workers Free, accepts the residual request-quota risk, and approved this new personal-account project. Deployment remains with the lead after CI and review. No custom domain, WAF or paid feature is configured.
+Decisions needed: none for slice 1. Copied from synccore-r1 (461afde). The app integration contract and release gates are in [sync-relay-integration.md](../docs/sync-relay-integration.md). No deployment or account login is performed by this slice.
 
 ## Lead deployment
 
@@ -10,7 +10,7 @@ With Bun/dependencies installed and Wrangler already authenticated, the only dep
 bunx wrangler deploy
 ```
 
-`wrangler.toml` selects Worker `sidenote-relay`, account `3216bc4d5cf3736883b6976853d59a4c`, workers.dev, binding `ROOMS`, and `new_sqlite_classes = ["Room"]`. Another operator changes `account_id` to their own account first. Use the resulting origin as `wss://<worker-host>`. This branch does not deploy, authenticate, or change billing.
+`wrangler.toml` selects Worker `sidenote-relay`, workers.dev, binding `ROOMS`, and `new_sqlite_classes = ["Room"]`. No account is selected in the checked-in config. An operator selects their own account before an authorized deployment. Use the resulting origin as `wss://<worker-host>`. This branch does not deploy, authenticate, or change billing.
 
 ## Admission and residual risk
 
@@ -34,12 +34,12 @@ The relay can observe IPs, public membership, room/session IDs, sizes and timing
 
 ## Round-one gates and CI-only execution
 
-The permitted local relay gate is `bun run typecheck`. Rust gates, from `crates/sidenote-sync/`, are `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D warnings`. No tests or Wrangler deploy/dev/dry-run are run locally for this revision.
+Run `bun test tests` and, with the pinned dependencies installed, `bun run typecheck` from this folder. Run Rust workspace gates from the repository root. The app integration test starts installed Wrangler locally on numeric loopback with disposable state. It does not deploy or log in.
 
-`.github/workflows/sync-core.yml` separately runs the new/retained tests and actual local Wrangler in CI. It installs relay dependencies with Bun, builds debug helper/fault fixtures before Rust tests, and builds the release helper and `local_e2e` example before the harness. No app test is part of that job.
+`.github/workflows/ci.yml` installs relay dependencies with Bun and runs the workspace tests, including two headless app processes with local Wrangler. Build the debug helper and examples before running the tests directly. Product pairing and physical-device testing remain release gates.
 
 The CI harness command is `python harness/run.py` from `relay/`; `--quick` reduces measured edits/idle time. It starts only numeric-loopback Wrangler on ports 8787/9237 with fresh disposable state and TEMP client databases. The harness terminates its own process tree and opens no windows or browser. This is local emulation, not cloud deployment.
 
 `harness/observed.ts` is a separate CI entry point. It captures incoming/outgoing auth/control, pair binaries, every signed envelope kind and SQLite schema/cell bytes in ignored `.local-evidence/ciphertext.log`. It disables automatic ping response only in that observer so those controls are captured. A local proof route plants the actual marker in SQL; the scanner must find it in the tagged negative control and nowhere else. Scanner unit tests inject the marker into each surface and require rejection, and require all capture kinds. Production hooks are no-ops and expose no proof routes. Raw evidence must remain disposable; the report contains only aggregates.
 
-Historical `evidence/local.json`, dry-run and environment files describe the pre-panel implementation. New CI writes `evidence/round1-local.json` or `round1-quick.json`; **no round-one runtime result exists yet**. The architecture, threat model, integration contract and complete review mapping are in `../docs/sync-core.md` and `../docs/sync-core-round1.md`.
+Historical evidence from the source branch was not copied. The standalone core harness remains available for additional qualification; its results are separate from the app integration test. See the integration plan for the threat model, migration boundary and work that remains before release.

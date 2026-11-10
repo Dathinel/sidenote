@@ -32,10 +32,11 @@ try {
         $uncovered = @($noticesResult.uncovered | ForEach-Object { "$($_.name) $($_.version): $($_.license) ($($_.reason))" })
         throw "Dependency notices are incomplete: $($uncovered -join '; '). Coverage: $stage/DEPENDENCY_NOTICE_COVERAGE.json"
     }
-    & cargo build --release --locked --bin sidenote
+    & cargo build --release --workspace --locked --bins
     if ($LASTEXITCODE) { throw 'Release build failed.' }
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
+    Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote-sync-worker.exe" -Destination "$stage/sidenote-sync-worker.exe" -Force
     $notices = @('LICENSE', 'THIRD_PARTY.md', 'assets/fonts/Inter-LICENSE.txt',
         'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt', 'assets/licenses/lucide-LICENSE.txt')
     foreach ($notice in $notices) {
