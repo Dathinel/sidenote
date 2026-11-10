@@ -1,0 +1,20 @@
+[
+  {
+    "answer": "A stand-up meeting is a brief team check-in to share progress, planned work, and blockers.\nIt usually lasts around 15 minutes and helps everyone stay coordinated.",
+    "first_text_s": 2.5031656,
+    "run": 1,
+    "total_s": 3.8368127
+  },
+  {
+    "answer": "A stand-up meeting is a short team check-in where people share progress, next steps, and blockers.\nIt typically lasts about 15 minutes and helps the team stay coordinated.",
+    "first_text_s": 3.107627,
+    "run": 2,
+    "total_s": 4.3304232
+  },
+  {
+    "answer": "A stand-up meeting is a brief team check-in to share progress, next steps, and anything blocking work.\nIt typically lasts around 15 minutes and helps everyone stay coordinated.",
+    "first_text_s": 2.3631161,
+    "run": 3,
+    "total_s": 3.6760197999999997
+  }
+]

@@ -9,7 +9,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
-out = root / "artifacts/ask-models/preferences"
+out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else root / "artifacts/ask-models/preferences"
 out.mkdir(parents=True, exist_ok=True)
 state = Path(tempfile.mkdtemp(prefix="ask-preferences-", dir=root / "target"))
 for name in ("appdata", "localappdata", "peers"):

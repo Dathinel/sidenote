@@ -27,6 +27,17 @@ for width in (1280, 640):
         assert not any("AI helpers" in node.get("text", "") for node in page)
         for key in ("ask-agent-row", "ask-model-row", "ask-meeting-thinking-row", "ask-chat-thinking-row"):
             keyed(page, key)
+        menu = shot("models-and-agents-menu", width, theme)
+        assert {"Sonnet 5.5", "Opus 5.5", "Haiku 5.5", "Other\u2026"} <= {
+            node.get("label") for node in menu if node.get("role") == "option"
+        }
+        assert not any(node.get("key") == "ask-settings-model-input" for node in menu)
+        other = shot("models-and-agents-other", width, theme)
+        keyed(other, "ask-settings-model-input")
+        keyed(other, "ask-settings-model-save")
+        for elements in (page, menu, other):
+            assert not any("helper" in str(node.get(field, "")).lower()
+                           for node in elements for field in ("text", "label", "help"))
         for scene, level in (("ask-thinking-picker", "Medium"), ("ask-in-meeting", "Low")):
             elements = shot(scene, width, theme)
             trigger = keyed(elements, "ask-thinking")
@@ -40,4 +51,4 @@ for width in (1280, 640):
         opencode = shot("ask-opencode", width, theme)
         assert not any(node.get("key") == "ask-thinking" for node in opencode)
         assert "no separate effort flag" in keyed(opencode, "ask-model").get("help", "")
-print("PASS: 20 offscreen PNGs and trees; model settings, Low/Medium defaults, all three thinking options, streamed text replacing the timer, and the OpenCode explanation.")
+print("PASS: 28 offscreen PNGs and trees; offered-model menu and Other field, agent wording, Low/Medium defaults, all three thinking options, streamed text replacing the timer, and the OpenCode explanation.")

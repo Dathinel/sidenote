@@ -298,6 +298,8 @@ foreach ($areaScene in @('areas-large-migration','areas-large-review','areas-lar
 # Ask model and thinking controls at the requested review sizes.
 foreach ($width in @(1280,640)) {
     $shots += ,@("models-and-agents-$width", 'settings-helpers', "${width}x800", $null, @())
+    $shots += ,@("models-and-agents-menu-$width", 'settings-model-menu', "${width}x800", $null, @())
+    $shots += ,@("models-and-agents-other-$width", 'settings-model-other', "${width}x800", $null, @())
     foreach ($scene in @('ask-thinking-picker','ask-in-meeting','ask-streaming','ask-opencode')) {
         $shots += ,@("$scene-$width", $scene, "${width}x800", $null, @())
     }
