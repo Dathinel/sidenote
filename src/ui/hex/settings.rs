@@ -593,6 +593,22 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "annotation-agent-row",
+            "Annotation agent",
+            "Annotation notes Claude Code Codex",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "annotation-model-row",
+            "Annotation model",
+            "Annotation notes model",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
             "mcp-connect",
             "Connect AI apps",
             "MCP Claude Desktop Cursor",
@@ -1073,6 +1089,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Helpers, 0) => col().w_full().child(super::super::ask_settings::section(s,k,p,layer))
             .child(roles::GROUP.wrap("Meeting summary agent",p.soft).mt(22.0))
             .child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
+            .child(super::super::annotations::agents_section(s,k,p,layer))
             .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)),p)),
         (Page::Helpers, 1) => super::super::models::view(s,p,rune::el()).key("speech-models").fill(highlight(s,"speech-models",p)),
         (Page::Helpers, _) => col().key("helper-advanced").fill(group_highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))

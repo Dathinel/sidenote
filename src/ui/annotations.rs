@@ -1,18 +1,28 @@
-//! Local capture browsing. No agent or model is called from this page.
+//! Capture review, explicit approval and locally saved annotation notes.
+mod workflow;
 use super::{
     Event, State, hex, nav, roles,
     theme::{self, Palette},
     widgets::{link, pressable, scroll},
 };
-use rune::{El, Image, ImageCache, Key, col, el, row};
+use rune::{El, Image, ImageCache, Key, TextEdit, col, el, row};
+use rune_kit::TextArea;
 use sidenote::{
     core::{
-        annotations::{self, Capture, Keyframe, Mark, Scan, Word},
+        annotations::{
+            self, Capture, Keyframe, Mark, Scan, Word,
+            generation::{self, Epoch, Progress, Ticket},
+            media::{self, ApprovedCapture, ReviewFrame},
+            note,
+        },
         file_reads,
     },
     hex_engine::HexEngine,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+pub(super) use workflow::agents_section;
+pub(super) use workflow::new_button;
+use workflow::*;
 
 #[derive(Default)]
 pub struct Annotations {
@@ -25,16 +35,60 @@ pub struct Annotations {
     images: Vec<Result<Image, String>>,
     shortcut: Option<String>,
     disabled: bool,
+    can_record: bool,
+    record_busy: bool,
+    review: Option<Vec<ReviewFrame>>,
+    dragging: Option<(u64, media::BoxNorm)>,
+    preview: Option<ApprovedCapture>,
+    preview_images: BTreeMap<u64, Image>,
+    approved: Option<ApprovedCapture>,
+    drafts: BTreeMap<u64, serde_json::Value>,
+    note: Option<serde_json::Value>,
+    stream: String,
+    busy: bool,
+    status: String,
+    epoch: Epoch,
+    ticket: Option<Ticket>,
+    editing: BTreeMap<String, TextEdit>,
+    note_images: BTreeMap<u64, Image>,
+    note_open: bool,
+    source_fingerprint: Option<String>,
+    review_source: Option<String>,
+    last_review: Option<Vec<ReviewFrame>>,
+    options: Option<generation::Options>,
+    model: TextEdit,
+    model_open: bool,
+    other_model: bool,
 }
 pub enum Msg {
     Scanned {
         scan: Scan,
         shortcut: Option<String>,
         disabled: bool,
+        can_record: bool,
     },
     Images {
         folder: PathBuf,
         images: Vec<Result<Image, String>>,
+        fingerprint: Option<String>,
+    },
+    Recording(Result<(), String>),
+    Progress {
+        id: u64,
+        progress: Progress,
+    },
+    Approved {
+        id: u64,
+        approved: ApprovedCapture,
+    },
+    Finished {
+        id: u64,
+        result: Result<(), String>,
+    },
+    Loaded {
+        folder: PathBuf,
+        approved: ApprovedCapture,
+        note: serde_json::Value,
     },
 }
 
@@ -81,11 +135,16 @@ impl State {
         self.annotations.open = true;
         self.annotations.selected = None;
         self.annotations.images.clear();
+        self.load_annotation_options();
         self.refresh_annotations();
         self.nav_done();
     }
     pub fn refresh_annotations(&mut self) {
-        if self.annotations.loading || rune::tooling::headless_run().is_some() {
+        if self.annotations.loading
+            || self.annotations.busy
+            || self.annotations.review.is_some()
+            || rune::tooling::headless_run().is_some()
+        {
             return;
         }
         self.annotations.loading = true;
@@ -101,10 +160,12 @@ impl State {
             let engine = HexEngine::new();
             let settings = engine.settings_list().unwrap_or_default();
             let (shortcut, disabled) = hex_hints(&settings);
+            let can_record = hex_program().is_ok();
             let _ = sender.send(Event::Annotations(Msg::Scanned {
                 scan,
                 shortcut,
                 disabled,
+                can_record,
             }));
             if let Some(wake) = wake {
                 wake();
@@ -115,17 +176,40 @@ impl State {
         let Some(capture) = self.annotations.captures.get(index).cloned() else {
             return;
         };
+        self.cancel_annotation_note();
+        self.annotations.review = None;
+        self.annotations.approved = None;
+        self.annotations.note = None;
+        self.annotations.drafts.clear();
+        self.annotations.note_open = false;
+        self.annotations.note_images.clear();
+        self.annotations.last_review = None;
+        self.annotations.source_fingerprint = None;
+        self.annotations.review_source = None;
+        self.annotations.editing.clear();
         self.annotations.selected = Some(capture.folder.clone());
         self.annotations.transcript = false;
         self.annotations.images.clear();
         let sender = self.events_tx.clone();
         let wake = self.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
+        let root = self.store.root.clone();
         std::thread::spawn(move || {
+            let fingerprint = media::source_fingerprint(&capture).ok();
             let images = images(&capture, wake.clone(), false);
+            let fingerprint = fingerprint
+                .filter(|f| media::source_fingerprint(&capture).ok().as_ref() == Some(f));
             let _ = sender.send(Event::Annotations(Msg::Images {
-                folder: capture.folder,
+                folder: capture.folder.clone(),
                 images,
+                fingerprint,
             }));
+            if let Ok(Some((approved, note))) = load_note(&root, &capture) {
+                let _ = sender.send(Event::Annotations(Msg::Loaded {
+                    folder: capture.folder,
+                    approved,
+                    note,
+                }));
+            }
             wake();
         });
     }
@@ -135,40 +219,112 @@ impl State {
                 scan,
                 shortcut,
                 disabled,
+                can_record,
             } => {
                 self.annotations.captures = scan.captures;
                 self.annotations.errors = scan.errors;
                 self.annotations.shortcut = shortcut;
                 self.annotations.disabled = disabled;
+                self.annotations.can_record = can_record;
                 self.annotations.loading = false;
-                if let Some(folder) = self.annotations.selected.clone() {
-                    if let Some(index) = self
-                        .annotations
-                        .captures
-                        .iter()
-                        .position(|c| c.folder == folder)
-                    {
-                        let transcript = self.annotations.transcript;
-                        self.select_annotation(index);
-                        self.annotations.transcript = transcript;
-                    } else {
-                        self.annotations.selected = None;
-                        self.annotations.images.clear();
-                    }
+                if let Some(folder) = self.annotations.selected.clone()
+                    && !self.annotations.captures.iter().any(|c| c.folder == folder)
+                {
+                    self.annotations.selected = None;
+                    self.annotations.images.clear();
                 }
             }
-            Msg::Images { folder, images }
-                if self.annotations.selected.as_ref() == Some(&folder) =>
-            {
-                self.annotations.images = images
+            Msg::Images {
+                folder,
+                images,
+                fingerprint,
+            } if self.annotations.selected.as_ref() == Some(&folder) => {
+                self.annotations.images = images;
+                self.annotations.source_fingerprint = fingerprint;
             }
             Msg::Images { .. } => {}
+            Msg::Recording(result) => {
+                self.annotations.record_busy = false;
+                self.annotations.status = match result {
+                    Ok(()) => "Recording in Hex. Stop it in Hex, then refresh Annotations.".into(),
+                    Err(e) => e,
+                };
+            }
+            Msg::Approved { id, approved } if self.annotation_job_current(id) => {
+                self.annotations.status =
+                    if generation::uses_frame_drafts(approved.approval.frames.len()) {
+                        "Writing frame drafts...".into()
+                    } else {
+                        "Writing the annotation note...".into()
+                    };
+                self.annotations.approved = Some(approved);
+                self.load_annotation_note_images();
+            }
+            Msg::Progress { id, progress } if self.annotation_job_current(id) => match progress {
+                Progress::Frame { index, draft, .. } => {
+                    self.annotations.drafts.insert(index, draft);
+                    let ready = self.annotations.drafts.len();
+                    let total = self
+                        .annotations
+                        .approved
+                        .as_ref()
+                        .map_or(ready, |a| a.approval.frames.len());
+                    self.annotations.status = if ready < total {
+                        format!("{ready} of {total} frame drafts ready.")
+                    } else {
+                        format!(
+                            "{ready} of {total} frame drafts ready. Writing the annotation note..."
+                        )
+                    };
+                }
+                Progress::NoteDelta(text) => self.annotations.stream = text,
+                Progress::Final { note, .. } => {
+                    self.annotations.note = Some(note);
+                    self.annotations.busy = false;
+                    self.annotations.status = "Annotation note saved on this PC.".into();
+                    if let Some(a) = &self.annotations.approved
+                        && save_latest(&self.store.root, a).is_err()
+                    {
+                        self.annotations.status="The note is saved, but Sidenote could not save its capture link. Save your edits to try again.".into();
+                    }
+                    self.annotations.note_open = true;
+                    self.load_annotation_note_images();
+                }
+            },
+            Msg::Finished { id, result } if self.annotation_job_current(id) => {
+                self.annotations.busy = false;
+                if let Err(error) = result {
+                    self.annotations.status = error;
+                }
+            }
+            Msg::Loaded {
+                folder,
+                approved,
+                note,
+            } if self.annotations.selected.as_ref() == Some(&folder) && !self.annotations.busy => {
+                self.annotations.approved = Some(approved);
+                self.annotations.note = Some(note);
+                self.load_annotation_note_images();
+            }
+            Msg::Approved { .. }
+            | Msg::Progress { .. }
+            | Msg::Finished { .. }
+            | Msg::Loaded { .. } => {}
         }
     }
 }
 
 pub fn on_key(s: &mut State, e: &rune::KeyEvent) -> bool {
     if e.key == Key::Escape {
+        if s.annotations.review.take().is_some() {
+            return true;
+        }
+        if s.annotations.note_open {
+            s.cancel_annotation_note();
+            s.annotations.note_open = false;
+            return true;
+        }
+        s.cancel_annotation_note();
         if s.annotations.selected.take().is_none() {
             s.go_home();
         }
@@ -337,20 +493,50 @@ fn frame_image(
     canvas
 }
 fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
-    let mut page = col()
-        .w_full()
-        .gap(14.0)
-        .child(
-            link("\u{2039}  All annotations", p)
-                .key("annotations-back")
-                .on_press(|s: &mut State| {
-                    s.annotations.selected = None;
-                    s.annotations.images.clear();
-                }),
-        )
+    let mut page = col().w_full().gap(14.0).child(
+        row()
+            .w_full()
+            .min_w(0.0)
+            .gap(8.0)
+            .items_center()
+            .key("annotation-breadcrumb")
+            .child(
+                link("Annotations", p)
+                    .key("annotations-back")
+                    .on_press(|s: &mut State| {
+                        s.cancel_annotation_note();
+                        s.annotations.selected = None;
+                        s.annotations.images.clear();
+                        s.annotations.review = None;
+                        s.annotations.note_open = false;
+                    }),
+            )
+            .child(roles::META.line("/", p.faint))
+            .child(roles::META.line(c.title(), p.soft).grow(1.0).min_w(0.0)),
+    );
+    if s.annotations.busy || s.annotations.note_open {
+        return note_page(s, c, width, p, page);
+    }
+    page = page
         .child(roles::GROUP.wrap(c.app(), p.soft))
         .child(roles::SECTION.wrap(c.title(), p.ink).max_lines(2))
         .child(facts(c, p));
+    if s.annotations.review.is_some() {
+        return review_page(s, c, width, p, page);
+    }
+    page = page.child(
+        row()
+            .gap(12.0)
+            .child(
+                super::area::button("Write note", "annotation-write-note", p)
+                    .on_press(|s: &mut State| s.review_annotation()),
+            )
+            .children(s.annotations.note.as_ref().map(|_| {
+                link("Open annotation note", p)
+                    .key("annotation-open-note")
+                    .on_press(|s: &mut State| s.annotations.note_open = true)
+            })),
+    );
     let folder = c.folder.clone();
     page = page.child(link("Show files", p).key("annotation-show-files").on_press(
         move |s: &mut State| {
@@ -570,6 +756,16 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
     for error in &s.annotations.errors {
         content = content.child(roles::SMALL.wrap(error, p.warn).role("status"));
     }
+    if !s.annotations.note_open
+        && s.annotations.review.is_none()
+        && !s.annotations.status.is_empty()
+    {
+        content = content.child(
+            roles::SMALL
+                .wrap(&s.annotations.status, p.soft)
+                .role("status"),
+        );
+    }
     scroll(
         col()
             .w_full()
@@ -587,6 +783,12 @@ pub fn scene(s: &mut State, name: &str) {
     s.annotations.open = true;
     s.annotations.loading = false;
     s.annotations.errors.clear();
+    s.annotations.can_record = true;
+    s.ai_notes.settings = Some(sidenote::core::notes::NotesSettings {
+        helper: Some(sidenote::core::notes::Helper::Claude),
+        model: "claude-sonnet-5-5".into(),
+        ..Default::default()
+    });
     s.annotations.captures = if name == "annotations-empty" {
         Vec::new()
     } else {
@@ -596,12 +798,73 @@ pub fn scene(s: &mut State, name: &str) {
         .captures
     };
     super::scene_sidebar(s, true);
-    if (name.starts_with("annotation-capture") || name == "annotation-transcript")
-        && let Some(c) = s.annotations.captures.first()
+    if (name.starts_with("annotation-capture")
+        || name == "annotation-transcript"
+        || matches!(
+            name,
+            "annotation-review" | "annotation-drafting" | "annotation-note"
+        ))
+        && let Some(c) = s.annotations.captures.first().cloned()
     {
         s.annotations.selected = Some(c.folder.clone());
-        s.annotations.images = images(c, Arc::new(|| {}), true);
+        s.annotations.images = images(&c, Arc::new(|| {}), true);
+        s.annotations.source_fingerprint = media::source_fingerprint(&c).ok();
         s.annotations.transcript = name == "annotation-transcript";
+        if name == "annotation-review" {
+            s.review_annotation();
+            if let Some(frames) = &mut s.annotations.review {
+                frames[0].masks.push(media::SYNTHETIC_MASK);
+            }
+        }
+        if name == "annotation-review" {
+            s.prepare_annotation_preview();
+        }
+        if matches!(name, "annotation-drafting" | "annotation-note") {
+            let review: Vec<_> = c
+                .data
+                .keyframes
+                .iter()
+                .enumerate()
+                .map(|(i, f)| ReviewFrame {
+                    index: f.index,
+                    included: true,
+                    masks: if i == 0 {
+                        vec![media::SYNTHETIC_MASK]
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect();
+            let approved =
+                media::approve(&c, &review, &s.store.root).expect("synthetic annotation approval");
+            let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tools/ui-fixtures/annotation-note.json");
+            let value = std::fs::read(fixture)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .filter(|n| note::validate(n, &approved).is_ok())
+                .unwrap_or_else(|| note::synthetic_note(&approved));
+            s.annotations.approved = Some(approved);
+            s.annotations.note_open = true;
+            s.load_annotation_note_images();
+            if name == "annotation-note" {
+                s.annotations.note = Some(value);
+                s.annotations.status = "Annotation note saved on this PC.".into();
+            } else {
+                s.annotations.busy = true;
+                s.annotations.ticket = Some(s.annotations.epoch.begin());
+                s.annotations.status = "Writing the annotation note...".into();
+                let summary = value["summary"].as_str().unwrap_or("");
+                let preview: String = summary.chars().take(135).collect();
+                s.annotations.stream = format!(
+                    "{{\"title\":{},\"summary\":{}",
+                    value["title"],
+                    serde_json::to_string(&preview)
+                        .unwrap()
+                        .trim_end_matches('"')
+                );
+            }
+        }
     }
 }
 

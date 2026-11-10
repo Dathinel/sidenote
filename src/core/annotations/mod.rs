@@ -1,6 +1,9 @@
 //! Read-only Hex Annotate bundles. Media is never opened by the reader.
+pub mod generation;
+pub mod media;
+pub mod note;
 use super::file_reads;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     os::windows::fs::MetadataExt,
@@ -9,11 +12,12 @@ use std::{
 
 /// Hex's word and mark times are in seconds; createdAtMs and durationMs are milliseconds.
 pub const WORD_WINDOW_SECONDS: f64 = 3.0;
+pub const WORD_END_LIMIT_SECONDS: f64 = 8.0;
 pub const BUNDLE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MANIFEST_MAX_BYTES: u64 = 16 * 1024 * 1024;
 pub const IMAGE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Scrawl {
     pub version: serde_json::Value,
@@ -29,14 +33,14 @@ pub struct Scrawl {
     #[serde(deserialize_with = "null_default")]
     pub keyframes: Vec<Keyframe>,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Target {
     pub mode: Option<String>,
     pub app: Option<String>,
     pub window_title: Option<String>,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Transcript {
     pub source: Option<String>,
@@ -47,14 +51,14 @@ pub struct Transcript {
     #[serde(deserialize_with = "null_default")]
     pub words: Vec<Word>,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Word {
     pub t0: f64,
     pub t1: f64,
     pub text: String,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Mark {
     pub id: serde_json::Value,
@@ -65,13 +69,13 @@ pub struct Mark {
     pub description: Option<String>,
     pub frame: Option<FrameRef>,
 }
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum FrameRef {
     Index(u64),
     File(String),
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Keyframe {
     pub index: u64,
@@ -128,12 +132,37 @@ impl Capture {
     }
     pub fn words_for_mark(&self, mark: &Mark) -> Vec<&Word> {
         let start = (mark.t0 - WORD_WINDOW_SECONDS).max(0.0);
-        let end = mark.t1 + WORD_WINDOW_SECONDS;
+        let initial_end = mark.t1 + WORD_WINDOW_SECONDS;
+        let limit = mark.t1 + WORD_END_LIMIT_SECONDS;
+        let sentence_end = self
+            .data
+            .transcript
+            .words
+            .iter()
+            .filter(|w| {
+                w.t1 >= initial_end
+                    && w.t1 <= limit
+                    && w.text
+                        .trim_end_matches(['\"', '\'', ')'])
+                        .ends_with(['.', '?', '!'])
+            })
+            .map(|w| w.t1);
+        let segment_end = self
+            .data
+            .transcript
+            .segments
+            .iter()
+            .filter(|s| s.t1 >= initial_end && s.t1 <= limit)
+            .map(|s| s.t1);
+        let end = sentence_end
+            .chain(segment_end)
+            .min_by(f64::total_cmp)
+            .unwrap_or(limit);
         self.data
             .transcript
             .words
             .iter()
-            .filter(|w| w.t1 >= start && w.t0 <= end && w.t1 >= w.t0)
+            .filter(|w| w.t1 >= start && w.t0 <= end && w.t1 <= end && w.t1 >= w.t0)
             .collect()
     }
     /// Only PNGs below the two frame directories may reach the image decoder.

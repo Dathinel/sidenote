@@ -246,6 +246,31 @@ fn thinking(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, meeting: bool) 
         .build(k, layer)
 }
 
+pub(super) fn model_menu(
+    key: &str,
+    label: &str,
+    models: &[core::ask_session::Model],
+    current: Option<&str>,
+    other: bool,
+) -> Select {
+    let mut options: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
+    options.push("Other\u{2026}".into());
+    let selected = if other {
+        Some("Other\u{2026}")
+    } else {
+        models
+            .iter()
+            .find(|m| Some(m.id.as_str()) == current)
+            .map(|m| m.name.as_str())
+    };
+    Select::new(key, &options)
+        .label(label)
+        .current(selected)
+        .placeholder("Choose a model")
+        .appearance(SelectAppearance::Field)
+        .width(220.0)
+}
+
 fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let runner = s
         .runners
@@ -257,51 +282,42 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         || current
             .as_ref()
             .is_some_and(|id| !models.iter().any(|m| &m.id == id));
-    let mut options: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
-    options.push("Other\u{2026}".into());
-    let selected = if other {
-        Some("Other\u{2026}")
-    } else {
-        models
+    let select = model_menu(
+        "ask-settings-model",
+        "Ask model",
+        &models,
+        current.as_deref(),
+        other,
+    )
+    .disabled(runner.is_none())
+    .open(s.ask_settings.select_open.as_deref() == Some("ask-settings-model"))
+    .on_toggle(|s: &mut State| {
+        let opening = s.ask_settings.select_open.as_deref() != Some("ask-settings-model");
+        s.ask_settings.select_open = opening.then(|| "ask-settings-model".into());
+        if opening {
+            s.discover_ask_models();
+        }
+    })
+    .on_close(|s: &mut State| s.ask_settings.select_open = None)
+    .on_choose(|s: &mut State, value: &str, _| {
+        s.ask_settings.select_open = None;
+        if value == "Other\u{2026}" {
+            s.ask_settings.other_model = true;
+            return;
+        }
+        if let Some(runner) = s
+            .runners
             .iter()
-            .find(|m| Some(&m.id) == current.as_ref())
-            .map(|m| m.name.as_str())
-    };
-    let select = Select::new("ask-settings-model", &options)
-        .label("Ask model")
-        .current(selected)
-        .placeholder("Choose a model")
-        .appearance(SelectAppearance::Field)
-        .width(220.0)
-        .disabled(runner.is_none())
-        .open(s.ask_settings.select_open.as_deref() == Some("ask-settings-model"))
-        .on_toggle(|s: &mut State| {
-            let opening = s.ask_settings.select_open.as_deref() != Some("ask-settings-model");
-            s.ask_settings.select_open = opening.then(|| "ask-settings-model".into());
-            if opening {
-                s.discover_ask_models();
-            }
-        })
-        .on_close(|s: &mut State| s.ask_settings.select_open = None)
-        .on_choose(|s: &mut State, value: &str, _| {
-            s.ask_settings.select_open = None;
-            if value == "Other\u{2026}" {
-                s.ask_settings.other_model = true;
-                return;
-            }
-            if let Some(runner) = s
-                .runners
-                .iter()
-                .find(|r| Some(&r.name) == s.runner.as_ref())
-                && let Some(model) = core::ask_session::models(runner)
-                    .into_iter()
-                    .find(|m| m.name == value)
-            {
-                s.ask_settings.model_input = TextEdit::new(&model.id);
-                s.save_ask_model();
-            }
-        })
-        .build(k, layer);
+            .find(|r| Some(&r.name) == s.runner.as_ref())
+            && let Some(model) = core::ask_session::models(runner)
+                .into_iter()
+                .find(|m| m.name == value)
+        {
+            s.ask_settings.model_input = TextEdit::new(&model.id);
+            s.save_ask_model();
+        }
+    })
+    .build(k, layer);
     let mut control = col().gap(8.0).child(select);
     if other {
         control = control.child(

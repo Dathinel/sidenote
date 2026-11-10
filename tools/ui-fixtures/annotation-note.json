@@ -1,0 +1,106 @@
+{
+  "figures": [
+    {
+      "app": "Northwind Board",
+      "callouts": [
+        {
+          "boxNorm": [
+            0.03,
+            0.19,
+            0.24,
+            0.73
+          ],
+          "description": "Workshop navigation",
+          "evidence_refs": [
+            "synthetic:mark-1",
+            "frame-1"
+          ],
+          "explanation": "This marks the workshop navigation, which lists Overview, Materials and Review.",
+          "label": "Workshop navigation",
+          "mark_id": "synthetic:mark-1",
+          "mark_number": 1,
+          "uncertainty": null
+        },
+        {
+          "boxNorm": [
+            0.31,
+            0.52,
+            0.3,
+            0.36
+          ],
+          "description": "Paper prototype materials",
+          "evidence_refs": [
+            "synthetic:mark-2",
+            "frame-1"
+          ],
+          "explanation": "This marks the Materials card, which lists paper and pencils for the paper prototype.",
+          "label": "Paper prototype materials",
+          "mark_id": "synthetic:mark-2",
+          "mark_number": 2,
+          "uncertainty": null
+        }
+      ],
+      "caption": "Workshop navigation and the Materials card on the Northwind workshop plan.",
+      "capture_id": "synthetic",
+      "figure_id": "frame-1",
+      "keyframe_index": 1,
+      "keyframe_reason": "Materials marked",
+      "window_title": "Workshop plan: paper prototypes and the next review"
+    },
+    {
+      "app": "Northwind Board",
+      "callouts": [
+        {
+          "boxNorm": [
+            0.64,
+            0.52,
+            0.32,
+            0.36
+          ],
+          "description": "The next review",
+          "evidence_refs": [
+            "synthetic:mark-3",
+            "frame-2"
+          ],
+          "explanation": "This marks the Next review card, which shows Friday morning and a note to bring two versions.",
+          "label": "The next review",
+          "mark_id": "synthetic:mark-3",
+          "mark_number": 3,
+          "uncertainty": null
+        }
+      ],
+      "caption": "The Next review card on the Northwind workshop plan.",
+      "capture_id": "synthetic",
+      "figure_id": "frame-2",
+      "keyframe_index": 2,
+      "keyframe_reason": "Review marked",
+      "window_title": "Workshop plan: paper prototypes and the next review"
+    }
+  ],
+  "open_questions": [
+    "The narration around the marks is linked to them by timing only, so it is unclear exactly which words refer to each mark, for example whether the overview remark relates to the navigation mark."
+  ],
+  "sections": [
+    {
+      "figure_refs": [
+        "frame-1"
+      ],
+      "heading": "Workshop setup and materials",
+      "paragraphs": [
+        "The workshop navigation lists Overview, Materials and Review, and the Materials card lists paper and pencils for the paper prototype."
+      ]
+    },
+    {
+      "figure_refs": [
+        "frame-2"
+      ],
+      "heading": "Next review",
+      "paragraphs": [
+        "The Next review card shows Friday morning and a note to bring two versions."
+      ]
+    }
+  ],
+  "summary": "The Northwind Board workshop plan centers on prototyping with paper cards. The workshop navigation and the Materials card (paper and pencils) were marked as the starting point for the exercise. The next review was marked on the board, which lists Friday morning and a note to bring two versions.",
+  "title": "Northwind workshop plan: paper prototypes and the next review",
+  "todos": []
+}
