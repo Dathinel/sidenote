@@ -117,16 +117,15 @@ pub fn scene(s: &mut State, kind: &str) {
     s.go_home();
     wait(s);
     if kind == "refresh-error" {
-        let bad = s.tasks.store.root.join("synthetic-not-a-folder");
-        fs::write(&bad, b"blocked").unwrap();
-        let original = s.tasks.store.clone();
-        s.tasks.store = core::TaskStore::new(bad);
+        let device = s.tasks.store.root.join("device.json");
+        let original = fs::read(&device).unwrap();
+        fs::write(&device, b"{").unwrap();
         s.refresh_areas();
         while s.areas.refresh_pending {
             let event = s.events_rx.recv_timeout(Duration::from_secs(30)).unwrap();
             s.apply_event(event);
         }
-        s.tasks.store = original;
+        fs::write(&device, original).unwrap();
         assert_eq!(
             s.areas.error.as_deref(),
             Some("Could not finish the area change. Your data was kept. Reload and try again.")
