@@ -38,5 +38,6 @@ helpers = shot("settings-helpers-1280-light")
 assert sum(node.get("text") == "In use" for node in helpers) == 1, "Duplicate In use labels"
 for scene, field in (("sidebar", "finder-input"), ("settings", "hex-filter")):
     elements = shot(f"settings-review-{scene}-slash-light")
-    assert keyed(elements, field).get("focused"), f"Slash did not focus {scene} search"
+    container = keyed(elements, field)
+    assert any(node.get("focused") and node.get("role") == "textbox" and node.get("path", "").startswith(container["path"] + "/") for node in elements), f"Slash did not focus {scene} search"
 print("PASS: title/tab order, single-line labels and tooltips, rail alignment, single hints/status, and both slash shortcuts.")
