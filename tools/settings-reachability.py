@@ -27,7 +27,7 @@ def main():
                for key, controls in manifest["keys"].items()}
     missing = {key: controls for key, controls in missing.items() if controls}
     assert not missing, f"Unreachable legacy settings: {missing}"
-    for name in ("General", "Meetings", "Prompt library", "People", "Hex and dictation", "AI helpers", "Appearance and startup", "Sync", "Updates"):
+    for name in ("General", "Meetings", "Prompt library", "People", "Hex and dictation", "Models and agents", "Appearance and startup", "Sync", "Updates"):
         assert f"settings-page-{name}" in keys, name
     search = json.loads((folder / "settings-search-1280-light.json").read_text(encoding="utf-8-sig"))
     search_nodes = list(nodes(search))
