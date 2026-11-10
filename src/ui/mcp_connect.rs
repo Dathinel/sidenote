@@ -1,4 +1,4 @@
-use super::{Event, State, roles, tasks::button, theme::Palette, widgets::hairline};
+use super::{Event, State, area, roles, tasks::button, theme::Palette, widgets::hairline};
 use rune::{El, col, row};
 use sidenote::core::mcp_connect::{self, Client};
 
@@ -29,7 +29,7 @@ impl State {
     }
 }
 pub fn section(s: &State, p: Palette) -> El {
-    let mut body = col().w_full().gap(12.0)
+    let mut body = col().w_full().pt(24.0).gap(12.0)
         .child(roles::SECTION.wrap("Connect AI apps", p.ink))
         .child(roles::SMALL.wrap("Use your meeting knowledge in an AI app on this PC.", p.soft))
         .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.", p.soft))
@@ -82,7 +82,7 @@ pub fn section(s: &State, p: Palette) -> El {
                 "Add to Claude Code"
             },
             "connect-claude-add",
-            false,
+            true,
             p,
         );
         if !s.connection.busy {
@@ -106,6 +106,6 @@ pub fn section(s: &State, p: Palette) -> El {
     body.child(roles::META.wrap(format!("Config file: {}", client.config_path().display()), p.soft))
         .child(roles::SMALL.wrap(if client == Client::ClaudeCode { "Or run this command in PowerShell:" } else { "Merge this into your config, keeping the other entries:" }, p.soft))
         .child(col().w_full().px(12.0).py(12.0).radius(8.0).fill(p.chip).child(roles::SMALL.wrap(config.clone(), p.ink)))
-        .child(button(if client == Client::ClaudeCode { "Copy command" } else { "Copy config" }, "connect-copy", false, p).on_press_tx(move |s: &mut State, tx| { tx.copy(config.clone()); s.show_toast("Copied", tx); }))
+        .child(area::button(if client == Client::ClaudeCode { "Copy command" } else { "Copy config" }, "connect-copy", p).on_press_tx(move |s: &mut State, tx| { tx.copy(config.clone()); s.show_toast("Copied", tx); }))
         .child(roles::META.wrap(if client == Client::ClaudeCode { "Restart its MCP session after setup. The button uses Claude Code to manage its own config." } else { "Restart or reconnect your AI app after setup. Sidenote only copies this text; it does not edit your config." }, p.soft))
 }
