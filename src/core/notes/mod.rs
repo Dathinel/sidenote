@@ -45,6 +45,10 @@ pub enum JobState {
     TooLong {
         minutes: u64,
     },
+    ContextTooLong {
+        typed_notes: bool,
+        glossary: bool,
+    },
     Empty,
 }
 

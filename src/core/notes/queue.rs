@@ -320,7 +320,11 @@ fn process(
             root,
             id,
             job,
-            JobState::TooLong { minutes },
+            JobState::ContextTooLong {
+                typed_notes: typed.chars().count() > prompt::TYPED_CAP,
+                glossary: glossary.iter().map(|s| s.chars().count()).sum::<usize>()
+                    > prompt::GLOSSARY_CAP,
+            },
             "meeting context exceeds size limit",
         );
     }

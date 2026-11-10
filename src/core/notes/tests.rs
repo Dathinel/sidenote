@@ -716,8 +716,20 @@ fn typed_notes_and_glossary_have_separate_character_caps_for_all_requests() {
             }
             enqueue(&root.0, &s, request);
             drain(&root.0, &s, &mut fake);
-            assert!(matches!(state(&root.0), JobState::TooLong { .. }));
+            assert_eq!(
+                state(&root.0),
+                JobState::ContextTooLong {
+                    typed_notes: !glossary,
+                    glossary
+                }
+            );
             assert!(fake.calls.is_empty());
+            fs::write(folder.join("notes.md"), "Short notes").unwrap();
+            fake.glossary.clear();
+            fake.replies = vec![Ok(summary()), Ok(sorted())].into();
+            enqueue(&root.0, &s, Some(request.unwrap_or(Request::TryAgain)));
+            drain(&root.0, &s, &mut fake);
+            assert!(matches!(state(&root.0), JobState::Done { .. }));
         }
     }
     assert!(prompt::bounded_inputs(
@@ -926,4 +938,56 @@ fn redo_uses_existing_english_transcript_without_rewriting_it() {
         transcript
     );
     assert!(fake.calls[0].0.contains("Use the folded sample."));
+}
+
+#[test]
+fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting() {
+    for helper in [Helper::Codex, Helper::OpenCode] {
+        let root = Temp::new();
+        let folder = meeting(&root.0, PRIVATE);
+        let t1 = 1;
+        let t2 = 2;
+        let mut s = NotesSettings {
+            helper: Some(helper),
+            enabled_at_ms: Some(t1),
+            ..NotesSettings::default()
+        };
+        store_io::write(
+            &root.0.join("config.json"),
+            &serde_json::json!({"version":1,"features":{},"notes":s}),
+        )
+        .unwrap();
+        store_io::write(
+            &folder.join("manifest.json"),
+            &serde_json::json!({"status":"complete","ended_at_ms":t2}),
+        )
+        .unwrap();
+        enqueue(&root.0, &s, None);
+        s.helper = Some(Helper::Claude);
+        crate::core::Config::save_notes(&root.0, &s).unwrap();
+        let saved = crate::core::Config::load_in(&root.0)
+            .unwrap()
+            .notes
+            .unwrap();
+        assert!(t1 < t2 && t2 < saved.enabled_at_ms.unwrap());
+        let mut fake = Fake::new(vec![]);
+        drain(&root.0, &saved, &mut fake);
+        assert_eq!(state(&root.0), JobState::NeedsClick);
+        assert!(fake.calls.is_empty());
+        assert!(!folder.join("english-transcript.md").exists());
+        s.helper = Some(helper);
+        for auto in [false, true] {
+            s.auto = auto;
+            s.your_name = "Changed name".into();
+            crate::core::Config::save_notes(&root.0, &s).unwrap();
+            assert_eq!(
+                crate::core::Config::load_in(&root.0)
+                    .unwrap()
+                    .notes
+                    .unwrap()
+                    .enabled_at_ms,
+                None
+            );
+        }
+    }
 }
