@@ -269,7 +269,7 @@ impl TaskStore {
     pub fn load_grouping(&self) -> io::Result<super::TaskGrouping> {
         match super::store_io::read_bounded(&self.root.join("local/task-grouping.json"), 4096) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::from),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(super::TaskGrouping::Due),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(super::TaskGrouping::Status),
             Err(e) => Err(e),
         }
     }
@@ -937,6 +937,7 @@ mod tests {
     fn grouping_is_device_local_and_round_trips() {
         let f = Fixture::new(json!([]));
         let store = f.store();
+        assert_eq!(store.load_grouping().unwrap(), TaskGrouping::Status);
         store.save_grouping(TaskGrouping::Team).unwrap();
         assert_eq!(store.load_grouping().unwrap(), TaskGrouping::Team);
         assert!(f.root.join("local/task-grouping.json").is_file());

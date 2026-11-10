@@ -225,15 +225,7 @@ pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
         p.bg.alpha(0.0)
     }
 }
-pub(crate) fn icon_tile(icon: &'static rune::Icon, p: Palette) -> El {
-    col()
-        .w(34.0)
-        .h(34.0)
-        .center()
-        .radius(8.0)
-        .fill(p.chip)
-        .child(icons::draw(icon, 18.0, p.soft))
-}
+pub(crate) use crate::ui::cards::{icon_tile, panel};
 pub(crate) fn pc(p: Palette) -> El {
     roles::META
         .line("This PC", p.soft)
@@ -297,16 +289,6 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
         _ => &icons::SETTINGS,
     }
 }
-pub(crate) fn panel(p: Palette) -> El {
-    col()
-        .w_full()
-        .min_w(0.0)
-        .padding(1.0)
-        .radius(10.0)
-        .clip_rounded(10.0)
-        .border(1.0, p.line)
-        .fill(p.card)
-}
 pub(crate) fn setting_row(
     s: &State,
     key: &str,
@@ -324,23 +306,12 @@ pub(crate) fn setting_row(
     if local {
         title = title.child(pc(p));
     }
-    row()
+    crate::ui::cards::row_shell()
         .key(key)
-        .w_full()
         .flex_wrap()
-        .items_center()
-        .gaps(12.0, 10.0)
-        .padding(14.0)
         .fill(highlight(s, key, p))
         .child(icon_tile(row_icon(key), p))
-        .child(
-            col()
-                .grow(1.0)
-                .min_w(170.0)
-                .gap(4.0)
-                .child(title)
-                .child(roles::SMALL.wrap(help, p.soft)),
-        )
+        .child(crate::ui::cards::copy(title, help, p))
         .child(control)
 }
 pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
@@ -355,27 +326,16 @@ fn advanced(s: &State, body: El, p: Palette) -> El {
     let page = current(s.hex.section).0.name();
     let open = s.hex.shell.advanced.contains(page) || s.hex.section == Section::Advanced;
     let mut out = col().w_full().mt(18.0).child(
-        pressable(
-            row()
-                .w_full()
-                .items_center()
-                .gap(8.0)
-                .py(12.0)
-                .child(roles::CONTROL.line(if open { "\u{25be}" } else { "\u{25b8}" }, p.soft))
-                .child(roles::NAME.line("Advanced", p.ink)),
-        )
-        .key("settings-advanced")
-        .label("Advanced")
-        .role("button")
-        .expanded(open)
-        .on_press(move |s: &mut State| {
-            if !s.hex.shell.advanced.remove(page) {
-                s.hex.shell.advanced.insert(page);
-            }
-            if s.hex.section == Section::Advanced {
-                s.hex.section = Section::Updates;
-            }
-        }),
+        crate::ui::cards::fold_control("Advanced", "settings-advanced", open, p).on_press(
+            move |s: &mut State| {
+                if !s.hex.shell.advanced.remove(page) {
+                    s.hex.shell.advanced.insert(page);
+                }
+                if s.hex.section == Section::Advanced {
+                    s.hex.section = Section::Updates;
+                }
+            },
+        ),
     );
     if open {
         out = out.child(body);

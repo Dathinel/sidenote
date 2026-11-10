@@ -448,6 +448,10 @@ impl State {
                     };
                     let unchanged = input.text == typed && description_unchanged;
                     if matches!(field, Field::Title) {
+                        if unchanged {
+                            self.tasks.ui.title_edit = false;
+                            self.tasks.ui.description_edit = false;
+                        }
                         if let Some(title) = mine["title"].as_str() {
                             self.tasks.edit_title = title.into();
                         }

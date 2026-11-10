@@ -867,7 +867,7 @@ pub fn count_tasks(tasks: &[TaskItem]) -> TaskCounts {
     c
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DoneFilter {
     #[default]
     Open,

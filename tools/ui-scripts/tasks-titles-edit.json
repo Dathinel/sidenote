@@ -40,7 +40,12 @@
     {
       "t": 12.0,
       "type": "tap",
-      "key": "show-full-titles"
+      "key": "redo-meeting-open"
+    },
+    {
+      "t": 12.3,
+      "type": "tap",
+      "key": "redo-older-tasks-item0"
     },
     {
       "t": 13.0,

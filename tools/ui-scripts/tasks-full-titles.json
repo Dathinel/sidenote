@@ -3,7 +3,12 @@
     {
       "t": 0.3,
       "type": "tap",
-      "key": "show-full-titles"
+      "key": "redo-meeting-open"
+    },
+    {
+      "t": 0.6,
+      "type": "tap",
+      "key": "redo-older-tasks-item0"
     },
     {
       "t": 1.3,
