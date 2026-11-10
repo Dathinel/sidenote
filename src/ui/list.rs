@@ -5,11 +5,11 @@ use super::{
     nav::Filter,
     project, roles,
     theme::{Palette, display},
-    widgets::{highlighted, keycap, link, notice_bar, page_icon, pressable, scroll},
+    widgets::{dot, highlighted, keycap, link, notice_bar, page_icon, pressable, scroll},
 };
 use rune::{El, Key, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
-use sidenote::core::{Meeting, SearchHit, SearchSource};
+use sidenote::core::{self, Meeting, SearchHit, SearchSource};
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
@@ -121,6 +121,18 @@ fn home_row(
         .started
         .map(|t| t.format("%H:%M").to_string())
         .unwrap_or_default();
+    let notes_job = super::notes_status::job(s, m);
+    let problem = notes_job.as_ref().is_some_and(|j| {
+        super::notes_status::is_failure(&j.state)
+            || matches!(
+                j.state,
+                core::notes::JobState::NoHelper
+                    | core::notes::JobState::Done {
+                        tasks_failed: true,
+                        ..
+                    }
+            )
+    });
     let mut text_col = col()
         .grow(1.0)
         .min_w(0.0)
@@ -131,7 +143,7 @@ fn home_row(
                 super::notes_status::list_label(s, m)
                     .map(str::to_string)
                     .unwrap_or_else(|| people_line(m)),
-                p.faint,
+                if problem { p.ink } else { p.faint },
             ),
         );
     if let Some(hit) = &item.hit {
@@ -142,7 +154,11 @@ fn home_row(
         row()
             .gap(14.0)
             .items_center()
-            .child(page_icon(p))
+            .child(if problem {
+                dot(8.0, p.warn)
+            } else {
+                page_icon(p)
+            })
             .child(text_col),
     )
     .key(format!("meeting-{}", m.id))
@@ -159,6 +175,48 @@ fn home_row(
         .radius(10.0)
         .hover(p.chip)
         .child(main);
+    if problem && let Some(job) = &notes_job {
+        let setup = matches!(
+            job.state,
+            core::notes::JobState::NoHelper | core::notes::JobState::HelperMissing
+        );
+        let id = m.id.clone();
+        let request = if matches!(
+            job.state,
+            core::notes::JobState::Done {
+                tasks_failed: true,
+                ..
+            }
+        ) {
+            core::notes::Request::SortAgain
+        } else {
+            job.retry_request()
+        };
+        let needs_page = matches!(
+            job.state,
+            core::notes::JobState::TooLong { .. } | core::notes::JobState::ContextTooLong { .. }
+        );
+        r = r.child(
+            super::area::button(
+                if setup {
+                    "Choose a helper"
+                } else {
+                    "Try again"
+                },
+                &format!("notes-list-action-{id}"),
+                p,
+            )
+            .on_press_tx(move |s: &mut State, tx| {
+                if setup {
+                    s.open_ai_notes();
+                } else if needs_page {
+                    s.select(&id, tx);
+                } else {
+                    s.request_notes(id.clone(), request);
+                }
+            }),
+        );
+    }
     if !narrow && let Some(chip) = project::chip(s, k, &m.id, p, layer) {
         r = r.child(chip);
     }

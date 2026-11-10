@@ -13,3 +13,5 @@ The following remain for 0.0.2:
 - OpenCode stores sessions. It is detected but is not offered as a notes helper
   in 0.0.1; Codex is also detected but not offered.
 - npm-only Claude Code installations are not detected.
+
+- A running summary cannot be cancelled in 0.0.1.

@@ -22,13 +22,19 @@ pub struct Job {
     pub helper: Option<Helper>,
     #[serde(default)]
     pub updated_at: i64,
+    #[serde(default)]
+    pub request: Option<Request>,
 }
 impl Job {
+    pub fn retry_request(&self) -> Request {
+        self.request.unwrap_or(Request::TryAgain)
+    }
     pub fn queued() -> Self {
         Self {
             state: JobState::Queued,
             helper: None,
             updated_at: 0,
+            request: None,
         }
     }
 }
@@ -56,31 +62,50 @@ pub fn is_failure(state: &JobState) -> bool {
             | JobState::TimedOut
             | JobState::BadOutput
             | JobState::TooLong { .. }
+            | JobState::ContextTooLong { .. }
+    )
+}
+pub fn running_message(name: &str, started_at: i64) -> String {
+    let minutes = chrono::Utc::now()
+        .timestamp_millis()
+        .saturating_sub(started_at)
+        .max(0)
+        / 60_000;
+    format!(
+        "Writing summary with {name}. This can take up to 15 minutes. Started {minutes} minutes ago."
     )
 }
 pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
     let name = helper.map(Helper::name).unwrap_or("The helper");
     match &job.state {
-        JobState::NoHelper => "No summary yet. Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
-        JobState::NeedsClick => "No summary yet. Sidenote only writes summaries automatically for meetings that end after you turn on AI notes. You can write this one now.".into(),
-        JobState::Queued => "This meeting is waiting for its summary. You can read the saved transcript now.".into(),
-        JobState::Running => format!("Writing summary with {name}. This can take a few minutes."),
-        JobState::HelperMissing => format!("{name} was not found on this PC. Install it again, then choose it in Settings. Your transcript is saved."),
+        JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
+        JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on AI notes. You can write this one now.".into(),
+        JobState::Queued => "Waiting for another summary to finish.".into(),
+        JobState::Running => running_message(name, job.updated_at),
+        JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
             let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your helper" };
             let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
         JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Try again in a few minutes. Your transcript is saved."),
-        JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into a summary. Try again. If it keeps happening, reset your instructions in Settings. Your transcript is saved."),
+        JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into a summary. Try again. If it keeps happening, press Open instructions to review or reset them. Your transcript is saved."),
         JobState::Done { fallback: true, .. } => "This summary used the default instructions because your own instructions did not work. Edit your instructions before trying again.".into(),
         JobState::Done { .. } => String::new(),
         JobState::TooLong { minutes } => {
             let length = if minutes % 60 == 0 { format!("{} hours", minutes / 60) } else { format!("{} hours {} minutes", minutes / 60, minutes % 60) };
-            format!("This meeting ran {length}. Summaries can cover the first 4 hours. Choose the first 4 hours below. Your transcript is saved.")
+            format!("This meeting ran {length}. Summaries can cover the first 4 hours. Use the button below to summarise the first 4 hours. Your transcript is saved.")
         },
-        JobState::Empty => "Hex heard no speech in this meeting, so there are no notes to write.".into(),
+        JobState::ContextTooLong { typed_notes, glossary } => {
+            let input = match (typed_notes, glossary) {
+                (true, true) => "Typed notes and glossary are each",
+                (true, false) => "Typed notes are",
+                _ => "The glossary is",
+            };
+            format!("{input} over the 16,000 character limit. Shorten the input, then press Try again. Your transcript is saved.")
+        }
+        JobState::Empty => "Sidenote heard no speech in this meeting, so there is nothing to summarise.".into(),
     }
 }
 pub fn label(state: &JobState) -> &'static str {
@@ -90,10 +115,15 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::Queued => "Summary queued",
         JobState::Running => "Writing summary",
         JobState::HelperMissing => "Helper not found",
-        JobState::BackendError { .. } => "Helper did not finish",
+        JobState::BackendError {
+            next_try_ms: Some(_),
+            ..
+        } => "Helper failed, retry scheduled",
+        JobState::BackendError { .. } => "Helper failed, retry needed",
         JobState::TimedOut => "Helper took too long",
         JobState::BadOutput => "Helper reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for notes",
+        JobState::ContextTooLong { .. } => "Shorten the summary input",
         JobState::Empty => "No speech heard",
         JobState::Done { fallback: true, .. } => "Summary used default instructions",
         JobState::Done {
@@ -131,6 +161,7 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
                 },
                 helper: None,
                 updated_at: 0,
+                request: None,
             })
         })
         .map(|mut job| {
@@ -233,11 +264,11 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                         .on_press(|s: &mut State| s.open_ai_notes()),
                 )
         }
-        JobState::TimedOut | JobState::BadOutput => {
+        JobState::TimedOut | JobState::BadOutput | JobState::ContextTooLong { .. } => {
             buttons = buttons.child(request_button(
                 "Try again",
                 id,
-                Request::TryAgain,
+                job.retry_request(),
                 "notes-state-retry",
                 s,
                 p,
@@ -266,13 +297,9 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         _ => {}
     }
-    c = c.child(buttons);
-    if let JobState::BackendError {
-        exit: Some(code), ..
-    } = job.state
-    {
+    if let JobState::BackendError { exit: Some(_), .. } = job.state {
         let key = id.to_string();
-        c = c.child(
+        buttons = buttons.child(
             button("Details", "notes-error-details", p)
                 .self_start()
                 .on_press(move |s: &mut State| {
@@ -281,11 +308,14 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     }
                 }),
         );
-        if s.ai_notes.details.contains(id) {
-            c = c.child(
-                roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft),
-            );
-        }
+    }
+    c = c.child(buttons);
+    if let JobState::BackendError {
+        exit: Some(code), ..
+    } = job.state
+        && s.ai_notes.details.contains(id)
+    {
+        c = c.child(roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft));
     }
     if let Some(pending) = s.ai_notes.pending {
         c = c.child(roles::META.wrap(pending, p.soft).role("status"));
@@ -296,8 +326,8 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     Some(c)
 }
 fn edit_button(p: Palette) -> El {
-    button("Edit\u{a0}instructions", "notes-state-edit", p)
-        .label("Edit instructions")
+    button("Open\u{a0}instructions", "notes-state-edit", p)
+        .label("Open instructions")
         .on_press(|s: &mut State| {
             s.open_ai_notes();
             super::scene_scroll(s, "agent-instructions");
@@ -320,6 +350,7 @@ pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
             p,
         )
         .mt(12.0)
+        .mb(16.0)
         .children(
             s.ai_notes
                 .error
@@ -417,6 +448,7 @@ mod tests {
                 state,
                 helper: Some(Helper::Codex),
                 updated_at: 0,
+                request: None,
             };
             let text = message(&job, Some(Helper::Claude));
             assert!(!text.is_empty(), "{name}");
@@ -446,6 +478,7 @@ mod tests {
             },
             helper: Some(Helper::OpenCode),
             updated_at: 0,
+            request: None,
         };
         let text = message(&job, Some(Helper::Claude));
         assert!(text.contains("OpenCode did not finish"));
@@ -458,6 +491,37 @@ mod tests {
             exit: None,
         };
         assert!(message(&job, None).contains("tries again at"));
+    }
+    #[test]
+    fn context_retry_preserves_first_part_and_task_requests() {
+        for request in [Request::FirstPart, Request::RedoTasks, Request::SortAgain] {
+            let raw = serde_json::json!({"state":"context_too_long","typed_notes":true,"glossary":false,"request":request});
+            let job: Job = serde_json::from_value(raw).unwrap();
+            assert_eq!(job.retry_request(), request);
+        }
+    }
+    #[test]
+    fn context_overflow_names_the_input_and_offers_shortening() {
+        for (typed_notes, glossary, name) in [
+            (true, false, "Typed notes"),
+            (false, true, "glossary"),
+            (true, true, "Typed notes and glossary"),
+        ] {
+            let job = Job {
+                state: JobState::ContextTooLong {
+                    typed_notes,
+                    glossary,
+                },
+                helper: Some(Helper::Claude),
+                updated_at: 0,
+                request: None,
+            };
+            let text = message(&job, None);
+            assert!(text.contains(name));
+            assert!(text.contains("16,000"));
+            assert!(text.contains("Try again"));
+            assert!(!text.contains("first 4 hours"));
+        }
     }
     #[test]
     fn job_state_ignores_untrusted_message_text() {

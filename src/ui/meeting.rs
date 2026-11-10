@@ -47,7 +47,15 @@ fn chips(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El
     };
     for c in [
         when,
-        m.minutes.map(|n| format!("{n} min")),
+        m.minutes.map(|n| {
+            if n >= 60 && n % 60 == 0 {
+                format!("{} h", n / 60)
+            } else if n >= 60 {
+                format!("{} h {} min", n / 60, n % 60)
+            } else {
+                format!("{n} min")
+            }
+        }),
         Some(m.summary.kind.clone()),
         people,
         m.device.as_ref().map(|device| format!("from {device}")),

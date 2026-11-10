@@ -12,7 +12,7 @@ pub const RULES: &str = "You answer questions about one recorded meeting. The su
 /// One-tap questions. The window shows the first four as chips and the rest under "More".
 pub const SUGGESTIONS: &[&str] = &[
     "What did we decide?",
-    "List my to-dos",
+    "List my tasks",
     "Draft a follow-up message",
     "Write a TL;DR",
     "What do I need to do next?",
