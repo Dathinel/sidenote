@@ -14,7 +14,7 @@ def move(t=1.5):return dict(type='move',x=10,y=700,t=t)
 def main():
     p=argparse.ArgumentParser();p.add_argument('exe',type=Path);p.add_argument('--reference',type=Path,required=True);a=p.parse_args();exe=a.exe.resolve()
     index=json.loads((OUT/'render-index.json').read_text())
-    assert len(index['rows'])==24
+    assert len(index['rows'])==28
     assert index['binary_sha256']==hashlib.sha256(exe.read_bytes()).hexdigest()
     for shot in index['rows']:
         path=Path(shot['path']);w=shot['width'];theme=shot['theme'];name=path.stem.rsplit('-',2)[0];nodes=elements(name,w,theme)
@@ -40,11 +40,29 @@ def main():
         elif name=='meeting':assert keyed(nodes,'meeting-source-icon-pt-0-0')['opacity']==0
         if name=='meeting-transcript-sheet':
             sheet=keyed(nodes,'transcript-sheet')['rect'];assert sheet[0]>=0 and sheet[0]+sheet[2]<=w
+            ask=keyed(nodes,'ask-pill')['rect'];lead=keyed(nodes,'meeting-transcript')['rect']
+            assert abs(sheet[1]+sheet[3]+10-min(ask[1],lead[1]))<1
+            assert 400<=sheet[3]<=450
+            assert keyed(nodes,'transcript-sheet')['fill'].endswith('ff')
+            assert keyed(nodes,'transcript-panel')['fill'].endswith('ff')
+            back=keyed(nodes,'back-to-summary');assert '/transcript-header/' in back['path']
+            assert any(n.get('key')=='meeting-summary-dim' for n in nodes)
+            assert any(n.get('key')=='transcript-close' for n in nodes)
+            assert not any(n.get('text')=='Minimise' for n in nodes)
             selected=next(n for n in nodes if n.get('text','').startswith('Then let us launch in the second week'))
             assert selected['rect'][1]>=sheet[1] and selected['rect'][1]+selected['rect'][3]<=sheet[1]+sheet[3]
             assert any(n.get('text')=='29 lines' for n in nodes)
             assert not any(n.get('key')=='transcript-jump' for n in nodes)
-    print('PASS: 24 renders, task visibility, rail placement, source highlight and four pixel-identical Settings renders',flush=True)
+        if name=='meeting-wide-ask' and w==1280:
+            pill=keyed(nodes,'ask-pill')['rect'];lead=keyed(nodes,'meeting-transcript')['rect']
+            baseline=keyed(elements('meeting',w,theme),'ask-pill')['rect']
+            assert pill[2]>baseline[2]+40
+            assert abs(lead[1]+lead[3]/2-pill[1]-pill[3]/2)<1
+            assert lead[0]+lead[2]+8<=pill[0]
+        assert not any(n.get('text') in ['Maya','Priya','Tom'] for n in nodes if '/meeting-point-' in n.get('path',''))
+        assert any(n.get('text')=='Sidenote updated 1 thing from this meeting.' for n in nodes)
+        assert keyed(nodes,'meeting-memory')['text']=='See in Memory'
+    print('PASS: 28 renders, task visibility, rail placement, source highlight and four pixel-identical Settings renders',flush=True)
     def shot(name,events=None,state=None,width=1280):
         r=render(exe,name,width=width,events=events,state=state)
         return elements(name,width),Path(r['state'])
@@ -53,7 +71,7 @@ def main():
     assert any(n.get('key')=='pt-0-0' and n.get('focused') for n in nodes)
     nodes,_=shot('meeting-keyboard-source',[tap('meeting-template'),key('Escape',.7),key('Tab',1),key('Tab',1.3),key('Enter',1.6),move(2)])
     assert any(n.get('key')=='transcript-sheet' for n in nodes)
-    nodes,_=shot('meeting-sheet-minimised',[tap('meeting-transcript'),tap('transcript-minimise',.8),move()])
+    nodes,_=shot('meeting-sheet-closed',[tap('meeting-transcript'),tap('transcript-close',.8),move()])
     assert not any(n.get('key')=='transcript-sheet' for n in nodes)
     assert any(n.get('key')=='meeting-transcript' and n.get('focused') for n in nodes)
     nodes,_=shot('meeting-transcript-search',[tap('meeting-transcript'),tap('transcript-filter',.7),typing('survey',1),move()])
@@ -127,6 +145,39 @@ def main():
     nodes,_=shot('meeting-source-back',[tap('meeting-source-pt-0-0'),tap('back-to-summary',.9),move()])
     assert not any(n.get('key')=='transcript-sheet' for n in nodes)
     print('PASS: explicit external owners, independent rail scroll and return from a source',flush=True)
+    nodes,_=shot('meeting-escape-search',[tap('meeting-transcript'),tap('transcript-filter',.7),typing('survey',1),key('Escape',1.4)])
+    assert not any(n.get('key')=='transcript-sheet' for n in nodes)
+    assert keyed(nodes,'meeting-transcript')['focused']
+    nodes,_=shot('meeting-escape-time',[tap('meeting-transcript'),tap('transcript-time-toggle',.6),tap('transcript-jump',.9),key('Escape',1.2)])
+    assert not any(n.get('key')=='transcript-sheet' for n in nodes)
+    assert keyed(nodes,'meeting-transcript')['focused']
+    nodes,_=shot('meeting-escape-ask',[tap('meeting-transcript'),tap('ask-input',.6),typing('Keep this draft question',.9),key('Escape',1.2)])
+    assert not any(n.get('key')=='transcript-sheet' for n in nodes)
+    assert any(n.get('text')=='Keep this draft question' for n in nodes)
+    nodes,_=shot('meeting-source-closed',[tap('meeting-source-pt-0-0'),tap('transcript-close',.8),move()])
+    assert not any(n.get('key') in ['transcript-sheet','back-to-summary'] for n in nodes)
+    assert any(n.get('key')=='meeting-transcript' and n.get('focused') for n in nodes)
+    nodes,_=shot('meeting-sheet-grown',[tap('meeting-transcript'),dict(type='drag',key='transcript-resize',dy=-60,dur=.3,t=.8)])
+    height=keyed(nodes,'transcript-sheet')['rect'][3];assert 495<=height<=505
+    assert abs(keyed(nodes,'transcript-sheet')['rect'][1]+height+10-keyed(nodes,'ask-pill')['rect'][1])<1
+    nodes,_=shot('meeting-sheet-shrunk',[tap('meeting-transcript'),dict(type='drag',key='transcript-resize',dy=90,dur=.3,t=.8)])
+    assert 345<=keyed(nodes,'transcript-sheet')['rect'][3]<=355
+    nodes,_=shot('meeting-sheet-keyboard-resize',[tap('meeting-transcript'),tap('transcript-resize',.7),key('Down',1)])
+    assert abs(keyed(nodes,'transcript-sheet')['rect'][3]-416)<1
+    nodes,_=shot('meeting-sheet-minimum',[tap('meeting-transcript'),dict(type='drag',key='transcript-resize',dy=500,dur=.3,t=.8)])
+    assert keyed(nodes,'transcript-sheet')['rect'][3]==180
+    print('PASS: single Escape, source close focus, mouse resizing, keyboard resizing and minimum height',flush=True)
+    for width in [1280,640]:
+        render(exe,'meeting-wide-ask-sheet',case='wide-ask',width=width,events=[tap('meeting-transcript')])
+        nodes=elements('meeting-wide-ask-sheet',width)
+        pill=keyed(nodes,'ask-pill')['rect'];lead=keyed(nodes,'meeting-transcript')['rect'];sheet=keyed(nodes,'transcript-sheet')['rect']
+        assert abs(sheet[1]+sheet[3]+10-min(pill[1],lead[1]))<1
+        assert keyed(nodes,'ask-input')['rect'][2]>150
+        assert pill[0]+pill[2]<=width and lead[0]>=0
+        if width==1280:assert abs(lead[1]+lead[3]/2-pill[1]-pill[3]/2)<1
+    print('PASS: wider Ask bar and longer model control keep the Transcript button and sheet aligned',flush=True)
+
+
 
 
 if __name__=='__main__':main()

@@ -5,7 +5,7 @@ from pathlib import Path
 import render_people_review as native
 from prepare_check_fixture import sources_fp
 ROOT=native.ROOT
-OUT=ROOT/'artifacts/pages-meeting'
+OUT=ROOT/'artifacts/pages-meeting-round1'
 native.OUT=OUT
 ID='1793955600000-1'
 tap=native.tap
@@ -47,11 +47,11 @@ def render(exe,name,case='finished',width=1280,theme='light',events=None,state=N
     meetings=prepare(state,case)
     if case=='source-hover':events=[dict(type='move',key='meeting-point-pt-0-0',t=.3)]
     if case=='transcript-sheet':events=[dict(type='move',key='meeting-point-pt-0-0',t=.3),tap('meeting-source-pt-0-0',.7),dict(type='move',x=10,y=700,t=1.0)]
-    return native.render(exe,name,'meeting-reading-review',width,theme,events,state,meetings)
+    return native.render(exe,name,'meeting-reading-wide-ask' if case=='wide-ask' else 'meeting-reading-review',width,theme,events,state,meetings)
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('exe',type=Path);p.add_argument('--quick',action='store_true');a=p.parse_args()
-    cases=[('meeting','finished'),('meeting-source-hover','source-hover'),('meeting-transcript-sheet','transcript-sheet'),('meeting-no-tasks','no-tasks'),('meeting-long-title','long-title'),('settings-general','settings')]
+    cases=[('meeting','finished'),('meeting-source-hover','source-hover'),('meeting-transcript-sheet','transcript-sheet'),('meeting-no-tasks','no-tasks'),('meeting-long-title','long-title'),('meeting-wide-ask','wide-ask'),('settings-general','settings')]
     jobs=[(n,c,w,t) for n,c in cases for w in ([1280] if a.quick else [1280,640]) for t in (['light'] if a.quick else ['light','dark'])]
     def run(job):
         n,c,w,t=job
