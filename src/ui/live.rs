@@ -1146,7 +1146,13 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                 .fill(p.warnbg)
                 .gap(12.0)
                 .role("alert")
-                .child(roles::NAME.wrap("!  Your notes need saving", p.warn))
+                .child(
+                    row()
+                        .gap(8.0)
+                        .items_center()
+                        .child(super::icons::draw(&super::icons::WARNING, 16.0, p.warn))
+                        .child(roles::NAME.wrap("Your notes need saving", p.warn)),
+                )
                 .child(roles::SMALL.wrap(warning, p.ink))
                 .child(
                     row()

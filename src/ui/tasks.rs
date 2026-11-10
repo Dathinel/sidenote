@@ -1225,9 +1225,9 @@ pub(super) fn button(name: impl AsRef<str>, key: impl AsRef<str>, primary: bool,
 /// A pill that sets a value: the due shortcuts.
 pub(super) fn pill(name: &str, key: &str, on: bool, p: Palette) -> El {
     pressable(if on {
-        roles::CONTROL.bold().wrap(name, p.ink)
+        roles::CONTROL.bold().icon_label(name, p.ink)
     } else {
-        roles::CONTROL.regular().wrap(name, p.ink)
+        roles::CONTROL.regular().icon_label(name, p.ink)
     })
     .key(key.to_string())
     .px(11.0)
@@ -1323,7 +1323,8 @@ fn title_row(s: &State, k: &Kit, narrow: bool, p: Palette, layer: &mut Vec<El>) 
         row()
             .gap(8.0)
             .items_center()
-            .child(roles::CONTROL.wrap("+  Add task", p.accent))
+            .child(super::icons::draw(&super::icons::PLUS, 16.0, p.accent))
+            .child(roles::CONTROL.wrap("Add task", p.accent))
             .child(cap("N", p)),
     )
     .key("task-add")
