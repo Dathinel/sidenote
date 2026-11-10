@@ -3370,26 +3370,23 @@ impl State {
     }
 }
 
-pub(super) fn shown_title<'a>(s: &State, t: &'a TaskItem) -> &'a str {
-    let authored = if t.manual {
-        true
-    } else {
-        s.tasks
+pub(super) fn shown_title<'a>(s: &'a State, t: &'a TaskItem) -> &'a str {
+    let authored = t.manual
+        || s.tasks
             .overrides
             .match_task(&t.meeting_id, &t.stable_id, &t.task, t.index)
-            .is_some_and(|o| o.title.is_some())
-            || s.meetings
-                .iter()
-                .find(|m| m.id == t.meeting_id)
-                .and_then(|m| m.summary.todo.get(t.index))
-                .is_some_and(|todo| !todo.title.trim().is_empty())
-    };
+            .is_some_and(|o| o.title.is_some());
     if s.tasks.show_full_titles && !authored {
-        &t.task
+        s.meetings
+            .iter()
+            .find(|m| m.id == t.meeting_id)
+            .and_then(|m| m.summary.todo.get(t.index))
+            .map_or(&t.task, |todo| todo.full_title())
     } else {
         &t.title
     }
 }
+
 impl State {
     fn toggle_full_titles(&mut self) {
         self.tasks.show_full_titles = !self.tasks.show_full_titles;

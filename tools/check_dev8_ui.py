@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 
 LEGACY = "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities"
-SHORT = "Put all production files in one"
+SHORT = "Put all production files"
 LONG = "Prepare the revised workshop materials and check every printed sample before the next planning meeting"
 DESCRIPTION = "Collect the batch details and responsibilities in the shared folder."
 
@@ -38,7 +38,7 @@ def check(root, scaled_roots=()):
             assert keyed["ptitle"]["rect"][3] <= 56
             assert "Read the sample pages" in keyed["pdescription"]["text"]
         _, keyed = load("tasks-v2-long-panel")
-        assert keyed["ptitle"]["text"] == LONG and keyed["ptitle"]["rect"][3] <= 56
+        assert keyed["ptitle"]["text"] == "Prepare the revised workshop materials" and keyed["ptitle"]["rect"][3] <= 56
         elements, _ = load("sb-live-finishing")
         assert "A summary can be written once Hex finishes the transcript. You can leave this page." in text(elements)
 
@@ -51,11 +51,11 @@ def check(root, scaled_roots=()):
         assert "Long task titles are now shown short. The full text is in each task's description." in text(elements)
 
         elements, keyed = load("tasks-v2-titles-edited")
-        assert keyed["ptitle"]["text"] == "Organise the shared tracker", keyed["ptitle"]["text"]
+        assert keyed["ptitle"]["text"] == "Organise the shared tracker and keep every production file together", keyed["ptitle"]["text"]
         assert keyed["pdescription"]["text"] == DESCRIPTION, keyed["pdescription"]["text"]
         row = keyed["ttask-1800000000000-1-6"]["path"] + "/"
         row_text = text([e for e in elements if e["path"].startswith(row)])
-        assert "Organise the shared tracker" in row_text
+        assert "Organise the shared tracker and keep every production file together" in row_text
         assert DESCRIPTION in row_text
         assert "Undo my changes" in text(elements)
         assert "Discard my changes" not in text(elements)
@@ -68,7 +68,7 @@ def check(root, scaled_roots=()):
 
         _, keyed = load("tasks-v2-long-panel-560")
         assert keyed["ptitle"]["rect"][3] <= 56, keyed["ptitle"]["rect"]
-        assert keyed["ptitle"]["text"] == LONG
+        assert keyed["ptitle"]["text"] == "Prepare the revised workshop materials"
 
         _, keyed = load("sidebar-settings")
         assert "hex-pane" in keyed and "profile-button" in keyed

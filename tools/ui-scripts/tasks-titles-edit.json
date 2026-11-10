@@ -14,7 +14,7 @@
     {
       "t": 0.9,
       "type": "type",
-      "text": "Organise the shared tracker"
+      "text": "Organise the shared tracker and keep every production file together"
     },
     {
       "t": 2.3,
@@ -36,6 +36,11 @@
       "t": 5.8,
       "type": "tap",
       "key": "task-text-save"
+    },
+    {
+      "t": 7.5,
+      "type": "tap",
+      "key": "show-full-titles"
     },
     {
       "t": 8.8,

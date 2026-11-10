@@ -125,18 +125,30 @@ pub struct Todo {
     pub at: Vec<String>,
 }
 impl Todo {
-    pub fn title(&self) -> &str {
+    pub fn full_title(&self) -> &str {
         if self.title.trim().is_empty() {
-            super::task_titles::split_title(&self.task).0
+            &self.task
         } else {
             &self.title
         }
     }
-    pub fn description(&self) -> &str {
-        if self.description.trim().is_empty() {
-            super::task_titles::split_title(&self.task).1
+    pub fn title(&self) -> &str {
+        if !self.title.trim().is_empty()
+            && self.title.split_whitespace().count() <= 6
+            && self.title.chars().count() <= 45
+        {
+            &self.title
         } else {
+            super::task_titles::split_title(self.full_title()).0
+        }
+    }
+    pub fn description(&self) -> &str {
+        if !self.description.trim().is_empty() {
             &self.description
+        } else if self.title() != self.full_title() {
+            self.full_title()
+        } else {
+            super::task_titles::split_title(&self.task).1
         }
     }
     pub fn text(&self) -> &str {
@@ -663,6 +675,25 @@ pub fn nice_date(date: &str) -> String {
 mod quick_title_tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn summary_titles_are_bounded_without_changing_the_stored_task() {
+        let mut todo = Todo {
+            task: "Original task identity from the meeting".into(),
+            title: "Prepare the revised workshop materials and check every printed sample before the next planning meeting".into(),
+            ..Todo::default()
+        };
+        assert_eq!(todo.title(), "Prepare the revised workshop materials");
+        assert_eq!(todo.description(), todo.full_title());
+        assert_eq!(todo.text(), "Original task identity from the meeting");
+        todo.description = "Keep the written description.".into();
+        assert_eq!(todo.description(), "Keep the written description.");
+        todo.title = "Review the field guide".into();
+        assert_eq!(todo.title(), todo.full_title());
+        todo.title = "Review extraordinarily detailed documentation before Friday".into();
+        assert!(todo.title().chars().count() <= 45);
+        assert!(todo.title().split_whitespace().count() <= 6);
+    }
 
     #[test]
     fn old_and_v2_task_fields_remain_readable() {

@@ -705,6 +705,43 @@ mod tests {
         assert_eq!(f.tasks(&store.load_overrides().unwrap())[0].description, "");
     }
     #[test]
+    fn summary_title_limits_preserve_hand_edits_and_original_keys() {
+        let original = "Original meeting task text";
+        let full = "Prepare the revised workshop materials and check every printed sample before the next planning meeting";
+        let f = Fixture::new(json!([{"task":original,"title":full}]));
+        let task = f.tasks(&Overrides::default()).remove(0);
+        assert_eq!(task.title, "Prepare the revised workshop materials");
+        assert_eq!(task.description, full);
+        let source = fs::read(f.meeting.folder.join("english-summary.json")).unwrap();
+        let hand_title = "Organise the shared tracker and keep every production file together";
+        let store = f.store();
+        let view = store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Title(hand_title.into()),
+            )
+            .unwrap();
+        let edited = f.tasks(&view.value).remove(0);
+        assert_eq!(edited.title, hand_title);
+        assert_eq!(edited.task, original);
+        let key = task_override_key(&task.meeting_id, "", original, 0);
+        assert_eq!(
+            view.value.tasks[&task.meeting_id][&key].task.as_deref(),
+            Some(original)
+        );
+        let ticks = core::StateStore::new(f.root.clone())
+            .set_task_tick_view(&task.meeting_id, original, "", true)
+            .unwrap();
+        assert!(ticks.value.checked.contains(original));
+        assert!(!ticks.value.checked.contains(&edited.title));
+        assert_eq!(
+            fs::read(f.meeting.folder.join("english-summary.json")).unwrap(),
+            source
+        );
+    }
+
+    #[test]
     fn notes_fields_win_independently_and_search_includes_descriptions() {
         let f = Fixture::new(
             json!([{"task":"Review the current production plan so that all departments can confirm the latest delivery dates", "title":"Review the plan", "description":"Include the orchid samples"}]),

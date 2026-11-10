@@ -11,7 +11,7 @@ todos=[
     dict(id='send',title='Send the sample pack',description='Share the approved sample with the workshop team.',owner='Morgan Lee',status='waiting',waiting_on=dict(task_id='draft'),due='2026-11-11'),
     dict(id='copy',title='Check the workshop invitation',description='The draft is ready. Check the date and the reply address before it goes out.',owner='Alex Chen',status='review',due='2026-11-12'),
     dict(id='outside',title='Confirm the room booking',owner='Robin',status='waiting',waiting_on=dict(text="The venue team's reply"),due=None),
-    dict(id='long',title='Prepare the revised workshop materials and check every printed sample before the next planning meeting',description='A deliberately long synthetic title checks wrapping at a narrow width.',owner=None,status='todo',due='2026-11-16'),
+    dict(id='long',title='Prepare the revised workshop materials and check every printed sample before the next planning meeting',owner=None,status='todo',due='2026-11-16'),
     dict(id='done',title='Book the print slot',owner='Morgan Lee',status='done',due='2026-11-09'),
     dict(task='Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities',owner='Robin',due='2026-11-17',due_default=True),
 ]

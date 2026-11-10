@@ -28,11 +28,26 @@ def check(folder):
             rect = keys[key]["rect"]
             assert abs((rect[1] + rect[3]/2) - (search[1] + search[3]/2)) <= 1
         row = below(elements, keys["ttask-1800000000000-1-6"])
-        title = next(e for e in row if e.get("text") == "Put all production files in one")
+        title = next(e for e in row if e.get("text") == "Put all production files")
         description = next(e for e in row if e.get("text", "").startswith("Put all production files in one tracker folder"))
         assert len(title["text"].split()) <= 6 and len(title["text"]) <= 45
         assert 18 < description["rect"][3] <= 36, description["rect"]
         assert sum(e.get("key", "").startswith("subtick-") for e in elements) <= 2
+
+        summary_row = below(elements, keys["ttask-1800000000000-1-4"])
+        assert any(e.get("text") == "Prepare the revised workshop materials" for e in summary_row)
+        full_summary = "Prepare the revised workshop materials and check every printed sample before the next planning meeting"
+        assert any(e.get("text") == full_summary for e in summary_row)
+        _, panel = load("tasks-v2-long-panel-560")
+        assert panel["ptitle"]["text"] == "Prepare the revised workshop materials"
+        assert panel["pdescription"]["text"] == full_summary
+        full_elements, full_keys = load("tasks-v2-full-titles")
+        for index, title in [(4, full_summary), (6, "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities")]:
+            row = below(full_elements, full_keys[f"ttask-1800000000000-1-{index}"])
+            assert any(e.get("text") == title and e["rect"][3] <= 42 for e in row)
+        _, edited = load("tasks-v2-titles-edited")
+        assert edited["show-full-titles"]["text"] == "Show full titles: on"
+        assert edited["ptitle"]["text"] == "Organise the shared tracker and keep every production file together"
 
         _, keys = load("tasks-v2-owner-narrow")
         search = keys["task-search"]["rect"]
