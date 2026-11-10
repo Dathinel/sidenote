@@ -42,8 +42,8 @@ def check(folder):
         assert panel["ptitle"]["text"] == "Prepare the revised workshop materials"
         assert panel["pdescription"]["text"] == full_summary
         full_elements, full_keys = load("tasks-v2-full-titles")
-        for index, title in [(4, full_summary), (6, "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities")]:
-            row = below(full_elements, full_keys[f"ttask-1800000000000-1-{index}"])
+        for task_index, title in [(4, full_summary), (6, "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities")]:
+            row = below(full_elements, full_keys[f"ttask-1800000000000-1-{task_index}"])
             assert any(e.get("text") == title and e["rect"][3] <= 42 for e in row)
         _, edited = load("tasks-v2-titles-edited")
         assert edited["show-full-titles"]["text"] == "Show full titles: on"
