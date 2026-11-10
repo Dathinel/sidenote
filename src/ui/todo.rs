@@ -63,12 +63,19 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
     }
     let task = t.text().to_string();
     // Next steps read in bold, as the actions of the meeting; a finished one steps back.
-    let task_text = text(t.title().to_string())
+    let item = s.tasks.all.iter().find(|item| {
+        item.meeting_id == s.selected.as_deref().unwrap_or_default() && item.index == index
+    });
+    let shown = item
+        .map(|item| super::tasks::shown_title(s, item))
+        .unwrap_or_else(|| t.title());
+    let task_text = text(shown.to_string())
         .font(if on { roles::READ } else { roles::READ.bold() }.style())
         .color(if on { p.faint } else { p.ink })
-        .wrap();
+        .wrap()
+        .max_lines(2);
     let task_text = if on {
-        task_text.strike(0, t.title().len(), None)
+        task_text.strike(0, shown.len(), None)
     } else {
         task_text
     };

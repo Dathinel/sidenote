@@ -68,6 +68,7 @@ pub struct PanelUi {
 #[derive(Default)]
 pub struct PanelInputs {
     pub title: TextEdit,
+    pub description: TextEdit,
     pub due: TextEdit,
     pub owner: TextEdit,
     pub project: TextEdit,
@@ -117,6 +118,9 @@ pub struct TasksState {
     pub inputs: PanelInputs,
     pub edit_base: serde_json::Value,
     pub edit_title: String,
+    pub edit_description: String,
+    pub show_full_titles: bool,
+    pub titles_notice: bool,
     pub edit_item: Option<TaskItem>,
     pub edit_failed: bool,
     pub editor_generation: u64,
@@ -166,7 +170,7 @@ impl TasksState {
             clear_confirm: None,
             subtask_input: TextEdit::new(""),
             waiting_input: TextEdit::new(""),
-            store,
+            store: store.clone(),
             pipeline: core::load_pipeline(meetings),
             projects,
             overrides,
@@ -194,6 +198,9 @@ impl TasksState {
             inputs: PanelInputs::default(),
             edit_base: serde_json::Value::Null,
             edit_title: String::new(),
+            edit_description: String::new(),
+            show_full_titles: core::UiPrefs::load(&store.root).show_full_titles,
+            titles_notice: !core::UiPrefs::load(&store.root).task_titles_notice_seen,
             edit_item: None,
             edit_failed: false,
             editor_generation: 0,
@@ -270,6 +277,7 @@ impl TasksState {
         self.search.focused
             || self.rename_input.focused
             || self.inputs.title.focused
+            || self.inputs.description.focused
             || self.inputs.due.focused
             || self.inputs.owner.focused
             || self.inputs.project.focused
@@ -481,13 +489,16 @@ impl State {
             };
             m.edit(change);
             if let Some(title) = title {
-                m.task = title.into();
+                m.title = Some(title.into());
             }
             serde_json::to_value(m).unwrap()
         } else {
             let mut o: TaskOverride = serde_json::from_value(base.clone()).unwrap_or_default();
             change(&mut o);
-            o.task = Some(self.tasks.edit_title.clone());
+            o.task = self.panel_task().map(|t| t.task.clone());
+            if let Some(title) = title {
+                o.title = Some(title.into());
+            }
             serde_json::to_value(o).unwrap()
         };
         let typed = match field {
@@ -678,6 +689,11 @@ impl State {
             }
             return false;
         };
+        let display = self
+            .tasks
+            .item(id, index)
+            .map(|item| shown_title(self, item).to_string())
+            .unwrap_or_else(|| title.clone());
         let t = &mut self.tasks;
         t.rename = None;
         t.close_menus();
@@ -714,14 +730,21 @@ impl State {
         {
             t.edit_base = serde_json::Value::Null;
         }
-        t.edit_title = title.clone();
+        let description = t
+            .edit_item
+            .as_ref()
+            .map(|item| item.description.clone())
+            .unwrap_or_default();
+        t.edit_title = display.clone();
+        t.edit_description = description.clone();
         t.edit_failed = false;
         t.cursor = Some((id.to_string(), index));
         t.keyboard = true;
         t.panel = Some(Panel::Task((id.to_string(), index)));
         t.ui = PanelUi::default();
         t.inputs = PanelInputs {
-            title: TextEdit::new(&title),
+            title: TextEdit::new(&display),
+            description: TextEdit::new(&description),
             ..PanelInputs::default()
         };
         true
@@ -809,15 +832,17 @@ impl State {
         }
     }
 
-    /// Saves a changed title of a hand-made task, as the panel closes or moves on. An empty
-    /// title is dropped: the task keeps its text.
+    /// Save display fields without changing the original identity text.
     fn flush_title(&mut self, close: bool) -> bool {
         let Some(t) = self.panel_task() else {
             return !self.tasks.edit_failed;
         };
-        let (id, index, manual) = (t.meeting_id.clone(), t.index, t.manual);
+        let (id, index) = (t.meeting_id.clone(), t.index);
         let text = self.tasks.inputs.title.text.trim().to_string();
-        if manual && text != self.tasks.edit_title {
+        let description = self.tasks.inputs.description.text.clone();
+        let title_changed = text != self.tasks.edit_title;
+        let description_changed = description != self.tasks.edit_description;
+        if title_changed || description_changed {
             if text.is_empty() {
                 self.tasks.ui.error = Some("A task needs some text.".into());
                 return false;
@@ -825,10 +850,14 @@ impl State {
             return self.save_task_edit(
                 &id,
                 index,
-                Some(&text),
+                title_changed.then_some(text.as_str()),
                 super::edit_worker::Field::Title,
                 close,
-                |_| {},
+                move |o| {
+                    if description_changed {
+                        o.description = Some(description);
+                    }
+                },
             );
         }
         !self.tasks.edit_failed
@@ -918,7 +947,7 @@ impl State {
                     self.commit_due()
                 } else if i.project.focused {
                     self.commit_new_project()
-                } else if i.title.focused {
+                } else if i.title.focused || i.description.focused {
                     self.commit_title()
                 } else {
                     true
@@ -1163,20 +1192,15 @@ fn check_box(on: bool, p: Palette) -> El {
 
 /// The round status mark of a row: empty while open, filled with a check when done.
 fn status_dot(on: bool, size: f32, p: Palette) -> El {
-    let ring = col()
-        .size(size, size)
-        .radius(size / 2.0)
-        .center()
-        .border(1.5, if on { p.ok } else { p.faint })
-        .fill(if on { p.ok } else { p.card });
-    if on {
-        ring.child(
-            label("\u{2713}", size - 6.0, 800.0, p.card)
-                .font(TextStyle::new(size - 6.0, 800.0).lh(size - 4.0)),
-        )
-    } else {
-        ring
-    }
+    super::icons::draw(
+        if on {
+            &super::icons::TASKS
+        } else {
+            &super::icons::CIRCLE
+        },
+        size.max(16.0),
+        if on { p.ok } else { p.faint },
+    )
 }
 
 pub(super) fn button(name: impl AsRef<str>, key: impl AsRef<str>, primary: bool, p: Palette) -> El {
@@ -1586,12 +1610,15 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         .on_press(move |s: &mut State| s.toggle_row(&id, index))
     };
     let title = if on {
-        roles::SMALL.wrap(&t.title, p.faint)
+        roles::SMALL.wrap(shown_title(s, t), p.faint).max_lines(2)
     } else {
-        roles::SMALL.medium().wrap(&t.title, p.ink)
+        roles::SMALL
+            .bold()
+            .wrap(shown_title(s, t), p.ink)
+            .max_lines(2)
     };
     let title = if on {
-        title.strike(0, t.title.len(), None)
+        title.strike(0, shown_title(s, t).len(), None)
     } else {
         title
     };
@@ -1606,11 +1633,15 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .min_w(0.0)
             .gap(3.0)
             .child(title)
+            .children((!t.description.is_empty()).then(|| roles::META.line(&t.description, p.soft)))
             .children(
                 (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none()).then(
                     || {
-                        roles::META
-                            .wrap(t.status_label(), p.soft)
+                        row()
+                            .gap(4.0)
+                            .items_center()
+                            .child(super::icons::draw(&super::icons::WAITING, 16.0, p.soft))
+                            .child(roles::META.wrap(t.status_label(), p.soft))
                             .px(6.0)
                             .radius(4.0)
                             .fill(p.chip)
@@ -1645,16 +1676,22 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     }
     props = props
         .child(
+            row().w(88.0).justify_end().items_center().child(
+                roles::META.line(
+                    owner_name(t)
+                        .map(|(name, _)| name)
+                        .unwrap_or_else(|| "No owner".into()),
+                    p.soft,
+                ),
+            ),
+        )
+        .child(
             row()
                 .w(88.0)
                 .justify_end()
                 .items_center()
                 .child(due_chip(t, tasks.today, p).unwrap_or_else(el)),
-        )
-        .child(row().w(34.0).center().child(match owner_name(t) {
-            Some((name, mine)) => avatar(&name, mine, 20.0, p),
-            None => el(),
-        }));
+        );
     let props = pressable(props)
         .key(format!("tmeta-{id}-{index}"))
         .focusable(false)
@@ -1709,6 +1746,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                     .child(
                         roles::SMALL
                             .wrap(&sub.title, if done { p.faint } else { p.soft })
+                            .max_lines(2)
                             .grow(1.0)
                             .min_w(0.0),
                     ),
@@ -2173,7 +2211,12 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
                 _ => (p.soft, 400.0),
             };
             let note = if x.due_default {
-                format!("{phrase}. Guessed from the meeting.")
+                format!(
+                    "{} (guessed)",
+                    x.due_date
+                        .map(|date| date.format("%a %-d %b").to_string())
+                        .unwrap_or(phrase)
+                )
             } else {
                 format!("{phrase}.")
             };
@@ -2204,6 +2247,18 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
     }
     if let Some(msg) = &t.ui.due_error {
         c = c.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
+    }
+    if task.is_some_and(|x| x.due_default) {
+        c = c
+            .child(roles::META.wrap(
+                "The meeting did not set a date. Sidenote guessed one.",
+                p.soft,
+            ))
+            .child(
+                button("Set a date", "task-guessed-date", false, p).on_press(|s: &mut State| {
+                    s.tasks.inputs.due.focused = true;
+                }),
+            );
     }
     c
 }
@@ -2503,7 +2558,7 @@ fn panel_top(title: &str, overlay: bool, p: Palette) -> El {
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
         top = top.child(
-            pressable(roles::CONTROL.wrap("\u{2039}  Tasks", p.soft))
+            pressable(roles::CONTROL.icon_label("\u{2039}  Tasks", p.soft))
                 .key("panel-back")
                 .label("Back to the task list (Escape)")
                 .px(10.0)
@@ -2640,36 +2695,54 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
 fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> (El, El) {
     let tasks = &s.tasks;
     let (id, index) = (t.meeting_id.clone(), t.index);
-    let title = if t.manual {
-        input_h(
-            k,
-            &tasks.inputs.title,
-            "ptitle",
-            "What needs doing?",
-            |s| &mut s.tasks.inputs.title,
-            40.0,
-            p,
-        )
+    let title = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
+        .key("ptitle")
+        .label("Task title")
+        .placeholder("Up to 8 words. Start with what to do.", p.faint)
+        .on_edit(|s: &mut State| &mut s.tasks.inputs.title)
+        .on_submit(|s: &mut State, _| {
+            s.commit_title();
+        })
+        .color(p.ink)
+        .caret(p.ink, p.hit)
+        .wrap_anywhere()
+        .max_lines(2)
         .w_full()
-    } else {
-        roles::SECTION
-            .wrap(&t.title, if t.done { p.soft } else { p.ink })
-            .w_full()
-    };
+        .min_h(56.0);
+    let description = rune::text_input(&tasks.inputs.description, roles::SMALL.style())
+        .on_edit(|s: &mut State| &mut s.tasks.inputs.description)
+        .placeholder("No description. Add one", p.faint)
+        .color(p.ink)
+        .caret(p.ink, p.hit)
+        .on_submit(|s: &mut State, _| s.tasks.inputs.description.insert("\n"))
+        .wrap_anywhere()
+        .min_h(80.0)
+        .key("pdescription")
+        .w_full();
     let mut body = col()
         .w_full()
-        .gap(18.0)
+        .gap(12.0)
         .px(20.0)
         .pt(4.0)
         .pb(28.0)
         .child(title)
         .children(
-            (!t.description.trim().is_empty()).then(|| roles::SMALL.wrap(&t.description, p.soft)),
+            tasks
+                .inputs
+                .title
+                .focused
+                .then(|| roles::META.wrap("Up to 8 words. Start with what to do.", p.faint)),
+        )
+        .child(rune::auto_grow(description, 3, 8))
+        .child(
+            button("Save title and description", "task-text-save", false, p).on_press(
+                |s: &mut State| {
+                    s.commit_title();
+                },
+            ),
         );
     body = body.child(v2_controls(s, k, t, p, layer));
-    if t.manual
-        && let Some(msg) = &tasks.ui.error
-    {
+    if let Some(msg) = &tasks.ui.error {
         body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
     if s.has_task_draft() {
@@ -2916,6 +2989,11 @@ fn list_column(
         .pb(56.0)
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
+        .children(t.titles_notice.then(|| row().w_full().gap(8.0).items_center()
+            .child(roles::SMALL.wrap("Long task titles are now shown short. The full text is in each task's description.", p.soft).grow(1.0))
+            .child(button("Dismiss", "titles-notice-dismiss", false, p).on_press(|s: &mut State| { s.tasks.titles_notice = false; s.save_title_prefs(); }))))
+        .child(button(if t.show_full_titles { "Show full titles: on" } else { "Show full titles: off" }, "show-full-titles", false, p)
+            .role("switch").checked(t.show_full_titles).on_press(|s: &mut State| { s.toggle_full_titles(); }))
         .child(summary_line(s, p).mb(16.0))
         .child(toolbar(s, k, p, layer).mb(10.0));
     if v.groups.is_empty() && v.done.is_empty() {
@@ -3097,7 +3175,13 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                     .gap(8.0)
                     .items_center()
                     .child(status_dot(done, 16.0, p))
-                    .child(roles::SMALL.wrap(&sub.title, p.soft).grow(1.0).min_w(0.0)),
+                    .child(
+                        roles::SMALL
+                            .wrap(&sub.title, p.soft)
+                            .max_lines(2)
+                            .grow(1.0)
+                            .min_w(0.0),
+                    ),
             )
             .key(format!("panel-sub-{}", sub.id))
             .label(format!("Sub-task: {}", sub.title))
@@ -3195,7 +3279,7 @@ fn redo_older_control(s: &State, _k: &Kit, p: Palette, _layer: &mut Vec<El>) -> 
                 p,
             )
             .child(
-                super::area::button("Open AI notes settings", "redo-open-settings", p)
+                super::area::button("Open Meeting summary settings", "redo-open-settings", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
             .child(
@@ -3251,5 +3335,46 @@ impl State {
                 ),
             );
         }
+    }
+}
+
+pub(super) fn shown_title<'a>(s: &State, t: &'a TaskItem) -> &'a str {
+    let authored = if t.manual {
+        true
+    } else {
+        s.tasks
+            .overrides
+            .match_task(&t.meeting_id, &t.stable_id, &t.task, t.index)
+            .is_some_and(|o| o.title.is_some())
+            || s.meetings
+                .iter()
+                .find(|m| m.id == t.meeting_id)
+                .and_then(|m| m.summary.todo.get(t.index))
+                .is_some_and(|todo| !todo.title.trim().is_empty())
+    };
+    if s.tasks.show_full_titles && !authored {
+        &t.task
+    } else {
+        &t.title
+    }
+}
+impl State {
+    fn toggle_full_titles(&mut self) {
+        self.tasks.show_full_titles = !self.tasks.show_full_titles;
+        self.tasks.titles_notice = false;
+        if self.tasks.inputs.title.text == self.tasks.edit_title
+            && let Some(item) = self.panel_task()
+        {
+            let display = shown_title(self, item).to_string();
+            self.tasks.inputs.title = TextEdit::new(&display);
+            self.tasks.edit_title = display;
+        }
+        self.save_title_prefs();
+    }
+    fn save_title_prefs(&self) {
+        let mut prefs = core::UiPrefs::load(&self.store.root);
+        prefs.show_full_titles = self.tasks.show_full_titles;
+        prefs.task_titles_notice_seen = !self.tasks.titles_notice;
+        let _ = prefs.save(&self.store.root);
     }
 }

@@ -7,13 +7,13 @@ folder.mkdir(parents=True,exist_ok=True)
 def write(path,value):
     path.write_text(json.dumps(value,ensure_ascii=False),encoding='utf-8')
 todos=[
-    dict(id='draft',title='Review the field guide',description='Read the sample pages and check that the steps are clear. Bring the marked copy to the next planning meeting.',owner='Alex C',status='todo',team='Design',due='2026-11-10',subtasks=[dict(id='read',title='Read the sample pages',done=True),dict(id='mark',title='Mark the unclear steps',done=True),dict(id='share',title='Share the marked copy',done=False),dict(id='print',title='Print a clean copy',done=False)]),
+    dict(id='draft',title='Review the field guide',description='Read the sample pages and check that the steps are clear. Bring the marked copy to the next planning meeting.',owner='Alex C',status='todo',team='Design',due='2026-11-10',due_default=True,subtasks=[dict(id='read',title='Read the sample pages',done=True),dict(id='mark',title='Mark the unclear steps',done=True),dict(id='share',title='Share the marked copy',done=False),dict(id='print',title='Print a clean copy',done=False)]),
     dict(id='send',title='Send the sample pack',description='Share the approved sample with the workshop team.',owner='Morgan Lee',status='waiting',waiting_on=dict(task_id='draft'),due='2026-11-11'),
     dict(id='copy',title='Check the workshop invitation',description='The draft is ready. Check the date and the reply address before it goes out.',owner='Alex Chen',status='review',due='2026-11-12'),
     dict(id='outside',title='Confirm the room booking',owner='Robin',status='waiting',waiting_on=dict(text="The venue team's reply"),due=None),
     dict(id='long',title='Prepare the revised workshop materials and check every printed sample before the next planning meeting',description='A deliberately long synthetic title checks wrapping at a narrow width.',owner=None,status='todo',due='2026-11-16'),
     dict(id='done',title='Book the print slot',owner='Morgan Lee',status='done',due='2026-11-09'),
-    dict(task='Ask the supplier for a paper sample',owner='Robin',due=None),
+    dict(task='Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities',owner='Robin',due='2026-11-17',due_default=True),
 ]
 for t in todos:
     if 'title' in t:t['task']=t['title']

@@ -338,7 +338,7 @@ impl State {
                     match result {
                         Ok(()) => "Tasks queued. Your changes will be kept.",
                         Err(_) => {
-                            "Could not queue tasks. Check AI notes in Settings, then try again."
+                            "Could not queue tasks. Check Meeting summary in Settings, then try again."
                         }
                     }
                     .into(),
@@ -433,15 +433,25 @@ impl State {
                     }
                     self.tasks.edit_failed = false;
                     self.tasks.notice = None;
+                    let description_unchanged = !matches!(field, Field::Title)
+                        || self.tasks.inputs.description.text
+                            == mine["description"]
+                                .as_str()
+                                .unwrap_or(&self.tasks.edit_description);
                     let input = match field {
                         Field::Title => &mut self.tasks.inputs.title,
                         Field::Owner | Field::Mine => &mut self.tasks.inputs.owner,
                         Field::Due => &mut self.tasks.inputs.due,
                         Field::Project => &mut self.tasks.inputs.project,
                     };
-                    let unchanged = input.text == typed;
+                    let unchanged = input.text == typed && description_unchanged;
                     if matches!(field, Field::Title) {
-                        self.tasks.edit_title = mine["task"].as_str().unwrap_or_default().into();
+                        if let Some(title) = mine["title"].as_str() {
+                            self.tasks.edit_title = title.into();
+                        }
+                        if let Some(description) = mine["description"].as_str() {
+                            self.tasks.edit_description = description.into();
+                        }
                     } else if unchanged {
                         *input = Default::default();
                         match field {
