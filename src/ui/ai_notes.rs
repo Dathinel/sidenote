@@ -958,28 +958,42 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
     } else {
         SETUP_STEPS
     };
-    let mut card = card(p).key("today-ai-notes").mb(16.0)
+    let card = card(p).key("today-ai-notes").mb(16.0)
         .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "AI notes need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
-        .child(roles::SMALL.wrap("After you turn on AI notes, meeting text goes to Anthropic through your Claude Code account.", p.soft))
-        .child(row().flex_wrap().gaps(8.0, 8.0)
-            .child(button(if helper.is_some() { "Turn on AI notes" } else { "Show setup steps" }, "today-notes-setup", p).on_press(|s: &mut State| s.open_ai_notes()))
-            .child(button("What is sent", "today-notes-privacy", p).on_press(|s: &mut State| s.open_ai_notes())));
+        .child(roles::SMALL.wrap("After you turn on AI notes, meeting text goes to Anthropic through your Claude Code account.", p.soft));
+    let mut actions = row().flex_wrap().gaps(8.0, 8.0);
     if helper.is_none() {
-        card = card.child(
-            row()
-                .flex_wrap()
-                .gaps(8.0, 8.0)
+        actions = actions
+            .child(
+                button("Open install page", "today-notes-install", p)
+                    .on_press(|s: &mut State| s.open_notes_install_page()),
+            )
+            .child(
+                button("Check again", "today-notes-check", p)
+                    .on_press(|s: &mut State| s.refresh_ai_notes()),
+            );
+    }
+    Some(
+        card.child(
+            actions
                 .child(
-                    button("Open install page", "today-notes-install", p)
-                        .on_press(|s: &mut State| s.open_notes_install_page()),
+                    button(
+                        if helper.is_some() {
+                            "Turn on AI notes"
+                        } else {
+                            "Show setup steps"
+                        },
+                        "today-notes-setup",
+                        p,
+                    )
+                    .on_press(|s: &mut State| s.open_ai_notes()),
                 )
                 .child(
-                    button("Check again", "today-notes-check", p)
-                        .on_press(|s: &mut State| s.refresh_ai_notes()),
+                    button("What is sent", "today-notes-privacy", p)
+                        .on_press(|s: &mut State| s.open_ai_notes()),
                 ),
-        );
-    }
-    Some(card)
+        ),
+    )
 }
 
 #[cfg(test)]

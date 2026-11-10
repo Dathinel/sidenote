@@ -155,7 +155,7 @@ fn home_row(
             .gap(14.0)
             .items_center()
             .child(if problem {
-                dot(8.0, p.warn)
+                col().size(32.0, 32.0).center().child(dot(8.0, p.warn))
             } else {
                 page_icon(p)
             })
@@ -189,17 +189,26 @@ fn home_row(
             }
         ) {
             core::notes::Request::SortAgain
+        } else if matches!(job.state, core::notes::JobState::TooLong { .. }) {
+            core::notes::Request::FirstPart
         } else {
             job.retry_request()
         };
-        let needs_page = matches!(
-            job.state,
-            core::notes::JobState::TooLong { .. } | core::notes::JobState::ContextTooLong { .. }
-        );
+        let needs_page = matches!(job.state, core::notes::JobState::ContextTooLong { .. });
         r = r.child(
             super::area::button(
                 if setup {
-                    "Choose a helper"
+                    if matches!(job.state, core::notes::JobState::NoHelper)
+                        && s.ai_notes
+                            .found
+                            .contains(&(core::notes::Helper::Claude, true))
+                    {
+                        "Turn on AI notes"
+                    } else {
+                        "Choose a helper"
+                    }
+                } else if matches!(job.state, core::notes::JobState::TooLong { .. }) {
+                    "Use first 4 hours"
                 } else {
                     "Try again"
                 },
