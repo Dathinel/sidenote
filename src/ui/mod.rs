@@ -8,6 +8,7 @@ mod area_migration;
 mod area_scene;
 mod ask;
 mod benchmark;
+mod cards;
 mod check;
 mod diary;
 mod edit_worker;
