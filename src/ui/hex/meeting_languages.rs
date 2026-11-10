@@ -80,5 +80,5 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
     if let Some(error) = &s.feature_error {
         body = body.child(roles::SMALL.medium().line(error, p.warn).role("alert"));
     }
-    body
+    body.key("meeting-language-mode")
 }
