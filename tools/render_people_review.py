@@ -12,7 +12,7 @@ ENV['PATH']=r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+ENV['P
 def tap(key,t=.3): return dict(type='tap',key=key,t=t)
 def key(name,t): return dict(type='key',name=name,t=t)
 
-def render(exe,name,scene,width=1280,theme='light',events=None,state=None):
+def render(exe,name,scene,width=1280,theme='light',events=None,state=None,meetings=None):
     (OUT/'state').mkdir(parents=True,exist_ok=True)
     state=state or Path(tempfile.mkdtemp(prefix=name+'-',dir=OUT/'state'))
     state.mkdir(parents=True,exist_ok=True)
@@ -21,7 +21,7 @@ def render(exe,name,scene,width=1280,theme='light',events=None,state=None):
     (state/'config.json').write_text(json.dumps(dict(version=1,features={k:True for k in ['tasks','memory','daily_check','projects','other_devices']})))
     (state/'projects.json').write_text(json.dumps(dict(projects=['Northwind Atlas','Northwind Field Guide'],aliases={})))
     shutil.copy2(ROOT/'tools/ui-fixtures/hex.json',state/'hex-fixture.json')
-    meetings=prepare(state) if scene.startswith('people-') else ROOT/'tools/ui-fixtures/meetings'
+    meetings=meetings or (prepare(state) if scene.startswith('people-') else ROOT/'tools/ui-fixtures/meetings')
     base=OUT/f'{name}-{width}-{theme}'
     args=[str(exe),'--meetings-dir',str(meetings),'--data-dir',str(state),'--peers-dir',str(state/'peers'),'--scene',scene,'--theme',theme,'--size',f'{width}x800','--scale','1','--snap',str(base)+'.png','--tree',str(base)+'.json']
     if events:
