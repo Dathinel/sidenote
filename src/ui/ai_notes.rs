@@ -17,12 +17,12 @@ pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed 
 pub const INSTALL_URL: &str = "https://code.claude.com/docs/en/setup";
 const SETUP_STEPS: &str =
     "1. Install Claude Code. 2. Open a terminal, type claude, and sign in. 3. Press Check again.";
-pub const LOAD_ERROR: &str = "Sidenote could not load AI notes settings. Press Reload helper status. If it fails again, restart Sidenote.";
+pub const LOAD_ERROR: &str = "Sidenote could not load Meeting summary settings. Press Reload helper status. If it fails again, restart Sidenote.";
 pub const SAVE_ERROR: &str = "Sidenote could not save your instructions. Your text is still here. Try Save instructions again. If it fails twice, copy the text and restart Sidenote.";
 
 pub fn helper_fallback_message(helper: Helper) -> String {
     format!(
-        "{} is coming in a later version. Choose Claude Code below to turn on AI notes.",
+        "{} is coming in a later version. Choose Claude Code below to turn on Meeting summary.",
         helper.name()
     )
 }
@@ -41,7 +41,7 @@ fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
             return None;
         }
     }
-    Some("AI notes are off. Choose Claude Code in AI notes settings, then try again.".into())
+    Some("Meeting summaries are off. Choose Claude Code in Meeting summary settings, then try again.".into())
 }
 
 pub struct Editor {
@@ -176,7 +176,8 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
         Work::Load => Snapshot::read(root).map(|s| Completion::Loaded(Box::new(s))),
         Work::Settings(settings) => {
             notes::save_settings(&settings).map_err(|_| {
-                "Could not save AI notes settings. Your previous choice was kept.".to_string()
+                "Could not save Meeting summary settings. Your previous choice was kept."
+                    .to_string()
             })?;
             notes::settings().map(Completion::Settings).map_err(|_| {
                 "Settings were written but could not be read back. Reload to check.".into()
@@ -213,7 +214,7 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
             notes::test_helper(HELPERS[index], &model),
         )),
         Work::Request(id, mode) => {
-            notes::request(&id, mode).map_err(|_| "Could not queue notes. Choose an installed helper in AI notes settings, then try again.".to_string())?;
+            notes::request(&id, mode).map_err(|_| "Could not queue a meeting summary. Choose an installed helper in Meeting summary settings, then try again.".to_string())?;
             Ok(Completion::Requested(id))
         }
     }
@@ -245,7 +246,7 @@ impl State {
             .name("ai-notes-operation".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| run(&root, work)).unwrap_or_else(|_| {
-                    Err("AI notes hit a problem. Reload before trying again.".into())
+                    Err("Meeting summaries hit a problem. Reload before trying again.".into())
                 });
                 let _ = events.send(Event::AiNotes {
                     generation,
@@ -259,7 +260,8 @@ impl State {
             .is_err()
         {
             self.ai_notes.pending = None;
-            self.ai_notes.error = Some("Could not start the AI notes worker. Try again.".into());
+            self.ai_notes.error =
+                Some("Could not start the Meeting summary worker. Try again.".into());
         }
     }
     pub fn refresh_ai_notes(&mut self) {
@@ -267,7 +269,7 @@ impl State {
             self.reload_runners();
             self.agents_rechecked = !self.has_agent();
         }
-        self.notes_work(Work::Load, "Loading AI notes...");
+        self.notes_work(Work::Load, "Loading Meeting summary...");
     }
     fn open_notes_install_page(&mut self) {
         if self.ai_notes.scene {
@@ -343,7 +345,7 @@ impl State {
                 self.config.notes = Some(settings.clone());
                 self.ai_notes.settings = Some(settings);
                 self.ai_notes.fallback = None;
-                self.ai_notes.notice = Some("AI notes settings saved.".into());
+                self.ai_notes.notice = Some("Meeting summary settings saved.".into());
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
                 self.notes_editor_loaded(index, entry, reset);
@@ -402,14 +404,17 @@ impl State {
         settings.helper = Some(HELPERS[index]);
         settings.model = self.ai_notes.models[index].text.trim().into();
         settings.your_name = self.ai_notes.name.text.trim().into();
-        self.notes_work(Work::Settings(settings), "Saving AI notes...");
+        self.notes_work(Work::Settings(settings), "Saving Meeting summary...");
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
         if let Some(problem) = self.notes_request_problem() {
             self.ai_notes.error = Some(problem);
             return;
         }
-        self.notes_work(Work::Request(id, mode), "Adding notes to the queue...");
+        self.notes_work(
+            Work::Request(id, mode),
+            "Adding the meeting summary to the queue...",
+        );
     }
     pub fn notes_request_problem(&self) -> Option<String> {
         if let Some(helper) = self.ai_notes.fallback {
@@ -497,7 +502,7 @@ fn editor(s: &State, index: usize, p: Palette) -> El {
         .wrap_anywhere()
         .caret(p.ink, p.hit)
         .label(if index == 0 {
-            "Meeting notes instructions"
+            "Meeting summary instructions"
         } else {
             "Tasks instructions"
         })
@@ -612,7 +617,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .w_full()
         .gap(16.0)
         .mt(20.0)
-        .child(roles::SECTION.wrap("AI notes", p.ink));
+        .child(roles::SECTION.wrap("Meeting summary", p.ink));
     if let Some(pending) = a.pending {
         c = c.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
@@ -650,7 +655,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     }
     let status = match (settings.engine.as_str(), settings.effective_helper()) {
         ("app", Some(h)) => format!(
-            "AI notes are on. Summaries use {} ({}).",
+            "Meeting summaries are on. Summaries use {} ({}).",
             h.name(),
             if settings.model.is_empty() || settings.model == h.default_model() {
                 "default model"
@@ -659,7 +664,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             }
         ),
         ("scripts", _) => "Your own scripts write summaries on this PC.".into(),
-        _ => "AI notes are off. New meetings get a transcript only.".into(),
+        _ => "Meeting summaries are off. New meetings get a transcript only.".into(),
     };
     c = c.child(
         roles::SMALL
@@ -692,9 +697,9 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         .child(button(if a.privacy_open { "Hide details" } else { "Details" }, "notes-privacy-details", p).self_start().on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open));
     if a.privacy_open {
         privacy = privacy
-            .child(roles::SMALL.wrap("Nothing is sent until you turn on AI notes. After that, Sidenote sends a meeting when it ends, if automatic notes are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
+            .child(roles::SMALL.wrap("Nothing is sent until you turn on Meeting summary. After that, Sidenote sends a meeting when it ends, if automatic meeting summaries are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
-            .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved notes and transcripts between your devices.", p.soft))
+            .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
     }
     c = c.child(privacy);
@@ -852,9 +857,9 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             });
         }
         if a.switch_confirm == Some(h) {
-            r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write notes.", p.warn))
+            r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.", p.warn))
                 .child(row().flex_wrap().gaps(8.0, 8.0)
-                    .child(button("Switch to built-in notes", "notes-confirm-switch", p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
+                    .child(button("Switch to built-in meeting summaries", "notes-confirm-switch", p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
                     .child(button("Keep scripts", "notes-cancel-switch", p).on_press(|s: &mut State| s.ai_notes.switch_confirm = None)));
         }
         c = c.child(r);
@@ -865,7 +870,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 .key("notes-scripts-card")
                 .child(roles::TITLE.wrap("Your own scripts (advanced)", p.ink))
                 .child(roles::SMALL.wrap(
-                    "Use your configured script. Built-in notes will stop starting new jobs.",
+                    "Use your configured script. Built-in meeting summaries will stop starting new jobs.",
                     p.soft,
                 ))
                 .child(
@@ -893,24 +898,27 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     .self_start()
                     .focusable(false)
             } else {
-                button("Turn off AI notes", "notes-off", p)
+                button("Turn off Meeting summary", "notes-off", p)
                     .self_start()
                     .on_press(|s: &mut State| {
                         if let Some(mut settings) = s.ai_notes.settings.clone() {
                             settings.engine = "off".into();
-                            s.notes_work(Work::Settings(settings), "Turning off AI notes...");
+                            s.notes_work(
+                                Work::Settings(settings),
+                                "Turning off Meeting summary...",
+                            );
                         }
                     })
             }),
     );
     c = c.child(card(p).key("notes-options")
         .child(row().w_full().gap(12.0).items_center()
-            .child(roles::NAME.wrap("Write a summary when a meeting ends", if off { p.soft } else { p.ink }).grow(1.0).min_w(0.0))
+            .child(roles::NAME.wrap("Write a meeting summary when a meeting ends", if off { p.soft } else { p.ink }).grow(1.0).min_w(0.0))
             .child(roles::CONTROL.wrap(if settings.auto { "On" } else { "Off" }, p.soft))
-            .child(Switch::new(settings.auto).disabled(off).label("Write a summary when a meeting ends").hide_label().on_toggle(|s: &mut State| {
-                if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic notes..."); }
+            .child(Switch::new(settings.auto).disabled(off).label("Write a meeting summary when a meeting ends").hide_label().on_toggle(|s: &mut State| {
+                if let Some(mut settings) = s.ai_notes.settings.clone() { settings.auto = !settings.auto; s.notes_work(Work::Settings(settings), "Saving automatic meeting summaries..."); }
             }).build(k).key("notes-auto")))
-        .child(roles::SMALL.wrap(if off { "Only applies when AI notes are on." } else { "When this is off, use Write summary on each meeting." }, p.soft)))
+        .child(roles::SMALL.wrap(if off { "Only applies when Meeting summaries are on." } else { "When this is off, use Write summary on each meeting." }, p.soft)))
         .child(card(p).key("notes-identity")
         .child(roles::TITLE.wrap("Who you are in tasks", p.ink))
         .child(roles::NAME.wrap("Your name (optional)", p.ink))
@@ -920,7 +928,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             if let Some(mut settings) = s.ai_notes.settings.clone() { settings.your_name = s.ai_notes.name.text.trim().into(); s.notes_work(Work::Settings(settings), "Saving your name..."); }
         })));
     c.child(col().key("agent-instructions").w_full().gap(16.0)
-        .child(roles::SECTION.wrap("How notes are written", p.ink))
+        .child(roles::SECTION.wrap("Meeting summary instructions", p.ink))
         .child(roles::SMALL.wrap("Change the base instructions for your helper. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
         .child(editor(s, 0, p)).child(editor(s, 1, p)))
         .child(roles::SMALL.wrap(if s.tasks.teams.teams.is_empty() { "No teams yet. Tasks will not be given a team." } else { "Tasks use the team of the person who owns them." }, p.soft))
@@ -959,8 +967,8 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
         SETUP_STEPS
     };
     let card = card(p).key("today-ai-notes").mb(16.0)
-        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "AI notes need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
-        .child(roles::SMALL.wrap("After you turn on AI notes, meeting text goes to Anthropic through your Claude Code account.", p.soft));
+        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
+        .child(roles::SMALL.wrap("After you turn on Meeting summary, meeting text goes to Anthropic through your Claude Code account.", p.soft));
     let mut actions = row().flex_wrap().gaps(8.0, 8.0);
     if helper.is_none() {
         actions = actions
@@ -979,7 +987,7 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
                 .child(
                     button(
                         if helper.is_some() {
-                            "Turn on AI notes"
+                            "Turn on Meeting summary"
                         } else {
                             "Show setup steps"
                         },

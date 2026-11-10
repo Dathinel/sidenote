@@ -17,7 +17,7 @@ use sidenote::{
 };
 use std::time::{Duration, Instant};
 
-/// How long "Copied notes" stays on screen.
+/// How long "Copied summary" stays on screen.
 const TOAST_FOR: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy)]
@@ -38,7 +38,7 @@ impl Part {
 
     fn name(self) -> &'static str {
         match self {
-            Self::Notes => "notes",
+            Self::Notes => "summary",
             Self::Decisions => "decisions",
             Self::Todos => "tasks",
         }
@@ -176,7 +176,7 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
         let folder_id = m.id.clone();
         let export_id = m.id.clone();
         menu = menu
-            .item(copy("Copy notes", Part::Notes, true, ""))
+            .item(copy("Copy summary", Part::Notes, true, ""))
             .item(copy(
                 "Copy decisions",
                 Part::Decisions,

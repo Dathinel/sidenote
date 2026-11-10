@@ -12,7 +12,7 @@ def nodes(node):
 
 def check(root):
     checked = 0
-    message = "Ask works with Claude Code, Codex or OpenCode. AI notes need Claude Code."
+    message = "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code."
     for width in (1320, 560):
         for theme in ("light", "dark"):
             def load(scene):
@@ -42,7 +42,7 @@ def check(root):
             assert "notes-install-page" in keyed
             assert text.count("Selected") == 1
             assert "disabled" in accessible["notes-auto"]["states"]
-            assert "Only applies when AI notes are on." in text
+            assert "Only applies when Meeting summaries are on." in text
             for index in (1, 2):
                 card = keyed[f"notes-helper-{index}"]["path"] + "/"
                 content = [e["text"] for e in elements if e["path"].startswith(card) and "text" in e]
@@ -60,7 +60,7 @@ def check(root):
             for helper in ("codex", "opencode"):
                 _, _, text, _ = load(f"notes-settings-saved-{helper}")
                 assert text.count("Saved choice not available") == 1
-                assert sum("AI notes are off" in t for t in text) == 1
+                assert sum("Meeting summaries are off" in t for t in text) == 1
 
             _, _, text, _ = load("notes-meeting-done")
             assert any("in recording" in t for t in text)

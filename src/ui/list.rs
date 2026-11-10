@@ -204,7 +204,7 @@ fn home_row(
                             .found
                             .contains(&(core::notes::Helper::Claude, true))
                     {
-                        "Turn on AI notes"
+                        "Turn on Meeting summary"
                     } else {
                         "Choose a helper"
                     }

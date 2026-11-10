@@ -96,7 +96,7 @@ pub fn settings(s: &mut State, mode: &str) {
         }
         "loading" => {
             s.ai_notes.settings = None;
-            s.ai_notes.pending = Some("Loading AI notes...");
+            s.ai_notes.pending = Some("Loading Meeting summary...");
         }
         "helpers" => {
             super::scene_scroll(s, "notes-helper-0");

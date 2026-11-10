@@ -102,22 +102,20 @@ impl Transcript {
         match self {
             Self::Finishing => "Hex is finishing the transcript",
             Self::Interrupted => "Transcript waiting for Hex",
-            Self::Ready if slow => "The notes are taking a while",
-            Self::Ready => "Making notes",
+            Self::Ready if slow => "The summary is taking a while",
+            Self::Ready => "Writing the summary",
         }
     }
 
     fn detail(self) -> &'static str {
         match self {
             Self::Finishing => {
-                "Notes can be made once Hex finishes the transcript. You can leave this page."
+                "A summary can be written once Hex finishes the transcript. You can leave this page."
             }
             Self::Interrupted => {
                 "Hex was restarted. It will finish this transcript when it starts again."
             }
-            Self::Ready => {
-                "The meeting will open here when its notes are ready. You can leave this page."
-            }
+            Self::Ready => "The summary opens here when it is ready. You can leave this page.",
         }
     }
 }
@@ -1117,7 +1115,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     let hint = if starting {
         "Starting the recording. You can start writing now."
     } else {
-        "Your typed notes save as you type. The transcript is added when you stop."
+        "Your notes save as you type. Sidenote writes the summary after you stop."
     };
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
@@ -1126,7 +1124,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .color(p.ink)
         .placeholder("Write notes\u{2026}", p.faint)
         .caret(p.ink, k.selection())
-        .label("Meeting notes")
+        .label("Your notes")
         .on_edit(|s: &mut State| &mut s.live_notes)
         // Return starts a new line here; it would otherwise submit.
         .on_submit(|s: &mut State, _| s.live_notes.insert("\n"));
@@ -1350,7 +1348,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                     match transcript {
                         Transcript::Finishing => "Finishing the transcript",
                         Transcript::Interrupted => "Waiting for Hex",
-                        Transcript::Ready => "Making notes",
+                        Transcript::Ready => "Writing the summary",
                     },
                 )),
         )
@@ -1557,7 +1555,10 @@ mod writer_tests {
         let transcript = read_transcript_state(&folder);
         assert_eq!(transcript, Some(Transcript::Ready));
         state.live.as_ref().unwrap().feed.lock().unwrap().transcript = transcript;
-        assert_eq!(making_transcript(&state).heading(false), "Making notes");
+        assert_eq!(
+            making_transcript(&state).heading(false),
+            "Writing the summary"
+        );
         let refresh = |state: &mut State| {
             let options = state.refresh_options();
             state.apply_event(super::super::Event::Refreshed(
@@ -1575,7 +1576,7 @@ mod writer_tests {
         state.live.as_mut().unwrap().folder = None;
         assert_eq!(
             making_transcript(&state).heading(true),
-            "The notes are taking a while"
+            "The summary is taking a while"
         );
         fs::write(
             folder.join("english-summary.json"),

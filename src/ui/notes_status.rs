@@ -80,7 +80,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let name = helper.map(Helper::name).unwrap_or("The helper");
     match &job.state {
         JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
-        JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on AI notes. You can write this one now.".into(),
+        JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
         JobState::Running => running_message(name, job.updated_at),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
@@ -122,7 +122,7 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::BackendError { .. } => "Helper failed, retry needed",
         JobState::TimedOut => "Helper took too long",
         JobState::BadOutput => "Helper reply could not be read",
-        JobState::TooLong { .. } => "Meeting too long for notes",
+        JobState::TooLong { .. } => "Meeting too long for a summary",
         JobState::ContextTooLong { .. } => "Shorten the summary input",
         JobState::Empty => "No speech heard",
         JobState::Done { fallback: true, .. } => "Summary used default instructions",

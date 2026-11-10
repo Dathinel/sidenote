@@ -114,7 +114,7 @@ pub(super) fn enqueue_in(
     if settings.engine() != Engine::App {
         if mode.is_some() {
             return Err(store_io::invalid(
-                "Turn on built-in AI notes in Settings first",
+                "Turn on built-in Meeting summary in Settings first",
             ));
         }
         return Ok(());

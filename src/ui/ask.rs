@@ -488,7 +488,7 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
         return slot.child(
             pressable(
                 disc().child(
-                    rune::icon(&rune_kit::glyphs::ARROW_RIGHT, 16.0)
+                    rune::icon(&super::icons::ARROW_RIGHT, 16.0)
                         .color(p.card)
                         .icon_rotation(-FRAC_PI_2),
                 ),
@@ -512,7 +512,7 @@ fn no_agent(s: &State, p: Palette) -> El {
         .min_w(0.0)
         .gap(2.0)
         .child(roles::CONTROL.wrap(
-            "Ask works with Claude Code, Codex or OpenCode. AI notes need Claude Code.",
+            "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
             p.ink,
         ));
     if s.agents_rechecked {
@@ -567,7 +567,7 @@ pub fn overlay_with(
     if s.back.is_some() {
         stack = stack.child(
             row().w_full().justify_end().child(
-                pressable(roles::CONTROL.wrap(
+                pressable(roles::CONTROL.icon_label(
                     if s.check_back {
                         "\u{2039} Back to the check"
                     } else if s.cite_back.is_some() {

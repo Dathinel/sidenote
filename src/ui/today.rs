@@ -48,9 +48,9 @@ fn items(s: &State, p: Palette) -> Vec<Item> {
     let mut out = Vec::new();
     if let Some(l) = s.live.as_ref().filter(|l| l.phase == live::Phase::Making) {
         let (lead, words) = match l.quick_title() {
-            Some(title) => ("Writing summary".to_string(), title),
+            Some(title) => ("Writing the summary".to_string(), title),
             None => (
-                "Writing summary".to_string(),
+                "Writing the summary".to_string(),
                 format!("for the {} meeting", l.clock()),
             ),
         };
@@ -162,7 +162,9 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
                     .px(14.0)
                     .py(9.0)
                     .child(words)
-                    .child(roles::CONTROL.wrap(format!("{} \u{203a}", item.action), p.accent)),
+                    .child(
+                        roles::CONTROL.icon_label(format!("{} \u{203a}", item.action), p.accent),
+                    ),
             )
             .key(item.key)
             .label(format!("{said}. {}", item.action))
