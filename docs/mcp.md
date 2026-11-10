@@ -308,6 +308,17 @@ fields, status filters, Teams aliases/paging and typed-notes search/paging. Offs
 Settings scenes are `mcp-connect` and `mcp-connect-560` in `tools/render_ui.ps1`,
 rendered in light and dark; they do not launch the desktop window.
 
+On 10 November 2026, all five local Cargo gates above passed. Each test build
+(default and `asr-runtime`) ran 163 tests with zero failures. The extended smoke
+passed for all nine schemas/annotations and the new task, Teams and typed-notes
+behavior, including one-item pages with duplicate task titles and feature-disabled
+calls. Its existing-config fixture includes the config reader's persistent lock
+file, and every fixture file is checked for changes. The four Connect AI apps
+renders at widths 1320 and 560, light and dark, were opened and inspected.
+This is test/protocol and offscreen-render evidence. A packaged install's path,
+actual clipboard interaction, a real `claude mcp add` run, and connections from the
+five AI clients remain unverified. No app was installed or opened on the desktop.
+
 On 7 November 2026, `cargo clippy --locked --all-targets -- -D warnings` and
 `cargo build --locked` passed on the configured Windows GNU target. The single
 fixture smoke passed with empty stderr, JSON-RPC-only stdout and unchanged fixture
