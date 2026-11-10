@@ -615,6 +615,19 @@ impl State {
     pub fn hex_record_stop(&mut self) {
         // Notes typed on the live page reach the folder before the pipeline can start.
         self.live_flush();
+        if !self.hex_recording() {
+            if self.hex_running() {
+                self.live_sync();
+            }
+            if self
+                .live
+                .as_ref()
+                .is_some_and(|live| live.phase == super::live::Phase::Making)
+            {
+                self.leave_live();
+            }
+            return;
+        }
         if self.hex.record_busy
             || !self.hex.can(Feature::RecordStop)
             || self.hex.recording().is_none()

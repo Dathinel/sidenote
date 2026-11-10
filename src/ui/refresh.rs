@@ -259,12 +259,6 @@ impl Handle {
         drop(current);
         let _ = self.tx.try_send(());
     }
-    pub fn send(&self, _: ()) -> std::result::Result<(), mpsc::SendError<()>> {
-        match self.tx.try_send(()) {
-            Ok(()) | Err(mpsc::TrySendError::Full(())) => Ok(()),
-            Err(mpsc::TrySendError::Disconnected(())) => Err(mpsc::SendError(())),
-        }
-    }
     pub fn invalidate(&self) {
         self.dirty.store(true, Ordering::Release);
     }

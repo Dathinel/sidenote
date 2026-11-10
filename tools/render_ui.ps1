@@ -310,6 +310,7 @@ $shots += ,@('screens-more-open', 'screens-summary', '1320x800', 'screens-more-o
 $sidebarScenes = @(
     'list', 'home-open', 'home-collapsed', 'home-project', 'home-peers', 'home-end', 'tasks-open',
     'live-recording', 'live-starting', 'live-making', 'live-naming', 'recording-away',
+    'live-finishing', 'live-interrupted', 'live-making-slow',
     'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-making-notes', 'meeting-your-notes',
     'ask-idle', 'ask-focused', 'ask-typed', 'ask-suggestions', 'ask-model', 'ask-focused-meeting',
     'ask-model-missing', 'ask-no-agent', 'ask-no-agent-again',
@@ -322,6 +323,7 @@ foreach ($n in $sidebarScenes) {
 }
 # A phone-width window: the sidebar is a rail, and a drawer when opened.
 foreach ($n in 'home-open', 'live-recording', 'live-notes-typed', 'live-panel', 'live-panel-empty', 'live-making-notes', 'meeting-your-notes', 'hex', 'hex-general', 'hex-dictation', 'hex-meetings', 'hex-vocabulary', 'ask-idle', 'ask-focused', 'ask-typed', 'ask-model-missing', 'ask-no-agent') { $shots += ,@("sb-$n-560", $n, '560x900', $null, @()) }
+foreach ($n in 'live-finishing', 'live-interrupted', 'live-making-slow') { $shots += ,@("sb-$n-560", $n, '560x900', $null, @()) }
 # The sidebar on each page it serves, wide and at phone width (where it opens as a drawer).
 # These scenes read a longer invented project list and a memory fixture with proposals.
 foreach ($n in 'meetings', 'meeting', 'tasks', 'memory', 'check', 'settings', 'update', 'project', 'all', 'rail') {

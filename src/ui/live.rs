@@ -33,7 +33,7 @@ use rune_kit::Kit;
 use sidenote::core::live::{self as feed_io, LiveLine, Read};
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -68,10 +68,8 @@ type SaveResult = (String, Result<Option<PathBuf>, String>);
 
 /// How long a start may take before the page gives up waiting for Hex to say it is recording.
 const START_WAIT: Duration = Duration::from_secs(25);
-/// After this long without a new meeting, the page says the notes are slow and lets go.
+/// After this long without a new meeting, the page says the notes are slow.
 const MAKING_SLOW: Duration = Duration::from_secs(10 * 60);
-/// How often the folder is scanned while notes are being made.
-const SCAN_EVERY: Duration = Duration::from_secs(6);
 /// How often the new meeting's folder is checked for its quick title after Stop.
 const TITLE_EVERY: Duration = Duration::from_secs(2);
 /// How often the live transcript file is read while the page is visible.
@@ -90,6 +88,101 @@ pub enum Phase {
     Recording,
     /// Stopped; waiting for the pipeline to write the meeting.
     Making,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Transcript {
+    Finishing,
+    Interrupted,
+    Ready,
+}
+
+impl Transcript {
+    fn heading(self, slow: bool) -> &'static str {
+        match self {
+            Self::Finishing => "Hex is finishing the transcript",
+            Self::Interrupted => "Transcript waiting for Hex",
+            Self::Ready if slow => "The notes are taking a while",
+            Self::Ready => "Making notes",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Finishing => {
+                "Notes can be made once Hex finishes the transcript. You can leave this page."
+            }
+            Self::Interrupted => {
+                "Hex was restarted. It will finish this transcript when it starts again."
+            }
+            Self::Ready => {
+                "The meeting will open here when its notes are ready. You can leave this page."
+            }
+        }
+    }
+}
+
+fn read_transcript_state(folder: &Path) -> Option<Transcript> {
+    let raw = sidenote::core::file_reads::read(&folder.join("manifest.json"), 1024 * 1024).ok()?;
+    let manifest: sidenote::core::Manifest = serde_json::from_slice(&raw).ok()?;
+    match manifest.status.as_deref() {
+        Some("recording" | "starting" | "transcribing") => Some(Transcript::Finishing),
+        Some("interrupted") if folder.join("final.pending").is_file() => {
+            Some(Transcript::Interrupted)
+        }
+        Some("complete") => Some(Transcript::Ready),
+        _ => None,
+    }
+}
+
+fn making_transcript(s: &State) -> Transcript {
+    s.live
+        .as_ref()
+        .and_then(|live| {
+            live.feed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .transcript
+        })
+        .unwrap_or_else(|| {
+            if s.hex
+                .status
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .is_some_and(|st| st.meeting_state == "transcribing")
+            {
+                Transcript::Finishing
+            } else {
+                Transcript::Ready
+            }
+        })
+}
+
+pub(super) fn scene_making(s: &mut State, status: &str) {
+    hex::scene(s, false);
+    let mut live = Live::scene(Phase::Making, Some("Weekly planning"));
+    live.feed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .transcript = Some(match status {
+        "transcribing" => Transcript::Finishing,
+        "interrupted" => Transcript::Interrupted,
+        _ => Transcript::Ready,
+    });
+    if status == "slow" {
+        live.stopped = Some(Instant::now() - Duration::from_secs(49 * 60));
+    }
+    s.ai_notes.settings = Some(sidenote::core::notes::NotesSettings {
+        engine: "scripts".into(),
+        ..Default::default()
+    });
+    if let Some(meeting) = s.meetings.iter_mut().find(|m| m.device.is_none()) {
+        meeting.summary_raw.clear();
+        live.folder = Some(meeting.folder.clone());
+    }
+    s.live = Some(live);
+    s.live_open = true;
+    s.live_notes = TextEdit::new("Check the launch date with the team.");
 }
 
 /// What the reader thread knows about the live transcript. The page reads it; only the thread
@@ -112,6 +205,7 @@ pub struct Feed {
     /// Counts every change, so the page knows to draw again.
     version: u64,
     notes_problem: Option<&'static str>,
+    transcript: Option<Transcript>,
 }
 
 impl Feed {
@@ -237,9 +331,13 @@ impl Live {
             .and_then(|id| id.to_str())
         {
             Some(id) => meeting.id == id,
-            None => meeting.started.is_some_and(|t| {
-                t.timestamp_millis() >= self.wall_start.timestamp_millis().saturating_sub(120_000)
-            }),
+            None => meeting
+                .started
+                .map(|t| t.timestamp_millis())
+                .or_else(|| meeting.id.split_once('-')?.0.parse::<i64>().ok())
+                .is_some_and(|made| {
+                    made >= self.wall_start.timestamp_millis().saturating_sub(120_000)
+                }),
         }
     }
 
@@ -436,7 +534,9 @@ impl State {
 
     /// Leaves the live page for the meetings list, keeping a recording going.
     pub fn leave_live(&mut self) {
-        self.go_meetings();
+        if self.live_close() {
+            self.go_meetings();
+        }
     }
 
     /// Called after each Hex sample and each scan: moves the page along its three phases.
@@ -492,7 +592,7 @@ impl State {
         live.stopped = Some(Instant::now());
         live.panel_open = false;
         live.watching.store(false, Ordering::Relaxed);
-        let cancel = live.cancel.clone();
+        let title_cancel = live.cancel.clone();
         let quick = live.quick_title.clone();
         // Folder ids start with their creation time; allow for a clock a little behind the start.
         let since_ms = live.wall_start.timestamp_millis().saturating_sub(120_000);
@@ -500,7 +600,6 @@ impl State {
         let waker = self.waker.clone();
         self.request_refresh();
         // The quick title lands a few seconds after Stop, well before the notes, so look often.
-        let title_cancel = cancel.clone();
         let _ = thread::Builder::new()
             .name("live-title".into())
             .spawn(move || {
@@ -521,19 +620,7 @@ impl State {
                     thread::sleep(TITLE_EVERY);
                 }
             });
-        if let Some(tx) = self.scan_tx.clone() {
-            let _ = thread::Builder::new()
-                .name("live-scan".into())
-                .spawn(move || {
-                    // Ends when the page lets go, when the app closes, or after a long wait.
-                    for _ in 0..(MAKING_SLOW.as_secs() / SCAN_EVERY.as_secs() + 10) {
-                        thread::sleep(SCAN_EVERY);
-                        if cancel.load(Ordering::Relaxed) || tx.send(()).is_err() {
-                            break;
-                        }
-                    }
-                });
-        }
+        // The normal refresh keeps calling live_scanned, even when notes take hours.
     }
 
     /// After a scan: the first new local meeting while notes are being made is the one.
@@ -548,9 +635,21 @@ impl State {
             .meetings
             .iter()
             .find(|m| live.matches_meeting(m) && !live.known.contains(&m.id) && m.has_summary())
-            .map(|m| m.id.clone());
-        if let Some(id) = found {
+            .map(|m| (m.id.clone(), m.folder.clone()));
+        if let Some((id, folder)) = found {
             let was_open = self.on_live();
+            if let Some(live) = &mut self.live {
+                live.folder = Some(folder.clone());
+            }
+            if !self.live_close() {
+                return;
+            }
+            if let Ok(fresh) = sidenote::core::Meeting::load(&folder)
+                && let Some(meeting) = self.meetings.iter_mut().find(|m| m.id == id)
+            {
+                *meeting = fresh;
+                self.refresh_list();
+            }
             self.live = None;
             self.live_open = false;
             // Opening a meeting needs the UI's scroll handle, so `poll` finishes the job.
@@ -588,9 +687,13 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         };
         let read = feed_io::read_rolling(&folder, last);
         let notes_problem = feed_io::notes_problem(&folder);
+        let transcript = read_transcript_state(&folder);
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
-        let mut changed = f.folder.as_ref() != Some(&folder) || f.notes_problem != notes_problem;
+        let mut changed = f.folder.as_ref() != Some(&folder)
+            || f.notes_problem != notes_problem
+            || f.transcript != transcript;
         f.notes_problem = notes_problem;
+        f.transcript = transcript;
         f.folder = Some(folder);
         match read {
             Ok(Read::Waiting | Read::Same) => {
@@ -1105,7 +1208,17 @@ fn heading(s: &State) -> String {
 }
 
 fn making_view(s: &State, p: Palette, narrow: bool) -> El {
-    if let Some(live) = &s.live {
+    let transcript = making_transcript(s);
+    let finishing = transcript != Transcript::Ready;
+    let scripts = s
+        .ai_notes
+        .settings
+        .as_ref()
+        .is_some_and(|n| n.engine == "scripts");
+    if !finishing
+        && !scripts
+        && let Some(live) = &s.live
+    {
         let id = live
             .folder
             .as_ref()
@@ -1139,8 +1252,10 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                 .child(link("Open meeting and transcript", p).on_press_tx(
                     move |s: &mut State, tx| {
                         s.leave_live();
-                        s.select(&id, tx);
-                        s.toggle_transcript();
+                        if !s.on_live() {
+                            s.select(&id, tx);
+                            s.toggle_transcript();
+                        }
                     },
                 ))
                 .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()));
@@ -1152,16 +1267,11 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .and_then(|l| l.stopped)
         .is_some_and(|t| t.elapsed() > MAKING_SLOW);
     let problem = s.live.as_ref().and_then(|live| {
-        if s.ai_notes
-            .settings
-            .as_ref()
-            .is_some_and(|n| n.engine == "scripts")
-        {
+        if !finishing && scripts {
             live.feed
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .notes_problem
-                .or(slow.then_some(feed_io::NOTES_FAILED))
         } else {
             None
         }
@@ -1210,7 +1320,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             )
             .key("live-name"),
         )
-        .children(quick.is_none().then(|| {
+        .children((quick.is_none() && !finishing).then(|| {
             roles::META
                 .wrap("Naming\u{2026}", p.faint)
                 .key("live-naming")
@@ -1218,14 +1328,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         }))
         .child(
             roles::SECTION
-                .wrap(
-                    if slow {
-                        "The summary is taking a while"
-                    } else {
-                        "Writing summary"
-                    },
-                    p.ink,
-                )
+                .wrap(transcript.heading(slow), p.ink)
                 .mt(if narrow { 6.0 } else { 18.0 })
                 .role("status"),
         )
@@ -1234,28 +1337,26 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             col()
                 .gap(6.0)
                 .mt(4.0)
-                .child(step(true, "Recording saved"))
-                .child(step(false, "Writing the summary")),
+                .child(step(
+                    true,
+                    if finishing {
+                        "Recording stopped"
+                    } else {
+                        "Transcript ready"
+                    },
+                ))
+                .child(step(
+                    false,
+                    match transcript {
+                        Transcript::Finishing => "Finishing the transcript",
+                        Transcript::Interrupted => "Waiting for Hex",
+                        Transcript::Ready => "Making notes",
+                    },
+                )),
         )
         .child(
             roles::SMALL
-                .wrap(
-                    super::notes_status::running_message(
-                        s.ai_notes
-                            .settings
-                            .as_ref()
-                            .and_then(|n| n.effective_helper())
-                            .map(|h| h.name())
-                            .unwrap_or("Claude Code"),
-                        chrono::Utc::now().timestamp_millis()
-                            - s.live
-                                .as_ref()
-                                .and_then(|l| l.stopped)
-                                .map(|t| t.elapsed().as_millis() as i64)
-                                .unwrap_or(0),
-                    ),
-                    p.soft,
-                )
+                .wrap(transcript.detail(), p.soft)
                 .max_w(460.0)
                 .mt(6.0),
         );
@@ -1362,6 +1463,179 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn restart_and_late_summary_preserve_live_notes() {
+        use sidenote::{
+            core,
+            hex_engine::{EngineState, HexError},
+        };
+        use std::{fs, os::windows::process::CommandExt, process::Command};
+
+        // Give State and all of its workers private paths without changing other tests' env.
+        if std::env::var_os("SIDENOTE_LIVE_TIMELINE_CHILD").is_none() {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("artifacts")
+                .join(format!("live-timeline-{}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ui::live::writer_tests::restart_and_late_summary_preserve_live_notes",
+                    "--nocapture",
+                ])
+                .env("SIDENOTE_LIVE_TIMELINE_CHILD", "1")
+                .env("APPDATA", root.join("appdata"))
+                .env("LOCALAPPDATA", root.join("localappdata"))
+                .env("SIDENOTE_DATA_DIR", root.join("state"))
+                .env("SIDENOTE_STATE_DIR", root.join("state"))
+                .env("SIDENOTE_HEX_DIR", root.join("meetings"))
+                .env("SIDENOTE_PEERS_DIR", root.join("peers"))
+                .creation_flags(0x08000000)
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated live timeline failed");
+            return;
+        }
+        let root = core::meetings_dir();
+        let folder = root.join("1794303362394-45464");
+        fs::create_dir_all(&folder).unwrap();
+        let manifest = |status: &str| {
+            fs::write(
+                folder.join("manifest.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "status": status, "created_at_ms": 1794303362394_i64
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        manifest("recording");
+        let mut state = State::new();
+        let mut live = Live::scene(Phase::Recording, None);
+        live.wall_start = DateTime::from_timestamp_millis(1794303362394 + 1000)
+            .unwrap()
+            .with_timezone(&Local);
+        live.folder = Some(folder.clone());
+        state.live = Some(live);
+        state.live_open = true;
+        state.live_notes = TextEdit::new("Typed notes must survive");
+        let status = |name: &str| EngineState {
+            running: true,
+            version: "test".into(),
+            protocol: 4,
+            recording: None,
+            meeting_state: name.into(),
+            dictating: Some(false),
+            capture_state: "idle".into(),
+            model: serde_json::from_str("{}").unwrap(),
+        };
+        manifest("transcribing");
+        state.hex.status = Some(Ok(status("transcribing")));
+        state.live_sync();
+        assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
+        assert_eq!(making_transcript(&state), Transcript::Finishing);
+        assert_eq!(read_transcript_state(&folder), Some(Transcript::Finishing));
+        manifest("interrupted");
+        fs::write(folder.join("final.pending"), "").unwrap();
+        state.hex.status = Some(Err(HexError::HexNotRunning));
+        state.live_sync();
+        assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
+        let transcript = read_transcript_state(&folder);
+        assert_eq!(transcript, Some(Transcript::Interrupted));
+        state.live.as_ref().unwrap().feed.lock().unwrap().transcript = transcript;
+        state.hex.status = Some(Ok(status("idle")));
+        state.live_sync();
+        assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
+        assert_eq!(making_transcript(&state), Transcript::Interrupted);
+        assert_eq!(
+            making_transcript(&state).detail(),
+            "Hex was restarted. It will finish this transcript when it starts again."
+        );
+        manifest("complete");
+        fs::remove_file(folder.join("final.pending")).unwrap();
+        let transcript = read_transcript_state(&folder);
+        assert_eq!(transcript, Some(Transcript::Ready));
+        state.live.as_ref().unwrap().feed.lock().unwrap().transcript = transcript;
+        assert_eq!(making_transcript(&state).heading(false), "Making notes");
+        let refresh = |state: &mut State| {
+            let options = state.refresh_options();
+            state.apply_event(super::super::Event::Refreshed(
+                super::super::refresh::Result {
+                    generation: core::mutation_generation(),
+                    options,
+                    data: Some(Box::new(super::super::refresh::Data::read(options))),
+                },
+            ));
+        };
+        refresh(&mut state);
+        assert!(state.live.is_some());
+        state.live.as_mut().unwrap().stopped = Some(Instant::now() - Duration::from_secs(49 * 60));
+        state.live.as_mut().unwrap().scene = false;
+        state.live.as_mut().unwrap().folder = None;
+        assert_eq!(
+            making_transcript(&state).heading(true),
+            "The notes are taking a while"
+        );
+        fs::write(
+            folder.join("english-summary.json"),
+            r#"{"title":"Finished meeting"}"#,
+        )
+        .unwrap();
+        refresh(&mut state);
+        assert!(state.live.is_none());
+        assert_eq!(state.live_ready.as_deref(), Some("1794303362394-45464"));
+        assert_eq!(feed_io::read_notes(&folder), "Typed notes must survive");
+        assert_eq!(state.meetings[0].notes, "Typed notes must survive");
+
+        state.live = Some(Live::new(Phase::Making, HashSet::new()));
+        state.live.as_mut().unwrap().folder = Some(folder.clone());
+        state.live_open = true;
+        state.live_notes = TextEdit::new("Notes from the last Stop click");
+        state.hex_record_stop();
+        assert!(
+            !state.on_live(),
+            "Stop after Hex stopped should release the page"
+        );
+        assert!(state.live_close());
+        assert_eq!(
+            feed_io::read_notes(&folder),
+            "Notes from the last Stop click"
+        );
+
+        // Back leaves the page; completion later must not pull the owner away from the list.
+        state.live = Some(Live::new(Phase::Making, HashSet::new()));
+        state.live.as_mut().unwrap().folder = Some(folder.clone());
+        state.live_open = true;
+        state.live_notes = TextEdit::new("Notes saved when leaving");
+        state.live_ready = None;
+        state.leave_live();
+        assert!(!state.on_live());
+        assert_eq!(feed_io::read_notes(&folder), "Notes saved when leaving");
+        state.live_scanned();
+        assert!(state.live.is_none());
+        assert!(state.live_ready.is_none());
+    }
+
+    #[test]
+    fn folder_timestamp_matches_without_hex_id_or_manifest_start() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("artifacts/live-match-test")
+            .join("1794303362394-45464");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("english-summary.json"), "{}").unwrap();
+        let mut meeting = sidenote::core::Meeting::load(&root).unwrap();
+        let mut live = Live::scene(Phase::Making, None);
+        live.wall_start = DateTime::from_timestamp_millis(1794303362394 + 120_000)
+            .unwrap()
+            .with_timezone(&Local);
+        assert!(live.matches_meeting(&meeting));
+        live.wall_start += chrono::Duration::milliseconds(1);
+        assert!(!live.matches_meeting(&meeting));
+        live.wall_start -= chrono::Duration::milliseconds(1);
+        meeting.device = Some("peer".into());
+        assert!(!live.matches_meeting(&meeting));
+    }
 
     #[test]
     fn save_warning_tells_the_truth_about_recording_and_backups() {

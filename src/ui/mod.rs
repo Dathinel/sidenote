@@ -2821,6 +2821,9 @@ pub fn spec() -> AppSpec<State> {
                 scene_agents(s, ALL_AGENTS);
             }),
             // Notes being made: with the quick title, and before it has arrived ("Naming...").
+            ("live-finishing", |s| live::scene_making(s, "transcribing")),
+            ("live-interrupted", |s| live::scene_making(s, "interrupted")),
+            ("live-making-slow", |s| live::scene_making(s, "slow")),
             ("live-making", |s| {
                 hex::scene(s, false);
                 s.live = Some(live::Live::scene(
