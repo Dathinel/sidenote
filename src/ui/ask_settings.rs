@@ -24,6 +24,12 @@ pub struct AskSettings {
     pub select_open: Option<String>,
     pub last_end_ms: Option<i64>,
     pub last_live: Option<ask_options::LiveSource>,
+    pub recording: bool,
+    pub recording_source: Option<ask_options::LiveSource>,
+    pub warm_signature: String,
+    pub last_input: String,
+    pub catalog_version: u64,
+    pub other_model: bool,
     pub overrides: HashMap<(String, bool), Thinking>,
 }
 impl AskSettings {
@@ -41,14 +47,64 @@ impl AskSettings {
             select_open: None,
             last_end_ms: recent.as_ref().map(|(end, _)| *end),
             last_live: recent.map(|(_, source)| source),
+            recording: false,
+            recording_source: None,
+            warm_signature: String::new(),
+            last_input: String::new(),
+            catalog_version: 0,
+            other_model: false,
             overrides: HashMap::new(),
         }
     }
 }
 impl State {
+    pub fn warm_ask(&mut self) {
+        if self.waker.is_none() {
+            return;
+        }
+        let Some(runner) = self
+            .runners
+            .iter()
+            .find(|r| Some(&r.name) == self.runner.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        let model = self.ask_model();
+        let thinking = self.ask_thinking();
+        let chat = self.ask_key();
+        let signature = format!("{}:{model:?}:{thinking:?}:{chat}", runner.name);
+        if self.ask_settings.warm_signature == signature {
+            return;
+        }
+        self.ask_settings.warm_signature = signature;
+        core::ask::prewarm(
+            runner,
+            &core::ask_options::Options {
+                model,
+                thinking,
+                ..Default::default()
+            },
+            chat,
+        );
+    }
+
+    pub fn discover_ask_models(&mut self) {
+        self.ask_settings.warm_signature.clear();
+        self.warm_ask();
+        if self.waker.is_some()
+            && let Some(runner) = self
+                .runners
+                .iter()
+                .find(|r| Some(&r.name) == self.runner.as_ref())
+        {
+            core::ask_session::discover(runner.clone());
+        }
+    }
+
     pub fn ask_in_meeting(&self) -> bool {
         ask_options::in_meeting(
-            self.hex_recording(),
+            self.hex_recording() || self.ask_settings.recording,
             self.ask_settings.last_end_ms,
             chrono::Local::now().timestamp_millis(),
         )
@@ -99,7 +155,17 @@ impl State {
         self.refresh_ask_model_input();
     }
     pub fn refresh_ask_model_input(&mut self) {
-        self.ask_settings.model_input = TextEdit::new(self.ask_model().as_deref().unwrap_or(""));
+        let model = self.ask_model();
+        self.ask_settings.other_model = self
+            .runners
+            .iter()
+            .find(|r| Some(&r.name) == self.runner.as_ref())
+            .is_some_and(|r| {
+                model.as_ref().is_some_and(|value| {
+                    !core::ask_session::models(r).iter().any(|m| &m.id == value)
+                })
+            });
+        self.ask_settings.model_input = TextEdit::new(model.as_deref().unwrap_or(""));
     }
     pub fn ask_model(&self) -> Option<String> {
         let name = self.runner.as_ref()?;
@@ -180,6 +246,92 @@ fn thinking(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, meeting: bool) 
         .build(k, layer)
 }
 
+fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let runner = s
+        .runners
+        .iter()
+        .find(|r| Some(&r.name) == s.runner.as_ref());
+    let models = runner.map(core::ask_session::models).unwrap_or_default();
+    let current = s.ask_model();
+    let other = s.ask_settings.other_model
+        || current
+            .as_ref()
+            .is_some_and(|id| !models.iter().any(|m| &m.id == id));
+    let mut options: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
+    options.push("Other?".into());
+    let selected = if other {
+        Some("Other?")
+    } else {
+        models
+            .iter()
+            .find(|m| Some(&m.id) == current.as_ref())
+            .map(|m| m.name.as_str())
+    };
+    let select = Select::new("ask-settings-model", &options)
+        .label("Ask model")
+        .current(selected)
+        .placeholder("Choose a model")
+        .appearance(SelectAppearance::Field)
+        .width(220.0)
+        .disabled(runner.is_none())
+        .open(s.ask_settings.select_open.as_deref() == Some("ask-settings-model"))
+        .on_toggle(|s: &mut State| {
+            let opening = s.ask_settings.select_open.as_deref() != Some("ask-settings-model");
+            s.ask_settings.select_open = opening.then(|| "ask-settings-model".into());
+            if opening {
+                s.discover_ask_models();
+            }
+        })
+        .on_close(|s: &mut State| s.ask_settings.select_open = None)
+        .on_choose(|s: &mut State, value: &str, _| {
+            s.ask_settings.select_open = None;
+            if value == "Other?" {
+                s.ask_settings.other_model = true;
+                return;
+            }
+            if let Some(runner) = s
+                .runners
+                .iter()
+                .find(|r| Some(&r.name) == s.runner.as_ref())
+                && let Some(model) = core::ask_session::models(runner)
+                    .into_iter()
+                    .find(|m| m.name == value)
+            {
+                s.ask_settings.model_input = TextEdit::new(&model.id);
+                s.save_ask_model();
+            }
+        })
+        .build(k, layer);
+    let mut control = col().gap(8.0).child(select);
+    if other {
+        control = control.child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .flex_wrap()
+                .child(
+                    TextInput::new(&s.ask_settings.model_input)
+                        .label("Other model")
+                        .placeholder("Model name")
+                        .height(34.0)
+                        .on_edit(|s: &mut State| &mut s.ask_settings.model_input)
+                        .on_submit(|s: &mut State, _| s.save_ask_model())
+                        .build(k)
+                        .key("ask-settings-model-input")
+                        .w(205.0),
+                )
+                .child(
+                    pressable(roles::CONTROL.wrap("Save", p.accent))
+                        .key("ask-settings-model-save")
+                        .px(8.0)
+                        .py(7.0)
+                        .on_press(|s: &mut State| s.save_ask_model()),
+                ),
+        );
+    }
+    control
+}
+
 pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let options: Vec<String> = s
         .runners
@@ -223,28 +375,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 s.ask_settings.select_open = None;
             })
             .build(k, layer);
-    let model = row()
-        .gap(8.0)
-        .items_center()
-        .flex_wrap()
-        .child(
-            TextInput::new(&s.ask_settings.model_input)
-                .label("Ask model")
-                .placeholder("Agent default")
-                .height(34.0)
-                .on_edit(|s: &mut State| &mut s.ask_settings.model_input)
-                .on_submit(|s: &mut State, _| s.save_ask_model())
-                .build(k)
-                .key("ask-settings-model-input")
-                .w(205.0),
-        )
-        .child(
-            pressable(roles::CONTROL.wrap("Save", p.accent))
-                .key("ask-settings-model-save")
-                .px(8.0)
-                .py(7.0)
-                .on_press(|s: &mut State| s.save_ask_model()),
-        );
+    let model = model_choice(s, k, p, layer);
     let body = col()
         .w_full()
         .child(setting_row(
@@ -261,7 +392,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             s,
             "ask-model-row",
             "Model",
-            "Enter a model available in your agent account. Press Save or Enter.",
+            "Choose an offered model, or choose Other to enter a model name.",
             model,
             true,
             p,

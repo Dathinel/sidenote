@@ -185,15 +185,15 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
         .run(h, model, sample.into(), helper::TITLE_TIMEOUT)
         .map_err(|e| {
             match e {
-                helper::Failure::Missing => "The helper was not found on this PC",
-                helper::Failure::TimedOut => "The helper test timed out",
-                _ => "The helper test failed; check its sign-in",
+                helper::Failure::Missing => "The agent was not found on this PC",
+                helper::Failure::TimedOut => "The agent test timed out",
+                _ => "The agent test failed; check its sign-in",
             }
             .to_string()
         })?;
     let value: serde_json::Value = schema::object(&raw).map_err(str::to_string)?;
     if value["ok"] != true {
-        return Err("The helper test returned invalid JSON".into());
+        return Err("The agent test returned invalid JSON".into());
     }
     Ok(start.elapsed())
 }

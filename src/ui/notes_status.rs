@@ -77,7 +77,7 @@ pub fn running_message(name: &str, started_at: i64) -> String {
 }
 pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
-    let name = helper.map(Helper::name).unwrap_or("The helper");
+    let name = helper.map(Helper::name).unwrap_or("The agent");
     match &job.state {
         JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
@@ -85,7 +85,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         JobState::Running => running_message(name, job.updated_at),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
-            let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your helper" };
+            let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your agent" };
             let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
@@ -114,14 +114,14 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::NeedsClick => "Ready to write a summary",
         JobState::Queued => "Summary queued",
         JobState::Running => "Writing summary",
-        JobState::HelperMissing => "Helper not found",
+        JobState::HelperMissing => "Agent not found",
         JobState::BackendError {
             next_try_ms: Some(_),
             ..
-        } => "Helper failed, retry scheduled",
-        JobState::BackendError { .. } => "Helper failed, retry needed",
-        JobState::TimedOut => "Helper took too long",
-        JobState::BadOutput => "Helper reply could not be read",
+        } => "Agent failed, retry scheduled",
+        JobState::BackendError { .. } => "Agent failed, retry needed",
+        JobState::TimedOut => "Agent took too long",
+        JobState::BadOutput => "Agent reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for a summary",
         JobState::ContextTooLong { .. } => "Shorten the summary input",
         JobState::Empty => "No speech heard",
@@ -226,7 +226,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     match job.state {
         JobState::NoHelper => {
             buttons = buttons.child(
-                button("Choose a helper", "notes-state-setup", p)
+                button("Choose a agent", "notes-state-setup", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
@@ -245,7 +245,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
         }
         JobState::HelperMissing => {
             buttons = buttons.child(
-                button("Choose a helper", "notes-state-settings", p)
+                button("Choose a agent", "notes-state-settings", p)
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
@@ -260,7 +260,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     p,
                 ))
                 .child(
-                    button("Choose a helper", "notes-state-settings", p)
+                    button("Choose a agent", "notes-state-settings", p)
                         .on_press(|s: &mut State| s.open_ai_notes()),
                 )
         }
@@ -315,7 +315,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     } = job.state
         && s.ai_notes.details.contains(id)
     {
-        c = c.child(roles::META.wrap(format!("The helper ended with exit code {code}."), p.soft));
+        c = c.child(roles::META.wrap(format!("The agent ended with exit code {code}."), p.soft));
     }
     if let Some(pending) = s.ai_notes.pending {
         c = c.child(roles::META.wrap(pending, p.soft).role("status"));

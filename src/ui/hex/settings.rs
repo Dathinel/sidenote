@@ -245,6 +245,10 @@ pub(crate) fn pc(p: Palette) -> El {
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
+        "ask-agent-row" => &icons::BOT,
+        "ask-model-row" => &icons::CPU,
+        "ask-meeting-thinking-row" => &icons::TIMER,
+        "ask-chat-thinking-row" => &icons::MESSAGE_SQUARE,
         "meetings.auto_start" => &icons::PHONE_CALL,
         "meetings.record_my_microphone" => &icons::MIC,
         "languages-row" | "meeting-language-mode" => &icons::LANGUAGES,
@@ -602,8 +606,8 @@ fn app_index() -> Vec<Destination> {
         ),
         entry(
             "helper-advanced",
-            "Model per helper",
-            "meeting summary model sample sign in safety rules",
+            "Model per agent",
+            "helper helpers meeting summary model sample sign in safety rules",
             Page::Helpers,
             2,
             false,
@@ -1222,6 +1226,23 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ask_rows_have_distinct_requested_lucide_icons_at_the_shared_stroke() {
+        let rows = [
+            ("ask-agent-row", "lucide-bot"),
+            ("ask-model-row", "lucide-cpu"),
+            ("ask-meeting-thinking-row", "lucide-timer"),
+            ("ask-chat-thinking-row", "lucide-message-square"),
+        ];
+        let mut seen = HashSet::new();
+        assert_eq!(icons::STROKE_WIDTH, 2.25);
+        for (key, name) in rows {
+            let icon = row_icon(key);
+            assert_eq!(icon.name, name);
+            assert!(seen.insert(icon.name));
+            assert!(icon.body.contains("stroke-width=\"2.25\""));
+        }
+    }
     #[test]
     fn every_old_hex_setting_has_a_reachable_destination() {
         let fixture: Fixture =

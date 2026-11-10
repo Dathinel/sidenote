@@ -876,7 +876,9 @@ impl State {
             thinking: self.ask_thinking(),
             model: self.ask_model(),
             meeting: self.ask_in_meeting(),
-            live: if self.hex_recording() {
+            live: if self.ask_settings.recording {
+                self.ask_settings.recording_source.clone()
+            } else if self.hex_recording() {
                 Some(core::ask_options::LiveSource {
                     hint: hex::recording_id(self),
                     start_ms: hex::recording_start(self).map(|(at, _)| at.timestamp_millis()),
@@ -961,6 +963,7 @@ impl State {
 
     pub fn clear_thread(&mut self) {
         let id = self.ask_key();
+        core::ask_session::reset(&id);
         self.asks.remove(&id);
         self.ask_errors.remove(&id);
         self.ask_settings.overrides.retain(|(key, _), _| key != &id);
@@ -1315,8 +1318,25 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     s.footer_minute = minute;
     // The Ask bar opens and folds in a commit of its own, so it moves instead of jumping.
     if s.ask_open != s.question.focused {
+        if s.question.focused {
+            s.ask_settings.warm_signature.clear();
+        }
         s.ask_open = s.question.focused;
         changed = true;
+    }
+    if !headless {
+        if s.ask_settings.last_input != s.question.text {
+            s.ask_settings.last_input = s.question.text.clone();
+            s.ask_settings.warm_signature.clear();
+        }
+        if s.question.focused || s.hex_recording() {
+            s.warm_ask();
+        }
+        let version = core::ask_session::catalog_version();
+        if version != s.ask_settings.catalog_version {
+            s.ask_settings.catalog_version = version;
+            changed = true;
+        }
     }
     // The elapsed seconds of a running Ask redraw once a second, woken by its ticker.
     if !headless && s.asks.values().any(|r| r.live) {
@@ -2605,6 +2625,14 @@ pub fn spec() -> AppSpec<State> {
                         left: 3,
                     });
                 }
+            }),
+            ("settings-model-menu", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ask_settings.select_open = Some("ask-settings-model".into());
+            }),
+            ("settings-model-other", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ask_settings.other_model = true;
             }),
             ("ask-thinking-picker", |s| {
                 scene_agents(s, ALL_AGENTS);
