@@ -25,10 +25,12 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 $shots = @(
     @('tasks-v2-legacy-panel', 'tasks-v2-legacy-panel', '1320x1000', $null, @()),
     @('tasks-v2-long-panel', 'tasks-v2-long-panel', '900x900', $null, @()),
+    @('tasks-v2-long-panel-560', 'tasks-v2-long-panel', '560x900', $null, @()),
     @('tasks-v2-titles-edited', 'tasks-v2-legacy-panel', '1320x1000', 'tasks-titles-edit.json', @('--at', 'mark:end')),
     @('tasks-v2-full-titles', 'tasks-v2-owner', '1320x1000', 'tasks-full-titles.json', @('--at', 'mark:end')),
 
     @('profile-menu', 'profile-menu', '1320x800', $null, @()),
+    @('profile-editor', 'profile-menu', '1320x1000', 'profile-editor.json', @('--at', 'mark:end')),
     @('mcp-connect', 'mcp-connect', '1320x1500', $null, @()),
     @('mcp-connect-560', 'mcp-connect', '560x1800', $null, @()),
     @('listener-error', 'listener-error', '1320x900', $null, @()),

@@ -2695,20 +2695,32 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
 fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> (El, El) {
     let tasks = &s.tasks;
     let (id, index) = (t.meeting_id.clone(), t.index);
-    let title = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
+    let title = if tasks.inputs.title.focused {
+        let field = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
+            .key("ptitle")
+            .label("Task title")
+            .placeholder("Up to 8 words. Start with what to do.", p.faint)
+            .on_edit(|s: &mut State| &mut s.tasks.inputs.title)
+            .on_submit(|s: &mut State, _| {
+                s.commit_title();
+            })
+            .color(p.ink)
+            .caret(p.ink, p.hit)
+            .wrap_anywhere()
+            .w_full();
+        rune::auto_grow(field, 2, 2).key("task-title-editor")
+    } else {
+        pressable(
+            roles::SECTION
+                .wrap(&tasks.inputs.title.text, p.ink)
+                .max_lines(2)
+                .w_full()
+                .min_h(56.0),
+        )
         .key("ptitle")
-        .label("Task title")
-        .placeholder("Up to 8 words. Start with what to do.", p.faint)
-        .on_edit(|s: &mut State| &mut s.tasks.inputs.title)
-        .on_submit(|s: &mut State, _| {
-            s.commit_title();
-        })
-        .color(p.ink)
-        .caret(p.ink, p.hit)
-        .wrap_anywhere()
-        .max_lines(2)
-        .w_full()
-        .min_h(56.0);
+        .label("Edit task title")
+        .on_press(|s: &mut State| s.tasks.inputs.title.focused = true)
+    };
     let description = rune::text_input(&tasks.inputs.description, roles::SMALL.style())
         .on_edit(|s: &mut State| &mut s.tasks.inputs.description)
         .placeholder("No description. Add one", p.faint)
@@ -2718,6 +2730,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         .wrap_anywhere()
         .min_h(80.0)
         .key("pdescription")
+        .label("Task description")
         .w_full();
     let mut body = col()
         .w_full()

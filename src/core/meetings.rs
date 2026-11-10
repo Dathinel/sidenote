@@ -140,7 +140,7 @@ impl Todo {
         }
     }
     pub fn text(&self) -> &str {
-        if self.task.trim().is_empty() {
+        if self.task.trim().is_empty() && !self.title.trim().is_empty() {
             &self.title
         } else {
             &self.task

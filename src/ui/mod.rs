@@ -2784,8 +2784,8 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("sidebar-all", |s| scene_side(s, nav::scene_all)),
             ("sidebar-rail", |s| {
-                hex::scene(s, true);
                 scene_side(s, |_| {});
+                hex::scene(s, true);
                 scene_sidebar(s, false);
             }),
             // The end of the list, to see the last meetings clear the Ask bar.

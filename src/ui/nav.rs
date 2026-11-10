@@ -458,7 +458,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Vec<Place>, Option<Place>) {
 /// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
 ///
 /// Three tiers: the places (Meetings, Tasks, Memory, Diary) on 40-point rows with icons; the
-/// projects as lighter 32-point rows under a quiet label; Settings and Hex's status in the
+/// projects as lighter 32-point rows under a quiet label; one profile button in the
 /// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
 /// memory proposals to review, and high findings of the daily check in the Diary.
 pub fn sidebar(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
@@ -678,16 +678,16 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
             .color(p.soft)
             .focusable(false),
     };
-    col()
-        .items_end()
-        .gap(2.0)
-        .child(action)
-        .children(blocked.map(|reason| {
-            roles::META
-                .wrap(reason, p.soft)
-                .max_w(if narrow { 300.0 } else { 440.0 })
-                .role("status")
-        }))
+    col().items_end().gap(2.0).child(action).children(
+        blocked
+            .filter(|reason| !reason.starts_with("Checking for Hex."))
+            .map(|reason| {
+                roles::META
+                    .wrap(reason, p.soft)
+                    .max_w(if narrow { 300.0 } else { 440.0 })
+                    .role("status")
+            }),
+    )
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {

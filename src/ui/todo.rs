@@ -69,6 +69,9 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
     let shown = item
         .map(|item| super::tasks::shown_title(s, item))
         .unwrap_or_else(|| t.title());
+    let description = item
+        .map(|item| item.description.as_str())
+        .unwrap_or_else(|| t.description());
     let task_text = text(shown.to_string())
         .font(if on { roles::READ } else { roles::READ.bold() }.style())
         .color(if on { p.faint } else { p.ink })
@@ -101,6 +104,7 @@ fn item(s: &State, index: usize, t: &Todo, p: Palette) -> El {
                         .key(format!("task-{index}"))
                         .on_press(move |s: &mut State| s.toggle_task(&task)),
                 )
+                .children((!description.is_empty()).then(|| roles::SMALL.line(description, p.soft)))
                 .child(meta),
         );
     if from {

@@ -196,7 +196,7 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
             )
             .item(
                 MenuItem::new("Export this meeting (Markdown)")
-                    .description("Notes and your notes, no transcript")
+                    .description("Summary and your notes, no transcript")
                     .on_select_tx(move |s: &mut State, tx| s.export_meeting(&export_id, tx)),
             );
     }

@@ -17,28 +17,28 @@
       "text": "Organise the shared tracker"
     },
     {
-      "t": 1.3,
+      "t": 2.3,
       "type": "tap",
       "key": "pdescription"
     },
     {
-      "t": 1.6,
+      "t": 2.6,
       "type": "key",
       "name": "a",
       "cmd": true
     },
     {
-      "t": 1.9,
+      "t": 2.9,
       "type": "type",
       "text": "Collect the batch details and responsibilities in the shared folder."
     },
     {
-      "t": 2.3,
+      "t": 5.8,
       "type": "tap",
       "key": "task-text-save"
     },
     {
-      "t": 5,
+      "t": 8.8,
       "type": "mark",
       "name": "end"
     }
