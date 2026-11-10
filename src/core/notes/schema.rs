@@ -114,7 +114,7 @@ pub(super) fn object<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, &'s
 
 pub(super) fn title(text: &str, cap: usize) -> String {
     let mut out = String::new();
-    for word in text.split_whitespace().take(8) {
+    for word in text.split_whitespace().take(6) {
         if out.chars().count() + usize::from(!out.is_empty()) + word.chars().count() > cap {
             if out.is_empty() {
                 out.extend(word.chars().take(cap));
@@ -204,7 +204,7 @@ pub(super) fn parse(
     let mut seen = BTreeSet::new();
     let mut references = BTreeMap::new();
     for todo in &mut notes.todo {
-        todo.title = title(&todo.title, 60);
+        todo.title = title(&todo.title, 45);
         if todo.title.is_empty() {
             return Err("empty task title");
         }
@@ -234,10 +234,10 @@ pub(super) fn parse(
                 .entry(todo.reference.clone())
                 .or_insert_with(|| todo.id.clone());
         }
-        todo.subtasks.truncate(7);
+        todo.subtasks.truncate(4);
         let mut child_ids = BTreeSet::new();
         for child in &mut todo.subtasks {
-            child.title = title(&child.title, 60);
+            child.title = title(&child.title, 45);
             child.id = next_id(
                 hash(&[&todo.id, &child.title.to_lowercase()]),
                 &mut child_ids,
@@ -467,13 +467,11 @@ mod tests {
         assert_eq!(t.due.as_deref(), Some("2026-11-11"));
         assert!(t.due_default);
         assert_eq!(t.at, ["00:00:01"]);
-        assert_eq!(t.subtasks.len(), 7);
+        assert_eq!(t.subtasks.len(), 4);
         assert!(t.subtasks.iter().all(|s| !s.done));
-        assert!(t.title.chars().count() <= 60);
-        assert_eq!(
-            t.title,
-            "Send the extremely comprehensive finalized consolidated"
-        );
+        assert!(t.title.chars().count() <= 45);
+        assert!(t.title.split_whitespace().count() <= 6);
+        assert_eq!(t.title, "Send the extremely comprehensive finalized");
     }
     #[test]
     fn stable_ids_collisions_and_blocker_refs() {

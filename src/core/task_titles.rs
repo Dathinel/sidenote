@@ -1,7 +1,13 @@
 //! Display-only titles. The original task remains the identity and full description.
 pub fn split_title(task: &str) -> (&str, &str) {
     let text = task.trim();
-    if text.chars().count() <= 60 {
+    let dangling = text.split_whitespace().next_back().is_some_and(|word| {
+        ["the", "to", "of", "and"].iter().any(|stop| {
+            word.trim_end_matches([',', ':', ';', '.'])
+                .eq_ignore_ascii_case(stop)
+        })
+    });
+    if text.chars().count() <= 45 && text.split_whitespace().count() <= 6 && !dangling {
         return (text, "");
     }
     // Match ASCII clause markers without changing the original UTF-8 offsets.
@@ -32,18 +38,18 @@ pub fn split_title(task: &str) -> (&str, &str) {
     for (n, word) in text[..clause].split_whitespace().enumerate() {
         let start = text[end..clause].find(word).unwrap() + end;
         let next = start + word.len();
-        if n == 8 || text[..next].chars().count() > 60 {
+        if n == 6 || text[..next].chars().count() > 45 {
             break;
         }
         end = next;
     }
     // A long first word still gets a bounded, UTF-8-safe title.
     if end == 0 {
-        end = text.char_indices().nth(60).map_or(text.len(), |(i, _)| i);
+        end = text.char_indices().nth(45).map_or(text.len(), |(i, _)| i);
     }
     let mut title = text[..end].trim_end_matches([' ', ',', ':', ';', '.']);
     while let Some((head, last)) = title.rsplit_once(char::is_whitespace) {
-        if !["the", "to", "of"]
+        if !["the", "to", "of", "and"]
             .iter()
             .any(|w| last.eq_ignore_ascii_case(w))
         {
@@ -62,7 +68,7 @@ mod tests {
         for (task, title) in [
             (
                 "Put all production files in one tracker folder on the shared drive: production MIS, batch details and responsibilities",
-                "Put all production files in one tracker folder",
+                "Put all production files in one",
             ),
             (
                 "Send the revised supplier tracker so that the operations team can confirm the next batch",
@@ -78,11 +84,11 @@ mod tests {
             ),
             (
                 "Collect the current figures from the leads to ensure the monthly report reflects the latest results",
-                "Collect the current figures from the leads",
+                "Collect the current figures from",
             ),
             (
                 "Share the updated production figures with the team because the current report is incomplete",
-                "Share the updated production figures with the team",
+                "Share the updated production figures with",
             ),
             (
                 "Review the supplier schedule, confirm deliveries with operations and publish the updated tracker",
@@ -92,8 +98,8 @@ mod tests {
             let (short, full) = split_title(task);
             assert_eq!(short, title);
             assert_eq!(full, task);
-            assert!(short.chars().count() <= 60);
-            assert!(short.split_whitespace().count() <= 8);
+            assert!(short.chars().count() <= 45);
+            assert!(short.split_whitespace().count() <= 6);
         }
     }
     #[test]
@@ -105,8 +111,20 @@ mod tests {
             split_title(task).0,
             "Send all revised reports today directly"
         );
+        assert_eq!(
+            split_title("Send these files to the team and"),
+            (
+                "Send these files to the team",
+                "Send these files to the team and"
+            )
+        );
+        assert_eq!(
+            split_title("Share all reports with the and the updated delivery team").0,
+            "Share all reports with"
+        );
+        assert_eq!(split_title("Finish the draft and").0, "Finish the draft");
         let long = "\u{754c}".repeat(90);
-        assert_eq!(split_title(&long).0.chars().count(), 60);
+        assert_eq!(split_title(&long).0.chars().count(), 45);
         let unicode = "\u{130}nclude the caf\u{e9} report: share the revised production details with the operations team";
         assert_eq!(split_title(unicode).0, "\u{130}nclude the caf\u{e9} report");
     }

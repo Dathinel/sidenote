@@ -7,7 +7,7 @@ folder.mkdir(parents=True,exist_ok=True)
 def write(path,value):
     path.write_text(json.dumps(value,ensure_ascii=False),encoding='utf-8')
 todos=[
-    dict(id='draft',title='Review the field guide',description='Read the sample pages and check that the steps are clear. Bring the marked copy to the next planning meeting.',owner='Alex C',status='todo',team='Design',due='2026-11-10',due_default=True,subtasks=[dict(id='read',title='Read the sample pages',done=True),dict(id='mark',title='Mark the unclear steps',done=True),dict(id='share',title='Share the marked copy',done=False),dict(id='print',title='Print a clean copy',done=False)]),
+    dict(id='draft',title='Review the field guide',description='Read the sample pages and check that the steps are clear. Bring the marked copy to the next planning meeting.',owner='Alex C',status='todo',team='Design',due='2026-11-10',due_default=True,subtasks=[dict(id='share',title='Share the marked copy',done=False)]),
     dict(id='send',title='Send the sample pack',description='Share the approved sample with the workshop team.',owner='Morgan Lee',status='waiting',waiting_on=dict(task_id='draft'),due='2026-11-11'),
     dict(id='copy',title='Check the workshop invitation',description='The draft is ready. Check the date and the reply address before it goes out.',owner='Alex Chen',status='review',due='2026-11-12'),
     dict(id='outside',title='Confirm the room booking',owner='Robin',status='waiting',waiting_on=dict(text="The venue team's reply"),due=None),

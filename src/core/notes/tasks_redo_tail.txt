@@ -1,9 +1,9 @@
 ﻿# Output format
 Extract concrete tasks from the meeting, with short verb-led titles and useful descriptions. Do not sort projects in this response. This output format takes priority over project sorting instructions above.
 Reply with {"todo":[{"title":"Review the sample","description":"What needs doing and why.","status":"todo","waiting_on":null,"subtasks":[],"team":null,"owner":null,"due":null,"at":[]}]}
-- Every task needs title. Use at most 8 words and 60 characters.
+- Every task needs title. Use at most 6 words and 45 characters.
 - status is todo, waiting or review. waiting_on is null, {"ref":"another task ref"} or {"text":"a person or event"}.
 - Tasks may have a ref for references in waiting_on. Only reference a task in this meeting.
-- subtasks has 0 to 7 objects with title. Include only real separate steps.
+- Subtasks are usually empty. Add them only when the meeting itself listed separate steps for this to-do. Never split one action into steps yourself. At most 4.
 - team names must come from Teams. Never invent a person, date or task.
 - description is 1 to 3 plain sentences. at holds transcript timestamps when available.
