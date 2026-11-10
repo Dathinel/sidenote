@@ -258,9 +258,9 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             .as_ref()
             .is_some_and(|id| !models.iter().any(|m| &m.id == id));
     let mut options: Vec<String> = models.iter().map(|m| m.name.clone()).collect();
-    options.push("Other?".into());
+    options.push("Other\u{2026}".into());
     let selected = if other {
-        Some("Other?")
+        Some("Other\u{2026}")
     } else {
         models
             .iter()
@@ -285,7 +285,7 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .on_close(|s: &mut State| s.ask_settings.select_open = None)
         .on_choose(|s: &mut State, value: &str, _| {
             s.ask_settings.select_open = None;
-            if value == "Other?" {
+            if value == "Other\u{2026}" {
                 s.ask_settings.other_model = true;
                 return;
             }
