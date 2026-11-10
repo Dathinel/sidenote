@@ -937,6 +937,7 @@ mod tests {
     fn grouping_is_device_local_and_round_trips() {
         let f = Fixture::new(json!([]));
         let store = f.store();
+        assert_eq!(store.load_grouping().unwrap(), TaskGrouping::Status);
         store.save_grouping(TaskGrouping::Team).unwrap();
         assert_eq!(store.load_grouping().unwrap(), TaskGrouping::Team);
         assert!(f.root.join("local/task-grouping.json").is_file());

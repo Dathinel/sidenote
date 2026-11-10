@@ -367,6 +367,16 @@ impl State {
         self.refresh_areas();
     }
 
+    fn open_hidden_task_filters(&mut self) {
+        self.tasks.close_menus();
+        self.tasks.cleared_menu = true;
+        self.pending_scroll = Some(PendingScroll {
+            key: "tasks-cleared".into(),
+            center: false,
+            left: 3,
+        });
+    }
+
     /// Clears the tasks of meetings older than `days` days, or keeps all. Only the page changes;
     /// the meetings and their to-dos are untouched, so any choice can be undone.
     pub fn set_cutoff_days(&mut self, days: Option<i64>) {
@@ -1174,9 +1184,8 @@ fn form_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 /// Escape in a panel text box closes the panel. Enter goes through `on_submit`.
 fn panel_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape {
-        if s.close_panel() {
-            tx.blur();
-        }
+        s.close_panel();
+        let _ = tx;
         return true;
     }
     false
@@ -1559,6 +1568,21 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 s.tasks.close_menus();
                 s.save_task_filters();
             }));
+        menu = menu.separator().item(
+            MenuItem::new("Hide older tasks...")
+                .on_select(|s: &mut State| s.open_hidden_task_filters()),
+        );
+        if s.tasks.cutoff.is_some() {
+            menu = menu.item(
+                MenuItem::new("Show hidden tasks")
+                    .checked(s.tasks.show_cleared)
+                    .on_select(|s: &mut State| {
+                        s.tasks.filters_menu = false;
+                        s.tasks.show_cleared = !s.tasks.show_cleared;
+                        s.rebuild_tasks();
+                    }),
+            );
+        }
     }
     menu.build(k, layer)
 }
@@ -1854,7 +1878,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                     .w_full()
                     .gap(8.0)
                     .items_center()
-                    .child(status_dot(done, 14.0, p))
+                    .child(status_dot(done, 18.0, p))
                     .child(
                         roles::SMALL
                             .wrap(&sub.title, if done { p.faint } else { p.soft })
@@ -2291,7 +2315,7 @@ pub(super) fn value_button(content: El, key: &str, help: String, p: Palette) -> 
 }
 
 fn caret(p: Palette) -> El {
-    label("\u{25be}", 10.0, 400.0, p.faint)
+    super::icons::draw(&super::icons::CHEVRON_DOWN, 16.0, p.faint)
 }
 
 fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
@@ -2847,6 +2871,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         let field = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
             .key("ptitle")
             .label("Task title")
+            .on_key(panel_key)
             .placeholder("At most 6 words. Start with what to do.", p.faint)
             .on_edit(|s: &mut State| &mut s.tasks.inputs.title)
             .on_submit(|s: &mut State, _| {
@@ -2873,6 +2898,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         rune::auto_grow(
             rune::text_input(&tasks.inputs.description, roles::SMALL.style())
                 .on_edit(|s: &mut State| &mut s.tasks.inputs.description)
+                .on_key(panel_key)
                 .placeholder("No description. Add one.", p.faint)
                 .color(p.ink)
                 .caret(p.ink, p.hit)
@@ -3399,6 +3425,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                         TextInput::new(&s.tasks.waiting_input)
                             .placeholder("Person or event")
                             .on_edit(|s: &mut State| &mut s.tasks.waiting_input)
+                            .on_key(panel_key)
                             .on_submit(move |s: &mut State, _| s.save_waiting(&submit_id, index))
                             .height(34.0)
                             .build(k)
@@ -3501,7 +3528,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                 row()
                     .gap(8.0)
                     .items_center()
-                    .child(status_dot(done, 16.0, p))
+                    .child(status_dot(done, 18.0, p))
                     .child(
                         roles::SMALL
                             .wrap(&sub.title, p.soft)
@@ -3543,6 +3570,7 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
                     TextInput::new(&s.tasks.subtask_input)
                         .placeholder("Add a sub-task")
                         .on_edit(|s: &mut State| &mut s.tasks.subtask_input)
+                        .on_key(panel_key)
                         .on_submit(move |s: &mut State, _| s.add_panel_subtask(&submit_id, index))
                         .height(34.0)
                         .build(k)
@@ -3584,6 +3612,10 @@ fn redo_older_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                         s.tasks.redo_menu = false;
                         s.toggle_full_titles();
                     }),
+            )
+            .item(
+                MenuItem::new("Hide older tasks...")
+                    .on_select(|s: &mut State| s.open_hidden_task_filters()),
             )
             .separator()
             .group_label("Rebuild tasks from old summaries");
