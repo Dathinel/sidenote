@@ -162,6 +162,7 @@ fn back(s: &mut State) {
             nav::Page::Tasks => s.view = tasks::View::Tasks,
             nav::Page::Memory => s.memory_open = true,
             nav::Page::Check => s.check_open = true,
+            nav::Page::Annotations => s.annotations.open = true,
             _ => {}
         }
         s.refresh_list();

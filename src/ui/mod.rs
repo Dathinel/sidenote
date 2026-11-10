@@ -2,6 +2,7 @@
 //! status), a home list, one meeting as a reading column, the live page of a recording, and
 //! every task.
 mod ai_notes;
+mod annotations;
 mod area;
 mod area_editor;
 mod area_migration;
@@ -95,6 +96,7 @@ fn default_runner(
 }
 
 pub enum Event {
+    Annotations(annotations::Msg),
     AiNotes {
         generation: u64,
         worker: std::thread::ThreadId,
@@ -189,6 +191,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub annotations: annotations::Annotations,
     pub updates: updates::Updates,
     pub models: models::Models,
     pub config: core::Config,
@@ -385,6 +388,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let prefs = core::UiPrefs::load(&store.root);
         let mut s = Self {
+            annotations: annotations::Annotations::default(),
             updates: updates::Updates::default(),
             models: models::Models::load(&store.root),
             config,
@@ -577,6 +581,9 @@ impl State {
     }
 
     pub fn focus_search(&mut self) {
+        if self.annotations.open {
+            self.go_home();
+        }
         // In the Tasks view the search box is the task search.
         if self.view == tasks::View::Tasks {
             self.focus_task_search();
@@ -602,6 +609,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        self.annotations.open = false;
         self.view = tasks::View::Meetings;
         self.check_open = false;
         self.check_back = false;
@@ -623,6 +631,7 @@ impl State {
     }
 
     pub fn select(&mut self, id: &str, tx: &mut Tx) {
+        self.annotations.open = false;
         self.view = tasks::View::Meetings;
         self.check_open = false;
         self.check_back = false;
@@ -1066,6 +1075,7 @@ impl State {
             Event::ListenerFinished(result) => self.listener_finished(result),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
+            Event::Annotations(msg) => self.apply_annotations(msg),
             Event::McpConnected(result) => {
                 self.connection.busy = false;
                 self.connection.result = Some(result);
@@ -1387,7 +1397,9 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     // In Tasks a focused button (a tick just pressed) must not swallow J, K or X; only a
     // text box counts as typing there.
     let tasks_view = s.view == tasks::View::Tasks;
-    let typing = if tasks_view {
+    let typing = if s.annotations.open {
+        false
+    } else if tasks_view {
         s.tasks.typing() || s.search.focused
     } else if s.on_check() || s.on_memory() || s.on_hex() {
         // A pressed button keeps focus; only a text box counts as typing on these pages.
@@ -1442,6 +1454,9 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.on_hex() {
         return hex::on_key(s, e, tx);
+    }
+    if s.annotations.open {
+        return annotations::on_key(s, e);
     }
     if tasks_view {
         return tasks::on_key(s, e, tx);
@@ -1574,6 +1589,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let home = !tasks_view && s.selected.is_none();
     let content = if tasks_view {
         tasks::pane(s, &k, p, narrow, &mut layer)
+    } else if s.annotations.open {
+        annotations::pane(s, p, narrow)
     } else if on_check {
         check::pane(s, &k, p, narrow, &mut layer)
     } else if on_memory {
@@ -1601,6 +1618,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .fill(p.bg)
         .children((!on_hex).then(|| top_bar(s, p, narrow)));
     let on_list = home
+        && !s.annotations.open
         && !on_check
         && !on_memory
         && !on_hex
@@ -1657,6 +1675,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .on_window_focus(|s: &mut State, focused, _| {
             if focused {
                 s.request_refresh();
+                if s.annotations.open {
+                    s.refresh_annotations();
+                }
                 s.updates_focus();
             }
             // A lost focus is not a hide: a window on another monitor still shows the indicator.
@@ -2088,6 +2109,18 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("annotations-list", |s| {
+                annotations::scene(s, "annotations-list")
+            }),
+            ("annotation-capture", |s| {
+                annotations::scene(s, "annotation-capture")
+            }),
+            ("annotation-transcript", |s| {
+                annotations::scene(s, "annotation-transcript")
+            }),
+            ("annotations-empty", |s| {
+                annotations::scene(s, "annotations-empty")
+            }),
             ("notes-today-first-open", notes_scene::first_open),
             ("notes-today-hex-missing", |s| {
                 notes_scene::first_open(s);
