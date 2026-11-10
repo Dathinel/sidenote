@@ -14,11 +14,77 @@ pub fn return_key(origin: &str) -> String {
     }
 }
 
+pub fn sheet_bottom(s: &State) -> f32 {
+    s.meeting_ui.dock_h.get() + 10.0
+}
+
 pub fn sheet_height(s: &State) -> f32 {
-    (s.viewport_h.get() * 0.6).clamp(240.0, 360.0)
+    let available = (s.viewport_h.get() - sheet_bottom(s) - 8.0).max(180.0);
+    s.meeting_ui
+        .sheet_h
+        .unwrap_or(s.meeting_ui.window_h.get() * 0.55)
+        .clamp(180.0, available)
+}
+
+fn resize_handle(s: &State, p: Palette) -> El {
+    col()
+        .key("transcript-resize")
+        .w_full()
+        .h(18.0)
+        .shrink()
+        .center()
+        .cursor(rune::Cursor::ResizeRow)
+        .role("separator")
+        .focusable(true)
+        .label(format!(
+            "Resize transcript, {} pixels",
+            sheet_height(s).round()
+        ))
+        .help("Drag up or down, or use the arrow keys to resize the transcript.")
+        .hover(p.chip)
+        .child(el().w(36.0).h(4.0).radius(2.0).fill(p.faint.alpha(0.5)))
+        .on_drag(|s: &mut State, d, _| match d.phase {
+            rune::Phase::Down => {
+                d.data = if s.meeting_ui.sheet_h.is_some() {
+                    sheet_height(s)
+                } else {
+                    -sheet_height(s)
+                }
+            }
+            rune::Phase::Move => s.meeting_ui.sheet_h = Some(d.data.abs() - d.dy),
+            rune::Phase::Up => {
+                if d.cancelled() {
+                    s.meeting_ui.sheet_h = (d.data > 0.0).then_some(d.data);
+                } else {
+                    s.meeting_ui.sheet_h = Some(sheet_height(s));
+                }
+            }
+        })
+        .on_key(|s: &mut State, e, _| {
+            let change = match e.key {
+                Key::Up => 24.0,
+                Key::Down => -24.0,
+                _ => return false,
+            };
+            s.meeting_ui.sheet_h = Some(sheet_height(s) + change);
+            true
+        })
 }
 
 impl State {
+    pub fn close_transcript_sheet(&mut self) {
+        self.transcript_open = false;
+        self.transcript_filter.focused = false;
+        self.transcript_jump.focused = false;
+        if self
+            .back
+            .as_deref()
+            .is_some_and(|origin| origin.starts_with("pt-") || origin.starts_with("todo-"))
+        {
+            self.back = None;
+        }
+    }
+
     pub fn set_meeting_layout(&mut self, tabs: bool) {
         let mut prefs = core::UiPrefs::load(&self.store.root);
         prefs.meeting_tabs = tabs;
@@ -280,22 +346,21 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .items_start()
         .hover_group()
         .child(roles::READ.wrap("•", p.soft).w(12.0))
-        .child(
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .child(body)
-                .children(pt.who.as_ref().map(|who| roles::META.wrap(who, p.faint))),
-        );
+        .child(body.grow(1.0).min_w(0.0));
     if let Some(at) = pt.at.first() {
         let time = at.clone();
         let back = origin.clone();
+        let meta = match pt.who.as_deref().filter(|who| !who.is_empty()) {
+            Some(who) => format!("{who} \u{b7} {}", crate::ui::widgets::recording_time(at)),
+            None => crate::ui::widgets::recording_time(at),
+        };
         let source = roles::META
-            .line("Source", p.soft.alpha(0.0))
+            .line(&meta, p.soft.alpha(0.0))
+            .max_w(140.0)
             .key(source_key)
             .group_color(p.soft)
             .link(
-                rune::Link::new(0..6, origin.clone())
+                rune::Link::new(0..meta.len(), origin.clone())
                     .label(format!("Open source at {at}"))
                     .help("Open this line in the transcript")
                     .focused(rune::LinkPaint::new().color(p.soft).bg(p.chip)),
@@ -531,22 +596,28 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
         .collect();
     let id = m.id.clone();
     rail.child(
-        pressable(roles::META.wrap(
-            format!(
-                "Sidenote updated {} {} from this meeting. See",
-                updated.len(),
-                if updated.len() == 1 {
-                    "thing"
-                } else {
-                    "things"
-                }
+        col()
+            .w_full()
+            .gap(4.0)
+            .mt(8.0)
+            .child(roles::META.wrap(
+                format!(
+                    "Sidenote updated {} {} from this meeting.",
+                    updated.len(),
+                    if updated.len() == 1 {
+                        "thing"
+                    } else {
+                        "things"
+                    }
+                ),
+                p.soft,
+            ))
+            .child(
+                crate::ui::widgets::link("See in Memory", p)
+                    .key("meeting-memory")
+                    .self_start()
+                    .on_press(move |s: &mut State| s.meeting_memory(&id)),
             ),
-            p.soft,
-        ))
-        .key("meeting-memory")
-        .label("See memory from this meeting")
-        .mt(8.0)
-        .on_press(move |s: &mut State| s.meeting_memory(&id)),
     )
 }
 
@@ -561,6 +632,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     }
     let mut main = col()
         .key("meeting-main")
+        .on_key(|s: &mut State, e, _| {
+            if e.key == Key::Escape && s.transcript_open {
+                s.close_transcript_sheet();
+                true
+            } else {
+                false
+            }
+        })
         .grow(1.0)
         .min_w(0.0)
         .min_h(0.0)
@@ -573,23 +652,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         ));
     if s.transcript_open {
         main = main.child(
-            col()
-                .key("transcript-sheet")
-                .focus_return(
-                    s.back
-                        .as_ref()
-                        .map(|origin| return_key(origin))
-                        .unwrap_or_else(|| "meeting-transcript".into()),
-                )
-                .pin(Some(16.0), None, Some(16.0), Some(s.overlay_h.get()))
-                .h(sheet_height(s))
-                .min_h(0.0)
-                .radius(10.0)
-                .clip_rounded(10.0)
-                .border(1.0, p.line)
-                .fill(p.card)
-                .shadow(0.0, 10.0, p.shadow)
-                .child(transcript_panel(s, k, m, true, p)),
+            el().key("meeting-summary-dim")
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .fill(rune::Color::BLACK.alpha(0.1))
+                .label("Close transcript")
+                .on_press(|s: &mut State| s.close_transcript_sheet()),
         );
     }
     let transcript = tasks::value_button(
@@ -602,10 +669,16 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         "Transcript".into(),
         p,
     )
+    .shrink()
     .on_press_tx(|s: &mut State, tx| {
         s.toggle_transcript();
         tx.blur();
     });
+    let transcript = if narrow {
+        transcript
+    } else {
+        transcript.self_center()
+    };
     main = main.child(ask::overlay_with(
         s,
         k,
@@ -615,6 +688,24 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         Some(transcript),
         None,
     ));
+    if s.transcript_open {
+        main = main.child(
+            col()
+                .key("transcript-sheet")
+                .focus_return("meeting-transcript")
+                .pin(Some(16.0), None, Some(16.0), Some(sheet_bottom(s)))
+                .h(sheet_height(s))
+                .min_h(0.0)
+                .radius(10.0)
+                .clip_rounded(10.0)
+                .padding(1.0)
+                .border(1.0, p.faint.alpha(0.4))
+                .fill(p.card)
+                .shadow(8.0, 28.0, p.shadow)
+                .child(resize_handle(s, p))
+                .child(transcript_panel(s, k, m, true, p).grow(1.0)),
+        );
+    }
     let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0).child(main);
     if wide {
         columns = columns.child(

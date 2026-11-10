@@ -23,6 +23,9 @@ pub struct ReadingUi {
     pub template_open: bool,
     pub templates: std::collections::BTreeMap<String, String>,
     pub time_open: bool,
+    pub sheet_h: Option<f32>,
+    pub window_h: std::cell::Cell<f32>,
+    pub dock_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
     pub fn new(root: &std::path::Path, prefs: &sidenote::core::UiPrefs) -> Self {
@@ -38,6 +41,9 @@ impl ReadingUi {
             template_open: false,
             templates: prefs.meeting_summary_templates.clone(),
             time_open: false,
+            sheet_h: None,
+            window_h: std::cell::Cell::new(800.0),
+            dock_h: std::cell::Cell::new(100.0),
         }
     }
 }
@@ -188,7 +194,11 @@ impl State {
             .current()
             .is_some_and(|m| !self.meeting_ui.tabs || !m.lines.is_empty())
         {
-            self.transcript_open = !self.transcript_open;
+            if self.transcript_open && !self.meeting_ui.tabs {
+                self.close_transcript_sheet();
+            } else {
+                self.transcript_open = !self.transcript_open;
+            }
         }
     }
 
@@ -526,6 +536,18 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     (out, shown)
 }
 
+fn transcript_key(s: &mut State, e: &rune::KeyEvent, tx: &mut Tx) -> bool {
+    if e.key != Key::Escape {
+        return false;
+    }
+    if s.meeting_ui.tabs {
+        tx.blur();
+    } else {
+        s.close_transcript_sheet();
+    }
+    true
+}
+
 /// The transcript: a search box, a "go to" time, the lines with each match marked, and Copy.
 fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) -> El {
     let focused = s.transcript_filter.focused;
@@ -535,14 +557,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         .label("Search the transcript")
         .height(36.0)
         .on_edit(|s: &mut State| &mut s.transcript_filter)
-        .on_key(|_: &mut State, e: &rune::KeyEvent, tx: &mut Tx| {
-            // Esc leaves the box, so T and Escape work on the page again.
-            if e.key == Key::Escape {
-                tx.blur();
-                return true;
-            }
-            false
-        })
+        .on_key(transcript_key)
         .build(k)
         .key("transcript-filter")
         .border(1.0, if focused { p.accent } else { p.line })
@@ -579,6 +594,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
                 .width(Some(104.0))
                 .on_edit(|s: &mut State| &mut s.transcript_jump)
                 .on_submit(|s: &mut State, tx| s.jump_to_typed(tx))
+                .on_key(transcript_key)
                 .build(k)
                 .key("transcript-jump")
                 .border(
@@ -642,17 +658,45 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
     // Beside the summary the panel has its own title and close button. Covering the page it is
     // a tab, and the page's tab row above it does that work.
     if !s.meeting_ui.tabs {
+        let back = s.back.as_ref().map(|_| {
+            quiet_button(
+                if s.memory_back {
+                    "Back to Memory"
+                } else if s.check_back {
+                    "Back to the check"
+                } else if s.cite_back.is_some() {
+                    "Back to your answer"
+                } else {
+                    "Back to the summary point"
+                },
+                "back-to-summary",
+                p,
+            )
+            .on_press_tx(|s: &mut State, tx| s.go_back(tx))
+        });
         frame = frame.child(
             row()
+                .key("transcript-header")
                 .w_full()
+                .gap(8.0)
                 .items_center()
-                .justify_between()
                 .px(14.0)
-                .py(8.0)
+                .pb(8.0)
                 .child(roles::NAME.wrap("Transcript", p.ink))
+                .child(el().grow(1.0))
+                .children(back)
                 .child(
-                    quiet_button("Minimise", "transcript-minimise", p)
-                        .on_press(|s: &mut State| s.transcript_open = false),
+                    pressable(col().size(28.0, 28.0).center().child(super::icons::draw(
+                        &super::icons::X,
+                        16.0,
+                        p.soft,
+                    )))
+                    .key("transcript-close")
+                    .label("Close transcript (Escape)")
+                    .help("Close transcript")
+                    .radius(6.0)
+                    .hover(p.chip)
+                    .on_press(|s: &mut State| s.close_transcript_sheet()),
                 ),
         );
     } else if overlay {

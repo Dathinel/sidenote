@@ -1460,7 +1460,11 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         }
         // Escape closes the transcript first, and a second one leaves the meeting.
         Key::Escape if !home && s.transcript_open => {
-            s.transcript_open = false;
+            if s.meeting_ui.tabs {
+                s.transcript_open = false;
+            } else {
+                s.close_transcript_sheet();
+            }
             true
         }
         // Escape steps back from a meeting to the home list.
@@ -1565,6 +1569,16 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     }
     if let Some(h) = cx.layout_with("ask-overlay", |r| r[3].round() as i32) {
         s.overlay_h.set(h as f32);
+    }
+    if let Some(h) = cx.layout_with("app", |r| r[3].round() as i32) {
+        s.meeting_ui.window_h.set(h as f32);
+    }
+    if let (Some(bottom), Some(top)) = (
+        cx.layout_with("meeting-main", |r| (r[1] + r[3]).round() as i32),
+        cx.layout_with("live-bar", |r| r[1].round() as i32)
+            .or_else(|| cx.layout_with("meeting-transcript", |r| r[1].round() as i32)),
+    ) {
+        s.meeting_ui.dock_h.set((bottom - top).max(0) as f32);
     }
     let window_narrow = narrow;
     let narrow = window_narrow || s.app_w.get() - nav::width(s) < COMPACT;
@@ -2442,6 +2456,22 @@ pub fn spec() -> AppSpec<State> {
                 s.refresh_areas();
                 area_scene::wait(s);
                 sync_scene::settle(s);
+            }),
+            ("meeting-reading-wide-ask", |s| {
+                scene_screens(s);
+                s.refresh_areas();
+                area_scene::wait(s);
+                sync_scene::settle(s);
+                scene_sidebar(s, false);
+                if let Some(runner) = s
+                    .runners
+                    .iter_mut()
+                    .find(|r| Some(&r.name) == s.runner.as_ref())
+                {
+                    runner.name = "Claude Sonnet with extended thinking controls".into();
+                    s.runner_found.insert(runner.name.clone());
+                    s.runner = Some(runner.name.clone());
+                }
             }),
             ("screens-notes", |s| {
                 scene_screens(s);
