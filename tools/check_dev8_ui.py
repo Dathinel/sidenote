@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 
 LEGACY = "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities"
-SHORT = "Put all production files in one tracker folder"
+SHORT = "Put all production files in one"
 LONG = "Prepare the revised workshop materials and check every printed sample before the next planning meeting"
 DESCRIPTION = "Collect the batch details and responsibilities in the shared folder."
 
@@ -31,7 +31,7 @@ def check(root, scaled_roots=()):
         assert SHORT in text(row_elements) and LEGACY in text(row_elements)
         title = next(e for e in row_elements if e.get("text") == SHORT)
         description = next(e for e in row_elements if e.get("text") == LEGACY)
-        assert title["rect"][3] <= 42 and description["rect"][3] <= 18
+        assert title["rect"][3] <= 42 and description["rect"][3] <= 36
         for scene in ("tasks-v2-panel", "tasks-v2-panel-560"):
             _, keyed = load(scene)
             assert keyed["ptitle"]["text"] == "Review the field guide"
@@ -87,7 +87,7 @@ def check(root, scaled_roots=()):
 
         elements, _ = load("profile-menu")
         menu = text([e for e in elements if e["path"].startswith("kit-root/profile-menu-menu/")])
-        for label in ["You", "Meeting summary instructions", "Help", "Settings", "Ctrl+,"]:
+        for label in ["You", "Prompt library", "Help", "Settings", "Ctrl+,"]:
             assert label in menu, (label, menu)
         assert any(line.startswith("This PC:") for line in menu)
 

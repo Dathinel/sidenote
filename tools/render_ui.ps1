@@ -24,6 +24,8 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('profile-menu-narrow', 'profile-menu', '560x900', $null, @()),
+    @('tasks-v2-owner-narrow', 'tasks-v2-owner', '560x1000', $null, @()),
     @('tasks-v2-legacy-panel', 'tasks-v2-legacy-panel', '1320x1000', $null, @()),
     @('tasks-v2-long-panel', 'tasks-v2-long-panel', '900x900', $null, @()),
     @('tasks-v2-long-panel-560', 'tasks-v2-long-panel', '560x900', $null, @()),
