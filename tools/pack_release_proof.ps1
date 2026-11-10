@@ -1,6 +1,8 @@
-param([string]$VpkPath = 'vpk')
+param([string]$VpkPath = 'vpk', [string]$DotnetRoot = $env:DOTNET_ROOT)
 $ErrorActionPreference = 'Stop'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+# vpk is a framework-dependent dotnet tool: without DOTNET_ROOT it exits before printing help.
+if ($DotnetRoot) { $env:DOTNET_ROOT = $DotnetRoot }
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(

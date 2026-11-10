@@ -28,7 +28,8 @@ E7: `tools/pack_release.ps1:47` requests `--shortcuts StartMenuRoot`, without
 Desktop. Checked against the installed vpk 0.0.1298 `--skip-updates pack --help`;
 its default lists `Desktop,StartMenuRoot`. `tools/pack_release_proof.ps1` parses
 the real argument array, passes it to a fake runner in an OS temp folder, and
-checks installed help without executing the release script.
+checks installed help without executing the release script. Pass `-DotnetRoot`
+(or set `DOTNET_ROOT`) as for the release script; without it vpk cannot start.
 
 Upgrade limit: the installed vpk's bundled `vendor/update.exe` contains both
 `Shortcut Previous Locations:` and `Shortcut Next Locations:` diagnostics and
