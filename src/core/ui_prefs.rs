@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
+    pub people_since_ms: Option<i64>,
+    pub people_existing_meetings: Option<std::collections::BTreeSet<String>>,
+    pub people_sides: std::collections::BTreeMap<String, super::people::Side>,
     pub show_full_titles: bool,
     /// Task filters belong to this PC. Missing keys keep the first visit on Everyone/Open.
     pub tasks_mine: bool,
