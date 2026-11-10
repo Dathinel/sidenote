@@ -16,6 +16,9 @@ pub struct Settings {
     pub language_query: TextEdit,
     pub recommended: bool,
     pub model_recommended: bool,
+    pub relay: sidenote::core::relay_preview::Settings,
+    pub relay_address: TextEdit,
+    pub relay_error: Option<String>,
 }
 
 struct ReturnTo {
@@ -628,6 +631,24 @@ fn app_index() -> Vec<Destination> {
 }
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
+    entries.push(entry(
+        "relay-preview",
+        "Relay sync (preview)",
+        "Labs experimental tasks",
+        Page::Updates,
+        0,
+        true,
+    ));
+    if s.hex.shell.relay.enabled {
+        entries.push(entry(
+            "relay-address",
+            "Relay address",
+            "sync endpoint server",
+            Page::Sync,
+            0,
+            true,
+        ));
+    }
     entries.retain(|dest| {
         dest.key != "notes-scripts-card"
             || s.ai_notes
@@ -975,6 +996,44 @@ fn devices(s: &State, p: Palette) -> El {
     }
     out
 }
+fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
+    setting_row(s, "relay-preview", "Relay sync (preview)",
+        "Use a separate manual-task preview collection. Folder tasks return when this is off. Pairing UI is not available yet.",
+        Switch::new(s.hex.shell.relay.enabled).label("Relay sync (preview)").hide_label()
+            .on_toggle(|s: &mut State| {
+                let mut settings = s.hex.shell.relay.clone();
+                settings.enabled = !settings.enabled;
+                match settings.save(&s.store.root) {
+                    Ok(()) => {
+                        s.hex.shell.relay = settings;
+                        s.hex.shell.relay_error = None;
+                        s.toast = Some(("Relay preview changed. Reopen Sidenote to refresh the task collection.".into(), Instant::now()));
+                    }
+                    Err(_) => s.hex.shell.relay_error = Some("Could not save relay preview settings.".into()),
+                }
+            }).build(k), true, p)
+}
+fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
+    if !s.hex.shell.relay.enabled {
+        return col();
+    }
+    let mut out = col().w_full().child(setting_row(s, "relay-address", "Relay address",
+        "WSS origin, or ws://127.0.0.1:port for local tests. Press Enter to save, then reopen Sidenote. Provisioned test devices only.",
+        TextInput::new(&s.hex.shell.relay_address).label("Relay address").placeholder("ws://127.0.0.1:8787")
+            .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
+            .on_submit(|s: &mut State, _| {
+                let mut settings = s.hex.shell.relay.clone();
+                settings.address = s.hex.shell.relay_address.text.trim().into();
+                match settings.save(&s.store.root) {
+                    Ok(()) => { s.hex.shell.relay = settings; s.hex.shell.relay_error = None; }
+                    Err(_) => s.hex.shell.relay_error = Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into()),
+                }
+            }).build(k).key("relay-address-input").w(300.0), true, p));
+    if let Some(error) = &s.hex.shell.relay_error {
+        out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
+    }
+    out
+}
 fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     let mut out = col()
         .key("hex-vocabulary")
@@ -1031,9 +1090,9 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Appearance, _) => card("Preferences",hex_rows(s,k,p,layer,page,tab,false),p),
         (Page::Sync, _) => col().w_full().child(card("Devices",devices(s,p).child(hairline(p)).child(feature(s,k,AppFeature::OtherDevices,"Other devices","Show meetings recorded on your other devices.",p)),p))
             .child(roles::SMALL.wrap(format!("{} meetings from other devices.",s.nav.peers),p.soft).mt(12.0))
-            .child(advanced(s,card("Sync folder",roles::SMALL.wrap(s.store.root.display().to_string(),p.ink).key("sync-folder").fill(highlight(s,"sync-folder",p)).padding(14.0),p),p)),
+            .child(advanced(s,col().w_full().child(card("Sync folder",roles::SMALL.wrap(s.store.root.display().to_string(),p.ink).key("sync-folder").fill(highlight(s,"sync-folder",p)).padding(14.0),p)).child(relay_address(s,k,p)),p)),
         (Page::Updates, _) => col().w_full().child(super::super::updates::section(s,p).fill(highlight(s,"updates-section",p)))
-            .child(advanced(s,card("Labs and rarely used",col().w_full().child(hex_rows(s,k,p,layer,page,tab,true)).child(super::super::updates::source(s,p).padding(14.0)),p),p)),
+            .child(advanced(s,card("Labs and rarely used",col().w_full().child(relay_labs(s,k,p)).child(hex_rows(s,k,p,layer,page,tab,true)).child(super::super::updates::source(s,p).padding(14.0)),p),p)),
     }
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {

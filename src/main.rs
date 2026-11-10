@@ -34,6 +34,11 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
     }
+    if args.iter().any(|a| a == "--relay-preview-headless") {
+        std::process::exit(i32::from(
+            sidenote::core::relay_preview::headless(&args).is_err(),
+        ));
+    }
     if args.iter().any(|a| a == "--version") {
         println!("Sidenote {}", sidenote::updates::VERSION);
         return;

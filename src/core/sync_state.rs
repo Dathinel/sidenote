@@ -252,6 +252,8 @@ struct Session {
     store: String,
     own: String,
     _lock: Option<fs::File>,
+    _relay_mode_lock: Option<fs::File>,
+    preview: Option<std::sync::Arc<super::relay_preview::Preview>>,
     read_only: bool,
     view: View,
 }
@@ -280,11 +282,26 @@ impl Session {
             )?)
         };
         let view = read_view(root, store, &own)?;
+        let relay_mode_lock = if !read_only
+            && store == "task-overrides.json"
+            && root.join("local/relay/settings.json").try_exists()?
+        {
+            Some(store_io::lock(&root.join("local/relay/mode.lock"))?)
+        } else {
+            None
+        };
+        let preview = if store == "task-overrides.json" {
+            super::relay_preview::get(root)?
+        } else {
+            None
+        };
         let mut session = Self {
             root: root.to_owned(),
             store: store.into(),
             own,
             _lock: lock,
+            _relay_mode_lock: relay_mode_lock,
+            preview,
             read_only,
             view,
         };
@@ -454,7 +471,11 @@ impl Session {
                 skipped += 1;
             }
         }
-        Ok((inflate(&self.store, valid, default)?, skipped))
+        let mut value = inflate(&self.store, valid, default)?;
+        if let Some(preview) = &self.preview {
+            value["manual"] = serde_json::to_value(preview.tasks()?)?;
+        }
+        Ok((value, skipped))
     }
 
     fn diff(&mut self, before: Items, after: Items) -> io::Result<()> {
@@ -466,14 +487,46 @@ impl Session {
         let at = latest.next_time()?;
         self.publish_diff(before, after, at)
     }
-    fn publish_diff(&mut self, before: Items, after: Items, at: u64) -> io::Result<()> {
+    fn publish_diff(&mut self, mut before: Items, mut after: Items, at: u64) -> io::Result<()> {
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
         let edits: Vec<_> = keys
             .iter()
             .filter(|k| before.get(*k) != after.get(*k))
             .map(|k| (k.clone(), before.get(k).cloned(), after.get(k).cloned()))
             .collect();
+        if self.store == "task-overrides.json"
+            && super::relay_preview::Settings::load(&self.root)?.enabled != self.preview.is_some()
+        {
+            return Err(invalid("Relay preview mode changed. Reload before saving."));
+        }
+        let mut relay_changes = None;
+        if let Some(preview) = &self.preview {
+            let manual = |items: &Items| -> io::Result<Vec<super::ManualTask>> {
+                items
+                    .iter()
+                    .filter(|(key, _)| key.first().is_some_and(|k| k == "manual"))
+                    .map(|(_, value)| {
+                        serde_json::from_value(value.clone()).map_err(io::Error::from)
+                    })
+                    .collect()
+            };
+            let (old, new) = (manual(&before)?, manual(&after)?);
+            before.retain(|key, _| key.first().is_none_or(|k| k != "manual"));
+            after.retain(|key, _| key.first().is_none_or(|k| k != "manual"));
+            if old != new {
+                if before != after {
+                    return Err(invalid(
+                        "Save preview tasks separately from folder task edits",
+                    ));
+                }
+                relay_changes = Some((preview, old, new));
+            }
+        }
         super::area_version::guard_changes(&self.root, &self.store, &edits)?;
+        if let Some((preview, old, new)) = relay_changes {
+            preview.edit(&old, &new)?;
+        }
+        let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
         let changes = keys
             .into_iter()
             .filter(|k| before.get(k) != after.get(k))
