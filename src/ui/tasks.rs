@@ -1415,7 +1415,7 @@ fn group_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     menu.build(k, layer)
 }
 
-fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, available: f32) -> El {
     let t = &s.tasks;
     let search = TextInput::new(&t.search)
         .plain()
@@ -1458,19 +1458,31 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             s.tasks.close_menus();
         },
     );
-    let filters = row()
-        .w_full()
+    let controls = row()
+        .key("task-filters")
         .flex_wrap()
         .items_center()
         .gaps(8.0, 8.0)
         .child(who)
         .child(done)
         .child(group_menu(s, k, p, layer));
-    let mut bar = col()
-        .w_full()
-        .gap(8.0)
-        .child(search.w_full())
-        .child(filters);
+    let fields = if available >= 730.0 {
+        row()
+            .key("task-toolbar")
+            .w_full()
+            .items_center()
+            .gap(8.0)
+            .child(search)
+            .child(controls)
+    } else {
+        col()
+            .key("task-toolbar")
+            .w_full()
+            .gap(8.0)
+            .child(search.w_full())
+            .child(controls.w_full())
+    };
+    let mut bar = col().w_full().gap(8.0).child(fields);
     if t.who == Who::Mine {
         bar = bar.child(
             pressable(
@@ -1629,43 +1641,44 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             s.open_task(&id, index);
         }
     };
-    let open_title = pressable(
-        col()
-            .min_w(0.0)
-            .gap(3.0)
-            .child(title)
-            .children((!t.description.is_empty()).then(|| roles::META.line(&t.description, p.soft)))
-            .children(
-                (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none()).then(
-                    || {
-                        row()
-                            .gap(4.0)
-                            .items_center()
-                            .children(
-                                (t.status == core::TaskStatus::Waiting).then(|| {
+    let open_title =
+        pressable(
+            col()
+                .min_w(0.0)
+                .gap(3.0)
+                .child(title)
+                .children(
+                    (!t.description.is_empty())
+                        .then(|| roles::META.wrap(&t.description, p.soft).max_lines(2)),
+                )
+                .children(
+                    (t.status != core::TaskStatus::Todo && !t.done && t.waiting_label.is_none())
+                        .then(|| {
+                            row()
+                                .gap(4.0)
+                                .items_center()
+                                .children((t.status == core::TaskStatus::Waiting).then(|| {
                                     super::icons::draw(&super::icons::WAITING, 16.0, p.soft)
-                                }),
-                            )
-                            .child(roles::META.wrap(t.status_label(), p.soft))
-                            .px(6.0)
-                            .radius(4.0)
-                            .fill(p.chip)
-                            .self_start()
-                    },
-                ),
-            )
-            .children(
-                t.waiting_label
-                    .as_ref()
-                    .map(|label| roles::META.wrap(format!("Waiting on: {label}"), p.soft)),
-            )
-            .children((!t.subtasks.is_empty()).then(|| roles::META.wrap(t.progress(), p.soft))),
-    )
-    .key(format!("ttask-{id}-{index}"))
-    .label(format!("Open the task: {}", t.task))
-    .grow(1.0)
-    .min_w(0.0)
-    .on_press(open.clone());
+                                }))
+                                .child(roles::META.wrap(t.status_label(), p.soft))
+                                .px(6.0)
+                                .radius(4.0)
+                                .fill(p.chip)
+                                .self_start()
+                        }),
+                )
+                .children(
+                    t.waiting_label
+                        .as_ref()
+                        .map(|label| roles::META.wrap(format!("Waiting on: {label}"), p.soft)),
+                )
+                .children((!t.subtasks.is_empty()).then(|| roles::META.wrap(t.progress(), p.soft))),
+        )
+        .key(format!("ttask-{id}-{index}"))
+        .label(format!("Open the task: {}", t.task))
+        .grow(1.0)
+        .min_w(0.0)
+        .on_press(open.clone());
     let mut props = row().h_full().items_center().gap(10.0);
     if lay.project_w > 0.0 {
         props = props.child(
@@ -2704,7 +2717,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         let field = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
             .key("ptitle")
             .label("Task title")
-            .placeholder("Up to 8 words. Start with what to do.", p.faint)
+            .placeholder("At most 6 words. Start with what to do.", p.faint)
             .on_edit(|s: &mut State| &mut s.tasks.inputs.title)
             .on_submit(|s: &mut State, _| {
                 s.commit_title();
@@ -2749,7 +2762,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                 .inputs
                 .title
                 .focused
-                .then(|| roles::META.wrap("Up to 8 words. Start with what to do.", p.faint)),
+                .then(|| roles::META.wrap("At most 6 words. Start with what to do.", p.faint)),
         )
         .child(rune::auto_grow(description, 3, 8))
         .child(
@@ -3013,7 +3026,7 @@ fn list_column(
         .child(button(if t.show_full_titles { "Show full titles: on" } else { "Show full titles: off" }, "show-full-titles", false, p)
             .role("switch").checked(t.show_full_titles).on_press(|s: &mut State| { s.toggle_full_titles(); }))
         .child(summary_line(s, p).mb(16.0))
-        .child(toolbar(s, k, p, layer).mb(10.0));
+        .child(toolbar(s, k, p, layer, list_w.min(920.0) - 2.0 * side).mb(10.0));
     if v.groups.is_empty() && v.done.is_empty() {
         doc = doc.child(empty_note(s, p));
     }
