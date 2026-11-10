@@ -929,7 +929,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(card("Memory", feature(s,k,AppFeature::Memory,"Remember across meetings","Use knowledge from earlier meetings.",p),p))
             .child(advanced(s, ai_notes::section(s,k,p,ai_notes::Part::Scripts),p)),
         (Page::Meetings, _) => col().w_full()
-            .child(card("Tasks", feature(s,k,AppFeature::DailyCheck,"Daily check","Once a day, Sidenote shows what is due and what slipped.",p),p))
+            .child(card("Tasks", feature(s,k,AppFeature::DailyCheck,"Daily check","Sidenote checks your meeting knowledge for gaps and conflicts each day.",p),p))
             .child(advanced(s, card("Sidebar features", col().w_full()
                 .child(roles::SMALL.wrap("These existing switches have no other home yet.",p.soft).padding(14.0))
                 .child(feature(s,k,AppFeature::Tasks,"Tasks","Show Tasks in the sidebar.",p))

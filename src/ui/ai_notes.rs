@@ -757,7 +757,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 s,
                 "summary-template",
                 "Summary template",
-                "Sidenote picks one by meeting kind, and you can edit them in the Prompt library.",
+                "Edit the instructions used to write meeting summaries.",
                 button("Edit instructions", "summary-template-edit", p).on_press(
                     |s: &mut State| {
                         s.hex.section = super::hex::Section::PromptLibrary;
