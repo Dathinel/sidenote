@@ -6,7 +6,52 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 VERSION = "1.61.0"
-ICONS = {'MEETINGS': 'notebook-pen', 'TASKS': 'circle-check', 'PROJECTS': 'folder', 'MEMORY': 'bookmark', 'DIARY': 'calendar', 'SETTINGS': 'settings', 'DEVICE': 'laptop', 'PLUS': 'plus', 'STOP': 'square', 'CHECK': 'check', 'CHEVRON_DOWN': 'chevron-down', 'CHEVRON_RIGHT': 'chevron-right', 'CHEVRON_LEFT': 'chevron-left', 'CHEVRONS_UP_DOWN': 'chevrons-up-down', 'ARROW_RIGHT': 'arrow-right', 'ARROW_UP': 'arrow-up', 'X': 'x', 'MORE': 'ellipsis', 'WARNING': 'triangle-alert', 'ERROR': 'circle-alert', 'HELP': 'circle-question-mark', 'INFO': 'info', 'SEARCH': 'search', 'PANEL_CLOSE': 'panel-left-close', 'PANEL_OPEN': 'panel-left-open', 'PROMPTS': 'sparkles', 'USER': 'user', 'MIC': 'mic', 'CIRCLE': 'circle', 'WAITING': 'circle-pause', 'BOT': 'bot', 'PALETTE': 'palette', 'REFRESH': 'refresh-cw', 'CHEVRON_UP': 'chevron-up', 'COPY': 'copy', 'LOCK': 'lock', 'EYE': 'eye', 'EYE_OFF': 'eye-off', 'CIRCLE_X': 'circle-x', 'DASH': 'minus'}
+ICONS = {'MEETINGS': 'notebook-pen',
+ 'TASKS': 'list-checks',
+ 'PROJECTS': 'folder',
+ 'MEMORY': 'library',
+ 'DIARY': 'calendar',
+ 'SETTINGS': 'settings',
+ 'DEVICE': 'laptop',
+ 'PLUS': 'plus',
+ 'STOP': 'square',
+ 'CHECK': 'check',
+ 'CHEVRON_DOWN': 'chevron-down',
+ 'CHEVRON_RIGHT': 'chevron-right',
+ 'CHEVRON_LEFT': 'chevron-left',
+ 'CHEVRONS_UP_DOWN': 'chevrons-up-down',
+ 'ARROW_RIGHT': 'arrow-right',
+ 'ARROW_UP': 'arrow-up',
+ 'X': 'x',
+ 'MORE': 'ellipsis',
+ 'WARNING': 'triangle-alert',
+ 'ERROR': 'circle-alert',
+ 'HELP': 'circle-question-mark',
+ 'INFO': 'info',
+ 'SEARCH': 'search',
+ 'PANEL_CLOSE': 'panel-left-close',
+ 'PANEL_OPEN': 'panel-left-open',
+ 'PROMPTS': 'braces',
+ 'MIC': 'mic',
+ 'CIRCLE': 'circle',
+ 'WAITING': 'circle-pause',
+ 'BOT': 'bot',
+ 'PALETTE': 'palette',
+ 'REFRESH': 'refresh-cw',
+ 'CHEVRON_UP': 'chevron-up',
+ 'COPY': 'copy',
+ 'LOCK': 'lock',
+ 'EYE': 'eye',
+ 'EYE_OFF': 'eye-off',
+ 'CIRCLE_X': 'circle-x',
+ 'DASH': 'minus',
+ 'DONE': 'circle-check',
+ 'SUMMARY': 'sparkles',
+ 'UPDATES': 'download',
+ 'CONNECTED': 'plug',
+ 'PEOPLE': 'users',
+ 'FLAG': 'flag',
+ 'SPELLING': 'spell-check'}
 ROOT = Path(__file__).resolve().parents[2]
 
 def main():
@@ -26,11 +71,13 @@ def main():
                 points = attributes.pop("points")
                 attributes["d"] = "M" + points + ("Z" if tag == "polygon" else "")
                 tag = "path"
+            if tag not in {"path", "rect", "circle", "ellipse", "line"} or "transform" in attributes:
+                raise ValueError(f"Rune cannot draw {name}: {tag}")
             attributes.update({"fill": "none", "stroke": "currentColor", "stroke-width": "STROKE_WIDTH", "stroke-linecap": "round", "stroke-linejoin": "round"})
             body += "<" + tag + " " + " ".join(key + '=\"' + value + '\"' for key, value in attributes.items()) + "/>"
         entries.append(f'lucide!({entry}, "lucide-{name}", r#"{body}"#);')
     path.write_text(header + "// Embedded entries\n" + "\n".join(entries) + "\n\n" + tail, encoding="utf-8")
-    (ROOT / "assets/licenses/lucide.txt").write_bytes(archive.extractfile("package/LICENSE").read())
+    (ROOT / "assets/licenses/lucide-LICENSE.txt").write_bytes(archive.extractfile("package/LICENSE").read())
 
 if __name__ == "__main__":
     main()

@@ -139,7 +139,7 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
     };
     let mark = match (number, kind) {
         (Some(n), _) => glyph(&format!("{n}."), p.ok, 600.0),
-        (None, "decided") => super::icons::draw(&super::icons::CHECK, 16.0, p.ok),
+        (None, "decided") => super::icons::draw(&super::icons::FLAG, 16.0, p.ok),
         (None, "concern") => super::icons::draw(&super::icons::WARNING, 16.0, p.warn),
         (None, "open") => super::icons::draw(&super::icons::HELP, 16.0, p.open),
         (None, "response") => el()

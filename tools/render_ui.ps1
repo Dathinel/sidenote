@@ -31,6 +31,7 @@ $shots = @(
 
     @('profile-menu', 'profile-menu', '1320x800', $null, @()),
     @('profile-editor', 'profile-menu', '1320x1000', 'profile-editor.json', @('--at', 'mark:end')),
+    @('prompt-editor-link', 'notes-meeting-bad-output', '1320x1000', $null, @()),
     @('mcp-connect', 'mcp-connect', '1320x1500', $null, @()),
     @('mcp-connect-560', 'mcp-connect', '560x1800', $null, @()),
     @('listener-error', 'listener-error', '1320x900', $null, @()),
@@ -476,7 +477,7 @@ foreach ($theme in $Themes) {
         $env:SIDENOTE_STATE_DIR = $state
         # The live and notes scenes read an invented meeting folder, never real meetings.
         $fixtureMeetings = if ($scene -in @('notes-today-first-open', 'notes-today-hex-missing')) { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($scene -like 'notes-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } elseif ($scene -like 'tasks-v2-*') { @('--meetings-dir', "$state/tasks-v2-meetings") } elseif ($scene -like 'areas-large-*') { @('--meetings-dir', "$state/large-meetings") } elseif ($name -like 'diary-empty*') { New-Item -ItemType Directory -Force -Path "$state/no-meetings" | Out-Null; @('--meetings-dir', "$state/no-meetings") } elseif ($name -like 'diary*') { @('--meetings-dir', "$state/diary-meetings") } elseif ($scene -like 'live-*' -or $scene -eq 'meeting-your-notes') { @('--meetings-dir', "$root/tools/ui-fixtures/live-notes/meetings") } elseif ($scene -like 'screens-*') { @('--meetings-dir', "$root/tools/ui-fixtures/screens/meetings") } else { @('--meetings-dir', "$root/tools/ui-fixtures/meetings") }
-        $arguments = $fixtureMeetings + @('--data-dir', $state, '--peers-dir', "$state/peers", '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', '1') + $extra
+        $arguments = $fixtureMeetings + @('--data-dir', $state, '--peers-dir', "$state/peers", '--snap', "$out/$name-$theme.png", '--scene', $scene, '--theme', $theme, '--size', $size, '--scale', $Scale.ToString([Globalization.CultureInfo]::InvariantCulture)) + $extra
         if ($Trees) { $arguments += @('--tree', "$out/$name-$theme.json") }
         if ($script) { $arguments += @('--script', "$root/tools/ui-scripts/$script") }
         $log = "$out/$name-$theme.log"

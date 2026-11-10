@@ -1303,13 +1303,13 @@ fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
 
 fn section_tab(section: Section, active: bool, p: Palette) -> El {
     let icon = match section {
-        Section::Connect => &*super::icons::DEVICE,
-        Section::Teams => &*super::icons::USER,
-        Section::AiNotes => &*super::icons::PROMPTS,
-        Section::Updates => &*super::icons::REFRESH,
+        Section::Connect => &*super::icons::CONNECTED,
+        Section::Teams => &*super::icons::PEOPLE,
+        Section::AiNotes => &*super::icons::SUMMARY,
+        Section::Updates => &*super::icons::UPDATES,
         Section::MeetingModels | Section::Model => &*super::icons::BOT,
         Section::Features => &*super::icons::PALETTE,
-        Section::Vocabulary => &*super::icons::MEETINGS,
+        Section::Vocabulary => &*super::icons::SPELLING,
         Section::General | Section::Advanced => &*super::icons::SETTINGS,
         Section::Dictation | Section::Meetings => &*super::icons::MIC,
         Section::Shortcuts => &*super::icons::HELP,

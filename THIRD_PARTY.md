@@ -519,4 +519,4 @@ below are an inference from those terms and the package declarations.
 
 The Mozilla certificate data in webpki-roots uses [CDLA-Permissive-2.0](https://cdla.dev/permissive-2-0/). The full text is retained in [assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt](assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt) and must accompany distributed certificate data. It is separate from the software licences above.
 
-Lucide 1.61.0 icons: ISC, with Feather-derived icons under MIT. Both notices are in `assets/licenses/lucide.txt`, included in the app package.
+Lucide 1.61.0 icons: ISC, with Feather-derived icons under MIT. Both notices are in `assets/licenses/lucide-LICENSE.txt`, included in the app package.

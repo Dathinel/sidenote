@@ -1,6 +1,8 @@
 """Assert dev.8 task, sidebar and naming behavior in isolated offscreen render trees."""
+import ast
 import json
 import sys
+import struct
 from pathlib import Path
 
 LEGACY = "Put all production files in one tracker folder on the shared drive: batch details, finished goods and responsibilities"
@@ -9,7 +11,7 @@ LONG = "Prepare the revised workshop materials and check every printed sample be
 DESCRIPTION = "Collect the batch details and responsibilities in the shared folder."
 
 
-def check(root):
+def check(root, scaled_roots=()):
     checked = 0
     for theme in ("dark", "light"):
         def load(scene):
@@ -68,6 +70,11 @@ def check(root):
         assert keyed["ptitle"]["rect"][3] <= 56, keyed["ptitle"]["rect"]
         assert keyed["ptitle"]["text"] == LONG
 
+        _, keyed = load("sidebar-settings")
+        assert "hex-pane" in keyed and "profile-button" in keyed
+        _, keyed = load("prompt-editor-link")
+        assert "notes-state-edit" in keyed
+
         _, keyed = load("sidebar-meetings")
         assert keyed["nav"]["rect"][2] == 248
         assert "profile-button" in keyed
@@ -99,13 +106,35 @@ def check(root):
         elements, _ = load("screens-toast")
         assert "Copied summary" in text(elements)
 
+    for folder, scale in zip(scaled_roots, (1.25, 1.5) if scaled_roots else (), strict=True):
+        index = json.loads((folder / "render-index.json").read_text(encoding="utf-8-sig"))
+        assert len(index) == 4
+        assert {row["Scene"] for row in index} == {"sidebar-meetings", "sidebar-settings"}
+        assert {row["Theme"] for row in index} == {"dark", "light"}
+        for row in index:
+            png = Path(row["Path"])
+            data = json.loads(png.with_suffix(".json").read_text(encoding="utf-8-sig"))
+            assert not data["warnings"]
+            assert data["scale"] == scale
+            image = png.read_bytes()
+            assert image[:8] == bytes.fromhex("89504e470d0a1a0a")
+            assert struct.unpack(">II", image[16:24]) == (round(1320 * scale), round(800 * scale))
+            checked += 1
+
     source = Path(__file__).resolve().parents[1]
     assert '.help("Stop recording and write the summary")' in (source / "src/ui/nav.rs").read_text()
-    notices = (source / "assets/licenses/lucide.txt").read_text()
+    table = ast.parse((source / "tools/icon/gen_lucide.py").read_text())
+    entries = next(node.value for node in table.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "ICONS" for target in node.targets))
+    catalog = ast.literal_eval(entries)
+    expected = {"MEETINGS": "notebook-pen", "TASKS": "list-checks", "MEMORY": "library", "PROMPTS": "braces", "SUMMARY": "sparkles", "UPDATES": "download", "CONNECTED": "plug", "PEOPLE": "users", "DONE": "circle-check"}
+    for entry, name in expected.items():
+        assert catalog[entry] == name, (entry, catalog[entry])
+    assert 'pub const STROKE_WIDTH: f32 = 2.25;' in (source / "src/ui/icons.rs").read_text()
+    notices = (source / "assets/licenses/lucide-LICENSE.txt").read_text()
     assert "ISC License" in notices and "MIT License" in notices and "Feather" in notices
-    assert "assets/licenses/lucide.txt" in (source / "tools/pack_release.ps1").read_text()
-    print(f"dev8 UI: PASS ({checked} offscreen trees; title edits, split switch, 2-line clamp, sidebar states, profile menu, 7 naming items and packaged notices)")
+    assert "assets/licenses/lucide-LICENSE.txt" in (source / "tools/pack_release.ps1").read_text()
+    print(f"dev8 UI: PASS ({checked} offscreen trees; title edits, split switch, 2-line clamp, sidebar states, profile menu, J.5 icon map, 7 naming items and packaged notices)")
 
 
 if __name__ == "__main__":
-    check(Path(sys.argv[1]))
+    check(Path(sys.argv[1]), tuple(Path(arg) for arg in sys.argv[2:]))

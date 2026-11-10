@@ -1194,7 +1194,7 @@ fn check_box(on: bool, p: Palette) -> El {
 fn status_dot(on: bool, size: f32, p: Palette) -> El {
     super::icons::draw(
         if on {
-            &super::icons::TASKS
+            &super::icons::DONE
         } else {
             &super::icons::CIRCLE
         },
@@ -1641,7 +1641,11 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                         row()
                             .gap(4.0)
                             .items_center()
-                            .child(super::icons::draw(&super::icons::WAITING, 16.0, p.soft))
+                            .children(
+                                (t.status == core::TaskStatus::Waiting).then(|| {
+                                    super::icons::draw(&super::icons::WAITING, 16.0, p.soft)
+                                }),
+                            )
                             .child(roles::META.wrap(t.status_label(), p.soft))
                             .px(6.0)
                             .radius(4.0)
@@ -2686,7 +2690,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
             .child(
                 row()
                     .gap(8.0)
-                    .child(label("\u{2713}", 13.5, 700.0, p.ok))
+                    .child(super::icons::draw(&super::icons::FLAG, 16.0, p.ok))
                     .child(roles::SMALL.wrap(said, p.ink).grow(1.0).min_w(0.0)),
             );
     }

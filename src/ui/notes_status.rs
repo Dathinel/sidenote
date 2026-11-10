@@ -326,12 +326,24 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     Some(c)
 }
 fn edit_button(p: Palette) -> El {
-    button("Open\u{a0}instructions", "notes-state-edit", p)
-        .label("Open instructions")
-        .on_press(|s: &mut State| {
-            s.open_ai_notes();
-            super::scene_scroll(s, "agent-instructions");
-        })
+    widgets::pressable(
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(super::icons::draw(&super::icons::PROMPTS, 16.0, p.soft))
+            .child(roles::CONTROL.wrap("Open\u{a0}instructions", p.soft)),
+    )
+    .key("notes-state-edit")
+    .px(10.0)
+    .py(6.0)
+    .radius(8.0)
+    .border(1.0, p.line)
+    .hover(p.chip)
+    .label("Open instructions")
+    .on_press(|s: &mut State| {
+        s.open_ai_notes();
+        super::scene_scroll(s, "agent-instructions");
+    })
 }
 pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let j = job(s, m)?;

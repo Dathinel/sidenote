@@ -881,13 +881,26 @@ fn profile(s: &State, k: &Kit, p: Palette, wide: bool, layer: &mut Vec<El>) -> E
                         .map(|status| format!(". {status}"))
                         .unwrap_or_default()
                 ))
+                .lead(super::icons::draw(
+                    if sync.is_some() {
+                        &super::icons::REFRESH
+                    } else {
+                        &super::icons::DEVICE
+                    },
+                    16.0,
+                    p.soft,
+                ))
                 .disabled(true),
             );
         if update_ready {
-            menu = menu.item(MenuItem::new("Update ready").on_select(|s: &mut State| {
-                s.nav.profile_menu = false;
-                super::updates::settings_scene(s);
-            }));
+            menu = menu.item(
+                MenuItem::new("Update ready")
+                    .lead(super::icons::draw(&super::icons::UPDATES, 16.0, p.soft))
+                    .on_select(|s: &mut State| {
+                        s.nav.profile_menu = false;
+                        super::updates::settings_scene(s);
+                    }),
+            );
         }
         if attention && !update_ready {
             menu = menu.item(MenuItem::new(format!("{status}. Fix")).on_select(
