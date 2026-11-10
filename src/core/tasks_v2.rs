@@ -211,6 +211,23 @@ impl Teams {
                 t.owner = Some(self.owner_name(owner));
             }
             t.team = self.resolve(t.owner.as_deref(), Some(&t.team));
+            if let Some(owner) = &t.owner
+                && let Some(team) = self.teams.iter().find(|team| team.name == t.team)
+                && let Some(member) = team
+                    .members
+                    .iter()
+                    .find(|m| name(m) == name(owner))
+                    .or_else(|| {
+                        team.aliases
+                            .iter()
+                            .find(|(a, _)| name(a) == name(owner))
+                            .and_then(|(_, m)| {
+                                team.members.iter().find(|member| name(member) == name(m))
+                            })
+                    })
+            {
+                t.owner = Some(member.clone());
+            }
         }
     }
 }

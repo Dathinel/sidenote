@@ -1131,6 +1131,7 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
+    Connect,
     Teams,
     AiNotes,
     Updates,
@@ -1146,8 +1147,9 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 12] = [
+const SECTIONS: [Section; 13] = [
     Section::Features,
+    Section::Connect,
     Section::AiNotes,
     Section::Teams,
     Section::MeetingModels,
@@ -1163,10 +1165,11 @@ const SECTIONS: [Section; 12] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 12] = SECTIONS;
+    pub const ALL: [Section; 13] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Connect => "Connect AI apps",
             Self::Teams => "Teams",
             Self::AiNotes => "AI notes",
             Self::Updates => "Updates",
@@ -1184,6 +1187,7 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::Connect => "Connect an AI app to your local meeting knowledge.",
             Self::Teams => "Group tasks by the people who own them.",
             Self::AiNotes => "Choose a helper and the instructions it uses to write meeting notes.",
             Self::Updates => "Keep Sidenote up to date from your update folder.",
@@ -1517,6 +1521,7 @@ fn search_results(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, query: &s
 /// The page for one section.
 fn section_body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, section: Section) -> El {
     match section {
+        Section::Connect => super::mcp_connect::section(s, p),
         Section::Teams => super::teams::section(s, k, p),
         Section::AiNotes => super::ai_notes::section(s, k, p),
         Section::Updates => super::updates::section(s, p),

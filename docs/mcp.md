@@ -7,22 +7,62 @@ discovery credential, run Ask, start a daily check or access the network.
 
 The client launches one process with piped stdin/stdout. Only newline-delimited
 JSON-RPC goes to stdout. Diagnostics go to stderr. No port, token or hosted service
-is required. Connected agents receive meeting and memory content, so use clients
-you trust with that content. Meeting text is data, not tool instructions.
+is required. Connected apps can read your meetings, typed notes, tasks and memory through this
+connection, and send what they read to their AI provider. Meeting text is data, not tool instructions.
 
 ## Setup
 
-Replace `C:\Apps\Sidenote\sidenote.exe` with your built executable. The GNU debug
+Open **Settings > Connect AI apps** for the actual expanded path of this running
+executable, an Add to Claude Code button, and copy-ready setup text for all five
+clients below. Installed builds use their own runtime path, including custom install
+locations. Dev builds are explicitly labelled; keep that executable at the shown
+path or reconnect with the installed copy after installation. The usual per-user
+installed path is `%LOCALAPPDATA%\sidenote\current\sidenote.exe`, but the page does
+not assume that location. Clients may need to reconnect after Sidenote updates.
+
+Add to Claude Code finds the native installed `claude.exe` on PATH or in
+`%USERPROFILE%\.local\bin`. It invokes the executable directly with separate
+arguments, without a shell, and adds a stdio server in user scope. It first checks
+`claude mcp get sidenote`, refuses to replace an existing entry, checks the add exit
+status, and checks the entry again afterwards. A failed or inconclusive precheck
+stops without adding. Commands run off the UI thread with a 30-second timeout per
+step. The page reports success, collision, missing CLI, failure or timeout without
+showing potentially private CLI config output. To undo a successful add, run
+`claude mcp remove --scope user sidenote`. Real CLI registration remains a manual
+integration check.
+
+For the other clients the page only copies text. Merge it with the existing config;
+keep other entries and resolve an existing `sidenote` entry yourself. No client config
+files are edited automatically in this version. The path in the copied text is
+expanded and escaped for PowerShell, JSON or TOML as appropriate.
+
+| Client | Config location | Setup |
+| --- | --- | --- |
+| Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button, or copy a PowerShell command. |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy `mcpServers` JSON and merge it. |
+| Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Copy a `[mcp_servers.sidenote]` TOML block. |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy `mcpServers` JSON and merge it. |
+| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy local `mcp.sidenote` JSON and merge it. Project or managed settings may override it. |
+
+The locations displayed in the app are expanded for this user. Restart or reconnect
+the client after setup. This local stdio connection has no network listener, ports,
+tokens or hosted sign-in. Web and mobile cloud connectors cannot launch it directly.
+
+For the examples below, replace `C:\Apps\Sidenote\sidenote.exe` with the path shown
+in Settings. The GNU debug
 build is at `target\x86_64-pc-windows-gnu\debug\sidenote.exe` in the worktree.
 Keep the executable available at the configured path after rebuilding.
 
 Claude Code:
 
 ```powershell
-claude mcp add sidenote -- "C:\Apps\Sidenote\sidenote.exe" --mcp
+claude mcp add --transport stdio --scope user sidenote -- "C:\Apps\Sidenote\sidenote.exe" --mcp
 ```
 
-Codex, in `~/.codex/config.toml`:
+Claude Desktop, in `%APPDATA%\Claude\claude_desktop_config.json`, uses the same
+`mcpServers` JSON shown for Cursor below.
+
+Codex, in `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`):
 
 ```toml
 [mcp_servers.sidenote]
@@ -105,17 +145,18 @@ pipeline script. See [sync.md](sync.md) for peer layout and journal ownership.
 ## Tools
 
 Every tool has an input JSON Schema, an outputSchema, a human title, and explicit
-annotations. All tools are idempotent, non-destructive, and closed-world. Seven tools
+annotations. All tools are idempotent, non-destructive, and closed-world. Eight tools
 are read-only. `propose_memory` is the sole write tool.
 
 | Tool | Arguments | Use and result |
 | --- | --- | --- |
-| `search_meetings` | `query`, optional `limit`, `from`, `to`, `project`, `device`, `cursor` | Literal case-insensitive full-text search over titles, summaries, decisions, to-dos and complete transcripts. Metadata and matching snippet, newest first. |
+| `search_meetings` | `query`, optional `limit`, `from`, `to`, `project`, `device`, `cursor` | Literal case-insensitive full-text search over titles, summaries, decisions, original AI to-dos, current merged tasks, typed notes and complete transcripts. Metadata and matching snippet, newest first. |
 | `list_meetings` | Optional `from`, `to`, `project`, `device`, `limit`, `cursor` | Browse metadata, stable id, title, date, device, project and summary URI. |
-| `get_meeting` | `id`, optional `parts`, `offset`, `limit` | Select `summary`, `decisions`, `tasks`, `transcript`, `participants`, `metadata`. Defaults to the first three plus metadata. Transcript is opt-in and paged. |
-| `list_tasks` | Optional `status`, `mine`, `project`, `meeting_id`, `limit`, `cursor` | `status` is `open` by default, `done` or `all`. `mine=true` selects explicitly marked Mine. Returns merged owner/due/project edits, ticks, manual tasks and source device. Applies the app's normal cleared-task cutoff. |
+| `get_meeting` | `id`, optional `parts`, `offset`, `limit` | Select `summary`, `decisions`, `tasks`, `notes`, `transcript`, `participants`, `metadata`. Defaults to the first three plus metadata. Typed notes and transcript are opt-in and paged. The summary labels its original AI to-dos; read `tasks` for current work. |
+| `list_tasks` | Optional `status`, `mine`, `project`, `meeting_id`, `limit`, `cursor` | `status` accepts `todo`, `waiting`, `review`, `done`, `open` (default, every unfinished status), or `all`. `mine=true` selects explicitly marked Mine. Returns current title, description, subtasks with effective ticks, waiting-on link and resolved label, resolved owner/team, due/project edits, manual tasks and source device. Applies the app's normal cleared-task cutoff. |
 | `get_memory` | `scope`, optional `query`, `limit`, `cursor` | `company` reads the same legacy-or-accepted company view as the window; `records` includes non-forgotten record statuses and sources; `proposals` includes pending, accepted and rejected status. Proposals are not facts. |
 | `list_projects` | Optional `limit`, `cursor` | Current names after aliases, including projects from peer meetings without to-dos. |
+| `list_teams` | Optional `limit`, `cursor` | Defined team names, members and owner aliases, paged by name. Available when Tasks is on. |
 | `get_daily_check` | `date`, optional `offset`, `limit` | Reads an existing merged report for `YYYY-MM-DD`. `data.report` is a byte page of JSON text. Does not generate a report. |
 | `propose_memory` | `text`, `reason`, optional `source_meeting_id` | Queues a reviewable addition. Returns proposal id/status. Does not approve, edit or remove records. |
 
@@ -126,7 +167,7 @@ Protocol errors are reserved for wire problems and resource lookup failures.
 
 Collection results use `data.items`, `data.hasMore` and `data.nextCursor`. Reuse the
 opaque cursor with exactly the same filters. `limit` defaults to 20 and is capped at
-50. Cursors follow the last returned id, so newly inserted items before it do not
+50. Cursors follow the last returned item (the meeting-scoped stable id for v2 tasks), so newly inserted items before it do not
 shift the next page. If that item disappears, restart the listing. Data is refreshed
 per call, not frozen into a session snapshot. Meeting ids are the app's ids; local
 ids take precedence over peer collisions exactly as in the window.
@@ -136,13 +177,33 @@ null. Date filters accept inclusive `YYYY-MM-DD` local calendar dates or RFC 333
 instants with a zone. Unknown dates do not match a date filter. Report dates and due
 dates remain calendar dates rather than fabricated timestamps.
 
-Transcript and report offsets are UTF-8 byte offsets, with up to 20,480 bytes per page.
+Typed-notes, transcript and report offsets are UTF-8 byte offsets, with up to 20,480 bytes per page.
 Use `nextOffset` and `hasMore`, and do not calculate a character offset yourself.
 Structured results are capped at 96 KiB. Other response text is bounded too, including
 unusually large legacy memory fields.
 `truncated` and `notes` disclose abbreviation. Narrow filters or select fewer parts
 when a response is capped. No meeting audio, arbitrary filesystem files, credentials,
 or Ask history is returned by these tools.
+
+Task output uses `status` values `todo`, `waiting`, `review`, `done`, and a
+`status_label` matching the app: To do, Waiting on, Review, Done. Completing a linked
+blocker makes a waiting task effectively To do, just as in the Tasks page. The
+`waiting_on.task_id` is the source stable task id within the same `meeting_id`;
+`waiting_label` is the resolved blocker title or free text. A completed blocker may
+leave the stored link present while its effective label is null. `stable_id` is the
+v2 source id and survives changes to task text; legacy tasks without a source id
+return an empty string. Join using `(meeting_id, stable_id)`. The existing `id` and
+`task` fields remain for compatibility; the old content-derived `id` can change
+when text changes. Manual tasks keep their global stable id and have no real meeting.
+Owner aliases resolve to the team's member spelling in the Tasks page and MCP.
+
+Both `list_tasks` and `get_meeting(parts=["tasks"])` use the Tasks page's cleared-before
+cutoff. Clearing is a view cutoff, not deletion: old meeting summaries, typed notes
+and transcripts remain readable and searchable. The raw `summary.todo` is preserved
+and explicitly labelled by `summary.todo_label` as the **original AI list**. It can
+contain old task text, ownership and status. Read the merged `tasks` part for current
+work. Search includes both this historical summary and effective task values, as
+well as typed notes; it does not rewrite the source summary.
 
 ## Resources and workflow
 
@@ -157,7 +218,7 @@ transcript in search results. Optional MCP prompts are omitted; the server's
 
 `core::agent_tools` owns operations independently of `src/mcp.rs`, which handles MCP
 schemas, results and stdio. Reads reuse `scan`, `Meeting::search_hit`, `build_tasks`,
-project aliases, memory rendering, daily-report loading and the sync journal merger.
+project and Teams aliases, memory rendering, daily-report loading and the sync journal merger.
 Peer meetings retain their device labels. Local meetings use the installation's name.
 Unknown dates and Mine values stay unknown.
 
@@ -229,11 +290,34 @@ tests against those products.
 
 ## Verification boundary
 
-The allowed smoke check uses an isolated temporary data folder, local recordings and
-peer fixture. It sends `initialize`, `tools/list` and one `search_meetings` request.
-It does not touch the owner's AppData, run tests, open the GUI or exercise a live
-memory write. Hosted CI remains the test gate. The commit report records the two
-required Cargo gates and the smoke replies.
+The smoke check uses isolated temporary state, meeting and peer fixtures. Build with
+`cargo build --locked`, then run `python tools/mcp-smoke.py`. It exercises initialize,
+all nine tool schemas and annotations, search, list_tasks, get_meeting and list_teams.
+It checks current task fields, all six status filters, owner and project aliases,
+stable ids and waiting links, manual tasks, team and task pagination, typed-notes
+search and UTF-8 paging, historical summary labelling, cleared-task cutoffs, peer
+device labels, disabled-feature behavior and unchanged fixture files. It does not open the GUI or touch the
+owner's data or client configs. The transcript is `artifacts/mcp-smoke.json`.
+
+Required local gates for this change: `cargo fmt --all --check`,
+`cargo clippy --workspace --locked --all-targets -- -D warnings`,
+`cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings`,
+`cargo test --workspace --locked`, and
+`cargo test --workspace --locked --features asr-runtime`. Unit tests cover effective
+fields, status filters, Teams aliases/paging and typed-notes search/paging. Offscreen
+Settings scenes are `mcp-connect` and `mcp-connect-560` in `tools/render_ui.ps1`,
+rendered in light and dark; they do not launch the desktop window.
+
+On 10 November 2026, all five local Cargo gates above passed. Each test build
+(default and `asr-runtime`) ran 163 tests with zero failures. The extended smoke
+passed for all nine schemas/annotations and the new task, Teams and typed-notes
+behavior, including one-item pages with duplicate task titles and feature-disabled
+calls. Its existing-config fixture includes the config reader's persistent lock
+file, and every fixture file is checked for changes. The four Connect AI apps
+renders at widths 1320 and 560, light and dark, were opened and inspected.
+This is test/protocol and offscreen-render evidence. A packaged install's path,
+actual clipboard interaction, a real `claude mcp add` run, and connections from the
+five AI clients remain unverified. No app was installed or opened on the desktop.
 
 On 7 November 2026, `cargo clippy --locked --all-targets -- -D warnings` and
 `cargo build --locked` passed on the configured Windows GNU target. The single
@@ -241,11 +325,6 @@ fixture smoke passed with empty stderr, JSON-RPC-only stdout and unchanged fixtu
 files. No tests or GUI were run. The fixture exercised the legacy initialize path;
 current-revision discovery, the other tool executions, real journal concurrency,
 proposal acceptance and client-by-client integration remain unverified in live use.
-
-Run it with `python tools/mcp-smoke.py` after building. It checks every advertised
-tool's annotations and schemas, title/transcript search, project aliases, peer device
-labels, local-id precedence and unchanged fixture files. The full JSON-RPC transcript
-is written to `artifacts/mcp-smoke.json`, outside version control.
 
 ## Optional features
 
@@ -256,7 +335,7 @@ off. An existing install enables matching features once from its saved data when
 
 | Feature | Tools available when enabled |
 | --- | --- |
-| Tasks | `list_tasks` |
+| Tasks | `list_tasks`, `list_teams` |
 | Memory | `get_memory`, `propose_memory` |
 | Daily check | `get_daily_check` |
 | Projects | `list_projects` |
@@ -272,3 +351,9 @@ The first MCP request may create this config from existing data, including when 
 server is the first process launched after an update. Config writes use a flushed temp
 file and an atomic rename. An unreadable config is preserved; optional calls fail with
 a settings error until it is repaired. No MCP tool changes feature settings.
+
+Feature switches change what the app shows and which dedicated tools are advertised.
+They are **not access controls**: meeting tools and meeting resources can still
+expose tasks in summaries and the merged tasks part, project metadata, and meetings
+from other devices when those UI features are off. Clearing tasks is also not a
+privacy boundary. Use only AI apps you trust with the meeting content.

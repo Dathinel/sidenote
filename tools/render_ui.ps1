@@ -23,6 +23,8 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('mcp-connect', 'mcp-connect', '1320x1500', $null, @()),
+    @('mcp-connect-560', 'mcp-connect', '560x1800', $null, @()),
     @('listener-error', 'listener-error', '1320x900', $null, @()),
     @('listener-error-narrow', 'listener-error', '560x1000', $null, @()),
     @('live-close-failure', 'live-close-failure', '1320x900', $null, @()),

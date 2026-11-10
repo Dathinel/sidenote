@@ -38,7 +38,7 @@ pub fn tools() -> Vec<Tool> {
         list_data.clone(),
     );
     filters["query"] = string(
-        "Case-insensitive literal text across title, summary, decisions, to-dos and the full transcript. Search first, then get_meeting.",
+        "Case-insensitive literal text across title, summary, decisions, current tasks, typed notes and the full transcript. Search first, then get_meeting.",
     );
     let config = crate::core::Config::load();
     vec![
@@ -53,29 +53,33 @@ pub fn tools() -> Vec<Tool> {
         definition(
             "get_meeting",
             "Read a meeting",
-            "Read selected parts of a meeting found by search/list. Defaults to summary, decisions, tasks and metadata. Fetch transcript only when needed, using nextOffset for subsequent UTF-8 byte pages. Task edits and ticks are merged.",
+            "Read selected parts of a meeting found by search/list. Defaults to summary, decisions, tasks and metadata. Fetch transcript only when needed, using nextOffset for subsequent UTF-8 byte pages. Read tasks for current merged tasks and ticks with the Tasks page cutoff. Summary todo is labelled as the original AI list. Typed notes and transcripts are opt-in UTF-8 byte pages. Feature switches are not access controls on meeting content.",
             object(
                 json!({"id":string("Stable meeting id returned by search/list."),"parts":{"type":"array","minItems":1,"uniqueItems":true,
-                "items":{"type":"string","enum":["summary","decisions","tasks","transcript","participants","metadata"]}},
-                "offset":{"type":"integer","minimum":0,"description":"Transcript byte offset. Use nextOffset; never split a UTF-8 character."},
+                "items":{"type":"string","enum":["summary","decisions","tasks","notes","transcript","participants","metadata"]}},
+                "offset":{"type":"integer","minimum":0,"description":"Typed notes or transcript byte offset. Use nextOffset; never split a UTF-8 character."},
                 "limit":limit(20480,20480)}),
                 &["id"],
             ),
             json!({"type":"object","properties":{"id":{"type":"string"},"uri":{"type":"string"},
                     "summary":{"type":"object"},"decisions":{"type":"array"},"tasks":{"type":"array"},"participants":{"type":"array"},
-                    "metadata":{"type":"object"},"transcript":{"type":"object"}},"required":["id","uri"]}),
+                    "metadata":{"type":"object"},"notes":{"type":"object"},"transcript":{"type":"object"}},"required":["id","uri"]}),
         ),
         definition(
             "list_tasks",
             "List tasks",
-            "Find open or completed work across meetings and manual tasks. Uses app edits, project aliases, Mine flags, ticks and the normal cleared-task cutoff. mine=true selects explicitly marked Mine; false includes everyone. Does not change tasks.",
+            "Find To do, Waiting on, Review or Done work across meetings and manual tasks. Uses app edits, owner and team aliases, stable task ids, Mine flags, subtask ticks and the normal cleared-task cutoff. mine=true selects explicitly marked Mine; false includes everyone. Does not change tasks.",
             object(
-                json!({"status":{"type":"string","enum":["open","done","all"],"default":"open"},"mine":{"type":"boolean"},
+                json!({"status":{"type":"string","enum":["todo","waiting","review","open","done","all"],"default":"open"},"mine":{"type":"boolean"},
                 "project":string("Current project or alias."),"meeting_id":string("Filter to one meeting id."),"limit":limit(50,20),
                 "cursor":string("Previous nextCursor with the same filters.")}),
                 &[],
             ),
             list_data.clone(),
+        ),
+        definition(
+            "list_teams", "List teams", "Discover defined teams, members and owner aliases. Available when Tasks is on. Follow nextCursor for more.",
+            object(json!({"limit":limit(50,20),"cursor":string("Previous nextCursor.")}), &[]), list_data.clone(),
         ),
         definition(
             "get_memory",

@@ -43,7 +43,7 @@ impl Feature {
 
     pub fn for_tool(name: &str) -> Option<Self> {
         match name {
-            "list_tasks" => Some(Self::Tasks),
+            "list_tasks" | "list_teams" => Some(Self::Tasks),
             "get_memory" | "propose_memory" => Some(Self::Memory),
             "get_daily_check" => Some(Self::DailyCheck),
             "list_projects" => Some(Self::Projects),

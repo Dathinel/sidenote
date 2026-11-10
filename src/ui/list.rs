@@ -42,6 +42,7 @@ fn source_name(source: SearchSource) -> &'static str {
     match source {
         SearchSource::Title => "Title",
         SearchSource::Summary => "Summary",
+        SearchSource::Notes => "Typed notes",
         SearchSource::Transcript => "Transcript",
     }
 }
