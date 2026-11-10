@@ -1487,6 +1487,13 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
                 .on_press(|s: &mut State| s.go_home()),
         );
     }
+    if s.on_memory() && s.memory.browse {
+        left = left.child(
+            roles::CONTROL
+                .wrap("Memory / All", p.soft)
+                .key("memory-breadcrumb"),
+        );
+    }
     row()
         .key("top-bar")
         .w_full()

@@ -60,7 +60,9 @@ pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         .placement(Placement::BottomEnd)
         .min_width(240.0);
     if m.filters_open {
-        menu = menu.on_close(|s: &mut State| s.memory.filters_open = false);
+        menu = menu
+            .on_close(|s: &mut State| s.memory.filters_open = false)
+            .group_label("Type");
         for (name, tab) in [("All types", Tab::All), ("Pending proposals", Tab::Review)]
             .into_iter()
             .chain(KINDS.into_iter().map(|t| {
@@ -82,6 +84,7 @@ pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
                 },
             ));
         }
+        menu = menu.separator().group_label("State");
         for (name, scope) in [
             ("Active", Scope::Active),
             ("Not recently confirmed", Scope::NeedsReview),
@@ -95,7 +98,7 @@ pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
                 },
             ));
         }
-        menu = menu.item(
+        menu = menu.separator().group_label("Project").item(
             MenuItem::new("All projects")
                 .checked(m.project.is_none())
                 .on_select(|s: &mut State| {
@@ -160,10 +163,15 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
         .min_w(0.0)
         .gap(6.0)
         .child(roles::NAME.wrap(title, p.ink))
-        .child(roles::SMALL.wrap(
-            format!("Best guess: {} {}", plain(&pr.text), pr.rationale),
-            p.accent,
-        ));
+        .child(
+            roles::SMALL
+                .wrap(
+                    format!("Best guess: {} {}", plain(&pr.text), pr.rationale),
+                    p.ink,
+                )
+                .spans(vec![rune::Span::new(0, "Best guess:".len()).weight(600.0)])
+                .key(format!("memory-best-guess-{id}")),
+        );
     if let Some(target) = target {
         body = body
             .child(roles::SMALL.wrap(
@@ -252,12 +260,7 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
 }
 
 fn recent(s: &State, p: Palette) -> El {
-    let mut out = col()
-        .w_full()
-        .gap(8.0)
-        .mt(20.0)
-        .child(roles::GROUP.wrap("Recently settled by Sidenote", p.soft))
-        .child(roles::META.wrap("Automatic settling history is not available yet.", p.faint));
+    let mut out = col().w_full().gap(8.0);
     let mut events: Vec<_> = s
         .memory
         .events
@@ -279,6 +282,7 @@ fn recent(s: &State, p: Palette) -> El {
     if events.is_empty() {
         return out;
     }
+    out = out.mt(20.0);
     out = out.child(
         roles::GROUP
             .wrap("Recent changes you approved", p.soft)
@@ -324,8 +328,6 @@ fn recent(s: &State, p: Palette) -> El {
                 button("Undo", format!("memory-undo-{i}"), false, p)
                     .on_press_tx(move |s: &mut State, tx| s.memory_undo(&record, &at, tx)),
             );
-        } else {
-            line = line.child(roles::META.wrap("Previous state was not saved", p.faint));
         }
         card = card.child(line);
     }

@@ -775,90 +775,64 @@ fn row_shell(
     line
 }
 
-fn flags(selected: bool, at_cursor: bool) -> (bool, bool) {
-    (selected, at_cursor)
-}
-
-fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
+fn record_row(s: &State, r: &MemoryRecord, _lay: Lay, p: Palette) -> El {
     let m = &s.memory;
     let selected = m.panel && m.cursor.as_deref() == Some(r.id.as_str());
     let at_cursor = m.keyboard && m.cursor.as_deref() == Some(r.id.as_str()) && !selected;
-    let (selected, at_cursor) = flags(selected, at_cursor);
     let claim = plain(r.text.as_deref().unwrap_or_default());
-    let review = needs_review(r, m.today);
-    let project = r.project.clone().unwrap_or_default();
-    let sources = plural(r.sources.len(), "source", "sources");
     let ink = if r.status == RecordStatus::Active {
         p.ink
     } else {
         p.faint
     };
-    let content = if lay.compact {
-        let mut meta = row().gap(8.0).items_center().min_w(0.0);
-        if !project.is_empty() {
-            meta = meta
-                .child(roles::META.line(&project, p.faint))
-                .child(roles::META.wrap("\u{b7}", p.faint));
-        }
-        meta = meta
-            .child(roles::META.wrap(confirmed_text(r), if review { p.open } else { p.faint }))
-            .child(roles::META.wrap("\u{b7}", p.faint))
-            .child(roles::META.wrap(sources, p.faint));
-        row()
-            .w_full()
-            .h(54.0)
-            .gap(10.0)
-            .items_center()
-            .child(
-                col()
-                    .grow(1.0)
-                    .min_w(0.0)
-                    .gap(2.0)
-                    .child(roles::SMALL.medium().line(&claim, ink))
-                    .child(meta),
-            )
-            .child(status_badge(r.status, p))
+    let mut meta = row()
+        .w_full()
+        .min_w(0.0)
+        .flex_wrap()
+        .gap(8.0)
+        .items_center();
+    if let Some(project) = &r.project {
+        meta = meta.child(roles::META.line(project, p.faint).min_w(0.0).shrink());
+    }
+    if r.last_confirmed.as_deref().and_then(parse_day).is_some() {
+        meta = meta.child(roles::META.wrap(confirmed_text(r), p.faint));
     } else {
-        let mut cells = row()
-            .w_full()
-            .h(38.0)
-            .gap(10.0)
-            .items_center()
-            .child(roles::SMALL.medium().line(&claim, ink).grow(1.0));
-        if lay.project {
-            cells = cells.child(
-                row()
-                    .w(150.0)
-                    .items_center()
-                    .gap(6.0)
-                    .child(if project.is_empty() {
-                        el()
-                    } else {
-                        dot(7.0, p.soft)
-                    })
-                    .child(roles::META.line(&project, p.faint)),
-            );
-        }
-        cells
+        meta = meta.child(
+            dot(6.0, p.faint)
+                .key(format!("memory-unconfirmed-{}", r.id))
+                .help("Not confirmed")
+                .label("Not confirmed"),
+        );
+    }
+    if r.sources.len() >= 2 {
+        meta = meta.child(
+            roles::META
+                .wrap(plural(r.sources.len(), "source", "sources"), p.faint)
+                .key(format!("memory-source-count-{}", r.id)),
+        );
+    }
+    let mut content = super::cards::row_shell().child(
+        col()
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(4.0)
             .child(
-                row()
-                    .w(84.0)
-                    .items_center()
-                    .child(status_badge(r.status, p)),
+                roles::SMALL
+                    .medium()
+                    .line(&claim, ink)
+                    .w_full()
+                    .help(&claim),
             )
-            .child(row().w(116.0).items_center().child(if review {
-                roles::META.medium().wrap(confirmed_text(r), p.open)
-            } else {
-                roles::meta(confirmed_text(r), p)
-            }))
-            .child(
-                row()
-                    .w(76.0)
-                    .justify_end()
-                    .items_center()
-                    .child(roles::META.wrap(sources, p.faint)),
-            )
+            .child(meta),
+    );
+    let matches_filter = match m.scope {
+        Scope::Active => r.status == RecordStatus::Active,
+        Scope::Retired => matches!(r.status, RecordStatus::Retired | RecordStatus::Superseded),
+        Scope::NeedsReview => false,
     };
+    if !matches_filter {
+        content = content.child(status_badge(r.status, p));
+    }
     row_shell(
         content,
         format!("mrow-{}", r.id),
@@ -868,6 +842,8 @@ fn record_row(s: &State, r: &MemoryRecord, lay: Lay, p: Palette) -> El {
         r.id.clone(),
         p,
     )
+    .px(14.0)
+    .radius(0.0)
 }
 
 fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
@@ -1175,19 +1151,24 @@ fn record_list(s: &State, lay: Lay, p: Palette) -> El {
         return empty_note(head, body, p);
     }
     let mut out = col().w_full();
-    let grouped = m.tab == Tab::All;
     for kind in KINDS {
         let of: Vec<&&MemoryRecord> = recs.iter().filter(|r| r.record_type == kind).collect();
         if of.is_empty() {
             continue;
         }
-        let mut g = col().w_full().mt(roles::GROUP_TOP).gap(1.0);
-        if grouped {
-            g = g.child(group_head(kind_label(kind), of.len(), p));
+        let mut g = col()
+            .w_full()
+            .mt(roles::GROUP_TOP)
+            .gap(8.0)
+            .child(group_head(kind_label(kind), of.len(), p));
+        let mut card = super::cards::panel(p).key(format!("memory-group-{kind:?}"));
+        for (index, r) in of.into_iter().enumerate() {
+            if index > 0 {
+                card = card.child(hairline(p));
+            }
+            card = card.child(record_row(s, r, lay, p));
         }
-        for r in of {
-            g = g.child(record_row(s, r, lay, p));
-        }
+        g = g.child(card);
         out = out.child(g);
     }
     out
@@ -1292,7 +1273,7 @@ fn list_column(
                     },
                 )),
         )
-        .child(landing::count(s, p).mb(14.0));
+        .mb(14.0);
     if !m.migrated {
         doc = doc.child(migration_banner(s, narrow, p).mb(14.0));
         match m.before {
