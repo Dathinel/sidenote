@@ -1,0 +1,875 @@
+//! One Ask transport, owned by a worker. No meeting text is written to disk or command lines.
+use super::{AskProgress, Runner, ask, runner_process::Output, runners};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    io::{BufRead, BufReader, Read, Write},
+    os::windows::process::CommandExt,
+    process::{Child, Command, Stdio},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
+
+const IDLE: Duration = Duration::from_secs(600);
+const CAP: usize = 4 * 1024 * 1024;
+static ACTOR: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
+static CLOSED: AtomicBool = AtomicBool::new(true);
+static CATALOG: Mutex<BTreeMap<String, Vec<Model>>> = Mutex::new(BTreeMap::new());
+static CATALOG_VERSION: AtomicU64 = AtomicU64::new(0);
+static OPENCODE_DISCOVERY: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn catalog_version() -> u64 {
+    CATALOG_VERSION.load(Ordering::Relaxed)
+}
+pub fn models(runner: &Runner) -> Vec<Model> {
+    let kind = runners::kind(runner).unwrap_or("");
+    if let Ok(catalog) = CATALOG.lock()
+        && let Some(models) = catalog.get(kind)
+    {
+        return models.clone();
+    }
+    let defaults: &[(&str, &str)] = match kind {
+        "claude" => &[
+            ("claude-sonnet-5-5", "Sonnet 5.5"),
+            ("claude-opus-5-5", "Opus 5.5"),
+            ("claude-haiku-5-5", "Haiku 5.5"),
+        ],
+        "codex" => &[
+            ("gpt-6.1-sol", "GPT-6.1-Sol"),
+            ("gpt-6.1-terra", "GPT-6.1 Terra"),
+            ("gpt-6-luna", "GPT-6-Luna"),
+        ],
+        _ => &[
+            ("openai/gpt-6.1-terra-fast", "GPT-6.1 Terra Fast"),
+            ("anthropic/claude-sonnet-5-5", "Sonnet 5.5"),
+        ],
+    };
+    defaults
+        .iter()
+        .map(|(id, name)| Model {
+            id: (*id).into(),
+            name: (*name).into(),
+        })
+        .collect()
+}
+fn remember_models(kind: &str, values: &[Value]) {
+    let mut models = Vec::new();
+    for value in values.iter().take(256) {
+        let Some(id) = value
+            .get("resolvedModel")
+            .or_else(|| value.get("model"))
+            .or_else(|| value.get("value"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        if id.is_empty()
+            || id.len() > 200
+            || id.chars().any(char::is_control)
+            || models.iter().any(|m: &Model| m.id == id)
+        {
+            continue;
+        }
+        let name = value
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or(id);
+        models.push(Model {
+            id: id.into(),
+            name: name.chars().filter(|c| !c.is_control()).take(120).collect(),
+        });
+    }
+    if !models.is_empty()
+        && let Ok(mut catalog) = CATALOG.lock()
+        && catalog.get(kind) != Some(&models)
+    {
+        catalog.insert(kind.into(), models);
+        CATALOG_VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// OpenCode exposes a plain model list, rather than the two streaming protocols.
+pub fn discover(runner: Runner) {
+    if runners::kind(&runner) != Ok("opencode") || OPENCODE_DISCOVERY.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    thread::spawn(move || {
+        let result = (|| {
+            let mut child = Command::new(runners::executable(&runner).ok()?)
+                .arg("models")
+                .creation_flags(0x08000000)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()?;
+            let job = match crate::platform::ProcessJob::attach(&child) {
+                Ok(job) => job,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+            };
+            let mut stdout = child.stdout.take()?;
+            let reader = thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = stdout
+                    .by_ref()
+                    .take((CAP + 1) as u64)
+                    .read_to_end(&mut bytes);
+                bytes
+            });
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let success = loop {
+                if ask::stop_requested() || Instant::now() >= deadline {
+                    break false;
+                }
+                if let Ok(Some(status)) = child.try_wait() {
+                    break status.success();
+                }
+                thread::sleep(Duration::from_millis(100));
+            };
+            drop(job);
+            let _ = child.kill();
+            let _ = child.wait();
+            let bytes = reader.join().ok()?;
+            if !success || bytes.len() > CAP {
+                return None;
+            }
+            let text = String::from_utf8(bytes).ok()?;
+            let values: Vec<Value> = text
+                .split_whitespace()
+                .filter(|s| {
+                    s.contains('/')
+                        && s.len() <= 200
+                        && s.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "/._-:#".contains(c))
+                })
+                .map(|id| json!({"model":id,"displayName":id}))
+                .collect();
+            remember_models("opencode", &values);
+            Some(())
+        })();
+        if result.is_none() {
+            OPENCODE_DISCOVERY.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Key {
+    runner: Runner,
+    chat: String,
+}
+enum Reply {
+    Progress(AskProgress),
+    Result(Result<String, String>),
+}
+enum Work {
+    Warm(Key),
+    Reset(String),
+    Ask {
+        key: Key,
+        prompt: String,
+        cancel: std::sync::Arc<AtomicBool>,
+        reply: SyncSender<Reply>,
+    },
+    Recording(bool),
+    Close,
+}
+
+fn actor() -> &'static mpsc::Sender<Work> {
+    ACTOR.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        CLOSED.store(false, Ordering::SeqCst);
+        thread::spawn(move || {
+            serve(rx);
+            CLOSED.store(true, Ordering::SeqCst);
+        });
+        tx
+    })
+}
+pub fn warm(runner: Runner, chat: String) {
+    if !ask::stop_requested()
+        && runner.stdin
+        && matches!(runners::kind(&runner), Ok("claude" | "codex"))
+    {
+        let _ = actor().send(Work::Warm(Key { runner, chat }));
+    }
+}
+pub fn recording(active: bool) {
+    if !ask::stop_requested() {
+        let _ = actor().send(Work::Recording(active));
+    }
+}
+pub fn reset(chat: &str) {
+    if let Some(actor) = ACTOR.get() {
+        let _ = actor.send(Work::Reset(chat.into()));
+    }
+}
+pub(super) fn close() {
+    if let Some(actor) = ACTOR.get() {
+        let _ = actor.send(Work::Close);
+    }
+}
+pub(super) fn closed() -> bool {
+    CLOSED.load(Ordering::SeqCst)
+}
+
+/// Blocking on an Ask worker, never the UI thread. Cancellation also stops an in-flight transport.
+pub fn run(
+    runner: &Runner,
+    prompt: String,
+    chat: &str,
+    progress: impl Fn(AskProgress),
+) -> Result<String, String> {
+    let _activity = crate::updates::activity()
+        .map_err(|_| "An update is being installed. Try again after restart.")?;
+    if !runner.stdin || !matches!(runners::kind(runner)?, "claude" | "codex") {
+        return super::run_runner(runner, prompt, &super::state_dir(), progress);
+    }
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::sync_channel(8);
+    actor()
+        .send(Work::Ask {
+            key: Key {
+                runner: runner.clone(),
+                chat: chat.into(),
+            },
+            prompt,
+            cancel: cancel.clone(),
+            reply: tx,
+        })
+        .map_err(|_| "The agent session stopped. Restart Sidenote and try again.")?;
+    let began = Instant::now();
+    loop {
+        if ask::stop_requested() || ask::cancel_requested() {
+            cancel.store(true, Ordering::SeqCst);
+            return Err(ask::STOPPED.into());
+        }
+        if began.elapsed() >= IDLE {
+            cancel.store(true, Ordering::SeqCst);
+            return Err("The agent exceeded its time limit.".into());
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Reply::Progress(event)) => progress(event),
+            Ok(Reply::Result(result)) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => return Err("The agent session closed. Try again.".into()),
+        }
+    }
+}
+
+struct Lifetime {
+    recording: bool,
+    ended: Option<Instant>,
+    activity: Instant,
+}
+impl Lifetime {
+    fn expired(&self, now: Instant) -> bool {
+        now.duration_since(self.activity) >= IDLE
+            || (!self.recording
+                && self
+                    .ended
+                    .is_some_and(|end| now.duration_since(end) >= IDLE))
+    }
+    fn recording(&mut self, recording: bool, now: Instant) {
+        if self.recording && !recording {
+            self.ended = Some(now);
+        }
+        if recording {
+            self.ended = None;
+        }
+        self.recording = recording;
+    }
+}
+
+fn serve(rx: Receiver<Work>) {
+    let mut lifetime = Lifetime {
+        recording: false,
+        ended: None,
+        activity: Instant::now(),
+    };
+    let mut desired: Option<Key> = None;
+    let mut session: Option<Session> = None;
+    let mut retry_at = Instant::now();
+    while !ask::stop_requested() {
+        let work = rx.recv_timeout(Duration::from_secs(1));
+        match work {
+            Ok(Work::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Work::Recording(active)) => {
+                if active && !lifetime.recording {
+                    session = None;
+                }
+                lifetime.recording(active, Instant::now());
+                continue;
+            }
+            Ok(Work::Reset(chat)) => {
+                if desired.as_ref().is_some_and(|key| key.chat == chat) {
+                    session = None;
+                    lifetime.activity = Instant::now();
+                    retry_at = Instant::now();
+                }
+            }
+            Ok(Work::Warm(key)) => {
+                lifetime.activity = Instant::now();
+                if desired.as_ref() != Some(&key) {
+                    session = None;
+                    retry_at = Instant::now();
+                }
+                desired = Some(key);
+            }
+            Ok(Work::Ask {
+                key,
+                prompt,
+                cancel,
+                reply,
+            }) => {
+                if cancel.load(Ordering::SeqCst) {
+                    continue;
+                }
+                lifetime.activity = Instant::now();
+                if desired.as_ref() != Some(&key) {
+                    session = None;
+                }
+                desired = Some(key.clone());
+                let result = (|| {
+                    if session.as_mut().is_none_or(|s| !s.alive()) {
+                        session = Some(Session::start(&key, &cancel)?);
+                    }
+                    let progress = |event| {
+                        let _ = reply.send(Reply::Progress(event));
+                    };
+                    session
+                        .as_mut()
+                        .unwrap()
+                        .turn(&key.runner, prompt, &cancel, &progress)
+                })();
+                if result.is_err() {
+                    session = None;
+                    retry_at = Instant::now() + Duration::from_secs(5);
+                }
+                lifetime.activity = Instant::now();
+                let _ = reply.send(Reply::Result(result));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if lifetime.expired(Instant::now()) {
+            session = None;
+            desired = None;
+            lifetime.ended = None;
+        }
+        if session.as_mut().is_some_and(|s| !s.alive()) {
+            session = None;
+        }
+        if session.is_none()
+            && Instant::now() >= retry_at
+            && let Some(key) = &desired
+        {
+            match Session::start(key, &AtomicBool::new(false)) {
+                Ok(warm) => session = Some(warm),
+                Err(_) => retry_at = Instant::now() + Duration::from_secs(5),
+            }
+        }
+    }
+    drop(session);
+}
+
+enum Stream {
+    Event(Value, usize),
+    Failed,
+    Closed,
+}
+struct Session {
+    child: Child,
+    job: Option<crate::platform::ProcessJob>,
+    input: Option<SyncSender<Vec<u8>>>,
+    events: Option<Receiver<Stream>>,
+    threads: Vec<JoinHandle<()>>,
+    kind: String,
+    thread_id: Option<String>,
+    next_id: u64,
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.events.take();
+        self.input.take();
+        self.job.take();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+impl Session {
+    fn start(key: &Key, cancel: &AtomicBool) -> Result<Self, String> {
+        runners::validate(&key.runner)?;
+        let kind = runners::kind(&key.runner)?;
+        let mut command = Command::new(runners::executable(&key.runner)?);
+        let root = super::state_dir();
+        std::fs::create_dir_all(&root).map_err(|_| "Could not open the app data folder.")?;
+        if kind == "claude" {
+            command.args(
+                key.runner
+                    .args
+                    .iter()
+                    .map(|a| a.replace("{model}", key.runner.model.as_deref().unwrap_or(""))),
+            );
+            command.args(["--input-format", "stream-json"]);
+        } else {
+            command.args(["app-server", "--stdio"]);
+        }
+        command.current_dir(root);
+        let mut session = Self::spawn(command, kind)?;
+        session.initialize(&key.runner, cancel)?;
+        Ok(session)
+    }
+    fn spawn(mut command: Command, kind: &str) -> Result<Self, String> {
+        let mut child = command
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "Could not start the agent session.")?;
+        let job = match crate::platform::ProcessJob::attach(&child) {
+            Ok(job) => job,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Could not contain the agent session.".into());
+            }
+        };
+        let mut stdin = child.stdin.take().ok_or("Could not open agent input.")?;
+        let stdout = child.stdout.take().ok_or("Could not open agent output.")?;
+        let mut stderr = child.stderr.take().ok_or("Could not open agent status.")?;
+        let (events_tx, events) = mpsc::sync_channel(16);
+        let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(1);
+        let writer_tx = events_tx.clone();
+        let writer = thread::spawn(move || {
+            for bytes in input_rx {
+                if stdin.write_all(&bytes).and_then(|_| stdin.flush()).is_err() {
+                    let _ = writer_tx.send(Stream::Failed);
+                    break;
+                }
+            }
+        });
+        let reader = thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut bytes = Vec::new();
+                match reader
+                    .by_ref()
+                    .take((CAP + 1) as u64)
+                    .read_until(b'\n', &mut bytes)
+                {
+                    Ok(0) => break,
+                    Ok(_) if bytes.len() <= CAP => {
+                        let event = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                        if events_tx.send(Stream::Event(event, bytes.len())).is_err() {
+                            return;
+                        }
+                    }
+                    _ => {
+                        let _ = events_tx.send(Stream::Failed);
+                        return;
+                    }
+                }
+            }
+            let _ = events_tx.send(Stream::Closed);
+        });
+        let errors = thread::spawn(move || {
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        });
+        Ok(Self {
+            child,
+            job: Some(job),
+            input: Some(input),
+            events: Some(events),
+            threads: vec![writer, reader, errors],
+            kind: kind.into(),
+            thread_id: None,
+            next_id: 0,
+        })
+    }
+    fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+    fn send(&self, event: Value) -> Result<(), String> {
+        let mut bytes =
+            serde_json::to_vec(&event).map_err(|_| "Could not prepare the agent question.")?;
+        if bytes.len() > 32 * 1024 * 1024 {
+            return Err("The meeting is too large for this question.".into());
+        }
+        bytes.push(b'\n');
+        self.input
+            .as_ref()
+            .ok_or("Agent input closed.")?
+            .send(bytes)
+            .map_err(|_| "The agent session closed. Try again.".into())
+    }
+    fn event(
+        &self,
+        deadline: Instant,
+        cancel: &AtomicBool,
+    ) -> Result<Option<(Value, usize)>, String> {
+        if ask::stop_requested() || cancel.load(Ordering::SeqCst) {
+            return Err(ask::STOPPED.into());
+        }
+        if Instant::now() >= deadline {
+            return Err("The agent session timed out. Try again.".into());
+        }
+        match self
+            .events
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            Ok(Stream::Event(event, bytes)) => Ok(Some((event, bytes))),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            _ => Err("The agent session closed. Check its sign-in and try again.".into()),
+        }
+    }
+    fn rpc(&mut self, method: &str, params: Value, cancel: &AtomicBool) -> Result<Value, String> {
+        self.next_id += 1;
+        let id = self.next_id;
+        let request_id = id.to_string();
+        if self.kind == "claude" {
+            self.send(
+                json!({"type":"control_request", "request_id":id.to_string(), "request":params}),
+            )?;
+        } else {
+            self.send(json!({"id":id, "method":method, "params":params}))?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(40);
+        let mut bytes = 0;
+        loop {
+            let Some((event, size)) = self.event(deadline, cancel)? else {
+                continue;
+            };
+            bytes += size;
+            if bytes > CAP {
+                return Err("The agent exceeded its output limit.".into());
+            }
+            if self.kind == "claude" {
+                if event["type"] == "control_response"
+                    && event["response"]["request_id"].as_str() == Some(request_id.as_str())
+                {
+                    if event["response"]["subtype"] == "error" {
+                        return Err("The agent could not initialize this session.".into());
+                    }
+                    return Ok(event["response"]["response"].clone());
+                }
+            } else if event["id"] == id {
+                if event.get("error").is_some() {
+                    return Err("The agent rejected this session request. Check the chosen model and sign-in.".into());
+                }
+                return Ok(event["result"].clone());
+            } else {
+                self.decline_request(&event)?;
+            }
+        }
+    }
+    fn initialize(&mut self, runner: &Runner, cancel: &AtomicBool) -> Result<(), String> {
+        if self.kind == "claude" {
+            let response = self.rpc("initialize", json!({"subtype":"initialize"}), cancel)?;
+            if let Some(models) = response["models"].as_array() {
+                remember_models("claude", models);
+            }
+        } else {
+            self.rpc("initialize", json!({"clientInfo":{"name":"sidenote","version":env!("CARGO_PKG_VERSION")}, "capabilities":{"experimentalApi":true}}), cancel)?;
+            self.send(json!({"method":"initialized","params":{}}))?;
+            let mut cursor = Value::Null;
+            let mut models = Vec::new();
+            for _ in 0..8 {
+                let response =
+                    self.rpc("model/list", json!({"limit":100,"cursor":cursor}), cancel)?;
+                if let Some(page) = response["data"].as_array() {
+                    models.extend(page.iter().cloned());
+                }
+                cursor = response["nextCursor"].clone();
+                if cursor.is_null() {
+                    break;
+                }
+            }
+            remember_models("codex", &models);
+            let response = self.rpc("thread/start", json!({"cwd":super::state_dir(),"model":runner.model,"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"}), cancel)?;
+            self.thread_id = response["thread"]["id"].as_str().map(str::to_owned);
+            if self.thread_id.is_none() {
+                return Err("The agent did not open a conversation.".into());
+            }
+        }
+        Ok(())
+    }
+    fn decline_request(&self, event: &Value) -> Result<(), String> {
+        if self.kind == "codex" && event.get("id").is_some() && event.get("method").is_some() {
+            self.send(json!({"id":event["id"],"error":{"code":-32601,"message":"Ask does not approve interactive requests."}}))?;
+        }
+        Ok(())
+    }
+    fn turn(
+        &mut self,
+        runner: &Runner,
+        prompt: String,
+        cancel: &AtomicBool,
+        progress: &impl Fn(AskProgress),
+    ) -> Result<String, String> {
+        progress(AskProgress::Started {
+            runner: runner.name.clone(),
+        });
+        let deadline = Instant::now() + IDLE;
+        let mut turn_request = None;
+        if self.kind == "claude" {
+            self.send(json!({"type":"user","message":{"role":"user","content":prompt}}))?;
+        } else {
+            let effort = runner
+                .args
+                .iter()
+                .find_map(|arg| arg.strip_prefix("model_reasoning_effort="))
+                .unwrap_or("medium");
+            self.next_id += 1;
+            turn_request = Some(self.next_id);
+            self.send(json!({"id":self.next_id,"method":"turn/start","params":{"threadId":self.thread_id,"effort":effort,"input":[{"type":"text","text":prompt}]}}))?;
+        }
+        let mut output = Output::default();
+        let mut bytes = 0;
+        let mut text_item = None;
+        loop {
+            let Some((event, size)) = self.event(deadline, cancel)? else {
+                continue;
+            };
+            bytes += size;
+            if bytes > CAP {
+                return Err("The agent exceeded its output limit.".into());
+            }
+            if self.kind == "claude" {
+                output.line(&event.to_string(), "claude", true, progress);
+                if event["type"] == "result" {
+                    if output.failed {
+                        return Err("The agent could not answer. Check the selected model and sign-in, then try again.".into());
+                    }
+                    break;
+                }
+            } else {
+                if event.get("id").and_then(Value::as_u64) == turn_request
+                    && event.get("error").is_some()
+                {
+                    return Err("The agent rejected this question. Check the selected model and thinking level.".into());
+                }
+                self.decline_request(&event)?;
+                let params = &event["params"];
+                match event["method"].as_str() {
+                    Some("item/agentMessage/delta") => {
+                        if let Some(text) = params["delta"].as_str() {
+                            if text_item.as_ref() != Some(&params["itemId"]) {
+                                output.final_text.clear();
+                                text_item = Some(params["itemId"].clone());
+                            }
+                            output.final_text.push_str(text);
+                            progress(AskProgress::Text {
+                                text: output.final_text.clone(),
+                            });
+                        }
+                    }
+                    Some("item/completed") => {
+                        let item = &params["item"];
+                        if item["type"] == "agentMessage"
+                            && let Some(text) = item["text"].as_str()
+                        {
+                            output.final_text = text.into();
+                            progress(AskProgress::Text { text: text.into() });
+                        }
+                    }
+                    Some("turn/completed") => {
+                        if params["turn"]["status"] != "completed" {
+                            return Err("The agent could not finish the answer. Try again.".into());
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if output.final_text.trim().is_empty() {
+            return Err("The agent returned no answer. Try again.".into());
+        }
+        Ok(output.final_text.trim().into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn warm_lifetime_covers_recording_and_expires_at_either_ten_minute_limit() {
+        let now = Instant::now();
+        let mut lifetime = Lifetime {
+            recording: false,
+            ended: None,
+            activity: now,
+        };
+        assert!(!lifetime.expired(now + IDLE - Duration::from_millis(1)));
+        assert!(lifetime.expired(now + IDLE));
+        lifetime.recording(true, now);
+        assert!(lifetime.expired(now + IDLE * 3));
+        lifetime.activity = now + IDLE * 3;
+        assert!(!lifetime.expired(now + IDLE * 3));
+        lifetime.recording(false, now + IDLE * 3);
+        lifetime.activity = now + IDLE * 3;
+        assert!(!lifetime.expired(now + IDLE * 4 - Duration::from_millis(1)));
+        lifetime.activity = now + IDLE * 4;
+        assert!(lifetime.expired(now + IDLE * 4));
+    }
+    #[test]
+    fn a_different_chat_or_model_cannot_inherit_a_warm_conversation() {
+        let runner: Runner =
+            serde_json::from_str::<Vec<Runner>>(include_str!("../../default-runners.json"))
+                .unwrap()
+                .remove(0);
+        let a = Key {
+            runner: runner.clone(),
+            chat: "meeting-one".into(),
+        };
+        let b = Key {
+            runner: runner.clone(),
+            chat: "meeting-two".into(),
+        };
+        assert!(a != b);
+        let mut c = a.clone();
+        c.runner.model = Some("other-model".into());
+        assert!(a != c);
+    }
+    #[test]
+    fn streaming_session_reuses_one_process_then_recovers_from_death_and_cancels() {
+        if std::env::var_os("SIDENOTE_ASK_PROTOCOL_FIXTURE").is_some() {
+            agent_fixture();
+            return;
+        }
+        let fixture = |kind| {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact","core::ask_session::tests::streaming_session_reuses_one_process_then_recovers_from_death_and_cancels","--nocapture"])
+                .env("SIDENOTE_ASK_PROTOCOL_FIXTURE","1");
+            Session::spawn(command, kind).unwrap()
+        };
+        for kind in ["claude", "codex"] {
+            let runner =
+                serde_json::from_str::<Vec<Runner>>(include_str!("../../default-runners.json"))
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| runners::kind(r) == Ok(kind))
+                    .unwrap();
+            let cancel = AtomicBool::new(false);
+            let mut session = fixture(kind);
+            session.initialize(&runner, &cancel).unwrap();
+            let pid = session.child.id();
+            let events = std::cell::RefCell::new(Vec::new());
+            let first = session
+                .turn(&runner, "first".into(), &cancel, &|e| {
+                    events.borrow_mut().push(e)
+                })
+                .unwrap();
+            assert_eq!(first, "answer 1");
+            assert_eq!(
+                session
+                    .turn(&runner, "second".into(), &cancel, &|_| {})
+                    .unwrap(),
+                "answer 2"
+            );
+            assert_eq!(session.child.id(), pid);
+            assert!(
+                events
+                    .borrow()
+                    .iter()
+                    .any(|e| matches!(e,AskProgress::Text {text} if text=="answer "))
+            );
+            assert!(
+                session
+                    .turn(&runner, "die".into(), &cancel, &|_| {})
+                    .is_err()
+            );
+            drop(session);
+            let mut restarted = fixture(kind);
+            restarted.initialize(&runner, &cancel).unwrap();
+            assert_eq!(
+                restarted
+                    .turn(&runner, "new".into(), &cancel, &|_| {})
+                    .unwrap(),
+                "answer 1"
+            );
+            let cancelled = AtomicBool::new(true);
+            assert_eq!(
+                restarted
+                    .turn(&runner, "cancel".into(), &cancelled, &|_| {})
+                    .unwrap_err(),
+                ask::STOPPED
+            );
+        }
+    }
+
+    fn agent_fixture() {
+        let stdin = std::io::stdin();
+        let mut stdout = std::io::stdout().lock();
+        let mut turn = 0;
+        writeln!(stdout).unwrap();
+        stdout.flush().unwrap();
+        for line in stdin.lock().lines() {
+            let event: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            let method = event["method"].as_str().unwrap_or("");
+            let responses = if event["type"] == "control_request" {
+                vec![
+                    json!({"type":"control_response","response":{"subtype":"success","request_id":event["request_id"],"response":{"models":[]}}}),
+                ]
+            } else if method == "initialize" {
+                vec![json!({"id":event["id"],"result":{}})]
+            } else if method == "model/list" {
+                vec![json!({"id":event["id"],"result":{"data":[],"nextCursor":null}})]
+            } else if method == "thread/start" {
+                assert_eq!(event["params"]["sandbox"], "read-only");
+                assert_eq!(event["params"]["approvalPolicy"], "never");
+                assert_eq!(event["params"]["ephemeral"], true);
+                vec![json!({"id":event["id"],"result":{"thread":{"id":"fixture-thread"}}})]
+            } else if event["type"] == "user" || method == "turn/start" {
+                if event["message"]["content"] == "die"
+                    || event["params"]["input"][0]["text"] == "die"
+                {
+                    std::process::exit(3);
+                }
+                turn += 1;
+                if method == "turn/start" {
+                    vec![
+                        json!({"method":"item/agentMessage/delta","params":{"threadId":"fixture-thread","itemId":turn.to_string(),"delta":"answer "}}),
+                        json!({"id":event["id"],"result":{"turn":{"id":turn.to_string()}}}),
+                        json!({"method":"item/agentMessage/delta","params":{"threadId":"fixture-thread","itemId":turn.to_string(),"delta":turn.to_string()}}),
+                        json!({"method":"turn/completed","params":{"turn":{"status":"completed"}}}),
+                    ]
+                } else {
+                    vec![
+                        json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answer "}}}),
+                        json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":turn.to_string()}}}),
+                        json!({"type":"result","result":format!("answer {turn}"),"is_error":false}),
+                    ]
+                }
+            } else {
+                continue;
+            };
+            for response in responses {
+                writeln!(stdout, "{response}").unwrap();
+                stdout.flush().unwrap();
+            }
+        }
+    }
+}

@@ -7,6 +7,7 @@ mod area_editor;
 mod area_migration;
 mod area_scene;
 mod ask;
+mod ask_settings;
 mod benchmark;
 mod check;
 mod diary;
@@ -144,6 +145,7 @@ pub struct AskRun {
     pub submitted_message_id: Option<String>,
     pub generation: u64,
     pub runner: String,
+    pub text: String,
     pub rx: Receiver<Result<String, String>>,
     pub steps: Vec<String>,
 }
@@ -162,6 +164,7 @@ impl AskRun {
             submitted_message_id: None,
             generation: 0,
             runner: runner.into(),
+            text: String::new(),
             rx,
             steps: steps.iter().map(|s| s.to_string()).collect(),
         }
@@ -231,6 +234,7 @@ pub struct State {
     /// `poll`, because a click into a field is a settle commit and those land without motion.
     pub ask_open: bool,
     pub runner_open: bool,
+    pub ask_settings: ask_settings::AskSettings,
     /// The Ask thread folded down to its header, so the meeting gets the room back.
     pub thread_hidden: bool,
     pub asks: HashMap<String, AskRun>,
@@ -413,6 +417,7 @@ impl State {
             agents_rechecked: false,
             ask_open: false,
             runner_open: false,
+            ask_settings: ask_settings::AskSettings::new(&prefs),
             thread_hidden: false,
             asks: HashMap::new(),
             ask_errors: HashMap::new(),
@@ -464,6 +469,7 @@ impl State {
         s.refresh_areas();
         s.refresh_list();
         s.load_saved();
+        s.refresh_ask_model_input();
         if s.config.features.daily_check {
             s.check.refresh();
         }
@@ -866,6 +872,23 @@ impl State {
             return;
         };
         let history = saved.messages[..=submitted_at].to_vec();
+        let options = core::ask_options::Options {
+            thinking: self.ask_thinking(),
+            model: self.ask_model(),
+            meeting: self.ask_in_meeting(),
+            live: if self.ask_settings.recording {
+                self.ask_settings.recording_source.clone()
+            } else if self.hex_recording() {
+                Some(core::ask_options::LiveSource {
+                    hint: hex::recording_id(self),
+                    start_ms: hex::recording_start(self).map(|(at, _)| at.timestamp_millis()),
+                })
+            } else if self.ask_in_meeting() {
+                self.ask_settings.last_live.clone()
+            } else {
+                None
+            },
+        };
         self.saved = saved.clone();
         self.question = TextEdit::new("");
         self.ask_errors.remove(&id);
@@ -888,11 +911,25 @@ impl State {
         };
         let cancel = core::ask::Cancel::new();
         let (rx, first_step) = if self.selected.is_some() {
-            let rx = core::ask::spawn(id.clone(), history, runner.clone(), cancel.clone(), notify);
+            let rx = core::ask::spawn_with_options(
+                id.clone(),
+                history,
+                runner.clone(),
+                options,
+                cancel.clone(),
+                notify,
+            );
             (rx, "Reading the meeting...")
         } else {
             let context = self.all_context();
-            let rx = core::ask_all::spawn(context, history, runner.clone(), cancel.clone(), notify);
+            let rx = core::ask_all::spawn_with_options(
+                context,
+                history,
+                runner.clone(),
+                options,
+                cancel.clone(),
+                notify,
+            );
             (rx, "Reading your meetings...")
         };
         // Wakes the window once a second while this run lives, so "Thinking, 12 s" counts.
@@ -916,6 +953,7 @@ impl State {
                 submitted_message_id: Some(submitted_message_id),
                 generation,
                 runner,
+                text: String::new(),
                 rx,
                 steps: vec![first_step.into()],
             },
@@ -925,8 +963,10 @@ impl State {
 
     pub fn clear_thread(&mut self) {
         let id = self.ask_key();
+        core::ask_session::reset(&id);
         self.asks.remove(&id);
         self.ask_errors.remove(&id);
+        self.ask_settings.overrides.retain(|(key, _), _| key != &id);
         match self.store.clear_history(&id) {
             Ok(saved) => self.saved = saved,
             Err(_) => self.notice = Some("Could not clear the saved answers.".into()),
@@ -1160,6 +1200,7 @@ impl State {
                 match event {
                     AskProgress::Started { .. } => {}
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
+                    AskProgress::Text { text } => run.text = text,
                     AskProgress::Finished => {
                         if let Some(run) = self.asks.remove(&id) {
                             self.finish_ask(&id, run, None);
@@ -1259,7 +1300,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_) => break,
         }
     }
-    if Instant::now() >= deadline
+    if (events == 8 || Instant::now() >= deadline)
         && let Some(waker) = &s.waker
     {
         waker();
@@ -1277,8 +1318,25 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     s.footer_minute = minute;
     // The Ask bar opens and folds in a commit of its own, so it moves instead of jumping.
     if s.ask_open != s.question.focused {
+        if s.question.focused {
+            s.ask_settings.warm_signature.clear();
+        }
         s.ask_open = s.question.focused;
         changed = true;
+    }
+    if !headless {
+        if s.ask_settings.last_input != s.question.text {
+            s.ask_settings.last_input = s.question.text.clone();
+            s.ask_settings.warm_signature.clear();
+        }
+        if s.question.focused || s.hex_recording() {
+            s.warm_ask();
+        }
+        let version = core::ask_session::catalog_version();
+        if version != s.ask_settings.catalog_version {
+            s.ask_settings.catalog_version = version;
+            changed = true;
+        }
     }
     // The elapsed seconds of a running Ask redraw once a second, woken by its ticker.
     if !headless && s.asks.values().any(|r| r.live) {
@@ -2567,6 +2625,39 @@ pub fn spec() -> AppSpec<State> {
                         left: 3,
                     });
                 }
+            }),
+            ("settings-model-menu", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ask_settings.select_open = Some("ask-settings-model".into());
+            }),
+            ("settings-model-other", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ask_settings.other_model = true;
+            }),
+            ("ask-thinking-picker", |s| {
+                scene_agents(s, ALL_AGENTS);
+                s.ask_settings.thinking_open = true;
+            }),
+            ("ask-in-meeting", |s| {
+                scene_live(s, SCENE_NOTES, SCENE_LINES, true);
+                s.ask_settings.thinking_open = true;
+            }),
+            ("ask-streaming", |s| {
+                scene_agents(s, ALL_AGENTS);
+                s.saved.messages.push(Message {
+                    role: "user".into(),
+                    text: "What did we decide?".into(),
+                    ..Default::default()
+                });
+                let mut run = AskRun::stand_in("Claude Sonnet", &[], 8);
+                run.text =
+                    "Start with a shorter onboarding flow. Test it with five customers next week."
+                        .into();
+                s.asks.insert(core::ALL_KEY.into(), run);
+            }),
+            ("ask-opencode", |s| {
+                scene_agents(s, ALL_AGENTS);
+                s.choose_ask_runner("OpenCode".into());
             }),
             ("ask", |s| {
                 scene_meeting(s);

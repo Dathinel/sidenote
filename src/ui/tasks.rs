@@ -3328,7 +3328,7 @@ fn redo_older_control(s: &State, _k: &Kit, p: Palette, _layer: &mut Vec<El>) -> 
             .map(|m| m.title.as_str())
             .unwrap_or("this meeting");
         let id = id.clone();
-        out = out.child(super::widgets::banner("Rebuild tasks?", format!("Rebuild tasks for {title}? The transcript, summary and your typed notes go to your helper again. Your changes are kept only when tasks can be matched."), super::widgets::BannerKind::Info, p)
+        out = out.child(super::widgets::banner("Rebuild tasks?", format!("Rebuild tasks for {title}? The transcript, summary and your typed notes go to your agent again. Your changes are kept only when tasks can be matched."), super::widgets::BannerKind::Info, p)
             .child(row().flex_wrap().gaps(8.0, 8.0)
                 .child(button("Keep tasks", "redo-cancel", true, p).on_press(|s: &mut State| s.tasks.redo_confirm = None))
                 .child(button("Rebuild tasks", "redo-confirm", false, p).on_press(move |s: &mut State| {

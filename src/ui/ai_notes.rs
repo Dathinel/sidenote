@@ -17,7 +17,7 @@ pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed 
 pub const INSTALL_URL: &str = "https://code.claude.com/docs/en/setup";
 const SETUP_STEPS: &str =
     "1. Install Claude Code. 2. Open a terminal, type claude, and sign in. 3. Press Check again.";
-pub const LOAD_ERROR: &str = "Sidenote could not load Meeting summary settings. Press Reload helper status. If it fails again, restart Sidenote.";
+pub const LOAD_ERROR: &str = "Sidenote could not load Meeting summary settings. Press Reload agent status. If it fails again, restart Sidenote.";
 pub const SAVE_ERROR: &str = "Sidenote could not save your instructions. Your text is still here. Try Save instructions again. If it fails twice, copy the text and restart Sidenote.";
 
 pub fn helper_fallback_message(helper: Helper) -> String {
@@ -133,7 +133,7 @@ pub struct Snapshot {
     found: Vec<(Helper, bool)>,
     store: instructions::Store,
 }
-const INSTRUCTIONS_LOAD_ERROR: &str = "Sidenote could not read your instructions. Your saved text was kept. Press Reload helper status. If it fails again, restart Sidenote.";
+const INSTRUCTIONS_LOAD_ERROR: &str = "Sidenote could not read your instructions. Your saved text was kept. Press Reload agent status. If it fails again, restart Sidenote.";
 
 pub(super) fn instructions_warning(store: &instructions::Store) -> Option<String> {
     store
@@ -214,7 +214,7 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
             notes::test_helper(HELPERS[index], &model),
         )),
         Work::Request(id, mode) => {
-            notes::request(&id, mode).map_err(|_| "Could not queue a meeting summary. Choose an installed helper in Meeting summary settings, then try again.".to_string())?;
+            notes::request(&id, mode).map_err(|_| "Could not queue a meeting summary. Choose an installed agent in Meeting summary settings, then try again.".to_string())?;
             Ok(Completion::Requested(id))
         }
     }
@@ -631,8 +631,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             roles::GROUP.wrap(
                 match part {
                     Part::Identity => "You",
-                    Part::Helpers => "AI helpers",
-                    Part::Advanced => "Helper diagnostics and models",
+                    Part::Helpers => "Models and agents",
+                    Part::Advanced => "Agent diagnostics and models",
                     Part::Summaries => "Meeting summary",
                     Part::Scripts => "Summary engine",
                     Part::Prompts => "Meeting summary instructions",
@@ -658,7 +658,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     }
     if part == Part::Advanced || a.settings.is_none() {
         c = c.child(
-            button("Reload helper status", "ai-notes-reload", p)
+            button("Reload agent status", "ai-notes-reload", p)
                 .self_start()
                 .on_press(|s: &mut State| s.refresh_ai_notes()),
         );
@@ -726,7 +726,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 "notes-options",
                 "Write a meeting summary when a meeting ends",
                 if off {
-                    "Choose an AI helper to write meeting summaries."
+                    "Choose an AI agent to write meeting summaries."
                 } else if settings.engine == "scripts" {
                     "Your configured script writes it when the meeting ends."
                 } else {
@@ -787,7 +787,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             privacy = col().w_full().child(privacy)
             .child(roles::SMALL.wrap("Nothing is sent until you turn on Meeting summary. After that, Sidenote sends a meeting when it ends, if automatic meeting summaries are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
-            .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
+            .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or agent replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
         }
         c = c.child(
@@ -804,8 +804,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     .gap(10.0)
                     .child(
                         TextInput::new(&s.hex.shell.helper_query)
-                            .placeholder("Search helpers")
-                            .label("Search helpers")
+                            .placeholder("Search agents")
+                            .label("Search agents")
                             .height(34.0)
                             .on_edit(|s: &mut State| &mut s.hex.shell.helper_query)
                             .build(k)
@@ -1143,12 +1143,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     }
                 }),
             );
-        c = c.child(super::hex::settings::panel(p).child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your helper.",control,true,p)));
+        c = c.child(super::hex::settings::panel(p).child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your agent.",control,true,p)));
     }
     if part == Part::Prompts {
         c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)
         .child(roles::SECTION.wrap("Meeting summary instructions", p.ink))
-        .child(roles::SMALL.wrap("Change the base instructions for your helper. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
+        .child(roles::SMALL.wrap("Change the base instructions for your agent. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
         .child(editor(s, 0, p)).child(editor(s, 1, p)))
         .child(roles::SMALL.wrap(if s.tasks.teams.teams.is_empty() { "No teams yet. Tasks will not be given a team." } else { "Tasks use the team of the person who owns them." }, p.soft))
         .children(s.config.features.tasks.then(|| button("Set up teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
@@ -1188,7 +1188,7 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
         SETUP_STEPS
     };
     let card = card(p).key("today-ai-notes").mb(16.0)
-        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need a helper" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
+        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need an agent" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
         .child(roles::SMALL.wrap("After you turn on Meeting summary, meeting text goes to Anthropic through your Claude Code account.", p.soft));
     let mut actions = row().flex_wrap().gaps(8.0, 8.0);
     if helper.is_none() {
@@ -1292,9 +1292,9 @@ mod tests {
     }
     #[test]
     fn unreadable_test_answers_use_plain_words() {
-        assert!(!test_error("The helper test returned invalid JSON").contains("JSON"));
+        assert!(!test_error("The agent test returned invalid JSON").contains("JSON"));
         assert_eq!(
-            test_error("The helper was not found on this PC"),
+            test_error("The agent was not found on this PC"),
             "The sample failed. Claude Code did not answer. Open a terminal, type claude, sign in, then press Send a sample."
         );
     }

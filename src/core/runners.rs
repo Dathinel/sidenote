@@ -6,7 +6,7 @@ use std::{
     sync::Mutex,
 };
 static CONFIG: Mutex<()> = Mutex::new(());
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Runner {
     pub name: String,
     pub program: String,
@@ -24,6 +24,7 @@ fn tools_on() -> bool {
 pub enum AskProgress {
     Started { runner: String },
     Tool { name: String },
+    Text { text: String },
     Finished,
     Failed { message: String },
 }

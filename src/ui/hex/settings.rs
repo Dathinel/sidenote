@@ -68,7 +68,7 @@ impl Page {
             Self::Prompts => "Prompt library",
             Self::People => "People",
             Self::Hex => "Hex and dictation",
-            Self::Helpers => "AI helpers",
+            Self::Helpers => "Models and agents",
             Self::Appearance => "Appearance and startup",
             Self::Sync => "Sync",
             Self::Updates => "Updates",
@@ -77,7 +77,7 @@ impl Page {
     fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::Meetings => &["Recording", "Summaries", "Tasks"],
-            Self::Helpers => &["Helpers", "Speech model", "Advanced"],
+            Self::Helpers => &["Agents", "Speech model", "Advanced"],
             _ => &[],
         }
     }
@@ -109,7 +109,7 @@ impl Page {
             Self::Prompts => &icons::PROMPTS,
             Self::People => &icons::PEOPLE,
             Self::Hex => &icons::MIC,
-            Self::Helpers => &icons::BOT,
+            Self::Helpers => &icons::BRAIN,
             Self::Appearance => &icons::PALETTE,
             Self::Sync => &icons::DEVICE,
             Self::Updates => &icons::UPDATES,
@@ -245,6 +245,10 @@ pub(crate) fn pc(p: Palette) -> El {
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
+        "ask-agent-row" => &icons::BOT,
+        "ask-model-row" => &icons::CPU,
+        "ask-meeting-thinking-row" => &icons::TIMER,
+        "ask-chat-thinking-row" => &icons::MESSAGE_SQUARE,
         "meetings.auto_start" => &icons::PHONE_CALL,
         "meetings.record_my_microphone" => &icons::MIC,
         "languages-row" | "meeting-language-mode" => &icons::LANGUAGES,
@@ -546,8 +550,40 @@ fn app_index() -> Vec<Destination> {
         ),
         entry(
             "ai-notes-settings",
-            "AI helpers",
-            "Claude Codex OpenCode AI notes helpers",
+            "Models and agents",
+            "Claude Codex OpenCode AI helpers meeting summary thinking effort",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "ask-agent-row",
+            "Ask agent",
+            "Claude Code Codex OpenCode models and agents",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "ask-model-row",
+            "Ask model",
+            "models and agents model",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "ask-meeting-thinking-row",
+            "Thinking during meetings",
+            "effort low medium high recording",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "ask-chat-thinking-row",
+            "Thinking in chats",
+            "effort low medium high",
             Page::Helpers,
             0,
             false,
@@ -570,8 +606,8 @@ fn app_index() -> Vec<Destination> {
         ),
         entry(
             "helper-advanced",
-            "Model per helper",
-            "AI notes model sample sign in safety rules",
+            "Model per agent",
+            "helper helpers meeting summary model sample sign in safety rules",
             Page::Helpers,
             2,
             false,
@@ -829,7 +865,18 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                 .fill(if active == page { p.sel } else { p.side })
                 .hover(p.chip)
                 .on_press(move |s: &mut State| {
-                    let tab = s.hex.shell.last_tabs.get(page.name()).copied().unwrap_or(0);
+                    let tab = s
+                        .hex
+                        .shell
+                        .last_tabs
+                        .get(page.name())
+                        .or_else(|| {
+                            (page == Page::Helpers)
+                                .then(|| s.hex.shell.last_tabs.get("AI helpers"))
+                                .flatten()
+                        })
+                        .copied()
+                        .unwrap_or(0);
                     navigate(s, page, tab);
                 }),
             );
@@ -1019,7 +1066,9 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .child(feature(s,k,AppFeature::Projects,"Projects","Show Projects in the sidebar.",p)),p),p)),
         (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
         (Page::People, _) => col().key("settings-teams").fill(group_highlight(s,"settings-teams",p)).w_full().child(card("Our team", super::super::teams::section(s,k,p).padding(14.0),p)),
-        (Page::Helpers, 0) => col().w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
+        (Page::Helpers, 0) => col().w_full().child(super::super::ask_settings::section(s,k,p,layer))
+            .child(roles::GROUP.wrap("Meeting summary agent",p.soft).mt(22.0))
+            .child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
             .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)),p)),
         (Page::Helpers, 1) => super::super::models::view(s,p,rune::el()).key("speech-models").fill(highlight(s,"speech-models",p)),
         (Page::Helpers, _) => col().key("helper-advanced").fill(group_highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))
@@ -1135,6 +1184,8 @@ pub fn scene(s: &mut State, name: &str) {
     assert!(super::super::isolated());
     super::super::notes_scene::settings(s, "scripts");
     super::super::models::scene(s, "empty");
+    super::super::scene_agents(s, super::super::ALL_AGENTS);
+    s.refresh_ask_model_input();
     s.ai_notes.name = TextEdit::new("Ravi Menon");
     if let Some(settings) = &mut s.ai_notes.settings {
         settings.your_name = "Ravi Menon".into();
@@ -1176,6 +1227,24 @@ pub fn scene(s: &mut State, name: &str) {
 mod tests {
     use super::*;
     #[test]
+    fn ask_rows_have_distinct_requested_lucide_icons_at_the_shared_stroke() {
+        let rows = [
+            ("ask-agent-row", "lucide-bot"),
+            ("ask-model-row", "lucide-cpu"),
+            ("ask-meeting-thinking-row", "lucide-timer"),
+            ("ask-chat-thinking-row", "lucide-message-square"),
+        ];
+        let mut seen = HashSet::new();
+        seen.insert(Page::Helpers.icon().name);
+        assert_eq!(icons::STROKE_WIDTH, 2.25);
+        for (key, name) in rows {
+            let icon = row_icon(key);
+            assert_eq!(icon.name, name);
+            assert!(seen.insert(icon.name));
+            assert!(icon.body.contains("stroke-width=\"2.25\""));
+        }
+    }
+    #[test]
     fn every_old_hex_setting_has_a_reachable_destination() {
         let fixture: Fixture =
             serde_json::from_str(include_str!("../../../tools/ui-fixtures/hex.json")).unwrap();
@@ -1191,6 +1260,7 @@ mod tests {
         let entries = app_index();
         for (query, key, page, tab) in [
             ("AI notes", "notes-options", Page::Meetings, 1),
+            ("AI helpers", "ai-notes-settings", Page::Helpers, 0),
             ("Vocabulary", "hex-vocabulary", Page::Meetings, 0),
             ("Teams", "settings-teams", Page::People, 0),
         ] {

@@ -115,14 +115,22 @@ fn forward_stdout(stdout: impl Read, sender: mpsc::SyncSender<Stream>) {
     }
     let _ = sender.send(Stream::Done);
 }
-struct Output {
-    final_text: String,
-    plain: String,
-    failed: bool,
-    tool_seen: std::collections::BTreeSet<String>,
+#[derive(Default)]
+pub(super) struct Output {
+    pub(super) final_text: String,
+    pub(super) streamed: String,
+    pub(super) plain: String,
+    pub(super) failed: bool,
+    pub(super) tool_seen: std::collections::BTreeSet<String>,
 }
 impl Output {
-    fn line(
+    fn text(&mut self, text: String, progress: &impl Fn(AskProgress)) {
+        if !text.is_empty() && self.streamed != text {
+            self.streamed = text.clone();
+            progress(AskProgress::Text { text });
+        }
+    }
+    pub(super) fn line(
         &mut self,
         line: &str,
         harness: &str,
@@ -132,6 +140,7 @@ impl Output {
         if !structured {
             self.plain.push_str(line);
             self.plain.push('\n');
+            self.text(self.plain.clone(), progress);
             return;
         }
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -139,9 +148,38 @@ impl Output {
         };
         let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if harness == "claude" {
+            if kind == "stream_event" {
+                if event.pointer("/event/type").and_then(|v| v.as_str()) == Some("message_start") {
+                    self.final_text.clear();
+                }
+                if let Some(text) = event.pointer("/event/delta/text").and_then(|v| v.as_str()) {
+                    self.final_text.push_str(text);
+                    self.text(self.final_text.clone(), progress);
+                }
+                if let Some(text) = event
+                    .pointer("/event/content_block/text")
+                    .and_then(|v| v.as_str())
+                {
+                    self.final_text.push_str(text);
+                    self.text(self.final_text.clone(), progress);
+                }
+            }
+            if kind == "assistant"
+                && let Some(content) = event.pointer("/message/content").and_then(|v| v.as_array())
+            {
+                let text: String = content
+                    .iter()
+                    .filter_map(|b| (b["type"] == "text").then(|| b["text"].as_str()).flatten())
+                    .collect();
+                if !text.is_empty() {
+                    self.final_text = text.clone();
+                    self.text(text, progress);
+                }
+            }
             if kind == "result" {
                 if let Some(text) = event.get("result").and_then(|v| v.as_str()) {
                     self.final_text = text.into();
+                    self.text(text.into(), progress);
                 }
                 self.failed = event
                     .get("is_error")
@@ -173,11 +211,12 @@ impl Output {
             }
             if let Some(item) = event.get("item") {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if kind == "item.completed"
+                if matches!(kind, "item.updated" | "item.completed")
                     && item_type == "agent_message"
                     && let Some(text) = item.get("text").and_then(|v| v.as_str())
                 {
                     self.final_text = text.into();
+                    self.text(text.into(), progress);
                 }
                 if kind == "item.started" || kind == "item.completed" {
                     let name = match item_type {
@@ -209,6 +248,7 @@ impl Output {
                     .or_else(|| event.get("text").and_then(|v| v.as_str()))
             {
                 self.final_text.push_str(text);
+                self.text(self.final_text.clone(), progress);
             }
             if let Some(part) = event.get("part")
                 && let Some(tool) = part.get("tool").and_then(|v| v.as_str())
@@ -348,6 +388,7 @@ pub(super) fn run_runner_with_timeout(
     let reader = std::thread::spawn(move || forward_stdout(stdout, sender));
     let mut output = Output {
         final_text: String::new(),
+        streamed: String::new(),
         plain: String::new(),
         failed: false,
         tool_seen: Default::default(),
@@ -424,6 +465,79 @@ pub(super) fn run_runner_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partial_answers_arrive_before_results_without_duplicating_text_or_leaking_tools() {
+        let mut output = Output {
+            final_text: String::new(),
+            streamed: String::new(),
+            plain: String::new(),
+            failed: false,
+            tool_seen: Default::default(),
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let progress = |event| events.borrow_mut().push(event);
+        for event in [
+            serde_json::json!({"type":"stream_event","event":{"type":"message_start"}}),
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private reasoning"}}}),
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}}),
+            serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"世界"}}}),
+        ] {
+            output.line(&event.to_string(), "claude", true, &progress);
+        }
+        assert_eq!(
+            *events.borrow(),
+            [
+                AskProgress::Text {
+                    text: "Hello ".into()
+                },
+                AskProgress::Text {
+                    text: "Hello 世界".into()
+                }
+            ]
+        );
+        output.line(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello 世界"},{"type":"tool_use","id":"one","name":"Read","input":{"secret":"tool input"}}]}}"#, "claude", true, &progress);
+        output.line(
+            r#"{"type":"result","result":"Hello 世界","is_error":false}"#,
+            "claude",
+            true,
+            &progress,
+        );
+        assert_eq!(output.final_text, "Hello 世界");
+        assert_eq!(events.borrow().len(), 3);
+        assert_eq!(
+            events.borrow()[2],
+            AskProgress::Tool {
+                name: "Read".into()
+            }
+        );
+        output.line(r#"{"type":"item.completed","item":{"id":"two","type":"agent_message","text":"Codex answer"}}"#, "codex", true, &progress);
+        assert_eq!(
+            events.borrow().last(),
+            Some(&AskProgress::Text {
+                text: "Codex answer".into()
+            })
+        );
+        output.final_text.clear();
+        output.line(
+            r#"{"type":"text","part":{"text":"Open"}}"#,
+            "opencode",
+            true,
+            &progress,
+        );
+        output.line(
+            r#"{"type":"text","part":{"text":"Code"}}"#,
+            "opencode",
+            true,
+            &progress,
+        );
+        assert_eq!(output.final_text, "OpenCode");
+        assert_eq!(
+            events.borrow().last(),
+            Some(&AskProgress::Text {
+                text: "OpenCode".into()
+            })
+        );
+    }
     fn capture(bytes: Vec<u8>) -> (usize, bool) {
         let (sender, receiver) = mpsc::sync_channel(8);
         let reader =

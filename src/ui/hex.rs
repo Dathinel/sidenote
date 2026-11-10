@@ -488,7 +488,31 @@ impl State {
                 self.hex_spawn(move |e| Msg::Caps(version, e.capabilities()));
             }
         }
+        let recording = r.as_ref().ok().map(|state| state.recording.is_some());
+        if self.ask_settings.recording && recording == Some(false) {
+            self.ask_settings.last_end_ms = Some(chrono::Local::now().timestamp_millis());
+            self.ask_settings.last_live = self.ask_settings.recording_source.take();
+        }
         self.hex.status = Some(r);
+        if let Some(recording) = recording {
+            if recording {
+                self.ask_settings.recording_source =
+                    Some(sidenote::core::ask_options::LiveSource {
+                        hint: recording_id(self),
+                        start_ms: recording_start(self).map(|(at, _)| at.timestamp_millis()),
+                    });
+            }
+            if recording != self.ask_settings.recording {
+                self.ask_settings.recording = recording;
+                if self.waker.is_some() {
+                    sidenote::core::ask_session::recording(recording);
+                    if recording {
+                        self.ask_settings.warm_signature.clear();
+                        self.warm_ask();
+                    }
+                }
+            }
+        }
         self.live_sync();
         self.hex_refresh_if_due();
         // A minimize can slip past the focus event; this catches it on the next sample.
@@ -1218,8 +1242,8 @@ impl Section {
             Self::Identity => "General",
             Self::PromptLibrary => "Prompt library",
             Self::Sync => "Sync",
-            Self::HelpersAdvanced => "AI helpers advanced",
-            Self::Connect => "AI helpers",
+            Self::HelpersAdvanced => "Models and agents advanced",
+            Self::Connect => "Models and agents",
             Self::Teams => "People",
             Self::AiNotes => "Meeting summary",
             Self::Updates => "Updates",
@@ -1240,11 +1264,11 @@ impl Section {
             Self::Identity => "Your name and setup.",
             Self::PromptLibrary => "Edit Meeting summary instructions.",
             Self::Sync => "This PC and other devices.",
-            Self::HelpersAdvanced => "Helper models and language handling.",
+            Self::HelpersAdvanced => "Agent models and language handling.",
             Self::Connect => "Connect an AI app to your local meeting knowledge.",
             Self::Teams => "Group tasks by the people who own them.",
             Self::AiNotes => {
-                "Choose a helper and the instructions it uses to write meeting summaries."
+                "Choose an agent and the instructions it uses to write meeting summaries."
             }
             Self::Updates => "Keep Sidenote up to date from your update folder.",
             Self::MeetingModels => "Choose spoken languages and download meeting models.",

@@ -5,7 +5,7 @@ use super::store_io;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
     pub show_full_titles: bool,
@@ -13,6 +13,24 @@ pub struct UiPrefs {
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
     pub settings_tabs: std::collections::BTreeMap<String, usize>,
+    #[serde(default = "super::ask_options::meeting_thinking_default")]
+    pub ask_meeting_thinking: super::ask_options::Thinking,
+    pub ask_chat_thinking: super::ask_options::Thinking,
+    pub ask_models: std::collections::BTreeMap<String, String>,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            show_full_titles: false,
+            task_titles_notice_seen: false,
+            sidebar_collapsed: None,
+            settings_tabs: Default::default(),
+            ask_meeting_thinking: super::ask_options::Thinking::Low,
+            ask_chat_thinking: super::ask_options::Thinking::Medium,
+            ask_models: Default::default(),
+        }
+    }
 }
 
 fn path(root: &Path) -> PathBuf {
@@ -40,6 +58,18 @@ mod tests {
         )
         .unwrap();
         assert!(prefs.settings_tabs.is_empty());
+        assert_eq!(
+            prefs.ask_meeting_thinking,
+            super::super::ask_options::Thinking::Low
+        );
+        assert_eq!(
+            prefs.ask_chat_thinking,
+            super::super::ask_options::Thinking::Medium
+        );
+        prefs.ask_chat_thinking = super::super::ask_options::Thinking::High;
+        prefs
+            .ask_models
+            .insert("Codex".into(), "chosen-model".into());
         prefs.settings_tabs.insert("Meetings".into(), 1);
         prefs.settings_tabs.insert("AI helpers".into(), 2);
         let round_trip: UiPrefs =

@@ -255,7 +255,25 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         messages = messages.child(message(s, k, i, m, p));
     }
     if let Some(run) = run {
-        messages = messages.child(progress(run, k, p));
+        if run.text.is_empty() {
+            messages = messages.child(progress(run, k, p));
+        } else {
+            messages = messages.child(
+                message(
+                    s,
+                    k,
+                    s.saved.messages.len(),
+                    &Message {
+                        role: "assistant".into(),
+                        text: run.text.clone(),
+                        ..Default::default()
+                    },
+                    p,
+                )
+                .key("ask-streaming-answer")
+                .role("status"),
+            );
+        }
     }
     let unanswered = run.is_none()
         && error.is_none()
@@ -381,11 +399,18 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
     } else {
         k.glyph.chevron_down
     };
-    let shown = if s.runner.is_some() {
-        short_runner(name)
-    } else {
-        name
-    };
+    let shown = s
+        .ask_settings
+        .models
+        .get(name)
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if s.runner.is_some() {
+                short_runner(name)
+            } else {
+                name
+            }
+        });
     let trigger = pressable(
         row()
             .gap(2.0)
@@ -403,7 +428,15 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
     .role("combobox")
     .label(format!("Model: {name}"))
     .help(if s.runner.is_some() {
-        format!("Model: {shown}. {}.", runner_note(tools))
+        let model = s.ask_model().unwrap_or_else(|| shown.into());
+        let thinking = s
+            .runners
+            .iter()
+            .find(|r| Some(&r.name) == s.runner.as_ref())
+            .filter(|r| !core::ask_options::supports_thinking(r))
+            .map(|_| super::ask_settings::OPENCODE_THINKING)
+            .unwrap_or("");
+        format!("Model: {model}. {}. {thinking}", runner_note(tools))
     } else {
         "Choose the model that answers".to_string()
     })
@@ -417,6 +450,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
     .hover(p.chip)
     .on_press(|s: &mut State| {
         s.runner_open = !s.runner_open;
+        s.ask_settings.thinking_open = false;
         if s.runner_open {
             s.reload_runners();
         }
@@ -439,8 +473,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
                 .description(runner_note(r.tools))
                 .checked(s.runner.as_deref() == Some(r.name.as_str()))
                 .on_select(move |s: &mut State| {
-                    s.runner = Some(chosen.clone());
-                    s.runner_open = false;
+                    s.choose_ask_runner(chosen.clone());
                 }),
         );
     }
@@ -452,6 +485,51 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         );
     }
     menu.build(k, layer).min_w(0.0).shrink()
+}
+
+fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
+    let runner = s
+        .runners
+        .iter()
+        .find(|r| Some(&r.name) == s.runner.as_ref())?;
+    if !core::ask_options::supports_thinking(runner) {
+        return None;
+    }
+    let value = s.ask_thinking();
+    let trigger = pressable(
+        row()
+            .gap(2.0)
+            .items_center()
+            .child(roles::META.wrap(value.label(), p.faint))
+            .child(rune::icon(k.glyph.chevron_down, 12.0).color(p.faint)),
+    )
+    .key("ask-thinking")
+    .role("combobox")
+    .label(format!("Thinking: {}", value.label()))
+    .help("Thinking level for this chat. Low uses less reasoning; High can take longer.")
+    .preserve_focus_on_press(true)
+    .px(6.0)
+    .py(6.0)
+    .radius(999.0)
+    .hover(p.chip)
+    .on_press(|s: &mut State| {
+        s.ask_settings.thinking_open = !s.ask_settings.thinking_open;
+        s.runner_open = false;
+    });
+    let mut menu = Menu::new("ask-thinking-menu")
+        .trigger(trigger)
+        .open(s.ask_settings.thinking_open)
+        .placement(Placement::TopEnd)
+        .min_width(140.0)
+        .on_close(|s: &mut State| s.ask_settings.thinking_open = false);
+    for level in core::ask_options::Thinking::ALL {
+        menu = menu.item(
+            MenuItem::new(level.label())
+                .checked(level == value)
+                .on_select(move |s: &mut State| s.set_ask_thinking(level)),
+        );
+    }
+    Some(menu.build(k, layer).shrink())
 }
 
 /// The room a send or Stop button takes, and how wide the pill is at rest.
@@ -631,6 +709,7 @@ pub fn overlay_with(
             // Esc folds the bar back to rest.
             if e.key == Key::Escape {
                 s.runner_open = false;
+                s.ask_settings.thinking_open = false;
                 tx.blur();
                 return true;
             }
@@ -673,6 +752,7 @@ pub fn overlay_with(
         )
         .child(input)
         .child(model)
+        .children(thinking_choice(s, k, p, layer))
         .child(action(s, p, ready, pending));
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
     pill = if beside_lead {

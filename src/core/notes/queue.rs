@@ -149,9 +149,9 @@ pub(super) fn enqueue_in(
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
-        Failure::Missing => (JobState::HelperMissing, "helper missing"),
-        Failure::TimedOut => (JobState::TimedOut, "helper timed out"),
-        Failure::BadOutput => (JobState::BadOutput, "invalid helper output"),
+        Failure::Missing => (JobState::HelperMissing, "agent missing"),
+        Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
+        Failure::BadOutput => (JobState::BadOutput, "invalid agent output"),
         Failure::Backend { exit } => {
             let delay = match job.attempts {
                 1 => Some(15 * 60_000),
@@ -163,7 +163,7 @@ fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<(
                     next_try_ms: delay.map(|d| now() + d),
                     exit,
                 },
-                "helper backend error",
+                "agent backend error",
             )
         }
     };
@@ -330,7 +330,7 @@ fn process(
     }
     let helper = settings
         .effective_helper()
-        .ok_or_else(|| store_io::invalid("No helper selected"))?;
+        .ok_or_else(|| store_io::invalid("No agent selected"))?;
     if !run.installed(helper) {
         return failure(root, id, job, Failure::Missing);
     }
@@ -573,7 +573,7 @@ fn drain_locked(
                     &id,
                     &mut job,
                     JobState::Queued,
-                    "rechecking helper for new meeting",
+                    "rechecking agent for new meeting",
                 )?;
                 ready.push(id);
             }
@@ -743,7 +743,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
     );
     let helper = settings
         .effective_helper()
-        .ok_or_else(|| store_io::invalid("No helper selected"))?;
+        .ok_or_else(|| store_io::invalid("No agent selected"))?;
     let model = if settings.model.trim().is_empty() {
         helper.default_model()
     } else {
