@@ -417,6 +417,8 @@ foreach ($scene in $settingsScenes) {
         $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
     }
 }
+$shots += ,@('settings-review-sidebar-slash','settings-sidebar-open','1280x800','settings-review-slash.json',@('--at','mark:end'))
+$shots += ,@('settings-review-settings-slash','settings-recording','1280x800','settings-review-slash.json',@('--at','mark:end'))
 $priorAppData = $env:APPDATA
 $priorLocalAppData = $env:LOCALAPPDATA
 $priorState = $env:SIDENOTE_STATE_DIR
