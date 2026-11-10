@@ -1,6 +1,11 @@
 {
   "events": [
     {
+      "t": 0.2,
+      "type": "tap",
+      "key": "team-add"
+    },
+    {
       "t": 0.5,
       "type": "tap",
       "key": "team-name"
@@ -19,6 +24,11 @@
       "t": 3.5,
       "type": "type",
       "text": "Sam Reed"
+    },
+    {
+      "t": 5.2,
+      "type": "tap",
+      "key": "team-advanced"
     },
     {
       "t": 5.5,
