@@ -81,9 +81,10 @@ pub enum Job {
         store: TaskStore,
         by: core::TaskGrouping,
     },
-    Teams {
+    TeamEdit {
         store: TaskStore,
-        teams: core::Teams,
+        original: Option<core::Team>,
+        replacement: Option<core::Team>,
     },
     Redo {
         id: String,
@@ -125,7 +126,7 @@ impl Job {
             | Self::ManualTick { .. }
             | Self::V2 { .. }
             | Self::Grouping { .. }
-            | Self::Teams { .. }
+            | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
             Self::Task {
                 row,
@@ -251,9 +252,19 @@ impl State {
                         teams: None,
                         result: store.save_grouping(by).map_err(|e| SaveError::from(&e)),
                     },
-                    Job::Teams { store, teams } => Completion::Preferences {
-                        result: store.save_teams(&teams).map_err(|e| SaveError::from(&e)),
-                        teams: Some(teams),
+                    Job::TeamEdit {
+                        store,
+                        original,
+                        replacement,
+                    } => match store.edit_team(original.as_ref(), replacement.as_ref()) {
+                        Ok(teams) => Completion::Preferences {
+                            teams: Some(teams),
+                            result: Ok(()),
+                        },
+                        Err(e) => Completion::Preferences {
+                            teams: None,
+                            result: Err(SaveError::from(&e)),
+                        },
                     },
                     Job::Redo { id } => Completion::Redo(
                         core::notes::request(&id, core::notes::Request::RedoTasks)
@@ -351,6 +362,7 @@ impl State {
                     if let Some(teams) = teams {
                         self.tasks.teams = teams;
                         self.tasks.teams_notice = Some("Teams saved".into());
+                        self.people.team_editor = None;
                         self.tasks.team_name = rune::TextEdit::default();
                         self.tasks.team_members = rune::TextEdit::default();
                         self.tasks.team_aliases = rune::TextEdit::default();

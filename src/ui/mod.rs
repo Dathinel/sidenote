@@ -25,6 +25,7 @@ mod more;
 mod nav;
 mod notes_scene;
 mod notes_status;
+mod people;
 mod project;
 mod project_merge;
 mod refresh;
@@ -186,6 +187,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub people: people::PeopleUi,
     pub updates: updates::Updates,
     pub models: models::Models,
     pub config: core::Config,
@@ -379,8 +381,10 @@ impl State {
             ),
         };
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
-        let prefs = core::UiPrefs::load(&store.root);
+        let mut prefs = core::UiPrefs::load(&store.root);
+        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
         let mut s = Self {
+            people,
             updates: updates::Updates::default(),
             models: models::Models::load(&store.root),
             config,
@@ -3057,6 +3061,26 @@ pub fn spec() -> AppSpec<State> {
                 if let Some(id) = s.memory.shown_ids().get(2).cloned() {
                     s.open_record(&id);
                 }
+            }),
+            ("people-our-team", |s| {
+                tasks_v2_teams_scene(s);
+                hex::settings::scene(s, "people-our-team");
+            }),
+            ("people-external", |s| {
+                tasks_v2_teams_scene(s);
+                hex::settings::scene(s, "people-external");
+            }),
+            ("people-import", |s| {
+                tasks_v2_teams_scene(s);
+                hex::settings::scene(s, "people-import");
+            }),
+            ("people-team-editor", |s| {
+                tasks_v2_teams_scene(s);
+                hex::settings::scene(s, "people-team-editor");
+            }),
+            ("people-search", |s| {
+                tasks_v2_teams_scene(s);
+                hex::settings::scene(s, "people-search");
             }),
             ("tasks-v2-edited", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, Some(0))
