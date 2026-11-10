@@ -66,9 +66,11 @@ def check(folder):
             texts = [e.get("text", "") for e in elements]
             assert not any(text in ("Areas", "No active areas yet.", "Show all") for text in texts)
             main = keys["main"]
-            for e in below(elements, main):
-                if "/top-bar/" in e["path"] or "/meeting-" in e["path"]:
-                    assert e["role"] != "icon", e["path"]
+            assert not any(e["role"] == "icon" for e in below(elements, keys["top-bar"]))
+            meeting_rows = [e for e in below(elements, main) if e.get("key", "").startswith("meeting-") and e["key"][8:9].isdigit()]
+            assert meeting_rows
+            for meeting_row in meeting_rows:
+                assert not any(e["role"] == "icon" for e in below(elements, meeting_row)), meeting_row["key"]
             if scene != "sb-home-collapsed":
                 assert any(e["role"] == "icon" for e in below(elements, keys["nav-meetings"]))
 
