@@ -1,0 +1,302 @@
+//! Ask preferences and context. Summary runners never pass through this module.
+use super::{Runner, file_reads, live, runners};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Thinking {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+impl Thinking {
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+pub fn meeting_thinking_default() -> Thinking {
+    Thinking::Low
+}
+pub fn supports_thinking(runner: &Runner) -> bool {
+    matches!(runners::kind(runner), Ok("claude" | "codex"))
+}
+pub fn agent_name(runner: &Runner) -> &'static str {
+    match runners::kind(runner) {
+        Ok("claude") => "Claude Code",
+        Ok("codex") => "Codex",
+        _ => "OpenCode",
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LiveSource {
+    pub hint: Option<String>,
+    pub start_ms: Option<i64>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    pub thinking: Thinking,
+    pub model: Option<String>,
+    pub meeting: bool,
+    pub live: Option<LiveSource>,
+}
+impl Options {
+    pub(super) fn runner(&self, mut runner: Runner) -> Result<Runner, String> {
+        if let Some(model) = &self.model {
+            runner.model = Some(model.clone());
+            if !runner.args.iter().any(|a| a == "--model") {
+                runner
+                    .args
+                    .splice(1..1, ["--model".into(), "{model}".into()]);
+            }
+        }
+        match runners::kind(&runner)? {
+            "claude" => {
+                let mut args = runner.args.into_iter();
+                runner.args = Vec::new();
+                while let Some(arg) = args.next() {
+                    if matches!(arg.as_str(), "--output-format" | "--effort") {
+                        args.next();
+                    } else if arg != "--include-partial-messages" && arg != "--verbose" {
+                        runner.args.push(arg);
+                    }
+                }
+                runner.args.extend([
+                    "--effort".into(),
+                    self.thinking.argument().into(),
+                    "--output-format".into(),
+                    "stream-json".into(),
+                    "--include-partial-messages".into(),
+                    "--verbose".into(),
+                ]);
+            }
+            "codex" => {
+                runner.args.splice(
+                    1..1,
+                    [
+                        "-c".into(),
+                        format!("model_reasoning_effort={}", self.thinking.argument()),
+                    ],
+                );
+            }
+            _ => {}
+        }
+        Ok(runner)
+    }
+    pub(super) fn prompt(&self, prompt: String) -> Result<String, String> {
+        self.prompt_in(prompt, &super::meetings_dir())
+    }
+    fn prompt_in(&self, mut prompt: String, root: &Path) -> Result<String, String> {
+        if self.meeting {
+            prompt.push_str("\nDuring this meeting or its follow-up, answer in at most 5 lines. Lead with the answer. Use the live transcript so far when supplied.\n");
+        }
+        if let Some(source) = &self.live {
+            let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
+            prompt.push_str("\n<live_transcript>\n");
+            if let Some(folder) = folder {
+                match live::read_rolling(&folder, None)
+                    .map_err(|_| "Could not read the live transcript. Try again.")?
+                {
+                    live::Read::Lines(lines, _) => {
+                        for line in lines {
+                            let secs = line.seconds;
+                            prompt.push_str(&format!(
+                                "[{:02}:{:02}:{:02}] {}: {}\n",
+                                secs / 3600,
+                                secs / 60 % 60,
+                                secs % 60,
+                                if line.you { "You" } else { "Them" },
+                                line.text
+                            ));
+                        }
+                    }
+                    _ => {
+                        let path = folder.join("english-transcript.md");
+                        match file_reads::read(&path, live::ROLLING_MAX_BYTES) {
+                            Ok(bytes) => prompt.push_str(&String::from_utf8_lossy(&bytes)),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(_) => {
+                                return Err(
+                                    "Could not read the meeting transcript. Try again.".into()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            prompt.push_str("</live_transcript>\nIf the live transcript is empty, no speech is available yet. Do not infer the current meeting from older meetings.\n");
+        }
+        Ok(prompt)
+    }
+}
+
+pub fn in_meeting(recording: bool, ended_ms: Option<i64>, now_ms: i64) -> bool {
+    recording || ended_ms.is_some_and(|end| (0..=600_000).contains(&now_ms.saturating_sub(end)))
+}
+/// Includes meetings whose summary has not been written yet. Ignores active and future records.
+pub fn recent_meeting(root: &Path, now_ms: i64) -> Option<(i64, LiveSource)> {
+    file_reads::entries(root)
+        .ok()?
+        .iter()
+        .filter_map(|entry| {
+            let folder = entry.path();
+            if !file_reads::directory(&folder) {
+                return None;
+            }
+            let bytes = file_reads::read(&folder.join("manifest.json"), 1024 * 1024).ok()?;
+            let m: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            if matches!(m["status"].as_str(), Some("recording" | "starting")) {
+                return None;
+            }
+            let end = m["ended_at_ms"].as_i64().or_else(|| {
+                let duration = m["duration_ms"]
+                    .as_f64()
+                    .filter(|d| d.is_finite() && *d >= 0.0)?;
+                Some(m["created_at_ms"].as_i64()?.saturating_add(duration as i64))
+            })?;
+            in_meeting(false, Some(end), now_ms).then(|| {
+                (
+                    end,
+                    LiveSource {
+                        hint: Some(entry.file_name().to_string_lossy().into_owned()),
+                        start_ms: m["created_at_ms"].as_i64(),
+                    },
+                )
+            })
+        })
+        .max_by_key(|(end, _)| *end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restart_finds_unsummarised_recent_meeting_and_prompt_reads_latest_transcript() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("ask-context-{}", std::process::id()));
+        let folder = root.join("1000-1");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("manifest.json"),
+            r#"{"status":"transcribing","created_at_ms":1000,"duration_ms":2000}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("transcript.rolling.ndjson"),
+            "{\"source\":\"microphone\",\"start_ms\":42000,\"text\":\"Ship on Friday\"}\n",
+        )
+        .unwrap();
+        let (end, source) = recent_meeting(&root, 4000).unwrap();
+        assert_eq!(end, 3000);
+        let options = Options {
+            meeting: true,
+            live: Some(source),
+            ..Default::default()
+        };
+        let prompt = options.prompt_in("Question".into(), &root).unwrap();
+        assert!(prompt.contains("at most 5 lines"));
+        assert!(prompt.contains("[00:00:42] You: Ship on Friday"));
+        std::fs::write(
+            folder.join("transcript.rolling.ndjson"),
+            "{\"source\":\"system\",\"start_ms\":43000,\"text\":\"Move it to Monday\"}\n",
+        )
+        .unwrap();
+        assert!(
+            options
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("Move it to Monday")
+        );
+        std::fs::remove_file(folder.join("transcript.rolling.ndjson")).unwrap();
+        std::fs::write(
+            folder.join("english-transcript.md"),
+            "[00:00:44] You: Final transcript",
+        )
+        .unwrap();
+        assert!(
+            options
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("Final transcript")
+        );
+        assert!(recent_meeting(&root, 603001).is_none());
+        assert!(
+            !Options::default()
+                .prompt_in("Question".into(), &root)
+                .unwrap()
+                .contains("5 lines")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn meeting_window_includes_ten_minutes_but_not_future_end_times() {
+        assert!(in_meeting(true, None, 0));
+        assert!(in_meeting(false, Some(1000), 1000));
+        assert!(in_meeting(false, Some(1000), 601000));
+        assert!(!in_meeting(false, Some(1000), 601001));
+        assert!(!in_meeting(false, Some(1001), 1000));
+        assert!(!in_meeting(false, None, 1000));
+    }
+    #[test]
+    fn every_ask_level_maps_to_real_flags_without_changing_stored_runners() {
+        let runners: Vec<Runner> =
+            serde_json::from_str(include_str!("../../default-runners.json")).unwrap();
+        for thinking in Thinking::ALL {
+            for original in &runners {
+                let runner = super::super::ask::read_only_runner(original.clone()).unwrap();
+                let before = runner.args.clone();
+                let options = Options {
+                    thinking,
+                    model: Some("chosen-model".into()),
+                    ..Default::default()
+                };
+                let prepared = options.runner(runner).unwrap();
+                runners::validate(&prepared).unwrap();
+                assert_eq!(prepared.model.as_deref(), Some("chosen-model"));
+                match runners::kind(original).unwrap() {
+                    "claude" => {
+                        assert!(
+                            prepared
+                                .args
+                                .windows(2)
+                                .any(|p| p == ["--effort", thinking.argument()])
+                        );
+                        assert!(
+                            prepared
+                                .args
+                                .iter()
+                                .any(|a| a == "--include-partial-messages")
+                        );
+                    }
+                    "codex" => assert!(
+                        prepared
+                            .args
+                            .contains(&format!("model_reasoning_effort={}", thinking.argument()))
+                    ),
+                    _ => assert_eq!(prepared.args, before),
+                }
+                assert!(
+                    !original
+                        .args
+                        .iter()
+                        .any(|a| a == "--effort" || a.starts_with("model_reasoning_effort="))
+                );
+            }
+        }
+    }
+}
