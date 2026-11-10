@@ -19,7 +19,7 @@ def main():
     manifest = json.loads((Path(__file__).parent / "ui-fixtures/settings-legacy-keys.json").read_text())
     trees = list(folder.glob("settings-*-1280-light.json"))
     assert trees, f"No render trees in {folder}"
-    for tree in trees:
+    for tree in folder.glob("settings-*.json"):
         assert not json.loads(tree.read_text(encoding="utf-8-sig"))["warnings"], f"Render warnings in {tree}"
     all_nodes = [node for tree in trees for node in nodes(json.loads(tree.read_text(encoding="utf-8-sig")))]
     keys = {node["key"] for node in all_nodes if isinstance(node.get("key"), str)}

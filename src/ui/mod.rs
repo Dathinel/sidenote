@@ -1601,6 +1601,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     app = app
         .child(if on_hex {
             hex::settings_sidebar(s, &k, p)
+        } else if window_narrow && open {
+            rune::el().w(nav::RAIL).h_full().fill(p.side)
         } else {
             nav::sidebar(s, p, open && !window_narrow, &mut layer)
         })
