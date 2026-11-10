@@ -150,7 +150,7 @@ pub fn resolve_waiting(tasks: &mut [TaskItem]) {
 pub struct Teams {
     pub teams: Vec<Team>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Team {
     pub name: String,
@@ -241,6 +241,40 @@ pub enum TaskV2Edit {
     AddSubtask(String),
 }
 impl TaskStore {
+    pub fn edit_team(
+        &self,
+        original: Option<&Team>,
+        replacement: Option<&Team>,
+    ) -> io::Result<Teams> {
+        let mut teams = self.load_teams()?;
+        if let Some(original) = original {
+            let index = teams
+                .teams
+                .iter()
+                .position(|t| name(&t.name) == name(&original.name))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "This team was removed. Cancel and open it again.",
+                    )
+                })?;
+            if teams.teams[index] != *original {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "This team changed. Cancel and open it again.",
+                ));
+            }
+            if let Some(replacement) = replacement {
+                teams.teams[index] = replacement.clone();
+            } else {
+                teams.teams.remove(index);
+            }
+        } else if let Some(replacement) = replacement {
+            teams.teams.push(replacement.clone());
+        }
+        self.save_teams(&teams)?;
+        Ok(teams)
+    }
     pub fn load_teams(&self) -> io::Result<Teams> {
         let path = self.root.join("teams.json");
         match super::store_io::read_bounded(&path, super::file_reads::JOURNAL_MAX) {
@@ -931,6 +965,41 @@ mod tests {
         assert_eq!(
             status.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(),
             ["Waiting on", "In review"]
+        );
+    }
+    #[test]
+    fn team_editor_renames_by_original_identity_and_refuses_stale_or_duplicate_edits() {
+        let f = Fixture::new(json!([]));
+        let store = f.store();
+        let original = Team {
+            name: "Design".into(),
+            members: vec!["Alex Chen".into()],
+            ..Default::default()
+        };
+        let other = Team {
+            name: "Delivery".into(),
+            ..Default::default()
+        };
+        store
+            .save_teams(&Teams {
+                teams: vec![original.clone(), other.clone()],
+            })
+            .unwrap();
+        let renamed = Team {
+            name: "Product".into(),
+            ..original.clone()
+        };
+        let saved = store.edit_team(Some(&original), Some(&renamed)).unwrap();
+        assert_eq!(saved.teams, [renamed.clone(), other.clone()]);
+        assert!(store.edit_team(Some(&original), None).is_err());
+        assert!(store.edit_team(Some(&renamed), Some(&other)).is_err());
+        assert_eq!(
+            store.load_teams().unwrap().teams,
+            [renamed.clone(), other.clone()]
+        );
+        assert_eq!(
+            store.edit_team(Some(&renamed), None).unwrap().teams,
+            [other]
         );
     }
     #[test]

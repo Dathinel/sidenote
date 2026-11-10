@@ -76,6 +76,7 @@ impl Page {
     }
     fn tabs(self) -> &'static [&'static str] {
         match self {
+            Self::People => &["Our team", "External", "Import"],
             Self::Meetings => &["Recording", "Summaries", "Tasks"],
             Self::Helpers => &["Agents", "Speech model", "Advanced"],
             _ => &[],
@@ -135,13 +136,29 @@ fn current(section: Section) -> (Page, usize) {
     }
 }
 
+fn active(s: &State) -> (Page, usize) {
+    let (page, tab) = current(s.hex.section);
+    (
+        page,
+        if page == Page::People {
+            s.people.tab
+        } else {
+            tab
+        },
+    )
+}
+
 fn navigate(s: &mut State, page: Page, tab: usize) {
     let tab = tab.min(page.tabs().len().saturating_sub(1));
     s.hex.section = page.section(tab);
+    if page == Page::People {
+        s.people.tab = tab;
+    }
     s.hex.select_open = None;
     s.hex.filter = TextEdit::default();
     s.hex.shell.last_tabs.insert(page.name().into(), tab);
-    if rune::tooling::headless_run().is_none() {
+    if rune::tooling::headless_run().is_none() || (page == Page::People && super::super::isolated())
+    {
         let mut prefs = UiPrefs::load(&s.store.root);
         prefs.settings_tabs = s.hex.shell.last_tabs.clone();
         let _ = prefs.save(&s.store.root);
@@ -172,10 +189,12 @@ fn back(s: &mut State) {
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
     if s.on_hex() {
-        let (page, tab) = current(s.hex.section);
+        let (page, tab) = active(s);
         if s.hex.shell.last_tabs.get(page.name()) != Some(&tab) {
             s.hex.shell.last_tabs.insert(page.name().into(), tab);
-            if rune::tooling::headless_run().is_none() {
+            if rune::tooling::headless_run().is_none()
+                || (page == Page::People && super::super::isolated())
+            {
                 let mut prefs = UiPrefs::load(&s.store.root);
                 prefs.settings_tabs = s.hex.shell.last_tabs.clone();
                 let _ = prefs.save(&s.store.root);
@@ -324,7 +343,7 @@ pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
         .child(panel(p).child(body.w_full()))
 }
 fn advanced(s: &State, body: El, p: Palette) -> El {
-    let page = current(s.hex.section).0.name();
+    let page = active(s).0.name();
     let open = s.hex.shell.advanced.contains(page) || s.hex.section == Section::Advanced;
     let mut out = col().w_full().mt(18.0).child(
         crate::ui::cards::fold_control("Advanced", "settings-advanced", open, p).on_press(
@@ -491,6 +510,30 @@ fn app_index() -> Vec<Destination> {
             "Teams people members aliases",
             Page::People,
             0,
+            false,
+        ),
+        entry(
+            "people-roster",
+            "Our team",
+            "People person roster names",
+            Page::People,
+            0,
+            false,
+        ),
+        entry(
+            "people-roster",
+            "External",
+            "People external company",
+            Page::People,
+            1,
+            false,
+        ),
+        entry(
+            "people-import",
+            "Import people",
+            "People import contacts",
+            Page::People,
+            2,
             false,
         ),
         entry(
@@ -787,7 +830,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
             );
         }
     } else {
-        let (active, _) = current(s.hex.section);
+        let (active, _) = active(s);
         for (i, page) in Page::ALL.into_iter().enumerate() {
             if i == 0 || i == 4 {
                 list = list.child(
@@ -858,7 +901,7 @@ fn path(page: Page, tab: usize) -> String {
     )
 }
 fn tab_bar(s: &State, p: Palette) -> El {
-    let (page, active) = current(s.hex.section);
+    let (page, active) = active(s);
     let mut tabs = row()
         .key("settings-tabs")
         .role("tablist")
@@ -1026,7 +1069,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .child(feature(s,k,AppFeature::Tasks,"Tasks","Show Tasks in the sidebar.",p))
                 .child(feature(s,k,AppFeature::Projects,"Projects","Show Projects in the sidebar.",p)),p),p)),
         (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
-        (Page::People, _) => col().key("settings-teams").fill(group_highlight(s,"settings-teams",p)).w_full().child(card("Our team", super::super::teams::section(s,k,p).padding(14.0),p)),
+        (Page::People, _) => super::super::people::section(s,k,p,tab),
         (Page::Helpers, 0) => col().w_full().child(super::super::ask_settings::section(s,k,p,layer))
             .child(roles::GROUP.wrap("Meeting summary agent",p.soft).mt(22.0))
             .child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
@@ -1047,7 +1090,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
     }
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
-    let (page, tab) = current(s.hex.section);
+    let (page, tab) = active(s);
     let mut doc = col()
         .key("hex-top")
         .w_full()
@@ -1117,6 +1160,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape {
+        if s.people.team_editor.is_some() && s.hex.section == Section::Teams {
+            super::super::teams::cancel(s);
+            tx.blur();
+            return true;
+        }
         if s.hex.select_open.take().is_some() {
         } else if !s.hex.filter.text.is_empty() {
             s.hex.filter = TextEdit::default();
@@ -1128,7 +1176,7 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if e.key == Key::Tab && e.mods.ctrl {
-        let (page, tab) = current(s.hex.section);
+        let (page, tab) = active(s);
         if !page.tabs().is_empty() {
             let delta = if e.mods.shift { -1 } else { 1 };
             let next = (tab as isize + delta).rem_euclid(page.tabs().len() as isize) as usize;
@@ -1159,6 +1207,9 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-tasks" => (Page::Meetings, 2),
         "settings-prompts" => (Page::Prompts, 0),
         "settings-people" => (Page::People, 0),
+        "people-our-team" | "people-team-editor" | "people-search" => (Page::People, 0),
+        "people-external" => (Page::People, 1),
+        "people-import" => (Page::People, 2),
         "settings-hex" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
         "settings-speech" => (Page::Helpers, 1),
@@ -1173,6 +1224,14 @@ pub fn scene(s: &mut State, name: &str) {
         super::super::updates::settings_fixture(s);
     }
     navigate(s, page, tab);
+    if name == "people-team-editor"
+        && let Some(team) = s.tasks.teams.teams.first().cloned()
+    {
+        super::super::teams::open(s, Some(team));
+    }
+    if name == "people-search" {
+        s.people.search = TextEdit::new("Alex");
+    }
     if name.ends_with("-expanded") {
         s.hex.shell.advanced.insert(page.name());
         s.ai_notes.model_open = true;

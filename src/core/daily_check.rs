@@ -921,7 +921,19 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     if meetings.is_empty() {
         return Err(invalid("No summarised meetings could be read"));
     }
-    let (memory_file, memory) = MemoryStore::default().snapshot()?;
+    let (memory_file, mut memory) = MemoryStore::default().snapshot()?;
+    let comments: Vec<_> = memory_file
+        .proposals
+        .iter()
+        .filter(|p| p.status == memory::ProposalStatus::Pending && p.comment.is_some())
+        .map(|p| serde_json::json!({"proposal":p.proposal.text,"owner_comment":p.comment}))
+        .collect();
+    if !comments.is_empty() {
+        memory.push_str(&format!(
+            "\nOwner comments on pending reviews, not confirmed facts:\n{}",
+            serde_json::to_string(&comments)?
+        ));
+    }
     let memory_records = memory_file.records;
     let memory_dir = root.join("local/memory");
     fs::create_dir_all(&memory_dir)?;

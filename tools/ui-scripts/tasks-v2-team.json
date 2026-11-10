@@ -1,6 +1,11 @@
 {
   "events": [
     {
+      "t": 0.2,
+      "type": "tap",
+      "key": "team-add"
+    },
+    {
       "t": 0.5,
       "type": "tap",
       "key": "team-name"
@@ -13,12 +18,12 @@
     {
       "t": 3,
       "type": "tap",
-      "key": "team-members"
+      "key": "team-member-morgan lee"
     },
     {
-      "t": 3.5,
-      "type": "type",
-      "text": "Sam Reed"
+      "t": 5.2,
+      "type": "tap",
+      "key": "team-advanced"
     },
     {
       "t": 5.5,
@@ -28,7 +33,7 @@
     {
       "t": 6,
       "type": "type",
-      "text": "Sam R = Sam Reed"
+      "text": "M Lee = Morgan Lee"
     },
     {
       "t": 9,
