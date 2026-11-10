@@ -185,7 +185,7 @@ impl State {
 /// The sidebar's width including its divider, for pages that size themselves from the window.
 pub fn width(s: &State) -> f32 {
     if s.narrow.get() || !s.sidebar_open.get() {
-        if s.hex_recording() { RAIL + 1.0 } else { 0.0 }
+        RAIL + 1.0
     } else {
         WIDE + 1.0
     }
@@ -414,9 +414,6 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
 /// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
 /// memory proposals to review, and high findings of the daily check in the Diary.
 pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
-    if !wide && !s.hex_recording() {
-        return el().w(0.0).h_full();
-    }
     let (places, peers) = places(s, p);
 
     let mut header = row().w_full().h(52.0).gap(8.0).items_center().child(logo());
@@ -425,15 +422,6 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             .px(6.0)
             .child(roles::TITLE.wrap("Sidenote", p.ink).grow(1.0))
             .child(toggle(s, p))
-            .child(
-                pressable(super::icons::draw(&super::icons::SEARCH, 16.0, p.soft))
-                    .key("nav-search")
-                    .label("Search (Ctrl+K)")
-                    .padding(5.0)
-                    .radius(6.0)
-                    .hover(p.chip)
-                    .on_press(|s: &mut State| s.toggle_finder()),
-            )
     } else {
         col()
             .w_full()
@@ -445,7 +433,26 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             .child(toggle(s, p))
     };
 
-    let mut top = col().w_full().gap(2.0);
+    let search = pressable(
+        row()
+            .w_full()
+            .h(34.0)
+            .gap(8.0)
+            .items_center()
+            .px(10.0)
+            .child(super::icons::draw(&super::icons::SEARCH, 16.0, p.soft))
+            .children(wide.then(|| roles::CONTROL.line("Search", p.soft).grow(1.0)))
+            .children(wide.then(|| roles::META.line("/", p.faint))),
+    )
+    .key("nav-search")
+    .label("Search (Ctrl+K)")
+    .help("Search (Ctrl+K)")
+    .radius(7.0)
+    .fill(p.card)
+    .border(1.0, p.line)
+    .hover(p.chip)
+    .on_press(|s: &mut State| s.toggle_finder());
+    let mut top = col().w_full().gap(2.0).child(search.mb(10.0));
     for place in places {
         let icon = place.icon(p);
         top = top.child(if wide {
