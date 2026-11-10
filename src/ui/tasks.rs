@@ -368,6 +368,7 @@ impl State {
         if view == View::Tasks && !self.config.features.tasks {
             return;
         }
+        self.annotations.open = false;
         self.view = view;
         self.tasks.close_menus();
         if view == View::Tasks {

@@ -25,6 +25,7 @@ pub const COLLAPSE_AT: f32 = 820.0;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Meetings,
+    Annotations,
     Tasks,
     Memory,
     Check,
@@ -60,7 +61,9 @@ pub struct NavCache {
 
 impl State {
     pub fn page(&self) -> Page {
-        if self.view == View::Tasks {
+        if self.annotations.open {
+            Page::Annotations
+        } else if self.view == View::Tasks {
             Page::Tasks
         } else if self.on_memory() {
             Page::Memory
@@ -337,6 +340,15 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
         flag: None,
         press: |s| s.go_meetings(),
     }];
+    places.push(Place {
+        key: "nav-annotations",
+        name: "Annotations",
+        help: "Annotations".into(),
+        active: page == Page::Annotations,
+        icon: |c, _| super::icons::draw(&super::icons::ANNOTATIONS, 18.0, c),
+        flag: None,
+        press: |s| s.open_annotations(),
+    });
     if features.tasks {
         places.push(Place {
             key: "view-tasks",
