@@ -27,6 +27,9 @@ impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             show_full_titles: false,
+            tasks_mine: false,
+            tasks_include_unassigned: false,
+            tasks_done: Default::default(),
             task_titles_notice_seen: false,
             sidebar_collapsed: None,
             settings_tabs: Default::default(),
