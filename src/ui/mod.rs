@@ -187,6 +187,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub meeting_ui: meeting::ReadingUi,
     pub people: people::PeopleUi,
     pub updates: updates::Updates,
     pub models: models::Models,
@@ -384,6 +385,7 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
         let mut s = Self {
+            meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
             updates: updates::Updates::default(),
             models: models::Models::load(&store.root),
@@ -720,6 +722,9 @@ impl State {
     /// Where a transcript line sits below the top of the panel's scroll area when a jump lands:
     /// about the middle of what the panel's search row and footer leave visible.
     fn panel_offset(&self) -> f32 {
+        if !self.meeting_ui.tabs {
+            return ((meeting::reading::sheet_height(self) - 100.0) / 2.0).max(24.0);
+        }
         ((self.viewport_h.get() - 190.0) / 2.0).max(60.0)
     }
 
@@ -787,7 +792,12 @@ impl State {
         let Some(origin) = self.back.take() else {
             return;
         };
-        tx.scroll_key_to(origin, self.jump_offset());
+        if !self.meeting_ui.tabs {
+            self.transcript_open = false;
+            tx.scroll_key_to(meeting::reading::return_key(&origin), self.jump_offset());
+        } else {
+            tx.scroll_key_to(origin, self.jump_offset());
+        }
     }
 
     /// Reads the runner list again and looks for each program on PATH.
@@ -1357,6 +1367,11 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     } else if s.on_check() || s.on_memory() || s.on_hex() {
         // A pressed button keeps focus; only a text box counts as typing on these pages.
         s.check.typing() || s.memory.typing() || s.hex.typing() || s.search.focused
+    } else if s.selected.is_some() {
+        s.question.focused
+            || s.transcript_filter.focused
+            || s.transcript_jump.focused
+            || s.project_input.focused
     } else {
         tx.focused().is_some()
     };
@@ -1476,16 +1491,32 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
         );
     }
     if s.view == tasks::View::Meetings && s.selected.is_some() {
-        left = left.child(
-            pressable(roles::CONTROL.icon_label("\u{2039}  All meetings", p.soft))
-                .key("all-meetings")
-                .label("All meetings (Escape)")
-                .px(10.0)
-                .py(4.0)
-                .radius(8.0)
-                .hover(p.chip)
+        if !s.meeting_ui.tabs {
+            let title = s.current().map(|m| m.title.as_str()).unwrap_or_default();
+            left = left.child(
+                pressable(
+                    roles::CONTROL
+                        .line(format!("Meetings / {title}"), p.soft)
+                        .grow(1.0),
+                )
+                .key("meeting-breadcrumb")
+                .label(format!("Meetings / {title}"))
+                .min_w(0.0)
+                .grow(1.0)
                 .on_press(|s: &mut State| s.go_home()),
-        );
+            );
+        } else {
+            left = left.child(
+                pressable(roles::CONTROL.icon_label("\u{2039}  All meetings", p.soft))
+                    .key("all-meetings")
+                    .label("All meetings (Escape)")
+                    .px(10.0)
+                    .py(4.0)
+                    .radius(8.0)
+                    .hover(p.chip)
+                    .on_press(|s: &mut State| s.go_home()),
+            );
+        }
     }
     if s.on_memory() && s.memory.browse {
         left = left.child(
@@ -1504,7 +1535,7 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
         .items_center()
         .justify_between()
         .fill(p.bg)
-        .child(left)
+        .child(left.grow(1.0))
         .child(nav::actions(s, p, narrow))
 }
 
@@ -2406,6 +2437,12 @@ pub fn spec() -> AppSpec<State> {
             // The meeting page with each tab, the transcript panel with a search hit, and the
             // "..." menu. All read the invented meetings in tools/ui-fixtures/screens.
             ("screens-summary", scene_screens),
+            ("meeting-reading-review", |s| {
+                scene_screens(s);
+                s.refresh_areas();
+                area_scene::wait(s);
+                sync_scene::settle(s);
+            }),
             ("screens-notes", |s| {
                 scene_screens(s);
                 s.meeting_tab = meeting::Tab::Notes;

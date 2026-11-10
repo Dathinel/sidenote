@@ -116,6 +116,14 @@ pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
                     }),
             );
         }
+        if m.meeting.is_some() {
+            menu = menu
+                .separator()
+                .item(MenuItem::new("All meetings").on_select(|s: &mut State| {
+                    s.memory.meeting = None;
+                    s.memory.filters_open = false;
+                }));
+        }
     }
     row()
         .w_full()

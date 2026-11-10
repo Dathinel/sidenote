@@ -1,9 +1,5 @@
-//! One meeting as a reading column, with the Ask bar floating at the bottom.
-//!
-//! Under the title and facts sits a row of tabs: Summary, Your notes (only when `notes.md`
-//! exists) and Transcript. Summary and Your notes swap the column. The transcript is a
-//! searchable panel beside the column in a wide window and takes the whole page in a narrow
-//! one. The "..." menu at the end of the row copies or exports this meeting.
+//! Finished meetings default to Reading, with an independent action rail and transcript sheet.
+//! The previous tabbed document remains available through the layout menu.
 use super::{
     State, ask,
     list::text_title,
@@ -19,6 +15,32 @@ use rune::{El, Key, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::{Meeting, Point};
 use std::ops::Range;
+pub(super) mod reading;
+
+pub struct ReadingUi {
+    pub custom: bool,
+    pub tabs: bool,
+    pub template_open: bool,
+    pub templates: std::collections::BTreeMap<String, String>,
+    pub time_open: bool,
+}
+impl ReadingUi {
+    pub fn new(root: &std::path::Path, prefs: &sidenote::core::UiPrefs) -> Self {
+        let custom = sidenote::core::agent_instructions::load(root)
+            .ok()
+            .is_some_and(|s| {
+                s.get(sidenote::core::agent_instructions::Agent::Notes)
+                    .is_some()
+            });
+        Self {
+            custom,
+            tabs: prefs.meeting_tabs,
+            template_open: false,
+            templates: prefs.meeting_summary_templates.clone(),
+            time_open: false,
+        }
+    }
+}
 
 /// The main column's two tabs. The transcript has its own switch, `State::transcript_open`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -157,12 +179,15 @@ impl State {
     /// True when the transcript would take the whole page, because there is no room for it
     /// beside the summary.
     pub fn transcript_covers(&self) -> bool {
-        split_geometry(self, self.narrow.get(), true).2
+        self.meeting_ui.tabs && split_geometry(self, self.narrow.get(), true).2
     }
 
     /// Shows or hides the transcript, when this meeting has one.
     pub fn toggle_transcript(&mut self) {
-        if self.current().is_some_and(|m| !m.lines.is_empty()) {
+        if self
+            .current()
+            .is_some_and(|m| !self.meeting_ui.tabs || !m.lines.is_empty())
+        {
             self.transcript_open = !self.transcript_open;
         }
     }
@@ -291,7 +316,7 @@ fn tab_row(s: &State, k: &Kit, m: &Meeting, narrow: bool, p: Palette, layer: &mu
         tabs = tabs.child(
             tab_button(
                 "tab-notes",
-                "Typed notes",
+                "Your notes",
                 None,
                 tab == Tab::Notes && !covers,
                 false,
@@ -383,6 +408,7 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     let has_time = m.timed();
     let mut out = col().w_full().px(6.0).pb(16.0);
     let mut shown = 0;
+    let mut previous_speaker = None;
     for (i, line) in lines.iter().enumerate() {
         if !filter.is_empty()
             && !format!("{} {}", line.who, line.text)
@@ -423,6 +449,38 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
             .selectable(true)
             .w_full()
             .min_w(0.0);
+        if !s.meeting_ui.tabs {
+            let mut words = col().grow(1.0).min_w(0.0).gap(3.0);
+            if !line.who.is_empty() && previous_speaker != Some(line.who.as_str()) {
+                words = words.child(roles::GROUP.wrap(&line.who, speaker_ink(m, &line.who, p)));
+            }
+            previous_speaker = Some(line.who.as_str());
+            if s.transcript_original && !line.language.is_empty() {
+                words = words.child(roles::META.wrap(&line.language, p.faint));
+            }
+            let mut entry = row()
+                .key(format!("line-{i}"))
+                .w_full()
+                .gap(12.0)
+                .padding(10.0)
+                .items_start()
+                .fill(if hit {
+                    p.hit
+                } else if near {
+                    p.chip
+                } else {
+                    p.card
+                });
+            if show_time {
+                entry = entry.child(
+                    roles::META
+                        .line(super::widgets::recording_time(&line.at), p.faint)
+                        .w(48.0),
+                );
+            }
+            out = out.child(entry.child(words.child(body)));
+            continue;
+        }
         let mut item = col()
             .key(format!("line-{i}"))
             .w_full()
@@ -453,7 +511,14 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     if shown == 0 {
         out = out.child(
             roles::SMALL
-                .wrap("No transcript lines match.", p.soft)
+                .wrap(
+                    if lines.is_empty() {
+                        "No transcript for this meeting."
+                    } else {
+                        "No transcript lines match."
+                    },
+                    p.soft,
+                )
                 .px(10.0)
                 .py(8.0),
         );
@@ -504,7 +569,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
             }),
         );
     }
-    if m.timed() {
+    if m.timed() && (s.meeting_ui.tabs || s.meeting_ui.time_open) {
         tools = tools.child(
             TextInput::new(&s.transcript_jump)
                 .plain()
@@ -526,6 +591,20 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
                 )
                 .radius(10.0)
                 .fill(p.bg),
+        );
+    }
+    if m.timed() && !s.meeting_ui.tabs {
+        tools = tools.child(
+            quiet_button(
+                if s.meeting_ui.time_open {
+                    "Hide time"
+                } else {
+                    "Go to time"
+                },
+                "transcript-time-toggle",
+                p,
+            )
+            .on_press(|s: &mut State| s.meeting_ui.time_open = !s.meeting_ui.time_open),
         );
     }
     let (lines, shown) = transcript_lines(s, m, p);
@@ -562,7 +641,21 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         .fill(p.card);
     // Beside the summary the panel has its own title and close button. Covering the page it is
     // a tab, and the page's tab row above it does that work.
-    if overlay {
+    if !s.meeting_ui.tabs {
+        frame = frame.child(
+            row()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .px(14.0)
+                .py(8.0)
+                .child(roles::NAME.wrap("Transcript", p.ink))
+                .child(
+                    quiet_button("Minimise", "transcript-minimise", p)
+                        .on_press(|s: &mut State| s.transcript_open = false),
+                ),
+        );
+    } else if overlay {
         frame = frame.child(el().h(8.0));
     } else {
         frame = frame.child(panel_top(
@@ -581,7 +674,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         .child(foot);
     // Covering the page, the floating Ask bar sits over the panel's bottom edge. Keep the foot
     // above it.
-    if overlay {
+    if overlay && s.meeting_ui.tabs {
         frame = frame.child(el().h(s.overlay_h.get()));
     }
     frame
@@ -758,6 +851,9 @@ fn document(
 }
 
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+    if !s.meeting_ui.tabs {
+        return reading::pane(s, k, p, narrow, layer);
+    }
     let mut pane = col()
         .key("meeting-pane")
         .grow(1.0)

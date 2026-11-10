@@ -146,7 +146,12 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
     let caption = if scope == "row" {
         roles::CONTROL.wrap("More", p.soft)
     } else {
-        label("\u{2026}", 18.0, 700.0, p.soft)
+        label(
+            "\u{2026}",
+            if scope == "meeting" { 16.0 } else { 18.0 },
+            700.0,
+            p.soft,
+        )
     };
     let trigger = pressable(caption.px(8.0).pb(3.0))
         .key(format!("{key}-button"))
@@ -204,6 +209,9 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
                     .description("Summary and your notes, no transcript")
                     .on_select_tx(move |s: &mut State, tx| s.export_meeting(&export_id, tx)),
             );
+        if scope == "meeting" {
+            menu = super::meeting::reading::menu_items(s, m, menu);
+        }
     }
     menu.build(k, layer)
 }

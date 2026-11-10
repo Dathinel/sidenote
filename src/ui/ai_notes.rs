@@ -383,6 +383,9 @@ impl State {
         entry: Option<instructions::Entry>,
         reset: bool,
     ) {
+        if index == 0 {
+            self.meeting_ui.custom = entry.is_some();
+        }
         self.ai_notes.editors[index].loaded(agent(index), entry, reset);
     }
     fn notes_save_editor(&mut self, index: usize) {
