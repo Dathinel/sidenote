@@ -1141,12 +1141,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
 pub fn setup_visible(s: &State) -> bool {
     s.view == super::tasks::View::Meetings
         && s.selected.is_none()
-        && !s.on_hex()
+        && (!s.on_hex() || s.hex.section == super::hex::Section::Identity)
         && !s.on_memory()
         && !s.on_check()
         && !s.on_live()
-        && s.filter == super::nav::Filter::All
-        && s.search.text.trim().is_empty()
+        && (s.on_hex() || s.filter == super::nav::Filter::All)
+        && (s.on_hex() || s.search.text.trim().is_empty())
         && s.ai_notes.settings.as_ref().is_some_and(|settings| {
             settings.engine != "scripts"
                 && (settings.engine != "app" || settings.effective_helper().is_none())
