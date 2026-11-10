@@ -448,8 +448,8 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             .children(wide.then(|| roles::META.line("/", p.faint))),
     )
     .key("nav-search")
-    .label("Search (Ctrl+K)")
-    .help("Search (Ctrl+K)")
+    .label("Search (/ or Ctrl+K)")
+    .help("Search (/ or Ctrl+K)")
     .radius(7.0)
     .fill(p.card)
     .border(1.0, p.line)
@@ -478,12 +478,15 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
         .child(profile(s, p, wide, layer));
     if !wide && s.hex_recording() {
         footer = footer.child(
-            pressable(super::icons::draw(&super::icons::MIC, 18.0, p.warn))
-                .key("rail-recording")
-                .label("Recording. Open live meeting")
-                .help("Recording")
-                .padding(8.0)
-                .on_press(|s: &mut State| s.hex_line_press()),
+            pressable(col().w(40.0).h(36.0).center().child(super::icons::draw(
+                &super::icons::MIC,
+                18.0,
+                p.warn,
+            )))
+            .key("rail-recording")
+            .label("Recording. Open live meeting")
+            .help("Recording")
+            .on_press(|s: &mut State| s.hex_line_press()),
         );
     }
 
@@ -664,6 +667,21 @@ fn logo() -> El {
     );
     mark
 }
+pub(super) fn profile_avatar(name: &str, p: Palette) -> El {
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('Y')
+        .to_uppercase()
+        .to_string();
+    col()
+        .size(28.0, 28.0)
+        .radius(14.0)
+        .fill(p.chip)
+        .center()
+        .child(roles::NAME.line(initial, p.ink))
+}
+
 fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
     let name = s
         .ai_notes
@@ -672,12 +690,6 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
         .map(|settings| settings.your_name.trim())
         .filter(|name| !name.is_empty())
         .unwrap_or("You");
-    let initial = name
-        .chars()
-        .next()
-        .unwrap_or('Y')
-        .to_uppercase()
-        .to_string();
     let (_, status) = hex::short_status(s, p);
     let helper_issue = s
         .ai_notes
@@ -700,12 +712,7 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             "Ready" | "Recording" | "Checking" | "Dictating"
         ) && !s.hex_recording();
     let avatar = || {
-        let mut avatar = col()
-            .size(28.0, 28.0)
-            .radius(14.0)
-            .fill(p.chip)
-            .center()
-            .child(roles::NAME.wrap(&initial, p.ink));
+        let mut avatar = profile_avatar(name, p);
         if attention {
             avatar = avatar.child(dot(7.0, p.warn).absolute(21.0, 0.0));
         }

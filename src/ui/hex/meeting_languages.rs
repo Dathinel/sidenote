@@ -68,9 +68,15 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
             s.hex.select_open = None;
         })
         .build(k, layer);
-    let mut body=col().w_full().gap(6.0).py(10.0)
-        .child(roles::NAME.wrap("Language handling", p.ink)).child(control)
-        .child(roles::META.wrap("Experimental: English and Hindi only. English only adds no detector or Hindi model. Always mixed uses the mixed Hindi-English model for every part.", p.soft).w_full().min_w(0.0));
+    let mut body = super::settings::setting_row(
+        s,
+        "meeting-language-mode",
+        "Language handling",
+        "Experimental English and Hindi routing; forced modes use the selected language for every part.",
+        control,
+        false,
+        p,
+    );
     if !cfg!(feature = "asr-runtime") {
         body = body.child(roles::META.line(
             "This build keeps the English reading when local inference is unavailable.",

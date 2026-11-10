@@ -459,15 +459,7 @@ fn count_text(count: usize) -> String {
     }
 }
 fn card(p: Palette) -> El {
-    col()
-        .w_full()
-        .min_w(0.0)
-        .gap(10.0)
-        .px(16.0)
-        .py(16.0)
-        .radius(10.0)
-        .border(1.0, p.line)
-        .fill(p.card)
+    super::hex::settings::panel(p).padding(15.0).gap(10.0)
 }
 fn edit_time(time: Option<&str>) -> String {
     time.and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
@@ -627,7 +619,11 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     let a = &s.ai_notes;
     let mut c = col()
         .key("ai-notes-settings")
-        .fill(super::hex::settings::highlight(s, "ai-notes-settings", p))
+        .fill(super::hex::settings::group_highlight(
+            s,
+            "ai-notes-settings",
+            p,
+        ))
         .w_full()
         .gap(if part == Part::Helpers { 10.0 } else { 16.0 })
         .mt(12.0)
@@ -723,7 +719,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     let off = settings.engine != "scripts"
         && (settings.engine != "app" || settings.effective_helper().is_none());
     if part == Part::Summaries {
-        c = c
+        let summary = col()
+            .w_full()
             .child(super::hex::settings::setting_row(
                 s,
                 "notes-options",
@@ -753,6 +750,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 true,
                 p,
             ))
+            .child(super::widgets::hairline(p))
             .child(super::hex::settings::setting_row(
                 s,
                 "summary-template",
@@ -767,31 +765,35 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 false,
                 p,
             ));
-        let mut privacy = card(p)
-            .key("notes-privacy")
-            .child(roles::TITLE.wrap("What is sent", p.ink))
-            .child(roles::SMALL.wrap(PRIVACY, p.ink))
-            .child(
-                button(
-                    if a.privacy_open {
-                        "Hide details"
-                    } else {
-                        "Details"
-                    },
-                    "notes-privacy-details",
-                    p,
-                )
-                .self_start()
-                .on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open),
-            );
+        let mut privacy = super::hex::settings::setting_row(
+            s,
+            "notes-privacy",
+            "What is sent",
+            PRIVACY,
+            button(
+                if a.privacy_open {
+                    "Hide details"
+                } else {
+                    "Details"
+                },
+                "notes-privacy-details",
+                p,
+            )
+            .on_press(|s: &mut State| s.ai_notes.privacy_open = !s.ai_notes.privacy_open),
+            false,
+            p,
+        );
         if a.privacy_open {
-            privacy = privacy
+            privacy = col().w_full().child(privacy)
             .child(roles::SMALL.wrap("Nothing is sent until you turn on Meeting summary. After that, Sidenote sends a meeting when it ends, if automatic meeting summaries are on. Write summary and Try again also send that meeting. Send a sample sends only sample text.", p.soft))
             .child(roles::SMALL.wrap("Each request includes the meeting title, date, time, length, glossary, teams and members, projects, your name if set, and instructions. It does not include other meetings or audio.", p.soft))
             .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or helper replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
         }
-        c = c.child(privacy);
+        c = c.child(
+            super::hex::settings::panel(p)
+                .child(summary.child(super::widgets::hairline(p)).child(privacy)),
+        );
     }
     if matches!(part, Part::Helpers | Part::Advanced) {
         if part == Part::Helpers {
@@ -827,6 +829,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             );
         }
 
+        let mut helper_list = col().w_full();
         for (index, h) in HELPERS.iter().copied().enumerate() {
             let found = a.found.contains(&(h, true));
             let offered = h.offered();
@@ -834,7 +837,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 offered && settings.engine == "app" && settings.effective_helper() == Some(h);
             let mut r = card(p)
                 .key(format!("notes-helper-{index}"))
-                .child(roles::TITLE.wrap(
+                .child(roles::NAME.wrap(
                     format!(
                         "{}{}",
                         h.name(),
@@ -867,8 +870,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                             .child(roles::NAME.wrap(h.name(), p.ink))
                             .children(
                                 (index == 0).then(|| roles::META.line("Recommended", p.accent)),
-                            )
-                            .children(selected.then(|| roles::META.line("In use", p.ok))),
+                            ),
                     )
                     .child(roles::SMALL.wrap(help, p.soft))
                     .child(roles::META.wrap(
@@ -900,12 +902,16 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     .items_center()
                     .padding(14.0)
                     .fill(p.card)
-                    .border(1.0, p.line)
-                    .radius(8.0)
-                    .child(super::hex::settings::icon_tile(&super::icons::BOT, p))
+                    .child(super::hex::settings::icon_tile(
+                        super::hex::settings::row_icon(&format!("notes-helper-{index}")),
+                        p,
+                    ))
                     .child(info)
                     .child(action);
-                c = c.child(r);
+                if index > 0 {
+                    helper_list = helper_list.child(super::widgets::hairline(p));
+                }
+                helper_list = helper_list.child(r);
                 if a.switch_confirm == Some(h) {
                     c = c.child(card(p)
                         .child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.",p.warn))
@@ -1062,6 +1068,9 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             }
             c = c.child(r);
         }
+        if part == Part::Helpers {
+            c = c.child(super::hex::settings::panel(p).child(helper_list));
+        }
     }
     if part == Part::Scripts {
         if settings.script.is_some() {
@@ -1134,7 +1143,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     }
                 }),
             );
-        c = c.child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your helper.",control,true,p).radius(10.0).border(1.0,p.line));
+        c = c.child(super::hex::settings::panel(p).child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your helper.",control,true,p)));
     }
     if part == Part::Prompts {
         c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)

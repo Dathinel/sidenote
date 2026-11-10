@@ -1354,6 +1354,14 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         return finder::key(s, e, tx);
     }
     if !typing && matches!(&e.key, Key::Text(t) if t == "/") {
+        if s.on_hex() {
+            s.focus_search();
+        } else {
+            s.open_finder();
+        }
+        return true;
+    }
+    if e.is_command('f') {
         s.focus_search();
         return true;
     }

@@ -213,6 +213,18 @@ pub(crate) fn highlight(s: &State, key: &str, p: Palette) -> Color {
         p.card
     }
 }
+pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
+    if s.hex
+        .shell
+        .highlighted
+        .as_ref()
+        .is_some_and(|(id, until)| id == key && Instant::now() < *until)
+    {
+        p.hit
+    } else {
+        p.bg.alpha(0.0)
+    }
+}
 pub(crate) fn icon_tile(icon: &'static rune::Icon, p: Palette) -> El {
     col()
         .w(34.0)
@@ -230,6 +242,66 @@ pub(crate) fn pc(p: Palette) -> El {
         .radius(4.0)
         .fill(p.chip)
         .help("Kept on this PC only. Your other devices have their own.")
+}
+pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
+    match key.trim_start_matches("hs-") {
+        "meetings.auto_start" => &icons::PHONE_CALL,
+        "meetings.record_my_microphone" => &icons::MIC,
+        "languages-row" | "meeting-language-mode" => &icons::LANGUAGES,
+        "vocabulary-row" => &icons::SPELLING,
+        "feature-Memory" => &icons::BRAIN,
+        "keep-audio" => &icons::AUDIO_LINES,
+        "meetings.retention" => &icons::TRASH,
+        "meetings.silence_threshold" => &icons::VOLUME_X,
+        "meetings.output_folder" | "sync-folder" => &icons::FOLDER,
+        "notes-identity" => &icons::USER,
+        "summary-template" => &icons::FILE_TEXT,
+        "notes-options" => &icons::SUMMARY,
+        "notes-privacy" => &icons::SHIELD_CHECK,
+        "dictation.shortcut" => &icons::KEYBOARD,
+        "shortcuts.toggle_meeting" => &icons::CIRCLE_STOP,
+        "dictation.remove_filler_words" => &icons::ERASER,
+        "shortcuts.paste_last" => &icons::CLIPBOARD_PASTE,
+        "dictation.max_seconds" => &icons::TIMER,
+        "dictation.paste_method" => &icons::CLIPBOARD,
+        "dictation.language" => &icons::SPEECH,
+        "general.theme" => &icons::PALETTE,
+        "general.launch_at_login" => &icons::POWER,
+        "general.sound_effects" => &icons::VOLUME_2,
+        "labs.meeting_finished_event" => &icons::FLASK,
+        "labs.live_captions" => &icons::CAPTIONS,
+        "labs.gpu_overlay" => &icons::CPU,
+        "cloud.api_key" => &icons::KEY_ROUND,
+        "about.build" => &icons::PACKAGE,
+        "diagnostics.log_level" => &icons::FILE_CLOCK,
+        "network.proxy" => &icons::GLOBE,
+        "hex-status" => &icons::AUDIO_WAVEFORM,
+        "feature-Daily check" => &icons::CALENDAR_CHECK,
+        "feature-Tasks" => &icons::LIST_TODO,
+        "feature-Projects" => &icons::FOLDERS,
+        "feature-Other devices" => &icons::RADIO_TOWER,
+        "this-pc-name" => &icons::MONITOR,
+        "connect-Claude Code" => &icons::CONNECTED,
+        "connect-Claude Desktop" => &icons::MONITOR,
+        "connect-Codex" => &icons::APP_WINDOW,
+        "connect-Cursor" => &icons::MOUSE_POINTER,
+        "connect-OpenCode" => &icons::NETWORK,
+        "notes-helper-0" => &icons::TERMINAL,
+        "notes-helper-1" => &icons::CODE_XML,
+        "notes-helper-2" => &icons::SQUARE_TERMINAL,
+        key if key.starts_with("sync-device-") => &icons::SMARTPHONE,
+        _ => &icons::SETTINGS,
+    }
+}
+pub(crate) fn panel(p: Palette) -> El {
+    col()
+        .w_full()
+        .min_w(0.0)
+        .padding(1.0)
+        .radius(10.0)
+        .clip_rounded(10.0)
+        .border(1.0, p.line)
+        .fill(p.card)
 }
 pub(crate) fn setting_row(
     s: &State,
@@ -256,16 +328,7 @@ pub(crate) fn setting_row(
         .gaps(12.0, 10.0)
         .padding(14.0)
         .fill(highlight(s, key, p))
-        .child(icon_tile(
-            if key.contains("summary") || key.contains("notes-options") {
-                &icons::SUMMARY
-            } else if key.contains("connect") {
-                &icons::CONNECTED
-            } else {
-                current(s.hex.section).0.icon()
-            },
-            p,
-        ))
+        .child(icon_tile(row_icon(key), p))
         .child(
             col()
                 .grow(1.0)
@@ -276,13 +339,13 @@ pub(crate) fn setting_row(
         )
         .child(control)
 }
-fn card(title: &str, body: El, p: Palette) -> El {
+pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
     col()
         .w_full()
         .gap(8.0)
         .mt(18.0)
         .child(roles::GROUP.wrap(title, p.soft))
-        .child(body.w_full().radius(10.0).border(1.0, p.line).fill(p.card))
+        .child(panel(p).child(body.w_full()))
 }
 fn advanced(s: &State, body: El, p: Palette) -> El {
     let page = current(s.hex.section).0.name();
@@ -625,7 +688,14 @@ fn jump(s: &mut State, dest: Destination) {
 
 pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
     let compact = s.app_w.get() < 700.0;
-    let width = if compact { 164.0 } else { 248.0 };
+    let width = if compact { 184.0 } else { 248.0 };
+    let name = s
+        .ai_notes
+        .settings
+        .as_ref()
+        .map(|settings| settings.your_name.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("You");
     let mut list = col()
         .w_full()
         .gap(3.0)
@@ -648,7 +718,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                 .w_full()
                 .gap(6.0)
                 .py(16.0)
-                .child(icon_tile(&icons::PEOPLE, p))
+                .child(super::super::nav::profile_avatar(name, p))
                 .child(
                     roles::NAME.wrap(
                         s.ai_notes
@@ -674,6 +744,9 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
         )
         .child(
             TextInput::new(&s.hex.filter)
+                .leading_icon(&icons::SEARCH)
+                .leading_icon_size(16.0)
+                .trailing(super::super::widgets::keycap("/", p))
                 .placeholder("Search settings")
                 .label("Search settings")
                 .height(34.0)
@@ -738,16 +811,20 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                         .py(7.0)
                         .child(icons::draw(page.icon(), 18.0, p.soft))
                         .child(if active == page {
-                            roles::NAME.wrap(page.name(), p.ink).grow(1.0).min_w(0.0)
+                            roles::NAME
+                                .line(page.name(), p.ink)
+                                .grow(1.0)
+                                .help(page.name())
                         } else {
                             roles::CONTROL
-                                .wrap(page.name(), p.soft)
+                                .line(page.name(), p.soft)
                                 .grow(1.0)
-                                .min_w(0.0)
+                                .help(page.name())
                         }),
                 )
                 .key(format!("settings-page-{}", page.name()))
                 .label(page.name())
+                .help(page.name())
                 .radius(8.0)
                 .fill(if active == page { p.sel } else { p.side })
                 .hover(p.chip)
@@ -833,7 +910,6 @@ fn hex_rows(
             .child(
                 keep_audio_row(s, k, p, layer)
                     .key("keep-audio")
-                    .px(14.0)
                     .fill(highlight(s, "keep-audio", p)),
             )
             .child(hairline(p));
@@ -930,8 +1006,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .children(ai_notes::setup_card(s, p)),
         (Page::Meetings, 0) => col().w_full()
             .child(card("Recording", hex_rows(s, k, p, layer, page, tab, false), p))
-            .child(card("Languages you speak", super::super::models::language_picker(s, k, p), p))
-            .child(card("Names and terms", vocabulary(s,k,p), p))
+            .child(card("Language and terms", col().w_full().child(super::super::models::language_picker(s,k,p)).child(hairline(p)).child(vocabulary(s,k,p)), p))
             .child(advanced(s, card("Recording on this PC", hex_rows(s, k, p, layer, page, tab, true), p), p)),
         (Page::Meetings, 1) => col().w_full().child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
             .child(card("Memory", feature(s,k,AppFeature::Memory,"Remember across meetings","Use knowledge from earlier meetings.",p),p))
@@ -943,18 +1018,18 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .child(feature(s,k,AppFeature::Tasks,"Tasks","Show Tasks in the sidebar.",p))
                 .child(feature(s,k,AppFeature::Projects,"Projects","Show Projects in the sidebar.",p)),p),p)),
         (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
-        (Page::People, _) => col().key("settings-teams").fill(highlight(s,"settings-teams",p)).w_full().child(card("Our team", super::super::teams::section(s,k,p).padding(14.0),p)),
+        (Page::People, _) => col().key("settings-teams").fill(group_highlight(s,"settings-teams",p)).w_full().child(card("Our team", super::super::teams::section(s,k,p).padding(14.0),p)),
         (Page::Helpers, 0) => col().w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
-            .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)).padding(14.0),p)),
+            .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)),p)),
         (Page::Helpers, 1) => super::super::models::view(s,p,rune::el()).key("speech-models").fill(highlight(s,"speech-models",p)),
-        (Page::Helpers, _) => col().key("helper-advanced").fill(highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))
-            .child(card("Language handling",meeting_languages::section(s,k,p,layer).padding(14.0),p))
+        (Page::Helpers, _) => col().key("helper-advanced").fill(group_highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))
+            .child(card("Routing",meeting_languages::section(s,k,p,layer),p))
             .child(advanced(s, col().w_full().key("legacy-hex-models").child(roles::SMALL.wrap("Hex's existing dictation model selector is kept here because it controls a separate engine.",p.soft)).child(model_section(s,p)).child(super::super::models::advanced(s,p)),p)),
-        (Page::Hex, _) => col().w_full().child(card("Hex",summary_line(s,p).padding(14.0),p))
+        (Page::Hex, _) => col().w_full().child(card("Recording engine",summary_line(s,p),p))
             .child(card("Shortcuts and dictation",hex_rows(s,k,p,layer,page,tab,false),p))
             .child(advanced(s,card("Dictation overrides",hex_rows(s,k,p,layer,page,tab,true),p),p)),
-        (Page::Appearance, _) => card("Appearance and startup",hex_rows(s,k,p,layer,page,tab,false),p),
-        (Page::Sync, _) => col().w_full().child(card("Devices",devices(s,p),p)).child(card("Other devices",feature(s,k,AppFeature::OtherDevices,"Other devices","Show meetings recorded on your other devices.",p),p))
+        (Page::Appearance, _) => card("Preferences",hex_rows(s,k,p,layer,page,tab,false),p),
+        (Page::Sync, _) => col().w_full().child(card("Devices",devices(s,p).child(hairline(p)).child(feature(s,k,AppFeature::OtherDevices,"Other devices","Show meetings recorded on your other devices.",p)),p))
             .child(roles::SMALL.wrap(format!("{} meetings from other devices.",s.nav.peers),p.soft).mt(12.0))
             .child(advanced(s,card("Sync folder",roles::SMALL.wrap(s.store.root.display().to_string(),p.ink).key("sync-folder").fill(highlight(s,"sync-folder",p)).padding(14.0),p),p)),
         (Page::Updates, _) => col().w_full().child(super::super::updates::section(s,p).fill(highlight(s,"updates-section",p)))
@@ -968,8 +1043,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .w_full()
         .max_w(940.0)
         .px(if narrow { 16.0 } else { 40.0 })
-        .pb(40.0)
-        .child(roles::SECTION.wrap(page.name(), p.ink).mt(22.0));
+        .pb(40.0);
     if let Some(note_) = s
         .hex
         .page_note()
@@ -1010,7 +1084,22 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .h_full()
         .child(crumb)
         .child(hairline(p))
-        .children((!page.tabs().is_empty()).then(|| tab_bar(s, p).px(24.0)))
+        .child(
+            col().w_full().items_center().child(
+                col()
+                    .w_full()
+                    .max_w(940.0)
+                    .px(if narrow { 16.0 } else { 40.0 })
+                    .child(
+                        roles::SECTION
+                            .wrap(page.name(), p.ink)
+                            .key("settings-title")
+                            .mt(22.0),
+                    )
+                    .children((!page.tabs().is_empty()).then(|| tab_bar(s, p)))
+                    .pb(4.0),
+            ),
+        )
         .child(scroll(
             col().w_full().items_center().child(doc),
             "hex-scroll",
@@ -1109,6 +1198,28 @@ mod tests {
             assert!(matches(result, query));
             assert_eq!((result.page, result.tab), (page, tab));
         }
+    }
+    #[test]
+    fn recording_rows_have_distinct_lucide_icons() {
+        let keys = [
+            "meetings.auto_start",
+            "meetings.record_my_microphone",
+            "languages-row",
+            "vocabulary-row",
+            "keep-audio",
+            "meetings.retention",
+            "meetings.silence_threshold",
+            "meetings.output_folder",
+        ];
+        let mut names = HashSet::new();
+        for key in keys {
+            let icon = row_icon(key);
+            assert!(names.insert(icon.name), "Repeated icon for {key}");
+            assert_ne!(icon.name, icons::MEETINGS.name);
+        }
+        assert_eq!(row_icon("meetings.auto_start").name, "lucide-phone-call");
+        assert_eq!(row_icon("notes-identity").name, "lucide-user");
+        assert_eq!(row_icon("summary-template").name, "lucide-file-text");
     }
     #[test]
     fn old_deep_links_and_tab_limits_are_preserved() {

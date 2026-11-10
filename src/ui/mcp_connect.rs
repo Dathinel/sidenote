@@ -32,7 +32,7 @@ impl State {
 }
 pub fn section(s: &State, p: Palette) -> El {
     let mut body = col().w_full().gap(8.0)
-        .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.",p.soft));
+        .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.",p.soft).padding(14.0));
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(_) => {
@@ -52,24 +52,26 @@ pub fn section(s: &State, p: Palette) -> El {
         if !found && !s.connection.show_all {
             continue;
         }
-        clients = clients.child(super::hex::settings::setting_row(
-            s,
-            &format!("connect-{}", client.name()),
-            client.name(),
-            "It can read your meetings through Sidenote.",
-            button(
-                "Set up",
-                format!("connect-{}-setup", client.name()),
+        clients = clients
+            .child(super::hex::settings::setting_row(
+                s,
+                &format!("connect-{}", client.name()),
+                client.name(),
+                "It can read your meetings through Sidenote.",
+                button(
+                    "Set up",
+                    format!("connect-{}-setup", client.name()),
+                    false,
+                    p,
+                )
+                .on_press(move |s: &mut State| {
+                    s.connection.client = client;
+                    s.connection.show_details = true;
+                }),
                 false,
                 p,
-            )
-            .on_press(move |s: &mut State| {
-                s.connection.client = client;
-                s.connection.show_details = true;
-            }),
-            false,
-            p,
-        ));
+            ))
+            .child(super::widgets::hairline(p));
     }
     body = body.child(clients).child(
         button(

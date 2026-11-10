@@ -198,7 +198,6 @@ pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
         .key("spoken-languages")
         .fill(super::hex::settings::highlight(s, "spoken-languages", p))
         .w_full()
-        .padding(14.0)
         .gap(8.0)
         .child(super::hex::settings::setting_row(
             s,
@@ -217,7 +216,7 @@ pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
             p,
         ));
     if s.hex.language_picker_open() {
-        out = out.child(language_column(s, k, p));
+        out = out.child(language_column(s, k, p).padding(14.0));
     }
     out
 }
@@ -268,7 +267,7 @@ fn language_column(s: &State, k: &Kit, p: Palette) -> El {
 }
 pub fn view(s: &State, p: Palette, routing: El) -> El {
     if !cfg!(feature = "asr-runtime") {
-        return super::hex::settings::setting_row(
+        return super::hex::settings::panel(p).child(super::hex::settings::setting_row(
             s,
             "speech-models",
             "Transcribe with: Hex",
@@ -276,7 +275,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
             roles::CONTROL.line("In use", p.ok),
             false,
             p,
-        );
+        ));
     }
     let k = super::theme::kit(&p);
     row()
@@ -289,7 +288,9 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
                 .w(160.0)
                 .gap(10.0)
                 .child(roles::GROUP.wrap("Meeting languages", p.soft))
-                .child(language_column(s, &k, p)),
+                .child(
+                    super::hex::settings::panel(p).child(language_column(s, &k, p).padding(14.0)),
+                ),
         )
         .child(catalog_view(s, p, routing, false).grow(1.0).min_w(240.0))
 }
@@ -388,6 +389,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
             p.soft,
         ));
     }
+    let mut model_list = col().w_full();
     for m in visible {
         let id = m.id;
         let info = col()
@@ -422,20 +424,20 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                             .on_press(move |s: &mut State| s.model_download(id, true)),
                     );
                 }
-                body = body.child(
-                    row()
-                        .key(format!("speech-model-{id}"))
-                        .w_full()
-                        .flex_wrap()
-                        .items_center()
-                        .gaps(14.0, 10.0)
-                        .padding(14.0)
-                        .radius(8.0)
-                        .border(1.0, p.line)
-                        .fill(p.card)
-                        .child(info)
-                        .child(card),
-                );
+                model_list = model_list
+                    .child(
+                        row()
+                            .key(format!("speech-model-{id}"))
+                            .w_full()
+                            .flex_wrap()
+                            .items_center()
+                            .gaps(14.0, 10.0)
+                            .padding(14.0)
+                            .fill(p.card)
+                            .child(info)
+                            .child(card),
+                    )
+                    .child(super::widgets::hairline(p));
                 continue;
             }
             if let Some(progress) = models.progress.get(id) {
@@ -527,21 +529,22 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 card = card.child(roles::SMALL.medium().wrap(error, p.warn).role("alert"));
             }
         }
-        body = body.child(
-            row()
-                .key(format!("speech-model-{id}"))
-                .w_full()
-                .flex_wrap()
-                .items_center()
-                .gaps(14.0, 10.0)
-                .padding(14.0)
-                .radius(8.0)
-                .border(1.0, p.line)
-                .fill(p.card)
-                .child(info)
-                .child(card),
-        );
+        model_list = model_list
+            .child(
+                row()
+                    .key(format!("speech-model-{id}"))
+                    .w_full()
+                    .flex_wrap()
+                    .items_center()
+                    .gaps(14.0, 10.0)
+                    .padding(14.0)
+                    .fill(p.card)
+                    .child(info)
+                    .child(card),
+            )
+            .child(super::widgets::hairline(p));
     }
+    body = body.child(super::hex::settings::panel(p).child(model_list));
     body.child(roles::meta("Downloads stay on this device. Memory figures cover the model process. Your Hex dictation model stays as you chose it.", p).mt(roles::GROUP_TOP))
 }
 

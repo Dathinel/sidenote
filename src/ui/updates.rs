@@ -313,7 +313,7 @@ pub fn section(s: &State, p: Palette) -> El {
             .w_full()
             .gap(12.0)
             .pt(20.0)
-            .child(roles::SECTION.wrap("Updates", p.ink))
+            .child(roles::GROUP.wrap("Application", p.soft))
             .child(roles::SMALL.wrap("Updates are off for this manual install", p.soft));
     }
     let status = &s.updates.status;
@@ -322,22 +322,24 @@ pub fn section(s: &State, p: Palette) -> El {
         .w_full()
         .gap(12.0)
         .pt(20.0)
-        .child(roles::SECTION.wrap("Updates", p.ink))
-        .child(super::hex::settings::setting_row(
-            s,
-            "update-version",
-            &format!("Sidenote {}", updates::VERSION),
-            "Check for a new version.",
-            if busy(status) {
-                roles::CONTROL.line("Checking...", p.soft)
-            } else {
-                link("Check now", p)
-                    .key("update-check")
-                    .on_press(|s: &mut State| s.check_updates())
-            },
-            false,
-            p,
-        ));
+        .child(roles::GROUP.wrap("Application", p.soft))
+        .child(
+            super::hex::settings::panel(p).child(super::hex::settings::setting_row(
+                s,
+                "update-version",
+                &format!("Sidenote {}", updates::VERSION),
+                "Check for a new version.",
+                if busy(status) {
+                    roles::CONTROL.line("Checking...", p.soft)
+                } else {
+                    link("Check now", p)
+                        .key("update-check")
+                        .on_press(|s: &mut State| s.check_updates())
+                },
+                false,
+                p,
+            )),
+        );
     let title = match status.phase {
         Phase::Manual => "Updates are off for this manual install".into(),
         Phase::Preparing => "Preparing update".into(),
@@ -355,15 +357,10 @@ pub fn section(s: &State, p: Palette) -> El {
         }
         Phase::Error => "Could not update Sidenote.".into(),
     };
-    let mut card = col()
-        .w_full()
+    let mut card = super::hex::settings::panel(p)
+        .padding(15.0)
         .gap(10.0)
-        .px(18.0)
-        .py(18.0)
-        .radius(10.0)
-        .border(1.0, p.line)
-        .fill(p.card)
-        .child(roles::TITLE.wrap(title, p.ink).role("status"));
+        .child(roles::NAME.wrap(title, p.ink).role("status"));
     match status.phase {
         Phase::Available => {
             card =
@@ -425,8 +422,11 @@ pub fn section(s: &State, p: Palette) -> El {
             .child(roles::SMALL.bold().wrap("What changed", p.ink))
             .child(roles::SMALL.wrap(&status.notes, p.soft));
     }
-    body = body.child(card).child(roles::META.wrap(
-        format!(
+    body = body
+        .child(roles::GROUP.wrap("Update status", p.soft))
+        .child(card)
+        .child(roles::META.wrap(
+            format!(
             "Last checked: {}",
             status
                 .checked
@@ -437,8 +437,8 @@ pub fn section(s: &State, p: Palette) -> El {
                     |d| d.format("%d %b %Y at %H:%M").to_string()
                 )
         ),
-        p.soft,
-    ));
+            p.soft,
+        ));
     body.child(roles::META.wrap("Checks run when Sidenote opens, every 6 hours, and on focus if the last attempt was over 30 minutes ago. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
 }
 pub fn source(s: &State, p: Palette) -> El {

@@ -1103,7 +1103,6 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
     let mut sec = col()
         .key("hex-vocabulary")
         .w_full()
-        .child(settings::icon_tile(&super::icons::SPELLING, p))
         .child(roles::SMALL.wrap(
             "Sidenote spells these right in transcripts and summaries.",
             p.soft,
@@ -1360,19 +1359,19 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let mut text = col()
         .grow(1.0)
         .min_w(220.0)
-        .gap(2.0)
+        .gap(4.0)
         .child(roles::NAME.wrap("Keep audio", p.ink))
-        .child(roles::META.line(
+        .child(roles::SMALL.line(
             "Sidenote keeps the sound file next to the transcript.",
-            p.faint,
+            p.soft,
         ));
     if let Some(reason) = h.page_note().or(h.settings_note) {
-        text = text.child(roles::META.wrap(reason, p.faint));
+        text = text.child(roles::SMALL.wrap(reason, p.soft));
     } else if !can && !busy {
-        text = text.child(roles::META.wrap("This Hex build cannot change audio expiry.", p.faint));
+        text = text.child(roles::SMALL.wrap("This Hex build cannot change audio expiry.", p.soft));
     }
     if busy {
-        text = text.child(roles::META.wrap("Saving.", p.faint));
+        text = text.child(roles::SMALL.wrap("Saving.", p.soft));
     }
     if let Some(error) = h.row_errors.get("meetings.audio_retention") {
         text = text.child(
@@ -1383,7 +1382,7 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         );
     }
     if enabled == Some(true) && current.is_none() {
-        text = text.child(roles::META.wrap("Audio follows Keep whole meetings in Hex.", p.faint));
+        text = text.child(roles::SMALL.wrap("Audio follows Keep whole meetings in Hex.", p.soft));
     }
     let options = ["24 hours", "7 days", "1 month", "Forever"].map(str::to_string);
     let control = Select::new("keep-audio", &options)
@@ -1411,9 +1410,10 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     row()
         .w_full()
         .items_center()
-        .gap(16.0)
-        .py(14.0)
-        .child(settings::icon_tile(&super::icons::MIC, p))
+        .flex_wrap()
+        .gaps(12.0, 10.0)
+        .padding(14.0)
+        .child(settings::icon_tile(&super::icons::AUDIO_LINES, p))
         .child(text)
         .child(control)
 }
@@ -1430,7 +1430,7 @@ fn setting_row(
     let key = st.key.clone();
     let name = settings::setting_name(st);
     let can = editable(st) && h.can(Feature::SettingsSet) && !h.busy_keys.contains(&key);
-    let mut text = col().gap(2.0).grow(1.0).min_w(170.0).child(
+    let mut text = col().gap(4.0).grow(1.0).min_w(170.0).child(
         row()
             .items_center()
             .flex_wrap()
@@ -1440,21 +1440,21 @@ fn setting_row(
     );
     if !st.about.is_empty() {
         text = text.child(
-            roles::META
+            roles::SMALL
                 .wrap(settings::setting_help(st), p.soft)
                 .help_when_truncated(st.about.clone()),
         );
     }
     if st.available == Some(false) {
-        text = text.child(roles::META.wrap("Not available here.", p.faint));
+        text = text.child(roles::SMALL.wrap("Not available here.", p.soft));
     } else if !st.writable {
-        text = text.child(roles::META.wrap("Read only.", p.faint));
+        text = text.child(roles::SMALL.wrap("Read only.", p.soft));
     }
     if let Some(e) = h.row_errors.get(&key) {
         text = text.child(roles::SMALL.medium().wrap(e.clone(), p.warn).role("alert"));
     }
     if h.busy_keys.contains(&key) {
-        text = text.child(roles::META.wrap("Saving.", p.faint));
+        text = text.child(roles::SMALL.wrap("Saving.", p.soft));
     }
     // A folder or file path needs more room than a short value.
     let width = if st.kind == "path" { 360.0 } else { 220.0 };
@@ -1464,7 +1464,7 @@ fn setting_row(
         } else {
             setting_text(&st.value)
         };
-        roles::META
+        roles::SMALL
             .line(
                 if shown.is_empty() {
                     "Not set".into()
@@ -1556,14 +1556,13 @@ fn setting_row(
     row()
         .key(format!("hs-{}", st.key))
         .w_full()
-        .py(10.0)
         .flex_wrap()
         .items_center()
-        .gaps(8.0, 16.0)
-        .child(settings::icon_tile(&super::icons::SETTINGS, p))
+        .gaps(12.0, 10.0)
+        .child(settings::icon_tile(settings::row_icon(&st.key), p))
         .child(text)
         .child(control)
-        .px(14.0)
+        .padding(14.0)
         .fill(settings::highlight(s, &format!("hs-{}", st.key), p))
 }
 

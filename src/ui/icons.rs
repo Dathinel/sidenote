@@ -243,6 +243,201 @@ lucide!(
     "lucide-spell-check",
     r#"<path d="m20 15-5.5 5.5L12 18" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m4 16 6-12 5.115 10.23" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 12h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
+lucide!(
+    PHONE_CALL,
+    "lucide-phone-call",
+    r#"<path d="M13 2a9 9 0 0 1 9 9" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 6a5 5 0 0 1 5 5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    LANGUAGES,
+    "lucide-languages",
+    r#"<path d="m5 8 6 6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m4 14 6-6 2-3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 5h12" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2h1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m22 22-5-10-5 10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 18h6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    BRAIN,
+    "lucide-brain",
+    r#"<path d="M12 18V5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 13a4.17 4.17 0 01-3-4 4.17 4.17 0 01-3 4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.707 6.294A3 3 0 1012 5a3 3 0 10-5.707 1.294" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.996 5.125a4 4 0 012.526 5.77" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 18a4 4 0 002-7.465" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.967 17.482a4 4 0 11-7.967.517 4 4 0 11-7.967-.517" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 18a4 4 0 01-2-7.465" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.004 5.125a4 4 0 00-2.526 5.77" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    AUDIO_LINES,
+    "lucide-audio-lines",
+    r#"<path d="M2 10v3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 6v11" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 3v18" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 8v7" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 5v13" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 10v3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    TRASH,
+    "lucide-trash-2",
+    r#"<path d="M10 11v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 11v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 6h18" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    VOLUME_X,
+    "lucide-volume-x",
+    r#"<path d="M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m16.5 14.5 5-5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m16.5 9.5 5 5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    FOLDER,
+    "lucide-folder",
+    r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    USER,
+    "lucide-user",
+    r#"<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    FILE_TEXT,
+    "lucide-file-text",
+    r#"<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v5a1 1 0 0 0 1 1h5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 9H8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 13H8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 17H8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    KEYBOARD,
+    "lucide-keyboard",
+    r#"<path d="M10 8h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 12h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 8h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 12h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 8h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 8h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 16h10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 12h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect width="20" height="16" x="2" y="4" rx="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    ERASER,
+    "lucide-eraser",
+    r#"<path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m5.082 11.09 8.828 8.828" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CLIPBOARD_PASTE,
+    "lucide-clipboard-paste",
+    r#"<path d="M11 14h10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4h2a2 2 0 0 1 2 2v1.344" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m17 18 4-4-4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="2" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    TIMER,
+    "lucide-timer",
+    r#"<line x1="10" x2="14" y1="2" y2="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" x2="15" y1="14" y2="11" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="14" r="8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CLIPBOARD,
+    "lucide-clipboard",
+    r#"<rect width="8" height="4" x="8" y="2" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SPEECH,
+    "lucide-speech",
+    r#"<path d="M8.8 20v-4.1l1.9.2a2.3 2.3 0 0 0 2.164-2.1V8.3A5.37 5.37 0 0 0 2 8.25c0 2.8.656 3.054 1 4.55a5.77 5.77 0 0 1 .029 2.758L2 20" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.8 17.8a7.5 7.5 0 0 0 .003-10.603" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 15a3.5 3.5 0 0 0-.025-4.975" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    POWER,
+    "lucide-power",
+    r#"<path d="M12 2v10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    VOLUME_2,
+    "lucide-volume-2",
+    r#"<path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 9a5 5 0 0 1 0 6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    FLASK,
+    "lucide-flask-conical",
+    r#"<path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.453 15h11.094" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 2h7" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CAPTIONS,
+    "lucide-captions",
+    r#"<rect width="18" height="14" x="3" y="5" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CPU,
+    "lucide-cpu",
+    r#"<path d="M12 20v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 2v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 17h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 7h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 17h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 7h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 20v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2v2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="8" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    KEY_ROUND,
+    "lucide-key-round",
+    r#"<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16.5" cy="7.5" r=".5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    PACKAGE,
+    "lucide-package",
+    r#"<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 22V12" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.29 7 12 12 20.71 7" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m7.5 4.27 9 5.15" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    FILE_CLOCK,
+    "lucide-file-clock",
+    r#"<path d="M16 22h2a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v2.85" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v5a1 1 0 0 0 1 1h5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 14v2.2l1.6 1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="16" r="6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    GLOBE,
+    "lucide-globe",
+    r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 12h20" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    AUDIO_WAVEFORM,
+    "lucide-audio-waveform",
+    r#"<path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CALENDAR_CHECK,
+    "lucide-calendar-check",
+    r#"<path d="M8 2v3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 2v3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 9h18" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 15 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    LIST_TODO,
+    "lucide-list-todo",
+    r#"<path d="M13 5h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 12h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 17 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="4" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    FOLDERS,
+    "lucide-folders",
+    r#"<path d="M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    RADIO_TOWER,
+    "lucide-radio-tower",
+    r#"<path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="9" r="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.5 18h5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m8 22 4-11 4 11" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    MONITOR,
+    "lucide-monitor",
+    r#"<rect width="20" height="14" x="2" y="3" rx="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><line x1="8" x2="16" y1="21" y2="21" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" x2="12" y1="17" y2="21" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SMARTPHONE,
+    "lucide-smartphone",
+    r#"<rect width="14" height="20" x="5" y="2" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 18h.01" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    TERMINAL,
+    "lucide-terminal",
+    r#"<path d="M12 19h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m4 17 6-6-6-6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CODE_XML,
+    "lucide-code-xml",
+    r#"<path d="m18 16 4-4-4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m6 8-4 4 4 4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m14.5 4-5 16" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SQUARE_TERMINAL,
+    "lucide-square-terminal",
+    r#"<path d="m7 11 2-2-2-2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 13h4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    APP_WINDOW,
+    "lucide-app-window",
+    r#"<rect x="2" y="4" width="20" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 4v4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 8h20" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 4v4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    MOUSE_POINTER,
+    "lucide-mouse-pointer-2",
+    r#"<path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    NETWORK,
+    "lucide-network",
+    r#"<rect x="16" y="16" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="16" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="9" y="2" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 12V8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SHIELD_CHECK,
+    "lucide-shield-check",
+    r#"<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    CIRCLE_STOP,
+    "lucide-circle-stop",
+    r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
 
 /// Existing controls share this adapter so text glyphs cannot drift from the SVG set.
 pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> El {

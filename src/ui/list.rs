@@ -5,7 +5,7 @@ use super::{
     nav::Filter,
     project, roles,
     theme::{Palette, display},
-    widgets::{highlighted, keycap, link, notice_bar, pressable, scroll},
+    widgets::{highlighted, link, notice_bar, pressable, scroll},
 };
 use rune::{El, Key, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
@@ -84,9 +84,6 @@ fn search_box(s: &State, k: &Kit, height: f32, placeholder: &str, p: Palette) ->
         .on_change(|s: &mut State, _| s.on_search_changed())
         .on_key(search_key)
         .height(height)
-        // "/" focuses this box from anywhere on the page. Ctrl+K opens the palette instead, so
-        // the cap names the key that actually lands here.
-        .trailing(keycap("/", p))
         .build(k)
         .key("search")
         .border(1.0, if s.search.focused { p.accent } else { p.line })
