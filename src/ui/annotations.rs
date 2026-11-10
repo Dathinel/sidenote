@@ -180,6 +180,9 @@ impl State {
         self.annotations.note_open = false;
         self.annotations.note_images.clear();
         self.annotations.last_review = None;
+        self.annotations.source_fingerprint = None;
+        self.annotations.review_source = None;
+        self.annotations.editing.clear();
         self.annotations.selected = Some(capture.folder.clone());
         self.annotations.transcript = false;
         self.annotations.images.clear();
@@ -250,30 +253,38 @@ impl State {
             Msg::Progress { id, progress } if self.annotation_job_current(id) => match progress {
                 Progress::Frame { index, draft, .. } => {
                     self.annotations.drafts.insert(index, draft);
-                    self.annotations.status = format!(
-                        "{} frame drafts ready. Writing the annotation note...",
-                        self.annotations.drafts.len()
-                    );
+                    let ready = self.annotations.drafts.len();
+                    let total = self
+                        .annotations
+                        .approved
+                        .as_ref()
+                        .map_or(ready, |a| a.approval.frames.len());
+                    self.annotations.status = if ready < total {
+                        format!("{ready} of {total} frame drafts ready.")
+                    } else {
+                        format!(
+                            "{ready} of {total} frame drafts ready. Writing the annotation note..."
+                        )
+                    };
                 }
                 Progress::NoteDelta(text) => self.annotations.stream = text,
                 Progress::Final { note, .. } => {
                     self.annotations.note = Some(note);
+                    self.annotations.busy = false;
                     self.annotations.status = "Annotation note saved on this PC.".into();
+                    if let Some(a) = &self.annotations.approved
+                        && save_latest(&self.store.root, a).is_err()
+                    {
+                        self.annotations.status="The note is saved, but Sidenote could not save its capture link. Save your edits to try again.".into();
+                    }
                     self.annotations.note_open = true;
                     self.load_annotation_note_images();
                 }
             },
             Msg::Finished { id, result } if self.annotation_job_current(id) => {
                 self.annotations.busy = false;
-                self.annotations.status = match result {
-                    Ok(()) => "Annotation note saved on this PC.".into(),
-                    Err(e) => e,
-                };
-                if self.annotations.note.is_some()
-                    && let Some(a) = &self.annotations.approved
-                    && save_latest(&self.store.root, a).is_err()
-                {
-                    self.annotations.status="The note is saved, but Sidenote could not save its capture link. Save your edits to try again.".into();
+                if let Err(error) = result {
+                    self.annotations.status = error;
                 }
             }
             Msg::Loaded {
@@ -830,8 +841,9 @@ pub fn scene(s: &mut State, name: &str) {
                 s.annotations.busy = true;
                 s.annotations.ticket = Some(s.annotations.epoch.begin());
                 s.annotations.status =
-                    "1 of 2 frame drafts ready. Writing the annotation note...".into();
+                    "2 of 2 frame drafts ready. Writing the annotation note...".into();
                 s.annotations.drafts.insert(1,serde_json::json!({"summary":"The board shows navigation and paper prototype materials.","callouts":[{"mark_number":1,"explanation":"Choose the overview and use paper cards."},{"mark_number":2,"explanation":"Use paper cards and review them on Friday."}]}));
+                s.annotations.drafts.insert(2,serde_json::json!({"summary":"The Next review card shows Friday morning and Bring two versions.","callouts":[{"mark_number":3,"explanation":"The speaker says to review these on Friday. What these refers to is unclear."}]}));
                 s.annotations.stream=r#"{"title":"Workshop plan","summary":"The speaker reviews the workshop navigation and paper materials"#.into();
             }
         }

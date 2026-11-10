@@ -399,6 +399,7 @@ impl State {
         }
         match note::validate(&note, approved).and_then(|()| {
             note::save(&approved.folder, &note)
+                .and_then(|()| save_latest(&self.store.root, approved))
                 .map_err(|_| "Could not save these edits. Your text is still here.".into())
         }) {
             Ok(()) => {
@@ -490,17 +491,29 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         page=page.child(roles::META.wrap(format!("Via {} using {}. Crops include 15% padding. PNGs are at most 1568 px on the long edge.",options.helper.name(),options.model),p.soft));
     }
     let mut controls = row().gap(12.0).items_center();
-    let allowed = frames.iter().any(|f| f.included) && s.annotation_options().is_ok();
+    let images_ready = frames.iter().filter(|f| f.included).all(|f| {
+        c.data
+            .keyframes
+            .iter()
+            .position(|kf| kf.index == f.index)
+            .and_then(|i| s.annotations.images.get(i))
+            .and_then(|r| r.as_ref().ok())
+            .is_some_and(|image| image.size().is_some() && image.error().is_none())
+    });
+    let allowed =
+        frames.iter().any(|f| f.included) && images_ready && s.annotation_options().is_ok();
     let send = super::super::area::button("Send for note", "annotation-send", p);
     controls = controls
         .child(if allowed {
             send.on_press(|s: &mut State| s.send_annotation(false))
         } else {
-            send.disabled(true).help(
+            send.disabled(true).help(if !images_ready {
+                "Wait for the selected frame images to load, or untick unavailable frames.".into()
+            } else {
                 s.annotation_options()
                     .err()
-                    .unwrap_or_else(|| "Choose at least one frame.".into()),
-            )
+                    .unwrap_or_else(|| "Choose at least one frame.".into())
+            })
         })
         .child(
             link("Cancel", p)
@@ -510,7 +523,11 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         .child(
             link("Models and agents", p)
                 .key("annotation-agent-settings")
-                .on_press(|s: &mut State| s.open_ai_notes()),
+                .on_press(|s: &mut State| {
+                    s.open_hex();
+                    s.hex.section = hex::Section::Connect;
+                    s.load_annotation_options();
+                }),
         );
     page = page.child(controls);
     if let Err(error) = s.annotation_options() {
@@ -686,7 +703,23 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
     );
     if !s.annotations.editing.is_empty() {
         let kit = theme::kit(&p);
-        for (path, input) in &s.annotations.editing {
+        let mut fields: Vec<_> = s.annotations.editing.iter().collect();
+        fields.sort_by_key(|(path, _)| {
+            if path.as_str() == "/title" {
+                0
+            } else if path.as_str() == "/summary" {
+                1
+            } else if path.starts_with("/sections/") {
+                2
+            } else if path.starts_with("/figures/") {
+                3
+            } else if path.starts_with("/open_questions/") {
+                4
+            } else {
+                5
+            }
+        });
+        for (path, input) in fields {
             let key = path.clone();
             page = page
                 .child(roles::GROUP.wrap(
@@ -772,13 +805,6 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
                 .wrap(section["heading"].as_str().unwrap(), p.ink)
                 .mt(16.0),
         );
-        for paragraph in section["paragraphs"].as_array().unwrap() {
-            page = page.child(
-                roles::READ
-                    .wrap(paragraph.as_str().unwrap(), p.ink)
-                    .selectable(true),
-            );
-        }
         for id in section["figure_refs"].as_array().unwrap() {
             let Some(figure) = note["figures"]
                 .as_array()
@@ -825,6 +851,13 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
                     col().w_full().gap(12.0).child(image).child(callouts)
                 })
                 .child(roles::META.wrap(figure["caption"].as_str().unwrap(), p.soft));
+        }
+        for paragraph in section["paragraphs"].as_array().unwrap() {
+            page = page.child(
+                roles::READ
+                    .wrap(paragraph.as_str().unwrap(), p.ink)
+                    .selectable(true),
+            );
         }
     }
     page = page.child(roles::SECTION.wrap("Open questions", p.ink).mt(16.0));
