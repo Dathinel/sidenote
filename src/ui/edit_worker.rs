@@ -349,6 +349,9 @@ impl State {
                     if let Some(teams) = teams {
                         self.tasks.teams = teams;
                         self.tasks.teams_notice = Some("Teams saved".into());
+                        self.tasks.team_name = rune::TextEdit::default();
+                        self.tasks.team_members = rune::TextEdit::default();
+                        self.tasks.team_aliases = rune::TextEdit::default();
                     }
                     self.rebuild_tasks();
                 }
