@@ -95,6 +95,7 @@ pub struct AiNotes {
     pub details: BTreeSet<String>,
     pub privacy_open: bool,
     pub model_open: bool,
+    pub ask_setup_open: bool,
     pub fallback: Option<Helper>,
     pub switch_confirm: Option<Helper>,
     pub generation: u64,
@@ -119,6 +120,7 @@ impl Default for AiNotes {
             details: BTreeSet::new(),
             privacy_open: false,
             model_open: false,
+            ask_setup_open: false,
             fallback: None,
             switch_confirm: None,
             generation: 0,
@@ -427,6 +429,12 @@ pub(super) fn test_error(message: &str) -> String {
     } else {
         "The sample failed. Claude Code did not answer. Open a terminal, type claude, sign in, then press Send a sample.".into()
     }
+}
+fn needs_sign_in(found: bool, sample: Option<&str>) -> bool {
+    found
+        && !sample.is_some_and(|result| {
+            result.starts_with("Worked in ") || result.starts_with("Claude Code replied")
+        })
 }
 pub fn valid_instructions(text: &str) -> bool {
     text.chars().count() <= instructions::MAX_CHARS && !text.contains('\0')
@@ -744,11 +752,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             c = c.child(r);
             continue;
         }
-        if !a
-            .test_results
-            .get(&index)
-            .is_some_and(|result| result.starts_with("Worked in "))
-        {
+        if needs_sign_in(found, a.test_results.get(&index).map(String::as_str)) {
             r = r.child(
                 button("Copy sign-in command: claude", "notes-copy-command", p)
                     .self_start()
@@ -931,6 +935,9 @@ pub fn setup_visible(s: &State) -> bool {
     s.view == super::tasks::View::Meetings
         && s.selected.is_none()
         && !s.on_hex()
+        && !s.on_memory()
+        && !s.on_check()
+        && !s.on_live()
         && s.filter == super::nav::Filter::All
         && s.search.text.trim().is_empty()
         && s.ai_notes.settings.as_ref().is_some_and(|settings| {
@@ -978,6 +985,17 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {
+        assert!(!needs_sign_in(false, None));
+        assert!(needs_sign_in(true, None));
+        assert!(needs_sign_in(true, Some(&test_error("sign-in failed"))));
+        assert!(!needs_sign_in(
+            true,
+            Some("Worked in 8 s. Only fixed sample text was sent.")
+        ));
+        assert!(!needs_sign_in(true, Some(&test_error("invalid JSON"))));
+    }
     #[test]
     fn instruction_fallback_reaches_existing_banner_without_blocking_settings() {
         assert!(instructions_warning(&instructions::Store::default()).is_none());

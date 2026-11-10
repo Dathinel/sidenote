@@ -501,6 +501,8 @@ fn hex_line(s: &State, p: Palette, wide: bool) -> El {
             "Ready"
         } else if words == "Checking" {
             "Check"
+        } else if words == "Dictating" {
+            "Dict"
         } else {
             "Off"
         };

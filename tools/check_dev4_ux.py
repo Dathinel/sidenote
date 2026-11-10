@@ -53,6 +53,10 @@ def check(root):
             assert "click" not in accessible["notes-use-0"].get("actions", [])
             assert "Copy sign-in command: claude" in text
 
+            for scene in ("notes-settings-worked", "notes-settings-test-bad-answer"):
+                _, keyed, _, _ = load(scene)
+                assert "notes-copy-command" not in keyed
+
             for helper in ("codex", "opencode"):
                 _, _, text, _ = load(f"notes-settings-saved-{helper}")
                 assert text.count("Saved choice not available") == 1
@@ -63,7 +67,7 @@ def check(root):
             assert "Your notes" not in text
 
             _, keyed, text, _ = load("features-settings")
-            assert "nav-tasks" in keyed
+            assert "view-tasks" in keyed
             switches = [e for e in keyed.values() if e.get("role") == "switch"]
             assert text.count("On") + text.count("Off") == len(switches)
 

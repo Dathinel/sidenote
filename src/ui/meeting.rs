@@ -17,7 +17,7 @@ use super::{
 };
 use rune::{El, Key, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
-use sidenote::core::{Meeting, Point, short};
+use sidenote::core::{Meeting, Point};
 use std::ops::Range;
 
 /// The main column's two tabs. The transcript has its own switch, `State::transcript_open`.
@@ -390,7 +390,7 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         let show_time = has_time && (!s.transcript_original || line.seconds.is_some());
         if show_time {
             meta = meta.child(
-                text(short(&line.at).to_string())
+                text(super::widgets::recording_time(&line.at))
                     .font(roles::META.style().mono())
                     .color(p.faint),
             );

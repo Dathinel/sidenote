@@ -594,13 +594,13 @@ pub fn overlay_with(
         stack = stack.child(panel);
     }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
-        let pill = if super::ai_notes::setup_visible(s) && !s.ask_open {
+        let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
             raised(
                 link("Ask anything", p)
                     .key("ask-open")
                     .px(20.0)
                     .py(10.0)
-                    .on_press(|s: &mut State| s.ask_open = true),
+                    .on_press(|s: &mut State| s.ai_notes.ask_setup_open = true),
                 p,
             )
         } else {

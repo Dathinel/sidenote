@@ -44,7 +44,7 @@ The answer reads at `READ` (16/27), the same as the summary under it. It used to
 a size used nowhere else, so it read as neither body nor small text. An answer is prose
 people read in full, so it gets the reading size; the question above it is `TITLE`.
 
-## Colour tokens and contrast (WCAG, checked 2026-11-09)
+## Colour tokens and contrast (WCAG, checked 2026-11-10)
 
 | Token | Light: page / card / sidebar / chip / sel / hit | Dark: page / card / sidebar / chip / sel / hit |
 |---|---|---|

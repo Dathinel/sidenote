@@ -163,7 +163,7 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
     col().w(22.0).items_center().child(mark)
 }
 
-/// The timestamp that opens the transcript at its line.
+/// Recording positions keep a minutes field even before the first minute.
 pub fn recording_time(at: &str) -> String {
     let shown = if at.matches(':').count() == 2 {
         core::short(at)
@@ -179,6 +179,7 @@ pub fn recording_time(at: &str) -> String {
     }
 }
 
+/// The timestamp that opens the transcript at its line.
 pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     let first = at.first()?.clone();
     let origin = origin.to_string();
@@ -241,7 +242,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
         );
         stamp_link = Some(
             Link::new(range, format!("{key}\u{1f}{at}"))
-                .label(format!("Open the transcript at {}", core::short(at)))
+                .label(format!("Open the transcript at {}", recording_time(at)))
                 .help("Read this in the transcript")
                 .hover(LinkPaint::new().color(p.accent).bg(p.chip)),
         );
