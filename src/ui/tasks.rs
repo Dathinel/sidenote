@@ -51,6 +51,9 @@ pub enum Panel {
 #[derive(Default)]
 pub struct PanelUi {
     pub waiting_menu: bool,
+    /// Keep editors mounted while focus moves to Save or Cancel.
+    pub title_edit: bool,
+    pub description_edit: bool,
     pub due_open: bool,
     pub status_menu: bool,
     pub advanced: bool,
@@ -1152,6 +1155,7 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                     s.tasks.inputs.due = focused_input();
                 } else if let Some(task) = s.panel_task().filter(|x| x.manual) {
                     s.tasks.inputs.title = input_with(&task.task.clone());
+                    s.tasks.ui.title_edit = true;
                 }
             }
             _ => return false,
@@ -2867,7 +2871,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
 fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> (El, El) {
     let tasks = &s.tasks;
     let (id, index) = (t.meeting_id.clone(), t.index);
-    let title = if tasks.inputs.title.focused {
+    let title = if tasks.ui.title_edit {
         let field = rune::text_input(&tasks.inputs.title, roles::SECTION.style())
             .key("ptitle")
             .label("Task title")
@@ -2892,9 +2896,12 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         )
         .key("ptitle")
         .label("Edit task title")
-        .on_press(|s: &mut State| s.tasks.inputs.title.focused = true)
+        .on_press(|s: &mut State| {
+            s.tasks.ui.title_edit = true;
+            s.tasks.inputs.title.focused = true;
+        })
     };
-    let description = if tasks.inputs.description.focused {
+    let description = if tasks.ui.description_edit {
         rune::auto_grow(
             rune::text_input(&tasks.inputs.description, roles::SMALL.style())
                 .on_edit(|s: &mut State| &mut s.tasks.inputs.description)
@@ -2925,7 +2932,10 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         )
         .key("pdescription")
         .label("Edit task description")
-        .on_press(|s: &mut State| s.tasks.inputs.description.focused = true)
+        .on_press(|s: &mut State| {
+            s.tasks.ui.description_edit = true;
+            s.tasks.inputs.description.focused = true;
+        })
     };
     let dirty = tasks.inputs.title.text != tasks.edit_title
         || tasks.inputs.description.text != tasks.edit_description;
@@ -2949,6 +2959,8 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                     button("Cancel", "task-text-cancel", false, p).on_press(|s: &mut State| {
                         s.tasks.inputs.title = TextEdit::new(&s.tasks.edit_title);
                         s.tasks.inputs.description = TextEdit::new(&s.tasks.edit_description);
+                        s.tasks.ui.title_edit = false;
+                        s.tasks.ui.description_edit = false;
                     }),
                 )
         }));
