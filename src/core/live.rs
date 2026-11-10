@@ -128,7 +128,8 @@ pub fn find_folder(root: &Path, hint: Option<&str>, start_ms: Option<i64>) -> Op
     const START_TOLERANCE_MS: u64 = 90_000;
     let mut found = None;
     for entry in fs::read_dir(root).ok()? {
-        let folder = entry.ok()?.path();
+        let Ok(entry) = entry else { continue };
+        let folder = entry.path();
         if !super::file_reads::directory(&folder) {
             continue;
         }
