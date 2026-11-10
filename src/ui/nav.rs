@@ -185,7 +185,7 @@ impl State {
 /// The sidebar's width including its divider, for pages that size themselves from the window.
 pub fn width(s: &State) -> f32 {
     if s.narrow.get() || !s.sidebar_open.get() {
-        RAIL + 1.0
+        if s.hex_recording() { RAIL + 1.0 } else { 0.0 }
     } else {
         WIDE + 1.0
     }
@@ -414,6 +414,9 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
 /// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
 /// memory proposals to review, and high findings of the daily check in the Diary.
 pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
+    if !wide && !s.hex_recording() {
+        return el().w(0.0).h_full();
+    }
     let (places, peers) = places(s, p);
 
     let mut header = row().w_full().h(52.0).gap(8.0).items_center().child(logo());

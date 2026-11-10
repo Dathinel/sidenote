@@ -1602,7 +1602,10 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(if on_hex {
             hex::settings_sidebar(s, &k, p)
         } else if window_narrow && open {
-            rune::el().w(nav::RAIL).h_full().fill(p.side)
+            rune::el()
+                .w(if s.hex_recording() { nav::RAIL } else { 0.0 })
+                .h_full()
+                .fill(p.side)
         } else {
             nav::sidebar(s, p, open && !window_narrow, &mut layer)
         })
@@ -2321,7 +2324,7 @@ pub fn spec() -> AppSpec<State> {
                 s.drawer_open.set(true);
             }),
             ("settings-sidebar-folded", |s| {
-                hex::scene(s, false);
+                hex::scene(s, true);
                 s.go_home();
                 s.sidebar_open.set(false);
                 s.drawer_open.set(false);
