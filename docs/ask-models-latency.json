@@ -1,0 +1,2019 @@
+[
+  {
+    "agent": "claude",
+    "effort": "default",
+    "run": 1,
+    "first_output_s": 1.9552068000193685,
+    "first_text_s": 5.893485100008547,
+    "total_s": 9.27821970009245,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did, what they will do next, and what is blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.955,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.959,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.959,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.201,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.276,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.713,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.767,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.997,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.023,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.893,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.893,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.893,
+        "type": "stream_event",
+        "text": "A stand-up is a short"
+      },
+      {
+        "at_s": 6.016,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": " daily team"
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": " meeting, usually 15"
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": " minutes or less, held"
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": " standing to"
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": " keep it brief."
+      },
+      {
+        "at_s": 6.643,
+        "type": "stream_event",
+        "text": "\nEach person says what they did"
+      },
+      {
+        "at_s": 6.644,
+        "type": "stream_event",
+        "text": ","
+      },
+      {
+        "at_s": 6.644,
+        "type": "stream_event",
+        "text": " what they will do next, and what"
+      },
+      {
+        "at_s": 6.644,
+        "type": "stream_event",
+        "text": " is blocking them."
+      },
+      {
+        "at_s": 6.65,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 6.65,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.661,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.662,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.606,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did, what they will do next, and what is blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "default",
+    "run": 1,
+    "first_output_s": 2.929617900052108,
+    "first_text_s": 9.438749599969015,
+    "total_s": 12.050852500018664,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a short team check-in to share progress, priorities, and blockers.\nIt usually lasts 10\u201315 minutes and helps the team coordinate its work.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.93,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 3.109,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 3.11,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 3.11,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 3.11,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 9.439,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a short team check-in to share progress, priorities, and blockers.\nIt usually lasts 10\u201315 minutes and helps the team coordinate its work."
+      },
+      {
+        "at_s": 10.259,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "low",
+    "run": 1,
+    "first_output_s": 2.487587600015104,
+    "first_text_s": 7.205051900004037,
+    "total_s": 10.63530860003084,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up meeting is a short daily team check-in, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and anything blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.488,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.491,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.491,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.816,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.919,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.441,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.023,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.361,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.384,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.204,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.205,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.205,
+        "type": "stream_event",
+        "text": "A stand-up meeting"
+      },
+      {
+        "at_s": 7.333,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.111,
+        "type": "stream_event",
+        "text": " is a short daily team"
+      },
+      {
+        "at_s": 8.112,
+        "type": "stream_event",
+        "text": " check-in, usually 15"
+      },
+      {
+        "at_s": 8.112,
+        "type": "stream_event",
+        "text": " minutes or less, held"
+      },
+      {
+        "at_s": 8.112,
+        "type": "stream_event",
+        "text": " stand"
+      },
+      {
+        "at_s": 8.112,
+        "type": "stream_event",
+        "text": "ing to keep it br"
+      },
+      {
+        "at_s": 8.112,
+        "type": "stream_event",
+        "text": "ief.\nEach person"
+      },
+      {
+        "at_s": 8.113,
+        "type": "stream_event",
+        "text": " says"
+      },
+      {
+        "at_s": 8.113,
+        "type": "stream_event",
+        "text": " what they did y"
+      },
+      {
+        "at_s": 8.113,
+        "type": "stream_event",
+        "text": "esterday, what they will"
+      },
+      {
+        "at_s": 8.113,
+        "type": "stream_event",
+        "text": " do today, and an"
+      },
+      {
+        "at_s": 8.113,
+        "type": "stream_event",
+        "text": "ything blocking them."
+      },
+      {
+        "at_s": 8.118,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 8.118,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.128,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.128,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.329,
+        "type": "result",
+        "text": "A stand-up meeting is a short daily team check-in, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and anything blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "low",
+    "run": 1,
+    "first_output_s": 2.1625214000232518,
+    "first_text_s": 9.225265700020827,
+    "total_s": 11.51234460005071,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a short team check-in where people share progress, upcoming work, and blockers.\nIt helps the team stay aligned and identify where support or coordination is needed.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.163,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.344,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.344,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.344,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.344,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 9.225,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a short team check-in where people share progress, upcoming work, and blockers.\nIt helps the team stay aligned and identify where support or coordination is needed."
+      },
+      {
+        "at_s": 9.952,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "medium",
+    "run": 1,
+    "first_output_s": 1.3915933999232948,
+    "first_text_s": 5.909723499906249,
+    "total_s": 9.334297799970955,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, often 15 minutes and held standing to keep it brief, where each person shares what they did yesterday, what they plan today, and anything blocking them.\nIts purpose is to sync the team and surface blockers early; detailed problem-solving happens afterward with only the people involved.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.392,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.394,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.394,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.608,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.685,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.067,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.133,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.471,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.495,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.404,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.558,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.559,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.906,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.906,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.909,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 5.909,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.909,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.91,
+        "type": "stream_event",
+        "text": "A stand"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": "-up is"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": " a short da"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": "ily team"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": " meeting, often"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": " 15 minutes and"
+      },
+      {
+        "at_s": 6.204,
+        "type": "stream_event",
+        "text": " held"
+      },
+      {
+        "at_s": 6.238,
+        "type": "stream_event",
+        "text": " standing to"
+      },
+      {
+        "at_s": 6.291,
+        "type": "stream_event",
+        "text": " keep it brief, where each"
+      },
+      {
+        "at_s": 6.338,
+        "type": "stream_event",
+        "text": " person sh"
+      },
+      {
+        "at_s": 6.391,
+        "type": "stream_event",
+        "text": "ares what they did yesterday"
+      },
+      {
+        "at_s": 6.441,
+        "type": "stream_event",
+        "text": ", what they plan today"
+      },
+      {
+        "at_s": 6.493,
+        "type": "stream_event",
+        "text": ", and an"
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": "ything blocking them."
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": "\nIts purpose is to sync"
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": " the team and sur"
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": "face blockers early"
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": "; detailed problem-sol"
+      },
+      {
+        "at_s": 7.034,
+        "type": "stream_event",
+        "text": "ving happens af"
+      },
+      {
+        "at_s": 7.035,
+        "type": "stream_event",
+        "text": "terward"
+      },
+      {
+        "at_s": 7.035,
+        "type": "stream_event",
+        "text": " with only"
+      },
+      {
+        "at_s": 7.035,
+        "type": "stream_event",
+        "text": " the people involved."
+      },
+      {
+        "at_s": 7.039,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 7.04,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.052,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.052,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.06,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, often 15 minutes and held standing to keep it brief, where each person shares what they did yesterday, what they plan today, and anything blocking them.\nIts purpose is to sync the team and surface blockers early; detailed problem-solving happens afterward with only the people involved."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "medium",
+    "run": 1,
+    "first_output_s": 2.316003100015223,
+    "first_text_s": 8.713525200029835,
+    "total_s": 10.891750499955378,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a brief team check-in to share progress, outline next steps, and flag blockers.\nIt usually lasts about 15 minutes and helps the team coordinate work.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.316,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.469,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.47,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.47,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.47,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 8.714,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a brief team check-in to share progress, outline next steps, and flag blockers.\nIt usually lasts about 15 minutes and helps the team coordinate work."
+      },
+      {
+        "at_s": 9.362,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "default",
+    "run": 2,
+    "first_output_s": 1.7336444000247866,
+    "first_text_s": 6.383860300062224,
+    "total_s": 9.150126500055194,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes or less, often held standing so it stays brief.\nEach person says what they did since the last one, what they'll do next, and what's blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.734,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.736,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.737,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.079,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.243,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.527,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.631,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.859,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.879,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.765,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.765,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 5.802,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.281,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.281,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.378,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.379,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.379,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.382,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 6.383,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.383,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.384,
+        "type": "stream_event",
+        "text": "A stand-up is"
+      },
+      {
+        "at_s": 6.848,
+        "type": "stream_event",
+        "text": " a short daily team"
+      },
+      {
+        "at_s": 6.848,
+        "type": "stream_event",
+        "text": " meeting, usually 15"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": " minutes or less, often"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": " held stand"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": "ing so it"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": " stays brief.\nEach"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": " person says what they did since"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": " the last one"
+      },
+      {
+        "at_s": 6.849,
+        "type": "stream_event",
+        "text": ", what they'll do next,"
+      },
+      {
+        "at_s": 6.885,
+        "type": "stream_event",
+        "text": " and what"
+      },
+      {
+        "at_s": 6.93,
+        "type": "stream_event",
+        "text": "'s blocking them."
+      },
+      {
+        "at_s": 6.935,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 6.935,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.944,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.944,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.885,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, usually 15 minutes or less, often held standing so it stays brief.\nEach person says what they did since the last one, what they'll do next, and what's blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "default",
+    "run": 2,
+    "first_output_s": 1.9157622000202537,
+    "first_text_s": 8.176319899968803,
+    "total_s": 11.15490680001676,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate its work.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.916,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.1,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.1,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.1,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.1,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 8.176,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate its work."
+      },
+      {
+        "at_s": 8.792,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "low",
+    "run": 2,
+    "first_output_s": 1.6045563999796286,
+    "first_text_s": 6.021377400029451,
+    "total_s": 9.27281530003529,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up meeting is a short daily team check-in, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and anything blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.605,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.607,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.607,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.963,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.154,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.434,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.772,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.026,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.05,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.902,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.021,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.021,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.021,
+        "type": "stream_event",
+        "text": "A stand-up meeting"
+      },
+      {
+        "at_s": 6.721,
+        "type": "stream_event",
+        "text": " is a short daily team"
+      },
+      {
+        "at_s": 6.721,
+        "type": "stream_event",
+        "text": " check-in, usually 15"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": " minutes or less, held"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": " stand"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": "ing to keep it br"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": "ief.\nEach person says what"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": " they did y"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": "esterday, what they will do"
+      },
+      {
+        "at_s": 6.722,
+        "type": "stream_event",
+        "text": " today, and an"
+      },
+      {
+        "at_s": 6.723,
+        "type": "stream_event",
+        "text": "ything blocking them."
+      },
+      {
+        "at_s": 6.733,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 6.733,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.744,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.744,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.918,
+        "type": "result",
+        "text": "A stand-up meeting is a short daily team check-in, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and anything blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "low",
+    "run": 2,
+    "first_output_s": 2.063335399958305,
+    "first_text_s": 9.17847729998175,
+    "total_s": 11.790628000046127,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate its work.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.063,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.24,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.24,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.24,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.24,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 9.178,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate its work."
+      },
+      {
+        "at_s": 9.897,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "medium",
+    "run": 2,
+    "first_output_s": 2.4216548000695184,
+    "first_text_s": 7.335896700038575,
+    "total_s": 11.672929899999872,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did, what they'll do next, and what's blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.422,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.424,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.424,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.034,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.036,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 4.475,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.212,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.419,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.437,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.335,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.336,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.336,
+        "type": "stream_event",
+        "text": "A stand-up is a short"
+      },
+      {
+        "at_s": 7.572,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.193,
+        "type": "stream_event",
+        "text": " daily team"
+      },
+      {
+        "at_s": 8.194,
+        "type": "stream_event",
+        "text": " meeting, usually 15"
+      },
+      {
+        "at_s": 8.194,
+        "type": "stream_event",
+        "text": " minutes or less, held"
+      },
+      {
+        "at_s": 8.194,
+        "type": "stream_event",
+        "text": " stand"
+      },
+      {
+        "at_s": 8.194,
+        "type": "stream_event",
+        "text": "ing to keep it brief."
+      },
+      {
+        "at_s": 8.195,
+        "type": "stream_event",
+        "text": "\nEach person says what they did"
+      },
+      {
+        "at_s": 8.195,
+        "type": "stream_event",
+        "text": ","
+      },
+      {
+        "at_s": 8.195,
+        "type": "stream_event",
+        "text": " what they'll do next, and"
+      },
+      {
+        "at_s": 8.195,
+        "type": "stream_event",
+        "text": " what"
+      },
+      {
+        "at_s": 8.196,
+        "type": "stream_event",
+        "text": "'s blocking them."
+      },
+      {
+        "at_s": 8.202,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 8.202,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.207,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.207,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.81,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, usually 15 minutes or less, held standing to keep it brief.\nEach person says what they did, what they'll do next, and what's blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "medium",
+    "run": 2,
+    "first_output_s": 2.7671024000737816,
+    "first_text_s": 10.894890900002792,
+    "total_s": 13.571246900013648,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a short team check-in to share progress, outline next steps, and flag blockers.\nIt usually lasts about 15 minutes and helps the team coordinate work and identify where support is needed.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.767,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.981,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.981,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.981,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.981,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 10.895,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a short team check-in to share progress, outline next steps, and flag blockers.\nIt usually lasts about 15 minutes and helps the team coordinate work and identify where support is needed."
+      },
+      {
+        "at_s": 11.649,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "default",
+    "run": 3,
+    "first_output_s": 2.051591300056316,
+    "first_text_s": 7.569238299969584,
+    "total_s": 10.770669399993494,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and what is blocking them.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.052,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.054,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.054,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.515,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.517,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.878,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.795,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.026,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.051,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.519,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.568,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.569,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.569,
+        "type": "stream_event",
+        "text": "A stand-up is a short"
+      },
+      {
+        "at_s": 8.339,
+        "type": "stream_event",
+        "text": " daily team"
+      },
+      {
+        "at_s": 8.339,
+        "type": "stream_event",
+        "text": " meeting, usually 15"
+      },
+      {
+        "at_s": 8.339,
+        "type": "stream_event",
+        "text": " minutes,"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": " held stand"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": "ing to"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": " keep it br"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": "ief.\nEach person"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": " says what they did yesterday"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": ", what they will do today, and"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": " what is"
+      },
+      {
+        "at_s": 8.34,
+        "type": "stream_event",
+        "text": " blocking them."
+      },
+      {
+        "at_s": 8.344,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 8.344,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.349,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.349,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.536,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, usually 15 minutes, held standing to keep it brief.\nEach person says what they did yesterday, what they will do today, and what is blocking them."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "default",
+    "run": 3,
+    "first_output_s": 2.4133473000256345,
+    "first_text_s": 10.119588900008239,
+    "total_s": 12.548388399998657,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt\u2019s usually held daily and kept to about 15 minutes so the team can coordinate quickly.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.413,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.647,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.647,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.647,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.647,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 10.12,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt\u2019s usually held daily and kept to about 15 minutes so the team can coordinate quickly."
+      },
+      {
+        "at_s": 10.854,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "low",
+    "run": 3,
+    "first_output_s": 1.7070496999658644,
+    "first_text_s": 6.787790699978359,
+    "total_s": 10.037724199937657,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up meeting is a short daily check-in, usually 15 minutes or less, where team members stand to keep it brief.\nEach person shares what they did yesterday, what they plan to do today, and any blockers.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 1.707,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.709,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 1.709,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.011,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 2.299,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.69,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.119,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.329,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.349,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 6.187,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.787,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.788,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 6.788,
+        "type": "stream_event",
+        "text": "A stand-up me"
+      },
+      {
+        "at_s": 7.586,
+        "type": "stream_event",
+        "text": "eting is a short da"
+      },
+      {
+        "at_s": 7.586,
+        "type": "stream_event",
+        "text": "ily check-in, usually "
+      },
+      {
+        "at_s": 7.586,
+        "type": "stream_event",
+        "text": "15"
+      },
+      {
+        "at_s": 7.586,
+        "type": "stream_event",
+        "text": " minutes or less, where"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": " team members stand to keep it"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": " brief.\nEach person sh"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": "ares what they did y"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": "esterday, what they plan"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": " to"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": " do today, and any blockers"
+      },
+      {
+        "at_s": 7.587,
+        "type": "stream_event",
+        "text": "."
+      },
+      {
+        "at_s": 7.594,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 7.595,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.604,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 7.604,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 8.624,
+        "type": "result",
+        "text": "A stand-up meeting is a short daily check-in, usually 15 minutes or less, where team members stand to keep it brief.\nEach person shares what they did yesterday, what they plan to do today, and any blockers."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "low",
+    "run": 3,
+    "first_output_s": 2.3235257000196725,
+    "first_text_s": 7.8054317000787705,
+    "total_s": 10.576698400080204,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a short team check-in where people share progress, upcoming work, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate and spot issues early.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.324,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.504,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.504,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.504,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.504,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 7.805,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a short team check-in where people share progress, upcoming work, and blockers.\nIt usually lasts about 15 minutes and helps the team coordinate and spot issues early."
+      },
+      {
+        "at_s": 8.622,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  },
+  {
+    "agent": "claude",
+    "effort": "medium",
+    "run": 3,
+    "first_output_s": 3.1207282000686973,
+    "first_text_s": 9.684016700019129,
+    "total_s": 12.688324799994007,
+    "exit_code": 0,
+    "model": "claude-opus-5-5",
+    "answer": "A stand-up is a short daily team meeting, usually 15 minutes or less, where each person says what they did yesterday, what they will do today, and what is blocking them.\nIt exists to surface blockers and keep the team in sync, not to solve problems; longer discussions move to a separate follow-up.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 3.121,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.126,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.127,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.512,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 3.669,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 5.168,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.496,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.712,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 7.73,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 8.659,
+        "type": "rate_limit_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.197,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.197,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.628,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 9.628,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.68,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.681,
+        "type": "system",
+        "text": ""
+      },
+      {
+        "at_s": 9.681,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.683,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 9.683,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.683,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 9.684,
+        "type": "stream_event",
+        "text": "A"
+      },
+      {
+        "at_s": 9.926,
+        "type": "stream_event",
+        "text": " stand-up is a short da"
+      },
+      {
+        "at_s": 9.926,
+        "type": "stream_event",
+        "text": "ily team meeting, usually"
+      },
+      {
+        "at_s": 9.926,
+        "type": "stream_event",
+        "text": " 15 minutes or less"
+      },
+      {
+        "at_s": 9.926,
+        "type": "stream_event",
+        "text": ", where each person says what they did"
+      },
+      {
+        "at_s": 9.939,
+        "type": "stream_event",
+        "text": " yesterday, what they will"
+      },
+      {
+        "at_s": 9.989,
+        "type": "stream_event",
+        "text": " do today, and what"
+      },
+      {
+        "at_s": 10.039,
+        "type": "stream_event",
+        "text": " is blocking them.\nIt"
+      },
+      {
+        "at_s": 10.089,
+        "type": "stream_event",
+        "text": " exists to surface blockers"
+      },
+      {
+        "at_s": 10.139,
+        "type": "stream_event",
+        "text": " and keep the team in"
+      },
+      {
+        "at_s": 10.19,
+        "type": "stream_event",
+        "text": " sync, not to sol"
+      },
+      {
+        "at_s": 10.238,
+        "type": "stream_event",
+        "text": "ve problems;"
+      },
+      {
+        "at_s": 10.289,
+        "type": "stream_event",
+        "text": " longer discussions move to a"
+      },
+      {
+        "at_s": 10.399,
+        "type": "stream_event",
+        "text": " separate follow-up."
+      },
+      {
+        "at_s": 10.404,
+        "type": "assistant",
+        "text": ""
+      },
+      {
+        "at_s": 10.404,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 10.414,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 10.414,
+        "type": "stream_event",
+        "text": ""
+      },
+      {
+        "at_s": 11.41,
+        "type": "result",
+        "text": "A stand-up is a short daily team meeting, usually 15 minutes or less, where each person says what they did yesterday, what they will do today, and what is blocking them.\nIt exists to surface blockers and keep the team in sync, not to solve problems; longer discussions move to a separate follow-up."
+      }
+    ]
+  },
+  {
+    "agent": "codex",
+    "effort": "medium",
+    "run": 3,
+    "first_output_s": 2.558083900017664,
+    "first_text_s": 7.894077599979937,
+    "total_s": 10.434752900036983,
+    "exit_code": 0,
+    "model": null,
+    "answer": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt\u2019s usually held daily and kept to about 15 minutes so everyone can coordinate their work.",
+    "error": null,
+    "events": [
+      {
+        "at_s": 2.558,
+        "type": "thread.started",
+        "text": ""
+      },
+      {
+        "at_s": 2.754,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.754,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.754,
+        "type": "item.completed",
+        "text": ""
+      },
+      {
+        "at_s": 2.754,
+        "type": "turn.started",
+        "text": ""
+      },
+      {
+        "at_s": 7.894,
+        "type": "item.completed",
+        "text": "A stand-up meeting is a brief team check-in to share progress, priorities, and blockers.\nIt\u2019s usually held daily and kept to about 15 minutes so everyone can coordinate their work."
+      },
+      {
+        "at_s": 8.579,
+        "type": "turn.completed",
+        "text": ""
+      }
+    ]
+  }
+]
