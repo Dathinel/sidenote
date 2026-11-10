@@ -19,9 +19,16 @@ Nearby words start about 3 seconds before the mark and finish at the nearest
 sentence or segment boundary, capped at 8 seconds after the mark. Timing and
 coordinates are hints, not proof that the speaker refers to a visible target.
 
-For each mark, explain the visible target and what the speaker says about it.
-Keep direct observation and speaker claims distinct. Preserve uncertainty and
-contradictions. Include every supplied mark exactly once. Put unsupported targets,
-unclear associations and missing context into uncertainty and open_questions.
-Return the requested JSON frame draft only. Do not invent causes, steps, owners,
-deadlines, names, numbers or commitments.
+Write as the person explaining their work to a colleague. The summary states the
+point in 2 to 4 plain sentences, rather than describing a sequence of frames.
+For each mark, write 1 to 2 plain sentences explaining what that mark means.
+Do not use "Observed:" or "Speaker:" labels. Do not quote fragments unless the
+exact wording matters. Use direct prose grounded in the visible content and words.
+
+Put uncertainty once in open_questions at the end, never in a callout or summary.
+Set every callout uncertainty field to null. When timing only suggests a link
+between words and a mark, phrase the callout narrowly using what is certain and
+add one open question about the link. Do not repeat the caveat in other fields.
+Include every supplied mark exactly once. Do not infer hidden text or invent
+causes, steps, owners, deadlines, names, numbers or commitments.
+Return the requested JSON frame draft only.
