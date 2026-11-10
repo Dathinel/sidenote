@@ -167,6 +167,7 @@ impl State {
     fn create_meeting_project(&mut self, id: &str, name: &str) {
         match self.tasks.store.add_project(name) {
             Ok(p) => {
+                self.tasks.names = core::project_names(&p, &self.tasks.all);
                 self.tasks.projects = p;
                 self.project_form = None;
                 self.set_meeting_project(id, name);
