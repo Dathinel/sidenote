@@ -522,6 +522,14 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "speech-model-anuvani-lid-int8",
+            "Anuvani language identification",
+            "language identification detection",
+            Page::Helpers,
+            2,
+            true,
+        ),
+        entry(
             "legacy-hex-models",
             "Hex dictation model",
             "model",

@@ -383,7 +383,10 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
         })
         .collect();
     if visible.is_empty() {
-        return body.child(roles::SMALL.wrap("English uses Hex's own model. Nothing to download. Add another language to see its models.", p.soft));
+        return body.child(roles::SMALL.wrap(
+            "No speech models match this search and the selected languages.",
+            p.soft,
+        ));
     }
     for m in visible {
         let id = m.id;
