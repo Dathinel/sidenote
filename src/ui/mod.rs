@@ -15,6 +15,7 @@ mod finder;
 mod hex;
 mod list;
 mod live;
+mod mcp_connect;
 mod meeting;
 mod memory;
 mod models;
@@ -120,6 +121,7 @@ pub enum Event {
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
     Models(models::Msg),
+    McpConnected(Result<String, String>),
     /// The scan, its errors, and the pipeline's `tasks.json` of each meeting.
     Refreshed(refresh::Result),
     Progress {
@@ -274,6 +276,7 @@ pub struct State {
     /// The Hex page, shown in place of the home list.
     pub hex_open: bool,
     pub hex: hex::HexState,
+    pub connection: mcp_connect::Connection,
     pub tasks: tasks::TasksState,
     /// Under 820 points wide. The view records it for handlers.
     pub narrow: Cell<bool>,
@@ -438,6 +441,7 @@ impl State {
             memory: memory::MemState::default(),
             hex_open: false,
             hex: hex::HexState::default(),
+            connection: mcp_connect::Connection::default(),
             tasks,
             narrow: Cell::new(false),
             viewport_h: Cell::new(600.0),
@@ -1019,6 +1023,10 @@ impl State {
             Event::ListenerFinished(result) => self.listener_finished(result),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
+            Event::McpConnected(result) => {
+                self.connection.busy = false;
+                self.connection.result = Some(result);
+            }
             Event::MigrationPrepared(result) => {
                 self.memory.preview_running = false;
                 if self.config.features.memory {
@@ -2209,6 +2217,9 @@ pub fn spec() -> AppSpec<State> {
                 hex::scene(s, false);
                 scene_tasks(s);
                 scene_sidebar(s, true);
+            }),
+            ("mcp-connect", |s| {
+                scene_hex(s, hex::Section::Connect, false)
             }),
             ("features-settings", |s| {
                 scene_hex(s, hex::Section::Features, false);

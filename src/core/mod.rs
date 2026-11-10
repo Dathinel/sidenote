@@ -22,6 +22,7 @@ pub mod agent_tools;
 mod device;
 pub mod file_reads;
 pub mod live_edit;
+pub mod mcp_connect;
 pub use sync_state::{EditView, mutation_generation};
 mod memory_migration;
 pub(crate) mod store_io;
