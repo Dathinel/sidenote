@@ -211,6 +211,7 @@ fn journals(root: &Path) -> BTreeFiles {
 }
 type BTreeFiles = std::collections::BTreeMap<PathBuf, Vec<u8>>;
 
+#[track_caller]
 fn status(app: &mut App, phase: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -218,7 +219,11 @@ fn status(app: &mut App, phase: &str) -> Value {
         if value["phase"] == phase {
             return value;
         }
-        assert!(Instant::now() < deadline, "pairing phase did not arrive");
+        assert!(
+            Instant::now() < deadline,
+            "pairing phase {phase} did not arrive; current phase: {}",
+            value["phase"].as_str().unwrap_or("unknown"),
+        );
         thread::sleep(Duration::from_millis(30));
     }
 }

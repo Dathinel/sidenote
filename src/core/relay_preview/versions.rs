@@ -139,7 +139,7 @@ impl Preview {
     }
     pub fn resolutions(&self) -> io::Result<Vec<Resolution>> {
         let doc = self.device.load("tasks").map_err(failed)?;
-        let mut out = Vec::new();
+        let mut out: Vec<Resolution> = Vec::new();
         for key in doc.keys(ROOT) {
             let [kind, _]: [String; 2] = serde_json::from_str(&key)?;
             if kind == "$resolution" {
