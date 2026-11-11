@@ -24,8 +24,8 @@ through Syncthing. Their directory is under ignored local/.
 Recommend a full durable replica on each paired device. Automerge domains are
 logical identifiers, not file paths. Map stable IDs and individual fields, never
 one JSON string for a complete item. Keep concurrent alternatives and tombstones.
-The core currently permits tasks, memory, projects, diary and meeting:<id>.
-Extend that allowlist explicitly for people, teams and shared settings later.
+The imported core allowed tasks, memory, projects, diary and meeting:<id>.
+Slice 3 adds explicit people and settings domains; teams share the people domain.
 
 | App data | Planned relay representation | Folder sync / device boundary |
 | --- | --- | --- |
@@ -146,7 +146,7 @@ an independent security review. These are not replaced by local automation.
 
 Run the requested fmt, locked clippy and workspace tests with and without
 asr-runtime, build and MCP smoke. Report exact results and limitations. Do not
-bump the version, push, deploy or begin slice 2. Stop after 90 minutes if needed.
+bump the version, push or deploy. Stop at the authorized slice and 90-minute limit.
 
 ## Ordered slices
 
@@ -164,27 +164,12 @@ bump the version, push, deploy or begin slice 2. Stop after 90 minutes if needed
 Slices 1 and 2 are accepted. Slice 3 is authorized on feat/sync-relay-2 after
 Round 1 UI acceptance (28fc734). Stop before slices 4 and 5.
 
-## Slice 1 evidence and limits
+## Earlier evidence and limits
 
-Implemented locally on feat/sync-relay. Automated checks are rung 4, not release
-qualification. The two-instance test launches the actual sidenote.exe twice with
-separate synthetic roots and a numeric-loopback Worker. It verifies delivery,
-owner/due edits while both sessions are stopped, convergence after both apps
-restart, deletion, and unchanged folder journal bytes after preview and rollback.
-
-The requested fmt, both strict clippy variants, both locked workspace test
-variants, locked build and MCP smoke passed locally. The workspace has 248
-top-level tests per feature variant, plus the nested restart proof process. The
-relay's bun suite passed 19 tests; its TypeScript check and the scanner's five
-tests also passed. Local relay tooling used the locked Wrangler 4.158.0 through
-its executable shim, not the older global 4.81.0 or the unsupported Bun JS runtime.
-
-At the end of slice 1, no pairing UI or journal migration was implemented.
-The fixture provisions only synthetic memberships through the core API. Nested task collections and
-same-field conflict UI need later qualification. GUI interactions, MCP access
-while a GUI owns the preview replica, physical devices, a deployed self-hosted
-Worker, release packaging and independent security review remain unverified.
-No version bump, push, Cloudflare login or deployment was performed.
+Slices 1 and 2 passed the recorded local gates. The initial provisioned pairing
+fixture was replaced in slice 2 with the real confirmed pairing flow. See
+`docs/sync-relay-2.md` for the accepted receipts. Local automated evidence is
+rung 4 and does not replace physical-device or independent security qualification.
 
 ## Slice 3 implementation contract
 
@@ -204,9 +189,9 @@ Success criteria:
 - Share Memory records, proposals, provenance and decisions without accepting a
   proposal merely because it arrived. Keep legacy text migration explicit.
 - Share an explicit You allowlist: your display name and People classifications.
-  Device paths, credentials, helper/model choices, hardware, UI layout and corpus
-  cutoffs stay local. Hex language/vocabulary files remain folder/device inputs
-  until an isolated adapter for that external application's configuration exists.
+  Device paths, credentials, helper/model choices, hardware, UI layout and People
+  corpus eligibility stay local. The existing task cutoff retains its folder policy.
+  Hex language/vocabulary stays outside this app until its own adapter exists.
 - Preserve IDs on import, use source receipts, and freeze only migrated folder
   fields. Verify backups and rollback without publishing relay projections into
   the original journals. Enabling again must retain the relay collection.
@@ -226,8 +211,10 @@ upgrade; missing stores must not replace remote data with defaults. Preserve
 unknown fields, tombstones, alias cycles and generated-task source matching.
 Collections need identity-based members, not array-position winners. Stale UI
 saves must not reset unrelated peer fields or machine-local settings. Reject
-corrupt backups, partial journals, invalid domains, mixed-version writes and
-changed undo baselines. Keep operation receipts immutable where required.
+corrupt backups, partial journals, invalid domains and changed undo baselines.
+Mixed-version writable clients must stay out of preview; capability negotiation
+and downgrade rejection still need release qualification. Keep operation receipts
+immutable where required.
 
 Out of scope: relay transfer of meeting source files/audio, Ask chat, daily-check
 reports, external Hex configuration, selective multi-peer rekey, hosted backlog,
@@ -235,3 +222,28 @@ login, deployment, pushing, version changes or owner-screen interaction. Slice 4
 covers the Worker self-host guide and local operational checks. Actual hosted
 self-host evidence, two real devices and an independent security review remain
 release gates in slice 5, requiring separate authorization where applicable.
+
+## Slice 3 local receipt
+
+The preview now uses field registers for meeting task edits/checks, stable
+subtasks, teams and aliases, People classifications, projects/areas, Memory and
+your name. Selected folder fields are backed up and frozen; meeting source files
+and nonselected settings retain their existing transport. Device helper/model
+choices, UI preferences and People corpus eligibility are excluded.
+
+The two real headless app processes pair through numeric-loopback Wrangler.
+Tests cover independent offline fields and members, Memory text and proposal
+accept/reject conflicts, a stale project merge, owner-only undo, duplicate-free
+migration, unchanged folder bytes and disable/re-enable durability. Shared-field
+choices and their history use the real Sync chooser. Remove confirmation hides
+the row action and uses the existing primary style; no shared destructive style
+was found in the UI components.
+
+All requested local gates passed, including both feature variants, MCP, 21 Bun
+tests and relay typecheck. The requested 12 Sync PNGs, four shared Memory PNGs,
+18 interaction-proof frames and ten affected-domain frames were rendered. See
+artifacts/relay3-evidence.json and artifacts/relay3-png-paths.json locally.
+Evidence is rung 4. Mixed-version negotiation/downgrade rejection is unqualified;
+do not mix writable app versions. Slices 4 and 5 and all physical-device, hosted
+self-host and independent security release gates remain. No login, deployment,
+push, version change or owner-screen interaction was performed.
