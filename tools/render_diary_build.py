@@ -325,7 +325,7 @@ def main():
         save(OUT/"interaction-manifest.json", rows)
         return
     if args.settings:
-        scenes = ["general", "recording", "summaries", "tasks", "prompts", "people", "hex", "helpers", "speech", "helper-advanced", "appearance", "sync", "updates", "search", "recording-expanded", "summaries-expanded", "tasks-expanded", "hex-expanded", "helper-advanced-expanded", "sync-expanded", "updates-expanded", "helpers-expanded"]
+        scenes = ["general", "recording", "summaries", "tasks", "prompts", "people", "hex", "helpers", "speech", "helper-advanced", "appearance", "sync", "updates", "privacy", "diagnostics", "speech-expanded", "search", "recording-expanded", "summaries-expanded", "tasks-expanded", "hex-expanded", "helper-advanced-expanded", "sync-expanded", "updates-expanded", "helpers-expanded"]
         def run_settings(scene):
             events = json.loads((ROOT / "tools/ui-scripts/settings-search.json").read_text())["events"] if scene == "search" else None
             return render(exe, "settings-"+scene, 1280, "light", "empty", events, "settings-"+scene, 800)

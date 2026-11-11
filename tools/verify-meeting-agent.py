@@ -109,7 +109,7 @@ assert keyed(restarted, "ask-meeting-agent-trigger")["label"] == "Agent during m
 assert any(n.get("text") == "Codex · GPT-6.1 Terra" for n in restarted)
 
 scenes = ("general recording summaries tasks prompts people hex helpers speech helper-advanced "
-          "appearance sync updates sidebar-open sidebar-folded recording-expanded "
+          "appearance sync updates privacy diagnostics speech-expanded sidebar-open sidebar-folded recording-expanded "
           "summaries-expanded tasks-expanded hex-expanded helper-advanced-expanded sync-expanded "
           "updates-expanded helpers-expanded").split()
 with ThreadPoolExecutor(max_workers=2) as pool:
