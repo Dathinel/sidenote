@@ -211,6 +211,11 @@ starts_with(http.request.uri.path, "/pair/") or
 starts_with(http.request.uri.path, "/sync/")
 ```
 
+Use a Custom Domain in a Cloudflare zone you control for this zone-level rule.
+Disable an alternate `workers.dev` route if it would bypass that rule. Domain,
+routing and edge-rule changes are owner operations and were not performed here.
+See [Worker routes and domains](https://developers.cloudflare.com/workers/configuration/routing/).
+
 Count by source IP, include WebSocket upgrade requests, and choose a request
 threshold, window and block duration for the actual fleet and plan. For example,
 start evaluation at 60 upgrade requests per IP per minute and a one-minute block;
