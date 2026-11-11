@@ -730,20 +730,10 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
         v["projects"]["merges"].get("Research").is_none()
             && v["projects"]["aliases"].get("Research").is_none()
     });
-    app_a.request(json!({"op":"remove","name":"Travel laptop"}));
-    assert_eq!(
-        app_a.request(json!({"op":"status"}))["devices"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    let after_remove = app_a.request(json!({"op":"add","task":{"task":"Synthetic after removal"}}));
-    thread::sleep(Duration::from_millis(300));
-    assert!(
-        find(&app_b.request(json!({"op":"list"})), &after_remove).is_none(),
-        "removed peer received a new task"
-    );
+    app_a.rejected(json!({"op":"remove","name":"Travel laptop"}));
+    let after_remove =
+        app_a.request(json!({"op":"add","task":{"task":"Synthetic retained relay collection"}}));
+    wait_for(&mut app_b, |tasks| find(tasks, &after_remove).is_some());
     assert_eq!(journals(&a), original_a);
     assert_eq!(journals(&b), original_b);
     app_a.request(json!({"op":"disable"}));
@@ -1017,7 +1007,7 @@ fn migration_recovers_after_process_kill_at_durable_boundaries() {
     }
 }
 #[test]
-fn three_peers_repair_survivor_after_rotation_and_exclude_removed_peer() {
+fn three_peers_refuse_unavailable_removal_without_claiming_revocation() {
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();
@@ -1040,22 +1030,15 @@ fn three_peers_repair_survivor_after_rotation_and_exclude_removed_peer() {
     for app in [&mut bb, &mut cc] {
         wait_for(app, |t| find(t, &initial).is_some());
     }
-    aa.request(json!({"op":"remove","name":"Synthetic C"}));
-    pair_apps(&mut aa, &mut bb, &a);
-    let private =
-        aa.request(json!({"op":"add","task":{"task":"Synthetic private after rotation"}}));
-    wait_for(&mut bb, |t| find(t, &private).is_some());
-    for _ in 0..25 {
-        assert!(
-            find(&cc.request(json!({"op":"list"})), &private).is_none(),
-            "removed peer received new content"
-        );
-        thread::sleep(Duration::from_millis(60));
-    }
-    assert!(
-        find(&cc.request(json!({"op":"list"})), &initial).is_some(),
-        "revocation erased previously held content"
+    let old_room = relay_preview::Settings::load(&a).unwrap().room;
+    aa.rejected(json!({"op":"remove","name":"Synthetic C"}));
+    assert_eq!(relay_preview::Settings::load(&a).unwrap().room, old_room);
+    let after = cc.request(
+        json!({"op":"add","task":{"task":"Synthetic existing group remains explicitly shared"}}),
     );
+    for app in [&mut aa, &mut bb] {
+        wait_for(app, |tasks| find(tasks, &after).is_some());
+    }
     aa.stop();
     bb.stop();
     cc.stop();

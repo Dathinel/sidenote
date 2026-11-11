@@ -374,6 +374,14 @@ mod platform {
         System::{JobObjects::*, Pipes::CreatePipe, Threading::*},
     };
     pub struct Job(OwnedHandle);
+    const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_DESKTOP
+        | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+        | JOB_OBJECT_UILIMIT_EXITWINDOWS
+        | JOB_OBJECT_UILIMIT_GLOBALATOMS
+        | JOB_OBJECT_UILIMIT_HANDLES
+        | JOB_OBJECT_UILIMIT_READCLIPBOARD
+        | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+        | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
     impl Job {
         pub fn new() -> Result<Self> {
             let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
@@ -395,6 +403,20 @@ mod platform {
                         JobObjectExtendedLimitInformation,
                         (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
                         std::mem::size_of_val(&limits) as u32,
+                    )
+                } != 0,
+                Failure(Reason::WorkerUnavailable)
+            );
+            let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+                UIRestrictionsClass: UI_LIMITS,
+            };
+            ensure!(
+                unsafe {
+                    SetInformationJobObject(
+                        job.0.as_raw_handle(),
+                        JobObjectBasicUIRestrictions,
+                        (&ui as *const JOBOBJECT_BASIC_UI_RESTRICTIONS).cast(),
+                        std::mem::size_of_val(&ui) as u32,
                     )
                 } != 0,
                 Failure(Reason::WorkerUnavailable)
@@ -561,6 +583,20 @@ mod platform {
         })
     }
     pub fn require_job() -> Result<()> {
+        let mut ui = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+        ensure!(
+            unsafe {
+                QueryInformationJobObject(
+                    ptr::null_mut(),
+                    JobObjectBasicUIRestrictions,
+                    (&mut ui as *mut JOBOBJECT_BASIC_UI_RESTRICTIONS).cast(),
+                    std::mem::size_of_val(&ui) as u32,
+                    ptr::null_mut(),
+                )
+            } != 0
+                && ui.UIRestrictionsClass & UI_LIMITS == UI_LIMITS,
+            Failure(Reason::WorkerUnavailable)
+        );
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         ensure!(
             unsafe {

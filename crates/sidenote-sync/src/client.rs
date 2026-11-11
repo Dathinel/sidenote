@@ -416,7 +416,13 @@ impl SyncClient {
                         id < self.device.identity.public() && opened.payload.len() == 32,
                         Failure(Reason::Protocol)
                     );
-                    let probe = opened.payload.try_into()?;
+                    let probe: [u8; 32] = opened.payload.try_into()?;
+                    if s.challenges.get(&id).is_some_and(|challenge| {
+                        challenge.probe == probe
+                            && challenge.at.elapsed() <= Duration::from_secs(10)
+                    }) {
+                        return Ok(());
+                    }
                     let nonce = random32();
                     s.challenges.insert(
                         id,
@@ -1800,6 +1806,18 @@ mod tests {
             .envelope(&mut Sink, &mut session, stale, &group, &mut bans)
             .await?;
         assert_eq!(session.peers[&id].cipher.session, old_session);
+        assert_eq!(session.challenges[&id].nonce, [9; 32]);
+        let replayed_probe = crypto::seal(
+            &sender.identity,
+            &group,
+            receiver.identity.public(),
+            4,
+            [0; 32],
+            &[6; 32],
+        );
+        client
+            .envelope(&mut Sink, &mut session, replayed_probe, &group, &mut bans)
+            .await?;
         assert_eq!(session.challenges[&id].nonce, [9; 32]);
         assert!(bans.is_empty());
         let bad = crypto::seal(

@@ -1369,7 +1369,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         )
         .child(hairline(p))
         .child(
-            col().w_full().items_center().child(
+            col().w_full().fill(p.bg).items_center().child(
                 col()
                     .w_full()
                     .max_w(940.0)
@@ -1384,10 +1384,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     .pb(4.0),
             ),
         )
-        .child(scroll(
-            col().w_full().items_center().child(doc),
-            "hex-scroll",
-        ))
+        .child(scroll(col().w_full().items_center().child(doc), "hex-scroll").clip_rounded(0.0))
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape {

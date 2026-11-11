@@ -480,6 +480,43 @@ impl Store {
             Ok(())
         })
     }
+    pub fn check_group_active(&self, room: &str) -> Result<()> {
+        ensure!(
+            self.protected(&format!("retired:{room}"))?.is_none(),
+            "This device left that group. Show the pairing code on this device instead."
+        );
+        Ok(())
+    }
+    /// Retirement is durable before key material is erased. It cannot be undone by enrollment.
+    pub fn retire_group(&self, room: &str) -> Result<()> {
+        use crate::identity::protect;
+        ensure!(
+            room.len() == 64 && room.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid room"
+        );
+        self.put_protected(&format!("retired:{room}"), &protect(b"retired-v1")?)?;
+        local(self.db.execute(
+            "DELETE FROM protected WHERE id=?1",
+            [format!("group:{room}")],
+        ))?;
+        Ok(())
+    }
+    /// Older previews retained groups after switching. Those groups must never be reused.
+    pub fn retire_inactive_groups(&self, active: &str) -> Result<()> {
+        let mut statement = self
+            .db
+            .prepare("SELECT id FROM protected WHERE id LIKE 'group:%'")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in ids {
+            let room = &id[6..];
+            if room != active {
+                self.retire_group(room)?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn merge_membership(
         &self,
         candidate: &crate::identity::Group,
@@ -487,6 +524,7 @@ impl Store {
     ) -> Result<crate::identity::Group> {
         use crate::identity::{Group, protect};
         use zeroize::Zeroizing;
+        self.check_group_active(&candidate.room())?;
         let root = candidate
             .enrollments
             .first()
@@ -551,6 +589,30 @@ impl Store {
 mod round2_tests {
     use super::*;
     use crate::model;
+    #[test]
+    fn retired_groups_refuse_old_membership_and_loading_after_restart() -> Result<()> {
+        use crate::{client::Device, identity::Group};
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("a.sqlite");
+        let a = Device::open(&path)?;
+        let b = Device::open(&dir.path().join("b.sqlite"))?;
+        let c = Device::open(&dir.path().join("c.sqlite"))?;
+        let mut old = Group::new(&a.identity);
+        old.enroll(&a.identity, b.identity.public());
+        old.enroll(&a.identity, c.identity.public());
+        a.merge_group(&old)?;
+        let fresh = Group::new(&a.identity);
+        a.merge_group(&fresh)?;
+        a.store(|s| s.retire_inactive_groups(&fresh.room()))?;
+        assert!(a.merge_group(&old).is_err());
+        assert!(a.store(|s| Group::load(s, &old.room())).is_err());
+        drop(a);
+        let a = Device::open(&path)?;
+        assert!(a.merge_group(&old).is_err());
+        assert!(a.store(|s| Group::load(s, &old.room())).is_err());
+        a.store(|s| s.check_group_active(&fresh.room()))?;
+        Ok(())
+    }
     #[test]
     fn creator_quota_follows_author_across_relays_without_losing_sender_caps() -> Result<()> {
         let dir = tempfile::tempdir()?;

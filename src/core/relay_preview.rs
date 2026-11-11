@@ -19,6 +19,7 @@ mod migration;
 pub mod operations;
 pub mod pairing;
 pub(crate) mod shared;
+#[cfg(any(debug_assertions, feature = "relay-qualification"))]
 mod test_driver;
 mod versions;
 pub use versions::{Choice, Conflict, Resolution, current as conflicts};
@@ -179,11 +180,12 @@ impl Settings {
             next.shared_backup = prior.shared_backup.clone();
         }
         if next.enabled && (!prior.enabled || prior.backup.is_empty()) {
+            ensure_replica_excluded(root)?;
             migration::enable(root, &mut next)?;
         } else if !next.enabled && prior.enabled {
             migration::verify(root, &prior.backup)?;
         }
-        if next.enabled && next.shared_backup.is_empty() {
+        if next.enabled && (!prior.enabled || prior.shared_backup.is_empty()) {
             migration::enable_shared(root, &mut next)?;
         } else if !next.enabled && prior.enabled {
             migration::verify_shared(root, &prior.shared_backup)?;
@@ -206,6 +208,24 @@ impl Settings {
     }
 }
 
+fn ensure_replica_excluded(root: &Path) -> io::Result<()> {
+    let path = root.join(".stignore");
+    let _guard = store_io::lock(&root.join("local/relay/ignore.lock"))?;
+    let prior = match store_io::read_bounded(&path, super::file_reads::JOURNAL_MAX) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let content = prior.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&prior);
+    if content.starts_with(b"/local\n") || content.starts_with(b"/local\r\n") {
+        return Ok(());
+    }
+    let mut next = prior[..prior.len() - content.len()].to_vec();
+    next.extend_from_slice(b"/local\n");
+    next.extend_from_slice(content);
+    store_io::atomic_write(&path, &next)
+}
+
 pub fn endpoint(address: &str) -> io::Result<RelayUrl> {
     let result = if address.starts_with("ws:") {
         RelayUrl::local(address)
@@ -215,6 +235,12 @@ pub fn endpoint(address: &str) -> io::Result<RelayUrl> {
     result.map_err(|_| store_io::invalid("Use a WSS origin on port 443 or ws://127.0.0.1:port"))
 }
 
+#[cfg(not(any(debug_assertions, feature = "relay-qualification")))]
+fn qualification_point(_root: &Path, _point: &str) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(any(debug_assertions, feature = "relay-qualification"))]
 fn qualification_point(root: &Path, point: &str) -> io::Result<()> {
     if !super::is_proof_path(root, "sidenote-relay-preview")
         || !std::env::args_os().any(|a| a == "--relay-preview-headless")
@@ -361,6 +387,7 @@ impl Preview {
 }
 
 fn open_device(root: &Path, settings: &mut Settings) -> io::Result<Arc<Device>> {
+    ensure_replica_excluded(root)?;
     store_io::reject_reparse(&root.join("local/relay/replica.sqlite"))?;
     let device = Arc::new(Device::open(&root.join("local/relay/replica.sqlite")).map_err(failed)?);
     if settings.room.is_empty() {
@@ -372,6 +399,9 @@ fn open_device(root: &Path, settings: &mut Settings) -> io::Result<Arc<Device>> 
             .store(|s| Group::load(s, &settings.room))
             .map_err(failed)?;
     }
+    device
+        .store(|s| s.retire_inactive_groups(&settings.room))
+        .map_err(failed)?;
     device
         .store(|s| s.configure_capabilities(&settings.room, operations::supported(root)))
         .map_err(failed)?;
@@ -475,6 +505,7 @@ fn project(doc: &Automerge) -> anyhow::Result<Vec<ManualTask>> {
 
 /// Synthetic two-process test driver. Runs before singleton, updates or window creation.
 #[doc(hidden)]
+#[cfg(any(debug_assertions, feature = "relay-qualification"))]
 pub fn headless(args: &[std::ffi::OsString]) -> io::Result<()> {
     use std::io::{BufRead, Write};
     let mut roots = Vec::new();

@@ -78,6 +78,11 @@ impl Store {
             remote.schema > 0 && remote.features > 0,
             Failure(Reason::Protocol)
         );
+        ensure!(
+            remote.schema <= Capabilities::CURRENT.schema + 1
+                && remote.features <= Capabilities::CURRENT.features + 1,
+            Failure(Reason::PeerBadData)
+        );
         if let Some(p) = &self.capabilities {
             let required = p.required.max(remote);
             let slot = p.slot.clone();
@@ -90,6 +95,33 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unbounded_remote_requirements_do_not_poison_the_durable_policy() -> Result<()> {
+        let d = tempfile::tempdir()?;
+        let path = d.path().join("replica.sqlite");
+        let room = "a".repeat(64);
+        let mut s = Store::open(&path, b"test")?;
+        s.configure_capabilities(&room, Capabilities::CURRENT)?;
+        for remote in [
+            Capabilities {
+                schema: u32::MAX,
+                features: 1,
+            },
+            Capabilities {
+                schema: 1,
+                features: u32::MAX,
+            },
+        ] {
+            assert!(s.observe_capabilities(remote).is_err());
+            s.check_compatible()?;
+            assert_eq!(s.requirements(), Some(Capabilities::CURRENT));
+        }
+        drop(s);
+        let mut s = Store::open(&path, b"test")?;
+        s.configure_capabilities(&room, Capabilities::CURRENT)?;
+        s.check_compatible()?;
+        Ok(())
+    }
     #[test]
     fn group_requirement_survives_downgrade_and_cannot_be_lowered() -> Result<()> {
         let d = tempfile::tempdir()?;

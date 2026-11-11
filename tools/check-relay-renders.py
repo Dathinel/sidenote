@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--operations", type=Path)
     args = parser.parse_args()
     for theme in ("light", "dark"):
-        for scene in ("preview", "pair-code", "pair-confirm", "paired", "conflict", "remove-confirm"):
+        for scene in ("preview", "pair-code", "pair-confirm", "paired", "conflict", "removal-unavailable"):
             path = args.frames / f"relay-{scene}-{theme}.png"
             header = path.read_bytes()[:24]
             assert header[:8] == b"\x89PNG\r\n\x1a\n", f"Invalid PNG: {path.name}"
@@ -60,7 +60,7 @@ def main():
         assert not any("relay-use-version-" in key for key in strings(after, "key")), theme
         assert "Recent choices" in after_text, theme
         assert any("chose Morgan for owner" in text for text in after_text), theme
-        for scene in ("preview", "paired", "entry", "remove-confirm"):
+        for scene in ("preview", "paired", "entry", "removal-unavailable"):
             tree = frame(args.proof, scene, theme)
             text = list(strings(tree, "text"))
             assert "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC." in text, scene
@@ -87,14 +87,10 @@ def main():
         pair = next(n for n in nodes(entry["accessibility"]) if n.get("key") == "relay-join")
         assert "disabled" in pair.get("states", []), "empty code enabled pairing"
         assert "click" not in pair.get("actions", []) and "press" not in pair.get("actions", []), "disabled Pair has a handler"
-        removal = frame(args.proof, "remove-confirm", theme)
-        assert "Remove Travel laptop? It stops syncing. Your other devices will need to pair again." in list(strings(removal, "text")), theme
-        assert element(removal, "relay-remove-confirm") and element(removal, "relay-remove-cancel"), theme
-        assert not any(n.get("key")=="relay-remove-1" for n in removal["elements"]), "duplicate row Remove remains"
-        assert element(removal, "relay-remove-confirm")["fill"] == host["fill"], "confirm Remove is not primary"
-        cancelled = frame(args.proof, "remove-cancelled", theme)
-        assert not any(n.get("key") == "relay-remove-prompt" for n in cancelled["elements"]), "Cancel kept the prompt"
-        assert element(cancelled, "relay-paired-device-1"), "Cancel removed the device"
+        removal = frame(args.proof, "removal-unavailable", theme)
+        assert "Removing a device is not available in this preview" in list(strings(removal,"text")), theme
+        assert element(removal,"relay-paired-device-1"), theme
+        assert not any(n.get("key", "").startswith("relay-remove-") for n in removal["elements"]), theme
     if args.operations:
         expected = {
             "operational": "Relay reachable. Both devices must be online to exchange changes.",

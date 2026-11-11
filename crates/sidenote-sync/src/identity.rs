@@ -138,6 +138,7 @@ impl Group {
         bool::from(self.key.as_ref().ct_eq(other.key.as_ref()))
     }
     pub fn load(store: &Store, room: &str) -> Result<Self> {
+        store.check_group_active(room)?;
         ensure!(
             room.len() == 64 && hex::decode(room).is_ok(),
             "invalid room"

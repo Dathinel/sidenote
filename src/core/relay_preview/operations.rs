@@ -13,7 +13,10 @@ pub fn build_capabilities() -> Capabilities {
         },
     }
 }
-pub(super) fn supported(root: &Path) -> Capabilities {
+pub(super) fn supported(_root: &Path) -> Capabilities {
+    #[cfg(any(debug_assertions, feature = "relay-qualification"))]
+    let root = _root;
+    #[cfg(any(debug_assertions, feature = "relay-qualification"))]
     // Only the isolated headless proof can impersonate a future application build.
     if super::super::is_proof_path(root, "sidenote-relay-preview")
         && std::env::args_os().any(|a| a == "--relay-preview-headless")

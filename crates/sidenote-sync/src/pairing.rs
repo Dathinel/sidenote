@@ -22,7 +22,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub const INVITATION_TTL: Duration = Duration::from_secs(600);
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(90);
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(150);
 
 fn room(code: &str) -> Result<String> {
     ensure!(
@@ -714,6 +714,70 @@ mod tests {
         async fn close(&mut self) -> Result<()> {
             Ok(())
         }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn retired_group_pairing_is_refused_whichever_device_hosts() -> Result<()> {
+        for old_survivor_hosts in [true, false] {
+            let dir = tempfile::tempdir()?;
+            let a = Device::open(&dir.path().join("a.sqlite"))?;
+            let b = Device::open(&dir.path().join("b.sqlite"))?;
+            let c = Device::open(&dir.path().join("c.sqlite"))?;
+            let mut old = Group::new(&a.identity);
+            old.enroll(&a.identity, b.identity.public());
+            old.enroll(&a.identity, c.identity.public());
+            a.merge_group(&old)?;
+            b.merge_group(&old)?;
+            a.store(|s| s.retire_group(&old.room()))?;
+            let fresh = Group::new(&a.identity);
+            a.merge_group(&fresh)?;
+            let (atx, arx) = tokio::sync::mpsc::channel(16);
+            let (btx, brx) = tokio::sync::mpsc::channel(16);
+            let used = Arc::new(AtomicBool::new(false));
+            let grants = Arc::new(AtomicUsize::new(0));
+            let retries = Arc::new(AtomicUsize::new(0));
+            let mut host = MemoryRelay {
+                host: true,
+                fault: None,
+                used: used.clone(),
+                grants: grants.clone(),
+                retries_after_grant: retries.clone(),
+                incoming: arx,
+                self_tx: atx.clone(),
+                other: btx.clone(),
+            };
+            let mut guest = MemoryRelay {
+                host: false,
+                fault: None,
+                used,
+                grants,
+                retries_after_grant: retries,
+                incoming: brx,
+                self_tx: btx,
+                other: atx,
+            };
+            let (host_device, guest_device) = if old_survivor_hosts {
+                (&b, &a)
+            } else {
+                (&a, &b)
+            };
+            let code = Zeroizing::new(format!("{:08}", OsRng.gen_range(0..100_000_000u32)));
+            let (offered, joined) = tokio::join!(
+                accept_transport(
+                    &mut host,
+                    &code,
+                    Instant::now() + INVITATION_TTL,
+                    host_device,
+                    Some(old.clone()),
+                    |_| async { true }
+                ),
+                join_transport(&mut guest, &code, guest_device, |_| async { true })
+            );
+            assert!(joined.is_err());
+            assert!(offered.is_err() || offered.is_ok_and(|g| g.receipt != Receipt::Confirmed));
+            assert!(a.merge_group(&old).is_err());
+            a.store(|s| s.check_group_active(&fresh.room()))?;
+        }
+        Ok(())
     }
     #[tokio::test(start_paused = true)]
     async fn c6_grant_recovery_distinguishes_unsent_bundle_and_durable_guest() -> Result<()> {

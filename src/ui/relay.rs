@@ -30,7 +30,6 @@ pub struct RelayUi {
     pub conflicts: Vec<Conflict>,
     pub resolutions: Vec<core::Resolution>,
     pub error: Option<String>,
-    pub removing: Option<String>,
     pub waiting: bool,
 }
 
@@ -331,7 +330,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         pair=pair.child(roles::NAME.wrap("Confirm on both devices",p.ink))
             .child(roles::CONTROL.wrap(format!("This device: {local}    Other device: {peer}"),p.soft))
             .child(roles::SECTION.wrap(phrase,p.ink).key("relay-safety-phrase"))
-            .child(roles::SMALL.wrap("Only confirm if these words and both device names match the other screen. No tasks flow to the new device until both sides confirm.",p.soft))
+            .child(roles::SMALL.wrap("Only confirm if these words and both device names match the other screen. No tasks flow to the new device until both sides confirm. If the other device shows an error or no words, choose Do not pair.",p.soft))
             .child(row().gap(8.0).child(button("They match. Confirm","relay-confirm",p).on_press(|s:&mut State|s.relay_confirm(true)))
                 .child(button("Do not pair","relay-reject",p).on_press(|s:&mut State|s.relay_confirm(false))));
     } else if let Some(code) = &s.relay_ui.code {
@@ -410,14 +409,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if !s.relay_ui.peers.is_empty() {
         let mut peers = col().w_full();
         for (index, peer) in s.relay_ui.peers.iter().enumerate() {
-            let control =
-                if peer.local || s.relay_ui.removing.as_deref() == Some(peer.token.as_str()) {
-                    col()
-                } else {
-                    let target = peer.token.clone();
-                    button("Remove", format!("relay-remove-{index}"), p)
-                        .on_press(move |s: &mut State| s.relay_ui.removing = Some(target.clone()))
-                };
+            let control = col();
             peers = peers.child(setting_row(
                 s,
                 &format!("relay-paired-device-{index}"),
@@ -428,35 +420,12 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 p,
             ));
         }
-        if let Some(target) = &s.relay_ui.removing {
-            let name = s
-                .relay_ui
-                .peers
-                .iter()
-                .find(|peer| &peer.token == target)
-                .map(|peer| peer.name.as_str())
-                .unwrap_or("this device");
-            let target = target.clone();
-            peers = peers.child(super::widgets::hairline(p)).child(
-                col().w_full().padding(14.0).gap(12.0).key("relay-remove-prompt")
-                    .child(roles::SMALL.wrap(format!("Remove {name}? It stops syncing. Your other devices will need to pair again."), p.ink).role("alert"))
-                    .child(row().gap(8.0)
-                        .child(primary_button("Remove", "relay-remove-confirm", p)
-                            .on_press(move |s: &mut State| {
-                                s.relay_cancel();
-                                let result = core::get(&s.store.root)
-                                    .and_then(|p| p.ok_or_else(|| std::io::Error::other("preview off")))
-                                    .and_then(|p| p.remove_device(&target));
-                                s.relay_ui.removing = None;
-                                if result.is_err() {
-                                    s.relay_ui.error = Some("Could not remove the device. Try again.".into());
-                                }
-                                s.relay_refresh();
-                            }))
-                        .child(button("Cancel", "relay-remove-cancel", p)
-                            .on_press(|s: &mut State| s.relay_ui.removing = None))),
-            );
-        }
+        peers = peers.child(super::widgets::hairline(p)).child(
+            roles::SMALL
+                .wrap("Removing a device is not available in this preview", p.soft)
+                .padding(14.0)
+                .key("relay-removal-unavailable"),
+        );
         out = out.child(card("Paired devices", peers, p).key("relay-peers-card"));
     }
     if let Some(error) = &s.relay_ui.error {
