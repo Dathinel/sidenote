@@ -8,7 +8,6 @@
 use super::{
     State, check,
     list::text_title,
-    meeting::COLUMN,
     memory::Tab,
     roles,
     tasks::chevron,
@@ -237,7 +236,7 @@ fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
     let time = m
         .started
         .map(|t| t.format("%H:%M").to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|| "Time unknown".into());
     let minutes = m
         .minutes
         .filter(|n| *n > 0)
@@ -248,16 +247,36 @@ fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
     pressable(
         row()
             .w_full()
-            .h(32.0)
+            .py(14.0)
             .gap(8.0)
-            .items_center()
-            .child(roles::META.wrap(time, p.faint).w(44.0))
-            .child(roles::CONTROL.line(m.title.clone(), p.ink).shrink())
-            .child(el().grow(1.0))
+            .items_start()
+            .child(roles::META.wrap(time, p.faint).w(48.0).shrink_0())
+            .child(
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(roles::META_GAP)
+                    .child(
+                        roles::NAME
+                            .wrap(m.diary_title.replace('\u{2014}', ","), p.ink)
+                            .w_full(),
+                    )
+                    .children((!m.summary.people.is_empty()).then(|| {
+                        roles::META
+                            .wrap(
+                                m.summary.people.join(", ").replace('\u{2014}', ","),
+                                p.faint,
+                            )
+                            .w_full()
+                    })),
+            )
             .child(roles::META.wrap(minutes, p.faint)),
     )
     .key(format!("diary-meeting-{}", m.id))
-    .label(format!("Open the meeting: {}", m.title))
+    .label(format!(
+        "Open the meeting: {}",
+        m.diary_title.replace('\u{2014}', ",")
+    ))
     .w_full()
     .px(8.0)
     .radius(6.0)
@@ -405,9 +424,9 @@ fn day_head(d: &Day, today: NaiveDate, p: Palette) -> El {
     } else {
         None
     };
-    let mut head = col().w_full().gap(roles::META_GAP);
+    let mut head = row().w_full().items_center().flex_wrap().gap(12.0);
     if let Some(w) = when {
-        head = head.child(roles::CAPTION.wrap(w.to_uppercase(), p.accent));
+        head = head.child(roles::SMALL.wrap(w, p.faint));
     }
     head.child(roles::SECTION.wrap(name, p.ink))
 }
@@ -582,7 +601,7 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let mut doc = col()
         .key("check-top")
         .w_full()
-        .max_w(COLUMN)
+        .max_w(1536.0)
         .px(if narrow { 16.0 } else { 40.0 })
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0);
@@ -602,6 +621,7 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if all.is_empty() {
         return doc.child(check::empty(s, p));
     }
+    let mut timeline = col().grow(1.0).min_w(0.0);
     let newest_check = s.check.report.as_ref().map(|r| r.date);
     for (n, &date) in all.iter().take(s.check.shown).enumerate() {
         let d = day(s, date);
@@ -610,10 +630,10 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         } else {
             roles::SECTION_TOP + 8.0
         };
-        doc = doc.child(entry(s, k, &d, newest_check == Some(date), p).mt(top));
+        timeline = timeline.child(entry(s, k, &d, newest_check == Some(date), p).mt(top));
     }
     if all.len() > s.check.shown {
-        doc = doc.child(
+        timeline = timeline.child(
             super::widgets::action("Show earlier days", p)
                 .key("diary-more")
                 .label("Show ten earlier days")
@@ -621,5 +641,16 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .on_press(|s: &mut State| s.check.shown += PAGE),
         );
     }
-    doc
+    if s.app_w.get() >= 1100.0 {
+        doc.child(
+            row()
+                .w_full()
+                .items_start()
+                .gap(48.0)
+                .child(timeline)
+                .child(col().w(320.0).shrink_0().key("diary-rail")),
+        )
+    } else {
+        doc.child(timeline)
+    }
 }
