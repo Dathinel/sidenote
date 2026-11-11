@@ -46,7 +46,9 @@ impl Problem {
     }
 }
 fn log(message: &str) {
-    let path = crate::core::log_path();
+    log_at(&crate::core::log_path(), message);
+}
+fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -103,10 +105,7 @@ fn pipeline_in(
         log(crate::core::live::NOTES_UNAVAILABLE);
         return Ok(());
     }
-    let folders = script_folders(state, meetings, meeting_id)?;
-    if folders.is_empty() {
-        return Ok(());
-    }
+    let mut folders = script_folders(state, meetings, meeting_id)?;
     let script_lock = match crate::core::store_io::lock(
         &crate::core::state_dir().join("local/notes-script.lock"),
     ) {
@@ -114,14 +113,21 @@ fn pipeline_in(
         Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
         Err(e) => return Err(e),
     };
-    // Legacy scripts scan every folder. Require the explicit folder contract to keep the gate effective.
-    let child = script_command(&script, &folders)?.spawn();
+    let (mut command, filtered) = script_command(&script, &folders, log)?;
+    if filtered && folders.is_empty() {
+        return Ok(());
+    }
+    if !filtered {
+        folders = legacy_script_folders(meetings, meeting_id)?;
+    }
+    let child = command.spawn();
     std::thread::spawn(move || {
         let _script_lock = script_lock;
         let _activity = activity;
         let succeeded = child
             .and_then(|mut child| child.wait())
             .is_ok_and(|status| status.success());
+        script_markers(&folders, succeeded);
         if !succeeded {
             log("Notes pipeline failed; the recording and personal notes are saved");
         }
@@ -168,14 +174,58 @@ fn catch_up_routing(
     }
     Ok(())
 }
-fn script_command(script: &std::path::Path, folders: &[PathBuf]) -> io::Result<Command> {
+const LEGACY_SCRIPT_NOTICE: &str =
+    "notes script does not accept MeetingFolders; short-recording filter not applied to the script";
+fn legacy_script_folders(
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+) -> io::Result<Vec<PathBuf>> {
+    Ok(fs::read_dir(meetings)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|folder| {
+            !folder.join("english-summary.json").is_file()
+                && (meeting_id.is_some_and(|id| folder.file_name().is_some_and(|n| n == id))
+                    || fs::read(folder.join("manifest.json"))
+                        .ok()
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                        .is_some_and(|m| m["status"] == "complete"))
+        })
+        .collect())
+}
+fn script_markers(folders: &[PathBuf], succeeded: bool) {
+    for folder in folders {
+        if !succeeded {
+            let _ = fs::write(folder.join("notes-failed"), b"failed");
+        } else {
+            let _ = fs::remove_file(folder.join("notes-failed"));
+        }
+    }
+}
+fn script_command(
+    script: &std::path::Path,
+    folders: &[PathBuf],
+    report: impl FnOnce(&str),
+) -> io::Result<(Command, bool)> {
+    let filtered = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; if ((Get-Command -Name $env:SIDENOTE_NOTES_SCRIPT).Parameters.ContainsKey('MeetingFolders')) { exit 0 }; exit 1"])
+        .env("SIDENOTE_NOTES_SCRIPT", script).creation_flags(HIDDEN)
+        .output().is_ok_and(|output| output.status.success());
     let mut command = Command::new("powershell.exe");
-    command.args(["-NoProfile", "-NonInteractive", "-Command",
-        "$ErrorActionPreference='Stop'; $script=$env:SIDENOTE_NOTES_SCRIPT; $folders=@(ConvertFrom-Json $env:SIDENOTE_MEETING_FOLDERS); if (!(Get-Command -Name $script).Parameters.ContainsKey('MeetingFolders')) { throw 'Notes script must accept MeetingFolders' }; & $script -MeetingFolders $folders; if (!$?) { exit 1 }"])
-        .env("SIDENOTE_NOTES_SCRIPT", script)
-        .env("SIDENOTE_MEETING_FOLDERS", serde_json::to_string(folders)?)
-        .creation_flags(HIDDEN);
-    Ok(command)
+    if filtered {
+        command.args(["-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; $folders=@(ConvertFrom-Json $env:SIDENOTE_MEETING_FOLDERS); & $env:SIDENOTE_NOTES_SCRIPT -MeetingFolders $folders; if (!$?) { exit 1 }"])
+            .env("SIDENOTE_NOTES_SCRIPT", script)
+            .env("SIDENOTE_MEETING_FOLDERS", serde_json::to_string(folders)?);
+    } else {
+        report(LEGACY_SCRIPT_NOTICE);
+        command
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(script);
+    }
+    command.creation_flags(HIDDEN);
+    Ok((command, filtered))
 }
 fn catch_up() -> io::Result<()> {
     let _activity = crate::updates::activity()?;
@@ -438,44 +488,102 @@ mod pipeline_tests {
                 .is_empty()
         );
     }
-    #[test]
-    fn script_receives_only_explicit_folders_and_legacy_scripts_do_not_run() {
+    fn script_fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "rec-guard-script-{}-{}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         ));
         fs::create_dir_all(&root).unwrap();
+        root
+    }
+    #[test]
+    fn legacy_no_param_script_runs_without_arguments_or_changed_environment_and_logs_once() {
+        let root = script_fixture();
+        let script = root.join("notes.ps1");
+        let output = root.join("legacy.json");
+        let logfile = root.join("listener.log");
+        fs::write(&script, "@{arguments=@($args); parameters=@($PSBoundParameters.Keys); folders=$env:SIDENOTE_MEETING_FOLDERS} | ConvertTo-Json | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT").unwrap();
+        let (mut command, filtered) =
+            script_command(&script, &[root.join("1793946600000-2")], |message| {
+                log_at(&logfile, message)
+            })
+            .unwrap();
+        assert!(!filtered);
+        assert_eq!(command.get_envs().count(), 0);
+        assert_eq!(
+            command
+                .get_args()
+                .map(|v| v.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "-NoProfile".to_owned(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                script.to_string_lossy().into_owned()
+            ]
+        );
+        let result = command.env("REC_GUARD_OUTPUT", &output).output().unwrap();
+        assert!(result.status.success());
+        let actual: serde_json::Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual["arguments"], serde_json::json!([]));
+        assert_eq!(actual["parameters"], serde_json::json!([]));
+        assert_eq!(
+            actual["folders"].as_str(),
+            std::env::var("SIDENOTE_MEETING_FOLDERS").ok().as_deref()
+        );
+        let log = fs::read_to_string(logfile).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        assert!(log.contains(LEGACY_SCRIPT_NOTICE));
+    }
+    #[test]
+    fn param_script_receives_only_eligible_folders() {
+        let root = script_fixture();
+        let meetings = root.join("meetings");
         let script = root.join("notes.ps1");
         let output = root.join("folders.json");
-        let folders = [root.join("1793946600000-2")];
-        fs::write(
-            &script,
-            "param([string[]]$MeetingFolders)
-ConvertTo-Json -InputObject @($MeetingFolders) | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT",
-        )
+        for (id, duration) in [("1793946600000-1", 29999), ("1793946600000-2", 30000)] {
+            let folder = meetings.join(id);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","duration_ms":duration}).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+            )
+            .unwrap();
+        }
+        fs::write(&script, "param([string[]]$MeetingFolders)\nConvertTo-Json -InputObject @($MeetingFolders) | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT").unwrap();
+        let folders = script_folders(&root, &meetings, None).unwrap();
+        let (mut command, filtered) = script_command(&script, &folders, |_| {
+            panic!("parameter script must not log a legacy notice")
+        })
         .unwrap();
+        assert!(filtered);
         assert!(
-            script_command(&script, &folders)
-                .unwrap()
+            command
                 .env("REC_GUARD_OUTPUT", &output)
                 .output()
                 .unwrap()
                 .status
                 .success()
         );
-        let actual: Vec<String> = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-        assert_eq!(
-            actual,
-            folders
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-        );
-        fs::write(&script, "throw 'A legacy script must never execute'").unwrap();
-        let result = script_command(&script, &folders).unwrap().output().unwrap();
-        assert!(!result.status.success());
-        assert!(String::from_utf8_lossy(&result.stderr).contains("must accept MeetingFolders"));
+        let actual: Vec<PathBuf> = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual, [meetings.join("1793946600000-2")]);
+        assert_eq!(legacy_script_folders(&meetings, None).unwrap().len(), 2);
+    }
+    #[test]
+    fn script_failure_markers_match_dev16() {
+        let root = script_fixture();
+        let folders = [root.clone()];
+        script_markers(&folders, false);
+        assert_eq!(fs::read(root.join("notes-failed")).unwrap(), b"failed");
+        script_markers(&folders, true);
+        assert!(!root.join("notes-failed").exists());
     }
     #[test]
     fn enqueue_failure_is_reported_without_ending_event_handling() {
