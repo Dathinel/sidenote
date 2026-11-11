@@ -208,13 +208,13 @@ fn script_command(
     report: impl FnOnce(&str),
 ) -> io::Result<(Command, bool)> {
     let filtered = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command",
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command",
             "$ErrorActionPreference='Stop'; if ((Get-Command -Name $env:SIDENOTE_NOTES_SCRIPT).Parameters.ContainsKey('MeetingFolders')) { exit 0 }; exit 1"])
         .env("SIDENOTE_NOTES_SCRIPT", script).creation_flags(HIDDEN)
         .output().is_ok_and(|output| output.status.success());
     let mut command = Command::new("powershell.exe");
     if filtered {
-        command.args(["-NoProfile", "-NonInteractive", "-Command",
+        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command",
             "$ErrorActionPreference='Stop'; $folders=@(ConvertFrom-Json $env:SIDENOTE_MEETING_FOLDERS); & $env:SIDENOTE_NOTES_SCRIPT -MeetingFolders $folders; if (!$?) { exit 1 }"])
             .env("SIDENOTE_NOTES_SCRIPT", script)
             .env("SIDENOTE_MEETING_FOLDERS", serde_json::to_string(folders)?);
@@ -575,6 +575,41 @@ mod pipeline_tests {
         let actual: Vec<PathBuf> = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
         assert_eq!(actual, [meetings.join("1793946600000-2")]);
         assert_eq!(legacy_script_folders(&meetings, None).unwrap().len(), 2);
+    }
+    #[test]
+    fn param_script_keeps_mixed_separator_paths_by_meeting_id() {
+        let root = script_fixture();
+        let meetings = root.join("hex/meetings");
+        let id = "1793946600000-2";
+        for name in [id, "1793946600000-3"] {
+            fs::create_dir_all(meetings.join(name)).unwrap();
+        }
+        let mixed = PathBuf::from(format!(r"{}\hex/meetings\{id}", root.display()));
+        assert!(mixed.to_string_lossy().contains(r"hex/meetings\"));
+        let script = root.join("leaf-filter.ps1");
+        let output = root.join("kept.json");
+        fs::write(&script, r#"param([string[]]$MeetingFolders)
+$allowed = if ($PSBoundParameters.ContainsKey('MeetingFolders')) { @($MeetingFolders | ForEach-Object { Split-Path -Leaf $_ }) }
+if ((Get-ExecutionPolicy -Scope Process) -ne 'Bypass') { throw 'Expected the dev16 execution policy' }
+$kept = @(foreach ($dir in Get-ChildItem -LiteralPath $env:REC_GUARD_MEETINGS -Directory) {
+    if ($null -ne $allowed -and $dir.Name -notin $allowed) { continue }
+    $dir.Name
+})
+ConvertTo-Json -InputObject $kept | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT
+"#).unwrap();
+        let (mut command, filtered) = script_command(&script, &[mixed], |_| {
+            panic!("parameter script must not use the legacy fallback")
+        })
+        .unwrap();
+        assert!(filtered);
+        let result = command
+            .env("REC_GUARD_MEETINGS", &meetings)
+            .env("REC_GUARD_OUTPUT", &output)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let kept: Vec<String> = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(kept, [id]);
     }
     #[test]
     fn script_failure_markers_match_dev16() {
