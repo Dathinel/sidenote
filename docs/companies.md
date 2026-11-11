@@ -32,3 +32,49 @@ No inferred companies, historical meeting rewriting, identity backfill, project 
 ## Branch integration notes
 
 The assigned base contains the People side controls and team aliases, but no company picker or optional email editor. This slice adds the missing company assignment UI and preserves side controls. TODO: integrate companies into the relay shared-data allowlist on the sync branch; this branch has local journal support but no relay shared-data allowlist.
+
+## Storage and migration
+
+`companies.json` is a logical store in the existing immutable device journal. Its catalog holds company records keyed by stable id and normalized person-name links containing `company_id` and optional typed email. A guarded publication changes the catalog and its Undo receipt together. Undo compares the current catalog with the receipt's result before restoring the prior catalog. Merge retains the source name as an alias, moves every explicit person link, and preserves both notes and domains, retaining a second domain in the notes.
+
+Migration reads only explicit text from `local/ui.json` (`people_companies` and `people_emails`) and `people.json` (`people` rows with `name`, `company` and optional `email`). It never scans meeting names to create records. It keeps original bytes under `local/company-migration-backup/`, leaves the source files in place, and journals a migration marker only after backup succeeds. Migration runs before People can save preferences. Corrupt input stops migration without replacing it. Case and whitespace variants reuse the same company record; aliases participate in matching and duplicate-name validation.
+
+The existing journal reader recognizes company stores and safely hashed company Ask thread keys. No relay or deployed sync configuration was changed. Company Ask builds context from the tab query's matching meetings and their tasks. An empty company yields empty meeting context. It has its own persisted thread and never falls back to the global thread.
+
+## Verification
+
+Evidence rung 4: all requested Cargo gates pass. Both workspace test configurations pass 261 tests. Six company tests cover migration backup and retry, malformed input, normalized deduplication, rename, merge, Undo guards, restart persistence, private Ask threads, aliases, hidden old-only people, tab queries and empty Ask context. Protocol smoke passes against this worktree's debug executable. The existing Settings reachability unit test also passes.
+
+Evidence rung 5 for the offscreen native app: all 40 company cases render at 1280 by 800 and 390 by 800 in light and dark, using isolated synthetic fixtures. Their element trees have no render warnings, and the person controls, company tabs and rows pass horizontal-bound checks. Native scripts exercise External-header navigation, tab switching, decision-source navigation, rename and Undo across app reloads, merge and Undo with restored person links, global search, typed email, the company picker and narrow Settings navigation. The unmodified legacy-settings validator finds all 49 entries, all nine Settings pages and the Advanced search reveal in 23 native render trees, including the actual open Teams Advanced editor.
+
+Reproduce from this worktree, with the GNU tools directory first on PATH and `CARGO_TARGET_DIR` set to this worktree's `target`:
+
+```text
+cargo fmt --all --check
+cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
+cargo test --workspace --locked
+cargo test --workspace --locked --features asr-runtime
+cargo build --locked
+python tools/mcp-smoke.py target/x86_64-pc-windows-gnu/debug/sidenote.exe
+python tools/render_companies.py target/x86_64-pc-windows-gnu/debug/sidenote.exe
+python tools/verify_companies.py target/x86_64-pc-windows-gnu/debug/sidenote.exe
+python tools/render_companies.py target/x86_64-pc-windows-gnu/debug/sidenote.exe --settings
+python tools/settings-reachability.py artifacts/companies
+```
+
+The render index records the executable SHA-256. The final 40 company images match the current debug executable. The ordered PNG list is `artifacts/companies/png-paths.txt`, the render index is `artifacts/companies/render-index.json`, interaction results are `artifacts/companies/interaction-results.json`, and individual gate logs and exit codes are under `artifacts/companies/gates/`.
+
+No external Ask agent was invoked, no mail was sent, and the test did not write to the Windows clipboard. Actual clipboard delivery is not runtime-tested. Email copying uses the existing `Tx::copy` path.
+
+## Differences from the proposed mockups
+
+- The company breadcrumb returns to People / External, its implemented entry point. The existing application sidebar, including Annotations, is retained. The mockup's Projects / Companies breadcrumb and selected Projects navigation belong to the separate project-lens work. There is no Companies sidebar entry.
+- Four shared native segmented tabs replace the mockup's underline tabs. The names are exactly Overview, People, Meetings and Decisions. Counts remain in the quiet header line instead of being repeated on the tabs.
+- Ask is the real shared composer above the tabs, with runner, thinking and send/stop controls. The static mockup shows a search icon and arrow without these controls. Its placeholder may wrap at 390 pixels so the real controls remain usable.
+- Overview displays explicit company notes and a last-meeting source card. It does not fabricate the mockup's generated stand-of-play sentences. Until a status exists, its plain status message is shown without an empty summary card. The two commitment groups remain beside each other on desktop and stack on a narrow window.
+- The native synthetic fixture has two linked people and three matching meetings, with two external open tasks and four internal open tasks. The static mockup has four meetings, two external follow-ups and one internal task. Native lists retain all matching rows and scroll rather than being trimmed to the mockup's counts.
+- Shared person rows use 34-pixel initials, as required by the settled rule, rather than the mockup's placeholder user glyph. Company and email editing is a real inline editor, and a supplied email becomes a clipboard-only action. The company group header itself opens the company.
+- More opens the shared company editor; merge is an inline confirmation dialog using one shared bordered panel. These editing states are not drawn in the supplied company overview mockup.
+- At 390 pixels, Settings navigation collapses behind the Settings pages control in the breadcrumb. This keeps External rows and their side controls inside the viewport. Opening navigation retains every Settings destination and search. Desktop Settings geometry remains the existing shared layout.
+- Dark renders use the application's current dark tokens. The proposed company and External PNGs provide only light desktop references, so there is no proposed dark or narrow image for a pixel comparison.
