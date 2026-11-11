@@ -1,0 +1,30 @@
+[
+  {
+    "answer": "We decided to test the paper prototype on Friday. [[live_transcript@00:04]]\nMaya will prepare it. [[live_transcript@00:09]]",
+    "call": "cold",
+    "fallback": null,
+    "first_text_s": 17.2300699,
+    "full_answer_s": 19.453843
+  },
+  {
+    "answer": "We decided to test the paper prototype on Friday.\nMaya will prepare it.",
+    "call": "warm",
+    "fallback": null,
+    "first_text_s": 2.753788,
+    "full_answer_s": 4.4388408
+  },
+  {
+    "answer": "We decided to test the paper prototype on Friday. [[live_transcript@00:04]]\nMaya will prepare it. [[live_transcript@00:09]]",
+    "call": "prewarmed-first",
+    "fallback": null,
+    "first_text_s": 7.5079008,
+    "full_answer_s": 9.3887423
+  },
+  {
+    "answer": "Decisions needed: none.\nThey decided to test the paper prototype on Friday, and Maya will prepare it (live transcript, 00:04 and 00:09).",
+    "call": "fallback",
+    "fallback": "Claude Sonnet",
+    "first_text_s": 26.9837815,
+    "full_answer_s": 29.2194524
+  }
+]
