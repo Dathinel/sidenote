@@ -22,7 +22,7 @@ for theme in ('light','dark'):
             notice=next(node for node in elements if node.get('key')=='relay-timeout-message')
         elif scene=='unconfirmed':
             assert 'Pairing not confirmed' in text and uncertain in text,stem
-            notice=next(node for node in elements if node.get('key')=='relay-unconfirmed-notice')
+            notice=next(node for node in elements if node.get('key')=='relay-unconfirmed-notice-1')
         else:
             continue
         assert 58<=notice['rect'][1] and notice['rect'][1]+notice['rect'][3]<=800,stem

@@ -3,6 +3,7 @@ param(
     # Another output folder (for example a before set), and an optional list of shot names.
     [string]$Out = "",
     [switch]$Dev3,
+    [switch]$SyncProofs,
     [ValidateRange(1, 4)][int]$Throttle = 1,
     [string[]]$Only = @(),
     # Themes to render; dark first is enough for a quick look.
@@ -456,6 +457,19 @@ foreach ($scene in @('notebooks','notebook','notebook-note','share-confirmation'
         $script = if ($width -eq 640) { 'dev3-close-drawer.json' } else { $null }
         $extra = if ($script) { @('--at','mark:end') } else { @() }
         $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
+    }
+}
+if ($SyncProofs) {
+    $syncProofScenes = @($shots | Where-Object { $_[1] -like 'relay-*' -or $_[1] -like 'sync-*' -or $_[1] -in @('settings-sync', 'settings-sync-expanded') })
+    $shots = @()
+    $seen = @{}
+    foreach ($shot in $syncProofScenes) {
+        $name = $shot[0] -replace '-(1280|640)$', ''
+        if ($seen.ContainsKey($name)) { continue }
+        $seen[$name] = $true
+        foreach ($width in @(1280, 390)) {
+            $shots += ,@("${name}-${width}", $shot[1], "${width}x800", $shot[3], $shot[4])
+        }
     }
 }
 $priorAppData = $env:APPDATA

@@ -1846,7 +1846,7 @@ fn named_folder(s: &State, k: &Kit, p: Palette) -> El {
     let mut out = col().w_full().mt(18.0).child(
         crate::ui::cards::fold_control(
             if s.hex.shell.relay.enabled {
-                "Folder and relay address"
+                "Advanced"
             } else {
                 "Folder location"
             },

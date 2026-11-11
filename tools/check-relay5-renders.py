@@ -14,7 +14,8 @@ for theme in ("light", "dark"):
         frame = json.loads((folder / f"{stem}.json").read_text(encoding="utf-8"))
         elements = frame["elements"]
         by_key = {node["key"]: node for node in elements if "key" in node}
-        assert by_key["settings-title"]["path"].startswith(by_key["hex-scroll"]["path"] + "/"), "Sync title must scroll with its content"
+        assert not by_key["settings-title"]["path"].startswith(by_key["hex-scroll"]["path"] + "/"), "Sync uses the dev16 Settings header"
+        assert not any(node.get("label") == "Breadcrumb" for node in elements), "Settings has no breadcrumb"
         text = [node["text"] for node in elements if "text" in node]
         assert "0 meetings from other devices." not in text, stem
         if scene in ("unreachable", "wrong-address", "update-required"):

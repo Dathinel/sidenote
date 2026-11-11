@@ -3,6 +3,7 @@ use super::{
     hex::settings::{card, setting_row},
     roles,
     theme::Palette,
+    widgets::ButtonDisabled,
 };
 use rune::{El, TextEdit, Tx, col, row};
 use rune_kit::{Kit, TextInput};
@@ -377,11 +378,9 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         );
         if s.relay_ui.join_open {
             let ready = complete_code(&s.relay_ui.join.text);
-            let mut join = button("Pair", "relay-join", p).disabled(!ready);
+            let mut join = button("Pair", "relay-join", p).button_disabled(!ready);
             if ready {
                 join = join.on_press(|s: &mut State| s.relay_pair(true));
-            } else {
-                join = join.dim(0.5);
             }
             pair = pair.child(
                 col()
@@ -425,19 +424,32 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         let mut peers = col().w_full();
         for (index, peer) in s.relay_ui.peers.iter().enumerate() {
             let control = col();
-            peers = peers.child(setting_row(
-                s,
-                &format!("relay-paired-device-{index}"),
-                &peer.name,
-                if peer.unconfirmed {
-                    "Pairing not confirmed"
-                } else {
-                    "Paired for relay sync."
-                },
-                control,
-                peer.local,
-                p,
-            ));
+            let mut device = col()
+                .w_full()
+                .min_w(0.0)
+                .key(format!("relay-device-{index}"))
+                .child(setting_row(
+                    s,
+                    &format!("relay-paired-device-{index}"),
+                    &peer.name,
+                    if peer.unconfirmed {
+                        "Pairing not confirmed"
+                    } else {
+                        "Paired for relay sync."
+                    },
+                    control,
+                    peer.local,
+                    p,
+                ));
+            if peer.unconfirmed {
+                device = device.child(
+                    roles::SMALL
+                        .wrap(core::pairing::UNCONFIRMED, p.warn)
+                        .padding(14.0)
+                        .key(format!("relay-unconfirmed-notice-{index}")),
+                );
+            }
+            peers = peers.child(device);
         }
         peers = peers.child(super::widgets::hairline(p)).child(
             roles::SMALL
@@ -445,16 +457,6 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 .padding(14.0)
                 .key("relay-removal-unavailable"),
         );
-        if s.relay_ui.peers.iter().any(|peer| peer.unconfirmed)
-            || s.relay_ui.error.as_deref() == Some(core::pairing::UNCONFIRMED)
-        {
-            peers = peers.child(
-                roles::SMALL
-                    .wrap(core::pairing::UNCONFIRMED, p.warn)
-                    .padding(14.0)
-                    .key("relay-unconfirmed-notice"),
-            );
-        }
         out = out.child(card("Paired devices", peers, p).key("relay-peers-card"));
     }
     if let Some(error) = &s.relay_ui.error
@@ -631,7 +633,7 @@ pub fn scene(s: &mut State, kind: &str) {
                 unconfirmed: true,
             });
             s.relay_update(s.relay_ui.generation, Update::Unconfirmed);
-            super::scene_scroll(s, "relay-unconfirmed-notice");
+            super::scene_scroll(s, "relay-unconfirmed-notice-1");
         }
         "paired" => s.relay_ui.peers.push(PairedDevice {
             token: "synthetic-peer".into(),
