@@ -15,6 +15,63 @@ use std::{
     sync::{Arc, Mutex, OnceLock, mpsc},
     thread,
 };
+mod migration;
+pub mod pairing;
+mod test_driver;
+mod versions;
+pub use versions::{Choice, Conflict, Resolution, current as conflicts};
+
+/// Builds a trusted synthetic conflict for the offscreen renderer, never a live data root.
+#[doc(hidden)]
+pub fn seed_render_conflict(root: &Path) -> io::Result<()> {
+    let resolved = root.canonicalize()?;
+    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()?
+        .join("target");
+    if !resolved.starts_with(target) && !super::is_proof_path(root, "sidenote-relay-preview") {
+        return Err(store_io::invalid(
+            "Conflict render requires an isolated proof folder",
+        ));
+    }
+    let mut device = super::DeviceSettings::load_in(root)?;
+    device.name = "DEMO-PC".into();
+    store_io::write(&root.join("device.json"), &device)?;
+    let mut settings = Settings::load(root)?;
+    settings.enabled = true;
+    settings.address.clear();
+    settings.save(root)?;
+    let preview = get(root)?.ok_or_else(|| failed("preview off"))?;
+    preview
+        .device
+        .store(|s| {
+            s.edit("tasks", |doc| {
+                let initial = ManualTask {
+                    id: "synthetic-relay-choice".into(),
+                    task: "Review the field guide".into(),
+                    owner: Some("Initial owner".into()),
+                    ..Default::default()
+                };
+                versions::apply(doc, &[], std::slice::from_ref(&initial), "DEMO-PC", "edit")?;
+                let mut other = doc.fork();
+                other.set_actor(automerge::ActorId::from(&[77; 32][..]));
+                let mut mine = initial.clone();
+                mine.owner = Some("Taylor".into());
+                let mut theirs = initial.clone();
+                theirs.owner = Some("Morgan".into());
+                versions::apply(
+                    doc,
+                    std::slice::from_ref(&initial),
+                    &[mine],
+                    "DEMO-PC",
+                    "edit",
+                )?;
+                versions::apply(&mut other, &[initial], &[theirs], "Travel laptop", "edit")?;
+                doc.merge(&mut other)?;
+                Ok(())
+            })
+        })
+        .map_err(failed)
+}
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -22,6 +79,8 @@ pub struct Settings {
     pub enabled: bool,
     pub address: String,
     pub room: String,
+    pub backup: String,
+    pub peers: BTreeMap<String, String>,
 }
 
 impl Settings {
@@ -36,11 +95,33 @@ impl Settings {
             endpoint(&self.address)?;
         }
         let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
-        store_io::write(&root.join("local/relay/settings.json"), self)?;
+        let prior = Self::load(root)?;
+        let mut next = self.clone();
+        if !prior.room.is_empty() {
+            next.room = prior.room.clone();
+            next.peers = prior.peers.clone();
+            next.backup = prior.backup.clone();
+        }
+        if next.enabled && (!prior.enabled || prior.backup.is_empty()) {
+            migration::enable(root, &mut next)?;
+        } else if !next.enabled && prior.enabled {
+            migration::verify(root, &prior.backup)?;
+        }
+        store_io::write(&root.join("local/relay/settings.json"), &next)?;
         if !self.enabled {
             disconnect(root)?;
         }
         Ok(())
+    }
+    fn save_authority(&self, root: &Path) -> io::Result<()> {
+        let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
+        let mut current = Self::load(root)?;
+        if !current.enabled {
+            return Err(store_io::invalid("Relay preview was turned off"));
+        }
+        current.room = self.room.clone();
+        current.peers = self.peers.clone();
+        store_io::write(&root.join("local/relay/settings.json"), &current)
     }
 }
 
@@ -65,27 +146,22 @@ struct Connection {
 
 pub struct Preview {
     device: Arc<Device>,
-    settings: Settings,
+    root: PathBuf,
     connection: Mutex<Option<Connection>>,
 }
 
 impl Preview {
     fn open(root: &Path, settings: Settings) -> io::Result<Self> {
-        endpoint(&settings.address)?;
-        if settings.room.is_empty() {
-            return Err(store_io::invalid(
-                "Relay preview needs paired test devices. Pairing UI is not available yet.",
-            ));
+        let mut settings = settings;
+        if settings.backup.is_empty() {
+            migration::enable(root, &mut settings)?;
         }
         std::fs::create_dir_all(root.join("local/relay"))?;
-        let device =
-            Arc::new(Device::open(&root.join("local/relay/replica.sqlite")).map_err(failed)?);
-        device
-            .store(|s| Group::load(s, &settings.room))
-            .map_err(failed)?;
+        let device = open_device(root, &mut settings)?;
+        store_io::write(&root.join("local/relay/settings.json"), &settings)?;
         Ok(Self {
             device,
-            settings,
+            root: root.into(),
             connection: Mutex::new(None),
         })
     }
@@ -100,10 +176,14 @@ impl Preview {
             return Ok(());
         }
         let device = self.device.clone();
+        let settings = Settings::load(&self.root)?;
         let group = device
-            .store(|s| Group::load(s, &self.settings.room))
+            .store(|s| Group::load(s, &settings.room))
             .map_err(failed)?;
-        let relay = endpoint(&self.settings.address)?;
+        if settings.address.is_empty() || group.members().len() < 2 {
+            return Ok(());
+        }
+        let relay = endpoint(&settings.address)?;
         let (ready, receiver) = mpsc::sync_channel(1);
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let thread = thread::spawn(move || {
@@ -153,18 +233,40 @@ impl Preview {
     }
 
     pub fn edit(&self, before: &[ManualTask], after: &[ManualTask]) -> io::Result<()> {
+        let name = super::DeviceSettings::read_in(&self.root)?.name;
         let connection = self.connection.lock().map_err(failed)?;
         if let Some(connection) = connection.as_ref() {
             connection
                 .client
-                .edit("tasks", |doc| apply(doc, before, after))
+                .edit("tasks", |doc| {
+                    versions::apply(doc, before, after, &name, "edit")
+                })
                 .map_err(failed)
         } else {
             self.device
-                .store(|store| store.edit("tasks", |doc| apply(doc, before, after)))
+                .store(|store| {
+                    store.edit("tasks", |doc| {
+                        versions::apply(doc, before, after, &name, "edit")
+                    })
+                })
                 .map_err(failed)
         }
     }
+}
+
+fn open_device(root: &Path, settings: &mut Settings) -> io::Result<Arc<Device>> {
+    store_io::reject_reparse(&root.join("local/relay/replica.sqlite"))?;
+    let device = Arc::new(Device::open(&root.join("local/relay/replica.sqlite")).map_err(failed)?);
+    if settings.room.is_empty() {
+        let group = Group::new(&device.identity);
+        device.merge_group(&group).map_err(failed)?;
+        settings.room = group.room();
+    } else {
+        device
+            .store(|s| Group::load(s, &settings.room))
+            .map_err(failed)?;
+    }
+    Ok(device)
 }
 
 impl Drop for Preview {
@@ -205,7 +307,7 @@ fn fields(tasks: &[ManualTask]) -> anyhow::Result<BTreeMap<String, Map<String, V
     let mut result = BTreeMap::new();
     for task in tasks {
         anyhow::ensure!(
-            !task.id.is_empty() && task.id.len() <= 128,
+            !task.id.is_empty() && !task.id.starts_with('$') && task.id.len() <= 256,
             "invalid task ID"
         );
         let Value::Object(fields) = serde_json::to_value(task)? else {
@@ -219,54 +321,29 @@ fn fields(tasks: &[ManualTask]) -> anyhow::Result<BTreeMap<String, Map<String, V
     Ok(result)
 }
 
+#[cfg(test)]
 fn apply(doc: &mut Automerge, before: &[ManualTask], after: &[ManualTask]) -> anyhow::Result<()> {
-    let (before, after) = (fields(before)?, fields(after)?);
-    let mut tx = doc.transaction();
-    for id in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
-        let (old, new) = (before.get(id), after.get(id));
-        if old.is_none() || new.is_none() {
-            tx.put(
-                ROOT,
-                serde_json::to_string(&[id.as_str(), "$present"])?,
-                if new.is_some() { "true" } else { "false" },
-            )?;
-        }
-        let names: BTreeSet<_> = old
-            .into_iter()
-            .flat_map(|f| f.keys())
-            .chain(new.into_iter().flat_map(|f| f.keys()))
-            .collect();
-        for name in names {
-            anyhow::ensure!(name.len() <= 128 && name != "$present", "invalid field");
-            let (a, b) = (old.and_then(|f| f.get(name)), new.and_then(|f| f.get(name)));
-            if a != b && new.is_some() {
-                tx.put(
-                    ROOT,
-                    serde_json::to_string(&[id, name])?,
-                    serde_json::to_string(&b)?,
-                )?;
-            }
-        }
-    }
-    tx.commit();
-    Ok(())
+    versions::apply(doc, before, after, "Synthetic device", "edit")
 }
-
 fn project(doc: &Automerge) -> anyhow::Result<Vec<ManualTask>> {
     let mut rows: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
     let mut present = BTreeSet::new();
     for key in doc.keys(ROOT) {
         let [id, field]: [String; 2] = serde_json::from_str(&key)?;
+        if id.starts_with('$') {
+            continue;
+        }
         let (value, _) = doc
             .get(ROOT, &key)?
             .ok_or_else(|| anyhow::anyhow!("missing field"))?;
-        let value: Value = serde_json::from_str(
+        let value = versions::decode(
             value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("invalid field"))?,
-        )?;
+        )?
+        .value;
         if field == "$present" {
-            if value == Value::Bool(true) {
+            if versions::present(doc, &key)? {
                 present.insert(id);
             }
         } else if !value.is_null() {
@@ -307,7 +384,8 @@ pub fn headless(args: &[std::ffi::OsString]) -> io::Result<()> {
     }
     let root = &roots[0];
     let store = super::TaskStore { root: root.clone() };
-    let preview = get(root)?.ok_or_else(|| store_io::invalid("Preview is disabled"))?;
+    let _ = get(root)?.ok_or_else(|| store_io::invalid("Preview is disabled"))?;
+    let mut driver = test_driver::Driver::new(root);
     let mut output = io::stdout().lock();
     writeln!(output, "{{\"ready\":true}}")?;
     output.flush()?;
@@ -353,18 +431,24 @@ pub fn headless(args: &[std::ffi::OsString]) -> io::Result<()> {
                 Ok(Value::Null)
             }
             "offline" => {
-                preview.online(false)?;
+                get(root)?
+                    .ok_or_else(|| failed("preview off"))?
+                    .online(false)?;
                 Ok(Value::Null)
             }
             "online" => {
-                preview.online(true)?;
+                get(root)?
+                    .ok_or_else(|| failed("preview off"))?
+                    .online(true)?;
                 Ok(Value::Null)
             }
             "quit" => {
-                preview.online(false)?;
+                get(root)?
+                    .ok_or_else(|| failed("preview off"))?
+                    .online(false)?;
                 Ok(Value::Bool(true))
             }
-            _ => Err(store_io::invalid("Unknown test operation")),
+            _ => driver.process(&command),
         })();
         let response = match result {
             Ok(value) => serde_json::json!({"ok":true,"value":value}),
@@ -460,6 +544,7 @@ mod tests {
             enabled: true,
             address: "ws://127.0.0.1:9".into(),
             room: group.room(),
+            ..Default::default()
         }
         .save(root)?;
         let store = super::super::TaskStore { root: root.into() };
@@ -485,6 +570,107 @@ mod tests {
         Settings::default().save(root)?;
         let overrides = store.load_overrides()?;
         assert!(overrides.manual.is_empty() && overrides.tasks.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn legacy_identity_backup_drift_and_resume_keep_both_collections() -> anyhow::Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path();
+        store_io::write(
+            &root.join("device.json"),
+            &super::super::DeviceSettings {
+                name: "Synthetic PC".into(),
+                id: "c".repeat(32),
+                daily_check: false,
+            },
+        )?;
+        let task = ManualTask {
+            id: "l".repeat(137),
+            task: "Synthetic legacy task".into(),
+            ..Default::default()
+        };
+        store_io::write(
+            &root.join("task-overrides.json"),
+            &super::super::Overrides {
+                manual: vec![task.clone()],
+                ..Default::default()
+            },
+        )?;
+        let original = super::super::sync_state::manual_journal_files(root)?;
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        let preview = get(root)?.unwrap();
+        let mut changed = task.clone();
+        changed.owner = Some("Relay owner".into());
+        preview.edit(std::slice::from_ref(&task), &[changed])?;
+        assert_eq!(preview.tasks()?.len(), 1);
+        drop(preview);
+        let mut drift = original["task-overrides.json"].clone();
+        drift.push(b'\n');
+        std::fs::write(root.join("task-overrides.json"), drift)?;
+        let mut settings = Settings::load(root)?;
+        settings.enabled = false;
+        assert!(settings.save(root).is_err());
+        assert!(Settings::load(root)?.enabled);
+        std::fs::write(
+            root.join("task-overrides.json"),
+            &original["task-overrides.json"],
+        )?;
+        settings.save(root)?;
+        assert_eq!(
+            super::super::sync_state::manual_journal_files(root)?,
+            original
+        );
+        let folder = super::super::TaskStore { root: root.into() };
+        assert!(folder.load_overrides()?.manual[0].owner.is_none());
+        settings.enabled = true;
+        settings.save(root)?;
+        let preview = get(root)?.unwrap();
+        assert_eq!(preview.tasks()?[0].owner.as_deref(), Some("Relay owner"));
+        disconnect(root)?;
+        drop(preview);
+        Ok(())
+    }
+    #[test]
+    fn a_stale_address_save_cannot_restore_an_old_pairing_group() -> anyhow::Result<()> {
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path();
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        let preview = get(root)?.unwrap();
+        let mut stale = Settings::load(root)?;
+        let fresh = Group::new(&preview.device.identity);
+        preview.device.merge_group(&fresh)?;
+        let mut authority = Settings::load(root)?;
+        authority.room = fresh.room();
+        authority.save_authority(root)?;
+        stale.address = "ws://127.0.0.1:9".into();
+        stale.save(root)?;
+        assert!(Settings::load(root)?.room == fresh.room());
+        disconnect(root)?;
+        drop(preview);
+        Ok(())
+    }
+    #[test]
+    fn an_independent_old_import_cannot_resurrect_a_deleted_task() -> anyhow::Result<()> {
+        let task = ManualTask {
+            id: "synthetic".into(),
+            task: "Synthetic task".into(),
+            ..Default::default()
+        };
+        let mut a = Automerge::new();
+        let mut stale = Automerge::new();
+        apply(&mut a, &[], std::slice::from_ref(&task))?;
+        apply(&mut a, std::slice::from_ref(&task), &[])?;
+        apply(&mut stale, &[], &[task])?;
+        a.merge(&mut stale)?;
+        assert!(project(&a)?.is_empty());
         Ok(())
     }
 }

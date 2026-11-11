@@ -49,6 +49,14 @@ const key = "a".repeat(64);
 const state = role => ({room:key, kind:"pair", role, key, nonce:"", deadline:Date.now()+600_000, window:Date.now(), messages:0, bytes:0});
 const pair = () => ({kind:"pair", pins:[key], expires:Date.now()+600_000, attempts:0, used:false, retries:0, messages:0, grantForwarded:false, receiptForwarded:false, cleanupAt:0});
 
+test("expired invitation rejects a guest before a socket or bundle exists", async () => {
+  const f=fixture(), meta=pair();meta.expires=Date.now()-1;f.room.save(meta);
+  const response=await f.room.fetch(new Request(`http://127.0.0.1/pair/${key}?role=guest`,{headers:{Upgrade:"websocket"}}));
+  expect(response.status).toBe(410);
+  expect(f.sockets.length).toBe(0);
+  expect(meta.grantForwarded).toBe(false);
+});
+
 test("R1 only the 1000 public locator hashes reach a DO", async () => {
   expect(PAIR_LOCATORS.size).toBe(1000);
   let calls=0;

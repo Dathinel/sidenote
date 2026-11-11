@@ -262,6 +262,14 @@ impl Session {
         Self::open_mode(root, store, false)
     }
     fn open_mode(root: &Path, store: &str, read_only: bool) -> io::Result<Self> {
+        Self::open_mode_preview(root, store, read_only, true)
+    }
+    fn open_mode_preview(
+        root: &Path,
+        store: &str,
+        read_only: bool,
+        use_preview: bool,
+    ) -> io::Result<Self> {
         if !supported(store) {
             return Err(invalid("Unsupported shared store"));
         }
@@ -290,7 +298,7 @@ impl Session {
         } else {
             None
         };
-        let preview = if store == "task-overrides.json" {
+        let preview = if use_preview && store == "task-overrides.json" {
             super::relay_preview::get(root)?
         } else {
             None
@@ -419,7 +427,7 @@ impl Session {
                 self.view.warnings.push("Could not import a legacy state file within the journal limit; it was retained".into());
                 continue;
             }
-            if self.read_only {
+            if self.read_only || (self.preview.is_some() && self.store == "task-overrides.json") {
                 // Apply exactly the same seed registers in memory without migration or backups.
                 journal.sources.clear();
                 self.view.merge(&journal);
@@ -558,6 +566,74 @@ pub(super) fn load_report<T: Serialize + DeserializeOwned + Default>(
 }
 pub(super) fn prepare(root: &Path, store: &str) -> io::Result<()> {
     Session::open(root, store).map(|_| ())
+}
+pub(super) fn folder_manual(root: &Path) -> io::Result<(Vec<super::ManualTask>, Vec<String>)> {
+    let session = Session::open_mode_preview(root, "task-overrides.json", true, false)?;
+    let (value, skipped) = session.value_report::<super::Overrides>()?;
+    if session.view.own_bad || !session.view.warnings.is_empty() || skipped != 0 {
+        return Err(invalid(
+            "Repair unreadable task journals before enabling relay sync",
+        ));
+    }
+    let deleted = session
+        .view
+        .items
+        .iter()
+        .filter_map(|(key, value)| match key.as_slice() {
+            [kind, id] if kind == "manual" && value.value.is_none() => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    Ok((
+        serde_json::from_value::<super::Overrides>(value)?.manual,
+        deleted,
+    ))
+}
+
+pub(super) fn manual_journal_files(root: &Path) -> io::Result<BTreeMap<String, Vec<u8>>> {
+    let store = "task-overrides.json";
+    let mut files = BTreeMap::new();
+    let mut paths = Vec::new();
+    for owner in entries(&root.join("state"))? {
+        let name = owner.file_name().to_string_lossy().into_owned();
+        if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
+            continue;
+        }
+        for entry in entries(&owner.path().join(hash(store.as_bytes())))? {
+            if entry.path().extension().is_some_and(|ext| ext == "json") {
+                let journal = read_journal(&entry.path(), &name, Some(store))?;
+                if journal
+                    .changes
+                    .iter()
+                    .any(|c| c.key.first().is_some_and(|k| k == "manual"))
+                {
+                    paths.push(entry.path());
+                }
+            }
+        }
+    }
+    for path in legacy_sources(root, store)? {
+        if let Some(bytes) = read_optional(&path)?
+            && parse(&bytes)?.get("manual").is_some()
+        {
+            paths.push(path);
+        }
+    }
+    let mut total = 0;
+    for path in paths {
+        let bytes = store_io::read_bounded(&path, super::file_reads::JOURNAL_MAX)?;
+        total += bytes.len();
+        if total as u64 > super::file_reads::STORE_MAX {
+            return Err(invalid("Task backup exceeds the store limit"));
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| invalid("Invalid task backup path"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.insert(relative, bytes);
+    }
+    Ok(files)
 }
 pub(super) fn writer(root: &Path, store: &str, key: Vec<String>) -> io::Result<Option<String>> {
     let session = Session::open_mode(root, store, true)?;

@@ -47,6 +47,19 @@ pub struct Grant {
     pub receipt: Receipt,
 }
 
+pub type SecretCode = Zeroizing<String>;
+
+#[derive(Clone)]
+pub struct Confirmation {
+    pub phrase: String,
+    pub peer_name: String,
+    pub peer: [u8; 32],
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
+}
+
 pub struct PairHost {
     transport: WebSocketTransport,
     code: Zeroizing<String>,
@@ -95,6 +108,33 @@ impl PairHost {
         &self.code
     }
 
+    pub fn remaining(&self) -> Duration {
+        self.expires.saturating_duration_since(Instant::now())
+    }
+
+    pub async fn accept_named<F, Fut>(
+        mut self,
+        device: &Device,
+        existing: Option<Group>,
+        name: &str,
+        confirm: F,
+    ) -> Result<Grant>
+    where
+        F: FnMut(Confirmation) -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        accept_named_transport(
+            &mut self.transport,
+            &self.code,
+            self.expires,
+            device,
+            existing,
+            name,
+            confirm,
+        )
+        .await
+    }
+
     /// The callback must present the SAS and obtain explicit local confirmation.
     /// Failed attempts are retried within the same invitation; success consumes this object.
     pub async fn accept<F, Fut>(
@@ -131,6 +171,31 @@ where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = bool>,
 {
+    accept_named_transport(
+        transport,
+        code,
+        expires,
+        device,
+        existing,
+        "Device",
+        move |info| confirm(info.phrase),
+    )
+    .await
+}
+
+async fn accept_named_transport<F, Fut>(
+    transport: &mut impl Transport,
+    code: &str,
+    expires: Instant,
+    device: &Device,
+    existing: Option<Group>,
+    name: &str,
+    mut confirm: F,
+) -> Result<Grant>
+where
+    F: FnMut(Confirmation) -> Fut,
+    Fut: Future<Output = bool>,
+{
     let group = existing.unwrap_or_else(|| Group::new(&device.identity));
     group.validate(device.identity.public())?;
     let deadline = tokio::time::Instant::from_std(expires);
@@ -142,6 +207,7 @@ where
                 transport,
                 code,
                 device,
+                name,
                 &mut confirm,
                 Side::Host {
                     group: &group,
@@ -208,6 +274,27 @@ where
     result
 }
 
+pub async fn join_named<F, Fut>(
+    relay: &RelayUrl,
+    code: &str,
+    device: &Device,
+    name: &str,
+    confirm: F,
+) -> Result<Group>
+where
+    F: FnMut(Confirmation) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let identity = &device.identity;
+    let room = room(code)?;
+    let mut transport =
+        WebSocketTransport::connect(&relay.endpoint("pair", &room, "guest")).await?;
+    authenticate(&mut transport, &room, "guest", identity, None).await?;
+    let result = join_named_transport(&mut transport, code, device, name, confirm).await;
+    let _ = transport.close().await;
+    result
+}
+
 async fn join_transport<F, Fut>(
     transport: &mut impl Transport,
     code: &str,
@@ -218,6 +305,23 @@ where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = bool>,
 {
+    join_named_transport(transport, code, device, "Device", move |info| {
+        confirm(info.phrase)
+    })
+    .await
+}
+
+async fn join_named_transport<F, Fut>(
+    transport: &mut impl Transport,
+    code: &str,
+    device: &Device,
+    name: &str,
+    mut confirm: F,
+) -> Result<Group>
+where
+    F: FnMut(Confirmation) -> Fut,
+    Fut: Future<Output = bool>,
+{
     let mut stored = None;
     let result = tokio::time::timeout(
         ATTEMPT_TIMEOUT,
@@ -225,6 +329,7 @@ where
             transport,
             code,
             device,
+            name,
             &mut confirm,
             Side::Guest {
                 stored: &mut stored,
@@ -340,13 +445,15 @@ async fn exchange<F, Fut>(
     transport: &mut impl Transport,
     code: &str,
     device: &Device,
+    name: &str,
     confirm: &mut F,
     side: Side<'_>,
 ) -> Result<Group>
 where
-    F: FnMut(String) -> Fut,
+    F: FnMut(Confirmation) -> Fut,
     Fut: Future<Output = bool>,
 {
+    ensure!(valid_name(name), "invalid device name");
     let identity = &device.identity;
     let host = matches!(side, Side::Host { .. });
     // Host waits for the joiner's first PAKE message; no pairing messages are buffered by the relay.
@@ -383,17 +490,27 @@ where
     }
     let transcript = hash(&transcript);
     let mut channel = Channel::new(&shared, transcript, host)?;
+    let mut signed = transcript.to_vec();
+    signed.extend_from_slice(name.as_bytes());
     let mut proof = identity.public().to_vec();
-    proof.extend_from_slice(&identity.sign(&transcript));
+    proof.extend_from_slice(&identity.sign(&signed));
+    proof.extend_from_slice(name.as_bytes());
     channel.send(transport, &proof).await?;
     let peer_proof = channel.recv(transport).await?;
-    ensure!(peer_proof.len() == 96, "invalid identity proof");
+    ensure!(
+        (97..=416).contains(&peer_proof.len()),
+        "invalid identity proof"
+    );
+    let peer_name = std::str::from_utf8(&peer_proof[96..]).context("invalid device name")?;
+    ensure!(valid_name(peer_name), "invalid device name");
     let peer: [u8; 32] = peer_proof[..32].try_into()?;
     ensure!(
         peer != identity.public(),
         "cannot pair identity with itself"
     );
-    verify(&peer, &transcript, &peer_proof[32..])?;
+    let mut peer_signed = transcript.to_vec();
+    peer_signed.extend_from_slice(peer_name.as_bytes());
+    verify(&peer, &peer_signed, &peer_proof[32..96])?;
     let mut sas_bytes = transcript.to_vec();
     if host {
         sas_bytes.extend_from_slice(&identity.public());
@@ -402,8 +519,21 @@ where
         sas_bytes.extend_from_slice(&peer);
         sas_bytes.extend_from_slice(&identity.public());
     }
+    let (first, second) = if host {
+        (name, peer_name)
+    } else {
+        (peer_name, name)
+    };
+    sas_bytes.extend_from_slice(first.as_bytes());
+    sas_bytes.push(0);
+    sas_bytes.extend_from_slice(second.as_bytes());
     let sas = hex::encode(&hash(&sas_bytes)[..4]);
-    let accepted = confirm(sas).await;
+    let accepted = confirm(Confirmation {
+        phrase: sas,
+        peer_name: peer_name.into(),
+        peer,
+    })
+    .await;
     channel
         .send(transport, if accepted { b"confirmed" } else { b"rejected" })
         .await?;
@@ -474,6 +604,45 @@ mod tests {
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
+    #[tokio::test(start_paused = true)]
+    async fn expired_invitation_cannot_grant_or_send_content() -> Result<()> {
+        assert_eq!(INVITATION_TTL, Duration::from_secs(600));
+        let dir = tempfile::tempdir()?;
+        let device = Device::open(&dir.path().join("expired.sqlite"))?;
+        let used = Arc::new(AtomicBool::new(false));
+        let grants = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let mut transport = MemoryRelay {
+            host: true,
+            fault: None,
+            used: used.clone(),
+            grants: grants.clone(),
+            retries_after_grant: Arc::new(AtomicUsize::new(0)),
+            incoming: rx,
+            self_tx: tx.clone(),
+            other: tx,
+        };
+        let result = accept_transport(
+            &mut transport,
+            "00112345",
+            Instant::now() - Duration::from_secs(1),
+            &device,
+            None,
+            |_| async { true },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(!used.load(Ordering::Relaxed));
+        assert_eq!(grants.load(Ordering::Relaxed), 0);
+        Ok(())
+    }
+    #[test]
+    fn device_names_are_bounded_before_the_confirmation_screen() {
+        assert!(valid_name("Synthetic laptop"));
+        for invalid in [String::new(), " ".into(), "a\nb".into(), "x".repeat(81)] {
+            assert!(!valid_name(&invalid));
+        }
+    }
     struct MemoryRelay {
         host: bool,
         fault: Option<&'static str>,
