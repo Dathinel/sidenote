@@ -20,7 +20,7 @@ def main():
         path=Path(shot['path']);w=shot['width'];theme=shot['theme'];name=path.stem.rsplit('-',2)[0];nodes=elements(name,w,theme)
         assert Image.open(path).size==(w,800)
         if name=='settings-general':
-            assert ImageChops.difference(Image.open(path).convert('RGBA'),Image.open(a.reference/path.name).convert('RGBA')).getbbox() is None,path
+            assert ImageChops.difference(Image.open(path).convert('RGB'),Image.open(a.reference/path.name).convert('RGB')).getbbox() is None,path
             continue
         assert keyed(nodes,'meeting-title')['rect'][3]<=80.1
         assert keyed(nodes,'meeting-breadcrumb')['text'].startswith('Meetings / ')

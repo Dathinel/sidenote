@@ -22,7 +22,7 @@ def aligned(row, sheet=False):
     n = nodes(row)
     pill, lead = n['ask-pill']['rect'], n['meeting-transcript']['rect']
     thinking = n['ask-thinking']
-    assert thinking['label'] == 'Thinking: Low'
+    assert thinking['label'] == 'Thinking: Medium'
     assert n['ask-input']['rect'][2] >= 150, n['ask-input']['rect']
     for key in ['ask-pill', 'meeting-transcript', 'ask-thinking']:
         x, _, w, _ = n[key]['rect']
@@ -64,7 +64,9 @@ def main():
             assert 'ask-thinking-menu-item2' in nodes(row)
             rows.append(row)
     for theme in ['light', 'dark']:
-        rows.append(native.render(exe, 'ask-in-meeting', 'ask-in-meeting', theme=theme))
+        row = native.render(exe, 'ask-in-meeting', 'ask-in-meeting', theme=theme)
+        assert nodes(row)['ask-thinking']['label'] == 'Thinking: Low'
+        rows.append(row)
         rows.append(tasks.render(exe, 'tasks', 'tasks-v2-status', 1280, theme))
         rows.append(memory.render(exe, 'memory', theme=theme))
         rows.append(native.render(exe, 'people-our-team', 'people-our-team', theme=theme))
@@ -90,7 +92,7 @@ def main():
     comparisons = []
     for row in rows:
         path = Path(row['path'])
-        for branch in ['meeting', 'dev12']:
+        for branch in ['meeting', 'dev12', 'dev12-matched']:
             reference = out.parent / 'reference' / branch / path.name
             if reference.exists():
                 diff = ImageChops.difference(Image.open(path).convert('RGB'),
