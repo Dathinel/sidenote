@@ -81,7 +81,7 @@ def main():
         preview = frame(args.proof, "preview", theme)
         assert not any(n.get("key") == "relay-join-code" for n in preview["elements"]), "entry is not folded"
         host = element(preview, "relay-host")
-        assert host["fill"] == ("#2f5d8aff" if theme == "light" else "#8db5dcff"), "host action is not primary"
+        assert host["fill"] == ("#1f2328ff" if theme == "light" else "#ecececff"), "host action must use dev16 quiet ink primary paint"
         entry = frame(args.proof, "entry", theme)
         assert element(entry, "relay-join-code"), "code link did not reveal the field"
         pair = next(n for n in nodes(entry["accessibility"]) if n.get("key") == "relay-join")
