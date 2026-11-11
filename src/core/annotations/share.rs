@@ -40,7 +40,7 @@ pub fn default_name(title: &str) -> String {
     format!("{name}.html")
 }
 const CSS: &str = r#"
-:root{color-scheme:light dark;--paper:#fcfbf8;--ink:#262522;--soft:#66645e;--line:#deddd7;--accent:#315f89;--card:#fff}*{box-sizing:border-box}body{overflow-wrap:anywhere;margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 'Segoe UI',system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:48px 24px 32px}header{max-width:820px;margin-bottom:36px}h1{font-size:clamp(28px,4vw,40px);line-height:1.18;letter-spacing:-.025em;margin:0 0 20px}h2{font-size:24px;line-height:1.3;margin:36px 0 18px}h3{font-size:17px;margin:0}p{margin:0 0 16px;white-space:pre-line}section{margin:24px 0 40px}.figure{display:grid;grid-template-columns:minmax(0,2fr) minmax(250px,1fr);gap:24px;align-items:start;margin:24px 0}figure{margin:0;min-width:0}img{display:block;width:100%;height:auto;border-radius:6px}figcaption{color:var(--soft);font-size:13px;margin-top:10px}.callout{border-top:1px solid var(--line);padding:14px 0}.callout:first-child{padding-top:0;border:0}.callout h3{display:flex;align-items:center;gap:10px;margin-bottom:8px}.number{display:inline-flex;min-width:26px;height:26px;padding:0 6px;align-items:center;justify-content:center;background:var(--accent);color:var(--card);border-radius:50%;font-size:14px}.callout p{margin:0;font-size:15px}li{margin:10px 0}footer{border-top:1px solid var(--line);padding:20px 0;color:var(--soft);font-size:12px}@media(prefers-color-scheme:dark){:root{--paper:#1c1d1b;--ink:#eeeee9;--soft:#bbbcb3;--line:#42443d;--accent:#99bfdf;--card:#1c1d1b}}@media(max-width:700px){main{padding:28px 18px}.figure{grid-template-columns:1fr;gap:18px}h2{font-size:22px}}@media print{:root{color-scheme:light;--paper:#fff;--ink:#111;--soft:#555;--line:#bbb;--accent:#315f89;--card:#fff}main{max-width:none;padding:0}.figure{break-inside:avoid}h2,h3{break-after:avoid}img{print-color-adjust:exact}footer{font-size:10px}@page{margin:14mm}}
+:root{color-scheme:light dark;--paper:#fcfbf8;--ink:#262522;--soft:#66645e;--line:#deddd7;--accent:#315f89;--card:#fff}*{box-sizing:border-box}body{overflow-wrap:anywhere;margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 'Segoe UI',system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:48px 24px 32px}header{max-width:820px;margin-bottom:36px}h1{font-size:clamp(28px,4vw,40px);line-height:1.18;letter-spacing:-.025em;margin:0 0 20px}h2{font-size:24px;line-height:1.3;margin:36px 0 18px}h3{font-size:17px;margin:0}p{margin:0 0 16px;white-space:pre-line}section{margin:24px 0 40px}.figure{display:grid;grid-template-columns:minmax(0,2fr) minmax(250px,1fr);gap:24px;align-items:start;margin:24px 0}figure{margin:0;min-width:0}.image-wrap{position:relative}.image-wrap svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.reuse{color:var(--soft);font-size:14px}img{display:block;width:100%;height:auto;border-radius:6px}figcaption{color:var(--soft);font-size:13px;margin-top:10px}.callout{border-top:1px solid var(--line);padding:14px 0}.callout:first-child{padding-top:0;border:0}.callout h3{display:flex;align-items:center;gap:10px;margin-bottom:8px}.number{display:inline-flex;min-width:26px;height:26px;padding:0 6px;align-items:center;justify-content:center;background:var(--accent);color:var(--card);border-radius:50%;font-size:14px}.callout p{margin:0;font-size:15px}li{margin:10px 0}footer{border-top:1px solid var(--line);padding:20px 0;color:var(--soft);font-size:12px}@media(prefers-color-scheme:dark){:root{--paper:#1c1d1b;--ink:#eeeee9;--soft:#bbbcb3;--line:#42443d;--accent:#99bfdf;--card:#1c1d1b}}@media(max-width:700px){main{padding:28px 18px}.figure{grid-template-columns:1fr;gap:18px}h2{font-size:22px}}@media print{:root{color-scheme:light;--paper:#fff;--ink:#111;--soft:#555;--line:#bbb;--accent:#315f89;--card:#fff}main{max-width:none;padding:0}.figure{break-inside:avoid}h2,h3{break-after:avoid}img{print-color-adjust:exact}footer{font-size:10px}@page{margin:14mm}}
 "#;
 fn header(title: &str, summary: &str) -> String {
     format!(
@@ -72,6 +72,9 @@ fn figures(figures: &Value, approved: &ApprovedCapture) -> Result<String, String
     let frames = figures.as_array().ok_or("Invalid note figures")?;
     let mut paths = Vec::new();
     for f in frames {
+        if f["same_screen"].is_string() {
+            continue;
+        }
         let frame = approved
             .approval
             .frames
@@ -82,19 +85,59 @@ fn figures(figures: &Value, approved: &ApprovedCapture) -> Result<String, String
     }
     let _pins = approved.pin_images(&paths).map_err(|e| e.to_string())?;
     let mut out = String::new();
-    for (f, path) in frames.iter().zip(paths) {
+    let mut paths = paths.into_iter();
+    for f in frames {
+        if let Some(reference) = f["same_screen"].as_str() {
+            out.push_str(&format!("<p class=\"reuse\">{}</p>", text(reference)));
+            for explanation in f["reuse_explanations"].as_array().unwrap() {
+                out.push_str(&format!("<p>{}</p>", text(explanation.as_str().unwrap())));
+            }
+            continue;
+        }
+        let path = paths.next().unwrap();
         let bytes = file_reads::read(&path, super::IMAGE_MAX_BYTES).map_err(|e| e.to_string())?;
         let expected = &approved.approval.file_hashes[path.file_name().unwrap().to_str().unwrap()];
         if blake3::hash(&bytes).to_hex().as_str() != expected {
             return Err("A shared image differs from its approval.".into());
         }
-        out.push_str(&format!("<div class=\"figure\"><figure><img alt=\"{}\" src=\"data:image/png;base64,{}\"><figcaption>{}</figcaption></figure><div>",text(f["caption"].as_str().unwrap()),STANDARD.encode(&bytes),text(f["caption"].as_str().unwrap())));
+        out.push_str(&format!("<div class=\"figure\"><figure><div class=\"image-wrap\"><img alt=\"{}\" src=\"data:image/png;base64,{}\">{}</div><figcaption>{}</figcaption></figure><div>",text(f["caption"].as_str().unwrap()),STANDARD.encode(&bytes), overlays(f, &bytes)?, text(f["caption"].as_str().unwrap())));
         for c in f["callouts"].as_array().unwrap() {
             out.push_str(&format!("<article class=\"callout\"><h3><span class=\"number\">{}</span>{}</h3><p>{}</p></article>",c["mark_number"].as_u64().unwrap(),text(c["label"].as_str().unwrap()),text(c["explanation"].as_str().unwrap())));
         }
         out.push_str("</div></div>");
     }
     Ok(out)
+}
+fn overlays(figure: &Value, bytes: &[u8]) -> Result<String, String> {
+    let image = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    let (w, h) = image.into_dimensions().map_err(|e| e.to_string())?;
+    let mut svg = String::new();
+    for c in figure["callouts"].as_array().unwrap() {
+        let Some(old) = c["original_mark_number"].as_u64() else {
+            continue;
+        };
+        let n = c["mark_number"].as_u64().unwrap();
+        if old == n {
+            continue;
+        }
+        if let Some(b) = c["boxNorm"].as_array() {
+            let bw = (old.to_string().len().max(n.to_string().len()) as f64 * 12.0 + 6.0).max(22.0);
+            let x = (b[0].as_f64().unwrap() * w as f64)
+                .floor()
+                .clamp(0.0, (w as f64 - bw).max(0.0));
+            let y = (b[1].as_f64().unwrap() * h as f64)
+                .floor()
+                .clamp(0.0, (h as f64 - 22.0).max(0.0));
+            svg.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{bw}\" height=\"22\" fill=\"#1e4a74\"/><text x=\"{}\" y=\"{}\" fill=\"white\" font-size=\"16\" font-family=\"sans-serif\" text-anchor=\"middle\">{n}</text>",x+bw/2.0,y+17.0));
+        }
+    }
+    Ok(if svg.is_empty() {
+        svg
+    } else {
+        format!("<svg viewBox=\"0 0 {w} {h}\" aria-hidden=\"true\">{svg}</svg>")
+    })
 }
 pub fn capture(value: &Value, approved: &ApprovedCapture) -> Result<String, String> {
     note::validate(value, approved)?;
@@ -132,7 +175,8 @@ pub fn capture(value: &Value, approved: &ApprovedCapture) -> Result<String, Stri
 }
 pub fn notebook(doc: &Document) -> Result<String, String> {
     super::notebook::validate(doc)?;
-    let v = &doc.value;
+    let value = super::notebook::reading_value(doc);
+    let v = &value;
     let mut out = header(v["title"].as_str().unwrap(), v["summary"].as_str().unwrap());
     for (section, asset) in v["sections"].as_array().unwrap().iter().zip(&doc.assets) {
         out.push_str(&format!(

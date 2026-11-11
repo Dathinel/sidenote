@@ -29,6 +29,84 @@ pub struct Document {
     pub value: Value,
     pub assets: Vec<Asset>,
 }
+/// Reading projection: one approved image per content hash, with notebook-wide badges.
+/// Source notes and approval files keep their original metadata and bytes.
+pub fn reading_value(doc: &Document) -> Value {
+    let mut value = doc.value.clone();
+    let mut seen = std::collections::BTreeMap::<String, (String, Value)>::new();
+    let mut next = 1_u64;
+    for (section, asset) in value["sections"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(&doc.assets)
+    {
+        let heading = section["heading"].as_str().unwrap().to_owned();
+        for figure in section["figures"].as_array_mut().unwrap() {
+            let frame = asset
+                .approved
+                .approval
+                .frames
+                .iter()
+                .find(|f| Some(f.index) == figure["keyframe_index"].as_u64())
+                .unwrap();
+            let hash = &asset.approved.approval.file_hashes[&frame.marked];
+            if let Some((first, original)) = seen.get(hash) {
+                let previous = original["callouts"].as_array().unwrap();
+                let numbers = previous
+                    .iter()
+                    .map(|c| c["mark_number"].as_u64().unwrap())
+                    .collect::<Vec<_>>();
+                let marks = numbers
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut extra = Vec::new();
+                if figure["caption"] != original["caption"] {
+                    extra.push(figure["caption"].clone());
+                }
+                for callout in figure["callouts"].as_array_mut().unwrap() {
+                    if let Some(prior) = previous
+                        .iter()
+                        .find(|c| c["original_mark_number"] == callout["mark_number"])
+                    {
+                        callout["original_mark_number"] = callout["mark_number"].clone();
+                        callout["mark_number"] = prior["mark_number"].clone();
+                        if callout["label"] != prior["label"]
+                            || callout["explanation"] != prior["explanation"]
+                        {
+                            extra.push(json!(format!(
+                                "Mark {}: {}. {}",
+                                callout["mark_number"],
+                                callout["label"].as_str().unwrap(),
+                                callout["explanation"].as_str().unwrap()
+                            )));
+                        }
+                    }
+                }
+                figure["reuse_explanations"] = json!(extra);
+                figure["same_screen"] = json!(if numbers.is_empty() {
+                    format!("Same screen as {first}.")
+                } else {
+                    format!(
+                        "Same screen as {first}, {} {marks}.",
+                        if numbers.len() == 1 { "mark" } else { "marks" }
+                    )
+                });
+                continue;
+            }
+            for callout in figure["callouts"].as_array_mut().unwrap() {
+                callout["original_mark_number"] = callout["mark_number"].clone();
+                callout["mark_number"] = json!(next);
+                next += 1;
+            }
+            seen.insert(hash.clone(), (heading.clone(), figure.clone()));
+        }
+    }
+    value
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Notebook {
     pub id: String,
@@ -530,6 +608,21 @@ pub fn synthetic_document(book: &Notebook, inputs: &[Input]) -> Result<Document,
     )
 }
 pub fn live_proof(root: &Path) -> Result<(), String> {
+    benchmark(root, "sonnet-medium")
+}
+#[doc(hidden)]
+pub fn benchmark(root: &Path, variant: &str) -> Result<(), String> {
+    let (helper, model, effort) = match variant {
+        "sonnet-medium" => (
+            crate::core::notes::Helper::Claude,
+            "claude-sonnet-5-5",
+            "medium",
+        ),
+        "codex-low" => (crate::core::notes::Helper::Codex, "gpt-5.6-luna", "low"),
+        "codex-medium" => (crate::core::notes::Helper::Codex, "gpt-5.6-luna", "medium"),
+        "haiku" => (crate::core::notes::Helper::Claude, "haiku", "low"),
+        _ => return Err("Unknown notebook benchmark variant.".into()),
+    };
     let (mut book, inputs, _) = synthetic(root, 3)?;
     save(root, &book).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
@@ -538,15 +631,16 @@ pub fn live_proof(root: &Path) -> Result<(), String> {
     let preview_events = std::sync::Mutex::new(Vec::<Value>::new());
     let ticket = super::generation::Epoch::default().begin();
     let options = super::generation::Options {
-        helper: crate::core::notes::Helper::Claude,
-        model: "claude-sonnet-5-5".into(),
+        helper,
+        model: model.into(),
     };
-    let doc = super::generation::run_notebook(
+    let doc = super::generation::run_notebook_at_effort(
         &book,
         &inputs,
         &options,
         &root.join("job"),
         &ticket,
+        effort,
         |text| {
             let elapsed = started.elapsed().as_secs_f64();
             let preview = super::generation::notebook_stream_preview(&text);
@@ -579,7 +673,7 @@ pub fn live_proof(root: &Path) -> Result<(), String> {
         &serde_json::to_vec_pretty(&doc.value).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    store_io::atomic_write(&root.join("timing.json"),&serde_json::to_vec_pretty(&json!({"model":options.model,"captures":3,"first_text_seconds":*first.lock().unwrap(),"first_title_summary_seconds":*first_header.lock().unwrap(),"complete_seconds":total,"valid":true,"images_sent":0,"existing_notes_only":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    store_io::atomic_write(&root.join("timing.json"),&serde_json::to_vec_pretty(&json!({"variant":variant,"effort":effort,"model":options.model,"captures":3,"first_text_seconds":*first.lock().unwrap(),"first_title_summary_seconds":*first_header.lock().unwrap(),"complete_seconds":total,"valid":true,"images_sent":0,"existing_notes_only":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     store_io::atomic_write(
         &root.join("stream-proof.json"),
         &serde_json::to_vec_pretty(&*preview_events.lock().unwrap()).map_err(|e| e.to_string())?,

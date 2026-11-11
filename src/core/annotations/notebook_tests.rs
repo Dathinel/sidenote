@@ -125,9 +125,10 @@ fn shared_html_is_static_pathless_and_contains_exactly_the_approved_marked_pngs(
     let mut expected = std::collections::BTreeMap::new();
     for input in &inputs {
         for frame in &input.approved.approval.frames {
-            *expected
-                .entry(input.approved.approval.file_hashes[&frame.marked].clone())
-                .or_insert(0usize) += 1;
+            expected.insert(
+                input.approved.approval.file_hashes[&frame.marked].clone(),
+                1usize,
+            );
         }
     }
     assert_eq!(share::image_hashes(&html).unwrap(), expected);
@@ -193,4 +194,115 @@ fn conflicting_questions_remain_distinct_and_legacy_uncertainty_moves_to_the_end
     assert!(doc.value["sections"][0]["figures"][0]["callouts"][0]["uncertainty"].is_null());
     let html = share::capture(&inputs[0].note, &inputs[0].approved).unwrap();
     assert!(html.contains("Which overview is intended?"));
+}
+
+#[test]
+fn shared_frames_appear_only_in_the_first_capture_with_unique_notebook_marks() {
+    let temp = Temp::new();
+    let (b, inputs, _) = notebook::synthetic(&temp.0, 2).unwrap();
+    let doc = notebook::synthetic_document(&b, &inputs).unwrap();
+    let view = notebook::reading_value(&doc);
+    assert_eq!(
+        view["sections"][0]["figures"][0]["callouts"][0]["mark_number"],
+        1
+    );
+    assert_eq!(
+        view["sections"][0]["figures"][1]["callouts"][0]["mark_number"],
+        3
+    );
+    assert_eq!(
+        view["sections"][1]["figures"][0]["same_screen"],
+        "Same screen as Workshop setup, marks 1, 2."
+    );
+    assert_eq!(
+        view["sections"][1]["figures"][1]["same_screen"],
+        "Same screen as Workshop setup, mark 3."
+    );
+    let html = share::notebook(&doc).unwrap();
+    assert_eq!(
+        share::image_hashes(&html).unwrap().values().sum::<usize>(),
+        2
+    );
+    assert_eq!(html.matches("class=\"number\"").count(), 3);
+    assert_eq!(
+        doc.value["sections"][1]["figures"][0]["callouts"][0]["mark_number"],
+        1
+    );
+}
+
+#[test]
+fn distinct_capture_frames_get_global_numbers_without_changing_approved_bytes() {
+    let temp = Temp::new();
+    let (b, mut inputs, captures) = notebook::synthetic(&temp.0, 2).unwrap();
+    let capture = &captures[1];
+    let path = capture.frame_path(&capture.data.keyframes[1]).unwrap();
+    let mut image = image::open(&path).unwrap().to_rgba8();
+    image.put_pixel(400, 100, image::Rgba([12, 34, 56, 255]));
+    image.save(&path).unwrap();
+    let review = inputs[1].approved.approval.review.clone();
+    inputs[1].approved = media::approve(capture, &review, &temp.0).unwrap();
+    let doc = notebook::synthetic_document(&b, &inputs).unwrap();
+    let view = notebook::reading_value(&doc);
+    assert!(view["sections"][1]["figures"][0]["same_screen"].is_string());
+    let last = &view["sections"][1]["figures"][1]["callouts"][0];
+    assert_eq!(last["mark_number"], 4);
+    assert_eq!(last["original_mark_number"], 3);
+    let before = fs::read(
+        inputs[1]
+            .approved
+            .folder
+            .join(&inputs[1].approved.approval.frames[1].marked),
+    )
+    .unwrap();
+    let html = share::notebook(&doc).unwrap();
+    assert!(html.contains("<svg viewBox="));
+    assert!(html.contains(">4</text>"));
+    let hashes = share::image_hashes(&html).unwrap();
+    assert_eq!(hashes.len(), 3);
+    assert!(hashes.values().all(|n| *n == 1));
+    assert!(hashes.contains_key(blake3::hash(&before).to_hex().as_str()));
+    assert_eq!(
+        before,
+        fs::read(
+            inputs[1]
+                .approved
+                .folder
+                .join(&inputs[1].approved.approval.frames[1].marked)
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn shared_screen_references_follow_reordering_and_keep_edited_explanations() {
+    let temp = Temp::new();
+    let (mut book, inputs, _) = notebook::synthetic(&temp.0, 2).unwrap();
+    let mut doc = notebook::synthetic_document(&book, &inputs).unwrap();
+    doc.value["sections"][1]["figures"][0]["callouts"][1]["explanation"] =
+        serde_json::json!("Bring the paper prototype to the review.");
+    book.note = Some(doc);
+    book.note_revision = book.revision;
+    let html = share::notebook(book.note.as_ref().unwrap()).unwrap();
+    assert!(
+        html.contains(
+            "Mark 2: Paper prototype materials. Bring the paper prototype to the review."
+        )
+    );
+    assert_eq!(
+        share::image_hashes(&html).unwrap().values().sum::<usize>(),
+        2
+    );
+    assert!(book.reorder(1, 0));
+    let doc = book.note.as_ref().unwrap();
+    let html = share::notebook(doc).unwrap();
+    assert!(html.contains("Same screen as Materials for the prototype, marks 1, 2."));
+    assert!(!html.contains("Same screen as Workshop setup"));
+    assert_eq!(
+        share::image_hashes(&html).unwrap().values().sum::<usize>(),
+        2
+    );
+    assert_eq!(
+        doc.value["sections"][0]["figures"][0]["callouts"][1]["explanation"],
+        "Bring the paper prototype to the review."
+    );
 }

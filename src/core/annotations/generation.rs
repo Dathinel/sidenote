@@ -885,6 +885,19 @@ pub fn run_notebook(
     ticket: &Ticket,
     delta: impl Fn(String),
 ) -> Result<super::notebook::Document, String> {
+    run_notebook_at_effort(book, inputs, options, folder, ticket, "medium", delta)
+}
+
+#[doc(hidden)]
+pub fn run_notebook_at_effort(
+    book: &super::notebook::Notebook,
+    inputs: &[super::notebook::Input],
+    options: &Options,
+    folder: &Path,
+    ticket: &Ticket,
+    effort: &str,
+    delta: impl Fn(String),
+) -> Result<super::notebook::Document, String> {
     available(options)?;
     ticket.check()?;
     for input in inputs {
@@ -900,7 +913,7 @@ pub fn run_notebook(
         Input {
             prompt: super::notebook::prompt(book, inputs),
             images: &[],
-            effort: "medium",
+            effort,
             final_note: false,
             schema: Some(&schema),
         },
