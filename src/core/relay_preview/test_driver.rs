@@ -10,6 +10,7 @@ pub(super) struct Driver {
     job: Option<pairing::Pairing>,
     events: Option<mpsc::Receiver<pairing::Update>>,
     phase: &'static str,
+    attempt: u64,
     merge: Option<super::super::project_merge::MergePreview>,
 }
 impl Driver {
@@ -19,6 +20,7 @@ impl Driver {
             job: None,
             events: None,
             phase: "idle",
+            attempt: 0,
             merge: None,
         }
     }
@@ -44,10 +46,12 @@ impl Driver {
                     self.phase = "code";
                 }
                 pairing::Update::Confirm {
+                    attempt,
                     local_name,
                     peer_name,
                     phrase,
                 } => {
+                    self.attempt = attempt;
                     let confirmation = SecretCode::new(serde_json::to_string(
                         &serde_json::json!({"local":local_name,"peer":peer_name,"phrase":phrase}),
                     )?);
@@ -61,6 +65,14 @@ impl Driver {
                 pairing::Update::Ready => {
                     self.job.take();
                     self.phase = "paired";
+                }
+                pairing::Update::TimedOut => {
+                    self.job.take();
+                    self.phase = "timed-out";
+                }
+                pairing::Update::Unconfirmed => {
+                    self.job.take();
+                    self.phase = "unconfirmed";
                 }
                 pairing::Update::Failed => {
                     self.job.take();
@@ -297,7 +309,7 @@ impl Driver {
                 self.job
                     .as_ref()
                     .ok_or_else(|| failed("no pairing"))?
-                    .confirm(command["accept"] == true);
+                    .confirm(self.attempt, command["accept"] == true);
                 self.phase = "waiting";
                 Ok(Value::Null)
             }

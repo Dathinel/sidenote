@@ -157,6 +157,7 @@ pub struct Settings {
     pub backup: String,
     pub shared_backup: String,
     pub peers: BTreeMap<String, String>,
+    pub unconfirmed: BTreeSet<String>,
 }
 
 impl Settings {
@@ -176,6 +177,7 @@ impl Settings {
         if !prior.room.is_empty() {
             next.room = prior.room.clone();
             next.peers = prior.peers.clone();
+            next.unconfirmed = prior.unconfirmed.clone();
             next.backup = prior.backup.clone();
             next.shared_backup = prior.shared_backup.clone();
         }
@@ -205,6 +207,7 @@ impl Settings {
         let previous_room = current.room.clone();
         current.room = self.room.clone();
         current.peers = self.peers.clone();
+        current.unconfirmed = self.unconfirmed.clone();
         // Startup retires inactive groups if a crash interrupts this durable handoff.
         store_io::write(&root.join("local/relay/settings.json"), &current)?;
         if previous_room != current.room {

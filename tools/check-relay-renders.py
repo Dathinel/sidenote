@@ -63,7 +63,7 @@ def main():
         for scene in ("preview", "paired", "entry", "removal-unavailable"):
             tree = frame(args.proof, scene, theme)
             text = list(strings(tree, "text"))
-            assert "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC." in text, scene
+            assert "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC.\nA lost or stolen device can't be removed in this preview. If that happens, turn off relay sync on all devices." in text, scene
             assert "This device" not in text, scene
             labs = element(tree, "relay-labs-card")["rect"]
             for key in ("relay-pair-card", "relay-peers-card"):

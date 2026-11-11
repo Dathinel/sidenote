@@ -136,7 +136,7 @@ impl PairHost {
     }
 
     /// The callback must present the SAS and obtain explicit local confirmation.
-    /// Failed attempts are retried within the same invitation; success consumes this object.
+    /// Every exchange consumes this invitation, including rejection or timeout.
     pub async fn accept<F, Fut>(
         mut self,
         device: &Device,
@@ -201,49 +201,32 @@ where
     let deadline = tokio::time::Instant::from_std(expires);
     let mut granted = None;
     let result = tokio::time::timeout_at(deadline, async {
-        for attempt in 0..3 {
-            let first = binary(transport).await?;
-            let exchange = exchange(
-                transport,
-                code,
-                device,
-                name,
-                &mut confirm,
-                Side::Host {
-                    group: &group,
-                    first,
-                    grant: &mut granted,
-                },
-            );
-            match tokio::time::timeout(ATTEMPT_TIMEOUT, exchange).await {
-                Ok(Ok(group)) => {
-                    let _ = transport
-                        .send(Frame::Text("{\"type\":\"complete\"}".into()))
-                        .await;
-                    return Ok(Grant {
-                        group,
-                        receipt: Receipt::Confirmed,
-                    });
-                }
-                _ if granted.is_some() => bail!("pairing grant interrupted"),
-                _ => {
-                    transport
-                        .send(Frame::Text("{\"type\":\"retry\"}".into()))
-                        .await?;
-                    ensure!(attempt < 2, "three pairing attempts exhausted");
-                    loop {
-                        if let Frame::Text(text) = transport.recv().await? {
-                            let v: serde_json::Value = serde_json::from_str(&text)
-                                .map_err(|_| Failure(Reason::Protocol))?;
-                            if v["type"] == "retry-ready" {
-                                break;
-                            }
-                        }
-                    }
-                }
+        let first = binary(transport).await?;
+        let exchange = exchange(
+            transport,
+            code,
+            device,
+            name,
+            &mut confirm,
+            Side::Host {
+                group: &group,
+                first,
+                grant: &mut granted,
+            },
+        );
+        match tokio::time::timeout(ATTEMPT_TIMEOUT, exchange).await {
+            Ok(Ok(group)) => {
+                let _ = transport
+                    .send(Frame::Text("{\"type\":\"complete\"}".into()))
+                    .await;
+                Ok(Grant {
+                    group,
+                    receipt: Receipt::Confirmed,
+                })
             }
+            Ok(Err(error)) => Err(error),
+            Err(_) => bail!("pairing attempt timed out"),
         }
-        bail!("pairing attempts exhausted")
     })
     .await;
     match result {
@@ -777,6 +760,62 @@ mod tests {
             assert!(a.merge_group(&old).is_err());
             a.store(|s| s.check_group_active(&fresh.room()))?;
         }
+        Ok(())
+    }
+    #[tokio::test(start_paused = true)]
+    async fn expired_confirmation_consumes_invitation_without_a_retry_or_grant() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let a = Device::open(&dir.path().join("a.sqlite"))?;
+        let b = Device::open(&dir.path().join("b.sqlite"))?;
+        let used = Arc::new(AtomicBool::new(false));
+        let grants = Arc::new(AtomicUsize::new(0));
+        let retries = Arc::new(AtomicUsize::new(0));
+        let (atx, arx) = tokio::sync::mpsc::channel(16);
+        let (btx, brx) = tokio::sync::mpsc::channel(16);
+        let mut host = MemoryRelay {
+            host: true,
+            fault: None,
+            used: used.clone(),
+            grants: grants.clone(),
+            retries_after_grant: retries.clone(),
+            incoming: arx,
+            self_tx: atx.clone(),
+            other: btx.clone(),
+        };
+        let mut guest = MemoryRelay {
+            host: false,
+            fault: None,
+            used: used.clone(),
+            grants: grants.clone(),
+            retries_after_grant: retries.clone(),
+            incoming: brx,
+            self_tx: btx,
+            other: atx,
+        };
+        let prompts = AtomicUsize::new(0);
+        let code = Zeroizing::new(format!("{:08}", OsRng.gen_range(0..100_000_000u32)));
+        let started = tokio::time::Instant::now();
+        let (host, guest) = tokio::join!(
+            accept_transport(
+                &mut host,
+                &code,
+                Instant::now() + INVITATION_TTL,
+                &a,
+                None,
+                |_| async {
+                    prompts.fetch_add(1, Ordering::Relaxed);
+                    tokio::time::sleep(Duration::from_secs(90)).await;
+                    false
+                }
+            ),
+            join_transport(&mut guest, &code, &b, |_| async { true })
+        );
+        assert!(host.is_err() && guest.is_err());
+        assert!(started.elapsed() < Duration::from_secs(91));
+        assert_eq!(prompts.load(Ordering::Relaxed), 1);
+        assert_eq!(grants.load(Ordering::Relaxed), 0);
+        assert_eq!(retries.load(Ordering::Relaxed), 0);
+        assert!(!used.load(Ordering::Relaxed));
         Ok(())
     }
     #[tokio::test(start_paused = true)]

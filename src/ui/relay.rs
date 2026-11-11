@@ -23,7 +23,7 @@ pub struct RelayUi {
     generation: u64,
     pub code: Option<SecretCode>,
     pub expires: Option<Instant>,
-    pub confirmation: Option<(String, String, String)>,
+    pub confirmation: Option<(u64, String, String, String)>,
     pub join: TextEdit,
     pub join_open: bool,
     pub peers: Vec<PairedDevice>,
@@ -198,13 +198,16 @@ impl State {
             }
         }
     }
-    fn relay_confirm(&mut self, accept: bool) {
+    fn relay_confirm(&mut self, attempt: u64, accept: bool) {
+        if self.relay_ui.confirmation.as_ref().map(|info| info.0) != Some(attempt) {
+            return;
+        }
         if !accept {
             self.relay_cancel();
             return;
         }
         if let Some(job) = &self.relay_ui.job {
-            job.confirm(true);
+            job.confirm(attempt, true);
             self.relay_ui.confirmation = None;
             self.relay_ui.waiting = true;
         }
@@ -220,12 +223,13 @@ impl State {
                 self.relay_ui.waiting = false;
             }
             Update::Confirm {
+                attempt,
                 local_name,
                 peer_name,
                 phrase,
             } => {
                 self.relay_ui.code = None;
-                self.relay_ui.confirmation = Some((local_name, peer_name, phrase));
+                self.relay_ui.confirmation = Some((attempt, local_name, peer_name, phrase));
                 self.relay_ui.waiting = false;
             }
             Update::Ready => {
@@ -239,6 +243,16 @@ impl State {
                     "Device paired. Shared data will sync when both devices are online.".into(),
                     Instant::now(),
                 ));
+            }
+            Update::TimedOut => {
+                self.relay_cancel();
+                self.relay_ui.error = Some(core::pairing::TIMED_OUT.into());
+            }
+            Update::Unconfirmed => {
+                self.relay_cancel();
+                self.relay_refresh();
+                self.request_refresh();
+                self.relay_ui.error = Some(core::pairing::UNCONFIRMED.into());
             }
             Update::Failed => {
                 self.relay_cancel();
@@ -326,13 +340,22 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         out = out.child(card("Recent choices", history, p));
     }
     let mut pair = col().w_full().gap(12.0).padding(14.0);
-    if let Some((local, peer, phrase)) = &s.relay_ui.confirmation {
+    if s.relay_ui.error.as_deref() == Some(core::pairing::TIMED_OUT) {
+        pair = pair.child(
+            roles::CONTROL
+                .wrap(core::pairing::TIMED_OUT, p.warn)
+                .role("alert")
+                .key("relay-timeout-message"),
+        );
+    }
+    if let Some((attempt, local, peer, phrase)) = &s.relay_ui.confirmation {
+        let attempt = *attempt;
         pair=pair.child(roles::NAME.wrap("Confirm on both devices",p.ink))
             .child(roles::CONTROL.wrap(format!("This device: {local}    Other device: {peer}"),p.soft))
             .child(roles::SECTION.wrap(phrase,p.ink).key("relay-safety-phrase"))
             .child(roles::SMALL.wrap("Only confirm if these words and both device names match the other screen. No tasks flow to the new device until both sides confirm. If the other device shows an error or no words, choose Do not pair.",p.soft))
-            .child(row().gap(8.0).child(button("They match. Confirm","relay-confirm",p).on_press(|s:&mut State|s.relay_confirm(true)))
-                .child(button("Do not pair","relay-reject",p).on_press(|s:&mut State|s.relay_confirm(false))));
+            .child(row().gap(8.0).child(button("They match. Confirm","relay-confirm",p).on_press(move |s:&mut State|s.relay_confirm(attempt,true)))
+                .child(button("Do not pair","relay-reject",p).on_press(move |s:&mut State|s.relay_confirm(attempt,false))));
     } else if let Some(code) = &s.relay_ui.code {
         let shown = format!(
             "{} {}",
@@ -414,7 +437,11 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 s,
                 &format!("relay-paired-device-{index}"),
                 &peer.name,
-                "Paired for relay sync.",
+                if peer.unconfirmed {
+                    "Pairing not confirmed"
+                } else {
+                    "Paired for relay sync."
+                },
                 control,
                 peer.local,
                 p,
@@ -426,9 +453,24 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 .padding(14.0)
                 .key("relay-removal-unavailable"),
         );
+        if s.relay_ui.peers.iter().any(|peer| peer.unconfirmed)
+            || s.relay_ui.error.as_deref() == Some(core::pairing::UNCONFIRMED)
+        {
+            peers = peers.child(
+                roles::SMALL
+                    .wrap(core::pairing::UNCONFIRMED, p.warn)
+                    .padding(14.0)
+                    .key("relay-unconfirmed-notice"),
+            );
+        }
         out = out.child(card("Paired devices", peers, p).key("relay-peers-card"));
     }
-    if let Some(error) = &s.relay_ui.error {
+    if let Some(error) = &s.relay_ui.error
+        && !matches!(
+            error.as_str(),
+            core::pairing::TIMED_OUT | core::pairing::UNCONFIRMED
+        )
+    {
         out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
     }
     out
@@ -543,6 +585,7 @@ pub fn scene(s: &mut State, kind: &str) {
         token: "synthetic-local".into(),
         name: "DEMO-PC".into(),
         local: true,
+        unconfirmed: false,
     }];
     match kind {
         "operational" | "unreachable" | "wrong-address" | "update-required" => {
@@ -572,15 +615,37 @@ pub fn scene(s: &mut State, kind: &str) {
         }
         "confirm" => {
             s.relay_ui.confirmation = Some((
+                1,
                 "DEMO-PC".into(),
                 "Travel laptop".into(),
                 "amber birch cedar dawn elm fern glen harbor".into(),
             ))
         }
+        "timeout" => {
+            s.relay_ui.confirmation = Some((
+                1,
+                "DEMO-PC".into(),
+                "Travel laptop".into(),
+                "synthetic expired phrase".into(),
+            ));
+            s.relay_ui.waiting = true;
+            s.relay_update(s.relay_ui.generation, Update::TimedOut);
+        }
+        "unconfirmed" => {
+            s.relay_ui.peers.push(PairedDevice {
+                token: "synthetic-peer".into(),
+                name: "Travel laptop".into(),
+                local: false,
+                unconfirmed: true,
+            });
+            s.relay_update(s.relay_ui.generation, Update::Unconfirmed);
+            super::scene_scroll(s, "relay-unconfirmed-notice");
+        }
         "paired" => s.relay_ui.peers.push(PairedDevice {
             token: "synthetic-peer".into(),
             name: "Travel laptop".into(),
             local: false,
+            unconfirmed: false,
         }),
         "conflict" | "shared-conflict" => {
             if kind == "shared-conflict" {

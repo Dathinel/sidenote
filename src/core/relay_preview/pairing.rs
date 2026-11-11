@@ -1,6 +1,46 @@
 use super::*;
 use sidenote_sync::pairing::{self as protocol, Confirmation, PairHost, Receipt, SecretCode};
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
+
+pub const TIMED_OUT: &str = "Pairing timed out. Start again on both devices.";
+pub const UNCONFIRMED: &str = "The other device may have joined. Check it. If you don't trust it, turn off relay sync on all devices and pair again.";
+static ATTEMPT: AtomicU64 = AtomicU64::new(1);
+struct Reply {
+    attempt: u64,
+    accept: bool,
+}
+async fn confirmation_reply(
+    attempt: u64,
+    replies: &mut tokio::sync::mpsc::UnboundedReceiver<Reply>,
+) -> Result<bool, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(90), async {
+        while let Some(reply) = replies.recv().await {
+            if reply.attempt == attempt {
+                return reply.accept;
+            }
+        }
+        false
+    })
+    .await
+}
+async fn await_confirmation(
+    attempt: u64,
+    replies: &mut tokio::sync::mpsc::UnboundedReceiver<Reply>,
+    events: &mpsc::Sender<Update>,
+    cancel: &tokio::sync::watch::Sender<bool>,
+) -> bool {
+    match confirmation_reply(attempt, replies).await {
+        Ok(accepted) => accepted,
+        Err(_) => {
+            let _ = events.send(Update::TimedOut);
+            let _ = cancel.send(true);
+            false
+        }
+    }
+}
 
 pub enum Update {
     Code {
@@ -8,22 +48,25 @@ pub enum Update {
         expires: Instant,
     },
     Confirm {
+        attempt: u64,
         local_name: String,
         peer_name: String,
         phrase: String,
     },
     Ready,
+    TimedOut,
+    Unconfirmed,
     Failed,
 }
 
 pub struct Pairing {
-    confirm: tokio::sync::mpsc::UnboundedSender<bool>,
+    confirm: tokio::sync::mpsc::UnboundedSender<Reply>,
     cancel: tokio::sync::watch::Sender<bool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl Pairing {
-    pub fn confirm(&self, accept: bool) {
-        let _ = self.confirm.send(accept);
+    pub fn confirm(&self, attempt: u64, accept: bool) {
+        let _ = self.confirm.send(Reply { attempt, accept });
     }
     pub fn cancel(&mut self) {
         let _ = self.cancel.send(true);
@@ -64,6 +107,7 @@ pub fn start(
     let (events, receiver) = mpsc::channel();
     let (confirm, confirmation) = tokio::sync::mpsc::unbounded_channel();
     let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    let timeout_cancel = cancel.clone();
     let thread = thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -84,8 +128,11 @@ pub fn start(
                 let local = local.clone();
                 let confirmations = confirmations.clone();
                 let peer = peer.clone();
+                let timeout_cancel = timeout_cancel.clone();
                 async move {
+                    let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed);
                     let shown = Update::Confirm {
+                        attempt,
                         local_name: local,
                         peer_name: info.peer_name.clone(),
                         phrase: phrase(&info.phrase),
@@ -93,19 +140,20 @@ pub fn start(
                     if messages.send(shown).is_err() {
                         return false;
                     }
-                    let accepted = tokio::time::timeout(Duration::from_secs(90), async {
-                        confirmations.lock().await.recv().await
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                        == Some(true);
+                    let accepted = await_confirmation(
+                        attempt,
+                        &mut *confirmations.lock().await,
+                        &messages,
+                        &timeout_cancel,
+                    )
+                    .await;
                     if accepted && let Ok(mut saved) = peer.lock() {
                         *saved = Some(info);
                     }
                     accepted
                 }
             };
+            let mut receipt = Receipt::Confirmed;
             let operation = async {
                 let group = if let Some(code) = join {
                     protocol::join_named(&relay, &code, &preview.device, &name, confirm).await?
@@ -122,10 +170,8 @@ pub fn start(
                     let grant = host
                         .accept_named(&preview.device, Some(existing), &name, confirm)
                         .await?;
-                    anyhow::ensure!(
-                        grant.receipt == Receipt::Confirmed,
-                        "pairing receipt missing"
-                    );
+                    receipt = grant.receipt;
+                    anyhow::ensure!(receipt != Receipt::NotSent, "pairing receipt missing");
                     grant.group
                 };
                 let peer = confirmed_peer
@@ -133,11 +179,18 @@ pub fn start(
                     .map_err(|_| anyhow::anyhow!("confirmation unavailable"))?
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("confirmation missing"))?;
-                preview.adopt(&group, &peer).map_err(anyhow::Error::from)?;
+                preview
+                    .adopt(&group, &peer, receipt)
+                    .map_err(anyhow::Error::from)?;
                 Ok::<_, anyhow::Error>(())
             };
             let result = tokio::select! {_=cancelled.changed()=>return,result=operation=>result};
-            let _ = events.send(if result.is_ok() {
+            if *cancelled.borrow() {
+                return;
+            }
+            let _ = events.send(if receipt == Receipt::Unknown {
+                Update::Unconfirmed
+            } else if result.is_ok() {
                 Update::Ready
             } else {
                 Update::Failed
@@ -154,6 +207,77 @@ pub fn start(
     ))
 }
 
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[tokio::test(start_paused = true)]
+    async fn confirmation_timeout_ends_job_and_expired_replies_cannot_approve_next_prompt() {
+        let (send, mut replies) = tokio::sync::mpsc::unbounded_channel();
+        let (events, updates) = mpsc::channel();
+        let (cancel, cancelled) = tokio::sync::watch::channel(false);
+        assert!(!await_confirmation(1, &mut replies, &events, &cancel).await);
+        assert!(*cancelled.borrow());
+        assert!(matches!(updates.try_recv(), Ok(Update::TimedOut)));
+        send.send(Reply {
+            attempt: 1,
+            accept: true,
+        })
+        .unwrap();
+        send.send(Reply {
+            attempt: 2,
+            accept: false,
+        })
+        .unwrap();
+        assert!(!confirmation_reply(2, &mut replies).await.unwrap());
+    }
+    #[tokio::test(start_paused = true)]
+    async fn a_reply_for_another_attempt_never_confirms_the_current_prompt() {
+        let (send, mut replies) = tokio::sync::mpsc::unbounded_channel();
+        send.send(Reply {
+            attempt: 41,
+            accept: true,
+        })
+        .unwrap();
+        send.send(Reply {
+            attempt: 42,
+            accept: false,
+        })
+        .unwrap();
+        assert!(!confirmation_reply(42, &mut replies).await.unwrap());
+    }
+    #[test]
+    fn uncertain_pairing_status_and_peer_name_survive_restart() -> anyhow::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        let preview = get(root)?.unwrap();
+        let peer = Device::open(&d.path().join("peer.sqlite"))?;
+        let room = Settings::load(root)?.room;
+        let mut group = preview.device.store(|s| Group::load(s, &room))?;
+        group.enroll(&preview.device.identity, peer.identity.public());
+        let confirmation = Confirmation {
+            peer: peer.identity.public(),
+            peer_name: "Synthetic laptop".into(),
+            phrase: String::new(),
+        };
+        preview.adopt(&group, &confirmation, Receipt::Unknown)?;
+        disconnect(root)?;
+        drop(preview);
+        let peers = devices(root)?;
+        assert!(
+            peers
+                .iter()
+                .any(|p| !p.local && p.unconfirmed && p.name == "Synthetic laptop")
+        );
+        disconnect(root)?;
+        Ok(())
+    }
+}
+
 fn token(key: &[u8; 32]) -> String {
     key.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -163,6 +287,7 @@ pub struct PairedDevice {
     pub token: String,
     pub name: String,
     pub local: bool,
+    pub unconfirmed: bool,
 }
 
 pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
@@ -201,13 +326,19 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
                     })
                     .unwrap_or_else(|| "Paired device".into())
             };
-            PairedDevice { token, name, local }
+            let unconfirmed = settings.unconfirmed.contains(&token);
+            PairedDevice {
+                token,
+                name,
+                local,
+                unconfirmed,
+            }
         })
         .collect())
 }
 
 impl Preview {
-    fn adopt(&self, group: &Group, peer: &Confirmation) -> io::Result<()> {
+    fn adopt(&self, group: &Group, peer: &Confirmation, receipt: Receipt) -> io::Result<()> {
         self.online(false)?;
         self.device
             .store(|s| s.check_compatible())
@@ -229,6 +360,11 @@ impl Preview {
         settings
             .peers
             .insert(token(&peer.peer), peer.peer_name.clone());
+        if receipt == Receipt::Unknown {
+            settings.unconfirmed.insert(token(&peer.peer));
+        } else {
+            settings.unconfirmed.remove(&token(&peer.peer));
+        }
         let local_name = super::super::DeviceSettings::read_in(&self.root)?.name;
         self.device
             .store(|s| {

@@ -1073,7 +1073,7 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
         s,
         "relay-preview",
         "Relay sync (preview)",
-        "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC.",
+        "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC.\nA lost or stolen device can't be removed in this preview. If that happens, turn off relay sync on all devices.",
         Switch::new(s.hex.shell.relay.enabled)
             .label("Relay sync (preview)")
             .hide_label()
