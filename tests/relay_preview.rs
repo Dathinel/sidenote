@@ -154,7 +154,17 @@ fn available_port() -> u16 {
         .port()
 }
 
-fn start_relay(state: &Path) -> (Process, String) {
+static RELAY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+struct LocalRelay {
+    _process: Process,
+    _lease: std::sync::MutexGuard<'static, ()>,
+}
+
+fn start_relay(state: &Path) -> (LocalRelay, String) {
+    // Each case still runs isolated peers; avoid four competing Workerd startups.
+    let lease = RELAY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let port = available_port();
     let inspector = available_port();
     let local = Path::new(env!("CARGO_MANIFEST_DIR")).join("relay/node_modules/.bin/wrangler.exe");
@@ -227,7 +237,13 @@ fn start_relay(state: &Path) -> (Process, String) {
         assert!(Instant::now() < deadline, "local Wrangler startup timeout");
         thread::sleep(Duration::from_millis(100));
     }
-    (process, format!("ws://127.0.0.1:{port}"))
+    (
+        LocalRelay {
+            _process: process,
+            _lease: lease,
+        },
+        format!("ws://127.0.0.1:{port}"),
+    )
 }
 
 fn journals(root: &Path) -> BTreeFiles {
