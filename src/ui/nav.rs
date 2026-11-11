@@ -38,6 +38,7 @@ pub enum Page {
 pub enum Filter {
     #[default]
     All,
+    Short,
     /// Meetings whose to-dos mostly sit in this project.
     Project(String),
     Area(String),
@@ -118,6 +119,7 @@ impl State {
     pub fn matches_filter(&self, meeting: &core::Meeting) -> bool {
         match &self.filter {
             Filter::All => true,
+            Filter::Short => false,
             Filter::Project(name) => self.nav.meeting_project.get(&meeting.id) == Some(name),
             Filter::Area(id) => self
                 .areas

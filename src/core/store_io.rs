@@ -67,7 +67,7 @@ fn checked_parent(path: &Path) -> io::Result<Parent> {
         _pins: pins,
     })
 }
-pub(super) fn lock(path: &Path) -> io::Result<fs::File> {
+pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     let _parent = checked_parent(path)?;
     for attempt in 0..5 {
         match fs::OpenOptions::new()

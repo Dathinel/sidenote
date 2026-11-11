@@ -81,7 +81,7 @@ fn meeting(root: &Path, text: &str) -> PathBuf {
     fs::write(folder.join("manifest.json"),serde_json::json!({"status":"complete","title":"Delivery planning","created_at_ms":1793946600000_i64,"duration_ms":300000}).to_string()).unwrap();
     fs::write(
         folder.join("transcript.ndjson"),
-        serde_json::json!({"start_ms":1000,"end_ms":2000,"source":"microphone","text":text})
+        serde_json::json!({"start_ms":1000,"end_ms":2000,"source":"microphone","text":if text.is_empty() { String::new() } else { format!("{text} {}", vec!["synthetic";25].join(" ")) }})
             .to_string(),
     )
     .unwrap();
@@ -90,6 +90,9 @@ fn meeting(root: &Path, text: &str) -> PathBuf {
         r#"{"title":"Delivery planning"}"#,
     )
     .unwrap();
+    if text.is_empty() {
+        crate::core::recording_guard::keep_in(root, ID).unwrap();
+    }
     folder
 }
 fn summary() -> String {
@@ -974,7 +977,7 @@ fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting()
         .unwrap();
         store_io::write(
             &folder.join("manifest.json"),
-            &serde_json::json!({"status":"complete","ended_at_ms":t2}),
+            &serde_json::json!({"status":"complete","ended_at_ms":t2,"duration_ms":30000}),
         )
         .unwrap();
         enqueue(&root.0, &s, None);
@@ -1050,4 +1053,79 @@ fn meeting_standard_choice_uses_builtin_without_overwriting_custom_instructions(
         fs::read(folder.join("english-summary.json")).unwrap(),
         saved
     );
+}
+
+#[test]
+fn automatic_short_and_unknown_recordings_never_enqueue_or_call_helpers() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::write(
+        folder.join("transcript.ndjson"),
+        serde_json::json!({"text":PRIVATE}).to_string(),
+    )
+    .unwrap();
+    store_io::write(
+        &root
+            .0
+            .join("local/recording-guard")
+            .join(format!("{ID}.json")),
+        &serde_json::json!({"short":false,"kept":false,"detected_at":null}),
+    )
+    .unwrap();
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    assert!(queue::read(&root.0, ID).unwrap().is_none());
+    assert!(!folder.join("english-transcript.md").exists());
+    fs::write(folder.join("transcript.ndjson"), "{\"text\":").unwrap();
+    store_io::write(
+        &root
+            .0
+            .join("local/recording-guard")
+            .join(format!("{ID}.json")),
+        &serde_json::json!({"short":false,"kept":false,"detected_at":null}),
+    )
+    .unwrap();
+    enqueue(&root.0, &settings, None);
+    assert!(queue::read(&root.0, ID).unwrap().is_none());
+}
+#[test]
+fn worker_rechecks_old_jobs_and_keep_queues_once() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, &vec!["synthetic"; 25].join(" "));
+    let guard_path = root
+        .0
+        .join("local/recording-guard")
+        .join(format!("{ID}.json"));
+    store_io::write(
+        &guard_path,
+        &serde_json::json!({"short":false,"kept":false,"detected_at":null}),
+    )
+    .unwrap();
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    assert_eq!(state(&root.0), JobState::Queued);
+    fs::write(
+        folder.join("transcript.ndjson"),
+        r#"{"start_ms":1000,"end_ms":2000,"source":"microphone","text":"abandoned"}"#,
+    )
+    .unwrap();
+    let mut fake = Fake::new(vec![]);
+    drain(&root.0, &settings, &mut fake);
+    assert!(fake.calls.is_empty());
+    assert_eq!(state(&root.0), JobState::Queued);
+    crate::core::recording_guard::keep_in(&root.0, ID).unwrap();
+    enqueue(&root.0, &settings, None);
+    let before = fs::read(root.0.join("local/notes-jobs").join(format!("{ID}.json"))).unwrap();
+    crate::core::recording_guard::keep_in(&root.0, ID).unwrap();
+    enqueue(&root.0, &settings, None);
+    assert_eq!(
+        fs::read(root.0.join("local/notes-jobs").join(format!("{ID}.json"))).unwrap(),
+        before
+    );
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &settings, &mut fake);
+    assert_eq!(fake.calls.len(), 2);
+    enqueue(&root.0, &settings, None);
+    drain(&root.0, &settings, &mut fake);
+    assert_eq!(fake.calls.len(), 2);
 }

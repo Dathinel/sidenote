@@ -652,6 +652,10 @@ fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
                 if !super::file_reads::directory(&folder) {
                     continue;
                 }
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if super::recording_guard::hidden(&state_dir(), &folder, &id) {
+                    continue;
+                }
                 let saved = folder.join("english-summary.json").exists()
                     || folder.join(super::live::NOTES_FILE).is_file();
                 let loaded = if saved {

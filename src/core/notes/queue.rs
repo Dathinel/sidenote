@@ -45,6 +45,13 @@ impl Job {
             || matches!(self.state, JobState::BackendError {next_try_ms: Some(at), ..} if at <= time)
     }
 }
+fn job_eligible(root: &Path, meetings: &Path, id: &str, job: &Job) -> io::Result<bool> {
+    let eligibility = core::recording_guard::eligibility(root, meetings, id)?;
+    // Explicit task redo can use saved English when Hex's original is unavailable.
+    Ok(eligibility == core::recording_guard::Eligibility::Eligible
+        || (job.request == Some(Request::RedoTasks)
+            && eligibility == core::recording_guard::Eligibility::Unknown))
+}
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -117,6 +124,12 @@ pub(super) fn enqueue_in(
                 "Turn on built-in Meeting summary in Settings first",
             ));
         }
+        return Ok(());
+    }
+    if mode.is_none()
+        && core::recording_guard::eligibility(root, meetings, id)?
+            != core::recording_guard::Eligibility::Eligible
+    {
         return Ok(());
     }
     let folder = meetings.join(id);
@@ -256,7 +269,11 @@ fn process(
             .zip(duration)
             .map(|(s, d)| s.saturating_add(d as i64))
     });
-    if let Some(state) = consent(settings, job.request.is_some(), end) {
+    if let Some(state) = consent(
+        settings,
+        job.request.is_some() || core::recording_guard::is_kept(root, id),
+        end,
+    ) {
         return write(
             root,
             id,
@@ -562,7 +579,11 @@ fn drain_locked(
                 continue;
             }
             match read(root, id) {
-                Ok(Some(job)) if job.ready(now()) => ready.push(id.to_owned()),
+                Ok(Some(job)) if job.ready(now()) => {
+                    if job_eligible(root, meetings, id, &job)? {
+                        ready.push(id.to_owned());
+                    }
+                }
                 Ok(Some(job)) if job.state == JobState::HelperMissing => {
                     missing.push((id.to_owned(), job))
                 }
@@ -614,6 +635,9 @@ fn drain_locked(
         let Some(mut job) = read(root, &id)? else {
             continue;
         };
+        if !job_eligible(root, meetings, &id, &job)? {
+            continue;
+        }
         if !job.ready(now()) {
             continue;
         }
@@ -652,6 +676,8 @@ pub fn catch_up() -> io::Result<()> {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if valid_id(&id)
+            && core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), &id)?
+                == core::recording_guard::Eligibility::Eligible
             && complete(&entry.path())
             && enqueue_in(
                 &core::state_dir(),
@@ -671,10 +697,23 @@ pub fn start_worker() -> io::Result<()> {
     if super::settings()?.engine() != Engine::App {
         return Ok(());
     }
-    if !fs::read_dir(jobs(&core::state_dir())).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .any(|e| e.path().extension().is_some_and(|s| s == "json"))
+    let root = core::state_dir();
+    let meetings = core::meetings_dir();
+    if !fs::read_dir(jobs(&root)).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let path = e.path();
+            if path.extension().is_none_or(|s| s != "json") {
+                return false;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                return false;
+            };
+            match read(&root, id) {
+                Ok(Some(job)) => job_eligible(&root, &meetings, id, &job).unwrap_or(false),
+                Err(_) => true,
+                Ok(None) => false,
+            }
+        })
     }) {
         return Ok(());
     }

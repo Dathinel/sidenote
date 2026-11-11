@@ -29,6 +29,7 @@ impl Default for Options {
 }
 pub(super) struct Data {
     pub meetings: Vec<Meeting>,
+    pub short_recordings: Option<Vec<core::recording_guard::ShortRecording>>,
     pub notes_jobs: std::collections::BTreeMap<String, super::notes_status::Job>,
     pub retained: Vec<PathBuf>,
     pub temporary: bool,
@@ -75,6 +76,10 @@ impl Data {
         });
         let device_error = device.is_err();
         let (meetings, mut errors) = core::scan();
+        let short_recordings = loaded(core::recording_guard::short_recordings(
+            &core::state_dir(),
+            &core::meetings_dir(),
+        ));
         let shared = shared.map(|seen| seen || meetings.iter().any(|m| m.device.is_some()));
         let notes_jobs = super::notes_status::read(&core::state_dir(), &meetings);
         let pipeline = core::load_pipeline(&meetings);
@@ -125,6 +130,7 @@ impl Data {
         }
         Self {
             meetings,
+            short_recordings,
             notes_jobs,
             retained: scope.failed(),
             temporary: reads.temporary,
@@ -232,6 +238,7 @@ pub(super) fn metadata() -> Metadata {
         root.join("memory"),
         root.join("checks"),
         root.join("local/notes-jobs"),
+        root.join("local/recording-guard"),
         core::meetings_dir(),
         core::peers_dir(),
     ] {
@@ -330,6 +337,7 @@ fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Da
             PANICS.fetch_add(1, Ordering::Relaxed);
             (
                 Data {
+                    short_recordings: None,
                     meetings: vec![],
                     notes_jobs: Default::default(),
                     retained: vec![core::meetings_dir(), core::peers_dir()],

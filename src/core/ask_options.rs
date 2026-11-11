@@ -190,7 +190,13 @@ impl Options {
                 live::find_folder(root, recent.hint.as_deref(), recent.start_ms)
             });
             prompt.push_str("\n<live_transcript>\n");
-            if let Some(folder) = folder {
+            if let Some(folder) = folder.filter(|folder| {
+                !super::recording_guard::hidden(
+                    &super::state_dir(),
+                    folder,
+                    &folder.file_name().unwrap_or_default().to_string_lossy(),
+                )
+            }) {
                 match live::read_rolling(&folder, None)
                     .map_err(|_| "Could not read the live transcript. Try again.")?
                 {
@@ -247,6 +253,13 @@ fn recent_meeting_for(
         }
         let bytes = file_reads::read(&folder.join("manifest.json"), 1024 * 1024).ok()?;
         let m: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        if super::recording_guard::hidden(
+            &super::state_dir(),
+            &folder,
+            &entry.file_name().to_string_lossy(),
+        ) {
+            return None;
+        }
         if start_ms.is_some_and(|start| {
             m["created_at_ms"]
                 .as_i64()
