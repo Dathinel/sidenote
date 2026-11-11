@@ -127,6 +127,9 @@ pub struct CheckState {
     pub report_open: bool,
     /// How many Diary days are listed.
     pub shown: usize,
+    pub diary_selected: Option<NaiveDate>,
+    pub diary_month: Option<NaiveDate>,
+    pub diary_week_open: bool,
     /// The day each ticked meeting task was ticked, by meeting id and task index.
     pub done_on: HashMap<(String, usize), NaiveDate>,
     /// Findings and new findings of the recent reports, for their days in the Diary.
@@ -185,6 +188,9 @@ impl Default for CheckState {
             strip: Vec::new(),
             report_open: false,
             shown: diary::PAGE,
+            diary_selected: None,
+            diary_month: None,
+            diary_week_open: false,
             done_on: HashMap::new(),
             totals: HashMap::new(),
             day_summaries: HashMap::new(),

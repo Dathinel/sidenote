@@ -14,9 +14,9 @@ use super::{
     theme::Palette,
     widgets::{label, link, pressable},
 };
-use chrono::{DateTime, Datelike, Local, NaiveDate};
-use rune::{El, col, el, row};
-use rune_kit::{Kit, Menu, MenuItem, Placement};
+use chrono::{DateTime, Datelike, Duration, Local, Months, NaiveDate};
+use rune::{El, Key, KeyEvent, Tx, col, el, row};
+use rune_kit::Kit;
 use sidenote::core::{self, TaskItem, memory::ProposalStatus};
 use std::collections::{BTreeSet, HashMap};
 
@@ -84,6 +84,7 @@ fn created(op: &str) -> bool {
 fn days(s: &State) -> Vec<NaiveDate> {
     let f = &s.config.features;
     let mut dates = BTreeSet::new();
+    dates.extend(s.check.diary_selected);
     for m in &s.meetings {
         if let Some(t) = m.started {
             dates.insert(t.date_naive());
@@ -645,51 +646,140 @@ fn disclosure(key: String, words: &str, open: bool, p: Palette) -> El {
 
 // ---- the page ------------------------------------------------------------------------------
 
-fn picker(s: &State, k: &Kit, all: &[NaiveDate], p: Palette, layer: &mut Vec<El>) -> El {
-    if all.len() < 2 {
-        return el();
-    }
-    let open = s.check.picker_open;
-    let trigger = pressable(
+fn month_start(date: NaiveDate) -> NaiveDate {
+    date.with_day(1).unwrap_or(date)
+}
+
+fn calendar(s: &State, p: Palette) -> El {
+    use super::widgets::{ButtonRole, button};
+    let selected = s.check.diary_selected.unwrap_or(s.check.today);
+    let month = month_start(s.check.diary_month.unwrap_or(selected));
+    let mut out = col()
+        .w_full()
+        .gap(8.0)
+        .key("diary-calendar")
+        .role("group")
+        .label("Calendar. Dots mark days with meetings");
+    out = out.child(
         row()
-            .gap(4.0)
+            .w_full()
             .items_center()
-            .child(roles::CONTROL.wrap("Earlier days", p.soft))
+            .justify_between()
+            .child(roles::GROUP.wrap(month.format("%B %Y").to_string(), p.ink))
             .child(
-                rune::icon(
-                    if open {
-                        k.glyph.chevron_up
-                    } else {
-                        k.glyph.chevron_down
-                    },
-                    16.0,
-                )
-                .color(p.faint),
+                row()
+                    .gap(2.0)
+                    .child(
+                        button("?", "diary-month-prev", ButtonRole::Ghost, p)
+                            .label("Previous month")
+                            .on_press(move |s: &mut State| {
+                                s.check.diary_month = month.checked_sub_months(Months::new(1))
+                            }),
+                    )
+                    .child(
+                        button("?", "diary-month-next", ButtonRole::Ghost, p)
+                            .label("Next month")
+                            .on_press(move |s: &mut State| {
+                                s.check.diary_month = month.checked_add_months(Months::new(1))
+                            }),
+                    ),
             ),
-    )
-    .key("check-picker")
-    .role("combobox")
-    .label("Go to a day")
-    .px(12.0)
-    .py(5.0)
-    .radius(999.0)
-    .border(1.0, p.line)
-    .hover(p.chip)
-    .on_press(|s: &mut State| s.check.picker_open = !s.check.picker_open);
-    let mut menu = Menu::new("diary-days")
-        .trigger(trigger)
-        .open(open)
-        .placement(Placement::BottomEnd)
-        .min_width(220.0)
-        .on_close(|s: &mut State| s.check.picker_open = false);
-    for (n, d) in all.iter().take(90).enumerate() {
-        let d = *d;
-        menu = menu.item(
-            MenuItem::new(d.format("%a %-d %b %Y").to_string())
-                .on_select(move |s: &mut State| s.diary_jump(d, n)),
+    );
+    let mut weekdays = row().w_full();
+    for day in ["M", "T", "W", "T", "F", "S", "S"] {
+        weekdays = weekdays.child(
+            col()
+                .grow(1.0)
+                .basis(0.0)
+                .items_center()
+                .child(roles::META.wrap(day, p.faint)),
         );
     }
-    menu.build(k, layer)
+    out = out.child(weekdays);
+    let meeting_days: BTreeSet<_> = s
+        .meetings
+        .iter()
+        .filter_map(|m| m.started.map(|t| t.date_naive()))
+        .collect();
+    let offset = month.weekday().num_days_from_monday() as i64;
+    for week in 0..6 {
+        let mut line = row().w_full();
+        let mut any = false;
+        for weekday in 0..7 {
+            let date = month + Duration::days(week * 7 + weekday - offset);
+            let cell = if date.month() == month.month() {
+                any = true;
+                let dot = meeting_days.contains(&date);
+                let action = pressable(
+                    col()
+                        .w_full()
+                        .items_center()
+                        .py(4.0)
+                        .child(roles::META.wrap(
+                            date.day().to_string(),
+                            if selected == date { p.bg } else { p.ink },
+                        ))
+                        .child(el().size(3.0, 3.0).radius(2.0).fill(if dot {
+                            if selected == date { p.bg } else { p.faint }
+                        } else {
+                            rune::Color::TRANSPARENT
+                        })),
+                )
+                .key(format!("diary-date-{date}"))
+                .label(format!(
+                    "{}{}",
+                    date.format("%A %-d %B %Y"),
+                    if dot { ", meetings" } else { ", no meetings" }
+                ))
+                .selected(selected == date)
+                .radius(6.0)
+                .hover(p.chip)
+                .on_key(calendar_key)
+                .on_press(move |s: &mut State| s.diary_jump(date));
+                if selected == date {
+                    action.fill(p.ink)
+                } else {
+                    action
+                }
+            } else {
+                el()
+            };
+            line = line.child(col().grow(1.0).basis(0.0).min_w(0.0).child(cell));
+        }
+        if any {
+            out = out.child(line);
+        }
+    }
+    out.child(
+        row()
+            .w_full()
+            .justify_between()
+            .items_center()
+            .child(roles::META.wrap("? Meetings", p.faint))
+            .child(
+                button("Today", "diary-today", ButtonRole::Ghost, p)
+                    .on_press(|s: &mut State| s.diary_jump(s.check.today)),
+            ),
+    )
+}
+
+fn calendar_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    let delta = match e.key {
+        Key::Left => -1,
+        Key::Right => 1,
+        Key::Up => -7,
+        Key::Down => 7,
+        Key::Escape => {
+            tx.focus("check-top");
+            return true;
+        }
+        _ => return false,
+    };
+    let date = s.check.diary_selected.unwrap_or(s.check.today) + Duration::days(delta);
+    s.check.diary_selected = Some(date);
+    s.check.diary_month = Some(month_start(date));
+    tx.focus(format!("diary-date-{date}"));
+    true
 }
 
 impl State {
@@ -750,7 +840,26 @@ impl State {
     }
 
     /// The day picker: show enough days to reach it, then scroll to its entry.
-    fn diary_jump(&mut self, date: NaiveDate, index: usize) {
+    pub(super) fn diary_jump(&mut self, date: NaiveDate) {
+        self.check.diary_selected = Some(date);
+        self.check.diary_month = Some(month_start(date));
+        let index = days(self).iter().position(|d| *d == date).unwrap_or(0);
+        // Historical summaries are read only when their date is visited.
+        if !self.check.day_summaries.contains_key(&date) {
+            for &report_date in &self.check.dates {
+                if report_date < date {
+                    continue;
+                }
+                if let Ok(report) = core::load_check(report_date)
+                    && report.content.day_summary_date == Some(date)
+                {
+                    self.check
+                        .day_summaries
+                        .insert(date, report.content.day_summary);
+                    break;
+                }
+            }
+        }
         self.check.picker_open = false;
         self.check.shown = self.check.shown.max(index + 1);
         self.pending_scroll = Some(super::PendingScroll {
@@ -762,10 +871,11 @@ impl State {
 }
 
 /// The Diary's reading column.
-pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, _layer: &mut Vec<El>) -> El {
     let all = days(s);
     let mut doc = col()
         .key("check-top")
+        .focusable(true)
         .w_full()
         .max_w(1536.0)
         .px(if narrow { 16.0 } else { 40.0 })
@@ -778,16 +888,18 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .justify_between()
             .gap(12.0)
             .flex_wrap()
-            .child(text_title("Diary", if narrow { 26.0 } else { 30.0 }, p))
-            .child(picker(s, k, &all, p, layer).pb(4.0)),
+            .child(text_title("Diary", if narrow { 26.0 } else { 30.0 }, p)),
     );
     if s.config.features.memory {
         doc = doc.child(super::memory::refresh_status(&s.memory, p));
     }
-    if all.is_empty() {
-        return doc.child(check::empty(s, p));
-    }
+
     let mut timeline = col().grow(1.0).min_w(0.0);
+    if all.is_empty() {
+        timeline = timeline
+            .child(roles::SECTION.wrap("No meetings yet", p.ink).mt(24.0))
+            .child(roles::SMALL.wrap("Record a meeting to begin your Diary.", p.soft));
+    }
     let newest_check = s.check.report.as_ref().map(|r| r.date);
     for (n, &date) in all.iter().take(s.check.shown).enumerate() {
         let d = day(s, date);
@@ -814,9 +926,42 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .items_start()
                 .gap(48.0)
                 .child(timeline)
-                .child(col().w(320.0).shrink_0().key("diary-rail")),
+                .child(
+                    col()
+                        .w(320.0)
+                        .shrink_0()
+                        .key("diary-rail")
+                        .mt(24.0)
+                        .child(calendar(s, p)),
+                ),
         )
     } else {
-        doc.child(timeline)
+        doc.child(calendar(s, p).mt(16.0)).child(timeline)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn display_copy_and_summary_boundaries() {
+        assert_eq!(
+            display_text("Decision DEC-12 at revision: abcdef12", "Review the update"),
+            "Review the update"
+        );
+        assert_eq!(display_text("Paper workshop", ""), "Paper workshop");
+        assert_eq!(display_text("Two\u{2014}parts", ""), "Two,parts");
+        assert_eq!(
+            short_summary("One. Two. Three."),
+            ("One. Two.".into(), true)
+        );
+        assert_eq!(short_summary("Short"), ("Short".into(), false));
+        assert_eq!(
+            month_start(NaiveDate::from_ymd_opt(2027, 1, 31).unwrap())
+                .checked_sub_months(Months::new(1))
+                .unwrap()
+                .to_string(),
+            "2026-12-01"
+        );
     }
 }
