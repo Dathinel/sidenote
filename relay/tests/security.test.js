@@ -24,7 +24,7 @@ function fixture(overrides) {
       sql: { exec(query, ...values) {
         if (/^(INSERT|UPDATE|DELETE)/.test(query)) writes++;
         const rows = db.query(query).all(...values);
-        return { toArray: () => rows };
+        return { toArray: () => rows, rowsWritten: db.query("SELECT changes() AS count").get().count };
       }},
       getAlarm: async () => alarm,
       setAlarm: async value => { alarm = value; },
@@ -347,7 +347,7 @@ test("pair-owner allowlist and three pending slots are enforced across rooms",as
   const claim=(room,release=false)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=${release?1:0}&owner=${claimOwner}`));
   const rooms=[1,2,3,4].map(i=>i.toString(16).padStart(64,"0"));
   for(const room of rooms.slice(0,3))expect((await claim(room)).status).toBe(204);
-  expect((await claim(rooms[0])).status).toBe(204);
+  expect((await claim(rooms[0])).status).toBe(429);
   expect((await claim(rooms[3])).status).toBe(429);
   expect((await claim(rooms[0],true)).status).toBe(204);
   expect((await claim(rooms[3])).status).toBe(204);
@@ -420,7 +420,7 @@ test("closing a second unauthenticated owner socket cannot release the first IP 
   const f=fixture(env),first=crypto.randomUUID(),second=crypto.randomUUID();
   const claim=(room,owner)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=8&owner=${owner}`));
   expect((await claim(key,first)).status).toBe(204);
-  expect((await claim(key,second)).status).toBe(204);
+  expect((await claim(key,second)).status).toBe(429);
   const duplicate=f.socket({...state("owner"),key:undefined,pairIp:"synthetic-ip",pairOwner:second});
   await f.room.webSocketClose(duplicate,1000);
   for(let i=1;i<=7;i++)expect((await claim(i.toString().repeat(64),crypto.randomUUID())).status).toBe(204);
@@ -439,4 +439,35 @@ test("public owner requests replace any caller supplied claim token",async()=>{
   }};}}};
   await worker.fetch(new Request(`https://relay.test/pair/${[...PAIR_LOCATORS][0]}?role=owner`,{headers:{Upgrade:"websocket","X-Sidenote-Pair-Owner":supplied}}),env);
   expect(replaced).toBe(true);
+});
+
+
+test("same-locator owner B is refused and cannot authenticate after owner A closes",async()=>{
+  const budget=fixture();let f;
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(name){return {fetch:request=>
+    (name.startsWith("pair-budget:") ? budget.room : f.room).fetch(new Request(request))};}}};
+  f=fixture(env);
+  const NativeResponse=globalThis.Response, NativePair=globalThis.WebSocketPair;
+  globalThis.WebSocketPair=class {constructor(){this[0]=this[1]=f.socket({...state("owner"),key:undefined});}};
+  globalThis.Response=class extends NativeResponse {constructor(body,init){if(init?.status===101)return {status:101,webSocket:init.webSocket};super(body,init);}};
+  try {
+    const locator=[...PAIR_LOCATORS][0];
+    const open=()=>worker.fetch(new Request(`https://relay.test/pair/${locator}?role=owner`,{headers:{Upgrade:"websocket","CF-Connecting-IP":"192.0.2.10"}}),env);
+    const a=await open(),b=await open();
+    expect(a.status).toBe(101);
+    await f.room.webSocketClose(a.webSocket,1000);
+    if(b.webSocket) {
+      const keys=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
+      const publicKey=hex(await crypto.subtle.exportKey("raw",keys.publicKey));
+      const {room,role,nonce}=b.webSocket.deserializeAttachment();
+      const signature=hex(await crypto.subtle.sign("Ed25519",keys.privateKey,new TextEncoder().encode(`sidenote-auth-v1:${room}:${role}:${nonce}`)));
+      await f.room.webSocketMessage(b.webSocket,JSON.stringify({type:"auth",key:publicKey,signature}));
+    }
+    expect(b.status).toBe(429);
+    expect(b.webSocket).toBeUndefined();
+    expect(f.sockets.length).toBe(1);
+    expect(f.sockets.some(ws=>ws.sent.some(text=>JSON.parse(text).type==="ready"))).toBe(false);
+    const next=await open();
+    expect(next.status).toBe(101);
+  } finally {globalThis.Response=NativeResponse;globalThis.WebSocketPair=NativePair;}
 });

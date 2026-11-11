@@ -133,7 +133,8 @@ export class Room extends DurableObject<Env> {
       const existing=this.ctx.storage.sql.exec("SELECT room FROM pair_claims WHERE room=?",room).toArray();
       const count=this.ctx.storage.sql.exec<{count:number}>("SELECT COUNT(*) AS count FROM pair_claims").toArray()[0].count;
       if (!existing.length && count>=limit) return new Response(null,{status:429});
-      this.ctx.storage.sql.exec("INSERT OR IGNORE INTO pair_claims VALUES(?,?,?)",room,Date.now()+PAIR_TTL,owner);
+      const claim=this.ctx.storage.sql.exec("INSERT OR IGNORE INTO pair_claims VALUES(?,?,?)",room,Date.now()+PAIR_TTL,owner);
+      if (!claim.rowsWritten) return new Response(null,{status:429});
       await this.schedule(Date.now()+PAIR_TTL);
       return new Response(null,{status:204});
     }
