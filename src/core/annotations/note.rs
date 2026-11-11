@@ -27,7 +27,7 @@ pub fn notebook_prompt(approved: &ApprovedCapture, drafts: &[Value]) -> String {
         .collect();
     format!(
         "{}\n\nApproved frame manifest:\n{}\nCompleted frame drafts:\n{}\nRequired JSON Schema:\n{}\nCopy figure_id, capture_id, app, window_title, keyframe_index, keyframe_reason and every mark_id, mark_number, boxNorm and description exactly from the manifest. Use mark_id or figure_id for evidence_refs. Include each approved frame and mark exactly once. Return a single JSON object, no markdown fences. Never invent names or numbers.",
-        include_str!("prompts/notebook.md"),
+        include_str!("prompts/capture-note.md"),
         json!(records),
         json!(drafts),
         SCHEMA

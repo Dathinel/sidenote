@@ -444,3 +444,96 @@ mod close_tests {
         assert!(destroyed.get());
     }
 }
+
+/// Called only by a person's Share action, never by offscreen proofs.
+pub fn save_html_dialog(default_name: &str) -> io::Result<Option<PathBuf>> {
+    use windows_sys::Win32::UI::{Controls::Dialogs::*, Input::KeyboardAndMouse::GetActiveWindow};
+    let mut buffer = vec![0u16; 32768];
+    let name = wide(std::ffi::OsStr::new(default_name));
+    if name.len() > buffer.len() {
+        return Err(io::Error::other("The file name is too long."));
+    }
+    buffer[..name.len()].copy_from_slice(&name);
+    let filter: Vec<u16> = "HTML page (*.html)\0*.html\0\0".encode_utf16().collect();
+    let extension = wide(std::ffi::OsStr::new("html"));
+    let title = wide(std::ffi::OsStr::new("Share annotation note"));
+    unsafe {
+        let mut dialog: OPENFILENAMEW = std::mem::zeroed();
+        dialog.lStructSize = std::mem::size_of_val(&dialog) as u32;
+        dialog.hwndOwner = GetActiveWindow();
+        dialog.lpstrFilter = filter.as_ptr();
+        dialog.lpstrFile = buffer.as_mut_ptr();
+        dialog.nMaxFile = buffer.len() as u32;
+        dialog.lpstrDefExt = extension.as_ptr();
+        dialog.lpstrTitle = title.as_ptr();
+        dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if GetSaveFileNameW(&mut dialog) == 0 {
+            let error = CommDlgExtendedError();
+            return if error == 0 {
+                Ok(None)
+            } else {
+                Err(io::Error::other("The save dialog could not open."))
+            };
+        }
+    }
+    let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    use std::os::windows::ffi::OsStringExt;
+    Ok(Some(std::ffi::OsString::from_wide(&buffer[..end]).into()))
+}
+/// A native file-drop clipboard payload, so paste transfers the HTML file itself.
+pub fn copy_file(file: &Path) -> io::Result<()> {
+    use windows_sys::Win32::{
+        Foundation::GlobalFree,
+        System::{DataExchange::*, Memory::*},
+        UI::{Input::KeyboardAndMouse::GetActiveWindow, Shell::DROPFILES},
+    };
+    if !file.is_file() {
+        return Err(io::Error::other("The shared file is missing."));
+    }
+    let mut path = wide(file.as_os_str());
+    path.push(0);
+    let size = std::mem::size_of::<DROPFILES>() + path.len() * 2;
+    unsafe {
+        let owner = GetActiveWindow();
+        if owner.is_null() {
+            return Err(io::Error::other("Activate Sidenote and try again."));
+        }
+        let memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, size);
+        if memory.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let bytes = GlobalLock(memory);
+        if bytes.is_null() {
+            let error = io::Error::last_os_error();
+            GlobalFree(memory);
+            return Err(error);
+        }
+        let header = bytes.cast::<DROPFILES>();
+        (*header).pFiles = std::mem::size_of::<DROPFILES>() as u32;
+        (*header).fWide = 1;
+        std::ptr::copy_nonoverlapping(
+            path.as_ptr(),
+            bytes
+                .cast::<u8>()
+                .add(std::mem::size_of::<DROPFILES>())
+                .cast::<u16>(),
+            path.len(),
+        );
+        GlobalUnlock(memory);
+        if OpenClipboard(owner) == 0 {
+            let error = io::Error::last_os_error();
+            GlobalFree(memory);
+            return Err(error);
+        }
+        // CF_HDROP is the Windows file-drop clipboard format (15).
+        let result = if EmptyClipboard() == 0 || SetClipboardData(15, memory).is_null() {
+            let error = io::Error::last_os_error();
+            GlobalFree(memory);
+            Err(error)
+        } else {
+            Ok(())
+        };
+        CloseClipboard();
+        result
+    }
+}

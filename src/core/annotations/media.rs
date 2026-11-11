@@ -53,7 +53,7 @@ pub struct Approval {
     pub review: Vec<ReviewFrame>,
     pub file_hashes: BTreeMap<String, String>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApprovedCapture {
     pub folder: PathBuf,
     pub approval: Approval,

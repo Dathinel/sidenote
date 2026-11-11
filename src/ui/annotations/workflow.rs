@@ -144,7 +144,7 @@ impl State {
             .as_ref()
             .is_some_and(|t| t.id == id && t.current())
     }
-    fn annotation_options(&self) -> Result<generation::Options, String> {
+    pub(super) fn annotation_options(&self) -> Result<generation::Options, String> {
         if let Some(options) = &self.annotations.options {
             generation::available(options)?;
             return Ok(options.clone());
@@ -475,7 +475,7 @@ impl Drop for Annotations {
         self.epoch.invalidate();
     }
 }
-fn editable_fields(v: &Value, path: &str, out: &mut BTreeMap<String, TextEdit>) {
+pub(super) fn editable_fields(v: &Value, path: &str, out: &mut BTreeMap<String, TextEdit>) {
     const TEXT: &[&str] = &[
         "title",
         "summary",
@@ -546,6 +546,9 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
     if let Ok(options) = s.annotation_options() {
         page=page.child(roles::META.wrap(format!("Via {} using {}. Crops include 15% padding. PNGs are at most 1568 px on the long edge.",options.helper.name(),options.model),p.soft));
     }
+    if s.annotations.notebooks.pending.is_some() {
+        page=page.child(roles::SMALL.wrap("This capture needs a note for the notebook. Review its images, then send for the capture note.",p.soft).key("notebook-capture-review-context"));
+    }
     let mut controls = row().gap(12.0).items_center();
     let images_ready = s
         .annotations
@@ -587,7 +590,12 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         .child(
             link("Cancel", p)
                 .key("annotation-review-cancel")
-                .on_press(|s: &mut State| s.annotations.review = None),
+                .on_press(|s: &mut State| {
+                    s.annotations.review = None;
+                    if let Some(id) = s.annotations.notebooks.pending.take() {
+                        s.open_notebook(&id);
+                    }
+                }),
         )
         .child(
             link("Models and agents", p)
@@ -775,6 +783,12 @@ pub(super) fn note_page(s: &State, _c: &Capture, width: f32, p: Palette, mut pag
                     s.save_annotation_edits();
                 }
             }),
+        );
+    }
+    if s.annotations.note.is_some() && !s.annotations.busy && s.annotations.editing.is_empty() {
+        actions = actions.child(
+            super::super::area::button("Share", "share-capture", p)
+                .on_press(|s: &mut State| s.share_annotation(false)),
         );
     }
     page = page.child(actions).child(
