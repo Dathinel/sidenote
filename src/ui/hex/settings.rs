@@ -567,6 +567,22 @@ pub(super) fn setting_help(st: &Setting) -> String {
 fn app_index() -> Vec<Destination> {
     vec![
         entry(
+            "labs-stop-forgotten",
+            "Stop forgotten recordings",
+            "Labs forgotten idle auto stop minutes",
+            Page::Diagnostics,
+            0,
+            false,
+        ),
+        entry(
+            "labs-measure-files",
+            "Measure recording files (diagnostics)",
+            "Labs probe WAV growing files",
+            Page::Diagnostics,
+            0,
+            false,
+        ),
+        entry(
             "notes-identity",
             "Your name",
             "identity profile",
@@ -1263,6 +1279,66 @@ fn feature(s: &State, k: &Kit, feature: AppFeature, name: &str, help: &str, p: P
         p,
     )
 }
+fn save_labs(s: &mut State, edit: impl FnOnce(&mut sidenote::core::meeting_watch::Labs)) {
+    let result = sidenote::core::Config::load_in(&s.store.root).and_then(|mut config| {
+        edit(&mut config.labs);
+        config.save(&s.store.root)?;
+        Ok(config)
+    });
+    match result {
+        Ok(config) => {
+            s.config = config;
+            s.feature_error = None;
+            s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+        }
+        Err(_) => s.feature_error = Some("Could not save Labs settings. Try again.".into()),
+    }
+}
+fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let minutes = s.config.labs.silence_minutes.minutes();
+    let options = [10, 20, 30, 60].map(|n| format!("{n} minutes"));
+    let current = format!("{minutes} minutes");
+    let duration = Select::new("labs-silence-minutes", &options)
+        .label("Stop after no speech for")
+        .current(Some(current.as_str()))
+        .appearance(SelectAppearance::Field)
+        .width(180.0)
+        .open(s.hex.select_open.as_deref() == Some("labs-silence-minutes"))
+        .on_toggle(|s: &mut State| {
+            s.hex.select_open = if s.hex.select_open.is_some() {
+                None
+            } else {
+                Some("labs-silence-minutes".into())
+            };
+        })
+        .on_close(|s: &mut State| s.hex.select_open = None)
+        .on_choose(|s: &mut State, value: &str, _: &mut Tx| {
+            use sidenote::core::meeting_watch::SilenceMinutes;
+            let minutes = match value {
+                "10 minutes" => SilenceMinutes::Ten,
+                "30 minutes" => SilenceMinutes::Thirty,
+                "60 minutes" => SilenceMinutes::Sixty,
+                _ => SilenceMinutes::Twenty,
+            };
+            save_labs(s, |labs| labs.silence_minutes = minutes);
+            s.hex.select_open = None;
+        })
+        .build(k, layer);
+    card("Labs", col().w_full()
+        .child(setting_row(s, "labs-stop-forgotten", "Stop forgotten recordings",
+            &format!("If a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
+            Switch::new(s.config.labs.stop_forgotten_recordings)
+                .label("Stop forgotten recordings").hide_label()
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.stop_forgotten_recordings = !labs.stop_forgotten_recordings)).build(k).key("labs-stop-forgotten-toggle"), true, p))
+        .child(hairline(p))
+        .child(setting_row(s, "labs-silence-duration", "Stop after no speech for", "Choose 10, 20, 30 or 60 minutes.", duration, false, p))
+        .child(hairline(p))
+        .child(setting_row(s, "labs-measure-files", "Measure recording files (diagnostics)",
+            "Save file sizes, WAV header details and transcript line counts during recordings. No audio or text is saved.",
+            Switch::new(s.config.labs.measure_recording_files)
+                .label("Measure recording files (diagnostics)").hide_label()
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p)), p)
+}
 fn devices(s: &State, p: Palette) -> El {
     let name = if rune::tooling::headless_run().is_some() {
         "DEMO-PC".into()
@@ -1657,6 +1733,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Diagnostics, _) => col()
             .w_full()
             .key("helper-advanced")
+            .child(labs(s, k, p, layer))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Advanced))
             .child(card(
                 "Update source",

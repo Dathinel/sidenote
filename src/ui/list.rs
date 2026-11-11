@@ -236,6 +236,9 @@ fn home_row(
 /// The home page: saved and pending meetings, newest day first, with the Ask bar floating over
 /// it. Ask here covers all of them.
 pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+    if s.filter == Filter::Short {
+        return short_recordings(s, p, narrow);
+    }
     let side = if narrow { 16.0 } else { 40.0 };
     let (title, count) = match &s.filter {
         Filter::All => (
@@ -271,6 +274,13 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                         .min_w(0.0),
                 )
                 .child(roles::meta(count, p).pb(6.0)),
+        )
+        .child(
+            link("Short recordings", p)
+                .key("filter-short-recordings")
+                .self_start()
+                .mb(10.0)
+                .on_press(|s: &mut State| s.set_filter(Filter::Short)),
         )
         .children(super::updates::listener_notice(s, p))
         .children((s.filter != Filter::All).then(|| {
@@ -335,4 +345,57 @@ pub fn text_title(s: &str, size: f32, p: Palette) -> El {
         .font(display(size))
         .color(p.ink)
         .wrap()
+}
+
+fn short_recordings(s: &State, p: Palette, narrow: bool) -> El {
+    let mut doc = col()
+        .w_full()
+        .max_w(860.0)
+        .px(if narrow { 16.0 } else { 40.0 })
+        .py(20.0)
+        .gap(16.0)
+        .child(text_title(
+            "Short recordings",
+            if narrow { 28.0 } else { 34.0 },
+            p,
+        ))
+        .child(roles::SMALL.wrap(core::recording_guard::EXPLANATION, p.soft))
+        .child(
+            link("Show all meetings", p)
+                .key("filter-clear")
+                .self_start()
+                .on_press(|s: &mut State| s.go_meetings()),
+        );
+    if s.short_recordings.is_empty() {
+        doc = doc.child(roles::SMALL.wrap("No short recordings.", p.soft));
+    }
+    for recording in &s.short_recordings {
+        let id = recording.id.clone();
+        doc = doc.child(row().w_full().items_center().gap(12.0).py(12.0)
+            .child(col().grow(1.0).min_w(0.0).gap(4.0)
+                .child(roles::TITLE.wrap(&recording.date, p.ink))
+                .child(roles::META.wrap(&recording.length, p.soft)))
+            .child(super::area::button("Keep", &format!("keep-recording-{id}"), p)
+                .on_press(move |s: &mut State| {
+                    match core::recording_guard::keep(&id) {
+                        Ok(()) => { s.short_recordings.retain(|r| r.id != id); s.notice = Some("Recording kept. Normal processing is queued.".into()); }
+                        Err(_) => { s.notice = Some("Could not queue this recording. Try again after the next refresh.".into()); }
+                    }
+                    if let Some(handle) = &s.scan_tx { handle.invalidate(); }
+                })));
+    }
+    let mut pane = col()
+        .key("meeting-pane")
+        .grow(1.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .w_full()
+        .fill(p.bg);
+    if let Some(note) = &s.notice {
+        pane = pane.child(notice_bar(note, p));
+    }
+    pane.child(scroll(
+        col().w_full().items_center().child(doc),
+        "list-scroll",
+    ))
 }

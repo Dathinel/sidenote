@@ -305,7 +305,7 @@ impl Snapshot {
         // Reconciliation can publish its own mutations before the snapshot read begins.
         let mutation_generation = sidenote::core::mutation_generation();
         let projects = sidenote::core::TaskStore::new(store.root.clone()).load_projects()?;
-        let file = store.load()?;
+        let file = store.visible_file(store.load()?);
         let (preview, legacy) = if file.migration.is_some() {
             (None, String::new())
         } else {
@@ -380,6 +380,7 @@ impl MemState {
     }
 
     pub(super) fn apply_file(&mut self, file: sidenote::core::memory::MemoryFile) {
+        let file = MemoryStore::default().visible_file(file);
         self.migrated = file.migration.is_some();
         self.accepted_at = file.migration.as_ref().map(|m| m.accepted_at.clone());
         self.records = file.records;

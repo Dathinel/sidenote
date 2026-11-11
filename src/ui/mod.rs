@@ -216,6 +216,7 @@ pub struct State {
     pub feature_error: Option<String>,
     pub meetings: Vec<Meeting>,
     pub scan_errors: Vec<String>,
+    pub short_recordings: Vec<core::recording_guard::ShortRecording>,
     /// The open meeting. None is the home list.
     pub selected: Option<String>,
     pub search: TextEdit,
@@ -423,6 +424,11 @@ impl State {
             selected: None,
             meetings,
             scan_errors,
+            short_recordings: core::recording_guard::short_recordings(
+                &core::state_dir(),
+                &core::meetings_dir(),
+            )
+            .unwrap_or_default(),
             search: TextEdit::new(""),
             groups: Vec::new(),
             cursor: 0,
@@ -1242,6 +1248,7 @@ impl State {
                 };
                 let refresh::Data {
                     mut meetings,
+                    short_recordings,
                     retained,
                     errors,
                     pipeline,
@@ -1266,6 +1273,9 @@ impl State {
                         self.saved = Saved::default();
                     }
                     self.refresh_list();
+                }
+                if let Some(recordings) = short_recordings {
+                    self.short_recordings = recordings;
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -3340,6 +3350,11 @@ pub fn spec() -> AppSpec<State> {
                 notes_scene::settings(s, "claude-only");
                 scene_sidebar(s, true);
                 s.nav.profile_menu = true;
+            }),
+            ("short-recordings", |s| {
+                hex::scene(s, false);
+                scene_sidebar(s, false);
+                s.set_filter(nav::Filter::Short);
             }),
             ("home-open", |s| {
                 hex::scene(s, false);

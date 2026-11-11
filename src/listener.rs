@@ -46,7 +46,9 @@ impl Problem {
     }
 }
 fn log(message: &str) {
-    let path = crate::core::log_path();
+    log_at(&crate::core::log_path(), message);
+}
+fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -58,7 +60,24 @@ fn log(message: &str) {
         );
     }
 }
-fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
+pub(crate) fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
+    pipeline_in(
+        &crate::core::state_dir(),
+        &crate::core::meetings_dir(),
+        meeting_id,
+    )
+}
+fn pipeline_in(
+    state: &std::path::Path,
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+) -> io::Result<()> {
+    if let Some(id) = meeting_id
+        && crate::core::recording_guard::eligibility(state, meetings, id)?
+            != crate::core::recording_guard::Eligibility::Eligible
+    {
+        return Ok(());
+    }
     let activity = crate::updates::activity()?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
@@ -86,8 +105,82 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
         log(crate::core::live::NOTES_UNAVAILABLE);
         return Ok(());
     }
-    let root = crate::core::meetings_dir();
-    let folders: Vec<_> = fs::read_dir(&root)?
+    let mut folders = script_folders(state, meetings, meeting_id)?;
+    let script_lock = match crate::core::store_io::lock(
+        &crate::core::state_dir().join("local/notes-script.lock"),
+    ) {
+        Ok(lock) => lock,
+        Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let (mut command, filtered) = script_command(&script, &folders, log)?;
+    if filtered && folders.is_empty() {
+        return Ok(());
+    }
+    if !filtered {
+        folders = legacy_script_folders(meetings, meeting_id)?;
+    }
+    let child = command.spawn();
+    std::thread::spawn(move || {
+        let _script_lock = script_lock;
+        let _activity = activity;
+        let succeeded = child
+            .and_then(|mut child| child.wait())
+            .is_ok_and(|status| status.success());
+        script_markers(&folders, succeeded);
+        if !succeeded {
+            log("Notes pipeline failed; the recording and personal notes are saved");
+        }
+    });
+    Ok(())
+}
+fn script_folders(
+    state: &std::path::Path,
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+) -> io::Result<Vec<PathBuf>> {
+    Ok(fs::read_dir(meetings)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|folder| {
+            folder
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|id| {
+                    meeting_id.is_none_or(|requested| requested == id)
+                        && crate::core::recording_guard::eligibility(state, meetings, id)
+                            .is_ok_and(|e| e == crate::core::recording_guard::Eligibility::Eligible)
+                })
+                && !folder.join("english-summary.json").is_file()
+        })
+        .collect())
+}
+fn catch_up_routing(
+    state: &std::path::Path,
+    meetings: &std::path::Path,
+    mut enqueue: impl FnMut(&str) -> io::Result<()>,
+) -> io::Result<()> {
+    for entry in fs::read_dir(meetings)? {
+        let entry = entry?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !id.is_empty()
+            && id.bytes().any(|b| b.is_ascii_digit())
+            && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+            && crate::core::recording_guard::eligibility(state, meetings, &id)?
+                == crate::core::recording_guard::Eligibility::Eligible
+        {
+            enqueue(&id)?;
+        }
+    }
+    Ok(())
+}
+const LEGACY_SCRIPT_NOTICE: &str =
+    "notes script does not accept MeetingFolders; short-recording filter not applied to the script";
+fn legacy_script_folders(
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+) -> io::Result<Vec<PathBuf>> {
+    Ok(fs::read_dir(meetings)?
         .flatten()
         .map(|entry| entry.path())
         .filter(|folder| {
@@ -98,47 +191,50 @@ fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
                         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
                         .is_some_and(|m| m["status"] == "complete"))
         })
-        .collect();
-    let child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(script)
-        .creation_flags(HIDDEN)
-        .spawn();
-    std::thread::spawn(move || {
-        let _activity = activity;
-        let succeeded = child
-            .and_then(|mut child| child.wait())
-            .is_ok_and(|status| status.success());
-        for folder in folders {
-            if !succeeded {
-                let _ = fs::write(folder.join("notes-failed"), b"failed");
-            } else {
-                let _ = fs::remove_file(folder.join("notes-failed"));
-            }
-        }
+        .collect())
+}
+fn script_markers(folders: &[PathBuf], succeeded: bool) {
+    for folder in folders {
         if !succeeded {
-            log("Notes pipeline failed; the recording and personal notes are saved");
+            let _ = fs::write(folder.join("notes-failed"), b"failed");
+        } else {
+            let _ = fs::remove_file(folder.join("notes-failed"));
         }
-    });
-    Ok(())
+    }
+}
+fn script_command(
+    script: &std::path::Path,
+    folders: &[PathBuf],
+    report: impl FnOnce(&str),
+) -> io::Result<(Command, bool)> {
+    let filtered = Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; if ((Get-Command -Name $env:SIDENOTE_NOTES_SCRIPT).Parameters.ContainsKey('MeetingFolders')) { exit 0 }; exit 1"])
+        .env("SIDENOTE_NOTES_SCRIPT", script).creation_flags(HIDDEN)
+        .output().is_ok_and(|output| output.status.success());
+    let mut command = Command::new("powershell.exe");
+    if filtered {
+        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; $folders=@(ConvertFrom-Json $env:SIDENOTE_MEETING_FOLDERS); & $env:SIDENOTE_NOTES_SCRIPT -MeetingFolders $folders; if (!$?) { exit 1 }"])
+            .env("SIDENOTE_NOTES_SCRIPT", script)
+            .env("SIDENOTE_MEETING_FOLDERS", serde_json::to_string(folders)?);
+    } else {
+        report(LEGACY_SCRIPT_NOTICE);
+        command
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(script);
+    }
+    command.creation_flags(HIDDEN);
+    Ok((command, filtered))
 }
 fn catch_up() -> io::Result<()> {
     let _activity = crate::updates::activity()?;
     if crate::core::meeting_router::jobs::configured() {
-        for entry in fs::read_dir(crate::core::meetings_dir())? {
-            let entry = entry?;
-            let id = entry.file_name().to_string_lossy().into_owned();
-            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-                continue;
-            }
-            let complete = fs::read(entry.path().join("manifest.json"))
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .is_some_and(|manifest| manifest["status"] == "complete");
-            if complete {
-                crate::core::meeting_router::jobs::enqueue(&id).map_err(io::Error::other)?;
-            }
-        }
+        catch_up_routing(
+            &crate::core::state_dir(),
+            &crate::core::meetings_dir(),
+            |id| crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other),
+        )?;
         crate::core::meeting_router::jobs::start_worker()?;
     }
     pipeline(None)
@@ -189,7 +285,7 @@ impl Read for Body {
         Ok(n)
     }
 }
-fn listen() -> Result<(), Problem> {
+fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
     let path =
         PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/local-api.json");
     let config: Discovery = serde_json::from_slice(&fs::read(path)?).map_err(|_| Problem::Value)?;
@@ -252,7 +348,7 @@ fn listen() -> Result<(), Problem> {
     }
     log("connected");
     crate::hex_engine::meeting_event();
-    continue_after_pipeline(pipeline(None), log);
+    continue_after_pipeline(catch_up(), log);
     let mut body = BufReader::new(Body {
         stream,
         chunked,
@@ -282,6 +378,9 @@ fn listen() -> Result<(), Problem> {
             let valid = !id.is_empty()
                 && id.bytes().any(|c| c.is_ascii_digit())
                 && id.bytes().all(|c| c.is_ascii_digit() || c == b'-');
+            if valid {
+                let _ = finished.send(id.to_owned());
+            }
             continue_after_pipeline(pipeline(valid.then_some(id)), log);
         }
     }
@@ -302,6 +401,7 @@ pub fn run() -> ! {
         std::process::exit(0);
     }
     // The watcher scans completed meetings even when the event API is unavailable.
+    let finished = crate::core::meeting_watch::start(log);
     if catch_up().is_err() {
         log("startup catch-up could not start; retrying on the next connection");
     }
@@ -317,12 +417,28 @@ pub fn run() -> ! {
             if crate::core::notes::queue::start_worker().is_err() {
                 log("notes worker could not start; retrying on the next drain");
             }
+            if crate::core::meeting_router::jobs::configured() {
+                let _ = catch_up_routing(
+                    &crate::core::state_dir(),
+                    &crate::core::meetings_dir(),
+                    |id| {
+                        if crate::core::meeting_router::jobs::has_result(id) {
+                            Ok(())
+                        } else {
+                            crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
+                        }
+                    },
+                );
+            }
+            if pipeline(None).is_err() {
+                log("catch-up remains pending for the next drain");
+            }
             std::thread::sleep(Duration::from_secs(30));
         }
     });
     let mut last = String::new();
     loop {
-        let problem = match listen() {
+        let problem = match listen(&finished) {
             Ok(()) => "stream ended".into(),
             Err(e) => e.message(),
         };
@@ -337,6 +453,177 @@ pub fn run() -> ! {
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+    #[test]
+    fn event_catch_up_and_script_folders_share_the_gate() {
+        let root = std::env::temp_dir().join(format!(
+            "rec-guard-listener-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let meetings = root.join("meetings");
+        for (id, duration) in [("1793946600000-1", 29999), ("1793946600000-2", 30000)] {
+            let folder = meetings.join(id);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","duration_ms":duration}).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+            )
+            .unwrap();
+        }
+        // A rejected event returns before activity locks, config reads or worker launches.
+        pipeline_in(&root, &meetings, Some("1793946600000-1")).unwrap();
+        let mut queued = Vec::new();
+        catch_up_routing(&root, &meetings, |id| {
+            queued.push(id.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(queued, ["1793946600000-2"]);
+        let folders = script_folders(&root, &meetings, None).unwrap();
+        assert_eq!(folders, [meetings.join("1793946600000-2")]);
+        assert!(
+            script_folders(&root, &meetings, Some("1793946600000-1"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    fn script_fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "rec-guard-script-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+    #[test]
+    fn legacy_no_param_script_runs_without_arguments_or_changed_environment_and_logs_once() {
+        let root = script_fixture();
+        let script = root.join("notes.ps1");
+        let output = root.join("legacy.json");
+        let logfile = root.join("listener.log");
+        fs::write(&script, "@{arguments=@($args); parameters=@($PSBoundParameters.Keys); folders=$env:SIDENOTE_MEETING_FOLDERS} | ConvertTo-Json | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT").unwrap();
+        let (mut command, filtered) =
+            script_command(&script, &[root.join("1793946600000-2")], |message| {
+                log_at(&logfile, message)
+            })
+            .unwrap();
+        assert!(!filtered);
+        assert_eq!(command.get_envs().count(), 0);
+        assert_eq!(
+            command
+                .get_args()
+                .map(|v| v.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "-NoProfile".to_owned(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                script.to_string_lossy().into_owned()
+            ]
+        );
+        let result = command.env("REC_GUARD_OUTPUT", &output).output().unwrap();
+        assert!(result.status.success());
+        let actual: serde_json::Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual["arguments"], serde_json::json!([]));
+        assert_eq!(actual["parameters"], serde_json::json!([]));
+        assert_eq!(
+            actual["folders"].as_str(),
+            std::env::var("SIDENOTE_MEETING_FOLDERS").ok().as_deref()
+        );
+        let log = fs::read_to_string(logfile).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        assert!(log.contains(LEGACY_SCRIPT_NOTICE));
+    }
+    #[test]
+    fn param_script_receives_only_eligible_folders() {
+        let root = script_fixture();
+        let meetings = root.join("meetings");
+        let script = root.join("notes.ps1");
+        let output = root.join("folders.json");
+        for (id, duration) in [("1793946600000-1", 29999), ("1793946600000-2", 30000)] {
+            let folder = meetings.join(id);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","duration_ms":duration}).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+            )
+            .unwrap();
+        }
+        fs::write(&script, "param([string[]]$MeetingFolders)\nConvertTo-Json -InputObject @($MeetingFolders) | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT").unwrap();
+        let folders = script_folders(&root, &meetings, None).unwrap();
+        let (mut command, filtered) = script_command(&script, &folders, |_| {
+            panic!("parameter script must not log a legacy notice")
+        })
+        .unwrap();
+        assert!(filtered);
+        assert!(
+            command
+                .env("REC_GUARD_OUTPUT", &output)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let actual: Vec<PathBuf> = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(actual, [meetings.join("1793946600000-2")]);
+        assert_eq!(legacy_script_folders(&meetings, None).unwrap().len(), 2);
+    }
+    #[test]
+    fn param_script_keeps_mixed_separator_paths_by_meeting_id() {
+        let root = script_fixture();
+        let meetings = root.join("hex/meetings");
+        let id = "1793946600000-2";
+        for name in [id, "1793946600000-3"] {
+            fs::create_dir_all(meetings.join(name)).unwrap();
+        }
+        let mixed = PathBuf::from(format!(r"{}\hex/meetings\{id}", root.display()));
+        assert!(mixed.to_string_lossy().contains(r"hex/meetings\"));
+        let script = root.join("leaf-filter.ps1");
+        let output = root.join("kept.json");
+        fs::write(&script, r#"param([string[]]$MeetingFolders)
+$allowed = if ($PSBoundParameters.ContainsKey('MeetingFolders')) { @($MeetingFolders | ForEach-Object { Split-Path -Leaf $_ }) }
+if ((Get-ExecutionPolicy -Scope Process) -ne 'Bypass') { throw 'Expected the dev16 execution policy' }
+$kept = @(foreach ($dir in Get-ChildItem -LiteralPath $env:REC_GUARD_MEETINGS -Directory) {
+    if ($null -ne $allowed -and $dir.Name -notin $allowed) { continue }
+    $dir.Name
+})
+ConvertTo-Json -InputObject $kept | Set-Content -LiteralPath $env:REC_GUARD_OUTPUT
+"#).unwrap();
+        let (mut command, filtered) = script_command(&script, &[mixed], |_| {
+            panic!("parameter script must not use the legacy fallback")
+        })
+        .unwrap();
+        assert!(filtered);
+        let result = command
+            .env("REC_GUARD_MEETINGS", &meetings)
+            .env("REC_GUARD_OUTPUT", &output)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        let kept: Vec<String> = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        assert_eq!(kept, [id]);
+    }
+    #[test]
+    fn script_failure_markers_match_dev16() {
+        let root = script_fixture();
+        let folders = [root.clone()];
+        script_markers(&folders, false);
+        assert_eq!(fs::read(root.join("notes-failed")).unwrap(), b"failed");
+        script_markers(&folders, true);
+        assert!(!root.join("notes-failed").exists());
+    }
     #[test]
     fn enqueue_failure_is_reported_without_ending_event_handling() {
         let mut messages = Vec::new();

@@ -466,6 +466,29 @@ impl HexEngine {
     pub fn model_status(&self) -> Result<ModelState> {
         Ok(self.status()?.model)
     }
+    pub(crate) fn stop_forgotten(&self, id: &str) -> Result<()> {
+        // Recheck immediately before the CLI call, including after a slow file read.
+        let status = self.status()?;
+        if crate::core::meeting_watch::recording_id(&status, &crate::core::meetings_dir())
+            .as_deref()
+            != Some(id)
+        {
+            return Err(failed("recording changed before auto-stop"));
+        }
+        let cli = self
+            .cache
+            .lock()
+            .map_err(|_| failed("engine cache unavailable"))?
+            .cli
+            .clone()
+            .ok_or(HexError::Unsupported)?;
+        hidden_help(
+            &cli,
+            &["meetings", "stop", "--json"],
+            Instant::now() + CALL_TIMEOUT,
+        )?;
+        Ok(())
+    }
     pub fn capabilities(&self) -> Result<Capabilities> {
         self.status()?;
         let (version, cli, reported, cached) = {

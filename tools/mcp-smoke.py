@@ -49,6 +49,10 @@ def main():
         meeting(meetings, "100-1", "Launch planning", "Review the scope.", 1794009600000)
         meeting(peers / "desktop", "100-2", "Release review", "The launch gate is signed off.", 1794096000000)
         meeting(peers / "desktop", "100-1", "Duplicate peer", "launch duplicate", 1794182400000)
+        for ident, duration, words in [("100-3", 29999, 25), ("100-4", 96000, 0)]:
+            meeting(meetings, ident, "Abandoned launch recording", "Hidden synthetic source", 1794182400000)
+            write(meetings / ident / "manifest.json", {"status":"complete", "created_at_ms":1794182400000, "duration_ms":duration})
+            write(meetings / ident / "transcript.ndjson", {"text":" ".join(["synthetic"] * words)})
         write(state / "projects.json", {
             "projects": ["Launch"], "aliases": {"Legacy launch": "Launch"}
         })

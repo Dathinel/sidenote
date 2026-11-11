@@ -62,6 +62,9 @@ fn acknowledge(root: &Path, id: &str, path: &Path, bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn has_result(id: &str) -> bool {
+    valid_id(id) && destination(&super::super::state_dir(), id).is_file()
+}
 pub fn configured() -> bool {
     fs::read(super::super::state_dir().join("config.json"))
         .ok()
@@ -69,13 +72,27 @@ pub fn configured() -> bool {
         .is_some_and(|v| v["pipeline"]["profile"] == "experimental")
 }
 pub fn enqueue(id: &str) -> Result<()> {
+    enqueue_in(
+        &super::super::state_dir(),
+        &super::super::meetings_dir(),
+        id,
+    )
+}
+fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    let root = super::super::state_dir();
-    let _lock = pending_lock(&root, id)?;
+    if super::super::recording_guard::eligibility(root, meetings, id)?
+        != super::super::recording_guard::Eligibility::Eligible
+    {
+        return Ok(());
+    }
+    let _lock = pending_lock(root, id)?;
+    if queue(root).join(format!("{id}.json")).exists() {
+        return Ok(());
+    }
     store_io::write(
-        &queue(&root).join(format!("{id}.json")),
+        &queue(root).join(format!("{id}.json")),
         &Pending {
             id: id.into(),
             generation: SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
@@ -300,6 +317,14 @@ fn cleanup_work(work: &Path) {
 pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
+    if super::super::recording_guard::eligibility(
+        &super::super::state_dir(),
+        &super::super::meetings_dir(),
+        &job.id,
+    )? != super::super::recording_guard::Eligibility::Eligible
+    {
+        return Ok(());
+    }
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
     let mut normalized = Cleanup(Vec::new());
@@ -405,6 +430,14 @@ pub fn run_pending() -> Result<()> {
                 return Err("Invalid queued meeting".into());
             }
             if !attempted.insert((pending.id.clone(), pending.generation)) {
+                continue;
+            }
+            if super::super::recording_guard::eligibility(
+                &root,
+                &super::super::meetings_dir(),
+                &pending.id,
+            )? != super::super::recording_guard::Eligibility::Eligible
+            {
                 continue;
             }
             if automatic && completed_attempt(&root, &pending) {
@@ -583,7 +616,13 @@ pub fn start_worker() -> io::Result<()> {
                     return true;
                 };
                 // Recover unattempted generations; completed fallbacks await an explicit drain.
-                !completed_attempt(&super::super::state_dir(), &pending)
+                super::super::recording_guard::eligibility(
+                    &super::super::state_dir(),
+                    &super::super::meetings_dir(),
+                    &pending.id,
+                )
+                .is_ok_and(|e| e == super::super::recording_guard::Eligibility::Eligible)
+                    && !completed_attempt(&super::super::state_dir(), &pending)
             })
         })
     {
@@ -661,4 +700,40 @@ fn prepared_chunks(folder: &Path, track: &str, sample_count: usize) -> Option<Ve
         }
     }
     (!chunks.is_empty()).then_some(chunks)
+}
+
+#[cfg(test)]
+mod recording_guard_tests {
+    use super::*;
+    #[test]
+    fn routing_enqueue_skips_short_and_unknown_and_deduplicates_kept() {
+        let root = std::env::temp_dir().join(format!(
+            "rec-guard-routing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let meetings = root.join("meetings");
+        let id = "1793946600000-1";
+        let folder = meetings.join(id);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("manifest.json"),
+            serde_json::json!({"status":"complete","duration_ms":29999}).to_string(),
+        )
+        .unwrap();
+        enqueue_in(&root, &meetings, id).unwrap();
+        assert!(!queue(&root).join(format!("{id}.json")).exists());
+        fs::write(folder.join("transcript.ndjson"), r#"{"text":"abandoned"}"#).unwrap();
+        enqueue_in(&root, &meetings, id).unwrap();
+        assert!(!queue(&root).join(format!("{id}.json")).exists());
+        super::super::super::recording_guard::keep_in(&root, id).unwrap();
+        enqueue_in(&root, &meetings, id).unwrap();
+        let path = queue(&root).join(format!("{id}.json"));
+        let before = fs::read(&path).unwrap();
+        enqueue_in(&root, &meetings, id).unwrap();
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
 }

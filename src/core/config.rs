@@ -106,6 +106,8 @@ pub struct Config {
     pub version: u32,
     pub features: Features,
     #[serde(default)]
+    pub labs: super::meeting_watch::Labs,
+    #[serde(default)]
     pub knowledge_base: KnowledgeBase,
     #[serde(default)]
     pub pipeline: super::meeting_router::RoutingConfig,
@@ -120,6 +122,7 @@ impl Default for Config {
         Self {
             version: 1,
             features: Features::default(),
+            labs: super::meeting_watch::Labs::default(),
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
             notes: None,

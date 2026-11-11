@@ -286,7 +286,7 @@ impl MemoryStore {
         Ok(file)
     }
     pub fn list_records(&self) -> io::Result<Vec<MemoryRecord>> {
-        Ok(self.load()?.records)
+        Ok(self.visible_file(self.load()?).records)
     }
     fn save(&self, before: &MemoryFile, file: &MemoryFile) -> io::Result<()> {
         super::sync_state::save_changes(&self.root, "memory/records.json", before, file)?;
@@ -309,26 +309,46 @@ impl MemoryStore {
     pub fn company_memory(&self) -> io::Result<String> {
         self.snapshot().map(|(_, text)| text)
     }
+    pub fn visible_file(&self, mut file: MemoryFile) -> MemoryFile {
+        let meetings = super::meetings_dir();
+        let visible = |sources: &[MemorySource]| {
+            super::recording_guard::sources_visible(
+                &self.root,
+                &meetings,
+                sources.iter().map(MemorySource::reference),
+            )
+        };
+        file.records.retain(|r| visible(&r.sources));
+        file.proposals.retain(|p| visible(&p.proposal.sources));
+        file
+    }
     /// One consistent prompt snapshot, protected against simultaneous owner edits.
     pub fn snapshot(&self) -> io::Result<(MemoryFile, String)> {
-        if super::paths::read_only() {
-            let file = self.resolve_projects(self.load_locked()?)?;
-            let text = if file.migration.is_some() {
-                render(&file)
-            } else {
-                self.legacy_text()?
-            };
-            return Ok((file, text));
-        }
-        let _lock = store_io::lock(&self.path("records.lock"))?;
-        let file = self.resolve_projects(self.load_locked()?)?;
-        if file.migration.is_some() {
-            let text = render(&file);
-            self.export(&text)?;
-            Ok((file, text))
+        let _lock = if super::paths::read_only() {
+            None
         } else {
-            self.legacy_text().map(|text| (file, text))
+            Some(store_io::lock(&self.path("records.lock"))?)
+        };
+        let file = self.resolve_projects(self.load_locked()?)?;
+        if file.migration.is_some() && !super::paths::read_only() {
+            self.export(&render(&file))?;
         }
+        let file = self.visible_file(file);
+        let text = if file.migration.is_some() {
+            render(&file)
+        } else {
+            self.legacy_text()?
+                .split_inclusive('\n')
+                .filter(|line| {
+                    super::recording_guard::sources_visible(
+                        &self.root,
+                        &super::meetings_dir(),
+                        [*line],
+                    )
+                })
+                .collect::<String>()
+        };
+        Ok((file, text))
     }
     pub(super) fn cache_root(&self) -> PathBuf {
         self.root.join("local")
@@ -457,9 +477,9 @@ impl MemoryStore {
             }
         }
         if super::paths::read_only() {
-            Ok(self.resolve_projects(file)?.proposals)
+            Ok(self.visible_file(self.resolve_projects(file)?).proposals)
         } else {
-            Ok(self.load()?.proposals)
+            Ok(self.visible_file(self.load()?).proposals)
         }
     }
     pub fn reject_proposal(&self, id: &str) -> io::Result<()> {
