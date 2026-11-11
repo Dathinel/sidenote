@@ -35,11 +35,14 @@ struct Day<'a> {
     memories: Vec<(String, String)>,
     proposals: usize,
     check: bool,
+    decisions: Vec<(String, String)>,
 }
 
 /// The folded sections of a day.
 #[derive(Clone, Copy)]
 pub enum Part {
+    Outcomes,
+    Summary,
     Tasks,
     Memories,
     Done,
@@ -50,6 +53,8 @@ pub enum Part {
 impl Part {
     fn name(self) -> &'static str {
         match self {
+            Self::Outcomes => "outcomes",
+            Self::Summary => "summary",
             Self::Tasks => "tasks",
             Self::Memories => "memories",
             Self::Done => "done",
@@ -184,13 +189,72 @@ fn day(s: &State, date: NaiveDate) -> Day<'_> {
     }
     Day {
         date,
-        meetings,
+        meetings: meetings.clone(),
         created: created_tasks,
         done,
         memories,
         proposals,
         check: f.daily_check && s.check.dates.contains(&date),
+        decisions: meetings_decisions(&meetings),
     }
+}
+
+fn meetings_decisions(meetings: &[&core::Meeting]) -> Vec<(String, String)> {
+    let mut seen = BTreeSet::new();
+    meetings
+        .iter()
+        .flat_map(|m| {
+            m.summary.topics.iter().flat_map(move |topic| {
+                topic
+                    .points
+                    .iter()
+                    .filter(|point| {
+                        matches!(
+                            point.kind.trim().to_lowercase().as_str(),
+                            "decision" | "decided"
+                        )
+                    })
+                    .map(move |point| {
+                        (
+                            m.id.clone(),
+                            display_text(&point.text, "Review the decision in Meeting summary"),
+                        )
+                    })
+            })
+        })
+        .filter(|(id, text)| seen.insert((id.clone(), text.to_lowercase())))
+        .collect()
+}
+
+/// Free-form model copy containing technical evidence is withheld, rather than partially scrubbed.
+fn display_text(value: &str, fallback: &str) -> String {
+    static INTERNAL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(?:\[\[|\b(?:finding|claim|proposal|record|decision)[-_:][a-z0-9_-]+|\b(?:DEC|D)[-_]\d+\b|\b[a-f0-9]{8,}\b|\b\d{13}-\d+\b|\brev(?:ision)?\s*[:#=])").unwrap()
+    });
+    if INTERNAL.is_match(value) {
+        return fallback.into();
+    }
+    value.trim().replace('\u{2014}', ",")
+}
+
+fn short_summary(value: &str) -> (String, bool) {
+    let mut end = 0;
+    for _ in 0..2 {
+        let rest = value[end..].trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let sentence = first_sentence(rest);
+        end = (value.len() - rest.len() + sentence.len()).min(value.len());
+    }
+    // Keep a very long first sentence readable without changing its stored value.
+    let limit = value
+        .char_indices()
+        .nth(280)
+        .map(|(i, _)| i)
+        .unwrap_or(value.len());
+    end = end.min(limit);
+    (value[..end].trim().to_string(), end < value.len())
 }
 
 /// The first sentence of a line: up to the first full stop, question or exclamation mark that
@@ -353,13 +417,35 @@ fn task_rows(tasks: &[&TaskItem], with_owner: bool, p: Palette) -> El {
         if with_owner {
             facts.insert(0, who);
         }
-        out = out.child(item(
-            tick(t.done, p),
-            col()
-                .w_full()
-                .child(roles::SMALL.wrap(t.task.clone(), if t.done { p.soft } else { p.ink }))
-                .child(roles::meta_line(&facts, p)),
-        ));
+        let id = t.meeting_id.clone();
+        let stable = t.stable_id.clone();
+        let index = t.index;
+        out = out.child(
+            pressable(item(
+                tick(t.done, p),
+                col()
+                    .w_full()
+                    .child(roles::SMALL.wrap(
+                        display_text(
+                            if t.title.trim().is_empty() {
+                                &t.task
+                            } else {
+                                &t.title
+                            },
+                            "Review this task",
+                        ),
+                        if t.done { p.soft } else { p.ink },
+                    ))
+                    .child(roles::META.wrap(display_text(&facts.join(roles::DOT), ""), p.faint)),
+            ))
+            .key(format!(
+                "diary-task-{}-{}-{with_owner}",
+                t.meeting_id, t.index
+            ))
+            .label("Open this task")
+            .hover(p.chip)
+            .on_press(move |s: &mut State| s.diary_task(&id, &stable, index)),
+        );
     }
     if tasks.len() > MOST {
         out = out.child(more(tasks.len() - MOST, "on the Tasks page", p));
@@ -374,7 +460,7 @@ fn memory_rows(d: &Day, p: Palette) -> El {
         out = out.child(
             pressable(item(
                 el().size(5.0, 5.0).radius(3.0).fill(p.faint).mt(8.0),
-                roles::SMALL.wrap(text.clone(), p.ink),
+                roles::SMALL.wrap(display_text(text, "Open accepted memory"), p.ink),
             ))
             .key(format!("diary-memory-{}-{id}", d.date))
             .label("Open this memory claim")
@@ -394,7 +480,7 @@ fn memory_rows(d: &Day, p: Palette) -> El {
         out = out.child(
             link(
                 format!(
-                    "{n} {} to review \u{203a}",
+                    "{n} currently pending {} to review \u{203a}",
                     if n == 1 { "proposal" } else { "proposals" }
                 ),
                 p,
@@ -431,81 +517,130 @@ fn day_head(d: &Day, today: NaiveDate, p: Palette) -> El {
     head.child(roles::SECTION.wrap(name, p.ink))
 }
 
-fn entry(s: &State, k: &Kit, d: &Day, newest_check: bool, p: Palette) -> El {
+fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
     let mut out = col()
         .key(format!("diary-{}", d.date))
         .w_full()
         .gap(12.0)
         .child(day_head(d, s.check.today, p));
-    let line = summary(s, d);
+    let line = display_text(&summary(s, d), "");
     if !line.is_empty() {
-        out = out.child(roles::READ.wrap(line, p.ink));
+        let (short, more) = short_summary(&line);
+        let key = part_key(d.date, Part::Summary);
+        let on = s.check.open_parts.contains(&key);
+        out = out.child(
+            roles::READ
+                .wrap(if on { line } else { short }, p.soft)
+                .max_w(720.0),
+        );
+        if more {
+            out = out.child(disclosure(
+                key,
+                if on { "Show less" } else { "Show more" },
+                on,
+                p,
+            ));
+        }
     } else if d.meetings.is_empty() {
-        out = out.child(roles::SMALL.wrap("No meetings this day.", p.soft));
+        out = out.child(roles::SMALL.wrap("No meetings", p.soft));
     }
-    if !d.meetings.is_empty() {
-        let mut list = col().w_full();
-        for m in &d.meetings {
-            list = list.child(meeting_row(m, d.date, p));
+    let mut list = col().w_full();
+    for m in &d.meetings {
+        list = list.child(meeting_row(m, d.date, p));
+    }
+    out = out.child(list);
+    let mut counts = Vec::new();
+    for (n, singular, plural) in [
+        (d.created.len(), "task", "tasks"),
+        (d.decisions.len(), "decision", "decisions"),
+        (d.memories.len(), "memory accepted", "memories accepted"),
+        (d.proposals, "memory proposal", "memory proposals"),
+        (d.done.len(), "completed task", "completed tasks"),
+    ] {
+        if n > 0 {
+            counts.push(format!("{n} {}", if n == 1 { singular } else { plural }));
         }
-        out = out.child(list);
     }
-    let open = |part: Part| s.check.open_parts.contains(&part_key(d.date, part));
-    let mut parts = col().w_full().gap(2.0);
-    let mut any = false;
-    if !d.created.is_empty() {
-        any = true;
-        let on = open(Part::Tasks);
-        parts = parts.child(fold_head(
-            part_key(d.date, Part::Tasks),
-            "Tasks created",
-            d.created.len(),
+    if !counts.is_empty() || d.check {
+        let key = part_key(d.date, Part::Outcomes);
+        let on = s.check.open_parts.contains(&key);
+        out = out.child(disclosure(
+            key,
+            &if counts.is_empty() {
+                "Daily check".into()
+            } else {
+                counts.join(roles::DOT)
+            },
             on,
             p,
         ));
         if on {
-            parts = parts.child(task_rows(&d.created, true, p));
+            let mut detail = col()
+                .w_full()
+                .gap(8.0)
+                .pl(8.0)
+                .key(format!("diary-outcomes-{}", d.date));
+            if !d.created.is_empty() {
+                detail = detail
+                    .child(roles::GROUP.wrap("Tasks from this day", p.soft))
+                    .child(task_rows(&d.created, true, p));
+            }
+            if !d.decisions.is_empty() {
+                detail = detail.child(roles::GROUP.wrap("Decisions", p.soft));
+                for (n, (id, text)) in d.decisions.iter().enumerate() {
+                    let id = id.clone();
+                    let origin = format!("diary-{}", d.date);
+                    detail = detail.child(
+                        pressable(roles::SMALL.wrap(text, p.ink).py(6.0).w_full())
+                            .key(format!("diary-decision-{}-{n}", d.date))
+                            .label("Open decision in Meeting summary")
+                            .hover(p.chip)
+                            .on_press_tx(move |s: &mut State, tx| {
+                                s.open_check_citation(&id, origin.clone(), tx)
+                            }),
+                    );
+                }
+            }
+            if !d.memories.is_empty() || d.proposals > 0 {
+                detail = detail
+                    .child(roles::GROUP.wrap("Memory accepted and currently pending", p.soft))
+                    .child(memory_rows(d, p));
+            }
+            if !d.done.is_empty() {
+                detail = detail
+                    .child(roles::GROUP.wrap("Completed", p.soft))
+                    .child(task_rows(&d.done, false, p));
+            }
+            if d.check {
+                detail = detail.child(check::day_line(s, d.date, p));
+            }
+            out = out.child(detail);
         }
-    }
-    if !d.memories.is_empty() || d.proposals > 0 {
-        any = true;
-        let on = open(Part::Memories);
-        // A day with proposals but nothing accepted says so, rather than "created 0".
-        let (name, n) = if d.memories.is_empty() {
-            ("Memory proposals", d.proposals)
-        } else {
-            ("Memories created", d.memories.len())
-        };
-        parts = parts.child(fold_head(part_key(d.date, Part::Memories), name, n, on, p));
-        if on {
-            parts = parts.child(memory_rows(d, p));
-        }
-    }
-    if !d.done.is_empty() {
-        any = true;
-        let on = open(Part::Done);
-        parts = parts.child(fold_head(
-            part_key(d.date, Part::Done),
-            "Done",
-            d.done.len(),
-            on,
-            p,
-        ));
-        if on {
-            parts = parts.child(task_rows(&d.done, false, p));
-        }
-    }
-    if d.check && newest_check {
-        any = true;
-        parts = parts.child(check::day_attention(s, k, d.date, p));
-    }
-    if any {
-        out = out.child(parts);
-    }
-    if d.check && !newest_check {
-        out = out.child(check::day_line(s, d.date, p).pl(8.0));
     }
     out
+}
+
+fn disclosure(key: String, words: &str, open: bool, p: Palette) -> El {
+    let toggle = key.clone();
+    pressable(
+        row()
+            .w_full()
+            .items_center()
+            .gap(8.0)
+            .child(chevron(open, p))
+            .child(roles::META.wrap(words, p.soft).grow(1.0).min_w(0.0)),
+    )
+    .key(format!("diary-fold-{key}"))
+    .label(words)
+    .expanded(open)
+    .py(8.0)
+    .radius(6.0)
+    .hover(p.chip)
+    .on_press(move |s: &mut State| {
+        if !s.check.open_parts.remove(&toggle) {
+            s.check.open_parts.insert(toggle.clone());
+        }
+    })
 }
 
 // ---- the page ------------------------------------------------------------------------------
@@ -581,6 +716,37 @@ impl State {
             }
         }
         self.check.done_on = done_on;
+    }
+
+    fn diary_task(&mut self, id: &str, stable: &str, index: usize) {
+        let target = self
+            .tasks
+            .all
+            .iter()
+            .find(|t| {
+                t.meeting_id == id
+                    && if stable.is_empty() {
+                        t.index == index
+                    } else {
+                        t.stable_id == stable
+                    }
+            })
+            .cloned();
+        let Some(t) = target else {
+            self.check.notice =
+                Some("Source unavailable. Open Tasks to browse current work.".into());
+            return;
+        };
+        self.set_view(super::tasks::View::Tasks);
+        if !self
+            .tasks
+            .items
+            .iter()
+            .any(|row| row.meeting_id == t.meeting_id && row.index == t.index)
+        {
+            self.tasks.items.push(t.clone());
+        }
+        self.open_task(&t.meeting_id, t.index);
     }
 
     /// The day picker: show enough days to reach it, then scroll to its entry.
