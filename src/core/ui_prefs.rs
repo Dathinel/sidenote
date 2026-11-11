@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
+    pub memory_kind: Option<super::memory::RecordType>,
+    pub memory_pending: bool,
+    pub memory_scope: String,
+    pub memory_project: Option<String>,
+    pub memory_meeting: Option<String>,
     pub meeting_tabs: bool,
     pub meeting_summary_templates: std::collections::BTreeMap<String, String>,
     pub people_since_ms: Option<i64>,
@@ -31,6 +36,11 @@ pub struct UiPrefs {
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
+            memory_kind: None,
+            memory_pending: false,
+            memory_scope: String::new(),
+            memory_project: None,
+            memory_meeting: None,
             meeting_tabs: false,
             meeting_summary_templates: Default::default(),
             people_since_ms: None,
@@ -68,6 +78,24 @@ impl UiPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn memory_filters_round_trip_and_leave_old_settings_intact() {
+        let mut prefs: UiPrefs =
+            serde_json::from_str(r#"{"show_full_titles":true,"settings_tabs":{"Meetings":1}}"#)
+                .unwrap();
+        assert!(prefs.memory_kind.is_none() && prefs.memory_project.is_none());
+        assert!(!prefs.memory_pending);
+        prefs.memory_kind = Some(super::super::memory::RecordType::Person);
+        prefs.memory_project = Some("Synthetic workshop".into());
+        prefs.memory_scope = "review".into();
+        prefs.memory_meeting = Some("synthetic-meeting".into());
+        let restored: UiPrefs =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert_eq!(prefs, restored);
+        assert!(restored.show_full_titles);
+        assert_eq!(restored.settings_tabs["Meetings"], 1);
+    }
+
     #[test]
     fn task_filters_default_to_everyone_and_round_trip_with_existing_keys() {
         let mut prefs: UiPrefs =

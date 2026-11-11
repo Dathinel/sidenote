@@ -1,5 +1,6 @@
 //! Needs you and Browse use the same pending proposal snapshot.
 use super::*;
+use crate::ui::widgets::ButtonDisabled;
 use crate::ui::{cards, icons};
 
 pub(super) fn count(s: &State, p: Palette) -> El {
@@ -46,93 +47,266 @@ fn search(s: &State, k: &Kit, p: Palette) -> El {
         .border(1.0, p.line)
         .radius(8.0)
         .fill(p.card)
-        .grow(1.0)
+        .w((s.app_w.get() - crate::ui::nav::width(s) - 80.0).clamp(72.0, 480.0))
+        .max_w(480.0)
         .min_w(72.0)
+}
+
+fn filter_chip(
+    s: &State,
+    k: &Kit,
+    p: Palette,
+    layer: &mut Vec<El>,
+    kind: FilterMenu,
+    name: &str,
+    key: &str,
+) -> El {
+    let m = &s.memory;
+    let open = m.filter_menu == Some(kind);
+    let trigger = crate::ui::widgets::button(
+        format!("{name} \u{25be}"),
+        key,
+        crate::ui::widgets::ButtonRole::Secondary,
+        p,
+    )
+    .expanded(open)
+    .on_press(move |s: &mut State| {
+        s.memory.filter_menu = if open { None } else { Some(kind) };
+    });
+    let mut menu = Menu::new(format!("{key}-menu"))
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::BottomStart)
+        .min_width(240.0);
+    if open {
+        menu = menu.on_close(|s: &mut State| s.memory.filter_menu = None);
+        match kind {
+            FilterMenu::Type => {
+                for (name, tab) in [("All types", Tab::All), ("Pending proposals", Tab::Review)]
+                    .into_iter()
+                    .chain(KINDS.into_iter().map(|t| (kind_label(t), Tab::Kind(t))))
+                {
+                    let count = match tab {
+                        Tab::Review => m.proposals.len(),
+                        Tab::All => m
+                            .records
+                            .iter()
+                            .filter(|r| r.status != RecordStatus::Forgotten)
+                            .count(),
+                        Tab::Kind(kind) => m
+                            .records
+                            .iter()
+                            .filter(|r| {
+                                r.record_type == kind && r.status != RecordStatus::Forgotten
+                            })
+                            .count(),
+                    };
+                    menu = menu.item(
+                        MenuItem::new(format!("{name} ({count})"))
+                            .checked(m.tab == tab)
+                            .on_select(move |s: &mut State| {
+                                s.close_record();
+                                s.memory.tab = tab;
+                                s.memory.filter_menu = None;
+                                s.save_memory_filters();
+                            }),
+                    );
+                }
+            }
+            FilterMenu::State => {
+                for (name, scope) in [
+                    ("Active", Scope::Active),
+                    ("Not recently confirmed", Scope::NeedsReview),
+                    ("Retired and superseded", Scope::Retired),
+                ] {
+                    menu = menu.item(MenuItem::new(name).checked(m.scope == scope).on_select(
+                        move |s: &mut State| {
+                            s.close_record();
+                            s.memory.scope = scope;
+                            s.memory.filter_menu = None;
+                            s.save_memory_filters();
+                        },
+                    ));
+                }
+            }
+            FilterMenu::Project => {
+                menu = menu.item(
+                    MenuItem::new("All projects")
+                        .checked(m.project.is_none())
+                        .on_select(|s: &mut State| {
+                            s.close_record();
+                            s.memory.project = None;
+                            s.memory.filter_menu = None;
+                            s.save_memory_filters();
+                        }),
+                );
+                for project in m.projects() {
+                    let count = m
+                        .records
+                        .iter()
+                        .filter(|r| {
+                            r.project.as_ref() == Some(&project)
+                                && r.status != RecordStatus::Forgotten
+                        })
+                        .count();
+                    menu = menu.item(
+                        MenuItem::new(format!("{project} ({count})"))
+                            .checked(m.project.as_ref() == Some(&project))
+                            .on_select(move |s: &mut State| {
+                                s.close_record();
+                                s.memory.project = Some(project.clone());
+                                s.memory.filter_menu = None;
+                                s.save_memory_filters();
+                            }),
+                    );
+                }
+            }
+        }
+    }
+    menu.build(k, layer)
 }
 
 pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let m = &s.memory;
-    let trigger = button("Filters", "memory-filters", false, p)
-        .border(1.0, p.line)
-        .fill(p.card)
-        .on_press(|s: &mut State| s.memory.filters_open = !s.memory.filters_open);
-    let mut menu = Menu::new("memory-filter-menu")
-        .trigger(trigger)
-        .open(m.filters_open)
-        .placement(Placement::BottomEnd)
-        .min_width(240.0);
-    if m.filters_open {
-        menu = menu
-            .on_close(|s: &mut State| s.memory.filters_open = false)
-            .group_label("Type");
-        for (name, tab) in [("All types", Tab::All), ("Pending proposals", Tab::Review)]
-            .into_iter()
-            .chain(KINDS.into_iter().map(|t| {
-                (
-                    if t == RecordType::Story {
-                        "Background"
-                    } else {
-                        kind_label(t)
-                    },
-                    Tab::Kind(t),
-                )
-            }))
-        {
-            menu = menu.item(MenuItem::new(name).checked(m.tab == tab).on_select(
-                move |s: &mut State| {
-                    s.close_record();
-                    s.memory.tab = tab;
-                    s.memory.filters_open = false;
-                },
-            ));
-        }
-        menu = menu.separator().group_label("State");
-        for (name, scope) in [
-            ("Active", Scope::Active),
-            ("Not recently confirmed", Scope::NeedsReview),
-            ("Retired and superseded", Scope::Retired),
-        ] {
-            menu = menu.item(MenuItem::new(name).checked(m.scope == scope).on_select(
-                move |s: &mut State| {
-                    s.close_record();
-                    s.memory.scope = scope;
-                    s.memory.filters_open = false;
-                },
-            ));
-        }
-        menu = menu.separator().group_label("Project").item(
-            MenuItem::new("All projects")
-                .checked(m.project.is_none())
-                .on_select(|s: &mut State| {
-                    s.memory.project = None;
-                    s.memory.filters_open = false;
-                }),
-        );
-        for project in m.projects() {
-            menu = menu.item(
-                MenuItem::new(project.clone())
-                    .checked(m.project.as_ref() == Some(&project))
-                    .on_select(move |s: &mut State| {
-                        s.memory.project = Some(project.clone());
-                        s.memory.filters_open = false;
-                    }),
-            );
-        }
-        if m.meeting.is_some() {
-            menu = menu
-                .separator()
-                .item(MenuItem::new("All meetings").on_select(|s: &mut State| {
-                    s.memory.meeting = None;
-                    s.memory.filters_open = false;
-                }));
-        }
-    }
-    row()
-        .w_full()
+    let filters = row()
+        .flex_wrap()
         .gap(8.0)
         .items_center()
-        .child(search(s, k, p))
-        .child(menu.build(k, layer))
+        .child(filter_chip(
+            s,
+            k,
+            p,
+            layer,
+            FilterMenu::Type,
+            "Type",
+            "memory-filter-type",
+        ))
+        .child(filter_chip(
+            s,
+            k,
+            p,
+            layer,
+            FilterMenu::State,
+            "State",
+            "memory-filter-state",
+        ))
+        .child(filter_chip(
+            s,
+            k,
+            p,
+            layer,
+            FilterMenu::Project,
+            "Project",
+            "memory-filter-project",
+        ));
+    let mut toolbar = col().w_full().gap(8.0).child(
+        row()
+            .w_full()
+            .flex_wrap()
+            .gap(8.0)
+            .items_center()
+            .child(search(s, k, p))
+            .child(filters),
+    );
+    let mut active = row().w_full().flex_wrap().gap(8.0).items_center();
+    let mut any = false;
+    if m.tab != Tab::All {
+        any = true;
+        let label = match m.tab {
+            Tab::Kind(kind) => kind_label(kind),
+            _ => "Pending proposals",
+        };
+        active = active.child(
+            crate::ui::widgets::button(
+                format!("Type: {label} \u{d7}"),
+                "memory-clear-type",
+                crate::ui::widgets::ButtonRole::Secondary,
+                p,
+            )
+            .h(28.0)
+            .label(format!("Remove type filter: {label}"))
+            .on_press(|s: &mut State| {
+                s.close_record();
+                s.memory.tab = Tab::All;
+                s.save_memory_filters();
+            }),
+        );
+    }
+    if m.scope != Scope::Active {
+        any = true;
+        let label = if m.scope == Scope::NeedsReview {
+            "Needs review"
+        } else {
+            "Retired"
+        };
+        active = active.child(
+            crate::ui::widgets::button(
+                format!("State: {label} \u{d7}"),
+                "memory-clear-state",
+                crate::ui::widgets::ButtonRole::Secondary,
+                p,
+            )
+            .h(28.0)
+            .label("Remove state filter")
+            .on_press(|s: &mut State| {
+                s.close_record();
+                s.memory.scope = Scope::Active;
+                s.save_memory_filters();
+            }),
+        );
+    }
+    if let Some(project) = &m.project {
+        any = true;
+        active = active.child(
+            crate::ui::widgets::button(
+                format!("Project: {project} \u{d7}"),
+                "memory-clear-project",
+                crate::ui::widgets::ButtonRole::Secondary,
+                p,
+            )
+            .h(28.0)
+            .label(format!("Remove project filter: {project}"))
+            .on_press(|s: &mut State| {
+                s.close_record();
+                s.memory.project = None;
+                s.save_memory_filters();
+            }),
+        );
+    }
+    if m.meeting.is_some() {
+        any = true;
+        active = active.child(
+            crate::ui::widgets::button(
+                "From meeting \u{d7}",
+                "memory-clear-meeting",
+                crate::ui::widgets::ButtonRole::Secondary,
+                p,
+            )
+            .h(28.0)
+            .label("Remove meeting filter")
+            .on_press(|s: &mut State| {
+                s.close_record();
+                s.memory.meeting = None;
+                s.save_memory_filters();
+            }),
+        );
+    }
+    if any {
+        toolbar = toolbar.child(active.child(
+            crate::ui::widgets::quiet_button("Clear all", "memory-clear-all", p).on_press(
+                |s: &mut State| {
+                    s.close_record();
+                    s.memory.tab = Tab::All;
+                    s.memory.scope = Scope::Active;
+                    s.memory.project = None;
+                    s.memory.meeting = None;
+                    s.memory.filter_menu = None;
+                    s.save_memory_filters();
+                },
+            ),
+        ));
+    }
+    toolbar
 }
 
 fn sources(s: &State, values: &[MemorySource], prefix: &str, p: Palette) -> El {
@@ -208,7 +382,7 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
             .gap(8.0)
             .child(
                 button(yes, format!("memory-accept-{id}"), true, p)
-                    .disabled(!s.memory.migrated)
+                    .button_disabled(!s.memory.migrated)
                     .on_press(move |s: &mut State| s.proposal_accept(&accept_id)),
             )
             .child(
@@ -376,8 +550,6 @@ pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                         .on_press(|s: &mut State| {
                             s.close_record();
                             s.memory.browse = true;
-                            s.memory.tab = Tab::All;
-                            s.memory.scope = Scope::Active;
                         })
                     }),
                 ),

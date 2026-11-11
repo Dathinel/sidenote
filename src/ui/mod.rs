@@ -1677,11 +1677,20 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
         }
     }
     if s.on_memory() && s.memory.browse {
-        left = left.child(
-            roles::CONTROL
-                .wrap("Memory / All", p.soft)
-                .key("memory-breadcrumb"),
-        );
+        left =
+            left.child(
+                row()
+                    .gap(6.0)
+                    .items_center()
+                    .key("memory-breadcrumb")
+                    .child(widgets::link("Memory", p).key("memory-home").on_press(
+                        |s: &mut State| {
+                            s.close_record();
+                            s.memory.browse = false;
+                        },
+                    ))
+                    .child(roles::CONTROL.wrap("/ All", p.soft)),
+            );
     }
     row()
         .key("top-bar")
