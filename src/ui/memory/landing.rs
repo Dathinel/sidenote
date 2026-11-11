@@ -6,7 +6,9 @@ pub(super) fn count(s: &State, p: Palette) -> El {
     let n = s.memory.proposals.len();
     roles::SMALL
         .wrap(
-            if n == 1 {
+            if n == 0 {
+                "Nothing needs you right now.".into()
+            } else if n == 1 {
                 "1 thing needs you".into()
             } else {
                 format!("{n} things need you")
@@ -351,18 +353,24 @@ pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                 .items_center()
                 .justify_between()
                 .child(text_title("Memory", if narrow { 26.0 } else { 30.0 }, p))
-                .child(
-                    button(
-                        format!("Browse all {}", m.count_kind(None)),
-                        "memory-browse",
-                        false,
-                        p,
-                    )
-                    .on_press(|s: &mut State| {
-                        s.close_record();
-                        s.memory.browse = true;
-                        s.memory.tab = Tab::All;
-                        s.memory.scope = Scope::Active;
+                .children(
+                    (m.count_kind(None) > 0 || !m.proposals.is_empty()).then(|| {
+                        button(
+                            if m.count_kind(None) == 0 {
+                                "Browse all".into()
+                            } else {
+                                format!("Browse all {}", m.count_kind(None))
+                            },
+                            "memory-browse",
+                            false,
+                            p,
+                        )
+                        .on_press(|s: &mut State| {
+                            s.close_record();
+                            s.memory.browse = true;
+                            s.memory.tab = Tab::All;
+                            s.memory.scope = Scope::Active;
+                        })
                     }),
                 ),
         )
@@ -379,22 +387,7 @@ pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                     .contains(&query)
         })
         .collect();
-    if m.proposals.is_empty() && query.is_empty() {
-        doc = doc.child(
-            roles::NAME
-                .wrap(
-                    "Nothing needs you. Sidenote keeps what it learns from each meeting.",
-                    p.ink,
-                )
-                .mt(8.0),
-        );
-        if m.records.is_empty() {
-            doc = doc.child(roles::SMALL.wrap(
-                "What Sidenote learns from your next meetings appears here.",
-                p.soft,
-            ));
-        }
-    } else {
+    if !m.proposals.is_empty() || !query.is_empty() {
         doc = doc.child(roles::GROUP.wrap(
             format!("Needs you · {} of at most 5", pending.len().min(5)),
             p.soft,

@@ -2,6 +2,42 @@
 use super::*;
 use crate::ui::{cards, icons};
 use sidenote::core::{self, settle};
+mod change;
+
+fn description(s: &State, entry: &settle::Entry, reverse: bool) -> change::Change {
+    let (before, after) = if reverse {
+        (&entry.after, &entry.before)
+    } else {
+        (&entry.before, &entry.after)
+    };
+    change::describe(entry.kind, before, after, |id| {
+        s.meetings
+            .iter()
+            .find(|m| m.id == entry.source_meeting_id)?
+            .summary
+            .todo
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.text().to_string())
+    })
+}
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+fn change_icon(kind: change::Icon) -> &'static rune::Icon {
+    match kind {
+        change::Icon::Owner => &icons::USER,
+        change::Icon::Date => &icons::DIARY,
+        change::Icon::Project => &icons::FOLDER,
+        change::Icon::Team => &icons::PEOPLE,
+        change::Icon::Waiting => &icons::HOURGLASS,
+        change::Icon::Ours => &icons::DONE,
+        change::Icon::Tasks => &icons::TASKS,
+    }
+}
 
 impl State {
     pub fn settle_undo(&mut self, id: String, redo: bool) {
@@ -28,13 +64,13 @@ impl State {
         self.memory.settle_busy = false;
         match result {
             Ok(entry) => {
+                let change = description(self, &entry, !redo);
                 self.memory.settle_pending_toast = Some((
-                    if redo {
-                        "Change restored."
-                    } else {
-                        "Change undone."
-                    }
-                    .into(),
+                    format!(
+                        "{}: {}",
+                        if redo { "Redid" } else { "Undid" },
+                        change.text.split(" \u{b7} ").next().unwrap_or(&change.text)
+                    ),
                     entry.id,
                     !redo,
                 ));
@@ -60,10 +96,6 @@ fn rows(s: &State, history: Vec<&settle::Row>, p: Palette) -> El {
             .find(|m| m.id == entry.source_meeting_id)
             .map(|m| m.title.clone())
             .unwrap_or_else(|| "Source meeting".into());
-        let source = match &entry.source_offset {
-            Some(at) => format!("{title} at {at}"),
-            None => title,
-        };
         let target = match &entry.source_offset {
             Some(at) => format!("{}@{at}", entry.source_meeting_id),
             None => entry.source_meeting_id.clone(),
@@ -73,32 +105,50 @@ fn rows(s: &State, history: Vec<&settle::Row>, p: Palette) -> El {
         let when = DateTime::parse_from_rfc3339(&entry.time)
             .map(|at| at.with_timezone(&Local).format("%-d %b, %H:%M").to_string())
             .unwrap_or_default();
+        let mut metadata = vec![title.clone()];
+        if let Some(at) = &entry.source_offset {
+            metadata.push(at.clone());
+        }
+        if !when.is_empty() {
+            metadata.push(when);
+        }
+        let source = metadata.join(" \u{b7} ");
+        let change = description(s, entry, false);
+        let label = if entry.kind == settle::Kind::ProjectAssignment {
+            &title
+        } else {
+            &entry.label
+        };
         let action = row.undo_target.clone();
         let redo = row.undone;
         card = card.child(
             cards::row_shell()
                 .key(origin)
                 .items_start()
-                .child(cards::icon_tile(&icons::FLAG, p))
+                .child(
+                    cards::icon_tile(change_icon(change.icon), p).key(format!("settle-icon-{i}")),
+                )
                 .child(
                     col()
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(4.0)
-                        .child(roles::NAME.wrap(&entry.label, p.ink).max_lines(2))
-                        .child(roles::SMALL.wrap(&entry.reason, p.soft))
+                        .child(roles::NAME.wrap(label, p.ink).max_lines(2))
                         .child(
-                            pressable(roles::META.line(source, p.accent))
+                            roles::SMALL
+                                .wrap(sentence(&change.text), p.soft)
+                                .max_lines(1)
+                                .key(format!("settle-change-{i}"))
+                                .help(&entry.reason),
+                        )
+                        .child(
+                            pressable(roles::META.line(source, p.faint))
                                 .key(format!("settle-source-{i}"))
                                 .self_start()
                                 .on_press_tx(move |s: &mut State, tx| {
                                     s.open_check_citation(&target, from.clone(), tx)
                                 }),
-                        )
-                        .child(roles::META.wrap(
-                            format!("{when}{}", if row.undone { " (undone)" } else { "" }),
-                            p.faint,
-                        )),
+                        ),
                 )
                 .child(
                     button(
@@ -255,6 +305,7 @@ pub fn scene(s: &mut State) {
                 "Morgan Lee"
             });
             task["due"] = serde_json::json!("2026-11-13");
+            task["due_default"] = serde_json::json!(i % 2 == 0);
         }
         let tags: Vec<_> = (0..tasks.len())
             .map(|i| serde_json::json!({"i":i,"project":"Northwind Atlas","mine":true}))
@@ -270,4 +321,23 @@ pub fn scene(s: &mut State) {
     }
     s.open_memory();
     crate::ui::sync_scene::settle(s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn change_kinds_use_the_requested_lucide_icons() {
+        for (kind, name) in [
+            (change::Icon::Owner, "lucide-user"),
+            (change::Icon::Date, "lucide-calendar"),
+            (change::Icon::Project, "lucide-folder"),
+            (change::Icon::Team, "lucide-users"),
+            (change::Icon::Waiting, "lucide-hourglass"),
+            (change::Icon::Ours, "lucide-circle-check"),
+        ] {
+            assert_eq!(change_icon(kind).name, name);
+        }
+        assert_eq!(icons::STROKE_WIDTH, 2.25);
+    }
 }

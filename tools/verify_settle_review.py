@@ -50,9 +50,21 @@ def main():
         base = nodes('memory-settled', theme)
         assert len([n for n in base if n.get('key', '').startswith('settled-')]) == 3
         assert has(base, 'settle-see-all')
+        assert not has(base, 'memory-browse')
+        assert any(n.get('key') == 'memory-count' and n.get('text') == 'Nothing needs you right now.' for n in base)
+        assert not any(n.get('text', '').startswith(('0 things need you', 'Nothing needs you.', 'What Sidenote learns')) for n in base)
+        changes = {n['key']:n for n in base if n.get('key', '').startswith('settle-change-')}
+        assert changes['settle-change-0']['text'] == 'Added to Northwind Atlas \u00b7 marked 2 tasks as ours'
+        assert changes['settle-change-1']['text'] == 'Owner set to Morgan Lee \u00b7 due Fri 13 Nov'
+        assert changes['settle-change-2']['text'] == 'Owner set to Alex Chen \u00b7 due Fri 13 Nov (guessed)'
+        assert any(n.get('text', '').startswith('Workshop planning \u00b7 01:10 \u00b7 ') for n in base)
+        for i in range(3):
+            tile = next(n for n in base if n.get('key') == f'settle-icon-{i}')
+            assert any(n.get('path', '').startswith(tile['path']+'/') and n.get('role') == 'icon' and n['rect'][2:] == [18.0, 18.0] for n in base)
+        assert not any(n.get('text', '').startswith('The meeting summary') for n in base)
         undone = nodes('memory-settle-undo', theme)
         assert has(undone, 'settle-toast-action')
-        assert any(n.get('text') == 'Change undone.' for n in undone)
+        assert any(n.get('text') == 'Undid: added to Northwind Atlas' for n in undone)
         all_ = nodes('memory-settle-all', theme)
         assert len([n for n in all_ if n.get('key', '').startswith('settled-')]) == 6
         assert has(all_, 'settle-back')
@@ -76,6 +88,7 @@ def main():
     render(exe, 'verify-task-undo', events=[tap('settle-undo-1', .4)], state=state)
     summary = state/'settle-meetings'/ID/'english-summary.json'
     assert json.loads(summary.read_text())['todo'][1]['owner'] is None
+    assert any(n.get('text') == 'Undid: owner set to Morgan Lee' for n in nodes('verify-task-undo'))
     render(exe, 'verify-toast-redo', events=[tap('settle-undo-1', .4)], state=state)
     assert json.loads(summary.read_text())['todo'][1]['owner'] == 'Morgan Lee'
     render(exe, 'verify-direct-toast-redo', events=[tap('settle-undo-1', .4), tap('settle-toast-action', 1.5)], state=state)
@@ -89,7 +102,7 @@ def main():
     render(exe, 'verify-meeting-history', events=[tap('settle-source-1', .4), tap('meeting-settle-memory', 1.4)], state=state)
     assert has(nodes('verify-meeting-history'), 'settle-back')
     assert len([n for n in nodes('verify-meeting-history') if n.get('key', '').startswith('settled-')]) == 3
-    (OUT/'validation.json').write_text(json.dumps(dict(result='pass', matrix_renders=10, settings_pixel_identical=4, reference=str(args.reference.resolve()), checks=['five-row limit', 'three settled rows', 'six in See all', 'Undo source data', 'Redo after restart', 'task Undo and Redo', 'toast Redo', 'append-only outcomes', 'source navigation', 'meeting count and filtered history']), indent=2))
+    (OUT/'validation.json').write_text(json.dumps(dict(result='pass', matrix_renders=10, settings_pixel_identical=4, reference=str(args.reference.resolve()), checks=['actual before/after descriptions', 'kind icons', 'one source/time line', 'single empty-state line', 'named Undo toast', 'five-row limit', 'three settled rows', 'six in See all', 'Undo source data', 'Redo after restart', 'task Undo and Redo', 'toast Redo', 'append-only outcomes', 'source navigation', 'meeting count and filtered history']), indent=2))
     print('PASS: native Undo/Redo, restart, citations, count, all history and four exact Settings references', flush=True)
 
 

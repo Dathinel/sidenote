@@ -38,7 +38,7 @@ The log is deliberately outside `state/` and is not synced. See `docs/sync.md`. 
 
 ## UI and meeting integration
 
-Memory shows the last seven days, newest first, at most five rows, plus See all. Each row has its label, reason, source meeting, available transcript offset, wall time and Undo. An undone row offers Redo, including after restart. The toast offers the same inverse action. An empty automatic section stays hidden.
+Memory shows the last seven days, newest first, at most five rows, plus See all. Each row uses its before/after values to describe the actual change, with a matching Lucide icon. Its stored reason is a tooltip. The source meeting, available transcript offset and wall time share one muted line. Undo and Redo toasts name the change. An undone row offers Redo, including after restart. The toast offers the same inverse action. An empty automatic section stays hidden.
 
 The requested dev.12 base predates the approved Reading rail. The existing meeting summary view uses `src/ui/memory/settled.rs`'s `meeting_footer`, and `core::settle::Store::meeting_count` is available for the dev.13 integration. It counts active original automatic entries, excluding currently undone entries and inverse operations. See in Memory opens this meeting's settled history.
 

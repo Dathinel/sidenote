@@ -448,6 +448,11 @@ lucide!(
     "lucide-circle-stop",
     r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
+lucide!(
+    HOURGLASS,
+    "lucide-hourglass",
+    r#"<path d="M5 22h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 2h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
 
 /// Existing controls share this adapter so text glyphs cannot drift from the SVG set.
 pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> El {
