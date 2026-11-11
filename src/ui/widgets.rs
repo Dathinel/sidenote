@@ -39,19 +39,187 @@ pub fn pressable(e: El) -> El {
     e.role("button").focusable(true).cursor(Cursor::Pointer)
 }
 
+/// Disabled push controls retain their role but never take pointer or keyboard input.
+pub trait ButtonDisabled {
+    fn button_disabled(self, disabled: bool) -> Self;
+}
+impl ButtonDisabled for El {
+    fn button_disabled(self, disabled: bool) -> Self {
+        if disabled {
+            self.disabled(true).dim(0.5).inert()
+        } else {
+            self
+        }
+    }
+}
+
 /// A text link with a quiet hover.
 pub fn link(s: impl Into<String>, p: Palette) -> El {
     pressable(roles::CONTROL.icon_label(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
 }
 
-/// A small text button for toolbars and headers.
-pub fn quiet_button(s: &str, key: &str, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(s, p.soft))
-        .key(key.to_string())
+#[derive(Clone, Copy)]
+pub enum ButtonRole {
+    Primary,
+    Secondary,
+    Ghost,
+    Destructive,
+}
+
+pub fn button_role(name: &str, primary: bool) -> ButtonRole {
+    if name.starts_with("Remove") || name.starts_with("Delete") || name.starts_with("Forget") {
+        ButtonRole::Destructive
+    } else if primary {
+        ButtonRole::Primary
+    } else {
+        ButtonRole::Ghost
+    }
+}
+
+/// All push buttons share geometry and state paint. Navigation uses `link`.
+pub fn button(name: impl Into<String>, key: &str, role: ButtonRole, p: Palette) -> El {
+    button_state(name.into(), key, role, rune_kit::State::Rest, p)
+}
+
+fn button_state(
+    name: String,
+    key: &str,
+    role: ButtonRole,
+    state: rune_kit::State,
+    p: Palette,
+) -> El {
+    let accessible_name = name.clone();
+    let ink = match role {
+        ButtonRole::Primary => p.button_ink,
+        ButtonRole::Destructive => p.danger,
+        _ => p.soft,
+    };
+    let fill = match role {
+        ButtonRole::Primary => p.button_fill,
+        ButtonRole::Secondary => p.card,
+        _ => Color::TRANSPARENT,
+    };
+    let (hover, pressed) = if matches!(role, ButtonRole::Primary) {
+        (p.button_primary_hover, p.button_primary_pressed)
+    } else {
+        (p.button_hover, p.button_pressed)
+    };
+    let mut b = pressable(
+        row()
+            .h(32.0)
+            .px(12.0)
+            .gap(6.0)
+            .center()
+            .radius(8.0)
+            .fill(fill)
+            .child(super::icons::styled(name, roles::CONTROL.style(), ink).max_lines(1)),
+    )
+    .label(accessible_name)
+    .hover(hover)
+    .press(pressed)
+    .focus_ring(2.0, 2.0, p.accent);
+    if !key.is_empty() {
+        b = b.key(key);
+    }
+    match role {
+        ButtonRole::Secondary => b = b.border(1.0, p.button_border).shadow(1.0, 0.0, p.shadow),
+        ButtonRole::Destructive => b = b.border(1.0, p.danger_border),
+        _ => {}
+    }
+    let overlay = match state {
+        rune_kit::State::Hover => Some(hover),
+        rune_kit::State::Pressed => Some(pressed),
+        _ => None,
+    };
+    if let Some(overlay) = overlay {
+        b = b.child(
+            el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .fill(overlay)
+                .radius(8.0),
+        );
+    }
+    match state {
+        rune_kit::State::Disabled => b.disabled(true).inert().dim(0.5),
+        rune_kit::State::Focus => b.outline(2.0, 2.0, p.accent),
+        _ => b,
+    }
+}
+
+pub fn icon_button(
+    icon: &'static rune::Icon,
+    label: &str,
+    key: &str,
+    role: ButtonRole,
+    p: Palette,
+) -> El {
+    let ink = match role {
+        ButtonRole::Primary => p.button_ink,
+        ButtonRole::Destructive => p.danger,
+        _ => p.soft,
+    };
+    button("", key, role, p)
+        .w(32.0)
         .px(8.0)
-        .py(2.0)
-        .radius(6.0)
-        .hover(p.chip)
+        .gap(0.0)
+        .label(label)
+        .help(label)
+        .child(super::icons::draw(icon, 16.0, ink))
+}
+
+pub fn action(name: impl Into<String>, p: Palette) -> El {
+    let name = name.into();
+    let role = button_role(&name, false);
+    button(name, "", role, p).h(28.0)
+}
+
+pub fn quiet_button(s: &str, key: &str, p: Palette) -> El {
+    button(s, key, ButtonRole::Ghost, p).h(28.0)
+}
+
+pub fn button_sheet(p: Palette) -> El {
+    use rune_kit::State::*;
+    let mut sheet = col()
+        .w_full()
+        .padding(16.0)
+        .gap(12.0)
+        .child(roles::TITLE.wrap("Quiet ink buttons", p.ink));
+    for (name, role) in [
+        ("Primary", ButtonRole::Primary),
+        ("Secondary", ButtonRole::Secondary),
+        ("Ghost", ButtonRole::Ghost),
+        ("Remove", ButtonRole::Destructive),
+    ] {
+        let mut group = col().gap(8.0).child(roles::GROUP.wrap(name, p.ink));
+        let mut buttons = row().flex_wrap().gap(8.0);
+        for (label, state) in [
+            ("Rest", Rest),
+            ("Hover", Hover),
+            ("Pressed", Pressed),
+            ("Focus", Focus),
+            ("Disabled", Disabled),
+        ] {
+            buttons = buttons.child(button_state(
+                label.into(),
+                &format!("sheet-{name}-{label}"),
+                role,
+                state,
+                p,
+            ));
+        }
+        group = group.child(buttons).child(
+            button("Compact 28 px", &format!("compact-{name}"), role, p)
+                .h(28.0)
+                .self_start(),
+        );
+        sheet = sheet.child(group.child(row().gap(8.0).items_center().child(icon_button(
+            &super::icons::ARROW_RIGHT,
+            "Continue",
+            &format!("icon-{name}"),
+            role,
+            p,
+        ))));
+    }
+    scroll(sheet, "button-sheet-scroll")
 }
 
 pub fn hairline(p: Palette) -> El {
@@ -106,18 +274,6 @@ pub fn scroll(content: El, key: &str) -> El {
             stick_bottom: false,
         })
         .child(content)
-}
-
-pub fn sidebar_icon(open: bool, p: Palette) -> El {
-    super::icons::draw(
-        if open {
-            &super::icons::PANEL_CLOSE
-        } else {
-            &super::icons::PANEL_OPEN
-        },
-        16.0,
-        p.soft,
-    )
 }
 
 /// The bullet column of a point. Colour carries the kind, the shape stays small.
@@ -282,7 +438,7 @@ pub fn notice_bar(note: &str, p: Palette) -> El {
         .fill(p.warnbg)
         .child(roles::CONTROL.wrap(note, p.warn).grow(1.0))
         .child(
-            link("Dismiss", p)
+            crate::ui::widgets::action("Dismiss", p)
                 .key("notice-dismiss")
                 .on_press(|s: &mut State| s.notice = None),
         )
@@ -323,16 +479,17 @@ pub fn split_geometry(s: &State, narrow: bool, panel_open: bool) -> (f32, f32, b
 
 /// The panel's top strip: a caption, the way back on a narrow window, and the close button.
 pub fn panel_top(title: &str, back: &str, overlay: bool, close: fn(&mut State), p: Palette) -> El {
-    let shut = pressable(label("\u{d7}", 22.0, 400.0, p.soft))
-        .key("panel-close")
-        .label("Close the panel (Escape)")
-        .px(10.0)
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press_tx(move |s: &mut State, tx| {
-            close(s);
-            tx.blur();
-        });
+    let shut = icon_button(
+        &super::icons::X,
+        "Close the panel (Escape)",
+        "panel-close",
+        ButtonRole::Ghost,
+        p,
+    )
+    .on_press_tx(move |s: &mut State, tx| {
+        close(s);
+        tx.blur();
+    });
     let mut top = row().w_full().h(48.0).px(12.0).gap(8.0).items_center();
     if overlay {
         top = top.child(
@@ -425,6 +582,63 @@ pub fn toast_with_action(text_: &str, action: Option<El>, p: Palette) -> El {
 #[cfg(test)]
 mod tests {
     use super::recording_time;
+
+    #[test]
+    fn disabled_buttons_reject_pointer_and_keyboard_even_with_a_handler() {
+        use super::{ButtonDisabled, ButtonRole, button};
+        use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime};
+        #[derive(Default)]
+        struct Clicks {
+            disabled: bool,
+            count: usize,
+        }
+        fn view(s: &Clicks, _: &mut Cx<Clicks>) -> El {
+            button(
+                "Example",
+                "example",
+                ButtonRole::Secondary,
+                crate::ui::theme::palette(false),
+            )
+            .button_disabled(s.disabled)
+            .on_press(|s: &mut Clicks| s.count += 1)
+        }
+        let mut runtime = Runtime::new(
+            Clicks {
+                disabled: true,
+                count: 0,
+            },
+            view,
+            (180.0, 80.0),
+            Env::default(),
+        );
+        runtime.frame(0.0);
+        runtime.pointer_move(20.0, 16.0);
+        runtime.pointer_down(20.0, 16.0);
+        runtime.pointer_up(20.0, 16.0);
+        runtime.set_full_keyboard_access(true);
+        for key in [Key::Tab, Key::Enter] {
+            runtime.key(KeyEvent {
+                key,
+                mods: Mods::default(),
+            });
+            runtime.frame(1.0 / 60.0);
+        }
+        assert_eq!(runtime.state.count, 0);
+        runtime.update(|s, _| s.disabled = false);
+        runtime.frame(1.0 / 60.0);
+        let bounds = runtime
+            .elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some("example"))
+            .unwrap()
+            .rect;
+        let (x, y) = (bounds[0] + bounds[2] / 2.0, bounds[1] + bounds[3] / 2.0);
+        runtime.pointer_move(x, y);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert_eq!(runtime.state.count, 1);
+    }
 
     #[test]
     fn recording_times_keep_minutes_when_the_source_omits_hours() {

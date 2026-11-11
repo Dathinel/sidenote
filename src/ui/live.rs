@@ -1159,12 +1159,15 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                         .flex_wrap()
                         .gaps(8.0, 8.0)
                         .child(
-                            super::area::button("Copy notes", "live-copy-notes", p)
-                                .fill(p.accent)
-                                .color(p.card)
-                                .on_press_tx(|s: &mut State, tx| {
-                                    tx.copy(s.live_notes.text.clone());
-                                }),
+                            super::widgets::button(
+                                "Copy notes",
+                                "live-copy-notes",
+                                super::widgets::ButtonRole::Primary,
+                                p,
+                            )
+                            .on_press_tx(|s: &mut State, tx| {
+                                tx.copy(s.live_notes.text.clone());
+                            }),
                         )
                         .child(
                             super::area::button("Try saving again", "live-save-retry", p)

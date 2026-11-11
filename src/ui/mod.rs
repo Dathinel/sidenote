@@ -197,6 +197,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    button_sheet: bool,
     pub annotations: annotations::Annotations,
     pub meeting_ui: meeting::ReadingUi,
     pub people: people::PeopleUi,
@@ -400,6 +401,7 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
         let mut s = Self {
+            button_sheet: false,
             annotations: annotations::Annotations::default(),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
@@ -1627,16 +1629,22 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
     let mut left = row().gap(4.0).items_center().min_w(0.0);
     if !s.sidebar_is_open() {
         left = left.child(
-            pressable(if nav::meetings_home(s) {
-                roles::CONTROL.wrap("Show sidebar", p.soft)
+            (if nav::meetings_home(s) {
+                widgets::button(
+                    "Show sidebar",
+                    "sidebar-toggle",
+                    widgets::ButtonRole::Ghost,
+                    p,
+                )
             } else {
-                widgets::sidebar_icon(false, p)
+                widgets::icon_button(
+                    &icons::PANEL_OPEN,
+                    "Show sidebar (Ctrl+\\)",
+                    "sidebar-toggle",
+                    widgets::ButtonRole::Ghost,
+                    p,
+                )
             })
-            .key("sidebar-toggle")
-            .label("Show sidebar (Ctrl+\\)")
-            .padding(8.0)
-            .radius(8.0)
-            .hover(p.chip)
             .on_press(|s: &mut State| s.toggle_sidebar()),
         );
     }
@@ -1691,6 +1699,9 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
 
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let p = theme::palette(cx.system_dark());
+    if s.button_sheet {
+        return widgets::button_sheet(p).fill(p.bg).w_full().h_full();
+    }
     let k = theme::kit(&p);
     let narrow = cx
         .layout_with("app", |r| u8::from(r[2] < NARROW))
@@ -1871,7 +1882,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     if let Some((text, _)) = &s.toast {
         let action = s.memory.settle_toast_action.as_ref().map(|(id, redo)| {
             let (id, redo) = (id.clone(), *redo);
-            widgets::link(if redo { "Redo" } else { "Undo" }, p)
+            widgets::action(if redo { "Redo" } else { "Undo" }, p)
                 .key("settle-toast-action")
                 .on_press(move |s: &mut State| s.settle_undo(id.clone(), redo))
         });
@@ -2537,6 +2548,7 @@ pub fn spec() -> AppSpec<State> {
             ("updates-error", |s| {
                 updates::scene(s, sidenote::updates::Phase::Error)
             }),
+            ("button-sheet", |s| s.button_sheet = true),
             ("settings-general", |s| {
                 hex::settings::scene(s, "settings-general")
             }),

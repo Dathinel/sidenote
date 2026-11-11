@@ -1057,7 +1057,7 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
             "vocabulary-row",
             "Names and terms",
             "Sidenote spells these right in transcripts and summaries.",
-            link("Edit terms", p)
+            crate::ui::widgets::action("Edit terms", p)
                 .key("vocabulary-edit")
                 .on_press(|s: &mut State| {
                     if !s.hex.open_groups.remove("vocabulary-edit") {

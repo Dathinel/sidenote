@@ -4,6 +4,7 @@ use super::{
     theme::Palette,
     widgets::{hairline, link, scroll},
 };
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, SegmentedControl, TextInput};
 use sidenote::core::{
@@ -176,7 +177,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                     .gap(8.0)
                     .child(
                         button("Save", "company-save", p)
-                            .disabled(s.edit_busy)
+                            .button_disabled(s.edit_busy)
                             .on_press(|s: &mut State| {
                                 s.company_edit(Edit::Save(Company {
                                     id: s.companies.selected.clone().unwrap_or_default(),
@@ -197,7 +198,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                     )
                     .child(
                         button("Cancel", "company-cancel", p)
-                            .disabled(s.edit_busy)
+                            .button_disabled(s.edit_busy)
                             .on_press(|s: &mut State| s.companies.editing = false),
                     ),
             ),
@@ -206,7 +207,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
 pub fn person_editor(s: &State, k: &Kit, p: Palette) -> El {
     let mut choices = row().w_full().flex_wrap().gap(6.0).child(
         button("No company", "person-company-none", p)
-            .disabled(s.edit_busy)
+            .button_disabled(s.edit_busy)
             .on_press(|s: &mut State| s.companies.person_company = None),
     );
     for c in s.companies.data.catalog.records.values() {
@@ -215,7 +216,7 @@ pub fn person_editor(s: &State, k: &Kit, p: Palette) -> El {
             button(&c.name, &format!("person-company-{}", c.id), p)
                 .role("radio")
                 .checked(s.companies.person_company.as_ref() == Some(&c.id))
-                .disabled(s.edit_busy)
+                .button_disabled(s.edit_busy)
                 .on_press(move |s: &mut State| s.companies.person_company = Some(id.clone())),
         );
     }
@@ -251,7 +252,7 @@ pub fn person_editor(s: &State, k: &Kit, p: Palette) -> El {
                 .gap(8.0)
                 .child(
                     button("Save person", "person-company-save", p)
-                        .disabled(s.edit_busy)
+                        .button_disabled(s.edit_busy)
                         .on_press(|s: &mut State| {
                             if let Some(person) = s.companies.person.clone() {
                                 s.company_edit(Edit::Link {
@@ -264,7 +265,7 @@ pub fn person_editor(s: &State, k: &Kit, p: Palette) -> El {
                 )
                 .child(
                     button("Cancel", "person-company-cancel", p)
-                        .disabled(s.edit_busy)
+                        .button_disabled(s.edit_busy)
                         .on_press(|s: &mut State| s.companies.person = None),
                 ),
         )
@@ -286,7 +287,7 @@ fn merge_dialog(s: &State, p: Palette) -> El {
             button(&c.name, &format!("company-merge-target-{}", c.id), p)
                 .role("radio")
                 .checked(s.companies.merge_into.as_ref() == Some(&c.id))
-                .disabled(s.edit_busy)
+                .button_disabled(s.edit_busy)
                 .on_press(move |s: &mut State| s.companies.merge_into = Some(id.clone())),
         );
     }
@@ -299,7 +300,7 @@ fn merge_dialog(s: &State, p: Palette) -> El {
             .gap(8.0)
             .child(
                 button("Merge into selected company", "company-merge-confirm", p)
-                    .disabled(s.edit_busy || s.companies.merge_into.is_none())
+                    .button_disabled(s.edit_busy || s.companies.merge_into.is_none())
                     .on_press(|s: &mut State| {
                         if let (Some(from), Some(into)) =
                             (s.companies.selected.clone(), s.companies.merge_into.clone())
@@ -310,7 +311,7 @@ fn merge_dialog(s: &State, p: Palette) -> El {
             )
             .child(
                 button("Cancel", "company-merge-cancel", p)
-                    .disabled(s.edit_busy)
+                    .button_disabled(s.edit_busy)
                     .on_press(|s: &mut State| s.companies.merging = false),
             ),
     )
@@ -484,9 +485,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .gap(8.0)
                 .child(roles::META.wrap(format!("{} saved", undo.label), p.soft))
                 .child(
-                    link("Undo", p)
+                    crate::ui::widgets::action("Undo", p)
                         .key("company-undo")
-                        .disabled(s.edit_busy)
+                        .button_disabled(s.edit_busy)
                         .on_press(|s: &mut State| s.company_edit(Edit::Undo)),
                 ),
         );
@@ -499,7 +500,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let Some(c) = company else {
         doc = doc.child(roles::SECTION.wrap("Companies", p.ink)).child(
             button("Add company", "company-add", p)
-                .disabled(s.edit_busy)
+                .button_disabled(s.edit_busy)
                 .on_press(|s: &mut State| {
                     s.companies.selected = None;
                     s.edit_company();
@@ -561,7 +562,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .child(
                     button("More", "company-more", p)
-                        .disabled(s.edit_busy)
+                        .button_disabled(s.edit_busy)
                         .on_press(|s: &mut State| s.edit_company()),
                 ),
         )
@@ -586,7 +587,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if s.companies.editing {
         doc = doc.child(editor(s, k, p)).child(
             button("Merge companies", "company-merge-open", p)
-                .disabled(s.edit_busy)
+                .button_disabled(s.edit_busy)
                 .on_press(|s: &mut State| {
                     s.companies.editing = false;
                     s.companies.merging = true;

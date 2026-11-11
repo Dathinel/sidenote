@@ -686,16 +686,13 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
                 .child(el().grow(1.0))
                 .children(back)
                 .child(
-                    pressable(col().size(28.0, 28.0).center().child(super::icons::draw(
+                    super::widgets::icon_button(
                         &super::icons::X,
-                        16.0,
-                        p.soft,
-                    )))
-                    .key("transcript-close")
-                    .label("Close transcript (Escape)")
-                    .help("Close transcript")
-                    .radius(6.0)
-                    .hover(p.chip)
+                        "Close transcript (Escape)",
+                        "transcript-close",
+                        super::widgets::ButtonRole::Ghost,
+                        p,
+                    )
                     .on_press(|s: &mut State| s.close_transcript_sheet()),
                 ),
         );

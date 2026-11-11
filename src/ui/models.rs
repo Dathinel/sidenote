@@ -1,8 +1,4 @@
-use super::{
-    Event, State, hex, roles,
-    theme::Palette,
-    widgets::{link, pressable},
-};
+use super::{Event, State, hex, roles, theme::Palette, widgets::pressable};
 use rune::{El, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
@@ -419,7 +415,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 ));
                 if models.installed.contains(id) || models.partial.contains(id) {
                     card = card.child(
-                        link("Remove", p)
+                        crate::ui::widgets::action("Remove", p)
                             .key(format!("model-remove-{id}"))
                             .on_press(move |s: &mut State| s.model_download(id, true)),
                     );
@@ -473,7 +469,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                                 .role("status"),
                         )
                         .child(
-                            link("Cancel download", p)
+                            crate::ui::widgets::action("Cancel download", p)
                                 .key(format!("model-cancel-{id}"))
                                 .on_press(move |s: &mut State| {
                                     if let Some(job) = s.models.jobs.get(id) {
@@ -488,7 +484,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                         .gap(14.0)
                         .child(roles::CONTROL.wrap("Installed", p.accent))
                         .child(
-                            link("Remove", p)
+                            crate::ui::widgets::action("Remove", p)
                                 .key(format!("model-remove-{id}"))
                                 .label(format!("Remove {}", m.name))
                                 .on_press(move |s: &mut State| s.model_download(id, true)),
@@ -496,7 +492,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 );
             } else {
                 card = card.child(
-                    link(
+                    crate::ui::widgets::action(
                         if models.partial.contains(id) {
                             "Resume download"
                         } else {
@@ -520,7 +516,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
             {
                 card = card.child(roles::meta("Partial download saved on this device.", p));
                 card = card.child(
-                    link("Remove partial download", p)
+                    crate::ui::widgets::action("Remove partial download", p)
                         .key(format!("model-clear-partial-{id}"))
                         .on_press(move |s: &mut State| s.model_download(id, true)),
                 );

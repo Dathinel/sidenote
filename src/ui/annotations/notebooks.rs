@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::widgets::ButtonDisabled;
 use rune_kit::TextInput;
 use serde_json::{Value, json};
 use sidenote::core::annotations::{
@@ -401,12 +402,7 @@ impl State {
     }
 }
 fn primary(label: &str, key: &str, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(label, p.card))
-        .key(key)
-        .px(16.0)
-        .py(9.0)
-        .radius(7.0)
-        .fill(p.accent)
+    crate::ui::widgets::button(label, key, crate::ui::widgets::ButtonRole::Primary, p)
 }
 pub(super) fn list_section(s: &State, p: Palette) -> El {
     let mut items = col().w_full().gap(4.0);
@@ -460,7 +456,7 @@ pub(super) fn list_section(s: &State, p: Palette) -> El {
                 .justify_between()
                 .child(roles::SECTION.wrap("Notebooks", p.ink))
                 .child(
-                    link("New notebook", p)
+                    crate::ui::widgets::action("New notebook", p)
                         .key("new-notebook")
                         .on_press(|s: &mut State| s.new_notebook()),
                 ),
@@ -486,7 +482,10 @@ pub(super) fn picker(s: &State, p: Palette) -> El {
         primary("New notebook", "picker-new-notebook", p)
             .on_press(|s: &mut State| s.new_notebook()),
     )
-    .child(link("Cancel", p).on_press(|s: &mut State| s.annotations.notebooks.picker = None))
+    .child(
+        crate::ui::widgets::action("Cancel", p)
+            .on_press(|s: &mut State| s.annotations.notebooks.picker = None),
+    )
 }
 pub(super) fn confirmation(s: &State, p: Palette) -> El {
     let path = s.annotations.notebooks.shared.as_ref().unwrap();
@@ -608,15 +607,16 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
         page = page.child(roles::READ.wrap(&book.purpose, p.soft).max_lines(1));
     }
     let mut actions = row()
-        .gap(12.0)
+        .flex_wrap()
+        .gap(8.0)
         .items_center()
         .child(
             primary("Write notebook note", "write-notebook-note", p)
-                .disabled(book.captures.is_empty())
+                .button_disabled(book.captures.is_empty())
                 .on_press(|s: &mut State| s.write_notebook_note()),
         )
         .child(
-            link("Edit details", p)
+            crate::ui::widgets::action("Edit details", p)
                 .key("edit-notebook")
                 .on_press(|s: &mut State| s.edit_notebook_metadata()),
         );
@@ -675,21 +675,23 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
                         .child(roles::TITLE.wrap(&r.title, p.ink).max_lines(1))
                         .child(roles::META.wrap(meta, p.soft).max_lines(1)),
                 )
-                .child(link("Open", p).key(format!("notebook-open-{i}")).on_press(
-                    move |s: &mut State| {
-                        if let Some(index) = s
-                            .annotations
-                            .captures
-                            .iter()
-                            .position(|c| c.folder == folder)
-                        {
-                            s.annotations.notebooks.selected = None;
-                            s.select_annotation(index);
-                        }
-                    },
-                ))
                 .child(
-                    link("Remove", p)
+                    crate::ui::widgets::action("Open", p)
+                        .key(format!("notebook-open-{i}"))
+                        .on_press(move |s: &mut State| {
+                            if let Some(index) = s
+                                .annotations
+                                .captures
+                                .iter()
+                                .position(|c| c.folder == folder)
+                            {
+                                s.annotations.notebooks.selected = None;
+                                s.select_annotation(index);
+                            }
+                        }),
+                )
+                .child(
+                    crate::ui::widgets::action("Remove", p)
                         .key(format!("notebook-remove-{i}"))
                         .on_press(move |s: &mut State| s.remove_book_capture(i)),
                 ),
@@ -739,7 +741,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
         page = page.child(card);
     }
     page = page.child(
-        link("Add captures", p)
+        crate::ui::widgets::action("Add captures", p)
             .key("notebook-add-captures")
             .on_press(|s: &mut State| s.annotations.notebooks.add = !s.annotations.notebooks.add),
     );
@@ -747,7 +749,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
         for (i, c) in s.annotations.captures.iter().enumerate() {
             if !book.captures.iter().any(|r| r.folder == c.folder) {
                 page = page.child(
-                    link(format!("Add {}", c.title()), p)
+                    crate::ui::widgets::action(format!("Add {}", c.title()), p)
                         .key(format!("notebook-add-{i}"))
                         .on_press(move |s: &mut State| s.add_book_capture(i)),
                 );
@@ -816,14 +818,14 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
     );
     if s.annotations.busy {
         actions = actions.child(
-            link("Cancel", p)
+            crate::ui::widgets::action("Cancel", p)
                 .key("notebook-cancel")
                 .on_press(|s: &mut State| s.cancel_annotation_note()),
         );
     } else if book.note.is_some() {
         let editing = !s.annotations.notebooks.editing.is_empty();
         actions = actions.child(
-            link(if editing { "Save changes" } else { "Edit note" }, p)
+            crate::ui::widgets::action(if editing { "Save changes" } else { "Edit note" }, p)
                 .key("edit-notebook-note")
                 .on_press(move |s: &mut State| {
                     if editing {
@@ -836,7 +838,7 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
         if !editing {
             actions = actions.child(
                 primary("Share", "share-notebook", p)
-                    .disabled(!book.fresh())
+                    .button_disabled(!book.fresh())
                     .on_press(|s: &mut State| s.share_annotation(true)),
             );
         }

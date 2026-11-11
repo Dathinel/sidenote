@@ -1,5 +1,6 @@
 //! People is a projection of the meeting roster, with device-local side corrections.
 use super::{State, cards, icons, nav, roles, teams, theme::Palette, widgets::hairline};
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextInput};
 use sidenote::core::{
@@ -230,12 +231,15 @@ pub fn person_row(
     } else if s.people.tab == 1 {
         let name = person.name.clone();
         Some(
-            super::widgets::pressable(
-                roles::SMALL.line(company.map_or("No company", |c| c.name.as_str()), p.accent),
+            super::widgets::button(
+                company.map_or("No company", |c| c.name.as_str()),
+                &format!("person-company-cell-{id}"),
+                super::widgets::ButtonRole::Ghost,
+                p,
             )
-            .key(format!("person-company-cell-{id}"))
+            .h(28.0)
             .label(format!("Choose company for {}", person.name))
-            .disabled(s.edit_busy)
+            .button_disabled(s.edit_busy)
             .on_press(move |s: &mut State| s.edit_person_company(&name)),
         )
     } else {

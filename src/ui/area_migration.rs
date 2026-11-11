@@ -3,6 +3,7 @@ use super::{
     State, area, roles,
     theme::{self, Palette},
 };
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, GrowthSpec, ScrollSpec, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::project_merge::normalized_name;
@@ -56,7 +57,7 @@ fn picker(s: &State, label: &str, key: &str, p: Palette) -> Menu {
     Menu::new(key)
         .trigger(
             area::button(label, key, p)
-                .disabled(s.areas.pending.is_some())
+                .button_disabled(s.areas.pending.is_some())
                 .on_press(move |s: &mut State| {
                     if let Some(e) = &mut s.areas.editor {
                         e.picker = if e.picker.as_deref() == Some(&owned) {
@@ -249,7 +250,7 @@ fn project(s: &State, index: usize, p: Palette, narrow: bool) -> El {
         &format!("migration-expand-{index}"),
         p,
     )
-    .disabled(s.areas.pending.is_some())
+    .button_disabled(s.areas.pending.is_some())
     .on_press(move |s: &mut State| {
         if let Some(e) = &mut s.areas.editor {
             e.rows[index].expanded = !e.rows[index].expanded;
@@ -449,7 +450,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
                     true,
                     p,
                 )
-                .disabled(busy)
+                .button_disabled(busy)
                 .on_press(|s: &mut State| {
                     if s.areas.preview.is_some() {
                         s.confirm_area();
@@ -460,7 +461,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
             )
             .child(
                 area::button("Cancel", "migration-cancel", p)
-                    .disabled(busy)
+                    .button_disabled(busy)
                     .on_press(|s: &mut State| {
                         s.cancel_area();
                     }),

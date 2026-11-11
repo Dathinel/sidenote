@@ -646,7 +646,7 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
             })),
     );
     page = page.child(
-        link("Add to notebook", p)
+        crate::ui::widgets::action("Add to notebook", p)
             .key("capture-add-notebook")
             .on_press(|s: &mut State| s.choose_notebook_for_capture()),
     );
@@ -810,7 +810,7 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
                             .font(theme::display(28.0)),
                     )
                     .child(
-                        link(
+                        crate::ui::widgets::action(
                             if s.annotations.loading {
                                 "Refreshing..."
                             } else {

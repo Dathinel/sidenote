@@ -30,6 +30,19 @@ pub struct Palette {
     pub shadow: Color,
     /// Dims the page under a modal, dark enough that page headings do not compete with it.
     pub scrim: Color,
+    pub button_fill: Color,
+    pub button_ink: Color,
+    pub button_border: Color,
+    pub danger: Color,
+    pub danger_border: Color,
+    pub button_hover: Color,
+    pub button_pressed: Color,
+    pub button_primary_hover: Color,
+    pub button_primary_pressed: Color,
+}
+
+fn hex(value: &str) -> Color {
+    rune::color::hex(value).expect("valid theme colour")
 }
 
 pub fn palette(dark: bool) -> Palette {
@@ -96,6 +109,15 @@ pub fn palette(dark: bool) -> Palette {
         hit: c[15],
         shadow: c[16],
         scrim: c[17],
+        button_fill: hex(if dark { "#ececec" } else { "#1f2328" }),
+        button_ink: hex(if dark { "#1f2328" } else { "#ffffff" }),
+        button_border: if dark { c[6] } else { hex("#dcd9d2") },
+        danger: hex(if dark { "#f29b99" } else { "#a92b30" }),
+        danger_border: hex(if dark { "#704345" } else { "#efc5c5" }),
+        button_hover: hex(if dark { "#ffffff0f" } else { "#00000008" }),
+        button_pressed: hex(if dark { "#ffffff1f" } else { "#00000014" }),
+        button_primary_hover: hex(if dark { "#0000000f" } else { "#ffffff14" }),
+        button_primary_pressed: hex(if dark { "#0000001f" } else { "#ffffff24" }),
     }
 }
 

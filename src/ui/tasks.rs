@@ -1213,38 +1213,20 @@ fn status_dot(on: bool, size: f32, p: Palette) -> El {
 }
 
 pub(super) fn button(name: impl AsRef<str>, key: impl AsRef<str>, primary: bool, p: Palette) -> El {
-    let (name, key) = (name.as_ref(), key.as_ref());
-    if primary {
-        pressable(roles::CONTROL.wrap(name, p.card))
-            .key(key.to_string())
-            .px(14.0)
-            .py(6.0)
-            .radius(8.0)
-            .fill(p.accent)
-    } else {
-        pressable(roles::CONTROL.wrap(name, p.soft))
-            .key(key.to_string())
-            .px(10.0)
-            .py(6.0)
-            .radius(8.0)
-            .hover(p.chip)
-    }
+    super::widgets::button(
+        name.as_ref(),
+        key.as_ref(),
+        super::widgets::button_role(name.as_ref(), primary),
+        p,
+    )
 }
 
 /// A pill that sets a value: the due shortcuts.
 pub(super) fn pill(name: &str, key: &str, on: bool, p: Palette) -> El {
-    pressable(if on {
-        roles::CONTROL.bold().icon_label(name, p.ink)
-    } else {
-        roles::CONTROL.regular().icon_label(name, p.ink)
-    })
-    .key(key.to_string())
-    .px(11.0)
-    .py(3.0)
-    .radius(999.0)
-    .fill(if on { p.card } else { p.chip })
-    .border(1.0, if on { p.accent } else { p.line })
-    .hover(p.line)
+    super::widgets::button(name, key, super::widgets::ButtonRole::Secondary, p)
+        .h(28.0)
+        .checked(on)
+        .fill(if on { p.chip } else { p.card })
 }
 
 /// A key cap for the shortcut hints.
@@ -1322,21 +1304,13 @@ fn summary_line(s: &State, p: Palette) -> El {
 }
 
 fn title_row(s: &State, k: &Kit, narrow: bool, p: Palette, layer: &mut Vec<El>) -> El {
-    let add = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(super::icons::draw(&super::icons::PLUS, 16.0, p.accent))
-            .child(roles::CONTROL.wrap("Add task", p.accent)),
+    let add = super::widgets::button(
+        "+ Add task",
+        "task-add",
+        super::widgets::ButtonRole::Secondary,
+        p,
     )
-    .key("task-add")
     .label("Add a task by hand (N)")
-    .px(10.0)
-    .py(5.0)
-    .radius(8.0)
-    .border(1.0, p.line)
-    .fill(p.card)
-    .hover(p.chip)
     .on_press(|s: &mut State| s.open_add());
     row()
         .w_full()
@@ -2018,14 +1992,9 @@ fn group_header(s: &State, k: &Kit, g: &TaskGroup, n: usize, p: Palette) -> El {
         GroupKind::Meeting(id) if id != MANUAL => {
             let id = id.clone();
             head = head.child(
-                pressable(roles::META.medium().wrap("Open", p.accent))
-                    .key(format!("tgroup-open-{n}"))
+                super::widgets::quiet_button("Open", &format!("tgroup-open-{n}"), p)
                     .label(format!("Open the meeting {}", g.label))
-                    .px(6.0)
-                    .py(2.0)
                     .mr(6.0)
-                    .radius(6.0)
-                    .hover(p.chip)
                     .on_press_tx(move |s: &mut State, tx| s.open_meeting(&id, tx)),
             );
         }
@@ -2109,13 +2078,7 @@ fn cutoff_text(day: NaiveDate, today: NaiveDate) -> String {
 fn cleared_line(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let t = &s.tasks;
     let link = |text: &str, key: &str, help: String| {
-        pressable(roles::CAPTION.wrap(text, p.accent))
-            .key(key.to_string())
-            .label(help)
-            .px(6.0)
-            .py(3.0)
-            .radius(6.0)
-            .hover(p.chip)
+        super::widgets::quiet_button(text, key, p).label(help)
     };
     let mut line = row()
         .key("tasks-cleared")
@@ -2287,16 +2250,11 @@ pub(super) fn prop_row(name: &str, control: El, p: Palette) -> El {
 
 /// The look of a property value that opens a menu or toggles.
 pub(super) fn value_button(content: El, key: &str, help: String, p: Palette) -> El {
-    pressable(content)
-        .key(key.to_string())
+    super::widgets::button("", key, super::widgets::ButtonRole::Secondary, p)
+        .h(28.0)
         .label(help)
         .self_start()
-        .px(10.0)
-        .py(5.0)
-        .radius(8.0)
-        .border(1.0, p.line)
-        .fill(p.card)
-        .hover(p.chip)
+        .child(content)
 }
 
 fn caret(p: Palette) -> El {
@@ -2394,13 +2352,8 @@ fn due_control(s: &State, k: &Kit, task: Option<&TaskItem>, p: Palette) -> El {
                 .is_some_and(|o| o.due.is_some())
         {
             c = c.child(
-                pressable(roles::CAPTION.wrap("Use the meeting's date", p.accent))
-                    .key("pdue-reset")
+                super::widgets::quiet_button("Use the meeting's date", "pdue-reset", p)
                     .self_start()
-                    .px(4.0)
-                    .ml(-4.0)
-                    .radius(5.0)
-                    .hover(p.chip)
                     .on_press(move |s: &mut State| s.set_task_due(&id, index, DueChoice::Reset)),
             );
         }
@@ -2558,32 +2511,29 @@ fn project_control(
         } {
             let target = task.map(|x| (x.meeting_id.clone(), x.index));
             let name = name.clone();
-            choices = choices.child(
-                pressable(roles::CONTROL.wrap(&name, p.accent))
-                    .py(4.0)
-                    .on_press(move |s: &mut State| {
-                        if let Some((id, i)) = &target {
-                            s.set_task_project(id, *i, &name);
-                        } else {
-                            s.tasks.add_project = Some(name.clone());
-                        }
-                        if !s.tasks.edit_failed && !s.edit_busy {
-                            s.tasks.ui.new_project = false;
-                            s.tasks.inputs.project = TextEdit::default();
-                        }
-                    }),
-            );
+            choices = choices.child(super::widgets::action(name.clone(), p).on_press(
+                move |s: &mut State| {
+                    if let Some((id, i)) = &target {
+                        s.set_task_project(id, *i, &name);
+                    } else {
+                        s.tasks.add_project = Some(name.clone());
+                    }
+                    if !s.tasks.edit_failed && !s.edit_busy {
+                        s.tasks.ui.new_project = false;
+                        s.tasks.inputs.project = TextEdit::default();
+                    }
+                },
+            ));
         }
         if !typed.is_empty() && matches.is_empty() {
             let target = task.map(|x| (x.meeting_id.clone(), x.index));
             choices = choices.child(
-                pressable(
-                    roles::CONTROL
-                        .bold()
-                        .wrap(format!("Create {typed}"), p.accent),
+                super::widgets::button(
+                    format!("Create {typed}"),
+                    "task-project-create",
+                    super::widgets::ButtonRole::Secondary,
+                    p,
                 )
-                .key("task-project-create")
-                .py(6.0)
                 .on_press(move |s: &mut State| {
                     match s.tasks.store.add_project(&typed) {
                         Ok(p) => {
@@ -3508,8 +3458,8 @@ fn v2_controls(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>
             row()
                 .gap(6.0)
                 .items_center()
-                .child(super::icons::draw(&super::icons::PLUS, 16.0, p.accent))
-                .child(roles::CONTROL.wrap("Add subtask", p.accent)),
+                .child(super::icons::draw(&super::icons::PLUS, 16.0, p.soft))
+                .child(roles::CONTROL.wrap("Add subtask", p.soft)),
             "subtask-add-open",
             "Add subtask".into(),
             p,

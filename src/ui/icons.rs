@@ -464,6 +464,7 @@ pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> E
     let value = value.into();
     let glyph = |ch| -> Option<&'static Icon> {
         Some(match ch {
+            '+' => &PLUS,
             '\u{2713}' => &CHECK,
             '\u{d7}' => &X,
             '\u{2039}' => &CHEVRON_LEFT,

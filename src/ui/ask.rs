@@ -1,5 +1,5 @@
 //! The Ask bar, floating at the bottom of a meeting or the home page: one quiet pill with the
-//! question box, the model's name and a round send arrow that fades in once there is text. The
+//! question box, the model's name and a send button that fades in once there is text. The
 //! box shows a few suggestion chips while it has focus, and Esc folds them away. While a question
 //! runs the arrow becomes Stop and a muted line counts the seconds. The thread of answers sits
 //! above the pill. On the home page it asks across every meeting, and its answers cite meetings.
@@ -11,13 +11,13 @@ use super::{
     meeting::COLUMN,
     roles,
     theme::Palette,
-    widgets::{hairline, link, pressable, quiet_button, spaced_caps},
+    widgets::{hairline, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, Spinner, TextInput};
 use sidenote::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
-use std::{f32::consts::FRAC_PI_2, sync::LazyLock};
+use std::sync::LazyLock;
 
 static STAMP: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]").expect("stamp pattern"));
@@ -314,22 +314,16 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
 }
 
 fn recipe(i: usize, text: &'static str, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(text, p.soft))
-        .key(format!("suggest-{i}"))
-        // Pressing a chip must not take the keyboard from the box, or the chips would vanish
-        // before the press landed.
-        .preserve_focus_on_press(true)
-        // Each chip slides up 8 points and fades in 30 ms after the one before it.
-        .transition(rise(8.0))
-        .enter_delay(i as f32 * 0.03)
-        .px(14.0)
-        .py(6.0)
-        .radius(999.0)
-        .fill(p.card)
-        .border(1.0, p.line)
-        .shadow(2.0, 10.0, p.shadow)
-        .hover(p.chip)
-        .on_press(move |s: &mut State| s.send(text))
+    super::widgets::button(
+        text,
+        &format!("suggest-{i}"),
+        super::widgets::ButtonRole::Secondary,
+        p,
+    )
+    .preserve_focus_on_press(true)
+    .transition(rise(8.0))
+    .enter_delay(i as f32 * 0.03)
+    .on_press(move |s: &mut State| s.send(text))
 }
 
 /// A few ideas to ask, floating above the pill while its box has focus and is empty.
@@ -419,50 +413,46 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
                 name
             }
         });
-    let trigger = pressable(
-        row()
-            .gap(2.0)
-            .items_center()
-            .child(
-                text(shown.to_string())
-                    .font(roles::META.medium().style())
-                    .color(p.faint)
-                    .truncate()
-                    .min_w(0.0),
-            )
-            .child(rune::icon(chevron, 12.0).color(p.faint)),
-    )
-    .key("ask-model")
-    .role("combobox")
-    .label(format!("Model: {name}"))
-    .help(if s.runner.is_some() {
-        let model = s.ask_model().unwrap_or_else(|| shown.into());
-        let thinking = s
-            .runners
-            .iter()
-            .find(|r| Some(&r.name) == s.runner.as_ref())
-            .filter(|r| !core::ask_options::supports_thinking(r))
-            .map(|_| super::ask_settings::OPENCODE_THINKING)
-            .unwrap_or("");
-        format!("Model: {model}. {}. {thinking}", runner_note(tools))
-    } else {
-        "Choose the model that answers".to_string()
-    })
-    .preserve_focus_on_press(true)
-    .min_w(0.0)
-    .max_w(if narrow { 110.0 } else { 150.0 })
-    .pl(10.0)
-    .pr(6.0)
-    .py(6.0)
-    .radius(999.0)
-    .hover(p.chip)
-    .on_press(|s: &mut State| {
-        s.runner_open = !s.runner_open;
-        s.ask_settings.thinking_open = false;
-        if s.runner_open {
-            s.reload_runners();
-        }
-    });
+    let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
+        .gap(0.0)
+        .child(
+            row()
+                .gap(2.0)
+                .items_center()
+                .child(
+                    text(shown.to_string())
+                        .font(roles::META.medium().style())
+                        .color(p.faint)
+                        .truncate()
+                        .min_w(0.0),
+                )
+                .child(rune::icon(chevron, 16.0).color(p.faint)),
+        )
+        .role("combobox")
+        .label(format!("Model: {name}"))
+        .help(if s.runner.is_some() {
+            let model = s.ask_model().unwrap_or_else(|| shown.into());
+            let thinking = s
+                .runners
+                .iter()
+                .find(|r| Some(&r.name) == s.runner.as_ref())
+                .filter(|r| !core::ask_options::supports_thinking(r))
+                .map(|_| super::ask_settings::OPENCODE_THINKING)
+                .unwrap_or("");
+            format!("Model: {model}. {}. {thinking}", runner_note(tools))
+        } else {
+            "Choose the model that answers".to_string()
+        })
+        .preserve_focus_on_press(true)
+        .min_w(0.0)
+        .max_w(if narrow { 110.0 } else { 150.0 })
+        .on_press(|s: &mut State| {
+            s.runner_open = !s.runner_open;
+            s.ask_settings.thinking_open = false;
+            if s.runner_open {
+                s.reload_runners();
+            }
+        });
     let mut menu = Menu::new("runner")
         .trigger(trigger)
         .open(s.runner_open)
@@ -504,26 +494,23 @@ fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Optio
         return None;
     }
     let value = s.ask_thinking();
-    let trigger = pressable(
-        row()
-            .gap(2.0)
-            .items_center()
-            .child(roles::META.wrap(value.label(), p.faint))
-            .child(rune::icon(k.glyph.chevron_down, 12.0).color(p.faint)),
-    )
-    .key("ask-thinking")
-    .role("combobox")
-    .label(format!("Thinking: {}", value.label()))
-    .help("Thinking level for this chat. Low uses less reasoning; High can take longer.")
-    .preserve_focus_on_press(true)
-    .px(6.0)
-    .py(6.0)
-    .radius(999.0)
-    .hover(p.chip)
-    .on_press(|s: &mut State| {
-        s.ask_settings.thinking_open = !s.ask_settings.thinking_open;
-        s.runner_open = false;
-    });
+    let trigger = super::widgets::button("", "ask-thinking", super::widgets::ButtonRole::Ghost, p)
+        .gap(0.0)
+        .child(
+            row()
+                .gap(2.0)
+                .items_center()
+                .child(roles::META.wrap(value.label(), p.faint))
+                .child(rune::icon(k.glyph.chevron_down, 16.0).color(p.faint)),
+        )
+        .role("combobox")
+        .label(format!("Thinking: {}", value.label()))
+        .help("Thinking level for this chat. Low uses less reasoning; High can take longer.")
+        .preserve_focus_on_press(true)
+        .on_press(|s: &mut State| {
+            s.ask_settings.thinking_open = !s.ask_settings.thinking_open;
+            s.runner_open = false;
+        });
     let mut menu = Menu::new("ask-thinking-menu")
         .trigger(trigger)
         .open(s.ask_settings.thinking_open)
@@ -541,7 +528,7 @@ fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Optio
 }
 
 /// The room a send or Stop button takes, and how wide the pill is at rest.
-const ACTION: f32 = 36.0;
+const ACTION: f32 = 32.0;
 const IDLE_W: f32 = 580.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
@@ -549,38 +536,33 @@ const IDLE_W: f32 = 580.0;
 /// shifts when the button comes and goes.
 fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
     let slot = col().key("ask-action").size(ACTION, ACTION).shrink();
-    let disc = || {
-        col()
-            .size(ACTION, ACTION)
-            .radius(999.0)
-            .fill(p.accent)
-            .center()
-    };
     if pending {
         let run = s.asks.get(&s.ask_key());
         let stopping = run.is_some_and(|r| r.cancel.stopped());
         let who = run.map_or("the answer", |r| short_runner(&r.runner));
         return slot.child(
-            pressable(disc().child(el().size(12.0, 12.0).radius(3.0).fill(p.card)))
-                .key("ask-stop")
-                .label("Stop")
-                .help(format!("Stop {who}"))
-                .transition(pop())
-                .dim(if stopping { 0.5 } else { 1.0 })
-                .on_press(|s: &mut State| s.stop_ask()),
+            super::widgets::icon_button(
+                &super::icons::STOP,
+                "Stop",
+                "ask-stop",
+                super::widgets::ButtonRole::Primary,
+                p,
+            )
+            .help(format!("Stop {who}"))
+            .transition(pop())
+            .dim(if stopping { 0.5 } else { 1.0 })
+            .on_press(|s: &mut State| s.stop_ask()),
         );
     }
     if ready {
         return slot.child(
-            pressable(
-                disc().child(
-                    rune::icon(&super::icons::ARROW_RIGHT, 16.0)
-                        .color(p.card)
-                        .icon_rotation(-FRAC_PI_2),
-                ),
+            super::widgets::icon_button(
+                &super::icons::ARROW_UP,
+                "Ask (Enter)",
+                "ask-send",
+                super::widgets::ButtonRole::Primary,
+                p,
             )
-            .key("ask-send")
-            .label("Ask (Enter)")
             .transition(pop())
             .on_press(|s: &mut State| {
                 let q = s.question.text.clone();
@@ -618,7 +600,7 @@ fn no_agent(s: &State, p: Palette) -> El {
         .radius(26.0)
         .child(note)
         .child(
-            link("Check again", p)
+            crate::ui::widgets::action("Check again", p)
                 .key("ask-recheck")
                 .on_press(|s: &mut State| {
                     s.refresh_ai_notes();
@@ -654,7 +636,7 @@ pub fn overlay_with(
     if s.back.is_some() && !(s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open) {
         stack = stack.child(
             row().w_full().justify_end().child(
-                pressable(roles::CONTROL.icon_label(
+                super::widgets::button(
                     if s.check_back {
                         "\u{2039} Back to the check"
                     } else if s.cite_back.is_some() {
@@ -662,14 +644,10 @@ pub fn overlay_with(
                     } else {
                         "\u{2191} Back to the summary point"
                     },
-                    p.card,
-                ))
-                .key("back-to-summary")
-                .px(16.0)
-                .py(7.0)
-                .radius(999.0)
-                .fill(p.accent)
-                .shadow(4.0, 16.0, p.shadow)
+                    "back-to-summary",
+                    super::widgets::ButtonRole::Primary,
+                    p,
+                )
                 .on_press_tx(|s: &mut State, tx| s.go_back(tx)),
             ),
         );
@@ -683,7 +661,7 @@ pub fn overlay_with(
     if !s.has_agent() && !pending && s.runner_error.is_none() {
         let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
             raised(
-                link("Ask anything", p)
+                super::widgets::action("Ask anything", p)
                     .key("ask-open")
                     .px(20.0)
                     .py(10.0)

@@ -1072,7 +1072,7 @@ fn header(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette, layer: &
         revision.chars().take(7).collect::<String>(),
         kb_when(&captured)
     );
-    let details = link(
+    let details = super::widgets::action(
         if s.check.details_open {
             "Hide details"
         } else {
@@ -1861,7 +1861,7 @@ fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -
             return out.child(roles::SMALL.wrap("This report has no story.", p.soft));
         }
         out = out.child(
-            link(
+            super::widgets::action(
                 format!(
                     "{}  {} the story",
                     if c.story_text_open {

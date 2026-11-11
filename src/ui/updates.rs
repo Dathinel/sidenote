@@ -1,9 +1,5 @@
 //! Quiet update notices and the device's Updates settings.
-use super::{
-    Event, State, hex, roles,
-    theme::Palette,
-    widgets::{hairline, link, pressable},
-};
+use super::{Event, State, hex, roles, theme::Palette, widgets::hairline};
 use rune::{El, col, el, row};
 use sidenote::updates::{self, Phase, Status};
 
@@ -224,33 +220,29 @@ fn busy(status: &Status) -> bool {
 }
 fn install(s: &State, p: Palette, footer: bool) -> El {
     let ready = s.updates.status.phase == Phase::Ready;
-    let b = pressable(
-        roles::CONTROL
-            .wrap(
-                match s.updates.status.phase {
-                    Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
-                    Phase::Preparing => "Preparing update".into(),
-                    Phase::StoppingListener => "Stopping the listener".into(),
-                    _ => "Install and restart".into(),
-                },
-                if ready { p.card } else { p.soft },
-            )
-            .px(12.0)
-            .py(7.0),
+    let title = match s.updates.status.phase {
+        Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
+        Phase::Preparing => "Preparing update".into(),
+        Phase::StoppingListener => "Stopping the listener".into(),
+        _ => "Install and restart".into(),
+    };
+    let b = crate::ui::widgets::button(
+        title,
+        if footer {
+            "update-footer-install"
+        } else {
+            "update-install"
+        },
+        crate::ui::widgets::ButtonRole::Primary,
+        p,
     )
-    .key(if footer {
-        "update-footer-install"
-    } else {
-        "update-install"
-    })
     .label(if ready {
         "Install update and restart Sidenote"
     } else {
         "Update progress"
     })
     .disabled(!ready)
-    .radius(7.0)
-    .fill(if ready { p.accent } else { p.chip });
+    .dim(if ready { 1.0 } else { 0.5 });
     if ready {
         b.on_press(|s: &mut State| s.install_update())
     } else {
@@ -277,7 +269,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
             )
         {
             actions = actions.child(
-                link("Later", p)
+                crate::ui::widgets::action("Later", p)
                     .key(if footer {
                         "update-footer-later"
                     } else {
@@ -289,7 +281,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
     }
     if !s.updates.status.notes.is_empty() {
         actions = actions.child(
-            link(
+            crate::ui::widgets::action(
                 if s.updates.notes_open {
                     "Hide what changed"
                 } else {
@@ -332,7 +324,7 @@ pub fn section(s: &State, p: Palette) -> El {
                 if busy(status) {
                     roles::CONTROL.line("Checking...", p.soft)
                 } else {
-                    link("Check now", p)
+                    crate::ui::widgets::action("Check now", p)
                         .key("update-check")
                         .on_press(|s: &mut State| s.check_updates())
                 },
@@ -398,7 +390,7 @@ pub fn section(s: &State, p: Palette) -> El {
     }
     if status.phase == Phase::Error || status.error.is_some() {
         card = card.child(
-            link("Try again", p)
+            crate::ui::widgets::action("Try again", p)
                 .key("update-retry")
                 .on_press(|s: &mut State| {
                     if s.updates.status.phase == Phase::Ready {
@@ -462,7 +454,7 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     }
     if !wide {
         return Some(
-            link("?", p)
+            super::widgets::action("?", p)
                 .key("update-footer")
                 .label("Update ready. Open Updates settings")
                 .on_press(|s: &mut State| s.open_updates()),
@@ -475,7 +467,7 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
             .py(10.0)
             .child(roles::CONTROL.line(format!("Sidenote {} is ready", u.status.version), p.soft))
             .child(
-                link("Restart to update", p)
+                crate::ui::widgets::action("Restart to update", p)
                     .key("update-footer-install")
                     .on_press(|s: &mut State| s.install_update()),
             ),

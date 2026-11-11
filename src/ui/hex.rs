@@ -7,7 +7,7 @@
 use super::{
     Event, State, roles,
     theme::Palette,
-    widgets::{badge, hairline, link, pressable, scroll},
+    widgets::{badge, hairline, pressable, scroll},
 };
 mod meeting_languages;
 pub(super) mod settings;
@@ -956,7 +956,7 @@ pub fn error_bar(s: &State, p: Palette) -> Option<El> {
                     .role("alert"),
             )
             .child(
-                link("Dismiss", p)
+                crate::ui::widgets::action("Dismiss", p)
                     .key("hex-error-dismiss")
                     .on_press(|s: &mut State| s.hex.error = None),
             ),
@@ -1108,21 +1108,17 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
     .grow(1.0)
     .min_w(140.0);
     let ready = can_add && !h.term.text.trim().is_empty();
-    let mut add = pressable(
-        roles::CONTROL
-            .bold()
-            .wrap("Add", if ready { p.card } else { p.faint }),
+    let mut add = super::widgets::button(
+        "Add",
+        "hex-vocab-add",
+        super::widgets::ButtonRole::Primary,
+        p,
     )
-    .key("hex-vocab-add")
-    .label("Add the word")
-    .px(14.0)
-    .py(8.0)
-    .radius(8.0)
-    .fill(if ready { p.accent } else { p.chip });
+    .label("Add the word");
     if ready {
         add = add.on_press(|s: &mut State| s.hex_vocab_add());
     } else {
-        add = add.dim(0.6);
+        add = add.dim(0.5).disabled(true);
     }
     let mut sec = col()
         .key("hex-vocabulary")
@@ -1568,7 +1564,7 @@ fn setting_row(
                 let mut r = row().w(width).gap(6.0).items_center().child(input);
                 if dirty && can {
                     r = r.child(
-                        link("Save", p)
+                        crate::ui::widgets::action("Save", p)
                             .key(format!("hs-save-{}", st.key))
                             .on_press(move |s: &mut State| s.hex_commit(&save_key)),
                     );

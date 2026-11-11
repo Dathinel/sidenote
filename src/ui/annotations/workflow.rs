@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::widgets::ButtonDisabled;
 use serde_json::{Value, json};
 use std::{
     os::windows::process::CommandExt,
@@ -31,24 +32,17 @@ pub(in crate::ui) fn new_button(s: &State, p: Palette) -> El {
     let enabled = s.annotations.can_record
         && s.hex.status.as_ref().is_some_and(Result::is_ok)
         && !s.annotations.record_busy;
-    let ink = if enabled { p.card } else { p.soft };
-    let b = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(super::super::nav::icon_plus(ink))
-            .child(roles::CONTROL.bold().wrap("New annotation", ink)),
-    )
-    .key("new-annotation")
-    .px(16.0)
-    .py(7.0)
-    .radius(999.0)
-    .fill(p.accent);
+    let b = crate::ui::widgets::button(
+        "New annotation",
+        "new-annotation",
+        crate::ui::widgets::ButtonRole::Primary,
+        p,
+    );
     if enabled {
         b.help("Record your screen while you draw and talk in Hex")
             .on_press(|s: &mut State| s.start_annotation())
     } else {
-        b.fill(p.chip).help("Hex is not answering or Annotate is unavailable. Open Hex and refresh Annotations.").disabled(true)
+        b.dim(0.5).help("Hex is not answering or Annotate is unavailable. Open Hex and refresh Annotations.").disabled(true)
     }
 }
 fn run_hex_start() -> Result<(), String> {
@@ -565,12 +559,12 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
         && images_ready
         && s.annotations.dragging.is_none()
         && s.annotation_options().is_ok();
-    let send = pressable(roles::CONTROL.wrap("Send for note", p.card))
-        .key("annotation-send")
-        .px(16.0)
-        .py(9.0)
-        .radius(7.0)
-        .fill(p.accent);
+    let send = crate::ui::widgets::button(
+        "Send for note",
+        "annotation-send",
+        crate::ui::widgets::ButtonRole::Primary,
+        p,
+    );
     controls = controls
         .child(if allowed {
             send.on_press(|s: &mut State| s.send_annotation(false))
@@ -588,7 +582,7 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
                 })
         })
         .child(
-            link("Cancel", p)
+            crate::ui::widgets::action("Cancel", p)
                 .key("annotation-review-cancel")
                 .on_press(|s: &mut State| {
                     s.annotations.review = None;
@@ -658,9 +652,9 @@ pub(super) fn review_page(s: &State, c: &Capture, width: f32, p: Palette, mut pa
                     p.soft,
                 ))
                 .child(
-                    link("Undo box", p)
+                    crate::ui::widgets::action("Undo box", p)
                         .key(format!("review-undo-{index}"))
-                        .disabled(review.masks.is_empty())
+                        .button_disabled(review.masks.is_empty())
                         .on_press(move |s: &mut State| {
                             if let Some(frames) = &mut s.annotations.review
                                 && let Some(frame) = frames.iter_mut().find(|f| f.index == index)

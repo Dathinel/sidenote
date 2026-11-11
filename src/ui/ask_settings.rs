@@ -3,7 +3,7 @@ use super::{
     hex::settings::{card, setting_row},
     roles,
     theme::Palette,
-    widgets::{hairline, pressable},
+    widgets::hairline,
 };
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, TextInput};
@@ -337,11 +337,13 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                         .w(205.0),
                 )
                 .child(
-                    pressable(roles::CONTROL.wrap("Save", p.accent))
-                        .key("ask-settings-model-save")
-                        .px(8.0)
-                        .py(7.0)
-                        .on_press(|s: &mut State| s.save_ask_model()),
+                    super::widgets::button(
+                        "Save",
+                        "ask-settings-model-save",
+                        super::widgets::ButtonRole::Secondary,
+                        p,
+                    )
+                    .on_press(|s: &mut State| s.save_ask_model()),
                 ),
         );
     }

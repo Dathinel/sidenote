@@ -614,7 +614,7 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     }
     if all.len() > s.check.shown {
         doc = doc.child(
-            link("Show earlier days", p)
+            super::widgets::action("Show earlier days", p)
                 .key("diary-more")
                 .label("Show ten earlier days")
                 .mt(roles::SECTION_TOP)
