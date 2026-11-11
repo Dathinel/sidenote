@@ -39,6 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("frames", type=Path)
     parser.add_argument("proof", type=Path)
+    parser.add_argument("--operations", type=Path)
     args = parser.parse_args()
     for theme in ("light", "dark"):
         for scene in ("preview", "pair-code", "pair-confirm", "paired", "conflict", "remove-confirm"):
@@ -94,7 +95,34 @@ def main():
         cancelled = frame(args.proof, "remove-cancelled", theme)
         assert not any(n.get("key") == "relay-remove-prompt" for n in cancelled["elements"]), "Cancel kept the prompt"
         assert element(cancelled, "relay-paired-device-1"), "Cancel removed the device"
-    print("PASS: 12 requested frames plus shared Memory choice proof; aligned cards, folded guarded entry, removal/Cancel and conflict choice in both themes")
+    if args.operations:
+        expected = {
+            "operational": "Relay reachable. Both devices must be online to exchange changes.",
+            "unreachable": "Relay unavailable. Check the address and your connection. Edits stay on this PC.",
+            "wrong-address": "This address did not answer as a Sidenote relay. Check the address in Advanced.",
+            "update-required": "Another device runs a newer Sidenote. Update this one to keep syncing.",
+        }
+        for theme in ("light", "dark"):
+            for scene, message in expected.items():
+                tree = frame(args.operations, scene, theme)
+                text = list(strings(tree, "text"))
+                assert message in text, (scene, theme)
+                assert "Last relay contact" in text, (scene, theme)
+                for key in ("relay-address-input", "relay-last-contact", "relay-contact-status"):
+                    x, y, width, height = element(tree, key)["rect"]
+                    assert 248 <= x < x + width <= 1280, (scene, key)
+                    assert 58 <= y < y + height <= 800, (scene, key)
+                assert not any(re.search(r"\d{4}-\d{2}-\d{2}T\d", value) for value in text), scene
+                if scene == "wrong-address":
+                    assert "Not yet contacted" in text, theme
+                else:
+                    assert any(re.search(r"\d{1,2} \w+ \d{4}, \d{2}:\d{2}", value) for value in text), scene
+                if scene == "update-required":
+                    assert "Relay changes are read-only. Folder sync keeps working." in text, theme
+                    assert not any(n.get("key") == "relay-host" for n in tree["elements"]), theme
+                png = args.operations / f"relay-{scene}-{theme}.png"
+                assert struct.unpack(">II", png.read_bytes()[16:24]) == (1280, 800), png.name
+    print("PASS: Sync frames, shared Memory choices, aligned cards, pairing/removal and optional operational states in both themes")
 
 
 if __name__ == "__main__":

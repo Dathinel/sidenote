@@ -324,6 +324,11 @@ lucide!(
     r#"<line x1="10" x2="14" y1="2" y2="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" x2="15" y1="14" y2="11" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="14" r="8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
 lucide!(
+    CLOCK,
+    "lucide-clock",
+    r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
     CLIPBOARD,
     "lucide-clipboard",
     r#"<rect width="8" height="4" x="8" y="2" rx="1" ry="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
