@@ -22,6 +22,7 @@ use sidenote::core::memory::{
 };
 use std::{collections::HashMap, io};
 mod landing;
+pub(super) mod settled;
 
 /// A claim not confirmed for this many days is suggested for review. Information only: age
 /// never changes a claim.
@@ -56,6 +57,12 @@ pub enum Ask {
 
 pub struct MemState {
     pub meeting: Option<String>,
+    pub settled: Vec<sidenote::core::settle::Row>,
+    pub settle_all: bool,
+    pub settle_meeting: Option<String>,
+    pub settle_busy: bool,
+    pub settle_toast_action: Option<(String, bool)>,
+    pub settle_pending_toast: Option<(String, String, bool)>,
     pub browse: bool,
     pub filters_open: bool,
     pub comment_for: Option<String>,
@@ -99,6 +106,12 @@ impl Default for MemState {
     fn default() -> Self {
         Self {
             meeting: None,
+            settled: vec![],
+            settle_all: false,
+            settle_meeting: None,
+            settle_busy: false,
+            settle_toast_action: None,
+            settle_pending_toast: None,
             browse: false,
             filters_open: false,
             comment_for: None,
@@ -265,6 +278,7 @@ fn confirmed_text(r: &MemoryRecord) -> String {
 // ---- state ---------------------------------------------------------------------------------
 
 pub struct Snapshot {
+    settled: Vec<sidenote::core::settle::Row>,
     mutation_generation: u64,
     projects: sidenote::core::Projects,
     file: sidenote::core::memory::MemoryFile,
@@ -286,7 +300,11 @@ impl Snapshot {
         } else {
             (Some(store.preview_migration()?), store.company_memory()?)
         };
+        let settled =
+            sidenote::core::settle::Store::new(store.root.clone(), sidenote::core::meetings_dir())
+                .history()?;
         Ok(Self {
+            settled,
             mutation_generation,
             projects,
             file,
@@ -334,6 +352,7 @@ impl MemState {
 
     fn apply_snapshot(&mut self, snapshot: Snapshot) {
         self.today = Local::now().date_naive();
+        self.settled = snapshot.settled;
         self.projects = snapshot.projects;
         self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
         self.apply_file(snapshot.file);
@@ -547,6 +566,8 @@ impl State {
         self.memory_open = true;
         self.memory.meeting = None;
         self.memory.browse = false;
+        self.memory.settle_all = false;
+        self.memory.settle_meeting = None;
         self.memory.panel = self.memory.editing;
         self.memory.prepare_after_refresh = true;
         self.refresh_memory(true);
@@ -1256,6 +1277,9 @@ fn list_column(
     layer: &mut Vec<El>,
 ) -> El {
     let m = &s.memory;
+    if m.settle_all {
+        return settled::all(s, p, narrow);
+    }
     if !m.browse {
         return landing::column(s, k, p, narrow);
     }
@@ -2048,6 +2072,9 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.memory.project_menu = false;
             } else if !s.memory.search.text.is_empty() {
                 s.memory.search = TextEdit::default();
+            } else if s.memory.settle_all {
+                s.memory.settle_all = false;
+                s.memory.settle_meeting = None;
             } else if s.memory.browse {
                 s.memory.browse = false;
                 s.memory.meeting = None;
@@ -2088,6 +2115,7 @@ mod refresh_tests {
 
     fn snapshot(mutation_generation: u64, legacy: &str) -> Snapshot {
         Snapshot {
+            settled: vec![],
             mutation_generation,
             projects: Default::default(),
             file: Default::default(),

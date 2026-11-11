@@ -530,6 +530,34 @@ pub(super) fn stamps(root: &Path, store: &str) -> io::Result<BTreeMap<Key, u64>>
         .map(|(k, r)| (k.clone(), r.at & !(1 << 63)))
         .collect())
 }
+/// Includes tombstones so deleting and recreating the same value still invalidates Undo.
+pub(super) fn settle_fence() {
+    fence_local_mutation();
+}
+
+pub(super) fn settle_versions(root: &Path, store: &str) -> io::Result<BTreeMap<Key, String>> {
+    let session = Session::open_mode(root, store, true)?;
+    session
+        .view
+        .items
+        .iter()
+        .map(|(key, value)| Ok((key.clone(), serde_json::to_string(&value.version())?)))
+        .collect()
+}
+
+pub(super) fn settle_locks(root: &Path, stores: &BTreeSet<String>) -> io::Result<Vec<fs::File>> {
+    stores
+        .iter()
+        .map(|store| {
+            store_io::lock(
+                &root
+                    .join("local/locks")
+                    .join(format!("{}.lock", hash(store.as_bytes()))),
+            )
+        })
+        .collect()
+}
+
 pub(super) fn update<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,

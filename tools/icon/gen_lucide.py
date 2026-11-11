@@ -91,7 +91,8 @@ ICONS = {'MEETINGS': 'notebook-pen',
  'MOUSE_POINTER': 'mouse-pointer-2',
  'NETWORK': 'network',
  'SHIELD_CHECK': 'shield-check',
- 'CIRCLE_STOP': 'circle-stop'}
+ 'CIRCLE_STOP': 'circle-stop',
+ 'HOURGLASS': 'hourglass'}
 ROOT = Path(__file__).resolve().parents[2]
 
 def main():

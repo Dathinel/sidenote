@@ -109,15 +109,6 @@ impl State {
             Err(_) => self.notice = Some("Could not save the summary template. Try again.".into()),
         }
     }
-    fn meeting_memory(&mut self, id: &str) {
-        self.open_memory();
-        self.memory.meeting = Some(id.into());
-        self.memory.browse = true;
-        self.memory.tab = crate::ui::memory::Tab::All;
-        self.memory.scope = crate::ui::memory::Scope::Active;
-        self.memory.project = None;
-        self.memory.search = TextEdit::default();
-    }
 }
 
 pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
@@ -582,43 +573,7 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
         }
         rail = rail.child(card);
     }
-    let ids:std::collections::BTreeSet<_>=s.memory.records.iter().filter(|r|r.sources.iter().any(|src|matches!(src,core::memory::MemorySource::Meeting{reference} if reference==&format!("[[{}]]",m.id)||reference.starts_with(&format!("[[{}@",m.id))))).map(|r|r.id.as_str()).collect();
-    let updated: std::collections::BTreeSet<_> = s
-        .memory
-        .events
-        .iter()
-        .filter(|e| {
-            ids.contains(e.record_id.as_str())
-                && e.undone_at.is_none()
-                && e.operation != "accept_migration"
-        })
-        .map(|e| e.record_id.as_str())
-        .collect();
-    let id = m.id.clone();
-    rail.child(
-        col()
-            .w_full()
-            .gap(4.0)
-            .mt(8.0)
-            .child(roles::META.wrap(
-                format!(
-                    "Sidenote updated {} {} from this meeting.",
-                    updated.len(),
-                    if updated.len() == 1 {
-                        "thing"
-                    } else {
-                        "things"
-                    }
-                ),
-                p.soft,
-            ))
-            .child(
-                crate::ui::widgets::link("See in Memory", p)
-                    .key("meeting-memory")
-                    .self_start()
-                    .on_press(move |s: &mut State| s.meeting_memory(&id)),
-            ),
-    )
+    rail.child(crate::ui::memory::settled::meeting_footer(s, m, p).mt(8.0))
 }
 
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {

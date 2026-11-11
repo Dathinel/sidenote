@@ -40,7 +40,7 @@ def main():
         if name in ('memory','memory-5','memory-empty'):
             expected={'memory':1,'memory-5':5,'memory-empty':0}[name]
             assert len(needs(nodes))==expected
-            assert keyed(nodes,'memory-count')['text']==('1 thing needs you' if expected==1 else f'{expected} things need you')
+            assert keyed(nodes,'memory-count')['text']==('Nothing needs you right now.' if expected==0 else '1 thing needs you' if expected==1 else f'{expected} things need you')
             assert not any(n.get('key')=='memory-filters' for n in nodes)
             assert len([n for n in nodes if n.get('key')=='mem-search'])==1
             if expected==0:
@@ -83,7 +83,7 @@ def main():
     ident=needs(nodes)[0]['key'].removeprefix('memory-need-')
     nodes,_=shot('accepted',events=[tap('memory-accept-'+ident)],state=state)
     assert not needs(nodes)
-    assert keyed(nodes,'memory-count')['text']=='0 things need you'
+    assert keyed(nodes,'memory-count')['text']=='Nothing needs you right now.'
     assert any(n.get('key')=='memory-undo-0' for n in nodes)
     nodes,_=shot('accepted-restarted',state=state)
     assert not needs(nodes)
