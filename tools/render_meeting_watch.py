@@ -47,7 +47,7 @@ def main():
                 x, y, w, h = element['rect']
                 assert x >= 0 and x + w <= width + 1 and y >= 0 and y + h <= 800, (base, key, element['rect'])
             text = ' '.join(n.get('text', '') for n in elements)
-            assert "Stop forgotten recordings: if a recording hears no speech for 20 minutes, Sidenote stops it so it doesn't run for hours." in text
+            assert "If a recording hears no speech for 20 minutes, Sidenote stops it so it doesn't run for hours." in text
             config = json.loads((settings.STATE / base / 'config.json').read_text(encoding='utf-8-sig'))
             labs = config.get('labs', {})
             enabled = mode == 'labs-enabled'
