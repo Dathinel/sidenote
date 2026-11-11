@@ -68,6 +68,11 @@ fn main() {
         }
         return;
     }
+    if args.iter().any(|a| a == "--relay-preview-headless") {
+        std::process::exit(i32::from(
+            sidenote::core::relay_preview::headless(&args).is_err(),
+        ));
+    }
     if args.iter().any(|a| a == "--version") {
         println!("Sidenote {}", sidenote::updates::VERSION);
         return;

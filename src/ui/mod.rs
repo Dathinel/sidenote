@@ -477,6 +477,15 @@ impl State {
             waker: None,
         };
         s.load_annotation_options();
+        match core::relay_preview::Settings::load(&s.store.root) {
+            Ok(settings) => {
+                s.hex.shell.relay_address = TextEdit::new(&settings.address);
+                s.hex.shell.relay = settings;
+            }
+            Err(_) => {
+                s.hex.shell.relay_error = Some("Could not read relay preview settings.".into())
+            }
+        }
         s.rebuild_nav();
         s.refresh_areas();
         s.refresh_list();

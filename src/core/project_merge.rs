@@ -205,6 +205,9 @@ impl TaskStore {
         ))
     }
     pub fn merge_projects(&self, preview: &MergePreview) -> io::Result<Projects> {
+        if super::relay_preview::Settings::load(&self.root)?.enabled {
+            return Err(invalid("Turn off relay preview before merging projects"));
+        }
         sync_state::update_checked_validated(
             &self.root,
             "projects.json",
@@ -319,6 +322,11 @@ impl TaskStore {
         Ok(backup)
     }
     pub fn undo_project_merge(&self, from: &str, expected_id: &str) -> io::Result<Projects> {
+        if super::relay_preview::Settings::load(&self.root)?.enabled {
+            return Err(invalid(
+                "Turn off relay preview before undoing a project merge",
+            ));
+        }
         let projects = self.load_projects()?;
         let merge = projects
             .merges

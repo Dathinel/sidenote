@@ -1,6 +1,7 @@
 [workspace]
-members = ["crates/meetings-domain"]
-default-members = [".", "crates/meetings-domain"]
+members = ["crates/meetings-domain", "crates/sidenote-sync"]
+exclude = ["crates/sidenote-sync/vendor/spake2"]
+default-members = [".", "crates/meetings-domain", "crates/sidenote-sync"]
 resolver = "3"
 
 [package]
@@ -13,6 +14,9 @@ license = "AGPL-3.0-or-later"
 image = { version = "=0.25.10", default-features = false, features = ["png"] }
 base64 = "0.22"
 jsonschema = { version = "0.37", default-features = false }
+anyhow = "1"
+automerge = "=0.12.0"
+sidenote-sync = { path = "crates/sidenote-sync" }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 sha2 = "0.11"
 url = "2"
@@ -54,3 +58,7 @@ panic = "unwind"
 
 [dev-dependencies]
 pollster = "1"
+tempfile = "3"
+
+[patch.crates-io]
+spake2 = { path = "crates/sidenote-sync/vendor/spake2" }

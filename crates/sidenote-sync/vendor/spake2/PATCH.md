@@ -1,0 +1,1 @@
+Vendored RustCrypto spake2 0.4.0 from the crates.io archive. The protocol and group calculations are unchanged. Local changes: zeroize Password buffers on drop, and store password_vec in Zeroizing<Vec<u8>>. This addresses owned password copies without changing cryptography. Keep the non-RFC/timing caveats documented; a separate RFC 9382 evaluation remains follow-up work.

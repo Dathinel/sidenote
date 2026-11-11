@@ -1,0 +1,16 @@
+name = "sidenote-relay"
+main = "src/index.ts"
+compatibility_date = "2026-11-09"
+workers_dev = true
+send_metrics = false
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
