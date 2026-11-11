@@ -17,6 +17,7 @@ out.mkdir(parents=True, exist_ok=True)
 receipts = []
 codex_model = next(r for r in json.loads((root / "default-runners.json").read_text())
                    if r["name"] == "Codex").get("model") or "Codex"
+codex_model = {"gpt-6.1-terra": "GPT-6.1 Terra", "gpt-6.1-sol": "GPT-6.1 Sol"}.get(codex_model, codex_model)
 
 
 def render(name, scene, theme="light", events=None, state=None):
@@ -90,10 +91,10 @@ for theme in ("light", "dark"):
     assert any("What did we decide?" in n.get("text", "") for n in fallback)
 
 warming, _ = render("live-ask-warming-1280-light", "meeting-agent-warming")
-line = keyed(warming, "ask-starting-codex")
-assert line["text"] == "Starting Codex…"
-pill = keyed(warming, "ask-pill")
-assert line["rect"][1] >= pill["rect"][1] + pill["rect"][3]
+keyed(warming, "ask-progress")
+assert sum(n.get("text") == "Starting Codex…" for n in warming) == 1
+assert not any("Thinking," in n.get("text", "") for n in warming)
+assert not any(n.get("key") == "ask-starting-codex" for n in warming)
 assert keyed(warming, "ask-model")["label"] == "Model: Codex"
 assert not any(n.get("key") == "ask-fallback-notice" for n in warming)
 

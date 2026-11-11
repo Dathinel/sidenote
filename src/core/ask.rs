@@ -316,6 +316,29 @@ pub fn spawn_with_options(
         progress,
     )
 }
+pub fn live_prompt(history: &[Message]) -> String {
+    format!(
+        "{RULES}\nAnswer only about this live meeting using its notes and transcript so far. Do not read other meetings.\n\nConversation so far:\n{}\n\nYou:",
+        chat(history)
+    )
+}
+pub fn spawn_live(
+    key: String,
+    history: Vec<Message>,
+    runner: String,
+    options: super::ask_options::Options,
+    cancel: Cancel,
+    progress: impl Fn(AskProgress) + Send + 'static,
+) -> std::sync::mpsc::Receiver<Result<String, String>> {
+    spawn_job(
+        move |step| {
+            check_question(&history)?;
+            options.run(&runner, options.prompt(live_prompt(&history))?, &key, &step)
+        },
+        cancel,
+        progress,
+    )
+}
 /// Runs `job` on a worker that `cancel_all` waits for. Its answer is queued before the final
 /// progress event, and the job's own final events are replaced by that one.
 pub(super) fn spawn_job(

@@ -116,7 +116,7 @@ Elapsed: about 80 minutes including orientation, implementation, cold compilatio
 
 ## Round 1 accepted follow-up
 
-Scope: remove thinking from the model picker in live and normal Ask. A question queued while Codex is still warming shows a muted `Starting Codex…` line under the box until non-empty answer text arrives. Warm-up progress must not trigger fallback. The existing error fallback remains unchanged.
+Scope: remove thinking from the model picker in live and normal Ask. A question queued while Codex is still warming shows a muted `Starting Codexâ€¦` line under the box until non-empty answer text arrives. Warm-up progress must not trigger fallback. The existing error fallback remains unchanged.
 
 Keep the same branch, isolated target, gates, version and screen restrictions. Add regression tests, re-render both live themes plus one warming state, and make no additional live provider calls. Final verification follows. No additional live provider calls were made; the six-call budget from the first round is unchanged.
 
@@ -148,3 +148,49 @@ Updated requested PNGs:
 - `artifacts/meeting-agent/live-ask-warming-1280-light.png`
 
 The same branch and isolated target were retained. No push, version change, packaging, installation or owner-screen input was performed.
+
+
+## Round 2 final mechanism review
+
+Purpose: keep one truthful progress status, prevent live panels from covering the page, use one composer width, default live Ask to the current meeting and show catalog model names.
+
+Success criteria: Starting Codex appears once in the answer card until the actual turn starts; then the timer starts from that event. The composer uses the panel width at rest and with answers. The live document and transcript toggle stay above a bounded panel stack; the transcript scrolls and gives up space first. Live questions use only this meeting's transcript and typed notes unless the scope menu is widened. Outside defaults remain unchanged. Catalog names replace known ids and unknown ids stay intact.
+
+Constraints and edge cases: preserve the branch, version, targets and gates. Keep drafts when scope changes and store live chats separately from all-meeting chats, including recordings without an id yet. Bound both scroll regions on narrow or short windows. Keep existing error fallback and cancellation. Use synthetic fixtures only, no extra provider requests and no owner-screen input. Finish this round and stop. Broader page redesign, citation work, model changes and distribution remain out of scope.
+
+The answer card owns the warming spinner row. It shows `Starting Codex…` while a submitted question waits behind priming. The actual turn-start event clears that status and starts the thinking timer from zero. There is no separate status under the composer and no fallback caused by waiting.
+
+The live page now lays out the title, notes and transcript toggle above the panel stack. Long notes have an internal scroll region. The stack uses the remaining pane height, with the transcript shrinking before the answer card; the transcript list shrinks and scrolls within its card. The live composer uses the panel width in both idle and answered states.
+
+Live Ask defaults to This meeting. Its prompt includes the current transcript and typed notes, without scanning the saved meeting corpus. The scope menu can widen it to All meetings and return to the separate live conversation without losing a draft. Outside meetings, the existing scope and agent defaults remain. The model field resolves known catalog ids to names such as `GPT-6.1 Terra`; unknown ids are retained.
+
+Regression coverage includes warming versus an actual turn, the timer reset, current-only prompt context, scope switching and draft retention, safe live conversation keys, panel height allocation, and known and unknown model names. The offscreen checker covers all three requested states in both themes at 1280 and 390 px, plus the scope menu and widened scope. No provider calls were added; the total remains six from the original implementation.
+
+| Final round gate | Result | Seconds |
+|---|---|---:|
+| `cargo fmt --all --check` | PASS | 5.00 |
+| `cargo clippy --workspace --locked --all-targets -- -D warnings` | PASS | 40.58 |
+| `cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings` | PASS | 26.72 |
+| `cargo test --workspace --locked` | PASS, 267 tests | 73.30 |
+| `cargo test --workspace --locked --features asr-runtime` | PASS, 267 tests | 108.81 |
+| `cargo build --locked` | PASS | 16.47 |
+| `python tools/mcp-smoke.py target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS | 1.48 |
+| `python tools/verify-meeting-agent-round2.py target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, 14 frames | 45.11 |
+| `python tools/verify-meeting-agent.py target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, 41 frames | 140.80 |
+| `python tools/settings-reachability.py artifacts/meeting-agent` | PASS, 49 legacy keys | 0.39 |
+
+Both test configurations passed 1 domain unit test, 14 domain integration tests, 199 app library tests and 53 UI tests. Isolated child tests are not counted twice. Both Clippy runs denied warnings. The legacy manifest and its expected count are unchanged. These checks are rung 4 evidence.
+
+All 12 requested PNGs were inspected visually, rung 5 for these synthetic states. Each has a matching warning-free element tree and was captured after the final executable was built. The checks assert that the title, notes and transcript toggle finish above the panels; the inner transcript stays within its card; adding an Ask card shrinks the transcript; and the idle and answered composer widths match. The first narrow capture exposed an inner scroll area that did not shrink with its card. That was corrected before the final gate run. No timeout, assertion, hook or gate was bypassed.
+
+Requested PNGs are in `artifacts/meeting-agent/round2/`:
+
+| State | 1280 light | 1280 dark | 390 light | 390 dark |
+|---|---|---|---|---|
+| Idle | `live-ask-idle-1280-light.png` | `live-ask-idle-1280-dark.png` | `live-ask-idle-390-light.png` | `live-ask-idle-390-dark.png` |
+| Warming | `live-ask-warming-1280-light.png` | `live-ask-warming-1280-dark.png` | `live-ask-warming-390-light.png` | `live-ask-warming-390-dark.png` |
+| Answer, transcript open | `live-ask-answer-1280-light.png` | `live-ask-answer-1280-dark.png` | `live-ask-answer-390-light.png` | `live-ask-answer-390-dark.png` |
+
+Gate logs and command receipts are in `artifacts/meeting-agent/round2/gates/`. PNG/tree hashes and the final executable hash are in `artifacts/meeting-agent/round2/verified-receipts.json`.
+
+Elapsed: about 40 minutes. Reading and editing, verification, layout rework and waiting account for the work. Builds and verification took the largest share; the narrow transcript sizing was the main avoidable rework. The same branch and isolated target were retained. Version 0.0.1-dev.15 is unchanged. No push, packaging, installation, additional provider calls or owner-screen input was performed. This is the final mechanism round.

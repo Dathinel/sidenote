@@ -980,7 +980,63 @@ fn stamp(seconds: u64) -> String {
 /// The live transcript above the bar, newest line at the bottom. A scroll area that follows the
 /// end: it keeps following new lines, stops when the reader scrolls up, and follows again once
 /// they are back at the bottom.
-fn transcript_panel(s: &State, p: Palette) -> El {
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PanelLimits {
+    pub space: f32,
+    pub thread: f32,
+    pub transcript: f32,
+}
+fn panel_limits(
+    pane: f32,
+    document: f32,
+    thread: f32,
+    has_ask: bool,
+    has_transcript: bool,
+    notice: bool,
+) -> PanelLimits {
+    let space = (pane - document.min((pane - 108.0).max(0.0))).max(0.0);
+    let available = (space - 108.0 - if notice { 46.0 } else { 0.0 }).max(0.0);
+    let transcript_min = if has_transcript && available >= 140.0 {
+        64.0
+    } else {
+        0.0
+    };
+    let thread_limit = if has_ask {
+        (available - transcript_min - if has_transcript { 20.0 } else { 10.0 }).clamp(0.0, 300.0)
+    } else {
+        0.0
+    };
+    let thread_height = if has_ask {
+        thread.max(44.0).min(thread_limit)
+    } else {
+        0.0
+    };
+    let transcript = if has_transcript {
+        (available - thread_height - if has_ask { 20.0 } else { 10.0 }).clamp(0.0, 384.0)
+    } else {
+        0.0
+    };
+    PanelLimits {
+        space,
+        thread: thread_limit,
+        transcript,
+    }
+}
+pub(super) fn limits(s: &State) -> PanelLimits {
+    let id = s.ask_key();
+    panel_limits(
+        s.pane_h.get(),
+        s.live_document_h.get(),
+        s.live_thread_h.get(),
+        !s.saved.messages.is_empty() || s.asks.contains_key(&id) || s.ask_errors.contains_key(&id),
+        s.live
+            .as_ref()
+            .is_some_and(|live| live.panel_open && live.phase == Phase::Recording),
+        s.ask_settings.fallback_notice.is_some(),
+    )
+}
+
+fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
     let Some(live) = s.live.as_ref() else {
         return el();
     };
@@ -1055,13 +1111,14 @@ fn transcript_panel(s: &State, p: Palette) -> El {
                     .child(roles::SMALL.wrap(&line.text, p.ink).grow(1.0).min_w(0.0)),
             );
         }
-        let max_h = (s.pane_h.get() * 0.45).clamp(150.0, 340.0);
-        col().w_full().child(
+        let max_h = (cap - 44.0).max(0.0);
+        col().w_full().min_h(0.0).shrink().child(
             col()
                 .key("live-tx-scroll")
                 .w_full()
                 .max_h(max_h)
                 .min_h(0.0)
+                .shrink()
                 .scroll(ScrollSpec { stick_bottom: true })
                 .child(rows),
         )
@@ -1071,21 +1128,26 @@ fn transcript_panel(s: &State, p: Palette) -> El {
             .key("live-panel")
             .w_full()
             .radius(16.0)
+            .max_h(cap)
+            .min_h(0.0)
+            .shrink()
+            .clip_rounded(16.0)
             .transition(rise(10.0))
             .child(header)
             .child(hairline(p))
-            .child(body),
+            .child(body.min_h(0.0).shrink()),
         p,
     )
 }
 
 /// The bottom bar: the recording pill next to the Ask pill, with the transcript above.
 fn bar(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+    let cap = limits(s).transcript;
     let panel = s
         .live
         .as_ref()
-        .filter(|l| l.panel_open && l.phase == Phase::Recording)
-        .map(|_| transcript_panel(s, p));
+        .filter(|l| l.panel_open && l.phase == Phase::Recording && cap >= 44.0)
+        .map(|_| transcript_panel(s, p, cap));
     ask::overlay_with(s, k, p, narrow, layer, None, panel)
 }
 
@@ -1120,7 +1182,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
         .w_full()
-        .min_h(if narrow { 8.0 } else { 12.0 } * roles::READ.lh)
+        .min_h(2.0 * roles::READ.lh)
         .color(p.ink)
         .placeholder("Write notes\u{2026}", p.faint)
         .caret(p.ink, k.selection())
@@ -1178,14 +1240,19 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
     } else {
         c = c.child(roles::META.wrap(hint, p.faint));
     }
-    c = c.children((!starting).then(|| rec_pill(s, k, p)));
-    c.child(
+    c = c.child(
         col()
             .key("live-notes")
             .w_full()
+            .max_h((s.pane_h.get() * 0.35).clamp(96.0, 280.0))
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
             .mt(if narrow { 4.0 } else { 10.0 })
-            .child(rune::auto_grow(field, if narrow { 8 } else { 12 }, 400)),
-    )
+            .child(rune::auto_grow(field, 2, 400)),
+    );
+    c.children((!starting).then(|| rec_pill(s, k, p)))
 }
 
 fn save_warning(recording: bool, recovered: bool) -> String {
@@ -1421,12 +1488,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .max_w(720.0)
         .px(if narrow { 20.0 } else { 40.0 })
         .pt(if narrow { 20.0 } else { 40.0 })
-        // Room under the editor for the floating bar.
-        .pb(if phase == Phase::Making {
-            56.0
-        } else {
-            s.overlay_h.get() + 32.0
-        })
+        .pb(if phase == Phase::Making { 56.0 } else { 12.0 })
         .items_start()
         .gap(16.0);
     if lost {
@@ -1454,10 +1516,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_h(0.0)
         .w_full()
         .fill(p.bg)
-        .child(scroll(
-            col().w_full().items_center().child(doc),
-            "live-scroll",
-        ));
+        .child(
+            scroll(col().w_full().items_center().child(doc), "live-scroll").min_h(
+                if phase == Phase::Making {
+                    0.0
+                } else {
+                    s.live_document_h
+                        .get()
+                        .min((s.pane_h.get() - 108.0).max(0.0))
+                },
+            ),
+        );
     if phase != Phase::Making {
         pane = pane.child(bar(s, k, p, narrow, layer));
     }
@@ -1468,6 +1537,16 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 mod writer_tests {
     use super::*;
 
+    #[test]
+    fn panel_budget_preserves_the_document_and_shrinks_transcript_first() {
+        for (pane, document) in [(748.0, 340.0), (748.0, 410.0)] {
+            let idle = panel_limits(pane, document, 0.0, false, true, false);
+            let answer = panel_limits(pane, document, 150.0, true, true, false);
+            assert!(answer.transcript < idle.transcript);
+            assert!(answer.transcript + answer.thread.min(150.0) + 128.0 <= answer.space + 0.1);
+            assert!(answer.space + document <= pane + 0.1);
+        }
+    }
     #[test]
     fn restart_and_late_summary_preserve_live_notes() {
         use sidenote::{

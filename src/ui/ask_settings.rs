@@ -23,6 +23,9 @@ pub struct AskSettings {
     pub meeting_level: Option<Thinking>,
     pub meeting_epoch: u64,
     pub fallback_notice: Option<String>,
+    pub live_all: bool,
+    pub scope_open: bool,
+    pub live_chat: String,
     pub chat: Thinking,
     pub models: BTreeMap<String, String>,
     pub model_input: TextEdit,
@@ -56,6 +59,9 @@ impl AskSettings {
             meeting_level: None,
             meeting_epoch: 0,
             fallback_notice: None,
+            live_all: false,
+            scope_open: false,
+            live_chat: core::live_ask_key(&chrono::Local::now().timestamp_millis().to_string()),
             chat: prefs.ask_chat_thinking,
             models: prefs.ask_models.clone(),
             model_input: TextEdit::default(),
@@ -74,6 +80,18 @@ impl AskSettings {
     }
 }
 impl State {
+    pub fn live_scope_available(&self) -> bool {
+        self.ask_live_meeting() && self.selected.is_none() && !self.companies.open
+    }
+    pub fn ask_current_live(&self) -> bool {
+        self.live_scope_available() && !self.ask_settings.live_all
+    }
+    pub fn set_live_scope(&mut self, all: bool) {
+        self.ask_settings.live_all = all;
+        self.ask_settings.scope_open = false;
+        self.ask_settings.warm_signature.clear();
+        self.load_saved();
+    }
     pub fn ask_live_meeting(&self) -> bool {
         self.hex_recording() || self.ask_settings.recording
     }
@@ -108,6 +126,12 @@ impl State {
         core::ask_session::release();
     }
     pub fn meeting_agent_transition(&mut self) {
+        self.ask_settings.live_all = false;
+        self.ask_settings.scope_open = false;
+        let seed = super::hex::recording_start(self)
+            .map(|(at, _)| at.timestamp_millis())
+            .unwrap_or_else(|| chrono::Local::now().timestamp_millis());
+        self.ask_settings.live_chat = core::live_ask_key(&seed.to_string());
         self.ask_settings.fallback_notice = None;
         self.ask_settings.meeting_epoch += 1;
         self.ask_settings.meeting_override = None;
@@ -725,9 +749,6 @@ mod tests {
             .insert(id.clone(), super::super::AskRun::stand_in("Codex", &[], 0));
         for event in [
             core::AskProgress::StartingCodex,
-            core::AskProgress::Started {
-                runner: "Codex".into(),
-            },
             core::AskProgress::Text {
                 text: String::new(),
             },
@@ -741,6 +762,16 @@ mod tests {
             assert_eq!(state.ask_runner_name(), Some("Codex"));
             assert!(state.ask_settings.fallback_notice.is_none());
         }
+        state.apply_event(super::super::Event::Progress {
+            id: id.clone(),
+            generation: 0,
+            event: core::AskProgress::Started {
+                runner: "Codex".into(),
+            },
+        });
+        assert!(!state.asks[&id].starting_codex);
+        assert!(state.asks[&id].turn_started);
+        assert!(state.asks[&id].started.elapsed().as_secs() < 1);
         state.apply_event(super::super::Event::Progress {
             id: id.clone(),
             generation: 0,
@@ -823,5 +854,36 @@ mod tests {
             "Synthetic completed answer"
         );
         assert_eq!(state.ask_runner_name(), Some("Claude Sonnet"));
+
+        state.selected = None;
+        state.ask_settings.recording = true;
+        state.meeting_agent_transition();
+        assert!(state.ask_current_live());
+        let live_key = state.ask_key();
+        assert_ne!(live_key, core::ALL_KEY);
+        state
+            .store
+            .append_message(
+                &live_key,
+                core::Message {
+                    role: "user".into(),
+                    text: "Only this meeting".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        state.question = TextEdit::new("Keep the draft while changing scope");
+        state.set_live_scope(true);
+        assert_eq!(state.ask_key(), core::ALL_KEY);
+        assert!(!state.ask_current_live());
+        state.set_live_scope(false);
+        assert_eq!(state.ask_key(), live_key);
+        assert_eq!(
+            state.saved.messages.last().unwrap().text,
+            "Only this meeting"
+        );
+        assert_eq!(state.question.text, "Keep the draft while changing scope");
+        state.ask_settings.recording = false;
+        assert_eq!(state.ask_key(), core::ALL_KEY);
     }
 }

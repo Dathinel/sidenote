@@ -35,6 +35,13 @@ impl Default for StateStore {
 }
 /// The key of the Ask thread across all meetings, which is not a meeting id.
 pub const ALL_KEY: &str = "all";
+pub fn live_ask_key(seed: &str) -> String {
+    format!("live-{}", blake3::hash(seed.as_bytes()).to_hex())
+}
+pub(crate) fn is_live_ask_key(id: &str) -> bool {
+    id.strip_prefix("live-")
+        .is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+}
 pub fn company_ask_key(id: &str) -> String {
     format!("company-{}", blake3::hash(id.as_bytes()).to_hex())
 }
@@ -44,6 +51,7 @@ pub(crate) fn is_company_ask_key(id: &str) -> bool {
 }
 fn checked_path(root: &Path, id: &str) -> io::Result<PathBuf> {
     let valid = id == ALL_KEY
+        || is_live_ask_key(id)
         || is_company_ask_key(id)
         || id.split_once('-').is_some_and(|(a, b)| {
             !a.is_empty() && !b.is_empty() && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())

@@ -56,6 +56,7 @@ pub struct Options {
     pub model: Option<String>,
     pub meeting: bool,
     pub live: Option<LiveSource>,
+    pub live_notes: Option<String>,
     pub meeting_agent: bool,
     pub fallback: Option<Fallback>,
 }
@@ -172,6 +173,11 @@ impl Options {
             instructions.push_str("\nIf the live transcript is empty, no speech is available yet. Do not infer the current meeting from older meetings.");
         }
         prompt.insert_str(boundary, &instructions);
+        if let Some(notes) = &self.live_notes {
+            prompt.push_str("\n<live_notes>\n");
+            prompt.push_str(notes);
+            prompt.push_str("\n</live_notes>\n");
+        }
         if let Some(source) = &self.live {
             let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
             let folder = folder.or_else(|| {
@@ -278,6 +284,49 @@ fn recent_meeting_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn current_live_prompt_includes_notes_and_transcript_without_other_meetings() {
+        let root =
+            std::env::temp_dir().join(format!("meeting-agent-live-context-{}", std::process::id()));
+        let current = root.join("1800000000000-1");
+        let other = root.join("1800000000001-1");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            current.join("english-transcript.md"),
+            "[00:04] Maya will prepare the Friday prototype.",
+        )
+        .unwrap();
+        std::fs::write(
+            other.join("english-summary.md"),
+            "Unrelated synthetic budget decision",
+        )
+        .unwrap();
+        let options = Options {
+            meeting: true,
+            live: Some(LiveSource {
+                hint: Some("1800000000000-1".into()),
+                start_ms: None,
+            }),
+            live_notes: Some("Typed notes: use paper cards".into()),
+            ..Default::default()
+        };
+        let history = [super::super::Message {
+            role: "user".into(),
+            text: "What did we decide?".into(),
+            ..Default::default()
+        }];
+        let prompt = options
+            .prompt_in(super::super::ask::live_prompt(&history), &root)
+            .unwrap();
+        assert!(prompt.contains("Typed notes: use paper cards"));
+        assert!(prompt.contains("Maya will prepare"));
+        assert!(prompt.contains("Do not read other meetings"));
+        assert!(!prompt.contains("Unrelated synthetic budget decision"));
+        let key = super::super::live_ask_key("../synthetic meeting");
+        assert!(super::super::persistence::is_live_ask_key(&key));
+        assert!(!super::super::persistence::is_live_ask_key("live-../../"));
+    }
     #[test]
     fn waiting_for_codex_warmup_does_not_select_the_fallback() {
         let options = Options {
