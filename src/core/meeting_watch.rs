@@ -545,6 +545,7 @@ mod tests {
             dictating,
             capture_state: "idle".into(),
             model: serde_json::from_value(serde_json::json!({})).unwrap(),
+            labs: Box::default(),
         }
     }
     fn wav(data: &[u8]) -> Vec<u8> {
