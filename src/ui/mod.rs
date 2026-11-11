@@ -1331,7 +1331,8 @@ impl State {
                             .find(|r| r.name == runner)
                             .map(core::ask_options::agent_name)
                             .unwrap_or(&runner);
-                        self.notice = Some(format!("Codex isn't available, using {name}."));
+                        self.ask_settings.fallback_notice =
+                            Some(format!("Codex isn't available, using {name}."));
                         let epoch = run.meeting_epoch;
                         if self.ask_live_meeting() && epoch == self.ask_settings.meeting_epoch {
                             self.ask_settings.meeting_override =

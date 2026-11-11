@@ -696,6 +696,20 @@ pub fn overlay_with(
     if let Some(panel) = thread(s, k, &id, p) {
         stack = stack.child(panel);
     }
+    if let Some(notice) = &s.ask_settings.fallback_notice {
+        stack = stack.child(
+            roles::META
+                .wrap(notice, p.soft)
+                .key("ask-fallback-notice")
+                .role("status")
+                .w_full()
+                .px(14.0)
+                .py(8.0)
+                .radius(10.0)
+                .fill(p.card)
+                .border(1.0, p.line),
+        );
+    }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
         let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
             raised(

@@ -22,6 +22,7 @@ pub struct AskSettings {
     pub meeting_override: Option<(String, Option<String>)>,
     pub meeting_level: Option<Thinking>,
     pub meeting_epoch: u64,
+    pub fallback_notice: Option<String>,
     pub chat: Thinking,
     pub models: BTreeMap<String, String>,
     pub model_input: TextEdit,
@@ -54,6 +55,7 @@ impl AskSettings {
             meeting_override: None,
             meeting_level: None,
             meeting_epoch: 0,
+            fallback_notice: None,
             chat: prefs.ask_chat_thinking,
             models: prefs.ask_models.clone(),
             model_input: TextEdit::default(),
@@ -98,6 +100,7 @@ impl State {
             .or_else(|| self.runners.iter().find(|r| &r.name == name)?.model.clone())
     }
     pub fn choose_meeting_model(&mut self, name: String, model: Option<String>) {
+        self.ask_settings.fallback_notice = None;
         self.ask_settings.meeting_epoch += 1;
         self.ask_settings.meeting_override = Some((name, model));
         self.runner_open = false;
@@ -105,6 +108,7 @@ impl State {
         core::ask_session::release();
     }
     pub fn meeting_agent_transition(&mut self) {
+        self.ask_settings.fallback_notice = None;
         self.ask_settings.meeting_epoch += 1;
         self.ask_settings.meeting_override = None;
         self.ask_settings.meeting_level = None;
@@ -139,15 +143,16 @@ impl State {
             return;
         }
         self.ask_settings.warm_signature = signature;
-        core::ask::prewarm(
-            runner,
-            &core::ask_options::Options {
-                model,
-                thinking,
-                ..Default::default()
-            },
-            chat,
-        );
+        let options = core::ask_options::Options {
+            model,
+            thinking,
+            ..Default::default()
+        };
+        if self.ask_live_meeting() {
+            let _ = core::ask::prewarm_meeting(runner, &options, chat);
+        } else {
+            core::ask::prewarm(runner, &options, chat);
+        }
     }
 
     pub fn discover_ask_models(&mut self) {

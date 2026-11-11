@@ -156,6 +156,14 @@ pub fn prewarm(runner: Runner, options: &super::ask_options::Options, chat: Stri
         super::ask_session::warm(runner, chat);
     }
 }
+pub fn prewarm_meeting(
+    runner: Runner,
+    options: &super::ask_options::Options,
+    chat: String,
+) -> Result<std::sync::mpsc::Receiver<Result<(), String>>, String> {
+    let runner = options.runner(read_only_runner(runner)?)?;
+    Ok(super::ask_session::warm_meeting(runner, chat))
+}
 
 /// Sends the final progress event for a finished call and passes the result through.
 pub(super) fn report(
