@@ -59,7 +59,7 @@ reproducible. The default-off preview does not provide device revocation.
 | --- | --- | --- |
 | H1, old-group re-pairing undoes removal | Fixed local guard | 6465d81, 5183f56. `retired_group_pairing_is_refused_whichever_device_hosts`; `retired_groups_refuse_old_membership_and_loading_after_restart`. Protected retirement records block membership merge and group loading. Startup retires inactive records left by older previews. |
 | H2, survivors keep sharing with removed peer | Deferred; safe fallback applied | 6465d81. `three_peers_refuse_unavailable_removal_without_claiming_revocation` proves the backend refuses removal and leaves authority unchanged. The UI has no Remove action. Signed retirement, acknowledgments, offline delivery and old-history isolation are still required. |
-| M1, self-hosted relay abuse | Fixed bounded controls | 330dc83. Worker tests `allowlist refuses unlisted genesis without persisting a sync room`, `pair-owner allowlist and three pending slots are enforced across rooms`, `IP pairing cap refuses a ninth pending room before room allocation`, and `connection byte budget refuses more than four MiB per second`. Distributed abuse and edge rules still need hosted qualification. |
+| M1, self-hosted relay abuse | Fixed bounded controls | 330dc83, 1a25568. Worker tests `allowlist refuses unlisted genesis without persisting a sync room`, `group allowlist refuses unknown sync rooms before object allocation`, `pair-owner allowlist and three pending slots are enforced across rooms`, `IP pairing cap refuses a ninth pending room before room allocation`, and `connection byte budget refuses more than four MiB per second`. Distributed abuse and edge rules still need hosted qualification. |
 | M2, unsafe backup-restore advice when disabling | Fixed | 6465d81. `peer_folder_edits_refuse_disable_without_overwriting_or_restore_advice` copies a second owner's journals into the first root, checks safe refusal and proves newer bytes unchanged. Shared-folder checks use the same safe advice. |
 | M3, re-enable misses edits or replays deletions | Fixed for snapshots made by this build | 6465d81. `reenable_imports_existing_task_field_deltas_and_preserves_relay_fields`, `unchanged_folder_deletion_does_not_delete_a_relay_restore`, `a_new_folder_deletion_is_imported_once_on_reenable`. Older receipts without a baseline safely refuse changed imports. |
 | L1, unbounded capabilities poison durable policy | Fixed for incoming requirements | 6465d81. `unbounded_remote_requirements_do_not_poison_the_durable_policy` checks both version dimensions and reopening. Valid next-version requirements still retain downgrade protection. Removal remains unavailable even when compatible. |
@@ -95,7 +95,41 @@ Two physical devices, an owner-account hosted relay and independent re-review
 remain release gates. The restricted-token sandbox is also unfinished.
 
 Authoritative commands and results are in `artifacts/relay2-security-final-gates/`.
-Offscreen PNGs and element trees are in `artifacts/relay-security-ui/`.
+Offscreen PNGs and element trees are in `artifacts/relay-security-ui-final/`.
 The normal optimized build and driver-refusal proof are in
 `artifacts/relay-security-release-*.json` and matching text logs. A combined
 artifact index records the precise results after verification completes.
+
+## Time-limited receipt
+
+At the 75-minute stop, do not treat this branch as having green release gates.
+The final rerun is `artifacts/relay2-security-serialized-gates/`. Its fmt and both
+strict clippy commands passed. The complete workspace tests and standalone locked
+debug build are unfinished. Existing Cargo processes were left running; none
+was killed to obtain a lock.
+
+The first full test attempt exposed a status-read race during retirement. The
+mode-lock handoff fix is in 5183f56. The next attempt passed 185 library tests
+and 47 UI tests, then four integration cases timed out starting local Wrangler.
+The 45-second limit and all assertions remain unchanged. 34e5306 serializes
+local relay fixtures. A standalone mixed-version retry still timed out at Worker
+startup. A separate startup diagnostic also failed to reach health within 45
+seconds, with no startup error captured. The startup cause is unresolved.
+
+Passed local evidence retained independently of those failures:
+- Four current compiled core regressions: retired pairing in both directions,
+  retired records after restart, capability bounds and duplicate-probe retention.
+- Five folder-transition/security tests, including byte-preserving refusal,
+  field-delta re-import, deletion/restore handling and replica ignore rules.
+- 31 Worker tests and relay typecheck, including claim expiration and storage cleanup.
+- Normal optimized build and `normal_release_rejects_headless_driver`.
+- MCP smoke, both final static-check variants and 28 offscreen light/dark PNGs.
+
+The initial three-peer unavailable-removal test passed before the handoff change;
+the full rerun has not reconfirmed it because Wrangler startup failed. The
+protected retired-group and PAKE tests passed again from the current core binary.
+No result above substitutes for the unfinished workspace gates.
+
+See `artifacts/relay-security-evidence.json` for results and hashes and
+`artifacts/relay-security-pngs.md` for every absolute PNG path. The final build
+and test logs can advance after this receipt because Cargo work remains running.
