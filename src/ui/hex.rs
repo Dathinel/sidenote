@@ -12,6 +12,7 @@ use super::{
 mod meeting_languages;
 mod readable;
 pub(super) mod settings;
+mod setup;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
@@ -68,6 +69,8 @@ pub enum Action {
 }
 
 pub enum Msg {
+    Meetings(Result<EngineState, HexError>),
+    Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
@@ -107,6 +110,9 @@ fn plain(e: &HexError) -> &'static str {
 // ---- state ----------------------------------------------------------------------------------
 
 pub struct HexState {
+    meetings_setup_checked: bool,
+    installation: sidenote::hex_install::Installation,
+    install: sidenote::hex_install::State,
     engine: HexEngine,
     /// Tells the forwarder thread when the window is shown or hidden.
     visibility: Option<Sender<bool>>,
@@ -150,6 +156,9 @@ pub struct HexState {
 impl Default for HexState {
     fn default() -> Self {
         Self {
+            meetings_setup_checked: false,
+            installation: sidenote::hex_install::detect(),
+            install: sidenote::hex_install::State::default(),
             engine: HexEngine::new(),
             visibility: None,
             visible: false,
@@ -434,6 +443,27 @@ impl State {
 
     pub fn hex_apply(&mut self, msg: Msg) {
         match msg {
+            Msg::Meetings(result) => {
+                self.hex.busy_keys.remove("meetings.enabled");
+                match result {
+                    Ok(state) => {
+                        self.hex.row_errors.remove("meetings.enabled");
+                        self.hex.data_dirty = true;
+                        self.hex_status(Ok(state));
+                    }
+                    Err(_) => {
+                        self.hex.row_errors.insert("meetings.enabled".into(),
+                            "Could not confirm that Meetings is on. Open Hex > Settings > Labs > Meetings, then check again.".into());
+                    }
+                }
+            }
+            Msg::Install(state) => {
+                if !state.busy() {
+                    self.hex.installation = sidenote::hex_install::detect();
+                    self.hex_refresh_if_due();
+                }
+                self.hex.install = state;
+            }
             Msg::Status(r) => self.hex_status(r),
             Msg::Caps(version, r) => {
                 self.hex.caps_loading = false;
@@ -498,6 +528,13 @@ impl State {
     }
 
     fn hex_status(&mut self, r: Result<EngineState, HexError>) {
+        let show_meetings_setup = !self.hex.meetings_setup_checked
+            && r.as_ref()
+                .is_ok_and(|state| state.labs.state("meetings") == Some(false));
+        self.hex.meetings_setup_checked |= r.is_ok();
+        if !self.hex.install.busy() && !super::isolated() {
+            self.hex.installation = sidenote::hex_install::detect();
+        }
         let running = r.is_ok();
         let model_changed = r
             .as_ref()
@@ -525,6 +562,10 @@ impl State {
             self.ask_settings.last_live = self.ask_settings.recording_source.take();
         }
         self.hex.status = Some(r);
+        if show_meetings_setup && !super::isolated() {
+            self.open_hex();
+            self.hex.section = Section::Dictation;
+        }
         if let Some(recording) = recording {
             if recording {
                 self.ask_settings.recording_source =
@@ -734,6 +775,10 @@ impl State {
             || self.hex.record_busy
             || !self.hex.can(Feature::RecordStart)
             || self.hex.recording().is_some()
+            || self
+                .hex
+                .state()
+                .is_some_and(|state| state.labs.state("meetings") == Some(false))
         {
             return;
         }
@@ -925,9 +970,15 @@ impl State {
 fn indicator(s: &State, p: Palette) -> (Color, String) {
     match &s.hex.status {
         None => (p.faint, "Checking Hex".into()),
+        Some(Err(HexError::HexNotRunning))
+            if s.hex.installation == sidenote::hex_install::Installation::Missing =>
+        {
+            (p.warn, "Install Hex".into())
+        }
         Some(Err(HexError::HexNotRunning)) => (p.faint, "Hex not running".into()),
         Some(Err(HexError::Timeout)) => (p.warn, "Hex not answering".into()),
         Some(Err(_)) => (p.warn, "Hex unavailable".into()),
+        Some(Ok(st)) if st.labs.state("meetings") == Some(false) => (p.warn, "Meetings off".into()),
         Some(Ok(st)) => match (&st.recording, st.dictating) {
             (Some(r), _) => (
                 p.warn,
@@ -949,6 +1000,11 @@ pub fn short_status(s: &State, p: Palette) -> (Color, String) {
     }
     match &s.hex.status {
         None => (p.faint, "Checking".into()),
+        Some(Err(HexError::HexNotRunning))
+            if s.hex.installation == sidenote::hex_install::Installation::Missing =>
+        {
+            (p.warn, "Install Hex".into())
+        }
         Some(Err(HexError::HexNotRunning)) => (p.faint, "Not running".into()),
         Some(Err(HexError::Timeout)) => (p.warn, "Not answering".into()),
         Some(Err(_)) => (p.warn, "Unavailable".into()),
@@ -990,8 +1046,15 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
         Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
     } else if h.status.is_none() || h.caps_loading {
         Some("Checking for Hex. This takes a few seconds.")
+    } else if !h.running() && h.installation == sidenote::hex_install::Installation::Missing {
+        Some("Install Hex in Settings > Hex and dictation to record and transcribe.")
     } else if !h.running() {
         Some("Open Hex, then try New meeting again.")
+    } else if h
+        .state()
+        .is_some_and(|state| state.labs.state("meetings") == Some(false))
+    {
+        Some("Turn on Meetings in Hex. Open Settings > Hex and dictation.")
     } else if h.recording().is_some() {
         Some("Already recording")
     } else if h.record_busy {
@@ -1068,7 +1131,7 @@ fn summary_line(s: &State, p: Palette) -> El {
         "hex-status",
         "Hex",
         if s.hex.running() {
-            "Hex is running and records your meetings."
+            "Hex is running. Check its status here before recording."
         } else {
             "Start Hex to record your meetings."
         },

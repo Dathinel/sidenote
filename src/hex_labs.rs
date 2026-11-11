@@ -587,6 +587,19 @@ pub fn setting_id(key: &str) -> Option<String> {
     };
     valid_id(&id).then_some(id)
 }
+
+pub fn meetings_setting_can_enable(settings: &[Setting]) -> bool {
+    settings
+        .iter()
+        .find(|setting| setting.key == "meetings.enabled")
+        .is_some_and(|setting| {
+            setting.kind == "bool"
+                && setting.writable
+                && setting.available != Some(false)
+                && !setting.secret
+                && setting.value.as_bool() == Some(false)
+        })
+}
 /// Missing entries and invalid values are unknown, including in an enabled-only status list.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
@@ -662,7 +675,7 @@ impl Snapshot {
     }
     pub fn status(value: &Value) -> Self {
         let mut out = Self {
-            source: "Hex status (enabled only)",
+            source: "Hex status",
             ..Self::default()
         };
         if let Some(labs) = value.get("labs").and_then(Value::as_array) {
@@ -673,6 +686,10 @@ impl Snapshot {
             {
                 out.states.insert(id.into(), Some(true));
             }
+        }
+        // Windows hides Meetings from the Labs list, but status reports its explicit state.
+        if let Some(enabled) = value["features"]["meetings"].as_bool() {
+            out.states.insert("meetings".into(), Some(enabled));
         }
         out
     }
@@ -725,6 +742,23 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_meetings_off_is_explicit_even_when_hidden_from_labs() {
+        let off = Snapshot::status(&serde_json::json!({"features":{"meetings":false},"labs":[]}));
+        assert_eq!(off.state("meetings"), Some(false));
+        let on = Snapshot::status(&serde_json::json!({"features":{"meetings":true},"labs":[]}));
+        assert_eq!(on.state("meetings"), Some(true));
+        let conflicting = Snapshot::status(
+            &serde_json::json!({"features":{"meetings":false},"labs":["meetings"]}),
+        );
+        assert_eq!(conflicting.state("meetings"), Some(false));
+        for value in [
+            serde_json::json!({"labs":[]}),
+            serde_json::json!({"features":{"meetings":"false"}}),
+        ] {
+            assert_eq!(Snapshot::status(&value).state("meetings"), None);
+        }
+    }
     #[test]
     fn registry_matches_review_and_ids_are_unique() {
         let catalog: Vec<Value> =
