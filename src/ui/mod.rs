@@ -535,6 +535,10 @@ impl State {
         if s.config.features.memory {
             s.refresh_memory(true);
         }
+        if !isolated() && s.hex_needs_install() {
+            s.open_hex();
+            s.hex.section = hex::Section::Dictation;
+        }
         s
     }
 
@@ -2712,6 +2716,18 @@ pub fn spec() -> AppSpec<State> {
                 hex::settings::scene(s, "settings-people")
             }),
             ("settings-hex", |s| hex::settings::scene(s, "settings-hex")),
+            ("settings-hex-setup", |s| {
+                hex::settings::scene(s, "settings-hex-setup")
+            }),
+            ("settings-hex-installing", |s| {
+                hex::settings::scene(s, "settings-hex-installing")
+            }),
+            ("settings-hex-install-failed", |s| {
+                hex::settings::scene(s, "settings-hex-install-failed")
+            }),
+            ("settings-hex-installed", |s| {
+                hex::settings::scene(s, "settings-hex-installed")
+            }),
             ("settings-helpers", |s| {
                 hex::settings::scene(s, "settings-helpers")
             }),

@@ -38,7 +38,31 @@ def main():
     for item in mapping:
         assert item["key"] in manifest["keys"],item["key"]
         assert item["preserve_controls"]==manifest["keys"][item["key"]],item["key"]
+    setup_states = {
+        "hex-setup": ("Install Hex", "Sidenote needs Hex"),
+        "hex-installing": ("Install Hex", "12 of 48 MB (25%)"),
+        "hex-install-failed": ("Try again", "Could not download Hex"),
+        "hex-installed": ("Open Hex", "Hex is installed"),
+    }
+    for theme in ("dark", "light"):
+        for width in (1280, 390):
+            for state, (label, message) in setup_states.items():
+                path = folder / f"settings-{state}-{width}-{theme}.json"
+                tree = json.loads(path.read_text(encoding="utf-8-sig"))
+                controls = {n["key"]: n for n in tree["elements"] if n.get("key")}
+                assert "hex-setup" in controls, path
+                progress = controls["hex-install-progress"]
+                assert message in progress["text"], path
+                assert progress["role"] == ("alert" if state == "hex-install-failed" else "status"), path
+                action = "hex-setup-open" if state == "hex-installed" else "hex-install"
+                assert controls[action]["label"] == label, path
+                for key in (action, "hex-download-page", "hex-install-recheck"):
+                    control = controls[key]
+                    assert control["focusable"] == (state != "hex-installing" or key == "hex-download-page"), (path, key)
+                    x, y, w, h = control["rect"]
+                    assert 0 <= x < x + w <= width and 0 <= y < y + h <= 900, (path, key)
     print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; eleven pages and search reveal verified in {len(trees)} render trees.")
+    print("PASS: all 16 Hex setup renders show the expected copy, controls, busy state and visible actions.")
 
 
 if __name__ == "__main__":

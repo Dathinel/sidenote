@@ -2137,10 +2137,20 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .max_w(940.0)
         .px(if narrow { 16.0 } else { 40.0 })
         .pb(40.0);
+    let setup = (page == Page::Hex)
+        .then(|| super::setup::card(s, p))
+        .flatten();
+    let has_setup = setup.is_some();
+    if let Some(setup) = setup {
+        doc = doc.child(setup);
+    }
     if let Some(note_) = s
         .hex
         .page_note()
         .filter(|_| matches!(page, Page::Hex | Page::Appearance | Page::Meetings))
+        .filter(|_| {
+            !has_setup || !matches!(s.hex.status, None | Some(Err(HexError::HexNotRunning)))
+        })
     {
         doc = doc.child(note(note_, p));
     }
@@ -2150,7 +2160,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(problem) = &s.feature_error {
         doc = doc.child(roles::SMALL.wrap(problem, p.warn).role("alert"));
     }
-    doc = doc.child(body(s, k, p, layer, page, tab));
+    if page != Page::Hex || (s.hex.running() && !s.hex.install.busy()) {
+        doc = doc.child(body(s, k, p, layer, page, tab));
+    }
     col()
         .key("hex-pane")
         .w_full()
@@ -2286,7 +2298,11 @@ pub fn scene(s: &mut State, name: &str) {
         "people-our-team" | "people-team-editor" | "people-search" => (Page::People, 0),
         "people-external" => (Page::People, 1),
         "people-import" => (Page::People, 2),
-        "settings-hex" => (Page::Hex, 0),
+        "settings-hex"
+        | "settings-hex-setup"
+        | "settings-hex-installing"
+        | "settings-hex-install-failed"
+        | "settings-hex-installed" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
         "settings-speech" => (Page::Helpers, 1),
         "settings-helper-advanced" => (Page::Diagnostics, 0),
@@ -2302,6 +2318,34 @@ pub fn scene(s: &mut State, name: &str) {
         super::super::updates::settings_fixture(s);
     }
     navigate(s, page, tab);
+    match name {
+        "settings-hex-setup"
+        | "settings-hex-installing"
+        | "settings-hex-install-failed"
+        | "settings-hex-installed" => {
+            use sidenote::hex_install::{Installation, State};
+            s.hex.status = Some(Err(HexError::HexNotRunning));
+            s.hex.installation = Installation::Missing;
+            s.hex.install = match name {
+                "settings-hex-installing" => State::Downloading {
+                    bytes: 12_000_000,
+                    total: 48_000_000,
+                },
+                "settings-hex-install-failed" => {
+                    State::Failed("Could not download Hex. Check your connection and try again.")
+                }
+                "settings-hex-installed" => {
+                    s.hex.installation = Installation::Installed {
+                        version: "3.4.0".into(),
+                        exe: "fixture/hex.exe".into(),
+                    };
+                    State::Complete
+                }
+                _ => State::Idle,
+            };
+        }
+        _ => {}
+    }
     if name == "people-team-editor"
         && let Some(team) = s.tasks.teams.teams.first().cloned()
     {

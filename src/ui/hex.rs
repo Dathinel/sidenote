@@ -12,6 +12,7 @@ use super::{
 mod meeting_languages;
 mod readable;
 pub(super) mod settings;
+mod setup;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
@@ -68,6 +69,7 @@ pub enum Action {
 }
 
 pub enum Msg {
+    Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
@@ -107,6 +109,8 @@ fn plain(e: &HexError) -> &'static str {
 // ---- state ----------------------------------------------------------------------------------
 
 pub struct HexState {
+    installation: sidenote::hex_install::Installation,
+    install: sidenote::hex_install::State,
     engine: HexEngine,
     /// Tells the forwarder thread when the window is shown or hidden.
     visibility: Option<Sender<bool>>,
@@ -150,6 +154,8 @@ pub struct HexState {
 impl Default for HexState {
     fn default() -> Self {
         Self {
+            installation: sidenote::hex_install::detect(),
+            install: sidenote::hex_install::State::default(),
             engine: HexEngine::new(),
             visibility: None,
             visible: false,
@@ -434,6 +440,13 @@ impl State {
 
     pub fn hex_apply(&mut self, msg: Msg) {
         match msg {
+            Msg::Install(state) => {
+                if !state.busy() {
+                    self.hex.installation = sidenote::hex_install::detect();
+                    self.hex_refresh_if_due();
+                }
+                self.hex.install = state;
+            }
             Msg::Status(r) => self.hex_status(r),
             Msg::Caps(version, r) => {
                 self.hex.caps_loading = false;
@@ -498,6 +511,9 @@ impl State {
     }
 
     fn hex_status(&mut self, r: Result<EngineState, HexError>) {
+        if !self.hex.install.busy() && !super::isolated() {
+            self.hex.installation = sidenote::hex_install::detect();
+        }
         let running = r.is_ok();
         let model_changed = r
             .as_ref()
@@ -925,6 +941,11 @@ impl State {
 fn indicator(s: &State, p: Palette) -> (Color, String) {
     match &s.hex.status {
         None => (p.faint, "Checking Hex".into()),
+        Some(Err(HexError::HexNotRunning))
+            if s.hex.installation == sidenote::hex_install::Installation::Missing =>
+        {
+            (p.warn, "Install Hex".into())
+        }
         Some(Err(HexError::HexNotRunning)) => (p.faint, "Hex not running".into()),
         Some(Err(HexError::Timeout)) => (p.warn, "Hex not answering".into()),
         Some(Err(_)) => (p.warn, "Hex unavailable".into()),
@@ -949,6 +970,11 @@ pub fn short_status(s: &State, p: Palette) -> (Color, String) {
     }
     match &s.hex.status {
         None => (p.faint, "Checking".into()),
+        Some(Err(HexError::HexNotRunning))
+            if s.hex.installation == sidenote::hex_install::Installation::Missing =>
+        {
+            (p.warn, "Install Hex".into())
+        }
         Some(Err(HexError::HexNotRunning)) => (p.faint, "Not running".into()),
         Some(Err(HexError::Timeout)) => (p.warn, "Not answering".into()),
         Some(Err(_)) => (p.warn, "Unavailable".into()),
@@ -990,6 +1016,8 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
         Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
     } else if h.status.is_none() || h.caps_loading {
         Some("Checking for Hex. This takes a few seconds.")
+    } else if !h.running() && h.installation == sidenote::hex_install::Installation::Missing {
+        Some("Install Hex in Settings > Hex and dictation to record and transcribe.")
     } else if !h.running() {
         Some("Open Hex, then try New meeting again.")
     } else if h.recording().is_some() {

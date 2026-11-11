@@ -194,27 +194,31 @@ fn verify(asset: &VelopackAsset) -> Result<(), String> {
     {
         return Err("The update size does not match. Try again.".into());
     }
+    if !verify_sha256(&mut file, &asset.SHA256).map_err(|_| "Could not read the update.")? {
+        return Err("The update checksum does not match. Try again.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_sha256(reader: &mut impl Read, expected: &str) -> io::Result<bool> {
+    if expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 128 * 1024];
     loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| "Could not read the update.")?;
+        let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
         }
         hash.update(&buffer[..count]);
     }
-    if !hash
+    Ok(hash
         .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>()
-        .eq_ignore_ascii_case(&asset.SHA256)
-    {
-        return Err("The update checksum does not match. Try again.".into());
-    }
-    Ok(())
+        .eq_ignore_ascii_case(expected))
 }
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

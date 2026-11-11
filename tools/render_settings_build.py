@@ -49,8 +49,11 @@ def main():
  parser=argparse.ArgumentParser();parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true');args=parser.parse_args()
  OUT.mkdir(parents=True,exist_ok=True)
  jobs=[]
+ setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed')]
  for theme in ('dark','light'):
   for width in (1280,390):
+   for name,scene in setup_scenes:
+    jobs.append((name,scene,width,theme,900,None))
    for name,scene,height in PAGES:
     jobs.append((name,scene,width,theme,height,None))
    for name,scene,events in [('updates-available','updates-ready',None),('updates-checking','updates-checking',None),('hex-scrolled','settings-hex-expanded',[tap('settings-jump-5')]),('recording-expanded','settings-recording-expanded',None),('summaries-expanded','settings-summaries-expanded',None),('helpers-expanded','settings-helpers-expanded',None),('speech-expanded','settings-speech-expanded',None),('privacy-expanded','settings-privacy',[tap('notes-privacy-details')]),('diagnostics-expanded','settings-diagnostics',None),('sync-expanded','settings-sync-expanded',None),('people-editor','people-team-editor',[tap('team-advanced')])]:
