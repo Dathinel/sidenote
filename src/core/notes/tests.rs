@@ -227,6 +227,21 @@ fn explicit_click_allows_an_old_meeting_and_success_has_v2_and_mine() {
     let tasks: crate::core::TasksFile =
         serde_json::from_slice(&fs::read(folder.join("tasks.json")).unwrap()).unwrap();
     assert_eq!(tasks.tasks[0].mine, Some(true));
+    let history = crate::core::settle::Store::new(root.0.clone(), root.0.join("meetings"))
+        .history()
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(
+        history
+            .iter()
+            .any(|row| row.entry.kind == crate::core::settle::Kind::TaskProperties)
+    );
+    assert!(
+        history
+            .iter()
+            .any(|row| row.entry.kind == crate::core::settle::Kind::ProjectAssignment)
+    );
+    assert!(history.iter().all(|row| row.entry.source_meeting_id == ID));
     assert_eq!(fake.calls.len(), 2);
     assert_eq!(fake.calls[0].1, helper::NOTES_TIMEOUT);
     assert_eq!(fake.calls[1].1, helper::TASKS_TIMEOUT);

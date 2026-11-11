@@ -444,7 +444,14 @@ fn process(
         ));
         let bytes = serde_json::to_vec_pretty(&summary)?;
         // An external scripts process may still finish while the helper is running.
-        match store_io::publish(&folder.join("english-summary.json"), &bytes) {
+        let settle = core::settle::Store::new(
+            root.to_owned(),
+            folder
+                .parent()
+                .ok_or_else(|| store_io::invalid("Missing meetings folder"))?
+                .to_owned(),
+        );
+        match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, true) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return write(
@@ -478,7 +485,9 @@ fn process(
             if answer.fallback {
                 let _ = log(root, id, "tasks used default fallback");
             }
-            store_io::write(&folder.join("tasks.json"), &answer.value).is_err()
+            core::settle::Store::new(root.to_owned(), folder.parent().unwrap().to_owned())
+                .publish_projects(id, &summary.title, &serde_json::to_value(&answer.value)?)
+                .is_err()
         }
         Err(_) => {
             let _ = log(root, id, "task sorting failed");
@@ -675,6 +684,7 @@ pub fn start_worker() -> io::Result<()> {
     Ok(())
 }
 pub fn run_pending() -> io::Result<()> {
+    core::settle::Store::default().recover()?;
     let root = core::state_dir();
     let meetings = core::meetings_dir();
     let _worker = match store_io::lock(&jobs(&root).join("worker.lock")) {
@@ -771,7 +781,8 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
     }
     let new: core::Summary = serde_json::from_value(source.clone())?;
     core::TaskStore::new(root.to_owned()).preserve_redo(id, &old.todo, &new.todo)?;
-    store_io::write(&path, &source)?;
+    core::settle::Store::new(root.to_owned(), folder.parent().unwrap().to_owned())
+        .publish_summary(id, &source, false)?;
     let sorted = call.ladder(
         run,
         Agent::Tasks,
@@ -779,7 +790,15 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         |raw| schema::sorting(raw, &answer.value, projects, &settings.your_name),
     );
     let tasks_failed = match sorted {
-        Ok(sorted) => store_io::write(&folder.join("tasks.json"), &sorted.value).is_err(),
+        Ok(sorted) => {
+            core::settle::Store::new(root.to_owned(), folder.parent().unwrap().to_owned())
+                .publish_projects(
+                    id,
+                    &answer.value.title,
+                    &serde_json::to_value(&sorted.value)?,
+                )
+                .is_err()
+        }
         Err(_) => true,
     };
     write(

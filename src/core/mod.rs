@@ -20,6 +20,7 @@ pub mod memory;
 pub mod notes;
 mod paths;
 pub mod project_merge;
+pub mod settle;
 pub use paths::{configure_paths, is_proof_path};
 pub mod agent_tools;
 mod device;

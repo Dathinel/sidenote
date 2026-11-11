@@ -237,3 +237,15 @@ The owner reads local and peer meetings and publishes reports/proposals to its j
 Other devices can read them and edit their own ticks, tasks, memory and Ask history. Two
 accidental daily owners cannot replace each other's files; the later report item wins in the
 view. To transfer scheduling ownership, disable the old owner and enable the new one.
+
+## Automatic settle history
+
+`memory/settle-log/` is one append-only, device-local log. Each immutable intent is
+flushed and published before its source-data write; a separate immutable outcome
+records whether it landed. Startup reconciles pending intents. Undo and Redo append
+new intents and never rewrite earlier history. The directory is outside the shared
+`state/` tree and must stay excluded from sync in this slice.
+
+Settle history needs to join sync in a later slice. That work must preserve operation
+identity, causality, source deletions and the optimistic guards before allowing an
+Undo from another device. Do not copy one device's history into another device's log.
