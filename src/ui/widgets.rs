@@ -117,7 +117,7 @@ fn button_state(
     .label(accessible_name)
     .hover(hover)
     .press(pressed)
-    .focus_ring(2.0, 2.0, p.accent);
+    .focus_ring(2.0, 2.0, p.soft);
     if !key.is_empty() {
         b = b.key(key);
     }
@@ -140,7 +140,7 @@ fn button_state(
     }
     match state {
         rune_kit::State::Disabled => b.disabled(true).inert().dim(0.5),
-        rune_kit::State::Focus => b.outline(2.0, 2.0, p.accent),
+        rune_kit::State::Focus => b.outline(2.0, 2.0, p.soft),
         _ => b,
     }
 }

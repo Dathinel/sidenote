@@ -871,7 +871,7 @@ fn profile_item(
     .help(name.to_string())
     .radius(6.0)
     .hover(p.chip)
-    .focus_ring(1.0, 0.0, p.accent)
+    .focus_ring(1.0, 0.0, p.soft)
     .on_press(action)
 }
 
