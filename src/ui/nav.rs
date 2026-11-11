@@ -9,7 +9,7 @@ use super::{
     State, hex, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, pressable, sidebar_icon},
+    widgets::{dot, pressable},
 };
 use chrono::{DateTime, Local};
 use rune::{Color, El, col, el, row};
@@ -24,6 +24,7 @@ pub const COLLAPSE_AT: f32 = 820.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
+    Companies,
     Meetings,
     Annotations,
     Tasks,
@@ -61,7 +62,9 @@ pub struct NavCache {
 
 impl State {
     pub fn page(&self) -> Page {
-        if self.annotations.open {
+        if self.companies.open {
+            Page::Companies
+        } else if self.annotations.open {
             Page::Annotations
         } else if self.view == View::Tasks {
             Page::Tasks
@@ -211,13 +214,6 @@ fn icon_check(c: Color, _: Color) -> El {
 fn icon_device(c: Color) -> El {
     super::icons::draw(&super::icons::DEVICE, 18.0, c)
 }
-pub fn icon_plus(c: Color) -> El {
-    super::icons::draw(&super::icons::PLUS, 16.0, c)
-}
-pub fn icon_stop(_: f32, c: Color) -> El {
-    super::icons::draw(&super::icons::STOP, 16.0, c)
-}
-
 // ---- the sidebar ------------------------------------------------------------------------------
 
 /// Row heights: the three places, the tools in the footer, and a project under its label.
@@ -296,14 +292,18 @@ fn toggle(s: &State, p: Palette) -> El {
     } else {
         "Show sidebar (Ctrl+\\)"
     };
-    pressable(col().child(sidebar_icon(open, p)))
-        .key("sidebar-toggle")
-        .label(name)
-        .help(name)
-        .padding(8.0)
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press(|s: &mut State| s.toggle_sidebar())
+    super::widgets::icon_button(
+        if open {
+            &super::icons::PANEL_CLOSE
+        } else {
+            &super::icons::PANEL_OPEN
+        },
+        name,
+        "sidebar-toggle",
+        super::widgets::ButtonRole::Ghost,
+        p,
+    )
+    .on_press(|s: &mut State| s.toggle_sidebar())
 }
 
 /// A place or a tool: what it is called, where it goes and the one signal it may carry.
@@ -535,23 +535,12 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         return recording_pill(s, p, narrow);
     }
     let blocked = hex::start_blocked(s);
-    let ink = if blocked.is_some() { p.soft } else { p.card };
-    let b = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .children((!meetings_home(s)).then(|| icon_plus(ink)))
-            .child(
-                roles::CONTROL
-                    .bold()
-                    .wrap(if narrow { "New" } else { "New meeting" }, ink),
-            ),
-    )
-    .key("new-meeting")
-    .px(if narrow { 12.0 } else { 16.0 })
-    .py(7.0)
-    .radius(999.0)
-    .fill(p.accent);
+    let b = super::widgets::button(
+        if narrow { "+ New" } else { "+ New meeting" },
+        "new-meeting",
+        super::widgets::ButtonRole::Primary,
+        p,
+    );
     let action = match blocked {
         None => b
             .label("New meeting")
@@ -560,20 +549,19 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         Some(reason) => b
             .label(format!("New meeting ({reason})"))
             .help(reason)
-            .fill(p.chip)
-            .color(p.soft)
-            .focusable(false),
+            .opacity(0.5)
+            .disabled(true),
     };
-    col().items_end().gap(2.0).child(action).children(
-        blocked
-            .filter(|reason| !reason.starts_with("Checking for Hex."))
-            .map(|reason| {
-                roles::META
-                    .wrap(reason, p.soft)
-                    .max_w(if narrow { 300.0 } else { 440.0 })
-                    .role("status")
-            }),
-    )
+    col()
+        .items_end()
+        .gap(2.0)
+        .child(action)
+        .children(blocked.map(|reason| {
+            roles::META
+                .wrap(reason, p.soft)
+                .max_w(if narrow { 300.0 } else { 440.0 })
+                .role("status")
+        }))
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
@@ -583,58 +571,41 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
         (Some(c), false) => format!("Recording {c}"),
         (None, _) => "Recording".into(),
     };
-    let open = pressable(
+    let open = super::widgets::button(
+        "",
+        "recording-open",
+        super::widgets::ButtonRole::Secondary,
+        p,
+    )
+    .gap(0.0)
+    .child(
         row()
             .gap(8.0)
             .items_center()
             .child(dot(8.0, p.warn))
-            .child(roles::CONTROL.bold().wrap(words.clone(), p.ink)),
+            .child(roles::CONTROL.wrap(words.clone(), p.soft)),
     )
-    .key("recording-open")
     .label(format!("{words}. Open the live meeting"))
     .help("Open the live meeting")
-    .pl(14.0)
-    .pr(12.0)
-    .py(7.0)
-    .radius(999.0)
-    .hover(p.chip)
     .on_press(|s: &mut State| s.open_live());
     let why = hex::stop_blocked(s);
-    let stop = pressable(
-        row()
-            .gap(7.0)
-            .items_center()
-            .children(
-                (!meetings_home(s))
-                    .then(|| icon_stop(9.0, if why.is_some() { p.faint } else { p.ink })),
-            )
-            .child(
-                roles::CONTROL
-                    .bold()
-                    .wrap("Stop", if why.is_some() { p.faint } else { p.ink }),
-            ),
-    )
-    .key("hex-stop")
-    .pl(12.0)
-    .pr(14.0)
-    .py(7.0)
-    .radius(999.0);
+    let stop = super::widgets::button("Stop", "hex-stop", super::widgets::ButtonRole::Secondary, p);
     let stop = match why {
         None => stop
             .label("Stop recording")
             .help("Stop recording and write the summary")
-            .hover(p.chip)
             .on_press(|s: &mut State| s.hex_record_stop()),
-        Some(reason) => stop.label(format!("Stop ({reason})")).help(reason).dim(0.6),
+        Some(reason) => stop
+            .label(format!("Stop ({reason})"))
+            .help(reason)
+            .disabled(true)
+            .dim(0.5),
     };
     row()
         .key("recording-pill")
+        .gap(8.0)
         .items_center()
-        .radius(999.0)
-        .fill(p.card)
-        .border(1.0, p.line)
         .child(open)
-        .child(el().w(1.0).h(18.0).fill(p.line))
         .child(stop)
 }
 
@@ -900,7 +871,7 @@ fn profile_item(
     .help(name.to_string())
     .radius(6.0)
     .hover(p.chip)
-    .focus_ring(1.0, 0.0, p.accent)
+    .focus_ring(1.0, 0.0, p.soft)
     .on_press(action)
 }
 

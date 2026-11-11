@@ -6,6 +6,7 @@ use super::{
     theme::Palette,
     widgets::{pressable, scroll},
 };
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, col, row};
 use rune_kit::Kit;
 use sidenote::core::{
@@ -95,6 +96,7 @@ impl State {
                 .map(|m| core::Meeting {
                     id: m.id.clone(),
                     title: m.title.clone(),
+                    diary_title: m.diary_title.clone(),
                     started: m.started,
                     summary: core::Summary {
                         todo: m.summary.todo.clone(),
@@ -458,7 +460,11 @@ impl State {
                 self.tasks.today = chrono::Local::now().date_naive();
                 self.tasks.checked = snapshot.checked;
                 self.tasks.all = snapshot.all_tasks;
-                self.tasks.items = snapshot.task_items;
+                self.tasks.items = if self.tasks.diary_filter.is_some() {
+                    self.tasks.all.clone()
+                } else {
+                    snapshot.task_items
+                };
                 self.tasks.names = snapshot.task_names;
                 self.tasks.counts = snapshot.task_counts;
                 self.areas.meeting_projects = snapshot.meeting_projects;
@@ -593,7 +599,7 @@ fn undo_cards(s: &State, p: Palette) -> El {
             card = card.child(
                 button("Undo change", &format!("area-undo-{id}"), p)
                     .self_start()
-                    .disabled(s.areas.pending.is_some())
+                    .button_disabled(s.areas.pending.is_some())
                     .on_press(move |s: &mut State| s.undo_area(id.clone())),
             );
         } else {
@@ -604,13 +610,13 @@ fn undo_cards(s: &State, p: Palette) -> El {
     content
 }
 pub fn button(title: impl Into<String>, key: &str, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(title, p.accent))
-        .key(key)
-        .px(10.0)
-        .py(7.0)
-        .radius(6.0)
-        .border(1.0, p.line)
-        .hover(p.chip)
+    let title = title.into();
+    super::widgets::button(
+        title.clone(),
+        key,
+        super::widgets::button_role(&title, false),
+        p,
+    )
 }
 pub fn notices(s: &State, p: Palette) -> El {
     let mut content = col().w_full().gap(8.0);
@@ -690,7 +696,7 @@ pub fn project_tools(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Opt
             .gap(8.0)
             .child(
                 button("Move into area", "area-move", p)
-                    .disabled(s.areas.pending.is_some())
+                    .button_disabled(s.areas.pending.is_some())
                     .on_press(move |s: &mut State| {
                         s.start_area(Action::Move {
                             project_id: move_id.clone(),
@@ -700,7 +706,7 @@ pub fn project_tools(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Opt
             )
             .child(
                 button("Turn into area", "area-convert", p)
-                    .disabled(s.areas.pending.is_some())
+                    .button_disabled(s.areas.pending.is_some())
                     .on_press(move |s: &mut State| {
                         s.start_area(Action::Convert {
                             project_id: convert_id.clone(),
@@ -953,7 +959,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             doc = doc.child(
                 button("Restore area", "area-restore", p)
                     .self_start()
-                    .disabled(s.areas.pending.is_some())
+                    .button_disabled(s.areas.pending.is_some())
                     .on_press(move |s: &mut State| {
                         s.start_area(Action::Create { name: name.clone() })
                     }),
@@ -969,7 +975,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .child(
                     button("Rename area", "area-rename", p)
-                        .disabled(s.areas.pending.is_some())
+                        .button_disabled(s.areas.pending.is_some())
                         .on_press(move |s: &mut State| {
                             s.start_area(Action::Rename {
                                 area_id: id.clone(),
@@ -992,7 +998,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .gap(8.0)
                 .child(
                     button("Create area", "area-create", p)
-                        .disabled(s.areas.pending.is_some())
+                        .button_disabled(s.areas.pending.is_some())
                         .on_press(|s: &mut State| {
                             s.start_area(Action::Create {
                                 name: String::new(),
@@ -1001,7 +1007,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .child(
                     button("Review migration", "area-migrate", p)
-                        .disabled(s.areas.pending.is_some())
+                        .button_disabled(s.areas.pending.is_some())
                         .on_press(|s: &mut State| {
                             s.start_area(area_editor::migration(&s.areas.catalog))
                         }),

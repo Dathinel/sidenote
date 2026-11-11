@@ -4,11 +4,7 @@
 //! Copying uses the window's own clipboard request (`Tx::copy`). The folder opens through
 //! File Explorer with the path as one argument, and an export is written into the app's
 //! `exports` folder, never into a meeting folder, so a meeting from another device is only read.
-use super::{
-    State, roles,
-    theme::Palette,
-    widgets::{label, pressable},
-};
+use super::{State, theme::Palette};
 use rune::{El, Tx};
 use rune_kit::{Kit, Menu, MenuItem, Placement};
 use sidenote::{
@@ -48,6 +44,7 @@ impl Part {
 impl State {
     /// A short confirmation near the top of the window. `poll` takes it down after two seconds.
     pub fn show_toast(&mut self, text: impl Into<String>, tx: &mut Tx) {
+        self.memory.settle_toast_action = None;
         self.toast = Some((text.into(), Instant::now() + TOAST_FOR));
         tx.wake_after(TOAST_FOR + Duration::from_millis(60));
     }
@@ -143,26 +140,21 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
     let key = format!("more-{scope}-{}", m.id);
     let open = s.more_menu.as_deref() == Some(key.as_str());
     let toggle = key.clone();
-    let caption = if scope == "row" {
-        roles::CONTROL.wrap("More", p.soft)
+    let trigger = if scope == "row" {
+        super::widgets::quiet_button("More", &format!("{key}-button"), p)
     } else {
-        label(
-            "\u{2026}",
-            if scope == "meeting" { 16.0 } else { 18.0 },
-            700.0,
-            p.soft,
+        super::widgets::icon_button(
+            &super::icons::MORE,
+            "More actions",
+            &format!("{key}-button"),
+            super::widgets::ButtonRole::Ghost,
+            p,
         )
-    };
-    let trigger = pressable(caption.px(8.0).pb(3.0))
-        .key(format!("{key}-button"))
-        .label("More actions")
-        .help("More actions")
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press(move |s: &mut State| {
-            let same = s.more_menu.as_deref() == Some(toggle.as_str());
-            s.more_menu = (!same).then(|| toggle.clone());
-        });
+    }
+    .on_press(move |s: &mut State| {
+        let same = s.more_menu.as_deref() == Some(toggle.as_str());
+        s.more_menu = (!same).then(|| toggle.clone());
+    });
     let mut menu = Menu::new(key)
         .trigger(trigger)
         .open(open)

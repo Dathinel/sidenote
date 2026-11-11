@@ -1,9 +1,5 @@
 //! Quiet update notices and the device's Updates settings.
-use super::{
-    Event, State, hex, roles,
-    theme::Palette,
-    widgets::{hairline, link, pressable},
-};
+use super::{Event, State, hex, roles, theme::Palette, widgets::hairline};
 use rune::{El, col, el, row};
 use sidenote::updates::{self, Phase, Status};
 
@@ -223,38 +219,51 @@ fn busy(status: &Status) -> bool {
     )
 }
 fn install(s: &State, p: Palette, footer: bool) -> El {
-    let ready = s.updates.status.phase == Phase::Ready;
-    let b = pressable(
-        roles::CONTROL
-            .wrap(
-                match s.updates.status.phase {
-                    Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
-                    Phase::Preparing => "Preparing update".into(),
-                    Phase::StoppingListener => "Stopping the listener".into(),
-                    _ => "Install and restart".into(),
-                },
-                if ready { p.card } else { p.soft },
+    let ready = s.updates.status.phase == Phase::Ready
+        && !s.hex_recording()
+        && !s.hex_record_busy()
+        && s.asks.is_empty()
+        && s.live.is_none()
+        && !s.edit_busy
+        && !s.annotations.working()
+        && s.ai_notes.pending.is_none()
+        && !s.ai_notes.jobs.values().any(|job| {
+            matches!(
+                job.state,
+                sidenote::core::notes::JobState::Queued | sidenote::core::notes::JobState::Running
             )
-            .px(12.0)
-            .py(7.0),
+        });
+    let title = match s.updates.status.phase {
+        Phase::Downloading => format!("Downloading {}%", s.updates.status.progress),
+        Phase::Preparing => "Preparing update".into(),
+        Phase::StoppingListener => "Stopping the listener".into(),
+        _ => "Install and restart".into(),
+    };
+    let b = crate::ui::widgets::button(
+        title,
+        if footer {
+            "update-footer-install"
+        } else {
+            "update-install"
+        },
+        crate::ui::widgets::ButtonRole::Primary,
+        p,
     )
-    .key(if footer {
-        "update-footer-install"
-    } else {
-        "update-install"
-    })
     .label(if ready {
         "Install update and restart Sidenote"
     } else {
         "Update progress"
     })
     .disabled(!ready)
-    .radius(7.0)
-    .fill(if ready { p.accent } else { p.chip });
+    .dim(if ready { 1.0 } else { 0.5 });
     if ready {
         b.on_press(|s: &mut State| s.install_update())
     } else {
-        b.help("The download must finish first")
+        b.help(if s.updates.status.phase == Phase::Ready {
+            "Finish recording, Ask and background jobs before installing."
+        } else {
+            "The download must finish first"
+        })
     }
 }
 fn actions(s: &State, p: Palette, footer: bool) -> El {
@@ -267,9 +276,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
             | Phase::Preparing
             | Phase::StoppingListener
     ) {
-        if s.updates.status.phase != Phase::Available {
-            actions = actions.child(install(s, p, footer));
-        }
+        actions = actions.child(install(s, p, footer));
         if !s.updates.applying
             && !matches!(
                 s.updates.status.phase,
@@ -277,7 +284,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
             )
         {
             actions = actions.child(
-                link("Later", p)
+                crate::ui::widgets::action("Later", p)
                     .key(if footer {
                         "update-footer-later"
                     } else {
@@ -289,7 +296,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
     }
     if !s.updates.status.notes.is_empty() {
         actions = actions.child(
-            link(
+            crate::ui::widgets::action(
                 if s.updates.notes_open {
                     "Hide what changed"
                 } else {
@@ -308,56 +315,54 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
     actions
 }
 pub fn section(s: &State, p: Palette) -> El {
-    if s.updates.status.phase == Phase::Manual {
-        return col()
-            .w_full()
-            .gap(12.0)
-            .pt(20.0)
-            .child(roles::GROUP.wrap("Application", p.soft))
-            .child(roles::SMALL.wrap("Updates are off for this manual install", p.soft));
-    }
     let status = &s.updates.status;
-    let mut body = col()
-        .key("updates-section")
-        .w_full()
-        .gap(12.0)
-        .pt(20.0)
-        .child(roles::GROUP.wrap("Application", p.soft))
-        .child(
-            super::hex::settings::panel(p).child(super::hex::settings::setting_row(
-                s,
-                "update-version",
-                &format!("Sidenote {}", updates::VERSION),
-                "Check for a new version.",
-                if busy(status) {
-                    roles::CONTROL.line("Checking...", p.soft)
-                } else {
-                    link("Check now", p)
-                        .key("update-check")
-                        .on_press(|s: &mut State| s.check_updates())
-                },
-                false,
-                p,
-            )),
+    let checked = status
+        .checked
+        .as_deref()
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+        .map_or_else(
+            || "Not checked yet".into(),
+            |d| format!("Last checked {}", d.format("%d %b %Y at %H:%M")),
         );
+    let mut application = super::hex::settings::panel(p).key("updates-section").child(
+        super::hex::settings::setting_row(
+            s,
+            "update-version",
+            &format!("Sidenote {}", updates::VERSION),
+            &checked,
+            if status.phase == Phase::Manual {
+                roles::SMALL.wrap("Updates are off for this manual install", p.soft)
+            } else {
+                crate::ui::widgets::button(
+                    if status.phase == Phase::Checking {
+                        "Checking…"
+                    } else {
+                        "Check now"
+                    },
+                    "update-check",
+                    crate::ui::widgets::ButtonRole::Secondary,
+                    p,
+                )
+                .disabled(busy(status))
+                .on_press(|s: &mut State| s.check_updates())
+            },
+            false,
+            p,
+        ),
+    );
     let title = match status.phase {
         Phase::Manual => "Updates are off for this manual install".into(),
         Phase::Preparing => "Preparing update".into(),
         Phase::StoppingListener => "Stopping the listener".into(),
-        Phase::Idle => {
-            if status.checked.is_some() {
-                "Sidenote is up to date.".into()
-            } else {
-                "Check for a new version.".into()
-            }
-        }
+        Phase::Idle => "Sidenote is up to date.".into(),
         Phase::Checking => "Checking the update folder...".into(),
         Phase::Available | Phase::Downloading | Phase::Ready => {
             format!("Update available: {}", status.version)
         }
         Phase::Error => "Could not update Sidenote.".into(),
     };
-    let mut card = super::hex::settings::panel(p)
+    let mut card = col()
+        .w_full()
         .padding(15.0)
         .gap(10.0)
         .child(roles::NAME.wrap(title, p.ink).role("status"));
@@ -398,7 +403,7 @@ pub fn section(s: &State, p: Palette) -> El {
     }
     if status.phase == Phase::Error || status.error.is_some() {
         card = card.child(
-            link("Try again", p)
+            crate::ui::widgets::action("Try again", p)
                 .key("update-retry")
                 .on_press(|s: &mut State| {
                     if s.updates.status.phase == Phase::Ready {
@@ -422,28 +427,15 @@ pub fn section(s: &State, p: Palette) -> El {
             .child(roles::SMALL.bold().wrap("What changed", p.ink))
             .child(roles::SMALL.wrap(&status.notes, p.soft));
     }
-    body = body
-        .child(roles::GROUP.wrap("Update status", p.soft))
-        .child(card)
-        .child(roles::META.wrap(
-            format!(
-            "Last checked: {}",
-            status
-                .checked
-                .as_deref()
-                .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-                .map_or_else(
-                    || "Not yet".into(),
-                    |d| d.format("%d %b %Y at %H:%M").to_string()
-                )
-        ),
-            p.soft,
-        ));
-    body.child(roles::META.wrap("Checks run when Sidenote opens, every 6 hours, and on focus if the last attempt was over 30 minutes ago. Installation waits until recording, Ask and background jobs finish.", p.faint).mt(8.0))
+    if !matches!(status.phase, Phase::Idle | Phase::Manual) {
+        application = application.child(hairline(p)).child(card);
+    }
+    col().w_full().mt(18.0).gap(8.0)
+        .child(roles::GROUP.wrap("Application",p.soft)).child(application)
+        .child(roles::META.wrap("Sidenote checks every 6 hours and installs when recording, Ask and jobs are idle.",p.faint).mt(8.0))
 }
 pub fn source(s: &State, p: Palette) -> El {
     col().w_full()
-        .child(roles::GROUP.wrap("Update source", p.soft))
         .child(roles::SMALL.wrap(if s.updates.scene {
                 "E:\\Sidenote updates".into()
             } else {
@@ -462,7 +454,7 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     }
     if !wide {
         return Some(
-            link("?", p)
+            super::widgets::action("?", p)
                 .key("update-footer")
                 .label("Update ready. Open Updates settings")
                 .on_press(|s: &mut State| s.open_updates()),
@@ -475,15 +467,15 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
             .py(10.0)
             .child(roles::CONTROL.line(format!("Sidenote {} is ready", u.status.version), p.soft))
             .child(
-                link("Restart to update", p)
+                crate::ui::widgets::action("Restart to update", p)
                     .key("update-footer-install")
                     .on_press(|s: &mut State| s.install_update()),
             ),
     )
 }
 pub fn scene(s: &mut State, phase: Phase) {
-    hex::scene(s, false);
     s.open_updates();
+    hex::scene(s, false);
     s.updates.scene = true;
     s.updates.status = Status { version: if phase == Phase::Idle { String::new() } else { "0.2.0".into() },
         progress: if phase == Phase::Downloading { 40 } else { 100 },

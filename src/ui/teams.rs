@@ -3,6 +3,7 @@ use super::{
     State, cards, icons, people::TeamEditor, roles, tasks::button, theme::Palette,
     widgets::hairline,
 };
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, Key, KeyEvent, TextEdit, Tx, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core;
@@ -193,7 +194,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
             .fill(if selected { p.sel } else { p.card })
             .role("checkbox")
             .checked(selected)
-            .disabled(s.edit_busy)
+            .button_disabled(s.edit_busy)
             .on_press(move |s: &mut State| {
                 let mut members = s
                     .tasks
@@ -215,7 +216,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
     }
     out = out.child(choices).child(
         cards::fold_control("Advanced", "team-advanced", editor.advanced, p)
-            .disabled(s.edit_busy)
+            .button_disabled(s.edit_busy)
             .on_press(|s: &mut State| {
                 if let Some(e) = &mut s.people.team_editor {
                     e.advanced = !e.advanced;
@@ -247,7 +248,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                             ))
                             .child(
                                 button("Remove team", "team-remove-confirm", false, p)
-                                    .disabled(s.edit_busy)
+                                    .button_disabled(s.edit_busy)
                                     .on_press(move |s: &mut State| {
                                         s.publish_edit(super::edit_worker::Job::TeamEdit {
                                             store: s.tasks.store.clone(),
@@ -260,7 +261,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
             } else {
                 out = out.child(
                     button("Remove team", "team-remove", false, p)
-                        .disabled(s.edit_busy)
+                        .button_disabled(s.edit_busy)
                         .on_press(|s: &mut State| {
                             if let Some(e) = &mut s.people.team_editor {
                                 e.remove_confirm = true;
@@ -275,12 +276,12 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
             .gap(8.0)
             .child(
                 button("Save team", "team-save", true, p)
-                    .disabled(s.edit_busy)
+                    .button_disabled(s.edit_busy)
                     .on_press(save),
             )
             .child(
                 button("Cancel", "team-cancel", false, p)
-                    .disabled(s.edit_busy)
+                    .button_disabled(s.edit_busy)
                     .on_press(cancel),
             ),
     )
@@ -307,13 +308,13 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                         row()
                             .gap(6.0)
                             .items_center()
-                            .child(icons::draw(&icons::PLUS, 16.0, p.accent))
-                            .child(roles::CONTROL.wrap("Add team", p.accent)),
+                            .child(icons::draw(&icons::PLUS, 16.0, p.soft))
+                            .child(roles::CONTROL.wrap("Add team", p.soft)),
                         "team-add",
                         "Add team".into(),
                         p,
                     )
-                    .disabled(s.edit_busy)
+                    .button_disabled(s.edit_busy)
                     .on_press(|s: &mut State| open(s, None)),
                 ),
         );
@@ -366,7 +367,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                         format!("{} {}", if opened { "Close" } else { "Open" }, team.name),
                         p,
                     )
-                    .disabled(s.edit_busy)
+                    .button_disabled(s.edit_busy)
                     .on_press(move |s: &mut State| {
                         if opened {
                             cancel(s)

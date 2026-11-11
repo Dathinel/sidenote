@@ -1,0 +1,699 @@
+[
+  {
+    "key": "meetings.audio_retention",
+    "owner": "Hex",
+    "home": "Privacy and data / Hex / Retention and files",
+    "preserve_controls": [
+      "keep-audio"
+    ],
+    "search_aliases": [
+      "meetings.audio_retention",
+      "keep-audio",
+      "Keep audio"
+    ],
+    "target": "keep-audio"
+  },
+  {
+    "key": "labs.expire_meeting_audio",
+    "owner": "Hex",
+    "home": "Privacy and data / Hex / Retention and files",
+    "preserve_controls": [
+      "keep-audio"
+    ],
+    "search_aliases": [
+      "labs.expire_meeting_audio",
+      "keep-audio",
+      "Keep audio (same combined control)"
+    ],
+    "target": "keep-audio"
+  },
+  {
+    "key": "meetings.retention",
+    "owner": "Hex",
+    "home": "Privacy and data / Hex / Retention and files",
+    "preserve_controls": [
+      "hs-meetings.retention"
+    ],
+    "search_aliases": [
+      "meetings.retention",
+      "hs-meetings.retention",
+      "Keep whole meetings"
+    ],
+    "target": "hs-meetings.retention"
+  },
+  {
+    "key": "general.launch_at_login",
+    "owner": "Hex",
+    "home": "Appearance and startup / Hex",
+    "preserve_controls": [
+      "hs-general.launch_at_login"
+    ],
+    "search_aliases": [
+      "general.launch_at_login",
+      "hs-general.launch_at_login",
+      "Open Hex when you sign in to Windows"
+    ],
+    "target": "hs-general.launch_at_login"
+  },
+  {
+    "key": "general.sound_effects",
+    "owner": "Hex",
+    "home": "Appearance and startup / Hex",
+    "preserve_controls": [
+      "hs-general.sound_effects"
+    ],
+    "search_aliases": [
+      "general.sound_effects",
+      "hs-general.sound_effects",
+      "Sound effects"
+    ],
+    "target": "hs-general.sound_effects"
+  },
+  {
+    "key": "dictation.shortcut",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Shortcuts",
+    "preserve_controls": [
+      "hs-dictation.shortcut"
+    ],
+    "search_aliases": [
+      "dictation.shortcut",
+      "hs-dictation.shortcut",
+      "Dictate"
+    ],
+    "target": "hs-dictation.shortcut"
+  },
+  {
+    "key": "dictation.language",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Dictation",
+    "preserve_controls": [
+      "hs-dictation.language"
+    ],
+    "search_aliases": [
+      "dictation.language",
+      "hs-dictation.language",
+      "Dictation language"
+    ],
+    "target": "hs-dictation.language"
+  },
+  {
+    "key": "dictation.max_seconds",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Dictation",
+    "preserve_controls": [
+      "hs-dictation.max_seconds"
+    ],
+    "search_aliases": [
+      "dictation.max_seconds",
+      "hs-dictation.max_seconds",
+      "Max seconds"
+    ],
+    "target": "hs-dictation.max_seconds"
+  },
+  {
+    "key": "meetings.silence_threshold",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex / Advanced",
+    "preserve_controls": [
+      "hs-meetings.silence_threshold"
+    ],
+    "search_aliases": [
+      "meetings.silence_threshold",
+      "hs-meetings.silence_threshold",
+      "Silence threshold"
+    ],
+    "target": "hs-meetings.silence_threshold"
+  },
+  {
+    "key": "meetings.output_folder",
+    "owner": "Hex",
+    "home": "Privacy and data / Hex / Retention and files",
+    "preserve_controls": [
+      "hs-meetings.output_folder"
+    ],
+    "search_aliases": [
+      "meetings.output_folder",
+      "hs-meetings.output_folder",
+      "Output folder"
+    ],
+    "target": "hs-meetings.output_folder"
+  },
+  {
+    "key": "cloud.api_key",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Advanced / Cloud connection",
+    "preserve_controls": [
+      "hs-cloud.api_key"
+    ],
+    "search_aliases": [
+      "cloud.api_key",
+      "hs-cloud.api_key",
+      "Cloud: API key"
+    ],
+    "target": "hs-cloud.api_key"
+  },
+  {
+    "key": "about.build",
+    "owner": "Hex",
+    "home": "Diagnostics / Hex",
+    "preserve_controls": [
+      "hs-about.build"
+    ],
+    "search_aliases": [
+      "about.build",
+      "hs-about.build",
+      "About: build"
+    ],
+    "target": "hs-about.build"
+  },
+  {
+    "key": "general.theme",
+    "owner": "Hex",
+    "home": "Appearance and startup / Hex",
+    "preserve_controls": [
+      "hs-general.theme"
+    ],
+    "search_aliases": [
+      "general.theme",
+      "hs-general.theme",
+      "Theme"
+    ],
+    "target": "hs-general.theme"
+  },
+  {
+    "key": "dictation.paste_method",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Dictation",
+    "preserve_controls": [
+      "hs-dictation.paste_method"
+    ],
+    "search_aliases": [
+      "dictation.paste_method",
+      "hs-dictation.paste_method",
+      "Paste method"
+    ],
+    "target": "hs-dictation.paste_method"
+  },
+  {
+    "key": "dictation.remove_filler_words",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Dictation",
+    "preserve_controls": [
+      "hs-dictation.remove_filler_words"
+    ],
+    "search_aliases": [
+      "dictation.remove_filler_words",
+      "hs-dictation.remove_filler_words",
+      "Remove filler words"
+    ],
+    "target": "hs-dictation.remove_filler_words"
+  },
+  {
+    "key": "meetings.auto_start",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex",
+    "preserve_controls": [
+      "hs-meetings.auto_start"
+    ],
+    "search_aliases": [
+      "meetings.auto_start",
+      "hs-meetings.auto_start",
+      "Start when a call starts"
+    ],
+    "target": "hs-meetings.auto_start"
+  },
+  {
+    "key": "meetings.record_my_microphone",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex",
+    "preserve_controls": [
+      "hs-meetings.record_my_microphone"
+    ],
+    "search_aliases": [
+      "meetings.record_my_microphone",
+      "hs-meetings.record_my_microphone",
+      "Record my microphone"
+    ],
+    "target": "hs-meetings.record_my_microphone"
+  },
+  {
+    "key": "shortcuts.paste_last",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Shortcuts",
+    "preserve_controls": [
+      "hs-shortcuts.paste_last"
+    ],
+    "search_aliases": [
+      "shortcuts.paste_last",
+      "hs-shortcuts.paste_last",
+      "Paste last shortcut"
+    ],
+    "target": "hs-shortcuts.paste_last"
+  },
+  {
+    "key": "shortcuts.toggle_meeting",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Shortcuts",
+    "preserve_controls": [
+      "hs-shortcuts.toggle_meeting"
+    ],
+    "search_aliases": [
+      "shortcuts.toggle_meeting",
+      "hs-shortcuts.toggle_meeting",
+      "Start or stop a meeting"
+    ],
+    "target": "hs-shortcuts.toggle_meeting"
+  },
+  {
+    "key": "labs.meeting_finished_event",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex / Advanced",
+    "preserve_controls": [
+      "hs-labs.meeting_finished_event"
+    ],
+    "search_aliases": [
+      "labs.meeting_finished_event",
+      "hs-labs.meeting_finished_event",
+      "Meeting finished event"
+    ],
+    "target": "hs-labs.meeting_finished_event"
+  },
+  {
+    "key": "labs.live_captions",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex",
+    "preserve_controls": [
+      "hs-labs.live_captions"
+    ],
+    "search_aliases": [
+      "labs.live_captions",
+      "hs-labs.live_captions",
+      "Live captions"
+    ],
+    "target": "hs-labs.live_captions"
+  },
+  {
+    "key": "labs.gpu_overlay",
+    "owner": "Hex",
+    "home": "Diagnostics / Hex",
+    "preserve_controls": [
+      "hs-labs.gpu_overlay"
+    ],
+    "search_aliases": [
+      "labs.gpu_overlay",
+      "hs-labs.gpu_overlay",
+      "GPU overlay"
+    ],
+    "target": "hs-labs.gpu_overlay"
+  },
+  {
+    "key": "network.proxy",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Advanced / Connection",
+    "preserve_controls": [
+      "hs-network.proxy"
+    ],
+    "search_aliases": [
+      "network.proxy",
+      "hs-network.proxy",
+      "Network: proxy"
+    ],
+    "target": "hs-network.proxy"
+  },
+  {
+    "key": "diagnostics.log_level",
+    "owner": "Hex",
+    "home": "Diagnostics / Hex",
+    "preserve_controls": [
+      "hs-diagnostics.log_level"
+    ],
+    "search_aliases": [
+      "diagnostics.log_level",
+      "hs-diagnostics.log_level",
+      "Diagnostics: log level"
+    ],
+    "target": "hs-diagnostics.log_level"
+  },
+  {
+    "key": "notes.engine",
+    "owner": "Sidenote",
+    "home": "Meetings / Summaries / Summary engine",
+    "preserve_controls": [
+      "notes-off",
+      "notes-scripts",
+      "notes-use-0"
+    ],
+    "search_aliases": [
+      "notes.engine",
+      "notes-off",
+      "notes-scripts",
+      "notes-use-0"
+    ],
+    "target": "notes-options"
+  },
+  {
+    "key": "notes.helper",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Meeting summaries",
+    "preserve_controls": [
+      "notes-use-0"
+    ],
+    "search_aliases": [
+      "notes.helper",
+      "notes-use-0",
+      "AI notes",
+      "AI helpers",
+      "Vocabulary",
+      "Teams"
+    ],
+    "target": "ai-notes-settings"
+  },
+  {
+    "key": "notes.model",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Meeting summaries / Model",
+    "preserve_controls": [
+      "notes-model-0"
+    ],
+    "search_aliases": [
+      "notes.model",
+      "notes-model-0"
+    ],
+    "target": "notes-model-0"
+  },
+  {
+    "key": "notes.auto",
+    "owner": "Sidenote",
+    "home": "Meetings / Summaries",
+    "preserve_controls": [
+      "notes-auto"
+    ],
+    "search_aliases": [
+      "notes.auto",
+      "notes-auto",
+      "AI notes",
+      "AI helpers",
+      "Vocabulary",
+      "Teams"
+    ],
+    "target": "notes-options"
+  },
+  {
+    "key": "notes.your_name",
+    "owner": "Sidenote",
+    "home": "General / You",
+    "preserve_controls": [
+      "notes-name"
+    ],
+    "search_aliases": [
+      "notes.your_name",
+      "notes-name"
+    ],
+    "target": "notes-identity"
+  },
+  {
+    "key": "agent-instructions.notes",
+    "owner": "Sidenote",
+    "home": "Prompt library / Meeting summary",
+    "preserve_controls": [
+      "instructions-input-0"
+    ],
+    "search_aliases": [
+      "agent-instructions.notes",
+      "instructions-input-0"
+    ],
+    "target": "agent-instructions"
+  },
+  {
+    "key": "agent-instructions.tasks",
+    "owner": "Sidenote",
+    "home": "Prompt library / Sorting tasks into projects",
+    "preserve_controls": [
+      "instructions-input-1"
+    ],
+    "search_aliases": [
+      "agent-instructions.tasks",
+      "instructions-input-1"
+    ],
+    "target": "agent-instructions"
+  },
+  {
+    "key": "teams.name",
+    "owner": "Sidenote",
+    "home": "People / Our team / Team editor",
+    "preserve_controls": [
+      "team-name"
+    ],
+    "search_aliases": [
+      "teams.name",
+      "team-name",
+      "AI notes",
+      "AI helpers",
+      "Vocabulary",
+      "Teams"
+    ],
+    "target": "settings-teams"
+  },
+  {
+    "key": "teams.members",
+    "owner": "Sidenote",
+    "home": "People / Our team / Team editor",
+    "preserve_controls": [
+      "team-members"
+    ],
+    "search_aliases": [
+      "teams.members",
+      "team-members"
+    ],
+    "target": "settings-teams"
+  },
+  {
+    "key": "teams.aliases",
+    "owner": "Sidenote",
+    "home": "People / Our team / Team editor / Advanced",
+    "preserve_controls": [
+      "team-aliases"
+    ],
+    "search_aliases": [
+      "teams.aliases",
+      "team-aliases"
+    ],
+    "target": "settings-teams"
+  },
+  {
+    "key": "meeting_languages",
+    "owner": "Sidenote",
+    "home": "Meetings / Recording / Sidenote / Languages you speak",
+    "preserve_controls": [
+      "meeting-language-en",
+      "meeting-language-hi",
+      "meeting-language-bn",
+      "meeting-language-ta",
+      "meeting-language-te",
+      "meeting-language-mr"
+    ],
+    "search_aliases": [
+      "meeting_languages",
+      "meeting-language-en",
+      "meeting-language-hi",
+      "meeting-language-bn",
+      "meeting-language-ta",
+      "meeting-language-te",
+      "meeting-language-mr"
+    ],
+    "target": "spoken-languages"
+  },
+  {
+    "key": "pipeline.profile",
+    "owner": "Sidenote",
+    "home": "Models and agents / Speech model / Advanced / Language handling",
+    "preserve_controls": [
+      "meeting-language-mode"
+    ],
+    "search_aliases": [
+      "pipeline.profile",
+      "meeting-language-mode"
+    ],
+    "target": "meeting-language-mode"
+  },
+  {
+    "key": "pipeline.language_mode",
+    "owner": "Sidenote",
+    "home": "Models and agents / Speech model / Advanced / Language handling",
+    "preserve_controls": [
+      "meeting-language-mode"
+    ],
+    "search_aliases": [
+      "pipeline.language_mode",
+      "meeting-language-mode"
+    ],
+    "target": "meeting-language-mode"
+  },
+  {
+    "key": "hex.vocabulary",
+    "owner": "Hex",
+    "home": "Meetings / Recording / Hex vocabulary",
+    "preserve_controls": [
+      "hex-term",
+      "hex-sounds",
+      "hex-vocab-add"
+    ],
+    "search_aliases": [
+      "hex.vocabulary",
+      "hex-term",
+      "hex-sounds",
+      "hex-vocab-add",
+      "AI notes",
+      "AI helpers",
+      "Vocabulary",
+      "Teams"
+    ],
+    "target": "hex-vocabulary"
+  },
+  {
+    "key": "hex.model",
+    "owner": "Hex",
+    "home": "Hex and dictation / Hex / Speech model",
+    "preserve_controls": [
+      "hex-model-parakeet-v3"
+    ],
+    "search_aliases": [
+      "hex.model",
+      "hex-model-parakeet-v3"
+    ],
+    "target": "legacy-hex-models"
+  },
+  {
+    "key": "features.tasks",
+    "owner": "Sidenote",
+    "home": "General / Sidebar features",
+    "preserve_controls": [
+      "feature-Tasks"
+    ],
+    "search_aliases": [
+      "features.tasks",
+      "feature-Tasks"
+    ],
+    "target": "feature-Tasks"
+  },
+  {
+    "key": "features.memory",
+    "owner": "Sidenote",
+    "home": "Meetings / Summaries",
+    "preserve_controls": [
+      "feature-Memory"
+    ],
+    "search_aliases": [
+      "features.memory",
+      "feature-Memory"
+    ],
+    "target": "feature-Memory"
+  },
+  {
+    "key": "features.daily_check",
+    "owner": "Sidenote",
+    "home": "Meetings / Tasks",
+    "preserve_controls": [
+      "feature-Daily check"
+    ],
+    "search_aliases": [
+      "features.daily_check",
+      "feature-Daily check"
+    ],
+    "target": "feature-Daily check"
+  },
+  {
+    "key": "features.projects",
+    "owner": "Sidenote",
+    "home": "General / Sidebar features",
+    "preserve_controls": [
+      "feature-Projects"
+    ],
+    "search_aliases": [
+      "features.projects",
+      "feature-Projects"
+    ],
+    "target": "feature-Projects"
+  },
+  {
+    "key": "features.other_devices",
+    "owner": "Sidenote",
+    "home": "Sync / Devices",
+    "preserve_controls": [
+      "feature-Other devices"
+    ],
+    "search_aliases": [
+      "features.other_devices",
+      "feature-Other devices"
+    ],
+    "target": "feature-Other devices"
+  },
+  {
+    "key": "annotations.helper",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Annotations",
+    "preserve_controls": [
+      "annotation-agent-Claude Code",
+      "annotation-agent-Codex"
+    ],
+    "search_aliases": [
+      "annotations.helper",
+      "annotation-agent-Claude Code",
+      "annotation-agent-Codex"
+    ],
+    "target": "annotation-agent-row"
+  },
+  {
+    "key": "annotations.model",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Annotations",
+    "preserve_controls": [
+      "annotation-model-menu-trigger"
+    ],
+    "search_aliases": [
+      "annotations.model",
+      "annotation-model-menu-trigger"
+    ],
+    "target": "annotation-model-row"
+  },
+  {
+    "key": "ask_models",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Ask",
+    "preserve_controls": [
+      "ask-settings-model-trigger"
+    ],
+    "search_aliases": [
+      "ask_models",
+      "ask-settings-model-trigger"
+    ],
+    "target": "ask-model-row"
+  },
+  {
+    "key": "ask_meeting_thinking",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Ask",
+    "preserve_controls": [
+      "ask-meeting-thinking-trigger"
+    ],
+    "search_aliases": [
+      "ask_meeting_thinking",
+      "ask-meeting-thinking-trigger"
+    ],
+    "target": "ask-meeting-thinking-row"
+  },
+  {
+    "key": "ask_chat_thinking",
+    "owner": "Sidenote",
+    "home": "Models and agents / Agents / Ask",
+    "preserve_controls": [
+      "ask-chat-thinking-trigger"
+    ],
+    "search_aliases": [
+      "ask_chat_thinking",
+      "ask-chat-thinking-trigger"
+    ],
+    "target": "ask-chat-thinking-row"
+  }
+]

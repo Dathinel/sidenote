@@ -24,6 +24,7 @@ const RECENT_ROWS: usize = 5;
 #[derive(Clone)]
 pub enum Target {
     Meeting(String),
+    Company(Option<String>),
     Meetings,
     Tasks,
     Memory,
@@ -119,6 +120,31 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         pages.retain(|e| contains(&e.title, &q) || contains(&e.detail, &q));
     }
 
+    if !typed || contains("Companies company records people", &q) {
+        pages.push(page(
+            "Companies",
+            "Company records and people",
+            Target::Company(None),
+        ));
+    }
+    for company in s.companies.data.catalog.records.values().filter(|c| {
+        !typed
+            || contains(
+                &format!(
+                    "{} {} {}",
+                    c.name,
+                    c.domain.as_deref().unwrap_or_default(),
+                    c.aliases.join(" ")
+                ),
+                &q,
+            )
+    }) {
+        pages.push(page(
+            &company.name,
+            "Company",
+            Target::Company(Some(company.id.clone())),
+        ));
+    }
     let mut meetings = Vec::new();
     if f.projects && typed {
         if contains("Areas project migration", &q) {
@@ -262,6 +288,7 @@ impl State {
         };
         self.close_finder();
         match target {
+            Target::Company(id) => self.open_company(id),
             Target::Meeting(id) => self.select(&id, tx),
             Target::Meetings => self.go_meetings(),
             Target::Tasks => {
@@ -294,7 +321,7 @@ impl State {
     /// Puts the cursor in the Ask bar with `question` in it. The Ask bar lives on Home and on a
     /// meeting, so from any other page this goes to Home first.
     pub fn focus_ask(&mut self, question: &str) {
-        if self.page() != Page::Meetings || self.on_live() {
+        if !self.companies.open && (self.page() != Page::Meetings || self.on_live()) {
             self.go_meetings();
         }
         self.question = TextEdit::new(question);

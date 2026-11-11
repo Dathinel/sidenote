@@ -17,10 +17,12 @@ pub mod relay_preview;
 pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
+pub mod diary;
 pub mod memory;
 pub mod notes;
 mod paths;
 pub mod project_merge;
+pub mod settle;
 pub use paths::{configure_paths, is_proof_path};
 pub mod agent_tools;
 mod device;
@@ -59,6 +61,7 @@ pub fn validation_message(error: &std::io::Error) -> Option<&str> {
     store_io::message(error)
 }
 
+pub mod companies;
 pub mod people;
 pub mod tasks_v2;
 pub use tasks_v2::*;

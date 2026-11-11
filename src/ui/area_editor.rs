@@ -1,4 +1,5 @@
 use super::{State, area, roles, theme::Palette};
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, TextEdit, col};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextInput};
 use sidenote::core::{
@@ -263,7 +264,7 @@ fn choice_menu(
     Menu::new(format!("area-pick-{key}"))
         .trigger(
             area::button(title, &format!("area-pick-{key}"), p)
-                .disabled(s.areas.pending.is_some())
+                .button_disabled(s.areas.pending.is_some())
                 .on_press(move |s: &mut State| {
                     if let Some(e) = &mut s.areas.editor {
                         e.picker = if e.picker.as_deref() == Some(&key_owned) {
@@ -560,21 +561,21 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
         card = card.child(
             super::tasks::button("Confirm change", "area-confirm", true, p)
                 .self_start()
-                .disabled(busy)
+                .button_disabled(busy)
                 .on_press(|s: &mut State| s.confirm_area()),
         );
     } else {
         card = card.child(
             super::tasks::button("Preview counts", "area-preview", true, p)
                 .self_start()
-                .disabled(busy)
+                .button_disabled(busy)
                 .on_press(|s: &mut State| s.preview_area()),
         );
     }
     card = card.child(
         area::button("Cancel", "area-cancel", p)
             .self_start()
-            .disabled(busy)
+            .button_disabled(busy)
             .on_press(|s: &mut State| {
                 s.cancel_area();
             }),

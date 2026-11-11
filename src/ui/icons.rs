@@ -34,6 +34,11 @@ lucide!(
     r#"<path d="m18 13-.654-4.736a4 4 0 00-2.756-3.266l-9.163-2.9a2 2 0 00-2.017.493l-.82.819a2 2 0 00-.492 2.017l2.9 9.163a4 4 0 003.266 2.756L13 18" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.648 12.352a1.205 1.205 0 011.704 0l1.296 1.296a1.205 1.205 0 010 1.704l-6.296 6.296a1.205 1.205 0 01-1.704 0l-1.296-1.296a1.205 1.205 0 010-1.704z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 3 6.586 6.586" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="11" r="2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
 lucide!(
+    GRIP_VERTICAL,
+    "lucide-grip-vertical",
+    r#"<circle cx="9" cy="12" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="5" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="19" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="15" cy="12" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="15" cy="5" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><circle cx="15" cy="19" r="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
     TASKS,
     "lucide-list-checks",
     r#"<path d="M13 5h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 12h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 19h8" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 17 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="m3 7 2 2 4-4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
@@ -463,12 +468,18 @@ lucide!(
     "lucide-circle-stop",
     r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><rect x="9" y="9" width="6" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
+lucide!(
+    HOURGLASS,
+    "lucide-hourglass",
+    r#"<path d="M5 22h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 2h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
 
 /// Existing controls share this adapter so text glyphs cannot drift from the SVG set.
 pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> El {
     let value = value.into();
     let glyph = |ch| -> Option<&'static Icon> {
         Some(match ch {
+            '+' => &PLUS,
             '\u{2713}' => &CHECK,
             '\u{d7}' => &X,
             '\u{2039}' => &CHEVRON_LEFT,
@@ -520,3 +531,31 @@ pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> E
     }
     line
 }
+
+lucide!(
+    BUILDING_2,
+    "lucide-building-2",
+    r#"<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2M18 8h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2M10 6h4M10 10h4M10 14h4M10 18h4" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+
+lucide!(
+    CIRCLE_PAUSE,
+    "lucide-circle-pause",
+    r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 9v6M14 9v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
+lucide!(
+    HEX_MARK,
+    "hex-ownership",
+    r#"<path d="m12 2 9 5v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SLIDERS,
+    "lucide-sliders-horizontal",
+    r#"<path d="M21 4h-7M10 4H3m18 8H10m-4 0H3m18 8h-3m-4 0H3M14 1v6M6 9v6m12 2v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round"/>"#
+);
+
+lucide!(
+    REFRESH_CW,
+    "lucide-refresh-cw",
+    r#"<path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16m5 0H3v5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);

@@ -3,7 +3,6 @@ use super::{
     hex::settings::{card, setting_row},
     roles,
     theme::Palette,
-    widgets::pressable,
 };
 use rune::{El, TextEdit, Tx, col, row};
 use rune_kit::{Kit, TextInput};
@@ -34,18 +33,11 @@ pub struct RelayUi {
 }
 
 fn button(label: &str, key: impl Into<String>, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(label, p.ink))
-        .key(key.into())
-        .label(label)
-        .padding(10.0)
-        .radius(7.0)
-        .fill(p.chip)
-        .border(1.0, p.line)
-        .hover(p.sel)
+    super::widgets::button(label, &key.into(), super::widgets::ButtonRole::Secondary, p)
 }
 
 fn primary_button(label: &str, key: &str, p: Palette) -> El {
-    super::tasks::button(label, key, true, p).py(10.0)
+    super::widgets::button(label, key, super::widgets::ButtonRole::Primary, p)
 }
 
 fn complete_code(text: &str) -> bool {
@@ -354,7 +346,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             .child(roles::CONTROL.wrap(format!("This device: {local}    Other device: {peer}"),p.soft))
             .child(roles::SECTION.wrap(phrase,p.ink).key("relay-safety-phrase"))
             .child(roles::SMALL.wrap("Only confirm if these words and both device names match the other screen. No tasks flow to the new device until both sides confirm. If the other device shows an error or no words, choose Do not pair.",p.soft))
-            .child(row().gap(8.0).child(button("They match. Confirm","relay-confirm",p).on_press(move |s:&mut State|s.relay_confirm(attempt,true)))
+            .child(row().flex_wrap().gap(8.0).child(button("They match. Confirm","relay-confirm",p).on_press(move |s:&mut State|s.relay_confirm(attempt,true)))
                 .child(button("Do not pair","relay-reject",p).on_press(move |s:&mut State|s.relay_confirm(attempt,false))));
     } else if let Some(code) = &s.relay_ui.code {
         let shown = format!(
@@ -418,7 +410,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             );
         } else {
             pair = pair.child(
-                super::widgets::link("Have a code from another device? Enter it", p)
+                super::widgets::action("Have a code? Enter it", p)
                     .key("relay-enter-code")
                     .self_start()
                     .on_press(|s: &mut State| {

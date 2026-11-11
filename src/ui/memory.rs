@@ -22,6 +22,7 @@ use sidenote::core::memory::{
 };
 use std::{collections::HashMap, io};
 mod landing;
+pub(super) mod settled;
 
 /// A claim not confirmed for this many days is suggested for review. Information only: age
 /// never changes a claim.
@@ -54,10 +55,25 @@ pub enum Ask {
     Forget,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FilterMenu {
+    Type,
+    State,
+    Project,
+}
+
 pub struct MemState {
     pub meeting: Option<String>,
+    pub settled: Vec<sidenote::core::settle::Row>,
+    pub settle_all: bool,
+    pub settle_meeting: Option<String>,
+    pub settle_busy: bool,
+    pub settle_toast_action: Option<(String, bool)>,
+    pub settle_pending_toast: Option<(String, String, bool)>,
     pub browse: bool,
-    pub filters_open: bool,
+    pub filter_menu: Option<FilterMenu>,
+    filters_loaded: bool,
+    collapsed: Vec<RecordType>,
     pub comment_for: Option<String>,
     pub comment: TextEdit,
     pub result: Option<String>,
@@ -90,7 +106,7 @@ pub struct MemState {
     pub refresh_pending: bool,
     refresh_generation: u64,
     refresh_again: Option<bool>,
-    refresh_error: Option<String>,
+    pub(super) refresh_error: Option<String>,
     prepare_after_refresh: bool,
     pub today: NaiveDate,
 }
@@ -99,8 +115,16 @@ impl Default for MemState {
     fn default() -> Self {
         Self {
             meeting: None,
+            settled: vec![],
+            settle_all: false,
+            settle_meeting: None,
+            settle_busy: false,
+            settle_toast_action: None,
+            settle_pending_toast: None,
             browse: false,
-            filters_open: false,
+            filter_menu: None,
+            filters_loaded: false,
+            collapsed: vec![],
             comment_for: None,
             comment: TextEdit::default(),
             result: None,
@@ -265,6 +289,7 @@ fn confirmed_text(r: &MemoryRecord) -> String {
 // ---- state ---------------------------------------------------------------------------------
 
 pub struct Snapshot {
+    settled: Vec<sidenote::core::settle::Row>,
     mutation_generation: u64,
     projects: sidenote::core::Projects,
     file: sidenote::core::memory::MemoryFile,
@@ -286,7 +311,11 @@ impl Snapshot {
         } else {
             (Some(store.preview_migration()?), store.company_memory()?)
         };
+        let settled =
+            sidenote::core::settle::Store::new(store.root.clone(), sidenote::core::meetings_dir())
+                .history()?;
         Ok(Self {
+            settled,
             mutation_generation,
             projects,
             file,
@@ -334,6 +363,7 @@ impl MemState {
 
     fn apply_snapshot(&mut self, snapshot: Snapshot) {
         self.today = Local::now().date_naive();
+        self.settled = snapshot.settled;
         self.projects = snapshot.projects;
         self.project = self.project.as_deref().map(|n| self.projects.resolve(n));
         self.apply_file(snapshot.file);
@@ -436,7 +466,11 @@ impl MemState {
                 .map(|p| p.proposal.id.clone())
                 .collect();
         }
-        self.sorted_records().iter().map(|r| r.id.clone()).collect()
+        self.sorted_records()
+            .iter()
+            .filter(|r| !self.collapsed.contains(&r.record_type))
+            .map(|r| r.id.clone())
+            .collect()
     }
 
     /// Rows grouped by kind of claim, each group in the order of the file.
@@ -545,11 +579,48 @@ impl State {
         }
         self.go_home();
         self.memory_open = true;
-        self.memory.meeting = None;
+        if !self.memory.filters_loaded {
+            let prefs = sidenote::core::UiPrefs::load(&self.store.root);
+            self.memory.tab = if prefs.memory_pending {
+                Tab::Review
+            } else {
+                prefs.memory_kind.map_or(Tab::All, Tab::Kind)
+            };
+            self.memory.scope = match prefs.memory_scope.as_str() {
+                "review" => Scope::NeedsReview,
+                "retired" => Scope::Retired,
+                _ => Scope::Active,
+            };
+            self.memory.project = prefs.memory_project;
+            self.memory.meeting = prefs.memory_meeting;
+            self.memory.filters_loaded = true;
+        }
         self.memory.browse = false;
+        self.memory.settle_all = false;
+        self.memory.settle_meeting = None;
         self.memory.panel = self.memory.editing;
         self.memory.prepare_after_refresh = true;
         self.refresh_memory(true);
+    }
+
+    fn save_memory_filters(&mut self) {
+        let mut prefs = sidenote::core::UiPrefs::load(&self.store.root);
+        prefs.memory_kind = match self.memory.tab {
+            Tab::Kind(kind) => Some(kind),
+            _ => None,
+        };
+        prefs.memory_pending = self.memory.tab == Tab::Review;
+        prefs.memory_scope = match self.memory.scope {
+            Scope::Active => "active",
+            Scope::NeedsReview => "review",
+            Scope::Retired => "retired",
+        }
+        .into();
+        prefs.memory_project = self.memory.project.clone();
+        prefs.memory_meeting = self.memory.meeting.clone();
+        if prefs.save(&self.store.root).is_err() {
+            self.memory.notice = Some("Could not remember filters on this PC.".into());
+        }
     }
 
     pub fn open_record(&mut self, id: &str) {
@@ -810,10 +881,13 @@ fn record_row(s: &State, r: &MemoryRecord, _lay: Lay, p: Palette) -> El {
         meta = meta.child(roles::META.wrap(confirmed_text(r), p.faint));
     } else {
         meta = meta.child(
-            dot(6.0, p.faint)
+            row()
+                .gap(4.0)
+                .items_center()
                 .key(format!("memory-unconfirmed-{}", r.id))
-                .help("Not confirmed")
-                .label("Not confirmed"),
+                .child(super::icons::draw(&super::icons::HELP, 16.0, p.faint))
+                .child(roles::META.wrap("Not confirmed", p.faint))
+                .help("This claim has not been confirmed by you"),
         );
     }
     if r.sources.len() >= 2 {
@@ -1168,11 +1242,37 @@ fn record_list(s: &State, lay: Lay, p: Palette) -> El {
         if of.is_empty() {
             continue;
         }
-        let mut g = col()
-            .w_full()
-            .mt(roles::GROUP_TOP)
-            .gap(8.0)
-            .child(group_head(kind_label(kind), of.len(), p));
+        let mut g = col().w_full().mt(roles::GROUP_TOP).gap(8.0).child(
+            super::widgets::button(
+                format!(
+                    "{} {} {}",
+                    if m.collapsed.contains(&kind) {
+                        "\u{203a}"
+                    } else {
+                        "\u{25be}"
+                    },
+                    kind_label(kind),
+                    of.len()
+                ),
+                &format!("memory-collapse-{kind:?}"),
+                super::widgets::ButtonRole::Ghost,
+                p,
+            )
+            .h(28.0)
+            .self_start()
+            .expanded(!m.collapsed.contains(&kind))
+            .on_press(move |s: &mut State| {
+                if s.memory.collapsed.contains(&kind) {
+                    s.memory.collapsed.retain(|value| *value != kind);
+                } else {
+                    s.memory.collapsed.push(kind);
+                }
+            }),
+        );
+        if m.collapsed.contains(&kind) {
+            out = out.child(g);
+            continue;
+        }
         let mut card = super::cards::panel(p).key(format!("memory-group-{kind:?}"));
         for (index, r) in of.into_iter().enumerate() {
             if index > 0 {
@@ -1256,6 +1356,9 @@ fn list_column(
     layer: &mut Vec<El>,
 ) -> El {
     let m = &s.memory;
+    if m.settle_all {
+        return settled::all(s, p, narrow);
+    }
     if !m.browse {
         return landing::column(s, k, p, narrow);
     }
@@ -1277,20 +1380,7 @@ fn list_column(
         .px(side)
         .pt(if narrow { 8.0 } else { 18.0 })
         .pb(56.0)
-        .child(
-            row()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .child(text_title("Memory", if narrow { 26.0 } else { 30.0 }, p).mb(4.0))
-                .child(button("Back to Memory", "memory-home", false, p).on_press(
-                    |s: &mut State| {
-                        s.close_record();
-                        s.memory.browse = false;
-                        s.memory.meeting = None;
-                    },
-                )),
-        )
+        .child(text_title("Memory", if narrow { 26.0 } else { 30.0 }, p).mb(4.0))
         .mb(14.0);
     if let Some(id) = &m.meeting {
         let title = s
@@ -1775,11 +1865,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 .child(spaced_caps("Why the check suggests it", p))
                 .child(roles::SMALL.wrap(&pr.rationale, p.ink)),
         );
-    let stale = target.is_some_and(|t| {
-        pr.target_updated_at
-            .as_deref()
-            .is_some_and(|u| u != t.updated_at)
-    });
+    let stale = target.is_some_and(|t| !pr.matches_target_version(t));
     if pr.op != ProposalOp::Add && target.is_none() {
         body = body.child(roles::SMALL.medium().wrap(
             "The claim this refers to is gone or no longer active. Accepting will refuse.",
@@ -1958,6 +2044,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_h(0.0)
         .w_full()
         .fill(p.bg)
+        .child(super::diary::return_link(s, p))
         .child(refresh_status(m, p).px(16.0));
     if let Some(note) = m.notice.as_ref().or(s.notice.as_ref()) {
         pane = pane.child(notice_bar(note, p));
@@ -2042,12 +2129,15 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.close_record();
             } else if s.memory.comment_for.is_some() {
                 s.memory.comment_for = None;
-            } else if s.memory.filters_open {
-                s.memory.filters_open = false;
+            } else if s.memory.filter_menu.is_some() {
+                s.memory.filter_menu = None;
             } else if s.memory.project_menu {
                 s.memory.project_menu = false;
             } else if !s.memory.search.text.is_empty() {
                 s.memory.search = TextEdit::default();
+            } else if s.memory.settle_all {
+                s.memory.settle_all = false;
+                s.memory.settle_meeting = None;
             } else if s.memory.browse {
                 s.memory.browse = false;
                 s.memory.meeting = None;
@@ -2065,6 +2155,43 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
+
+    fn synthetic_record(id: &str, kind: RecordType, project: &str) -> MemoryRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "type": kind, "text": "Synthetic workshop reference", "project": project,
+            "people": [], "sources": [], "first_seen": null, "last_confirmed": null,
+            "status": "active", "basis": "source_supported", "supersedes": null,
+            "updated_at": "2026-11-01T00:00:00Z", "source_fingerprint": "synthetic"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn combined_filters_and_collapsed_groups_keep_keyboard_rows_in_sync() {
+        let mut memory = MemState {
+            migrated: true,
+            tab: Tab::Kind(RecordType::Person),
+            project: Some("Synthetic workshop".into()),
+            records: vec![
+                synthetic_record("person", RecordType::Person, "Synthetic workshop"),
+                synthetic_record(
+                    "other-project",
+                    RecordType::Person,
+                    "Other synthetic project",
+                ),
+                synthetic_record("decision", RecordType::Decision, "Synthetic workshop"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(memory.shown_ids(), ["person"]);
+        memory.collapsed.push(RecordType::Person);
+        assert!(memory.shown_ids().is_empty());
+        assert_eq!(memory.sorted_records().len(), 1);
+        memory.collapsed.clear();
+        memory.tab = Tab::All;
+        memory.project = None;
+        assert_eq!(memory.shown_ids().len(), 3);
+    }
 
     #[test]
     fn meeting_filter_matches_whole_references_and_timestamps_only() {
@@ -2088,6 +2215,7 @@ mod refresh_tests {
 
     fn snapshot(mutation_generation: u64, legacy: &str) -> Snapshot {
         Snapshot {
+            settled: vec![],
             mutation_generation,
             projects: Default::default(),
             file: Default::default(),

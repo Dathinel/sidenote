@@ -278,9 +278,12 @@ pub enum Feature {
     VocabularyRemove,
     ModelsList,
     ModelStatus,
+    ModelUse,
+    ModelInstall,
+    WindowShow,
 }
 pub type Capabilities = BTreeMap<Feature, Support>;
-const FEATURES: [Feature; 14] = [
+const FEATURES: [Feature; 17] = [
     Feature::Status,
     Feature::RecordStart,
     Feature::RecordStop,
@@ -295,6 +298,9 @@ const FEATURES: [Feature; 14] = [
     Feature::VocabularyRemove,
     Feature::ModelsList,
     Feature::ModelStatus,
+    Feature::ModelUse,
+    Feature::ModelInstall,
+    Feature::WindowShow,
 ];
 
 #[derive(Clone, Deserialize, PartialEq)]
@@ -487,6 +493,7 @@ impl HexEngine {
             "settings",
             "vocabulary",
             "model",
+            "window",
         ] {
             let args: Vec<&str> = if group.is_empty() {
                 vec!["--help"]
@@ -525,6 +532,9 @@ impl HexEngine {
             (Feature::VocabularyAdd, "vocabulary", "add", None),
             (Feature::VocabularyRemove, "vocabulary", "remove", None),
             (Feature::ModelsList, "model", "list", None),
+            (Feature::ModelUse, "model", "use", None),
+            (Feature::ModelInstall, "model", "install", None),
+            (Feature::WindowShow, "window", "show", None),
         ] {
             let support = if capability.is_some_and(|c| reported.get(c) == Some(&false)) {
                 Support::Unsupported
@@ -640,6 +650,24 @@ impl HexEngine {
             "models",
         )?;
         decode(v, "models")
+    }
+    pub fn model_use(&self, model: &str) -> Result<()> {
+        self.change(
+            Feature::ModelUse,
+            json!({"command":"model-use","model":model}),
+        )
+    }
+    pub fn model_install(&self, model: &str) -> Result<()> {
+        self.change(
+            Feature::ModelInstall,
+            json!({"command":"model-install","model":model}),
+        )
+    }
+    pub fn open_models(&self) -> Result<()> {
+        self.change(
+            Feature::WindowShow,
+            json!({"command":"window-show","pane":"models"}),
+        )
     }
     pub fn watch(&self) -> Result<StatusWatcher> {
         StatusWatcher::start(self.clone())

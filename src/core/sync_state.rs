@@ -149,6 +149,8 @@ fn meeting_store(store: &str) -> bool {
         return false;
     };
     stem == "all"
+        || super::persistence::is_live_ask_key(stem)
+        || super::persistence::is_company_ask_key(stem)
         || stem.split_once('-').is_some_and(|(a, b)| {
             !a.is_empty() && !b.is_empty() && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())
         })
@@ -165,6 +167,7 @@ fn supported(store: &str) -> bool {
         || matches!(
             store,
             "projects.json"
+                | "companies.json"
                 | "task-overrides.json"
                 | "tasks-settings.json"
                 | "agent-instructions.json"
@@ -802,6 +805,33 @@ pub(super) fn stamps(root: &Path, store: &str) -> io::Result<BTreeMap<Key, u64>>
     }
     Ok(out)
 }
+/// Includes tombstones so deleting and recreating the same value still invalidates Undo.
+pub(super) fn settle_fence() {
+    fence_local_mutation();
+}
+
+pub(super) fn settle_versions(root: &Path, store: &str) -> io::Result<BTreeMap<Key, String>> {
+    let session = Session::open_mode(root, store, true)?;
+    session
+        .view
+        .items
+        .iter()
+        .map(|(key, value)| Ok((key.clone(), serde_json::to_string(&value.version())?)))
+        .collect()
+}
+
+pub(super) fn settle_locks(root: &Path, stores: &BTreeSet<String>) -> io::Result<Vec<fs::File>> {
+    stores
+        .iter()
+        .map(|store| {
+            store_io::lock(
+                &root
+                    .join("local/locks")
+                    .join(format!("{}.lock", hash(store.as_bytes()))),
+            )
+        })
+        .collect()
+}
 
 pub(super) fn update<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
@@ -964,6 +994,9 @@ fn validate_legacy(store: &str, value: &Value) -> io::Result<()> {
         return Err(invalid("Legacy state must be an object"));
     }
     match store {
+        "companies.json" => {
+            serde_json::from_value::<super::companies::Companies>(value.clone())?;
+        }
         "projects.json" => {
             serde_json::from_value::<super::Projects>(value.clone())?;
         }

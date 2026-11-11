@@ -30,6 +30,19 @@ pub struct Palette {
     pub shadow: Color,
     /// Dims the page under a modal, dark enough that page headings do not compete with it.
     pub scrim: Color,
+    pub button_fill: Color,
+    pub button_ink: Color,
+    pub button_border: Color,
+    pub danger: Color,
+    pub danger_border: Color,
+    pub button_hover: Color,
+    pub button_pressed: Color,
+    pub button_primary_hover: Color,
+    pub button_primary_pressed: Color,
+}
+
+fn hex(value: &str) -> Color {
+    rune::color::hex(value).expect("valid theme colour")
 }
 
 pub fn palette(dark: bool) -> Palette {
@@ -96,6 +109,15 @@ pub fn palette(dark: bool) -> Palette {
         hit: c[15],
         shadow: c[16],
         scrim: c[17],
+        button_fill: hex(if dark { "#ececec" } else { "#1f2328" }),
+        button_ink: hex(if dark { "#1f2328" } else { "#ffffff" }),
+        button_border: if dark { c[6] } else { hex("#dcd9d2") },
+        danger: hex(if dark { "#f29b99" } else { "#a92b30" }),
+        danger_border: hex(if dark { "#704345" } else { "#efc5c5" }),
+        button_hover: hex(if dark { "#ffffff0f" } else { "#00000008" }),
+        button_pressed: hex(if dark { "#ffffff1f" } else { "#00000014" }),
+        button_primary_hover: hex(if dark { "#0000000f" } else { "#ffffff14" }),
+        button_primary_pressed: hex(if dark { "#0000001f" } else { "#ffffff24" }),
     }
 }
 
@@ -124,6 +146,9 @@ pub fn kit(p: &Palette) -> Kit {
         circle_x: &super::icons::CIRCLE_X,
         dash: &super::icons::DASH,
     };
+    kit.c.bg_accent = p.button_fill;
+    kit.c.knob_on = p.button_ink;
+    kit.c.knob = Color::WHITE;
     kit.c.text_faint = p.faint;
     kit.ty.small = super::roles::META.style();
     kit
@@ -159,4 +184,29 @@ pub fn fonts() -> &'static [&'static [u8]] {
         list.push(Box::leak(bytes.into_boxed_slice()));
     }
     Box::leak(list.into_boxed_slice())
+}
+
+#[cfg(test)]
+mod quiet_ink_switch_tests {
+    use super::*;
+
+    #[test]
+    fn off_switches_keep_a_light_knob_in_both_themes() {
+        for dark in [false, true] {
+            let k = kit(&palette(dark));
+            assert_eq!(k.c.knob, Color::WHITE);
+            assert_ne!(k.c.knob, k.c.layer_04);
+        }
+    }
+
+    #[test]
+    fn switches_use_primary_button_ink_in_both_themes() {
+        for dark in [false, true] {
+            let p = palette(dark);
+            let k = kit(&p);
+            assert_eq!(k.c.bg_accent, p.button_fill);
+            assert_eq!(k.c.knob_on, p.button_ink);
+            assert_ne!(k.c.bg_accent, p.accent);
+        }
+    }
 }

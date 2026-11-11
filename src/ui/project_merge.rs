@@ -1,4 +1,5 @@
-use super::{State, nav::Filter, roles, theme::Palette, widgets::pressable};
+use super::{State, nav::Filter, roles, theme::Palette};
+use crate::ui::widgets::ButtonDisabled;
 use rune::{El, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement};
 use sidenote::core::project_merge::MergePreview;
@@ -185,13 +186,13 @@ impl State {
     }
 }
 fn button(title: impl Into<String>, key: &str, p: Palette) -> El {
-    pressable(roles::CONTROL.wrap(title, p.accent))
-        .key(key)
-        .px(10.0)
-        .py(7.0)
-        .radius(6.0)
-        .border(1.0, p.line)
-        .hover(p.chip)
+    let title = title.into();
+    super::widgets::button(
+        title.clone(),
+        key,
+        super::widgets::button_role(&title, false),
+        p,
+    )
 }
 pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
     if !s.config.features.projects {
@@ -206,7 +207,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
     let mut menu = Menu::new("project-actions")
         .trigger(
             button("Project menu", "project-actions", p)
-                .disabled(busy)
+                .button_disabled(busy)
                 .on_press(|s: &mut State| {
                     if s.project_merge.pending.is_none() {
                         s.project_merge.menu = !s.project_merge.menu;
@@ -228,7 +229,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
             .gap(8.0)
             .child(
                 button("Merge into...", "project-merge", p)
-                    .disabled(busy)
+                    .button_disabled(busy)
                     .on_press(move |s: &mut State| s.start_project_merge(&start)),
             )
             .child(menu.build(k, layer)),
@@ -280,7 +281,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                     p,
                 )
                 .self_start()
-                .disabled(busy)
+                .button_disabled(busy)
                 .on_press(move |s: &mut State| s.undo_project_merge(&from, &id)),
             );
         }
@@ -303,13 +304,15 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
             .map(|v| v.into.as_str())
             .unwrap_or("Choose a project");
         let mut picker = Menu::new("merge-survivor")
-            .trigger(button(choice, "merge-survivor", p).disabled(busy).on_press(
-                |s: &mut State| {
-                    if s.project_merge.pending.is_none() {
-                        s.project_merge.picker = !s.project_merge.picker;
-                    }
-                },
-            ))
+            .trigger(
+                button(choice, "merge-survivor", p)
+                    .button_disabled(busy)
+                    .on_press(|s: &mut State| {
+                        if s.project_merge.pending.is_none() {
+                            s.project_merge.picker = !s.project_merge.picker;
+                        }
+                    }),
+            )
             .open(s.project_merge.picker && !busy)
             .placement(Placement::BottomStart);
         if s.project_merge.picker && !busy {
@@ -359,7 +362,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                                 &format!("merge-items-{index}"),
                                 p,
                             )
-                            .disabled(busy)
+                            .button_disabled(busy)
                             .on_press(move |s: &mut State| {
                                 if s.project_merge.pending.is_none() {
                                     s.project_merge.expanded[index] =

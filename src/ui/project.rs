@@ -443,25 +443,22 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         &matches
     } {
         let (id, name) = (id.to_string(), name.clone());
-        choices = choices.child(
-            pressable(roles::CONTROL.wrap(&name, p.accent))
-                .py(4.0)
-                .on_press(move |s: &mut State| {
-                    s.project_form = None;
-                    s.set_meeting_project(&id, &name);
-                }),
-        );
+        choices = choices.child(super::widgets::action(name.clone(), p).on_press(
+            move |s: &mut State| {
+                s.project_form = None;
+                s.set_meeting_project(&id, &name);
+            },
+        ));
     }
     if !typed.is_empty() && matches.is_empty() && !area_alias {
         let id = id.to_string();
         choices = choices.child(
-            pressable(
-                roles::CONTROL
-                    .bold()
-                    .wrap(format!("Create {typed}"), p.accent),
+            super::widgets::button(
+                format!("Create {typed}"),
+                "project-create",
+                super::widgets::ButtonRole::Secondary,
+                p,
             )
-            .key("project-create")
-            .py(6.0)
             .on_press(move |s: &mut State| s.create_meeting_project(&id, &typed)),
         );
     }
@@ -478,21 +475,11 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
                     .mt(8.0)
                     .child(input)
                     .children((matches.len() == 1).then(|| {
-                        pressable(roles::CONTROL.bold().wrap("Use project", p.card))
-                            .key("project-save")
-                            .px(14.0)
-                            .py(6.0)
-                            .radius(8.0)
-                            .fill(p.accent)
+                        super::tasks::button("Use project", "project-save", true, p)
                             .on_press(|s: &mut State| s.commit_project_form())
                     }))
                     .child(
-                        pressable(roles::CONTROL.wrap("Cancel", p.soft))
-                            .key("project-cancel")
-                            .px(10.0)
-                            .py(6.0)
-                            .radius(8.0)
-                            .hover(p.chip)
+                        super::tasks::button("Cancel", "project-cancel", false, p)
                             .on_press(|s: &mut State| s.project_form = None),
                     ),
             )

@@ -36,6 +36,7 @@ pub(super) struct Data {
     pub pipeline: core::Pipeline,
     pub shared: Option<bool>,
     pub projects: Option<core::Projects>,
+    pub companies: Option<core::companies::Companies>,
     pub overrides: Option<core::Overrides>,
     pub cutoff: Option<Option<chrono::NaiveDate>>,
     pub saved: HashMap<String, Saved>,
@@ -80,10 +81,17 @@ impl Data {
         let pipeline = core::load_pipeline(&meetings);
         let store = core::TaskStore::default();
         let saved_store = core::StateStore::default();
+        let companies = loaded(core::companies::Companies::load(&core::state_dir()));
+        let company_threads: Vec<_> = companies
+            .iter()
+            .flat_map(|f| f.catalog.records.keys())
+            .map(|id| core::company_ask_key(id))
+            .collect();
         let saved = meetings
             .iter()
             .map(|m| m.id.as_str())
             .chain(std::iter::once(core::ALL_KEY))
+            .chain(company_threads.iter().map(String::as_str))
             .filter_map(|id| loaded(saved_store.load(id)).map(|s| (id.to_string(), s)))
             .collect();
         let profile = loaded(core::relay_preview::profile(&store.root));
@@ -126,6 +134,7 @@ impl Data {
             pipeline,
             shared,
             projects,
+            companies,
             overrides,
             cutoff,
             saved,
@@ -336,6 +345,7 @@ fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Da
                     pipeline: HashMap::new(),
                     shared: None,
                     projects: None,
+                    companies: None,
                     overrides: None,
                     cutoff: None,
                     saved: HashMap::new(),

@@ -22,6 +22,8 @@ fn tools_on() -> bool {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AskProgress {
+    StartingCodex,
+    Fallback { runner: String },
     Started { runner: String },
     Tool { name: String },
     Text { text: String },

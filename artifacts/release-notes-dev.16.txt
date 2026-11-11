@@ -1,0 +1,9 @@
+Sidenote 0.0.1-dev.16
+
+- Buttons use quiet ink colours, softer corners and a grey focus ring.
+- Ask is faster during meetings. Codex runs at Low thinking and stays warm, shows "Starting Codex…" while it starts, and defaults to this meeting.
+- Settings has three groups, marks settings shared with Hex, adds jump tabs and simplifies Updates.
+- Quieter breadcrumbs show the parent and current page only when you drill in. Settings and Diary have none.
+- Diary shows your daily history with a right rail for follow-ups and Memory suggestions.
+- Memory has Type, State and Project filters, with saved choices and Clear all.
+- Accepting a Memory suggestion no longer fails with 'Record changed' when nothing changed.
