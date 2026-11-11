@@ -334,6 +334,14 @@ pub struct EngineState {
 #[derive(Clone, Deserialize)]
 pub struct Setting {
     pub key: String,
+    #[serde(
+        default,
+        rename = "name",
+        alias = "label",
+        alias = "title",
+        alias = "display_name"
+    )]
+    pub display_name: Option<String>,
     pub value: Value,
     pub kind: String,
     pub writable: bool,

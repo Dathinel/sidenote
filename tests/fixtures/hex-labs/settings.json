@@ -19,7 +19,8 @@
       "value": false,
       "kind": "bool",
       "writable": true,
-      "available": true
+      "available": true,
+      "name": "New Hex experiment"
     },
     {
       "key": "labs.api_timestamps",
@@ -51,6 +52,48 @@
       "value": false,
       "kind": "bool",
       "writable": true
+    },
+    {
+      "key": "meetings.enabled",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "capture.enabled",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.expire_meeting_audio",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.unload_idle",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.vocabulary_biasing",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.api_processing",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
     }
   ]
 }

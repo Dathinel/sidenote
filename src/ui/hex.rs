@@ -1817,17 +1817,12 @@ pub fn scene(s: &mut State, recording: bool) {
     s.hex.was_running = true;
     s.hex.data_dirty = false;
     s.hex.models = f.models;
-    s.hex.shell.labs = sidenote::hex_labs::Snapshot::settings(&f.settings);
-    if let Ok(value) =
-        serde_json::from_str::<Value>(include_str!("../../tests/fixtures/hex-labs/settings.json"))
-        && let Ok(settings) = serde_json::from_value::<Vec<Setting>>(value["settings"].clone())
-    {
-        s.hex
-            .shell
-            .labs
-            .states
-            .extend(sidenote::hex_labs::Snapshot::settings(&settings).states);
-    }
+    let labs: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/hex-labs/settings.json"))
+            .expect("synthetic Labs fixture");
+    let labs: Vec<Setting> =
+        serde_json::from_value(labs["settings"].clone()).expect("synthetic Labs settings");
+    s.hex.shell.labs = sidenote::hex_labs::Snapshot::settings(&labs);
     s.hex_set_settings(Ok(f.settings));
     s.hex_set_vocabulary(Ok(f.vocabulary));
 }
