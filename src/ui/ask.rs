@@ -334,7 +334,13 @@ fn recipe(i: usize, text: &'static str, p: Palette) -> El {
 
 /// A few ideas to ask, floating above the pill while its box has focus and is empty.
 fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
-    let list = if s.selected.is_some() {
+    let list: &[&str] = if s.companies.open {
+        &[
+            "Where do things stand?",
+            "What are they waiting on from us?",
+            "Prep my next call",
+        ]
+    } else if s.selected.is_some() {
         SUGGESTIONS
     } else {
         ask_all::SUGGESTIONS
@@ -684,7 +690,7 @@ pub fn overlay_with(
         } else {
             raised(no_agent(s, p), p)
         };
-        return dock(beside(stack, lead, pill, narrow), narrow, p);
+        return place(s, beside(stack, lead, pill, narrow), narrow, p);
     }
     let empty = s.question.text.trim().is_empty();
     let focused = s.ask_open;
@@ -693,8 +699,19 @@ pub fn overlay_with(
     }
     let input = TextInput::new(&s.question)
         .plain()
-        .placeholder("Ask anything")
-        .label(if s.selected.is_some() {
+        .placeholder(if s.companies.open {
+            s.companies
+                .selected
+                .as_ref()
+                .and_then(|id| s.companies.data.catalog.records.get(id))
+                .map(|c| format!("Ask about {}", c.name))
+                .unwrap_or_else(|| "Ask about this company".into())
+        } else {
+            "Ask anything".into()
+        })
+        .label(if s.companies.open {
+            "Ask about this company"
+        } else if s.selected.is_some() {
             "Ask about this meeting"
         } else {
             "Ask about your meetings"
@@ -762,9 +779,26 @@ pub fn overlay_with(
     pill = if beside_lead {
         pill.grow(1.0).min_w(0.0)
     } else {
-        pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
+        pill.w_full().max_w(if wide || s.companies.open {
+            COLUMN
+        } else {
+            IDLE_W
+        })
     };
-    dock(beside(stack, lead, pill, narrow), narrow, p)
+    place(s, beside(stack, lead, pill, narrow), narrow, p)
+}
+
+fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
+    if s.companies.open {
+        col()
+            .key("company-ask")
+            .w_full()
+            .min_w(0.0)
+            .items_center()
+            .child(stack)
+    } else {
+        dock(stack, narrow, p)
+    }
 }
 
 /// Puts `lead` next to `pill` (above it when narrow) at the bottom of `stack`.

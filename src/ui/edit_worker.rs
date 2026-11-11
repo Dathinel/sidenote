@@ -71,6 +71,10 @@ impl Target {
     }
 }
 pub enum Job {
+    Company {
+        root: PathBuf,
+        edit: super::companies::Edit,
+    },
     V2 {
         store: TaskStore,
         task: Box<core::TaskItem>,
@@ -122,7 +126,8 @@ pub enum Job {
 impl Job {
     fn target(&self) -> Target {
         match self {
-            Self::Tick { .. }
+            Self::Company { .. }
+            | Self::Tick { .. }
             | Self::ManualTick { .. }
             | Self::V2 { .. }
             | Self::Grouping { .. }
@@ -139,6 +144,7 @@ impl Job {
     }
 }
 pub enum Completion {
+    Company(Result<Box<core::companies::Companies>, String>),
     Redo(Result<(), SaveError>),
     V2 {
         result: Result<Box<core::EditView<core::Overrides>>, SaveError>,
@@ -174,7 +180,8 @@ pub enum Completion {
 impl Completion {
     fn target(&self) -> Target {
         match self {
-            Self::Tick { .. }
+            Self::Company(_)
+            | Self::Tick { .. }
             | Self::ManualTick(_)
             | Self::Preferences { .. }
             | Self::V2 { .. }
@@ -229,6 +236,13 @@ impl State {
             .name("save-edit".into())
             .spawn(move || {
                 let completion = match job {
+                    Job::Company { root, edit } => {
+                        Completion::Company(edit.run(&root).map(Box::new).map_err(|e| {
+                            core::validation_message(&e)
+                                .map(str::to_string)
+                                .unwrap_or_else(|| SaveError::from(&e).message().into())
+                        }))
+                    }
                     Job::V2 {
                         store,
                         task,
@@ -344,6 +358,23 @@ impl State {
             return;
         }
         match completion {
+            Completion::Company(result) => match result {
+                Ok(data) => {
+                    self.companies.data = *data;
+                    if let Some(id) = &self.companies.selected
+                        && !self.companies.data.catalog.records.contains_key(id)
+                    {
+                        self.companies.selected = self.companies.merge_into.clone();
+                        self.question = Default::default();
+                        self.load_saved();
+                    }
+                    self.companies.editing = false;
+                    self.companies.merging = false;
+                    self.companies.person = None;
+                    self.companies.notice = None;
+                }
+                Err(e) => self.companies.notice = Some(e),
+            },
             Completion::Redo(result) => {
                 self.tasks.notice = Some(
                     match result {

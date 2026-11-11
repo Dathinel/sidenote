@@ -99,13 +99,18 @@ fn avatar(name: &str, p: Palette) -> El {
         .fill(p.chip)
         .child(roles::NAME.line(initials, p.soft))
 }
-fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
+fn base_person_row(person: &Person, affiliation: &str, k: &Kit, compact: bool, p: Palette) -> El {
     let id = core::people::key(&person.name);
     let name = col()
         .grow(1.0)
         .min_w(0.0)
         .gap(3.0)
-        .child(roles::NAME.line(&person.name, p.ink).help(&person.name))
+        .child(
+            roles::NAME
+                .wrap(&person.name, p.ink)
+                .max_lines(2)
+                .help(&person.name),
+        )
         .children(
             (!person.aliases.is_empty())
                 .then(|| roles::META.line(format!("also {}", person.aliases.join(", ")), p.soft)),
@@ -138,7 +143,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
                     .wrap(
                         format!(
                             "{} \u{b7} {} meetings \u{b7} {} \u{b7} {} open",
-                            person.team, person.meetings, date, person.open
+                            affiliation, person.meetings, date, person.open
                         ),
                         p.soft,
                     )
@@ -149,7 +154,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
         cards::row_shell()
             .key(format!("person-{id}"))
             .child(identity)
-            .child(roles::SMALL.line(&person.team, p.soft).w(100.0))
+            .child(roles::SMALL.line(affiliation, p.soft).w(100.0))
             .child(
                 roles::META
                     .line(person.meetings.to_string(), p.soft)
@@ -160,7 +165,7 @@ fn person_row(person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
             .child(side_control(person, k, p))
     }
 }
-fn heading(compact: bool, p: Palette) -> El {
+pub fn heading(compact: bool, external: bool, p: Palette) -> El {
     if compact {
         return col();
     }
@@ -170,11 +175,71 @@ fn heading(compact: bool, p: Palette) -> El {
         .gap(12.0)
         .mb(8.0)
         .child(roles::META.line("Person", p.faint).grow(1.0).min_w(190.0))
-        .child(roles::META.line("Team", p.faint).w(100.0))
+        .child(
+            roles::META
+                .line(if external { "Company" } else { "Team" }, p.faint)
+                .w(100.0),
+        )
         .child(roles::META.line("Meetings", p.faint).w(52.0))
         .child(roles::META.line("Last seen", p.faint).w(65.0))
         .child(roles::META.line("Open", p.faint).w(40.0))
         .child(roles::META.line("Side", p.faint).w(168.0))
+}
+pub fn person_row(s: &State, person: &Person, k: &Kit, compact: bool, p: Palette) -> El {
+    let name = person.name.clone();
+    let company = s.companies.data.company_for(&person.name);
+    let mut out = col().w_full().child(base_person_row(
+        person,
+        company.map_or(person.team.as_str(), |c| c.name.as_str()),
+        k,
+        compact,
+        p,
+    ));
+    let mut facts = row()
+        .w_full()
+        .flex_wrap()
+        .items_center()
+        .gap(10.0)
+        .px(14.0)
+        .pb(10.0)
+        .pl(60.0);
+    if let Some(c) = company {
+        let id = c.id.clone();
+        facts = facts.child(
+            super::widgets::link(&c.name, p)
+                .key(format!("person-company-link-{}", core::people::key(&name)))
+                .on_press(move |s: &mut State| s.open_company(Some(id.clone()))),
+        );
+    }
+    facts = facts.child(
+        super::widgets::link("Company and email", p)
+            .key(format!("person-edit-{}", core::people::key(&name)))
+            .disabled(s.edit_busy)
+            .on_press(move |s: &mut State| s.edit_person_company(&name)),
+    );
+    if let Some(email) = s
+        .companies
+        .data
+        .catalog
+        .people
+        .get(&core::people::key(&person.name))
+        .and_then(|l| l.email.clone())
+    {
+        facts = facts.child(
+            super::widgets::link(&email, p)
+                .key(format!(
+                    "person-email-copy-{}",
+                    core::people::key(&person.name)
+                ))
+                .label(format!("Copy email for {}", person.name))
+                .on_press_tx(move |_: &mut State, tx| tx.copy(email.clone())),
+        );
+    }
+    out = out.child(facts);
+    if s.companies.person.as_deref() == Some(&person.name) {
+        out = out.child(super::companies::person_editor(s, k, p));
+    }
+    out
 }
 pub fn section(s: &State, k: &Kit, p: Palette, tab: usize) -> El {
     if tab == 2 {
@@ -193,10 +258,15 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize) -> El {
             on_team == (tab == 0)
                 && (query.is_empty()
                     || format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
                         person.name,
                         person.aliases.join(" "),
-                        person.team
+                        person.team,
+                        s.companies
+                            .data
+                            .company_for(&person.name)
+                            .map(|c| format!("{} {}", c.name, c.aliases.join(" ")))
+                            .unwrap_or_default()
                     )
                     .to_lowercase()
                     .contains(&query))
@@ -255,7 +325,14 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize) -> El {
             .mt(6.0),
     );
     if tab == 1 {
-        out = out.child(roles::META.wrap("Companies are not available here yet.", p.faint));
+        out = out.child(
+            super::widgets::link("Companies", p)
+                .key("people-companies")
+                .on_press(|s: &mut State| s.open_company(None)),
+        );
+    }
+    if let Some(message) = &s.companies.notice {
+        out = out.child(roles::SMALL.wrap(message, p.warn).role("alert"));
     }
     if filtered.is_empty() {
         let text = if !query.is_empty() {
@@ -267,15 +344,69 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize) -> El {
         };
         out = out.child(cards::panel(p).child(roles::SMALL.wrap(text, p.soft).padding(14.0)));
     } else {
-        let mut panel = cards::panel(p).key("people-card");
-        for (i, person) in filtered.iter().enumerate() {
-            if i > 0 {
-                panel = panel.child(hairline(p));
-            }
-            panel = panel.child(person_row(person, k, compact, p));
+        let mut groups = std::collections::BTreeMap::<Option<String>, Vec<&Person>>::new();
+        for person in &filtered {
+            let company = if tab == 1 {
+                s.companies
+                    .data
+                    .company_for(&person.name)
+                    .map(|c| c.id.clone())
+            } else {
+                None
+            };
+            groups.entry(company).or_default().push(person);
         }
-        out = out.child(col().w_full().child(heading(compact, p)).child(panel));
+        for (company, group) in groups {
+            if tab == 1 {
+                if let Some(c) = company
+                    .as_ref()
+                    .and_then(|id| s.companies.data.catalog.records.get(id))
+                {
+                    let id = c.id.clone();
+                    out = out.child(
+                        super::widgets::pressable(
+                            row()
+                                .w_full()
+                                .items_center()
+                                .gap(8.0)
+                                .py(8.0)
+                                .child(icons::draw(&icons::BUILDING_2, 18.0, p.soft))
+                                .child(
+                                    roles::NAME
+                                        .wrap(
+                                            format!("{} \u{b7} {} people", c.name, group.len()),
+                                            p.ink,
+                                        )
+                                        .max_lines(2),
+                                ),
+                        )
+                        .key(format!("company-header-{}", c.id))
+                        .label(format!("Open company {}", c.name))
+                        .on_press(move |s: &mut State| s.open_company(Some(id.clone()))),
+                    );
+                } else {
+                    out = out.child(roles::NAME.wrap("No company assigned", p.soft));
+                }
+            }
+            let mut panel = cards::panel(p).key(format!(
+                "people-card-{}",
+                company.as_deref().unwrap_or("none")
+            ));
+            for (i, person) in group.iter().enumerate() {
+                if i > 0 {
+                    panel = panel.child(hairline(p));
+                }
+                panel = panel.child(person_row(s, person, k, compact, p));
+            }
+            out = out.child(
+                col()
+                    .w_full()
+                    .child(heading(compact, tab == 1, p))
+                    .child(panel),
+            );
+        }
     }
+
     if tab == 0 {
         out = out.child(teams::section(s, k, p));
     }

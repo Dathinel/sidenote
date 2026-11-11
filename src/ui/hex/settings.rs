@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct Settings {
+    pub navigation_open: bool,
     pub last_tabs: BTreeMap<String, usize>,
     back: Option<ReturnTo>,
     pub advanced: HashSet<&'static str>,
@@ -149,6 +150,7 @@ fn active(s: &State) -> (Page, usize) {
 }
 
 fn navigate(s: &mut State, page: Page, tab: usize) {
+    s.hex.shell.navigation_open = false;
     let tab = tab.min(page.tabs().len().saturating_sub(1));
     s.hex.section = page.section(tab);
     if page == Page::People {
@@ -743,6 +745,9 @@ fn jump(s: &mut State, dest: Destination) {
 }
 
 pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
+    if s.app_w.get() < 540.0 && !s.hex.shell.navigation_open {
+        return col().key("settings-sidebar").w(0.0).h_full();
+    }
     let compact = s.app_w.get() < 700.0;
     let width = if compact { 184.0 } else { 248.0 };
     let name = s
@@ -1134,6 +1139,16 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .px(24.0)
         .items_center()
         .gap(8.0)
+        .children((s.app_w.get() < 540.0).then(|| {
+            pressable(icons::draw(&icons::SETTINGS, 18.0, p.soft).padding(6.0))
+                .key("settings-navigation")
+                .label("Settings pages")
+                .help("Settings pages")
+                .expanded(s.hex.shell.navigation_open)
+                .on_press(|s: &mut State| {
+                    s.hex.shell.navigation_open = !s.hex.shell.navigation_open
+                })
+        }))
         .child(
             roles::CONTROL
                 .wrap(format!("Settings / {}", path(page, tab)), p.ink)
@@ -1176,6 +1191,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         ))
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    if e.key == Key::Escape && s.hex.shell.navigation_open {
+        s.hex.shell.navigation_open = false;
+        tx.blur();
+        return true;
+    }
     if e.key == Key::Escape {
         if s.people.team_editor.is_some() && s.hex.section == Section::Teams {
             super::super::teams::cancel(s);

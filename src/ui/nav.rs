@@ -24,6 +24,7 @@ pub const COLLAPSE_AT: f32 = 820.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
+    Companies,
     Meetings,
     Annotations,
     Tasks,
@@ -61,7 +62,9 @@ pub struct NavCache {
 
 impl State {
     pub fn page(&self) -> Page {
-        if self.annotations.open {
+        if self.companies.open {
+            Page::Companies
+        } else if self.annotations.open {
             Page::Annotations
         } else if self.view == View::Tasks {
             Page::Tasks

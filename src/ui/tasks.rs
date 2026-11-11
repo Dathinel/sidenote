@@ -402,6 +402,9 @@ impl State {
         if view == View::Tasks && !self.config.features.tasks {
             return;
         }
+        if self.companies.open {
+            self.go_home();
+        }
         self.annotations.open = false;
         self.view = view;
         self.tasks.close_menus();
