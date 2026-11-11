@@ -2170,6 +2170,7 @@ fn scene_check(s: &mut State) {
 /// list.
 fn scene_diary(s: &mut State) {
     if isolated() {
+        hex::scene(s, false);
         let mut ticks: Vec<(String, String)> = s
             .meetings
             .iter()
@@ -3145,6 +3146,7 @@ pub fn spec() -> AppSpec<State> {
                 scene_diary_open(
                     s,
                     &[
+                        diary::Part::Outcomes,
                         diary::Part::Tasks,
                         diary::Part::Memories,
                         diary::Part::Done,

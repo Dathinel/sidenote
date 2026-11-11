@@ -265,6 +265,8 @@ pub struct Meeting {
     pub device: Option<String>,
     pub id: String,
     pub title: String,
+    /// Diary title resolved before automatic date/time fallbacks.
+    pub diary_title: String,
     pub summary: Summary,
     pub summary_raw: String,
     pub transcript_raw: String,
@@ -278,6 +280,24 @@ pub struct Meeting {
     pub export_path: Option<String>,
     pub search: String,
 }
+fn diary_title(manifest: Option<&str>, source: Option<&str>, summary: &str) -> String {
+    static TIME_TITLE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:Meeting(?: at)?[ :]+)?\d{1,2}:\d{2}(?: ?[APap][Mm])?$").unwrap()
+    });
+    let meaningful = |value: &str| {
+        let value = value.trim();
+        !value.is_empty() && !value.starts_with("Meeting on ") && !TIME_TITLE.is_match(value)
+    };
+    let explicit = manifest
+        .filter(|v| !v.trim().is_empty())
+        .filter(|v| matches!(source, Some("user" | "calendar" | "call")) || meaningful(v));
+    explicit
+        .or_else(|| (!summary.trim().is_empty()).then_some(summary))
+        .unwrap_or("Untitled meeting")
+        .trim()
+        .to_string()
+}
+
 static LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\] (\S+) \(([^)]*)\): ?(.*)$").unwrap()
 });
@@ -458,6 +478,11 @@ impl Meeting {
                 summary.title.clone()
             }
         });
+        let diary_title = diary_title(
+            manifest.title.as_deref(),
+            manifest.title_source.as_deref(),
+            &summary.title,
+        );
         let transcript_raw = match super::file_reads::text(
             &folder.join("english-transcript.md"),
             super::live::ROLLING_MAX_BYTES,
@@ -510,6 +535,7 @@ impl Meeting {
             device: None,
             id,
             title,
+            diary_title,
             summary,
             summary_raw,
             transcript_raw,
@@ -830,5 +856,23 @@ mod quick_title_tests {
         );
         assert_eq!(pending_quick_title(&root, 2500, &known), None);
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod diary_title_tests {
+    use super::diary_title;
+    #[test]
+    fn provenance_and_empty_titles() {
+        assert_eq!(diary_title(Some("11:00"), None, " "), "Untitled meeting");
+        assert_eq!(
+            diary_title(Some("Meeting on 11 Nov at 11:00"), None, "Paper workshop"),
+            "Paper workshop"
+        );
+        assert_eq!(
+            diary_title(Some("11:00"), Some("user"), "Paper workshop"),
+            "11:00"
+        );
+        assert_eq!(diary_title(Some(" "), Some("user"), " Summary "), "Summary");
     }
 }

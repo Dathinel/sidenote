@@ -62,6 +62,17 @@ pub const SECTION: Role = Role {
     weight: 600.0,
     lh: 28.0,
 };
+/// Date headings and summaries in narrow reading views.
+pub const COMPACT_SECTION: Role = Role {
+    size: 18.0,
+    weight: 600.0,
+    lh: 26.0,
+};
+pub const COMPACT_READ: Role = Role {
+    size: 14.0,
+    weight: 400.0,
+    lh: 23.0,
+};
 /// Item titles: a meeting in a list, a topic, a model card, a panel's subject.
 pub const TITLE: Role = Role {
     size: 16.0,

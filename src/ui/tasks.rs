@@ -148,6 +148,8 @@ pub struct TasksState {
     pub collapsed: BTreeSet<String>,
     /// The Done section at the end of the page is open.
     pub done_open: bool,
+    pub diary_filter: Option<core::diary::TaskSelection>,
+    pub diary_label: Option<String>,
 }
 
 impl TasksState {
@@ -231,6 +233,8 @@ impl TasksState {
             keyboard: false,
             collapsed: BTreeSet::new(),
             done_open: false,
+            diary_filter: None,
+            diary_label: None,
         }
     }
 
@@ -260,7 +264,24 @@ impl TasksState {
 
     /// The page as laid out now: the groups and the folded Done section.
     pub fn arranged(&self) -> TaskView {
-        core::arrange(&self.items, &self.filter(), self.grouping, self.today)
+        let mut view = core::arrange(&self.items, &self.filter(), self.grouping, self.today);
+        if let Some(filter) = &self.diary_filter {
+            let keep = |i: &usize| filter.matches(&self.items[*i]);
+            for group in &mut view.groups {
+                group.rows.retain(keep);
+                group.rows.sort_by_key(|&i| {
+                    (
+                        self.items[i].due_date.unwrap_or(NaiveDate::MAX),
+                        core::diary::task_route(&self.items[i]).key(),
+                    )
+                });
+                group.open = group.rows.iter().filter(|&&i| !self.items[i].done).count();
+                group.done = group.rows.len() - group.open;
+            }
+            view.groups.retain(|g| !g.rows.is_empty());
+            view.done.retain(keep);
+        }
+        view
     }
 
     /// Every row the keyboard can reach, top to bottom.
@@ -3221,6 +3242,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 ),
         );
     }
+    pane = pane.child(super::diary::return_link(s, p));
     let panel_el = panel(s, k, p, overlay, layer);
     let body = row().w_full().grow(1.0).min_h(0.0).min_w(0.0);
     let Some(panel_el) = panel_el else {
@@ -3297,6 +3319,23 @@ fn list_column(
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(toolbar(s, k, p, layer).mb(10.0));
+    if let Some(name) = &t.diary_label {
+        doc = doc.child(
+            row()
+                .w_full()
+                .gap(8.0)
+                .items_center()
+                .child(roles::GROUP.wrap(name, p.ink))
+                .child(
+                    button("Clear", "diary-task-filter-clear", false, p).on_press(
+                        |s: &mut State| {
+                            s.tasks.diary_filter = None;
+                            s.tasks.diary_label = None;
+                        },
+                    ),
+                ),
+        );
+    }
     if v.groups.is_empty() && v.done.is_empty() {
         doc = doc.child(empty_note(s, p));
     }

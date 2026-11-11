@@ -16,6 +16,7 @@ pub mod meeting_router;
 pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
+pub mod diary;
 pub mod memory;
 pub mod notes;
 mod paths;

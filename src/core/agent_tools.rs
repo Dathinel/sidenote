@@ -670,6 +670,7 @@ mod tests {
             device: None,
             id: "100-1".into(),
             title: "Launch".into(),
+            diary_title: "Launch".into(),
             summary,
             summary_raw: String::new(),
             transcript_raw: String::new(),

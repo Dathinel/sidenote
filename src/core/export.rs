@@ -181,6 +181,7 @@ mod tests {
             device: None,
             id: "1800000000000-1".into(),
             title: "Northwind: onboarding review / launch".into(),
+            diary_title: "Northwind: onboarding review / launch".into(),
             summary: Summary {
                 kind: "Planning".into(),
                 people: vec!["Maya Chen".into(), "Priya Rao".into()],
