@@ -264,6 +264,7 @@ fn tab_queries_use_confirmed_links_and_aliases_without_exposing_old_only_people(
     assert!(errors.is_empty());
     let teams = Teams {
         teams: vec![super::super::Team {
+            id: "delivery".into(),
             name: "Delivery".into(),
             members: vec!["Ours".into(), "Aster Vale".into()],
             aliases: BTreeMap::from([("A Vale".into(), "Aster Vale".into())]),

@@ -1806,7 +1806,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Sync, _) => col()
             .w_full()
             .child(sync_page(s, k, p))
-            .child(named_folder(s, p)),
+            .child(named_folder(s, k, p)),
         (Page::Privacy, _) => col()
             .w_full()
             .child(privacy(s, k, p))
@@ -1841,7 +1841,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             )),
     }
 }
-fn named_folder(s: &State, p: Palette) -> El {
+fn named_folder(s: &State, k: &Kit, p: Palette) -> El {
     let open = s.hex.shell.advanced.contains(Page::Sync.name());
     let mut out = col().w_full().mt(18.0).child(
         crate::ui::cards::fold_control(
