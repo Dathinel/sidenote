@@ -297,14 +297,21 @@ pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
     }
 }
 pub(crate) use crate::ui::cards::{icon_tile, panel};
-fn ownership(p: Palette) -> El {
+fn ownership_text(page: Page) -> &'static str {
+    if page == Page::Hex {
+        "These settings live in Hex and also change Hex."
+    } else {
+        "Settings marked ⬡ Hex live in Hex and also change Hex."
+    }
+}
+fn ownership(page: Page, p: Palette) -> El {
     row()
         .w_full()
         .items_center()
         .gap(6.0)
         .mt(10.0)
-        .child(icons::draw(&icons::HEX_MARK, 14.0, p.soft))
-        .child(roles::SMALL.wrap("These settings live in Hex and also change Hex.", p.soft))
+        .children((page == Page::Hex).then(|| icons::draw(&icons::HEX_MARK, 14.0, p.soft)))
+        .child(roles::SMALL.wrap(ownership_text(page), p.soft))
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
@@ -472,11 +479,10 @@ fn location(st: &Setting) -> (Page, usize, bool) {
         "labs.live_captions"
         | "labs.meetings"
         | "meetings.enabled"
-        | "meetings.summaries"
-        | "meetings.opencode_model"
         | "meetings.show_recording_indicator"
         | "meetings.recording_indicator_corner"
         | "meetings.providers" => (Page::Meetings, 0, false),
+        "meetings.summaries" | "meetings.opencode_model" => (Page::Meetings, 1, false),
         "about.build" | "diagnostics.log_level" | "labs.gpu_overlay" => {
             (Page::Diagnostics, 0, false)
         }
@@ -1168,12 +1174,6 @@ fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
                             "hex-connection"
                         });
                     }
-                    if page == Page::Meetings && tab == 4 {
-                        s.hex.shell.advanced.insert(page.name());
-                    }
-                    if page == Page::Meetings && tab == 5 {
-                        s.hex.open_groups.insert("hex-summaries");
-                    }
                     super::super::scene_scroll(s, &format!("settings-group-{tab}"));
                 } else {
                     navigate(s, page, tab);
@@ -1298,7 +1298,7 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
             s,
             "vocabulary-row",
             "Names and terms",
-            "Sidenote spells these right in transcripts and summaries.",
+            "Hex and Sidenote spell these right in transcripts and summaries.",
             crate::ui::widgets::action("Edit terms", p)
                 .key("vocabulary-edit")
                 .on_press(|s: &mut State| {
@@ -1314,19 +1314,8 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     }
     out
 }
-fn jump_groups(page: Page, tab: usize) -> &'static [&'static str] {
-    match (page, tab) {
-        (Page::Hex, _) => &HEX_GROUPS,
-        (Page::Meetings, 0) => &[
-            "Recording",
-            "Call apps",
-            "Languages",
-            "Vocabulary",
-            "Advanced",
-            "Hex summaries",
-        ],
-        _ => &[],
-    }
+fn jump_groups(page: Page, _tab: usize) -> &'static [&'static str] {
+    if page == Page::Hex { &HEX_GROUPS } else { &[] }
 }
 const HEX_GROUPS: [&str; 6] = [
     "Engine",
@@ -1480,8 +1469,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     ),
                     p,
                 ),
-            ))
-            .child(hex_group(5, hex_summaries(s, k, p, layer))),
+            )),
         (Page::Meetings, 1) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
@@ -1501,7 +1489,8 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 s,
                 ai_notes::section(s, k, p, ai_notes::Part::Scripts),
                 p,
-            )),
+            ))
+            .child(hex_summaries(s, k, p, layer)),
         (Page::Meetings, _) => card(
             "Daily check",
             feature(
@@ -1563,29 +1552,29 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .w_full()
                 .child(hex_group(
                     0,
-                    card("Hex · Recording engine", summary_line(s, p), p),
+                    card("Recording engine", summary_line(s, p), p),
                 ))
                 .child(hex_group(
                     1,
-                    card("Hex · Shortcuts", hex_group_rows(s, k, p, layer, 1), p),
+                    card("Shortcuts", hex_group_rows(s, k, p, layer, 1), p),
                 ))
                 .child(hex_group(
                     2,
-                    card("Hex · Dictation", hex_group_rows(s, k, p, layer, 2), p),
+                    card("Dictation", hex_group_rows(s, k, p, layer, 2), p),
                 ))
                 .child(hex_group(
                     3,
                     card(
-                        "Hex · Speech model",
+                        "Speech model",
                         model_section(s, p).padding(14.0).key("legacy-hex-models"),
                         p,
                     ),
                 ));
             for index in [4, 5] {
                 let title = if index == 4 {
-                    "Hex · Dictation compatibility"
+                    "Dictation compatibility"
                 } else {
-                    "Hex · Connection"
+                    "Connection"
                 };
                 let open = s.hex.open_groups.contains(if index == 4 {
                     "hex-compatibility"
@@ -1597,19 +1586,17 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 } else {
                     "hex-connection"
                 };
-                let mut group =
-                    col()
-                        .w_full()
-                        .mt(18.0)
-                        .child(
-                            hex_fold(title, key, open, p).on_press(move |s: &mut State| {
-                                if !s.hex.open_groups.remove(key) {
-                                    s.hex.open_groups.insert(key);
-                                }
-                            }),
-                        );
+                let mut group = col().w_full().mt(18.0).child(
+                    crate::ui::cards::fold_control(title, key, open, p).on_press(
+                        move |s: &mut State| {
+                            if !s.hex.open_groups.remove(key) {
+                                s.hex.open_groups.insert(key);
+                            }
+                        },
+                    ),
+                );
                 if open {
-                    group = group.child(card(title, hex_group_rows(s, k, p, layer, index), p));
+                    group = group.child(panel(p).child(hex_group_rows(s, k, p, layer, index)));
                 }
                 out = out.child(hex_group(index, group));
             }
@@ -1772,9 +1759,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                             page,
                             Page::Hex | Page::Appearance | Page::Privacy | Page::Diagnostics
                         )
-                        .then(|| ownership(p)),
+                        .then(|| ownership(page, p)),
                     )
-                    .children((page == Page::Meetings && tab == 0).then(|| ownership(p)))
+                    .children((page == Page::Meetings && tab <= 1).then(|| ownership(page, p)))
                     .children((!page.tabs().is_empty()).then(|| tab_bar(s, p, false)))
                     .children((!jump_groups(page, tab).is_empty()).then(|| tab_bar(s, p, true)))
                     .pb(4.0),
@@ -1887,6 +1874,32 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
+        assert!(jump_groups(Page::Meetings, 0).is_empty());
+        assert_eq!(Page::Meetings.tabs(), ["Recording", "Summaries", "Tasks"]);
+        assert_eq!(jump_groups(Page::Hex, 0).len(), 6);
+        assert_eq!(
+            ownership_text(Page::Hex),
+            "These settings live in Hex and also change Hex."
+        );
+        assert_eq!(
+            ownership_text(Page::Meetings),
+            "Settings marked ⬡ Hex live in Hex and also change Hex."
+        );
+        let fixture: Vec<Setting> = serde_json::from_str(include_str!(
+            "../../../tools/ui-fixtures/settings-recording.json"
+        ))
+        .unwrap();
+        for st in fixture.iter().filter(|st| {
+            matches!(
+                st.key.as_str(),
+                "meetings.summaries" | "meetings.opencode_model"
+            )
+        }) {
+            assert_eq!(location(st), (Page::Meetings, 1, false));
+        }
+    }
     #[test]
     fn approved_legacy_search_map_keeps_all_49_destinations() {
         let map: serde_json::Value = serde_json::from_str(include_str!(

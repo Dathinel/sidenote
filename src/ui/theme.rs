@@ -146,6 +146,8 @@ pub fn kit(p: &Palette) -> Kit {
         circle_x: &super::icons::CIRCLE_X,
         dash: &super::icons::DASH,
     };
+    kit.c.bg_accent = p.button_fill;
+    kit.c.knob_on = p.button_ink;
     kit.c.text_faint = p.faint;
     kit.ty.small = super::roles::META.style();
     kit
@@ -181,4 +183,19 @@ pub fn fonts() -> &'static [&'static [u8]] {
         list.push(Box::leak(bytes.into_boxed_slice()));
     }
     Box::leak(list.into_boxed_slice())
+}
+
+#[cfg(test)]
+mod quiet_ink_switch_tests {
+    use super::*;
+    #[test]
+    fn switches_use_primary_button_ink_in_both_themes() {
+        for dark in [false, true] {
+            let p = palette(dark);
+            let k = kit(&p);
+            assert_eq!(k.c.bg_accent, p.button_fill);
+            assert_eq!(k.c.knob_on, p.button_ink);
+            assert_ne!(k.c.bg_accent, p.accent);
+        }
+    }
 }

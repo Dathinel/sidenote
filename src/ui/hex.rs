@@ -64,6 +64,7 @@ pub enum Action {
     Set(String),
     Add,
     Remove,
+    Model,
 }
 
 pub enum Msg {
@@ -127,6 +128,7 @@ pub struct HexState {
     vocab_error: Option<&'static str>,
     record_busy: bool,
     vocab_busy: bool,
+    model_busy: bool,
     busy_keys: HashSet<String>,
     /// Keys whose draft takes the value Hex reports next, because the write just went through.
     fresh: HashSet<String>,
@@ -166,6 +168,7 @@ impl Default for HexState {
             vocab_error: None,
             record_busy: false,
             vocab_busy: false,
+            model_busy: false,
             busy_keys: HashSet::new(),
             fresh: HashSet::new(),
             drafts: HashMap::new(),
@@ -474,7 +477,12 @@ impl State {
 
     fn hex_status(&mut self, r: Result<EngineState, HexError>) {
         let running = r.is_ok();
-        if running && !self.hex.was_running {
+        let model_changed = r
+            .as_ref()
+            .ok()
+            .zip(self.hex.state())
+            .is_some_and(|(now, before)| now.model != before.model);
+        if running && (!self.hex.was_running || model_changed) {
             self.hex.data_dirty = true;
         }
         self.hex.was_running = running;
@@ -620,6 +628,17 @@ impl State {
                     }
                 }
             }
+            Action::Model => {
+                self.hex.model_busy = false;
+                match r {
+                    Ok(()) => {
+                        self.hex.models_note = None;
+                        self.hex.data_dirty = true;
+                        self.hex_refresh_if_due();
+                    }
+                    Err(e) => self.hex.models_note = Some(plain(&e)),
+                }
+            }
             Action::Add | Action::Remove => {
                 self.hex.vocab_busy = false;
                 match r {
@@ -632,6 +651,46 @@ impl State {
                 }
             }
         }
+    }
+
+    fn hex_change_model(&mut self, id: &str, action: ModelAction) {
+        if rune::tooling::headless_run().is_some()
+            || self.hex.model_busy
+            || self.hex_recording()
+            || self
+                .hex
+                .state()
+                .is_none_or(|st| st.dictating != Some(false) || st.model.preparing.is_some())
+        {
+            return;
+        }
+        let Some(model) = self.hex.models.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if model_action(model, self.hex.can(Feature::ModelInstall)) != Some(action) {
+            return;
+        }
+        let feature = match action {
+            ModelAction::Use => Feature::ModelUse,
+            ModelAction::Install => Feature::ModelInstall,
+            ModelAction::OpenHex => Feature::WindowShow,
+        };
+        if !self.hex.can(feature) {
+            return;
+        }
+        self.hex.model_busy = true;
+        self.hex.models_note = None;
+        let id = id.to_owned();
+        self.hex_spawn(move |e| {
+            Msg::Done(
+                Action::Model,
+                match action {
+                    ModelAction::Use => e.model_use(&id),
+                    ModelAction::Install => e.model_install(&id),
+                    ModelAction::OpenHex => e.open_models(),
+                },
+            )
+        });
     }
 
     pub fn hex_recording(&self) -> bool {
@@ -995,6 +1054,25 @@ fn summary_line(s: &State, p: Palette) -> El {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelAction {
+    Use,
+    Install,
+    OpenHex,
+}
+fn model_action(model: &ModelInfo, can_install: bool) -> Option<ModelAction> {
+    if !model.installed {
+        Some(if can_install {
+            ModelAction::Install
+        } else {
+            ModelAction::OpenHex
+        })
+    } else if model.selected {
+        None
+    } else {
+        Some(ModelAction::Use)
+    }
+}
 fn model_section(s: &State, p: Palette) -> El {
     let h = &s.hex;
     let mut sec = col().key("hex-models").w_full();
@@ -1060,7 +1138,29 @@ fn model_section(s: &State, p: Palette) -> El {
                 .w(100.0),
             );
         if m.selected {
-            r = r.child(badge("Selected", p.accent, Some(p.chip)));
+            r = r.child(roles::CONTROL.line("Selected", p.soft));
+        }
+        if let Some(action) = model_action(m, h.can(Feature::ModelInstall)) {
+            let (label, feature, key) = match action {
+                ModelAction::Use => ("Use", Feature::ModelUse, "use"),
+                ModelAction::Install => ("Install", Feature::ModelInstall, "install"),
+                ModelAction::OpenHex => ("Install in Hex", Feature::WindowShow, "open"),
+            };
+            let id = m.id.clone();
+            let idle = !h.model_busy
+                && h.recording().is_none()
+                && h.state()
+                    .is_some_and(|st| st.dictating == Some(false) && st.model.preparing.is_none());
+            r = r.child(
+                crate::ui::widgets::button(
+                    label,
+                    &format!("hex-model-{key}-{}", m.id),
+                    crate::ui::widgets::ButtonRole::Secondary,
+                    p,
+                )
+                .disabled(!idle || !h.can(feature))
+                .on_press(move |s: &mut State| s.hex_change_model(&id, action)),
+            );
         }
         sec = sec.child(r);
     }
@@ -1665,6 +1765,9 @@ pub fn scene(s: &mut State, recording: bool) {
         Feature::SettingsSet,
         Feature::VocabularyAdd,
         Feature::VocabularyRemove,
+        Feature::ModelUse,
+        Feature::ModelInstall,
+        Feature::WindowShow,
     ]
     .into_iter()
     .map(|feature| (feature, Support::Supported))
@@ -1691,4 +1794,37 @@ pub fn scene(s: &mut State, recording: bool) {
     s.hex.models = f.models;
     s.hex_set_settings(Ok(f.settings));
     s.hex_set_vocabulary(Ok(f.vocabulary));
+}
+
+#[cfg(test)]
+mod model_action_tests {
+    use super::*;
+    #[test]
+    fn installed_models_never_offer_download_and_selected_models_are_information() {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../tools/ui-fixtures/hex.json")).unwrap();
+        assert_eq!(model_action(&fixture.models[0], true), None);
+        assert_eq!(
+            model_action(&fixture.models[1], true),
+            Some(ModelAction::Use)
+        );
+        assert_eq!(
+            model_action(&fixture.models[1], false),
+            Some(ModelAction::Use)
+        );
+        assert_eq!(
+            model_action(&fixture.models[2], true),
+            Some(ModelAction::Install)
+        );
+        assert_eq!(
+            model_action(&fixture.models[2], false),
+            Some(ModelAction::OpenHex)
+        );
+        let mut missing_selected = fixture.models[2].clone();
+        missing_selected.selected = true;
+        assert_eq!(
+            model_action(&missing_selected, true),
+            Some(ModelAction::Install)
+        );
+    }
 }

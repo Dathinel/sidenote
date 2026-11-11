@@ -83,3 +83,22 @@ Every Settings capture was compared with its matching proposal PNG where one exi
 No push, version bump, package or installation was performed. All app captures and input events used the offscreen runner. No windows or input were sent to the user's screen.
 
 Elapsed time was about 100 minutes, including the initial audit and source reading. Work was split between orientation, implementation, executable verification, render review and rework, with compiler waits overlapping edits. The initial dependency build took about 14 minutes. Repeated compile cycles after accessor and fixture mistakes were the largest avoidable cost.
+
+## Round 2 contract
+Implement only the final six review corrections. Keep Updates unchanged. Meetings retains Recording, Summaries and Tasks as its only tab row, with Hex summaries in Summaries. Only Hex and dictation uses the all-Hex ownership sentence and unmarked section headings; other Hex-bearing pages use the marked-settings sentence. Keep the vocabulary Hex-owned and explain both readers. Add capability-gated Use and Install model actions through Hex's existing protocol, with Install in Hex when direct installation is unavailable. On-state switches use the primary-button fill and ink tokens. Preserve all legacy keys and the shared button implementation. Complete the application edits, run formatting and both Clippy and test configurations, make one explicit cargo build, then run MCP smoke, 49-key reachability, and offscreen light/dark renders at 1280 and 390. Do not push, package, install or interact with the user's screen.
+
+Vocabulary ownership evidence: `HexEngine::vocabulary_add/remove` writes through Hex; `core::notes::helper::Cli::glossary` reads the same list into Sidenote summary prompts. Hex's [vocabulary source documentation](https://github.com/anomalyco/hex/blob/main/docs/features/vocabulary.md) describes its transcription and rewriting readers. Copy names both applications without promising every speech model uses vocabulary.
+
+Model command evidence: installed hidden `model --help`, `model use --help` and `model install --help` expose the actions. The [protocol source](https://github.com/anomalyco/hex/blob/main/src/control.rs) defines `model-use`, `model-install` and `window-show` with the model id and optional models pane. Verification never invokes a live mutation or opens Hex.
+
+## Round 2 result
+
+The six corrections are implemented. Meetings has one Recording / Summaries / Tasks row. Hex summaries and their search destinations now belong to Summaries. Mixed pages explain marked Hex settings; Hex and dictation has one ownership line and plain section headings. Names and terms remains Hex-owned and names both readers. Model rows offer Use or Install through the existing authenticated Hex commands, with capability-gated Install in Hex as the fallback. Selected remains plain text. Shared kit switches use the Quiet ink primary-button fill and ink tokens; the shared button component is unchanged.
+
+All requested native images and element trees are in `artifacts/settings-build/round2/`, with the twelve requested images enumerated in `render-manifest.json` alongside seven supporting captures. The four scrolled Hex captures verify that the active jump tab follows its section. Updates at dark 1280 is pixel-identical to the approved prior capture.
+
+Executable gates are rung 4 evidence: formatting, Clippy with and without asr-runtime, workspace tests with and without asr-runtime, the single cargo build, and MCP smoke passed. Logs and commands are in `artifacts/settings-build/round2/gates/results.json`. The new unit tests cover model action selection, the install fallback, ownership and Meetings routing, and both switch palettes. Runtime capture checks are rung 5 evidence for the fixture UI only. No live model selection, installation or window action was invoked.
+
+Visual review found an existing long Summary row title clipping at 390px. Its text bounds are unchanged from the prior capture, apart from the new ownership line's vertical offset. This final round leaves that pre-existing layout outside the six requested changes.
+
+The unchanged legacy reachability test passed all 49 keys across 55 wide light trees. Separate typed searches passed for all 49 keys and their visible approved destination. No stored setting was deleted. Round 2 took about 25 minutes, including source verification, edits, the complete gate suite and capture review.

@@ -1,8 +1,11 @@
 """Run the requested Settings build gates from this worktree."""
 from pathlib import Path
-import json,os,subprocess,time,sys
+import argparse,json,os,subprocess,time,sys
 ROOT=Path(__file__).resolve().parents[1]
-OUT=ROOT/'artifacts/settings-build/gates'
+parser=argparse.ArgumentParser()
+parser.add_argument('--out',default='artifacts/settings-build/gates')
+args=parser.parse_args()
+OUT=ROOT/args.out
 OUT.mkdir(parents=True,exist_ok=True)
 ENV=os.environ|{'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'CARGO_TARGET_DIR':str(ROOT/'target')}
 COMMANDS=[('fmt',['cargo','fmt','--all','--check']),('clippy',['cargo','clippy','--workspace','--locked','--all-targets','--','-D','warnings']),('clippy-asr',['cargo','clippy','--workspace','--locked','--all-targets','--features','asr-runtime','--','-D','warnings']),('test',['cargo','test','--workspace','--locked']),('test-asr',['cargo','test','--workspace','--locked','--features','asr-runtime']),('build',['cargo','build','--locked']),('mcp-smoke',[sys.executable,'tools/mcp-smoke.py',str(ROOT/'target/x86_64-pc-windows-gnu/debug/sidenote.exe')])]
