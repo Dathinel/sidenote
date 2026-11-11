@@ -96,6 +96,7 @@ impl State {
                 .map(|m| core::Meeting {
                     id: m.id.clone(),
                     title: m.title.clone(),
+                    diary_title: m.diary_title.clone(),
                     started: m.started,
                     summary: core::Summary {
                         todo: m.summary.todo.clone(),

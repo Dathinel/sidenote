@@ -130,6 +130,8 @@ pub struct CheckState {
     pub diary_selected: Option<NaiveDate>,
     pub diary_month: Option<NaiveDate>,
     pub diary_week_open: bool,
+    pub diary_return: Option<String>,
+    pub diary_review_open: bool,
     /// The day each ticked meeting task was ticked, by meeting id and task index.
     pub done_on: HashMap<(String, usize), NaiveDate>,
     /// Findings and new findings of the recent reports, for their days in the Diary.
@@ -195,6 +197,8 @@ impl Default for CheckState {
             diary_selected: None,
             diary_month: None,
             diary_week_open: false,
+            diary_return: None,
+            diary_review_open: false,
             done_on: HashMap::new(),
             totals: HashMap::new(),
             day_summaries: HashMap::new(),
@@ -1592,82 +1596,6 @@ fn report_link(date: NaiveDate, words: &str, p: Palette) -> El {
         .on_press(move |s: &mut State| s.open_report(date))
 }
 
-/// The newest check's open findings, folded under "Needs your attention" in its day of the
-/// Diary. Open, it lists high and medium findings, then lows under their own fold. Each row
-/// opens the same panel as the full report, with Apply, Dismiss and Snooze.
-pub(super) fn day_attention(s: &State, k: &Kit, date: NaiveDate, p: Palette) -> El {
-    let Some(r) = &s.check.report else {
-        return el();
-    };
-    let c = &s.check;
-    let open: Vec<usize> = (0..r.content.findings.len())
-        .filter(|&i| c.status_at(r, i) == TriageStatus::Open)
-        .collect();
-    let low: Vec<usize> = open
-        .iter()
-        .copied()
-        .filter(|&i| matches!(r.content.findings[i].severity, Severity::Low))
-        .collect();
-    let key = diary::part_key(date, diary::Part::Attention);
-    let on = c.open_parts.contains(&key);
-    let out = col()
-        .key("check-attention")
-        .w_full()
-        .child(diary::fold_head(
-            key,
-            "Needs your attention",
-            open.len(),
-            on,
-            p,
-        ));
-    if !on {
-        return out;
-    }
-    let mut body = col().w_full().gap(1.0).pl(20.0).pb(6.0);
-    if open.is_empty() {
-        let words = if r.content.findings.is_empty() {
-            "The daily check found nothing to flag."
-        } else {
-            "Nothing open. You handled everything the daily check found."
-        };
-        body = body.child(roles::SMALL.wrap(words, p.soft).px(8.0).py(4.0));
-    } else if let Some(line) = r.content.brief.first().filter(|_| is_v2(r)) {
-        body = body.child(
-            prose(s, k, p, line.trim(), "check-attention", 14.0)
-                .px(8.0)
-                .py(4.0),
-        );
-    }
-    let lay = Lay {
-        compact: true,
-        project: false,
-    };
-    let shown = rows(s);
-    for &i in shown.iter().filter(|i| !low.contains(i)) {
-        body = body.child(finding_row(s, r, i, lay, p));
-    }
-    if !low.is_empty() {
-        let low_key = diary::part_key(date, diary::Part::Low);
-        let low_on = c.open_parts.contains(&low_key);
-        body = body.child(diary::fold_head(low_key, "Low priority", low.len(), low_on, p).mt(4.0));
-        if low_on {
-            let mut lows = col().w_full().gap(1.0).pl(20.0);
-            for &i in shown.iter().filter(|i| low.contains(i)) {
-                lows = lows.child(finding_row(s, r, i, lay, p));
-            }
-            body = body.child(lows);
-        }
-    }
-    body = body.child(
-        row()
-            .w_full()
-            .pl(4.0)
-            .pt(6.0)
-            .child(report_link(r.date, "Full check", p)),
-    );
-    out.child(body)
-}
-
 /// An older day's check in one quiet line, with a link to its report.
 pub(super) fn day_line(s: &State, date: NaiveDate, p: Palette) -> El {
     let said = match s.check.totals.get(&date) {
@@ -2530,32 +2458,6 @@ fn hint_keys(keys: &[&str], what: &str, p: Palette) -> El {
 
 // ---- the page --------------------------------------------------------------------------------
 
-/// The Diary with no day in it yet.
-pub(super) fn empty(s: &State, p: Palette) -> El {
-    let exe = std::env::current_exe().unwrap_or_else(|_| "sidenote.exe".into());
-    let cmd = format!(
-        "& '{}' --daily-check",
-        exe.display().to_string().replace('\'', "''")
-    );
-    col()
-        .w_full()
-        .gap(12.0)
-        .mt(roles::SECTION_GAP)
-        .child(roles::SECTION.wrap("Nothing here yet", p.ink))
-        .child(roles::SMALL.wrap("Each day you record a meeting, tick a task or change memory gets an entry here, newest first. Every day at 08:30 the daily check also reads your meetings and tasks, compares them with the company knowledge base, and adds what needs your attention.", p.soft))
-        .child(roles::SMALL.wrap("To run the check now, paste this into PowerShell. It makes no window and takes a few minutes:", p.soft).mt(6.0))
-        .child(
-            col()
-                .w_full()
-                .px(12.0)
-                .py(10.0)
-                .radius(10.0)
-                .fill(p.side)
-                .child(copy_row(s, &cmd, "copy-run".into(), p)),
-        )
-        .child(roles::SMALL.wrap("Then reopen this page.", p.soft))
-}
-
 fn list_column(
     s: &State,
     k: &Kit,
@@ -2565,13 +2467,7 @@ fn list_column(
     layer: &mut Vec<El>,
 ) -> El {
     if !s.check.report_open {
-        return col().grow(1.0).min_w(0.0).min_h(0.0).child(scroll(
-            col()
-                .w_full()
-                .items_center()
-                .child(diary::feed(s, k, p, narrow, layer)),
-            "check-scroll",
-        ));
+        return diary::feed(s, k, p, narrow, layer);
     }
     let side = if narrow {
         16.0
@@ -2623,6 +2519,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_h(0.0)
         .w_full()
         .fill(p.bg);
+    if s.check.report_open {
+        pane = pane.child(diary::return_link(s, p));
+    }
     if let Some(note) = c.notice.as_ref().or(s.notice.as_ref()) {
         pane = pane.child(notice_bar(note, p));
     }

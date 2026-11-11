@@ -2048,6 +2048,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_h(0.0)
         .w_full()
         .fill(p.bg)
+        .child(super::diary::return_link(s, p))
         .child(refresh_status(m, p).px(16.0));
     if let Some(note) = m.notice.as_ref().or(s.notice.as_ref()) {
         pane = pane.child(notice_bar(note, p));
