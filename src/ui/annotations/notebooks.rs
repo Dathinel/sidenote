@@ -605,7 +605,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
             .font(theme::display(28.0)),
     );
     if !book.purpose.is_empty() {
-        page = page.child(roles::READ.wrap(&book.purpose, p.soft));
+        page = page.child(roles::READ.wrap(&book.purpose, p.soft).max_lines(1));
     }
     let mut actions = row()
         .gap(12.0)
@@ -671,6 +671,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
                 ),
         )
         .key(format!("notebook-capture-{key}"))
+        .h(120.0)
         .border(
             1.0,
             if s.annotations.notebooks.dragging == Some(i) {
@@ -737,7 +738,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
     }
     page
 }
-fn field_label(path: &str) -> String {
+fn field_label(path: &str, value: &Value) -> String {
     let parts = path.split('/').collect::<Vec<_>>();
     let number = |i: usize| {
         parts
@@ -763,10 +764,13 @@ fn field_label(path: &str) -> String {
                     format!("Capture {} frame {} caption", number(2), number(4))
                 } else {
                     format!(
-                        "Capture {} frame {} callout {} {}",
+                        "Capture {} frame {} mark {} {}",
                         number(2),
                         number(4),
-                        number(6),
+                        value
+                            .pointer(path.rsplit_once('/').map_or("", |(parent, _)| parent))
+                            .and_then(|c| c["mark_number"].as_u64())
+                            .unwrap_or(number(6) as u64),
                         parts.last().unwrap_or(&"text")
                     )
                 }
@@ -847,12 +851,12 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
         for (path, input) in fields {
             let key = path.clone();
             page = page
-                .child(roles::GROUP.wrap(field_label(path), p.soft))
+                .child(roles::GROUP.wrap(field_label(path, &doc.value), p.soft))
                 .child(
                     TextArea::new(input)
                         .rows(3)
                         .width(None)
-                        .label(field_label(path))
+                        .label(field_label(path, &doc.value))
                         .on_edit(move |s: &mut State| {
                             s.annotations.notebooks.editing.get_mut(&key).unwrap()
                         })
@@ -1016,5 +1020,18 @@ pub(in crate::ui) fn scene(s: &mut State, name: &str) {
             .join(share::default_name(doc.value["title"].as_str().unwrap()));
         share::save(&path, &share::notebook(&doc).unwrap()).unwrap();
         s.annotations.notebooks.shared = Some(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn editor_uses_the_image_badge_number_across_frames() {
+        let value = json!({"sections":[{"figures":[{}, {"callouts":[{"mark_number":3}]}]}]});
+        assert_eq!(
+            field_label("/sections/0/figures/1/callouts/0/explanation", &value),
+            "Capture 1 frame 2 mark 3 explanation"
+        );
     }
 }

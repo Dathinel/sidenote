@@ -435,6 +435,13 @@ foreach ($scene in @('annotations-list', 'annotation-capture', 'annotations-empt
         $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
     }
 }
+foreach ($scene in @('notebooks','notebook','notebook-note','share-confirmation')) {
+    foreach ($width in @(1280,640)) {
+        $script = if ($width -eq 640) { 'dev3-close-drawer.json' } else { $null }
+        $extra = if ($script) { @('--at','mark:end') } else { @() }
+        $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
+    }
+}
 $priorAppData = $env:APPDATA
 $priorLocalAppData = $env:LOCALAPPDATA
 $priorState = $env:SIDENOTE_STATE_DIR
@@ -445,6 +452,13 @@ function Complete-Render($job) {
     if ($job.Process.ExitCode -ne 0) { throw "Render $($job.Name) failed with exit $($job.Process.ExitCode), see $($job.Log)" }
     $rows.Add($job.Row)
     $rows | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 "$out/render-index.json"
+    if ($job.Row.SourceScene -eq 'share-confirmation') {
+        $html = Get-ChildItem -LiteralPath $job.State -File -Filter '*.html' | Select-Object -First 1
+        if (-not $html) { throw 'The share confirmation did not produce HTML.' }
+        & python "$root/tools/verify_notebook_export.py" $job.State $html.FullName "$out/export-proof-$($job.Name).json"
+        if ($LASTEXITCODE -ne 0) { throw 'Export verification failed.' }
+        Copy-Item -LiteralPath $html.FullName -Destination "$out/notebook.html" -Force
+    }
     Remove-Item -LiteralPath $job.State -Recurse -Force -ErrorAction SilentlyContinue
     Write-Output $job.Row.Path
 }

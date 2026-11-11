@@ -21,3 +21,8 @@ captures. Return only the requested title, summary and ordered sections.
 Captures can repeat the same point. Keep their separate sections and do not invent
 a progression or differences. Reused note_reference values mean identical prose,
 not a shared recording. Read that prose from the supplied notes array.
+
+State only facts explicitly present in the supplied notes. Do not add benefits,
+completeness claims, audience, intent or causal explanations. A list of materials
+does not prove those are all the materials needed. Do not claim something is
+simpler, quicker or better unless a supplied note explicitly says so.
