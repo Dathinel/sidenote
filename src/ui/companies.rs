@@ -2,7 +2,7 @@
 use super::{
     State, ask, cards, icons, people, roles,
     theme::Palette,
-    widgets::{hairline, link, scroll},
+    widgets::{hairline, scroll},
 };
 use crate::ui::widgets::ButtonDisabled;
 use rune::{El, TextEdit, col, row};
@@ -222,6 +222,13 @@ pub fn person_editor(s: &State, k: &Kit, p: Palette) -> El {
     }
     col()
         .key("person-company-editor")
+        .child(super::widgets::breadcrumb(
+            "People",
+            s.companies.person.as_deref().unwrap_or("Person"),
+            "person-breadcrumb",
+            p,
+            |s| s.companies.person = None,
+        ))
         .w_full()
         .padding(14.0)
         .gap(8.0)
@@ -464,17 +471,6 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .max_w(984.0)
         .padding(if narrow { 16.0 } else { 24.0 })
         .gap(12.0);
-    doc = doc.child(
-        link("People / External", p)
-            .px(0.0)
-            .key("company-back")
-            .on_press(|s: &mut State| {
-                s.open_hex();
-                s.hex.section = super::hex::Section::Teams;
-                s.people.tab = 1;
-                s.hex.shell.last_tabs.insert("People".into(), 1);
-            }),
-    );
     if let Some(message) = &s.companies.notice {
         doc = doc.child(roles::SMALL.wrap(message, p.warn).role("alert"));
     }
@@ -539,6 +535,18 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         }
         return scroll(col().w_full().items_center().child(doc), "companies-scroll");
     };
+    doc = doc.child(super::widgets::breadcrumb(
+        "People",
+        &c.name,
+        "company-breadcrumb",
+        p,
+        |s| {
+            s.open_hex();
+            s.hex.section = super::hex::Section::Teams;
+            s.people.tab = 1;
+            s.hex.shell.last_tabs.insert("People".into(), 1);
+        },
+    ));
     let data = core::companies::query(
         &c.id,
         &s.companies.data,

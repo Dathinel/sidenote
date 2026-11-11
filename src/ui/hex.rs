@@ -10,6 +10,7 @@ use super::{
     widgets::{badge, hairline, pressable, scroll},
 };
 mod meeting_languages;
+mod readable;
 pub(super) mod settings;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
@@ -259,10 +260,10 @@ fn editable(st: &Setting) -> bool {
     st.writable
         && st.available != Some(false)
         && !st.secret
-        && matches!(
+        && (matches!(
             st.kind.as_str(),
             "bool" | "choice" | "number" | "integer" | "text" | "path"
-        )
+        ) || (st.key == "meetings.providers" && st.kind == "json" && st.value.is_array()))
 }
 
 fn is_numeric(kind: &str) -> bool {
@@ -996,10 +997,7 @@ fn summary_line(s: &State, p: Palette) -> El {
 
 fn model_section(s: &State, p: Palette) -> El {
     let h = &s.hex;
-    let mut sec = col()
-        .key("hex-models")
-        .w_full()
-        .child(section_head(Section::Model, None, p));
+    let mut sec = col().key("hex-models").w_full();
     // The list below marks the selected model, so this line only stands in when it is empty.
     if let Some(st) = h.state().filter(|_| h.models.is_empty()) {
         let m = &st.model;
@@ -1214,10 +1212,12 @@ pub enum Section {
     PromptLibrary,
     Sync,
     HelpersAdvanced,
+    Privacy,
+    Diagnostics,
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 9] = [
+const SECTIONS: [Section; 11] = [
     Section::Identity,
     Section::Meetings,
     Section::PromptLibrary,
@@ -1226,15 +1226,19 @@ const SECTIONS: [Section; 9] = [
     Section::Connect,
     Section::General,
     Section::Sync,
+    Section::Privacy,
     Section::Updates,
+    Section::Diagnostics,
 ];
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 9] = SECTIONS;
+    pub const ALL: [Section; 11] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Privacy => "Privacy and data",
+            Self::Diagnostics => "Diagnostics",
             Self::Identity => "General",
             Self::PromptLibrary => "Prompt library",
             Self::Sync => "Sync",
@@ -1257,6 +1261,8 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::Privacy => "What is sent, connected apps and retained files.",
+            Self::Diagnostics => "Agent recovery and Hex diagnostics.",
             Self::Identity => "Your name and setup.",
             Self::PromptLibrary => "Edit Meeting summary instructions.",
             Self::Sync => "This PC and other devices.",
@@ -1446,6 +1452,9 @@ fn setting_row(
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
+    if st.key == "meetings.providers" && !st.secret {
+        return readable::providers(s, k, st, p, layer);
+    }
     let h = &s.hex;
     let key = st.key.clone();
     let name = settings::setting_name(st);
@@ -1455,14 +1464,13 @@ fn setting_row(
             .items_center()
             .flex_wrap()
             .gap(8.0)
-            .child(roles::NAME.wrap(name.clone(), p.ink))
-            .children((settings::is_meeting_setting(st)).then(|| settings::pc(p))),
+            .child(roles::NAME.wrap(name.clone(), p.ink)),
     );
     if !st.about.is_empty() {
         text = text.child(
             roles::SMALL
                 .wrap(settings::setting_help(st), p.soft)
-                .help_when_truncated(st.about.clone()),
+                .help_when_truncated(settings::setting_help(st)),
         );
     }
     if st.available == Some(false) {
@@ -1477,13 +1485,32 @@ fn setting_row(
         text = text.child(roles::SMALL.wrap("Saving.", p.soft));
     }
     // A folder or file path needs more room than a short value.
-    let width = if st.kind == "path" { 360.0 } else { 220.0 };
-    let control = if !editable(st) {
-        let shown = if st.secret {
-            "Hidden by Hex".into()
-        } else {
-            setting_text(&st.value)
-        };
+    let width = if st.kind == "path" {
+        360.0_f32.min((s.app_w.get() - 64.0).max(220.0))
+    } else {
+        220.0
+    };
+    let model_edit_key = format!("model-edit-{}", st.key);
+    let model_edit = s.hex.select_open.as_deref() == Some(model_edit_key.as_str());
+    let control = if st.kind == "json" || st.value.is_array() || st.value.is_object() {
+        roles::SMALL
+            .wrap("Structured setting. Open Hex to review or edit it.", p.soft)
+            .w(width)
+    } else if st.key.contains("model") && st.kind == "text" && !model_edit {
+        let edit_key = model_edit_key.clone();
+        row()
+            .w(width)
+            .flex_wrap()
+            .gap(8.0)
+            .items_center()
+            .child(roles::CONTROL.wrap(readable::current_label(st), p.ink))
+            .children(editable(st).then(|| {
+                crate::ui::widgets::action("Edit model", p)
+                    .key(model_edit_key)
+                    .on_press(move |s: &mut State| s.hex.select_open = Some(edit_key.clone()))
+            }))
+    } else if !editable(st) {
+        let shown = readable::current_label(st);
         roles::SMALL
             .line(
                 if shown.is_empty() {
@@ -1508,10 +1535,21 @@ fn setting_row(
                     .key(format!("hs-sw-{}", st.key))
             }
             "choice" => {
-                let options: Vec<String> = st.choices.iter().map(setting_text).collect();
-                let current = st.value.as_str();
+                let choices: Vec<_> = st
+                    .choices
+                    .iter()
+                    .filter(|v| readable::supported_choice(v))
+                    .cloned()
+                    .collect();
+                let options: Vec<String> = choices
+                    .iter()
+                    .map(|v| readable::value_label(st, v))
+                    .collect();
+                let current_label = readable::current_label(st);
+                let current = Some(current_label.as_str());
                 let open = can && h.select_open.as_deref() == Some(key.as_str());
                 let (toggle_key, choose_key) = (key.clone(), key.clone());
+                let labels = options.clone();
                 Select::new(format!("hs-sel-{key}"), &options)
                     .label(name)
                     .current(current)
@@ -1530,7 +1568,9 @@ fn setting_row(
                     })
                     .on_close(|s: &mut State| s.hex.select_open = None)
                     .on_choose(move |s: &mut State, v: &str, _: &mut Tx| {
-                        s.hex_choose(&choose_key, v)
+                        if let Some(index) = labels.iter().position(|label| label == v) {
+                            s.hex_choose(&choose_key, &setting_text(&choices[index]));
+                        }
                     })
                     .build(k, layer)
             }

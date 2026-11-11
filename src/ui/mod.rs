@@ -1625,7 +1625,6 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
-    use widgets::pressable;
     let mut left = row().gap(4.0).items_center().min_w(0.0);
     if !s.sidebar_is_open() {
         left = left.child(
@@ -1649,48 +1648,23 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
         );
     }
     if s.view == tasks::View::Meetings && s.selected.is_some() {
-        if !s.meeting_ui.tabs {
-            let title = s.current().map(|m| m.title.as_str()).unwrap_or_default();
-            left = left.child(
-                pressable(
-                    roles::CONTROL
-                        .line(format!("Meetings / {title}"), p.soft)
-                        .grow(1.0),
-                )
-                .key("meeting-breadcrumb")
-                .label(format!("Meetings / {title}"))
-                .min_w(0.0)
-                .grow(1.0)
-                .on_press(|s: &mut State| s.go_home()),
-            );
-        } else {
-            left = left.child(
-                pressable(roles::CONTROL.icon_label("\u{2039}  All meetings", p.soft))
-                    .key("all-meetings")
-                    .label("All meetings (Escape)")
-                    .px(10.0)
-                    .py(4.0)
-                    .radius(8.0)
-                    .hover(p.chip)
-                    .on_press(|s: &mut State| s.go_home()),
-            );
-        }
+        let title = s.current().map(|m| m.title.as_str()).unwrap_or_default();
+        left = left.child(
+            widgets::breadcrumb("Meetings", title, "meeting-breadcrumb", p, |s| s.go_home())
+                .grow(1.0),
+        );
     }
     if s.on_memory() && s.memory.browse {
-        left =
-            left.child(
-                row()
-                    .gap(6.0)
-                    .items_center()
-                    .key("memory-breadcrumb")
-                    .child(widgets::link("Memory", p).key("memory-home").on_press(
-                        |s: &mut State| {
-                            s.close_record();
-                            s.memory.browse = false;
-                        },
-                    ))
-                    .child(roles::CONTROL.wrap("/ All", p.soft)),
-            );
+        left = left.child(widgets::breadcrumb(
+            "Memory",
+            "All",
+            "memory-breadcrumb",
+            p,
+            |s| {
+                s.close_record();
+                s.memory.browse = false;
+            },
+        ));
     }
     row()
         .key("top-bar")
@@ -2551,6 +2525,9 @@ pub fn spec() -> AppSpec<State> {
             ("updates-downloading", |s| {
                 updates::scene(s, sidenote::updates::Phase::Downloading)
             }),
+            ("updates-checking", |s| {
+                updates::scene(s, sidenote::updates::Phase::Checking)
+            }),
             ("updates-ready", |s| {
                 updates::scene(s, sidenote::updates::Phase::Ready)
             }),
@@ -2594,6 +2571,15 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-sync", |s| {
                 hex::settings::scene(s, "settings-sync")
+            }),
+            ("settings-speech-expanded", |s| {
+                hex::settings::scene(s, "settings-speech-expanded")
+            }),
+            ("settings-privacy", |s| {
+                hex::settings::scene(s, "settings-privacy")
+            }),
+            ("settings-diagnostics", |s| {
+                hex::settings::scene(s, "settings-diagnostics")
             }),
             ("settings-updates", |s| {
                 hex::settings::scene(s, "settings-updates")

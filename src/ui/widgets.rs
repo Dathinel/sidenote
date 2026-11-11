@@ -58,6 +58,53 @@ pub fn link(s: impl Into<String>, p: Palette) -> El {
     pressable(roles::CONTROL.icon_label(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
 }
 
+/// Drill-down navigation has one parent and one current item.
+pub fn breadcrumb(
+    parent: &str,
+    current: &str,
+    key: &str,
+    p: Palette,
+    back: impl Fn(&mut State) + 'static,
+) -> El {
+    let style = TextStyle::new(13.0, 400.0).lh(20.0);
+    row()
+        .key(key)
+        .role("navigation")
+        .label("Breadcrumb")
+        .w_full()
+        .min_w(0.0)
+        .items_center()
+        .gap(7.0)
+        .child(
+            text(parent)
+                .font(style)
+                .color(p.soft)
+                .truncate()
+                .min_w(0.0)
+                .max_w(160.0)
+                .key(format!("{key}-parent"))
+                .link(
+                    Link::new(0..parent.len(), "parent")
+                        .hover(LinkPaint::new().color(p.soft).underline(p.soft)),
+                )
+                .on_link(move |s: &mut State, _, _| back(s)),
+        )
+        .child(super::icons::draw(
+            &super::icons::CHEVRON_RIGHT,
+            14.0,
+            p.soft,
+        ))
+        .child(
+            text(current)
+                .font(TextStyle::new(13.0, 500.0).lh(20.0))
+                .color(p.ink)
+                .truncate()
+                .min_w(0.0)
+                .grow(1.0)
+                .key(format!("{key}-current")),
+        )
+}
+
 #[derive(Clone, Copy)]
 pub enum ButtonRole {
     Primary,

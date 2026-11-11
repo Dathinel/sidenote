@@ -3283,6 +3283,17 @@ fn list_column(
         .px(side)
         .pt(if narrow { 8.0 } else { 30.0 })
         .pb(56.0)
+        .children(if let super::nav::Filter::Project(name) = &s.filter {
+            Some(
+                super::widgets::breadcrumb("Tasks", name, "tasks-project-breadcrumb", p, |s| {
+                    s.filter = super::nav::Filter::All;
+                    s.rebuild_tasks();
+                })
+                .mb(12.0),
+            )
+        } else {
+            None
+        })
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(toolbar(s, k, p, layer).mb(10.0));

@@ -24,3 +24,6 @@ No stored setting deletion, version bump, package, installation, push, real Hex 
 
 ## Evidence
 The proposal is the approved design input. Implementation inspection is rung 2, executable gates are rung 4, and inspected offscreen application pixels are rung 5 for rendering only. No claim of live production configuration verification is made.
+
+## Owner breadcrumb decision
+Remove the Settings breadcrumb on every page. Keep page navigation available at narrow widths. Use one shared quiet-chevron component on Meetings, company details, notebook details, the person editor, Memory All and Tasks with a project context. It accepts exactly a parent and current title, uses 13 px muted parent text with hover underline, a 14 px Lucide chevron at 2.25 stroke, and an ink current title at weight 500. Both titles truncate. Remove the annotation capture breadcrumb. Top-level lists, Memory home and Diary have none.

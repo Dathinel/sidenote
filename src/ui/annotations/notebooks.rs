@@ -540,24 +540,17 @@ pub(super) fn confirmation(s: &State, p: Palette) -> El {
         )
 }
 fn breadcrumb(s: &State, p: Palette) -> El {
-    row()
-        .gap(8.0)
-        .items_center()
-        .child(
-            link("Annotations", p)
-                .key("notebook-breadcrumb")
-                .on_press(|s: &mut State| {
-                    s.cancel_annotation_note();
-                    s.annotations.notebooks.selected = None;
-                    s.annotations.notebooks.note_open = false;
-                }),
-        )
-        .child(roles::META.wrap("/", p.soft))
-        .child(
-            roles::META
-                .wrap(s.book().map_or("Notebook", |b| b.title.as_str()), p.soft)
-                .max_lines(1),
-        )
+    super::super::widgets::breadcrumb(
+        "Annotations",
+        s.book().map_or("Notebook", |b| b.title.as_str()),
+        "notebook-breadcrumb",
+        p,
+        |s| {
+            s.cancel_annotation_note();
+            s.annotations.notebooks.selected = None;
+            s.annotations.notebooks.note_open = false;
+        },
+    )
 }
 pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
     let Some(book) = s.book() else {
