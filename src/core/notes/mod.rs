@@ -1,6 +1,7 @@
 //! Device-local meeting notes. Commands and consent are independent of editable runners.
 use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf, time::Duration};
+pub mod draft;
 mod helper;
 mod prompt;
 pub mod queue;

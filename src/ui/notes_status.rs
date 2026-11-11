@@ -140,7 +140,7 @@ fn after_setup(state: JobState, configured: bool) -> JobState {
     }
 }
 pub fn job(s: &State, m: &Meeting) -> Option<Job> {
-    if m.device.is_some() {
+    if m.device.is_some() || (!m.has_summary() && !m.draft_raw.is_empty()) {
         return None;
     }
     let configured = s

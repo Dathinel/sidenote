@@ -388,24 +388,34 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             crate::ui::live::your_notes(&m.notes, p).key("sec-your-notes")
         });
     }
-    if !m.has_summary() {
+    let draft = draft_summary(m);
+    let summary = draft.as_ref().unwrap_or(&m.summary);
+    if draft.is_some() {
+        body = body.child(
+            roles::META
+                .wrap(DRAFT_NOTICE, p.soft)
+                .key("draft-summary-notice")
+                .mb(12.0),
+        );
+    }
+    if !m.has_summary() && draft.is_none() {
         return body.child(roles::READ.wrap(
             "The meeting summary will appear here when it is ready.",
             p.soft,
         ));
     }
-    if !m.summary.context.is_empty() {
+    if !summary.context.is_empty() {
         body = body.child(
             roles::SECTION
                 .wrap("Context", p.ink)
                 .key("sec-context")
                 .mb(6.0),
         );
-        for (i, line) in m.summary.context.iter().enumerate() {
+        for (i, line) in summary.context.iter().enumerate() {
             body = body.child(roles::READ.wrap(line, p.ink).key(format!("ctx-{i}")));
         }
     }
-    for (ti, topic) in m.summary.topics.iter().enumerate() {
+    for (ti, topic) in summary.topics.iter().enumerate() {
         body = body.child(
             roles::TITLE
                 .wrap(&topic.title, p.ink)
@@ -417,9 +427,9 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             body = body.child(point(s, pt, format!("pt-{ti}-{pi}"), p));
         }
     }
-    if !m.summary.verify.is_empty() {
+    if !summary.verify.is_empty() {
         body = body.child(roles::TITLE.wrap("Check before acting", p.ink).mt(20.0));
-        for (i, line) in m.summary.verify.iter().enumerate() {
+        for (i, line) in summary.verify.iter().enumerate() {
             body = body.child(roles::READ.wrap(line, p.soft).key(format!("verify-{i}")));
         }
     }

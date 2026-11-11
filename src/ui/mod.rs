@@ -1264,6 +1264,20 @@ impl State {
                     ..
                 } = *data;
                 refresh::retain_catalog(&self.meetings, &mut meetings, &retained);
+                for meeting in &meetings {
+                    if meeting.has_summary()
+                        && meeting
+                            .folder
+                            .parent()
+                            .is_some_and(|p| p == core::meetings_dir())
+                    {
+                        core::notes::draft::discard_final(
+                            &self.store.root,
+                            &meeting.folder,
+                            &meeting.id,
+                        );
+                    }
+                }
                 let mut content_changed = !same_catalog(&self.meetings, &meetings);
                 if !same_catalog(&self.meetings, &meetings) {
                     self.meetings = meetings;
@@ -1440,6 +1454,7 @@ fn same_catalog(a: &[Meeting], b: &[Meeting]) -> bool {
                 && x.title == y.title
                 && x.minutes == y.minutes
                 && x.summary_raw == y.summary_raw
+                && x.draft_raw == y.draft_raw
                 && x.transcript_raw == y.transcript_raw
                 && x.routed_revision == y.routed_revision
                 && x.notes == y.notes

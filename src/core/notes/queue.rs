@@ -99,7 +99,7 @@ fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
         .open(root.join("sidenote.log"))?;
     writeln!(file, "{} notes: {id} {message}", now())
 }
-fn manifest(folder: &Path) -> io::Result<serde_json::Value> {
+pub(super) fn manifest(folder: &Path) -> io::Result<serde_json::Value> {
     let bytes = store_io::read_bounded(&folder.join("manifest.json"), file_reads::JOURNAL_MAX)?;
     serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
         .map_err(io::Error::from)
@@ -191,7 +191,7 @@ fn text(path: &Path, cap: u64) -> io::Result<String> {
         Err(e) => Err(e),
     }
 }
-fn teams(root: &Path) -> io::Result<Vec<schema::Team>> {
+pub(super) fn teams(root: &Path) -> io::Result<Vec<schema::Team>> {
     let path = root.join("teams.json");
     match store_io::read_bounded(&path, file_reads::JOURNAL_MAX) {
         Ok(bytes) => {

@@ -101,6 +101,210 @@ fn summary() -> String {
 fn sorted() -> String {
     r#"{"meeting_project":null,"tasks":[{"i":0,"project":"Delivery","new":true}]}"#.into()
 }
+
+fn scripts_settings() -> NotesSettings {
+    NotesSettings {
+        engine: "scripts".into(),
+        script: Some(PathBuf::from("C:/synthetic.ps1")),
+        ..settings_fixture()
+    }
+}
+
+#[test]
+fn scripts_finish_creates_only_a_display_draft_then_final_replaces_it() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let mut fake = Fake::new(vec![Ok(summary())]);
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::Written
+    );
+    assert_eq!(fake.calls.len(), 1);
+    let raw = draft::read(&root.0, &folder, ID).unwrap();
+    let preview: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(preview["title"], "Plan the delivery");
+    assert_eq!(preview["todo"], serde_json::json!([]));
+    for name in [
+        "english-summary.json",
+        "english-transcript.md",
+        "tasks.json",
+    ] {
+        assert!(!folder.join(name).exists(), "{name}");
+    }
+    for name in ["projects.json", "memory", "local/notes-jobs"] {
+        assert!(!root.0.join(name).exists(), "{name}");
+    }
+    let pending = crate::core::Meeting::load_pending(&folder).unwrap();
+    assert!(!pending.has_summary());
+    assert!(pending.summary.todo.is_empty());
+    assert!(
+        crate::core::build_tasks(
+            &[pending],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
+        .is_empty()
+    );
+    assert!(
+        crate::core::settle::Store::new(root.0.clone(), root.0.join("meetings"))
+            .history()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::Skipped
+    );
+    fs::write(folder.join("english-summary.json"), summary()).unwrap();
+    {
+        let _scope = crate::core::file_reads::Scope::begin();
+        assert!(draft::read(&root.0, &folder, ID).unwrap().is_empty());
+        assert!(
+            root.0
+                .join(format!("local/draft-summaries/{ID}.json"))
+                .exists()
+        );
+    }
+    assert!(draft::read(&root.0, &folder, ID).unwrap().is_empty());
+    assert!(
+        !root
+            .0
+            .join(format!("local/draft-summaries/{ID}.json"))
+            .exists()
+    );
+    assert_eq!(
+        crate::core::Meeting::load(&folder).unwrap().summary.title,
+        "Plan the delivery"
+    );
+}
+
+#[test]
+fn drafts_skip_app_off_short_and_unavailable_helpers() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let mut fake = Fake::new(vec![]);
+    for engine in ["app", "off"] {
+        let settings = NotesSettings {
+            engine: engine.into(),
+            ..scripts_settings()
+        };
+        assert_eq!(
+            draft::generate(&root.0, &root.0.join("meetings"), ID, &settings, &mut fake).unwrap(),
+            draft::Outcome::Skipped
+        );
+    }
+    fake.available = false;
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::NoHelper
+    );
+    let settings = NotesSettings {
+        helper: None,
+        ..scripts_settings()
+    };
+    assert_eq!(
+        draft::generate(&root.0, &root.0.join("meetings"), ID, &settings, &mut fake).unwrap(),
+        draft::Outcome::NoHelper
+    );
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    manifest["duration_ms"] = 1000.into();
+    fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
+    fake.available = true;
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::Skipped
+    );
+    assert!(fake.calls.is_empty());
+    assert!(draft::read(&root.0, &folder, ID).unwrap().is_empty());
+}
+
+#[test]
+fn final_arriving_during_draft_generation_wins() {
+    struct FinalDuringCall {
+        folder: PathBuf,
+    }
+    impl Run for FinalDuringCall {
+        fn installed(&self, _: Helper) -> bool {
+            true
+        }
+        fn run(&mut self, _: Helper, _: &str, _: String, _: Duration) -> Result<String, Failure> {
+            fs::write(self.folder.join("english-summary.json"), summary()).unwrap();
+            Ok(summary())
+        }
+    }
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let mut fake = FinalDuringCall {
+        folder: folder.clone(),
+    };
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::Skipped
+    );
+    assert!(draft::read(&root.0, &folder, ID).unwrap().is_empty());
+}
+
+#[test]
+fn draft_recording_guard_also_rejects_too_few_words() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    fs::write(
+        folder.join("transcript.ndjson"),
+        r#"{"start_ms":1000,"text":"Two words"}"#,
+    )
+    .unwrap();
+    let mut fake = Fake::new(vec![]);
+    assert_eq!(
+        draft::generate(
+            &root.0,
+            &root.0.join("meetings"),
+            ID,
+            &scripts_settings(),
+            &mut fake
+        )
+        .unwrap(),
+        draft::Outcome::Skipped
+    );
+    assert!(fake.calls.is_empty());
+}
 fn enqueue(root: &Path, settings: &NotesSettings, mode: Option<Request>) {
     queue::enqueue_in(root, &root.join("meetings"), ID, mode, settings).unwrap();
 }
