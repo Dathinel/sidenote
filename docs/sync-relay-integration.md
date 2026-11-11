@@ -1,5 +1,43 @@
 # Relay integration
 
+## Slice 5 local qualification: threat model and contract
+
+1. A hostile relay may replay, truncate or oversize ciphertext, route a wrong
+   group or resurrect an expired session; authentication must refuse it without
+   changing accepted data or losing later honest delivery.
+2. A removed paired device retains old content and keys. Rotation must prevent
+   it from decrypting new changes; only explicitly re-paired survivors reconnect.
+3. A process may die between backup, import and durable sync commits. Recovery
+   must preserve verified originals, avoid duplicate imports and converge from
+   durable replicas. Tests use synthetic roots, never the owner's installation.
+
+Purpose: finish the reviewed Sync UI and qualify the release paths that can run
+on this PC. Write this contract before tests. Remain opt-in and keep folder sync.
+
+Success criteria:
+- Put warning/unreachable notices at the top of Sync using shared components and
+  16 px Lucide icons. Keep Advanced detail, simplify its help, remove redundant
+  per-device badges and the loose zero count. Use an existing global status slot
+  only if one exists. Render the four statuses and preview in both themes.
+- Build actual optimized release binaries from this branch at capability versions
+  1 and 2, without changing the app version. Test upgrade/downgrade through their
+  real pairing/session paths. The qualification profile changes only capability
+  requirements; it does not invent or claim a future data-format implementation.
+- Kill during migration and an active exchange; restart, verify backup bytes,
+  idempotent import and durable changes, and prove eventual honest convergence.
+- Exercise replay, truncation, oversize, wrong-group and expired-session inputs
+  against the real protocol/Worker paths. Assert refusal and unchanged accepted
+  document heads/content, then successful honest synchronization.
+- Pair three isolated peers. Remove one, rotate, re-pair the survivor, and prove
+  the removed peer cannot receive or decrypt new content even with its old key.
+- Run fmt, both strict clippy/test variants, build, MCP, Bun tests/typecheck and
+  offscreen renders. Record precise evidence and any uncompleted local case.
+
+Needs owner: two physical devices, a relay on the owner's Cloudflare account and
+an independent security review. No login, deployment, push, version bump or screen
+windows. Stop at a clean commit around 60 minutes and report unfinished work.
+
+
 Decisions needed: none. Slice 1 contract and evidence are retained below.
 Slice 2 is authorized on dev.13 at d85f637; see docs/sync-relay-2.md for its contract.
 Base: settings at 74150f0, version 0.0.1-dev.10. Core source: synccore-r1
@@ -163,7 +201,7 @@ bump the version, push or deploy. Stop at the authorized slice and 90-minute lim
    independent security review, revocation/rotation and packaging evidence.
 
 Slices 1 and 2 are accepted. Slice 3 is authorized on feat/sync-relay-2 after
-Round 1 UI acceptance (28fc734). Slice 3 is accepted at 742acee; slice 4 is authorized.
+Round 1 UI acceptance (28fc734). Slices 3 and 4 are accepted; slice 5 local qualification is authorized.
 
 ## Earlier evidence and limits
 
@@ -189,61 +227,14 @@ The 44 offscreen frames and commands are indexed in artifacts/relay3-evidence.js
 This is rung 4 evidence. The pre-build slice 3 contract is retained in f9b56e6.
 Mixed-version negotiation was not implemented or qualified in that slice.
 
-## Slice 4 implementation contract
+## Accepted slice 4
 
-Purpose: prevent incompatible relay writers first, then make a local Worker
-installation and its status understandable to a first-time self-hosting user.
-The preview remains opt-in and source meeting files keep their folder transport.
-
-Success criteria, in order:
-1. Negotiate authenticated schema/capability requirements before document exchange.
-   Persist the highest group requirement so reconnect, restart and downgrade cannot
-   regain write access. Unsupported clients keep relay reads safe, refuse every
-   relay mutation and show: "Another device runs a newer Sidenote. Update this one
-   to keep syncing." Folder-only writes must still work. Prove two isolated app
-   processes with different supported versions against numeric-loopback Wrangler.
-2. Write docs/self-host-relay.md with prerequisites, pinned local commands, exact
-   config values, Settings > Sync > Advanced setup, pairing/removal/rotation,
-   cost/limit explanations and account-only steps. Execute every shell command
-   shown locally, capturing output under artifacts. Account actions are prose,
-   clearly unexecuted. Do not log protocol payloads, invitations, keys or secrets.
-3. Check /health, distinguish an invalid endpoint from unreachable service, and
-   show the configured address and last successful contact under Advanced.
-   Render normal, unreachable and update-required states in both themes.
-4. Run all existing gates: fmt, strict locked workspace clippy/tests with and
-   without asr-runtime, locked build, MCP smoke, Bun tests and relay typecheck.
-
-Edge cases: old/missing negotiation, future schema versus future feature version,
-forged or stale announcements, offline edits after incompatibility, downgrade
-across restarts, malformed health replies, timeouts, invalid addresses and no
-previous contact. Keep successful-contact time per device and never call a queued
-local edit delivered. Group removal must not retain another group's authority.
-
-Out of scope: login, deployment, push, version bump, hosted services, screen
-windows, backlog, selective rekey or slice 5. Physical devices, an owner-hosted
-Worker and independent security review remain release gates. Stop at a clean
-commit around 60 minutes and report any remaining work.
-
-## Slice 4 local receipt
-
-Implemented authenticated requirements before inventory/document exchange and a
-per-room, OS-protected maximum. Incompatible replicas refuse document edits,
-pairing and group rotation; offline/restart/downgrade does not reset the barrier.
-Folder-only notes and per-device sidebar/helper settings remain writable.
-Two actual headless app processes prove this with declared capability versions
-1 and 2. The future declaration is confined to synthetic headless test roots;
-this is not qualification of an actual future release binary or unknown format.
-
-The self-host guide is docs/self-host-relay.md. All nine command lines passed
-locally; output is in artifacts/relay4-local/commands.json and adjacent logs.
-Account setup/publication steps are prose and remain unexecuted. Health GET/HEAD,
-wrong service, unreachable address, retained contact time and local-time display
-are checked. Contact means a health check, not peer delivery. The eight new status
-frames and 44 existing regression/interaction frames passed offscreen checks.
-
-All requested local gates passed, plus final fixture checks in both feature
-variants. See artifacts/relay4-evidence.json and artifacts/relay4-pngs.md.
-Evidence is rung 4. Slice 5 still needs real-device/real-binary upgrade testing,
-recovery/adversarial and multi-peer rekey qualification, packaging, a working
-owner-hosted relay and independent security review. Offline devices cannot know
-an unseen upgrade. No login, deployment, push, version bump or screen windows.
+Slice 4 is accepted at cbf22bf. Its pre-build contract is retained in 88ad3ad.
+Authenticated requirements precede document exchange, with a durable per-room
+maximum. Incompatible replicas refuse writes, pairing and group rotation while
+folder-only notes and local settings work. Two headless processes proved versions
+1 and 2 through a test-only declaration. Real release-binary testing remained.
+The local self-host guide and all nine commands passed without an account.
+Health checks, retained contact time, all gates and 52 offscreen frames passed.
+See artifacts/relay4-evidence.json and docs/self-host-relay.md. Hosted evidence,
+physical devices and independent security review remain owner release gates.
