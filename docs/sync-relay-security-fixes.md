@@ -133,3 +133,10 @@ No result above substitutes for the unfinished workspace gates.
 See `artifacts/relay-security-evidence.json` for results and hashes and
 `artifacts/relay-security-pngs.md` for every absolute PNG path. The final build
 and test logs can advance after this receipt because Cargo work remains running.
+
+Cutoff update: the ASR-enabled workspace command exited 101 during linking with
+`LLVM ERROR: IO failure on output stream: No space left on device`. Its tests
+did not complete. The serialized gate runner hit its existing 1200-second
+fixtures-build timeout. The standalone locked debug build was still running.
+Free disk space and diagnose local Worker startup before rerunning the complete
+gates. No existing lead Cargo process was stopped to obtain a lock.
