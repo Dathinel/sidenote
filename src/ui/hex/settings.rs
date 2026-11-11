@@ -260,6 +260,9 @@ pub(crate) fn pc(p: Palette) -> El {
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
+        "relay-preview" => &icons::REFRESH_CW,
+        "relay-address" => &icons::NETWORK,
+        key if key.starts_with("relay-paired-device-") => &icons::DEVICE,
         "ask-agent-row" => &icons::BOT,
         "ask-model-row" => &icons::CPU,
         "ask-meeting-thinking-row" => &icons::TIMER,
@@ -332,7 +335,7 @@ pub(crate) fn setting_row(
     crate::ui::cards::row_shell()
         .key(key)
         .flex_wrap()
-        .fill(highlight(s, key, p))
+        .fill(group_highlight(s, key, p))
         .child(icon_tile(row_icon(key), p))
         .child(crate::ui::cards::copy(title, help, p))
         .child(control)
@@ -340,10 +343,11 @@ pub(crate) fn setting_row(
 pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
     col()
         .w_full()
+        .min_w(0.0)
         .gap(8.0)
         .mt(18.0)
         .child(roles::GROUP.wrap(title, p.soft))
-        .child(panel(p).child(body.w_full()))
+        .child(panel(p).child(body.w_full().min_w(0.0)))
 }
 fn advanced(s: &State, body: El, p: Palette) -> El {
     let page = active(s).0.name();
@@ -1068,7 +1072,7 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
         s,
         "relay-preview",
         "Relay sync (preview)",
-        "Back up manual tasks and sync them through the relay. Turning this off restores the unchanged folder view.",
+        "Only tasks you add by hand use the relay. A backup stays on this PC.",
         Switch::new(s.hex.shell.relay.enabled)
             .label("Relay sync (preview)")
             .hide_label()
@@ -1187,7 +1191,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
             roles::SMALL
                 .wrap(s.store.root.display().to_string(), p.ink)
                 .key("sync-folder")
-                .fill(highlight(s, "sync-folder", p))
+                .fill(group_highlight(s, "sync-folder", p))
                 .padding(14.0),
             p,
         ))
@@ -1201,7 +1205,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
     if s.hex.shell.relay.enabled {
         col()
             .w_full()
-            .child(card("Labs", relay_labs(s, k, p), p))
+            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
             .child(super::super::relay::section(s, k, p))
             .child(advanced(
                 s,
@@ -1212,7 +1216,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
         col()
             .w_full()
             .child(devices)
-            .child(card("Labs", relay_labs(s, k, p), p))
+            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
             .child(advanced(s, advanced_body, p))
     }
 }

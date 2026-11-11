@@ -138,3 +138,23 @@ phase diagnostics are retained; no timeout, quota or security gate was weakened.
 
 No physical device, Cloudflare deployment, login, push or version change was
 performed. Slice 3 has not started.
+
+## Round 1 UI review
+
+The Labs description now contains one muted line. Shared card surfaces own their
+borders; resting rows inherit the surface rather than painting over the rounded
+edge. Relay and device rows use the pinned Lucide refresh-cw and laptop icons at
+18 px, with the shared 2.25 stroke.
+
+Pairing has one primary action and a link that reveals code entry. The editor
+groups eight digits, preserves digit selection and disables Pair until complete;
+Enter uses the same guard. Conflict choices use local human times, name the field
+in the header and place Keep this beside each compact value row. Remove names the
+device, explains re-pairing and offers Remove and Cancel.
+
+The existing full gates remain required. Round 1 command receipts are in
+artifacts/relay2-r1-gates. The 12 requested light/dark frames, including removal
+confirmation, are in artifacts/relay2-r1-renders. Scripted reveal, removal/Cancel
+and real conflict resolution are in artifacts/relay2-r1-proof. The render checker
+also checks card alignment, transparent rows, the primary action and disabled
+entry. Pairing codes and confirmation phrases are excluded from tree dumps.

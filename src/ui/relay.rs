@@ -23,6 +23,7 @@ pub struct RelayUi {
     pub expires: Option<Instant>,
     pub confirmation: Option<(String, String, String)>,
     pub join: TextEdit,
+    pub join_open: bool,
     pub peers: Vec<PairedDevice>,
     pub conflicts: Vec<Conflict>,
     pub resolutions: Vec<core::Resolution>,
@@ -40,6 +41,76 @@ fn button(label: &str, key: impl Into<String>, p: Palette) -> El {
         .fill(p.chip)
         .border(1.0, p.line)
         .hover(p.sel)
+}
+
+fn primary_button(label: &str, key: &str, p: Palette) -> El {
+    super::tasks::button(label, key, true, p).py(10.0)
+}
+
+fn complete_code(text: &str) -> bool {
+    text.bytes().filter(|b| b.is_ascii_digit()).count() == 8
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_whitespace())
+}
+
+fn group_code(edit: &mut TextEdit) {
+    let digit_position = |index: usize| {
+        edit.text
+            .char_indices()
+            .take_while(|(i, _)| *i < index)
+            .filter(|(_, c)| c.is_ascii_digit())
+            .count()
+            .min(8)
+    };
+    let (anchor, focus) = (digit_position(edit.anchor), digit_position(edit.focus));
+    let digits = SecretCode::new(
+        edit.text
+            .chars()
+            .filter(char::is_ascii_digit)
+            .take(8)
+            .collect(),
+    );
+    let grouped = if digits.len() > 4 {
+        format!("{} {}", &digits[..4], &digits[4..])
+    } else {
+        digits.to_string()
+    };
+    if grouped != edit.text {
+        edit.replace_text(grouped);
+        edit.anchor = anchor + usize::from(anchor > 4);
+        edit.focus = focus + usize::from(focus > 4);
+    }
+}
+
+fn human_time(at: &str) -> String {
+    human_time_at(at, chrono::Local::now())
+}
+
+fn human_time_at(at: &str, now: chrono::DateTime<chrono::Local>) -> String {
+    let Ok(time) = chrono::DateTime::parse_from_rfc3339(at) else {
+        return "Time not recorded".into();
+    };
+    let time = time.with_timezone(&chrono::Local);
+    let day = match now
+        .date_naive()
+        .signed_duration_since(time.date_naive())
+        .num_days()
+    {
+        0 => "today".into(),
+        1 => "yesterday".into(),
+        _ => time.format("%-d %b %Y").to_string(),
+    };
+    format!("{day}, {}", time.format("%H:%M"))
+}
+
+fn field_name(field: &str) -> String {
+    let text = field.replace('_', " ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
 }
 
 impl State {
@@ -74,9 +145,13 @@ impl State {
         self.relay_ui.expires = None;
         self.relay_ui.confirmation = None;
         self.relay_ui.waiting = false;
-        self.relay_ui.join = TextEdit::default();
+        self.relay_ui.join = TextEdit::default().secure().revealed(true);
+        self.relay_ui.join_open = false;
     }
     fn relay_pair(&mut self, joining: bool) {
+        if joining && !complete_code(&self.relay_ui.join.text) {
+            return;
+        }
         let code = joining.then(|| {
             SecretCode::new(
                 std::mem::take(&mut self.relay_ui.join.text)
@@ -179,9 +254,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if !s.hex.shell.relay.enabled {
         return col();
     }
-    let mut out=col().w_full().gap(8.0)
-        .child(roles::SMALL.wrap("Tasks you add by hand sync through the relay; everything else still syncs through your folder.",p.ink))
-        .child(roles::META.wrap("A verified manual-task backup is kept on this PC. Turning preview off restores the folder view and keeps relay data for later.",p.soft));
+    let mut out = col().w_full().min_w(0.0).gap(8.0);
     for conflict in &s.relay_ui.conflicts {
         out = out.child(chooser(s, conflict, p));
     }
@@ -197,7 +270,10 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             history = history.child(roles::SMALL.wrap(
                 format!(
                     "{} chose {} for {}. {}. Both earlier versions are kept.",
-                    record.device, value, record.field, record.at
+                    record.device,
+                    value,
+                    record.field,
+                    human_time(&record.at)
                 ),
                 p.soft,
             ));
@@ -234,42 +310,62 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     .on_press(|s: &mut State| s.relay_cancel()),
             );
     } else {
-        pair = pair
-            .child(roles::SMALL.wrap(
-                "Create a code here, or enter the code shown on your other device.",
-                p.soft,
-            ))
-            .child(
-                button("Show a pairing code", "relay-host", p)
-                    .self_start()
-                    .on_press(|s: &mut State| s.relay_pair(false)),
-            )
-            .child(
-                row()
+        pair = pair.child(
+            primary_button("Show a pairing code", "relay-host", p)
+                .self_start()
+                .on_press(|s: &mut State| s.relay_pair(false)),
+        );
+        if s.relay_ui.join_open {
+            let ready = complete_code(&s.relay_ui.join.text);
+            let mut join = button("Pair", "relay-join", p).disabled(!ready);
+            if ready {
+                join = join.on_press(|s: &mut State| s.relay_pair(true));
+            } else {
+                join = join.dim(0.5);
+            }
+            pair = pair.child(
+                col()
+                    .w_full()
                     .gap(8.0)
-                    .items_center()
+                    .child(roles::SMALL.wrap("Code from the other device", p.soft))
                     .child(
-                        TextInput::new(&s.relay_ui.join)
-                            .label("Code from the other device")
-                            .placeholder("8-digit code")
-                            .on_edit(|s: &mut State| &mut s.relay_ui.join)
-                            .on_submit(|s: &mut State, _| s.relay_pair(true))
-                            .build(k)
-                            .key("relay-join-code")
-                            .w(220.0),
-                    )
-                    .child(
-                        button("Pair a device", "relay-join", p)
-                            .on_press(|s: &mut State| s.relay_pair(true)),
+                        row()
+                            .gap(8.0)
+                            .items_center()
+                            .child(
+                                TextInput::new(&s.relay_ui.join)
+                                    .secure()
+                                    .revealed(true)
+                                    .label("Code from the other device")
+                                    .placeholder("1234 5678")
+                                    .on_edit(|s: &mut State| &mut s.relay_ui.join)
+                                    .on_change(|s: &mut State, _| group_code(&mut s.relay_ui.join))
+                                    .on_submit(|s: &mut State, _| s.relay_pair(true))
+                                    .build(k)
+                                    .key("relay-join-code")
+                                    .w(220.0),
+                            )
+                            .child(join),
                     ),
             );
+        } else {
+            pair = pair.child(
+                super::widgets::link("Have a code from another device? Enter it", p)
+                    .key("relay-enter-code")
+                    .self_start()
+                    .on_press(|s: &mut State| {
+                        s.relay_ui.join_open = true;
+                        s.relay_ui.join = TextEdit::default().secure().revealed(true);
+                    }),
+            );
+        }
     }
-    out = out.child(card("Pair a device", pair, p));
+    out = out.child(card("Pair a device", pair, p).key("relay-pair-card"));
     if !s.relay_ui.peers.is_empty() {
         let mut peers = col().w_full();
         for (index, peer) in s.relay_ui.peers.iter().enumerate() {
             let control = if peer.local {
-                roles::SMALL.wrap("This device", p.soft)
+                col()
             } else {
                 let target = peer.token.clone();
                 button("Remove", format!("relay-remove-{index}"), p)
@@ -286,18 +382,35 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
             ));
         }
         if let Some(target) = &s.relay_ui.removing {
+            let name = s
+                .relay_ui
+                .peers
+                .iter()
+                .find(|peer| &peer.token == target)
+                .map(|peer| peer.name.as_str())
+                .unwrap_or("this device");
             let target = target.clone();
-            peers=peers.child(col().padding(14.0).gap(8.0)
-                .child(roles::SMALL.wrap("Remove this device and rotate the group key? Future sync stops. Other devices must pair again. Data already on a device stays there.",p.warn))
-                .child(button("Remove and require re-pairing","relay-remove-confirm",p).self_start().on_press(move|s:&mut State| {
-                    s.relay_cancel();
-                    let result=core::get(&s.store.root).and_then(|p|p.ok_or_else(||std::io::Error::other("preview off"))).and_then(|p|p.remove_device(&target));
-                    s.relay_ui.removing=None;
-                    if result.is_err(){s.relay_ui.error=Some("Could not remove the device. Try again.".into());}
-                    s.relay_refresh();
-                })));
+            peers = peers.child(super::widgets::hairline(p)).child(
+                col().w_full().padding(14.0).gap(12.0).key("relay-remove-prompt")
+                    .child(roles::SMALL.wrap(format!("Remove {name}? It stops syncing. Your other devices will need to pair again."), p.ink).role("alert"))
+                    .child(row().gap(8.0)
+                        .child(button("Remove", "relay-remove-confirm", p)
+                            .on_press(move |s: &mut State| {
+                                s.relay_cancel();
+                                let result = core::get(&s.store.root)
+                                    .and_then(|p| p.ok_or_else(|| std::io::Error::other("preview off")))
+                                    .and_then(|p| p.remove_device(&target));
+                                s.relay_ui.removing = None;
+                                if result.is_err() {
+                                    s.relay_ui.error = Some("Could not remove the device. Try again.".into());
+                                }
+                                s.relay_refresh();
+                            }))
+                        .child(button("Cancel", "relay-remove-cancel", p)
+                            .on_press(|s: &mut State| s.relay_ui.removing = None))),
+            );
         }
-        out = out.child(card("Paired devices", peers, p));
+        out = out.child(card("Paired devices", peers, p).key("relay-peers-card"));
     }
     if let Some(error) = &s.relay_ui.error {
         out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
@@ -308,17 +421,19 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
 fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
     let mut body = col()
         .w_full()
-        .gap(10.0)
+        .gap(8.0)
         .padding(14.0)
         .child(roles::NAME.wrap(
-            format!("{} · {} versions", conflict.title, conflict.choices.len()),
+            format!(
+                "{} \u{00b7} {} has {} versions",
+                conflict.title,
+                field_name(&conflict.field),
+                conflict.choices.len()
+            ),
             p.ink,
         ))
         .child(roles::SMALL.wrap(
-            format!(
-                "Choose the {} to keep. Both earlier values stay in history.",
-                conflict.field.replace('_', " ")
-            ),
+            "Choose a value to keep. Both earlier values stay in history.",
             p.soft,
         ));
     for (index, choice) in conflict.choices.iter().enumerate() {
@@ -327,52 +442,57 @@ fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
             conflict.field.clone(),
             choice.clone(),
         );
-        let time = if choice.at.is_empty() {
-            "Time not recorded"
-        } else {
-            &choice.at
-        };
         let value = choice
             .value
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| choice.value.to_string());
+        if index > 0 {
+            body = body.child(super::widgets::hairline(p));
+        }
         body = body.child(
-            super::cards::panel(p).child(
-                col()
-                    .w_full()
-                    .gap(6.0)
-                    .padding(12.0)
-                    .child(roles::SMALL.wrap(format!("{} · {time}", choice.device), p.soft))
-                    .child(roles::CONTROL.wrap(value, p.ink))
-                    .child(
-                        button(
-                            "Use this version",
-                            format!(
-                                "relay-use-version-{}-{}-{index}",
-                                conflict.task_id, conflict.field
-                            ),
-                            p,
-                        )
-                        .self_start()
-                        .on_press(move |s: &mut State| {
-                            let result = core::get(&s.store.root)
-                                .and_then(|p| p.ok_or_else(|| std::io::Error::other("preview off")))
-                                .and_then(|p| p.resolve(&id, &field, &chosen));
-                            if result.is_ok() {
-                                s.toast = Some((
-                                    "Choice saved. Both earlier versions remain in history.".into(),
-                                    Instant::now(),
-                                ));
-                                s.relay_refresh();
-                                s.request_refresh();
-                            } else {
-                                s.relay_ui.error =
-                                    Some("Versions changed. Refresh and choose again.".into());
-                            }
-                        }),
-                    ),
-            ),
+            row()
+                .w_full()
+                .items_center()
+                .gap(12.0)
+                .py(8.0)
+                .child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(4.0)
+                        .child(roles::CONTROL.wrap(value, p.ink))
+                        .child(roles::SMALL.wrap(
+                            format!("{} \u{00b7} {}", choice.device, human_time(&choice.at)),
+                            p.soft,
+                        )),
+                )
+                .child(
+                    button(
+                        "Keep this",
+                        format!(
+                            "relay-use-version-{}-{}-{index}",
+                            conflict.task_id, conflict.field
+                        ),
+                        p,
+                    )
+                    .on_press(move |s: &mut State| {
+                        let result = core::get(&s.store.root)
+                            .and_then(|p| p.ok_or_else(|| std::io::Error::other("preview off")))
+                            .and_then(|p| p.resolve(&id, &field, &chosen));
+                        if result.is_ok() {
+                            s.toast = Some((
+                                "Choice saved. Both earlier versions remain in history.".into(),
+                                Instant::now(),
+                            ));
+                            s.relay_refresh();
+                            s.request_refresh();
+                        } else {
+                            s.relay_ui.error =
+                                Some("Versions changed. Refresh and choose again.".into());
+                        }
+                    }),
+                ),
         );
     }
     card("Resolve task versions", body, p).key(format!(
@@ -442,5 +562,65 @@ pub fn scene(s: &mut State, kind: &str) {
             s.relay_refresh();
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Timelike};
+
+    #[test]
+    fn code_entry_groups_digits_and_keeps_the_pair_action_guarded() {
+        let mut edit = TextEdit::new("1234").secure().revealed(true);
+        group_code(&mut edit);
+        assert!(
+            !complete_code(&edit.text),
+            "incomplete code enabled pairing"
+        );
+        edit.replace_text("12345678");
+        group_code(&mut edit);
+        assert!(
+            edit.text.as_bytes().get(4) == Some(&b' '),
+            "code was not grouped"
+        );
+        assert!(edit.anchor == 9 && edit.focus == 9, "caret left the code");
+        assert!(complete_code(&edit.text), "grouped code was rejected");
+        edit.replace_text("1234 567");
+        group_code(&mut edit);
+        assert!(!complete_code(&edit.text), "seven digits enabled pairing");
+        assert!(
+            !complete_code("1234 567x"),
+            "non-digit code enabled pairing"
+        );
+        assert!(!complete_code("1234 56789"), "nine digits enabled pairing");
+    }
+
+    #[test]
+    fn grouping_preserves_a_selection_inside_a_pasted_code() {
+        let mut edit = TextEdit::new("12345678").secure().revealed(true);
+        edit.anchor = 2;
+        edit.focus = 6;
+        group_code(&mut edit);
+        assert!(
+            edit.anchor == 2 && edit.focus == 7,
+            "selection moved to another digit"
+        );
+    }
+
+    #[test]
+    fn conflict_times_use_local_days_and_minutes() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 11, 12, 39, 42)
+            .single()
+            .unwrap();
+        assert!(human_time_at(&now.to_rfc3339(), now) == "today, 12:39");
+        let yesterday = now - chrono::Duration::days(1);
+        assert!(human_time_at(&yesterday.to_rfc3339(), now) == "yesterday, 12:39");
+        let utc = now.with_timezone(&chrono::Utc).to_rfc3339();
+        let shown = human_time_at(&utc, now);
+        assert!(shown == format!("today, {:02}:{:02}", now.hour(), now.minute()));
+        assert!(human_time_at("", now) == "Time not recorded");
+        assert!(field_name("owner") == "Owner");
     }
 }
