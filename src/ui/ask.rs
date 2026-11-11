@@ -100,7 +100,7 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
         roles::TITLE.wrap(&m.text, p.ink)
     } else {
         let origin = key.clone();
-        let all = s.selected.is_none();
+        let all = s.selected.is_none() && !s.ask_current_live();
         Markdown::new(if all {
             link_citations(&m.text, &s.meetings)
         } else {
@@ -160,17 +160,30 @@ fn elapsed(secs: u64) -> String {
 }
 
 /// What a running Ask shows: a quiet line with the seconds so far and the step it is on.
-fn progress(run: &AskRun, k: &Kit, p: Palette) -> El {
-    let head = if run.cancel.stopped() {
+fn status(run: &AskRun) -> String {
+    if run.cancel.stopped() {
         "Stopping...".to_string()
+    } else if run.starting_codex {
+        "Starting Codex\u{2026}".into()
+    } else if !run.turn_started {
+        run.steps
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "Reading the meeting...".into())
     } else {
         elapsed(run.started.elapsed().as_secs())
+    }
+}
+fn progress(run: &AskRun, k: &Kit, p: Palette) -> El {
+    let head = status(run);
+    let step = if run.starting_codex || !run.turn_started {
+        String::new()
+    } else {
+        run.steps
+            .last()
+            .map(|s| format!("{}...", s.trim_end_matches('.')))
+            .unwrap_or_default()
     };
-    let step = run
-        .steps
-        .last()
-        .map(|s| format!("{}...", s.trim_end_matches('.')))
-        .unwrap_or_default();
     row()
         .key("ask-progress")
         .w_full()
@@ -213,12 +226,14 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         );
     }
     let asked = s.saved.messages.iter().filter(|m| m.role == "user").count();
-    let about = if s.selected.is_some() {
+    let about = if s.selected.is_some() || s.ask_current_live() {
         "this meeting"
     } else {
         "all your meetings"
     };
-    let title = if asked > 0 {
+    let title = if s.ask_current_live() {
+        "Asked about this meeting".into()
+    } else if asked > 0 {
         format!(
             "Asked about {about} \u{b7} {asked} question{}",
             if asked == 1 { "" } else { "s" }
@@ -233,7 +248,11 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .pl(16.0)
         .pr(8.0)
         .py(8.0)
-        .child(spaced_caps(&title, p))
+        .child(if s.ask_current_live() {
+            roles::META.medium().wrap(&title, p.soft)
+        } else {
+            spaced_caps(&title, p)
+        })
         .child(actions);
     let panel = raised(
         col()
@@ -244,6 +263,14 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
             .child(header),
         p,
     );
+    let panel = if s.on_live() {
+        panel
+            .max_h(super::live::limits(s).thread)
+            .min_h(0.0)
+            .clip_rounded(16.0)
+    } else {
+        panel
+    };
     if hidden {
         return Some(panel);
     }
@@ -300,7 +327,11 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         );
     }
     // The thread floats over the meeting, so it takes at most about half the pane.
-    let max_h = (s.pane_h.get() * 0.5).clamp(180.0, 460.0);
+    let max_h = if s.on_live() {
+        (super::live::limits(s).thread - 44.0).max(0.0)
+    } else {
+        (s.pane_h.get() * 0.5).clamp(180.0, 460.0)
+    };
     let list = col()
         .key("thread-scroll")
         .w_full()
@@ -334,7 +365,7 @@ fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
             "What are they waiting on from us?",
             "Prep my next call",
         ]
-    } else if s.selected.is_some() {
+    } else if s.selected.is_some() || s.ask_current_live() {
         SUGGESTIONS
     } else {
         ask_all::SUGGESTIONS
@@ -389,30 +420,40 @@ fn runner_note(tools: bool) -> &'static str {
 
 /// The model's name, muted, inside the pill. Pressing it opens a small menu of agents. An agent
 /// whose program is not on PATH says "Not installed" and cannot be picked.
+fn model_label(runner: &core::Runner, model: Option<&str>) -> String {
+    model
+        .map(|id| {
+            core::ask_session::models(runner)
+                .into_iter()
+                .find(|m| m.id == id)
+                .map_or_else(|| id.to_string(), |m| m.name)
+        })
+        .unwrap_or_else(|| short_runner(&runner.name).to_string())
+}
+
 fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
-    let name = s.runner.as_deref().unwrap_or("Choose a model");
+    let name = s.ask_runner_name().unwrap_or("Choose a model");
     let tools = s
         .runners
         .iter()
-        .find(|r| Some(&r.name) == s.runner.as_ref())
+        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
         .is_some_and(|r| r.tools);
     let chevron = if s.runner_open {
         k.glyph.chevron_up
     } else {
         k.glyph.chevron_down
     };
+    let selected_model = if s.ask_live_meeting() {
+        s.ask_model()
+    } else {
+        s.ask_settings.models.get(name).cloned()
+    };
     let shown = s
-        .ask_settings
-        .models
-        .get(name)
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            if s.runner.is_some() {
-                short_runner(name)
-            } else {
-                name
-            }
-        });
+        .runners
+        .iter()
+        .find(|r| r.name == name)
+        .map(|runner| model_label(runner, selected_model.as_deref()))
+        .unwrap_or_else(|| name.to_string());
     let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
         .gap(0.0)
         .child(
@@ -430,12 +471,12 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         )
         .role("combobox")
         .label(format!("Model: {name}"))
-        .help(if s.runner.is_some() {
-            let model = s.ask_model().unwrap_or_else(|| shown.into());
+        .help(if s.ask_runner_name().is_some() {
+            let model = s.ask_model().unwrap_or_else(|| shown.clone());
             let thinking = s
                 .runners
                 .iter()
-                .find(|r| Some(&r.name) == s.runner.as_ref())
+                .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
                 .filter(|r| !core::ask_options::supports_thinking(r))
                 .map(|_| super::ask_settings::OPENCODE_THINKING)
                 .unwrap_or("");
@@ -445,7 +486,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         })
         .preserve_focus_on_press(true)
         .min_w(0.0)
-        .max_w(if narrow { 110.0 } else { 150.0 })
+        .max_w(if narrow { 140.0 } else { 180.0 })
         .on_press(|s: &mut State| {
             s.runner_open = !s.runner_open;
             s.ask_settings.thinking_open = false;
@@ -469,11 +510,21 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         menu = menu.item(
             MenuItem::new(menu_name(&r.name))
                 .description(runner_note(r.tools))
-                .checked(s.runner.as_deref() == Some(r.name.as_str()))
+                .checked(s.ask_runner_name() == Some(r.name.as_str()))
                 .on_select(move |s: &mut State| {
                     s.choose_ask_runner(chosen.clone());
                 }),
         );
+    }
+    if s.ask_live_meeting() {
+        for (label, name, model) in super::ask_settings::meeting_choices(s) {
+            let chosen = s.ask_runner_name() == Some(name.as_str()) && s.ask_model() == model;
+            menu = menu.item(MenuItem::new(label).checked(chosen).on_select(
+                move |s: &mut State| {
+                    s.choose_meeting_model(name.clone(), model.clone());
+                },
+            ));
+        }
     }
     for r in missing {
         menu = menu.item(
@@ -489,7 +540,7 @@ fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Optio
     let runner = s
         .runners
         .iter()
-        .find(|r| Some(&r.name) == s.runner.as_ref())?;
+        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())?;
     if !core::ask_options::supports_thinking(runner) {
         return None;
     }
@@ -525,6 +576,47 @@ fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Optio
         );
     }
     Some(menu.build(k, layer).shrink())
+}
+
+fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let current = if s.ask_settings.live_all {
+        "All meetings"
+    } else {
+        "This meeting"
+    };
+    let trigger = pressable(
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(roles::META.wrap(current, p.soft))
+            .child(rune::icon(k.glyph.chevron_down, 12.0).color(p.faint)),
+    )
+    .key("ask-scope")
+    .role("combobox")
+    .label(format!("Ask scope: {current}"))
+    .preserve_focus_on_press(true)
+    .px(10.0)
+    .py(5.0)
+    .radius(8.0)
+    .hover(p.chip)
+    .on_press(|s: &mut State| s.ask_settings.scope_open = !s.ask_settings.scope_open);
+    Menu::new("ask-scope-menu")
+        .trigger(trigger)
+        .open(s.ask_settings.scope_open)
+        .placement(Placement::TopEnd)
+        .min_width(180.0)
+        .on_close(|s: &mut State| s.ask_settings.scope_open = false)
+        .item(
+            MenuItem::new("This meeting")
+                .checked(!s.ask_settings.live_all)
+                .on_select(|s: &mut State| s.set_live_scope(false)),
+        )
+        .item(
+            MenuItem::new("All meetings")
+                .checked(s.ask_settings.live_all)
+                .on_select(|s: &mut State| s.set_live_scope(true)),
+        )
+        .build(k, layer)
 }
 
 /// The room a send or Stop button takes, and how wide the pill is at rest.
@@ -658,6 +750,20 @@ pub fn overlay_with(
     if let Some(panel) = thread(s, k, &id, p) {
         stack = stack.child(panel);
     }
+    if let Some(notice) = &s.ask_settings.fallback_notice {
+        stack = stack.child(
+            roles::META
+                .wrap(notice, p.soft)
+                .key("ask-fallback-notice")
+                .role("status")
+                .w_full()
+                .px(14.0)
+                .py(8.0)
+                .radius(10.0)
+                .fill(p.card)
+                .border(1.0, p.line),
+        );
+    }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
         let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
             raised(
@@ -692,7 +798,7 @@ pub fn overlay_with(
         })
         .label(if s.companies.open {
             "Ask about this company"
-        } else if s.selected.is_some() {
+        } else if s.selected.is_some() || s.ask_current_live() {
             "Ask about this meeting"
         } else {
             "Ask about your meetings"
@@ -723,7 +829,7 @@ pub fn overlay_with(
         .min_w(0.0);
     let ready = !empty && !pending;
     // The pill lines up with the thread above it when there is one.
-    let wide = focused || pending || !empty || !s.saved.messages.is_empty();
+    let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
     let model = match &s.runner_error {
         Some(e) => roles::META
             .medium()
@@ -764,11 +870,39 @@ pub fn overlay_with(
     } else {
         pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
     };
-    place(s, beside(stack, lead, pill, narrow), narrow, p)
+    if s.live_scope_available() {
+        stack = stack.child(
+            row()
+                .w_full()
+                .justify_end()
+                .child(scope_choice(s, k, p, layer)),
+        );
+    }
+    let stack = beside(stack, lead, pill, narrow);
+    place(s, stack, narrow, p)
 }
 
 fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
-    if s.companies.open {
+    if s.on_live() {
+        col()
+            .key("ask-overlay")
+            .w_full()
+            .max_h(super::live::limits(s).space)
+            .min_h(0.0)
+            .shrink()
+            .items_center()
+            .pb(18.0)
+            .fill(p.bg)
+            .child(
+                stack
+                    .max_h((super::live::limits(s).space - 18.0).max(0.0))
+                    .min_h(0.0)
+                    .shrink()
+                    .scroll(rune::ScrollSpec {
+                        stick_bottom: false,
+                    }),
+            )
+    } else if s.companies.open {
         col().key("company-ask").w_full().min_w(0.0).child(stack)
     } else {
         dock(stack, narrow, p)
@@ -818,4 +952,33 @@ fn dock(stack: El, narrow: bool, p: Palette) -> El {
                 .fill(p.bg)
                 .child(stack),
         )
+}
+
+#[cfg(test)]
+mod meeting_agent_tests {
+    use super::*;
+    #[test]
+    fn catalog_names_replace_ids_and_unknown_ids_remain_unchanged() {
+        let runner =
+            serde_json::from_str::<Vec<core::Runner>>(include_str!("../../default-runners.json"))
+                .unwrap()
+                .into_iter()
+                .find(|r| r.name == "Codex")
+                .unwrap();
+        assert_eq!(model_label(&runner, Some("gpt-6.1-terra")), "GPT-6.1 Terra");
+        assert_eq!(
+            model_label(&runner, Some("unlisted-custom-model")),
+            "unlisted-custom-model"
+        );
+    }
+    #[test]
+    fn warming_and_started_turn_have_one_distinct_status() {
+        let mut run = AskRun::stand_in("Codex", &[], 14);
+        run.starting_codex = true;
+        run.turn_started = false;
+        assert_eq!(status(&run), "Starting Codex\u{2026}");
+        run.starting_codex = false;
+        run.turn_started = true;
+        assert!(status(&run).starts_with("Thinking,"));
+    }
 }

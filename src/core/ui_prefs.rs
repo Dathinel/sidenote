@@ -31,6 +31,8 @@ pub struct UiPrefs {
     pub ask_meeting_thinking: super::ask_options::Thinking,
     pub ask_chat_thinking: super::ask_options::Thinking,
     pub ask_models: std::collections::BTreeMap<String, String>,
+    pub ask_meeting_agent: String,
+    pub ask_meeting_model: Option<String>,
 }
 
 impl Default for UiPrefs {
@@ -56,6 +58,8 @@ impl Default for UiPrefs {
             ask_meeting_thinking: super::ask_options::Thinking::Low,
             ask_chat_thinking: super::ask_options::Thinking::Medium,
             ask_models: Default::default(),
+            ask_meeting_agent: super::ask_options::meeting_agent_default(),
+            ask_meeting_model: None,
         }
     }
 }

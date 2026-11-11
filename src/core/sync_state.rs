@@ -149,6 +149,7 @@ fn meeting_store(store: &str) -> bool {
         return false;
     };
     stem == "all"
+        || super::persistence::is_live_ask_key(stem)
         || super::persistence::is_company_ask_key(stem)
         || stem.split_once('-').is_some_and(|(a, b)| {
             !a.is_empty() && !b.is_empty() && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())

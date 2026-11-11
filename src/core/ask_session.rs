@@ -9,7 +9,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
@@ -17,9 +17,12 @@ use std::{
 };
 
 const IDLE: Duration = Duration::from_secs(600);
+const MEETING_IDLE: Duration = Duration::from_secs(120);
+const WARMUP: &str = "Reply exactly Ready. This is a synthetic connection warm-up. Do not use tools, read files, or take actions.";
 const CAP: usize = 4 * 1024 * 1024;
 static ACTOR: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
 static CLOSED: AtomicBool = AtomicBool::new(true);
+static WARMING: AtomicUsize = AtomicUsize::new(0);
 static CATALOG: Mutex<BTreeMap<String, Vec<Model>>> = Mutex::new(BTreeMap::new());
 static CATALOG_VERSION: AtomicU64 = AtomicU64::new(0);
 static OPENCODE_DISCOVERY: AtomicBool = AtomicBool::new(false);
@@ -178,8 +181,27 @@ enum Reply {
     Progress(AskProgress),
     Result(Result<String, String>),
 }
+struct Warmup {
+    ready: SyncSender<Result<(), String>>,
+}
+impl Warmup {
+    fn new(ready: SyncSender<Result<(), String>>) -> Self {
+        WARMING.fetch_add(1, Ordering::SeqCst);
+        Self { ready }
+    }
+}
+impl Drop for Warmup {
+    fn drop(&mut self) {
+        WARMING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+fn starting(runner: &Runner) -> Option<AskProgress> {
+    (runners::kind(runner) == Ok("codex") && WARMING.load(Ordering::SeqCst) > 0)
+        .then_some(AskProgress::StartingCodex)
+}
 enum Work {
-    Warm(Key),
+    Warm(Key, Option<Warmup>),
+    Release,
     Reset(String),
     Ask {
         key: Key,
@@ -207,8 +229,18 @@ pub fn warm(runner: Runner, chat: String) {
         && runner.stdin
         && matches!(runners::kind(&runner), Ok("claude" | "codex"))
     {
-        let _ = actor().send(Work::Warm(Key { runner, chat }));
+        let _ = actor().send(Work::Warm(Key { runner, chat }, None));
     }
+}
+/// Prime only Codex, using synthetic text. Receiving readiness never blocks the UI.
+pub fn warm_meeting(runner: Runner, chat: String) -> Receiver<Result<(), String>> {
+    let (ready, receiver) = mpsc::sync_channel(1);
+    if !ask::stop_requested() && runner.stdin && runners::kind(&runner) == Ok("codex") {
+        let _ = actor().send(Work::Warm(Key { runner, chat }, Some(Warmup::new(ready))));
+    } else {
+        let _ = ready.send(Err("Codex is not available for warming.".into()));
+    }
+    receiver
 }
 pub fn recording(active: bool) {
     if !ask::stop_requested() {
@@ -218,6 +250,12 @@ pub fn recording(active: bool) {
 pub fn reset(chat: &str) {
     if let Some(actor) = ACTOR.get() {
         let _ = actor.send(Work::Reset(chat.into()));
+    }
+}
+/// Release the idle transport after any current answer has completed.
+pub fn release() {
+    if let Some(actor) = ACTOR.get() {
+        let _ = actor.send(Work::Release);
     }
 }
 pub(super) fn close() {
@@ -242,6 +280,9 @@ pub fn run(
         return super::run_runner(runner, prompt, &super::state_dir(), progress);
     }
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    if let Some(event) = starting(runner) {
+        progress(event);
+    }
     let (tx, rx) = mpsc::sync_channel(8);
     actor()
         .send(Work::Ask {
@@ -280,7 +321,7 @@ struct Lifetime {
 }
 impl Lifetime {
     fn expired(&self, now: Instant) -> bool {
-        now.duration_since(self.activity) >= IDLE
+        now.duration_since(self.activity) >= if self.recording { MEETING_IDLE } else { IDLE }
             || (!self.recording
                 && self
                     .ended
@@ -310,9 +351,14 @@ fn serve(rx: Receiver<Work>) {
         let work = rx.recv_timeout(Duration::from_secs(1));
         match work {
             Ok(Work::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Work::Release) => {
+                session = None;
+                desired = None;
+            }
             Ok(Work::Recording(active)) => {
-                if active && !lifetime.recording {
+                if active != lifetime.recording {
                     session = None;
+                    desired = None;
                 }
                 lifetime.recording(active, Instant::now());
                 continue;
@@ -324,13 +370,28 @@ fn serve(rx: Receiver<Work>) {
                     retry_at = Instant::now();
                 }
             }
-            Ok(Work::Warm(key)) => {
+            Ok(Work::Warm(key, ready)) => {
                 lifetime.activity = Instant::now();
                 if desired.as_ref() != Some(&key) {
                     session = None;
                     retry_at = Instant::now();
                 }
-                desired = Some(key);
+                desired = Some(key.clone());
+                if let Some(warmup) = ready {
+                    let cancel = AtomicBool::new(false);
+                    let result = (|| {
+                        if session.as_mut().is_none_or(|s| !s.alive()) {
+                            session = Some(Session::start(&key, &cancel)?);
+                        }
+                        session.as_mut().unwrap().prime(&key.runner, &cancel)
+                    })();
+                    if result.is_err() {
+                        session = None;
+                        desired = None;
+                    }
+                    lifetime.activity = Instant::now();
+                    let _ = warmup.ready.send(result);
+                }
             }
             Ok(Work::Ask {
                 key,
@@ -402,6 +463,7 @@ struct Session {
     kind: String,
     thread_id: Option<String>,
     next_id: u64,
+    answered: bool,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -504,6 +566,7 @@ impl Session {
             kind: kind.into(),
             thread_id: None,
             next_id: 0,
+            answered: false,
         })
     }
     fn alive(&mut self) -> bool {
@@ -628,10 +691,31 @@ impl Session {
         cancel: &AtomicBool,
         progress: &impl Fn(AskProgress),
     ) -> Result<String, String> {
+        self.turn_until(runner, prompt, cancel, progress, Instant::now() + IDLE)
+    }
+    fn prime(&mut self, runner: &Runner, cancel: &AtomicBool) -> Result<(), String> {
+        if !self.answered {
+            self.turn_until(
+                runner,
+                WARMUP.into(),
+                cancel,
+                &|_| {},
+                Instant::now() + Duration::from_secs(30),
+            )?;
+        }
+        Ok(())
+    }
+    fn turn_until(
+        &mut self,
+        runner: &Runner,
+        prompt: String,
+        cancel: &AtomicBool,
+        progress: &impl Fn(AskProgress),
+        deadline: Instant,
+    ) -> Result<String, String> {
         progress(AskProgress::Started {
             runner: runner.name.clone(),
         });
-        let deadline = Instant::now() + IDLE;
         let mut turn_request = None;
         if self.kind == "claude" {
             self.send(json!({"type":"user","message":{"role":"user","content":prompt}}))?;
@@ -707,6 +791,7 @@ impl Session {
         if output.final_text.trim().is_empty() {
             return Err("The agent returned no answer. Try again.".into());
         }
+        self.answered = true;
         Ok(output.final_text.trim().into())
     }
 }
@@ -714,6 +799,26 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_warmup_reports_starting_for_codex_and_releases_on_drop() {
+        let runners: Vec<Runner> =
+            serde_json::from_str(include_str!("../../default-runners.json")).unwrap();
+        let codex = runners
+            .iter()
+            .find(|r| runners::kind(r) == Ok("codex"))
+            .unwrap();
+        let claude = runners
+            .iter()
+            .find(|r| runners::kind(r) == Ok("claude"))
+            .unwrap();
+        let (ready, _) = mpsc::sync_channel(1);
+        assert!(starting(codex).is_none());
+        let warmup = Warmup::new(ready);
+        assert_eq!(starting(codex), Some(AskProgress::StartingCodex));
+        assert!(starting(claude).is_none());
+        drop(warmup);
+        assert!(starting(codex).is_none());
+    }
     #[test]
     fn warm_lifetime_covers_recording_and_expires_at_either_ten_minute_limit() {
         let now = Instant::now();
@@ -725,6 +830,8 @@ mod tests {
         assert!(!lifetime.expired(now + IDLE - Duration::from_millis(1)));
         assert!(lifetime.expired(now + IDLE));
         lifetime.recording(true, now);
+        assert!(!lifetime.expired(now + MEETING_IDLE - Duration::from_millis(1)));
+        assert!(lifetime.expired(now + MEETING_IDLE));
         assert!(lifetime.expired(now + IDLE * 3));
         lifetime.activity = now + IDLE * 3;
         assert!(!lifetime.expired(now + IDLE * 3));
@@ -775,6 +882,7 @@ mod tests {
             let cancel = AtomicBool::new(false);
             let mut session = fixture(kind);
             session.initialize(&runner, &cancel).unwrap();
+            assert!(!session.answered);
             let pid = session.child.id();
             let events = std::cell::RefCell::new(Vec::new());
             let first = session
@@ -790,6 +898,12 @@ mod tests {
                 "answer 2"
             );
             assert_eq!(session.child.id(), pid);
+            let last_request = session.next_id;
+            session.prime(&runner, &cancel).unwrap();
+            assert_eq!(
+                session.next_id, last_request,
+                "An answered session was primed twice"
+            );
             assert!(
                 events
                     .borrow()
@@ -817,6 +931,21 @@ mod tests {
                     .unwrap_err(),
                 ask::STOPPED
             );
+            if kind == "codex" {
+                let mut warming = fixture(kind);
+                warming.initialize(&runner, &cancel).unwrap();
+                warming.prime(&runner, &cancel).unwrap();
+                assert!(warming.answered);
+                let last_request = warming.next_id;
+                warming.prime(&runner, &cancel).unwrap();
+                assert_eq!(warming.next_id, last_request);
+                assert_eq!(
+                    warming
+                        .turn(&runner, "after warm-up".into(), &cancel, &|_| {})
+                        .unwrap(),
+                    "answer 2"
+                );
+            }
         }
     }
 

@@ -3,7 +3,7 @@
 //! the meetings folder when it needs exact wording.
 use super::{
     AskProgress, Meeting, Message, Pipeline, Projects, TaskItem, UNSORTED,
-    ask::{Cancel, chat, check_question, pick_runner, report, spawn_job},
+    ask::{Cancel, chat, check_question, report, spawn_job},
     dominant_project, short,
 };
 use chrono::NaiveDate;
@@ -248,10 +248,8 @@ pub fn ask_with_options(
         }
         let folder: PathBuf = super::state_dir();
         std::fs::create_dir_all(&folder).map_err(|_| "Could not open app state folder")?;
-        let runner = pick_runner(runner_name)?;
-        let runner = options.runner(super::ask::read_only_runner(runner)?)?;
-        super::ask_session::run(
-            &runner,
+        options.run(
+            runner_name,
             options.prompt(prompt(context, history))?,
             super::ALL_KEY,
             &progress,

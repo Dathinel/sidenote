@@ -6,7 +6,7 @@ use super::{
     widgets::hairline,
 };
 use rune::{El, TextEdit, col, row};
-use rune_kit::{Kit, Select, SelectAppearance, TextInput};
+use rune_kit::{Kit, Menu, MenuItem, Placement, Select, SelectAppearance, TextInput};
 use sidenote::core::{
     self, UiPrefs,
     ask_options::{self, Thinking},
@@ -17,6 +17,15 @@ pub const OPENCODE_THINKING: &str = "OpenCode has no separate effort flag. Choos
 
 pub struct AskSettings {
     pub meeting: Thinking,
+    pub meeting_agent: String,
+    pub meeting_model: Option<String>,
+    pub meeting_override: Option<(String, Option<String>)>,
+    pub meeting_level: Option<Thinking>,
+    pub meeting_epoch: u64,
+    pub fallback_notice: Option<String>,
+    pub live_all: bool,
+    pub scope_open: bool,
+    pub live_chat: String,
     pub chat: Thinking,
     pub models: BTreeMap<String, String>,
     pub model_input: TextEdit,
@@ -39,7 +48,20 @@ impl AskSettings {
             chrono::Local::now().timestamp_millis(),
         );
         Self {
-            meeting: prefs.ask_meeting_thinking,
+            meeting: if prefs.ask_meeting_thinking == Thinking::High {
+                Thinking::Medium
+            } else {
+                prefs.ask_meeting_thinking
+            },
+            meeting_agent: prefs.ask_meeting_agent.clone(),
+            meeting_model: prefs.ask_meeting_model.clone(),
+            meeting_override: None,
+            meeting_level: None,
+            meeting_epoch: 0,
+            fallback_notice: None,
+            live_all: false,
+            scope_open: false,
+            live_chat: core::live_ask_key(&chrono::Local::now().timestamp_millis().to_string()),
             chat: prefs.ask_chat_thinking,
             models: prefs.ask_models.clone(),
             model_input: TextEdit::default(),
@@ -58,6 +80,67 @@ impl AskSettings {
     }
 }
 impl State {
+    pub fn live_scope_available(&self) -> bool {
+        self.ask_live_meeting() && self.selected.is_none() && !self.companies.open
+    }
+    pub fn ask_current_live(&self) -> bool {
+        self.live_scope_available() && !self.ask_settings.live_all
+    }
+    pub fn set_live_scope(&mut self, all: bool) {
+        self.ask_settings.live_all = all;
+        self.ask_settings.scope_open = false;
+        self.ask_settings.warm_signature.clear();
+        self.load_saved();
+    }
+    pub fn ask_live_meeting(&self) -> bool {
+        self.hex_recording() || self.ask_settings.recording
+    }
+    pub fn ask_runner_name(&self) -> Option<&str> {
+        if self.ask_live_meeting() {
+            Some(
+                self.ask_settings
+                    .meeting_override
+                    .as_ref()
+                    .map_or(self.ask_settings.meeting_agent.as_str(), |(name, _)| {
+                        name.as_str()
+                    }),
+            )
+        } else {
+            self.runner.as_deref()
+        }
+    }
+    pub fn normal_ask_model(&self) -> Option<String> {
+        let name = self.runner.as_ref()?;
+        self.ask_settings
+            .models
+            .get(name)
+            .cloned()
+            .or_else(|| self.runners.iter().find(|r| &r.name == name)?.model.clone())
+    }
+    pub fn choose_meeting_model(&mut self, name: String, model: Option<String>) {
+        self.ask_settings.fallback_notice = None;
+        self.ask_settings.meeting_epoch += 1;
+        self.ask_settings.meeting_override = Some((name, model));
+        self.runner_open = false;
+        self.ask_settings.warm_signature.clear();
+        core::ask_session::release();
+    }
+    pub fn meeting_agent_transition(&mut self) {
+        self.ask_settings.live_all = false;
+        self.ask_settings.scope_open = false;
+        let seed = super::hex::recording_start(self)
+            .map(|(at, _)| at.timestamp_millis())
+            .unwrap_or_else(|| chrono::Local::now().timestamp_millis());
+        self.ask_settings.live_chat = core::live_ask_key(&seed.to_string());
+        self.ask_settings.fallback_notice = None;
+        self.ask_settings.meeting_epoch += 1;
+        self.ask_settings.meeting_override = None;
+        self.ask_settings.meeting_level = None;
+        self.ask_settings.warm_signature.clear();
+        self.runner_open = false;
+        self.ask_settings.thinking_open = false;
+    }
+
     pub fn warm_ask(&mut self) {
         if self.waker.is_none() {
             return;
@@ -65,11 +148,17 @@ impl State {
         let Some(runner) = self
             .runners
             .iter()
-            .find(|r| Some(&r.name) == self.runner.as_ref())
+            .find(|r| Some(r.name.as_str()) == self.ask_runner_name())
             .cloned()
         else {
             return;
         };
+        if self.ask_live_meeting()
+            && (ask_options::agent_name(&runner) != "Codex"
+                || !self.runner_found.contains(&runner.name))
+        {
+            return;
+        }
         let model = self.ask_model();
         let thinking = self.ask_thinking();
         let chat = self.ask_key();
@@ -78,15 +167,16 @@ impl State {
             return;
         }
         self.ask_settings.warm_signature = signature;
-        core::ask::prewarm(
-            runner,
-            &core::ask_options::Options {
-                model,
-                thinking,
-                ..Default::default()
-            },
-            chat,
-        );
+        let options = core::ask_options::Options {
+            model,
+            thinking,
+            ..Default::default()
+        };
+        if self.ask_live_meeting() {
+            let _ = core::ask::prewarm_meeting(runner, &options, chat);
+        } else {
+            core::ask::prewarm(runner, &options, chat);
+        }
     }
 
     pub fn discover_ask_models(&mut self) {
@@ -110,6 +200,12 @@ impl State {
         )
     }
     pub fn ask_thinking(&self) -> Thinking {
+        if self.ask_live_meeting() {
+            return self
+                .ask_settings
+                .meeting_level
+                .unwrap_or(self.ask_settings.meeting);
+        }
         let meeting = self.ask_in_meeting();
         self.ask_settings
             .overrides
@@ -122,6 +218,14 @@ impl State {
             })
     }
     pub fn set_ask_thinking(&mut self, thinking: Thinking) {
+        if self.ask_live_meeting() {
+            self.ask_settings.meeting_epoch += 1;
+            self.ask_settings.meeting_level = Some(thinking);
+            self.ask_settings.thinking_open = false;
+            self.ask_settings.warm_signature.clear();
+            core::ask_session::reset(&self.ask_key());
+            return;
+        }
         let meeting = self.ask_in_meeting();
         self.ask_settings
             .overrides
@@ -135,6 +239,8 @@ impl State {
     pub fn save_ask_preferences(&mut self) {
         let mut prefs = UiPrefs::load(&self.store.root);
         prefs.ask_meeting_thinking = self.ask_settings.meeting;
+        prefs.ask_meeting_agent = self.ask_settings.meeting_agent.clone();
+        prefs.ask_meeting_model = self.ask_settings.meeting_model.clone();
         prefs.ask_chat_thinking = self.ask_settings.chat;
         prefs.ask_models = self.ask_settings.models.clone();
         if prefs.save(&self.store.root).is_err() {
@@ -145,6 +251,19 @@ impl State {
         }
     }
     pub fn choose_ask_runner(&mut self, name: String) {
+        if self.ask_live_meeting() {
+            let model = self
+                .ask_settings
+                .models
+                .get(&name)
+                .cloned()
+                .or_else(|| self.runners.iter().find(|r| r.name == name)?.model.clone());
+            self.choose_meeting_model(name, model);
+            return;
+        }
+        self.choose_normal_ask_runner(name);
+    }
+    pub fn choose_normal_ask_runner(&mut self, name: String) {
         self.runner = Some(name);
         self.runner_open = false;
         if let Some(name) = &self.runner
@@ -155,7 +274,7 @@ impl State {
         self.refresh_ask_model_input();
     }
     pub fn refresh_ask_model_input(&mut self) {
-        let model = self.ask_model();
+        let model = self.normal_ask_model();
         self.ask_settings.other_model = self
             .runners
             .iter()
@@ -168,12 +287,22 @@ impl State {
         self.ask_settings.model_input = TextEdit::new(model.as_deref().unwrap_or(""));
     }
     pub fn ask_model(&self) -> Option<String> {
-        let name = self.runner.as_ref()?;
-        self.ask_settings
-            .models
-            .get(name)
-            .cloned()
-            .or_else(|| self.runners.iter().find(|r| &r.name == name)?.model.clone())
+        if self.ask_live_meeting() {
+            return self
+                .ask_settings
+                .meeting_override
+                .as_ref()
+                .map(|(_, model)| model.clone())
+                .unwrap_or_else(|| self.ask_settings.meeting_model.clone())
+                .or_else(|| {
+                    self.runners
+                        .iter()
+                        .find(|r| Some(r.name.as_str()) == self.ask_runner_name())?
+                        .model
+                        .clone()
+                });
+        }
+        self.normal_ask_model()
     }
     pub fn save_ask_model(&mut self) {
         let Some(name) = self.runner.clone() else {
@@ -191,10 +320,11 @@ impl State {
 }
 
 fn thinking(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, meeting: bool) -> El {
-    if s.runners
-        .iter()
-        .find(|r| Some(&r.name) == s.runner.as_ref())
-        .is_some_and(|r| !ask_options::supports_thinking(r))
+    if !meeting
+        && s.runners
+            .iter()
+            .find(|r| Some(&r.name) == s.runner.as_ref())
+            .is_some_and(|r| !ask_options::supports_thinking(r))
     {
         return roles::META
             .wrap("Managed by OpenCode", p.faint)
@@ -210,7 +340,12 @@ fn thinking(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, meeting: bool) 
     } else {
         s.ask_settings.chat
     };
-    let options = Thinking::ALL.map(|v| v.label().to_string());
+    let levels = if meeting {
+        &Thinking::ALL[..2]
+    } else {
+        &Thinking::ALL[..]
+    };
+    let options: Vec<_> = levels.iter().map(|v| v.label().to_string()).collect();
     Select::new(key, &options)
         .label(if meeting {
             "Thinking during meetings"
@@ -277,7 +412,7 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .iter()
         .find(|r| Some(&r.name) == s.runner.as_ref());
     let models = runner.map(core::ask_session::models).unwrap_or_default();
-    let current = s.ask_model();
+    let current = s.normal_ask_model();
     let other = s.ask_settings.other_model
         || current
             .as_ref()
@@ -350,6 +485,85 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     control
 }
 
+pub(super) fn meeting_choices(s: &State) -> Vec<(String, String, Option<String>)> {
+    let mut choices = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for runner in s
+        .runners
+        .iter()
+        .filter(|r| s.runner_found.contains(&r.name))
+    {
+        let agent = ask_options::agent_name(runner);
+        if !seen.insert(agent) {
+            continue;
+        }
+        choices.push((format!("{agent} \u{b7} Default"), runner.name.clone(), None));
+        for model in core::ask_session::models(runner) {
+            choices.push((
+                format!("{agent} \u{b7} {}", model.name),
+                runner.name.clone(),
+                Some(model.id),
+            ));
+        }
+        if let Some(model) = s.ask_settings.models.get(&runner.name)
+            && !choices
+                .iter()
+                .any(|(_, name, id)| name == &runner.name && id.as_ref() == Some(model))
+        {
+            choices.push((
+                format!("{agent} \u{b7} {model}"),
+                runner.name.clone(),
+                Some(model.clone()),
+            ));
+        }
+    }
+    choices
+}
+fn meeting_agent(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
+    let choices = meeting_choices(s);
+    let options: Vec<_> = choices.iter().map(|(label, _, _)| label.clone()).collect();
+    let selected = choices.iter().find(|(_, name, model)| {
+        name == &s.ask_settings.meeting_agent && model == &s.ask_settings.meeting_model
+    });
+    let current = selected
+        .map(|(label, _, _)| label.as_str())
+        .unwrap_or(&s.ask_settings.meeting_agent);
+    let open = s.ask_settings.select_open.as_deref() == Some("ask-meeting-agent");
+    let trigger = Select::new("ask-meeting-agent", &options)
+        .label("Agent during meetings")
+        .current(Some(current))
+        .appearance(SelectAppearance::Field)
+        .width(220.0)
+        .disabled(options.is_empty())
+        .open(open)
+        .on_toggle(|s: &mut State| {
+            s.ask_settings.select_open = (s.ask_settings.select_open.as_deref()
+                != Some("ask-meeting-agent"))
+            .then(|| "ask-meeting-agent".into());
+        })
+        .trigger(k);
+    let mut menu = Menu::new("ask-meeting-agent-menu")
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::BottomEnd)
+        .min_width(320.0)
+        .on_close(|s: &mut State| s.ask_settings.select_open = None);
+    for (label, name, model) in choices {
+        let checked = name == s.ask_settings.meeting_agent && model == s.ask_settings.meeting_model;
+        menu = menu.item(
+            MenuItem::new(label)
+                .checked(checked)
+                .on_select(move |s: &mut State| {
+                    s.ask_settings.meeting_agent = name.clone();
+                    s.ask_settings.meeting_model = model.clone();
+                    s.save_ask_preferences();
+                    s.ask_settings.select_open = None;
+                }),
+        );
+    }
+    menu.build(k, layer)
+}
+
 pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let options: Vec<String> = s
         .runners
@@ -388,7 +602,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 if let Some(r) = s.runners.iter().find(|r| {
                     ask_options::agent_name(r) == value && s.runner_found.contains(&r.name)
                 }) {
-                    s.choose_ask_runner(r.name.clone());
+                    s.choose_normal_ask_runner(r.name.clone());
                 }
                 s.ask_settings.select_open = None;
             })
@@ -418,9 +632,19 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .child(hairline(p))
         .child(setting_row(
             s,
+            "ask-meeting-agent-row",
+            "Agent during meetings",
+            "Used for questions while a meeting is live. Low thinking keeps answers fast.",
+            meeting_agent(s, k, layer),
+            true,
+            p,
+        ))
+        .child(hairline(p))
+        .child(setting_row(
+            s,
             "ask-meeting-thinking-row",
             "Thinking during meetings",
-            "Used while recording and for 10 minutes after. You can override it in Ask.",
+            "Low keeps meeting answers fast. You can override it in Ask.",
             thinking(s, k, p, layer, true),
             true,
             p,
@@ -496,5 +720,172 @@ mod tests {
             serde_json::to_value(core::notes::settings().unwrap()).unwrap(),
             summary_before
         );
+        state.choose_normal_ask_runner("Claude Sonnet".into());
+        state.ask_settings.recording = true;
+        state.meeting_agent_transition();
+        assert_eq!(state.ask_runner_name(), Some("Codex"));
+        assert_eq!(state.ask_thinking(), Thinking::Low);
+        assert_ne!(state.ask_model().as_deref(), Some("chosen-model"));
+        state.question = TextEdit::new("Keep my typed question");
+        state.choose_meeting_model("OpenCode".into(), Some("test-model".into()));
+        state.set_ask_thinking(Thinking::Medium);
+        assert_eq!(state.ask_runner_name(), Some("OpenCode"));
+        assert_eq!(state.ask_model().as_deref(), Some("test-model"));
+        assert_eq!(state.question.text, "Keep my typed question");
+        let saved = UiPrefs::load(&root);
+        assert_eq!(saved.ask_meeting_agent, "Codex");
+        assert_eq!(saved.ask_meeting_thinking, Thinking::Low);
+        assert_eq!(saved.ask_chat_thinking, Thinking::High);
+        assert_eq!(
+            core::last_used_runner().unwrap().as_deref(),
+            Some("Claude Sonnet")
+        );
+        state.ask_settings.recording = false;
+        state.meeting_agent_transition();
+        assert_eq!(state.ask_runner_name(), Some("Claude Sonnet"));
+        state.ask_settings.recording = true;
+        state.meeting_agent_transition();
+        let id = state.ask_key();
+        state
+            .asks
+            .insert(id.clone(), super::super::AskRun::stand_in("Codex", &[], 0));
+        for event in [
+            core::AskProgress::StartingCodex,
+            core::AskProgress::Text {
+                text: String::new(),
+            },
+        ] {
+            state.apply_event(super::super::Event::Progress {
+                id: id.clone(),
+                generation: 0,
+                event,
+            });
+            assert!(state.asks[&id].starting_codex);
+            assert_eq!(state.ask_runner_name(), Some("Codex"));
+            assert!(state.ask_settings.fallback_notice.is_none());
+        }
+        state.apply_event(super::super::Event::Progress {
+            id: id.clone(),
+            generation: 0,
+            event: core::AskProgress::Started {
+                runner: "Codex".into(),
+            },
+        });
+        assert!(!state.asks[&id].starting_codex);
+        assert!(state.asks[&id].turn_started);
+        assert!(state.asks[&id].started.elapsed().as_secs() < 1);
+        state.apply_event(super::super::Event::Progress {
+            id: id.clone(),
+            generation: 0,
+            event: core::AskProgress::Text {
+                text: "First answer text".into(),
+            },
+        });
+        assert!(!state.asks[&id].starting_codex);
+        assert_eq!(state.asks[&id].runner, "Codex");
+        state.asks.remove(&id);
+        state.ask_settings.recording = false;
+        state.meeting_agent_transition();
+        assert_eq!(state.ask_thinking(), Thinking::High);
+        state.ask_settings.recording = true;
+        assert_eq!(state.ask_runner_name(), Some("Codex"));
+        assert_eq!(state.ask_thinking(), Thinking::Low);
+
+        let id = state.ask_key();
+        let (_, message_id) = state
+            .store
+            .append_message_identified(
+                &id,
+                core::Message {
+                    role: "user".into(),
+                    text: "Synthetic retained question".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut run = super::super::AskRun::stand_in("Codex", &[], 0);
+        run.submitted_message_id = Some(message_id);
+        state.question = TextEdit::default();
+        state.finish_ask(&id, run, Some("Both agents unavailable".into()));
+        assert_eq!(state.question.text, "Synthetic retained question");
+        assert!(state.store.load(&id).unwrap().messages.is_empty());
+
+        let (_, message_id) = state
+            .store
+            .append_message_identified(
+                &id,
+                core::Message {
+                    role: "user".into(),
+                    text: "Keep this unanswered question too".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut run = super::super::AskRun::stand_in("Codex", &[], 0);
+        run.submitted_message_id = Some(message_id);
+        run.meeting_request = true;
+        state.question = TextEdit::new("A newer draft");
+        state.finish_ask(&id, run, Some("Both agents unavailable".into()));
+        assert_eq!(state.question.text, "A newer draft");
+        assert_eq!(
+            state.store.load(&id).unwrap().messages.last().unwrap().text,
+            "Keep this unanswered question too"
+        );
+
+        let (_, message_id) = state
+            .store
+            .append_message_identified(
+                &id,
+                core::Message {
+                    role: "user".into(),
+                    text: "Synthetic question at meeting end".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("Synthetic completed answer".into())).unwrap();
+        let mut run = super::super::AskRun::stand_in("Codex", &[], 0);
+        run.submitted_message_id = Some(message_id);
+        run.rx = rx;
+        state.ask_settings.recording = false;
+        state.meeting_agent_transition();
+        state.finish_ask(&id, run, None);
+        assert_eq!(
+            state.store.load(&id).unwrap().messages.last().unwrap().text,
+            "Synthetic completed answer"
+        );
+        assert_eq!(state.ask_runner_name(), Some("Claude Sonnet"));
+
+        state.selected = None;
+        state.ask_settings.recording = true;
+        state.meeting_agent_transition();
+        assert!(state.ask_current_live());
+        let live_key = state.ask_key();
+        assert_ne!(live_key, core::ALL_KEY);
+        state
+            .store
+            .append_message(
+                &live_key,
+                core::Message {
+                    role: "user".into(),
+                    text: "Only this meeting".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        state.question = TextEdit::new("Keep the draft while changing scope");
+        state.set_live_scope(true);
+        assert_eq!(state.ask_key(), core::ALL_KEY);
+        assert!(!state.ask_current_live());
+        state.set_live_scope(false);
+        assert_eq!(state.ask_key(), live_key);
+        assert_eq!(
+            state.saved.messages.last().unwrap().text,
+            "Only this meeting"
+        );
+        assert_eq!(state.question.text, "Keep the draft while changing scope");
+        state.ask_settings.recording = false;
+        assert_eq!(state.ask_key(), core::ALL_KEY);
     }
 }

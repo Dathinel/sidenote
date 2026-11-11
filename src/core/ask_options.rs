@@ -31,6 +31,9 @@ impl Thinking {
 pub fn meeting_thinking_default() -> Thinking {
     Thinking::Low
 }
+pub fn meeting_agent_default() -> String {
+    "Codex".into()
+}
 pub fn supports_thinking(runner: &Runner) -> bool {
     matches!(runners::kind(runner), Ok("claude" | "codex"))
 }
@@ -53,8 +56,68 @@ pub struct Options {
     pub model: Option<String>,
     pub meeting: bool,
     pub live: Option<LiveSource>,
+    pub live_notes: Option<String>,
+    pub meeting_agent: bool,
+    pub fallback: Option<Fallback>,
+}
+#[derive(Clone, Debug)]
+pub struct Fallback {
+    pub runner: String,
+    pub model: Option<String>,
+    pub thinking: Thinking,
 }
 impl Options {
+    pub(super) fn run(
+        &self,
+        name: &str,
+        prompt: String,
+        chat: &str,
+        progress: &impl Fn(super::AskProgress),
+    ) -> Result<String, String> {
+        let execute = |name: &str, options: &Self| {
+            let runner = if options.meeting_agent {
+                super::list_runners()?
+                    .into_iter()
+                    .find(|r| r.name == name)
+                    .ok_or("The selected runner is not configured")?
+            } else {
+                super::ask::pick_runner(name)?
+            };
+            let runner = options.runner(super::ask::read_only_runner(runner)?)?;
+            super::ask_session::run(&runner, prompt.clone(), chat, progress)
+        };
+        self.try_fallback(name, progress, execute)
+    }
+    fn try_fallback(
+        &self,
+        name: &str,
+        progress: &impl Fn(super::AskProgress),
+        mut execute: impl FnMut(&str, &Self) -> Result<String, String>,
+    ) -> Result<String, String> {
+        let result = execute(name, self);
+        if result.is_err()
+            && !super::ask::cancel_requested()
+            && !super::ask::stop_requested()
+            && let Some(fallback) = &self.fallback
+        {
+            progress(super::AskProgress::Fallback {
+                runner: fallback.runner.clone(),
+            });
+            progress(super::AskProgress::Text {
+                text: String::new(),
+            });
+            return execute(
+                &fallback.runner,
+                &Self {
+                    model: fallback.model.clone(),
+                    thinking: fallback.thinking,
+                    meeting_agent: true,
+                    ..Default::default()
+                },
+            );
+        }
+        result
+    }
     pub(super) fn runner(&self, mut runner: Runner) -> Result<Runner, String> {
         if let Some(model) = &self.model {
             runner.model = Some(model.clone());
@@ -110,6 +173,11 @@ impl Options {
             instructions.push_str("\nIf the live transcript is empty, no speech is available yet. Do not infer the current meeting from older meetings.");
         }
         prompt.insert_str(boundary, &instructions);
+        if let Some(notes) = &self.live_notes {
+            prompt.push_str("\n<live_notes>\n");
+            prompt.push_str(notes);
+            prompt.push_str("\n</live_notes>\n");
+        }
         if let Some(source) = &self.live {
             let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
             let folder = folder.or_else(|| {
@@ -216,6 +284,129 @@ fn recent_meeting_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn current_live_prompt_includes_notes_and_transcript_without_other_meetings() {
+        let root =
+            std::env::temp_dir().join(format!("meeting-agent-live-context-{}", std::process::id()));
+        let current = root.join("1800000000000-1");
+        let other = root.join("1800000000001-1");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            current.join("english-transcript.md"),
+            "[00:04] Maya will prepare the Friday prototype.",
+        )
+        .unwrap();
+        std::fs::write(
+            other.join("english-summary.md"),
+            "Unrelated synthetic budget decision",
+        )
+        .unwrap();
+        let options = Options {
+            meeting: true,
+            live: Some(LiveSource {
+                hint: Some("1800000000000-1".into()),
+                start_ms: None,
+            }),
+            live_notes: Some("Typed notes: use paper cards".into()),
+            ..Default::default()
+        };
+        let history = [super::super::Message {
+            role: "user".into(),
+            text: "What did we decide?".into(),
+            ..Default::default()
+        }];
+        let prompt = options
+            .prompt_in(super::super::ask::live_prompt(&history), &root)
+            .unwrap();
+        assert!(prompt.contains("Typed notes: use paper cards"));
+        assert!(prompt.contains("Maya will prepare"));
+        assert!(prompt.contains("Do not read other meetings"));
+        assert!(!prompt.contains("Unrelated synthetic budget decision"));
+        let key = super::super::live_ask_key("../synthetic meeting");
+        assert!(super::super::persistence::is_live_ask_key(&key));
+        assert!(!super::super::persistence::is_live_ask_key("live-../../"));
+    }
+    #[test]
+    fn waiting_for_codex_warmup_does_not_select_the_fallback() {
+        let options = Options {
+            fallback: Some(Fallback {
+                runner: "slower default".into(),
+                model: None,
+                thinking: Thinking::Medium,
+            }),
+            ..Default::default()
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let mut calls = Vec::new();
+        let result = options.try_fallback(
+            "Codex",
+            &|event| events.borrow_mut().push(event),
+            |name, _| {
+                calls.push(name.to_owned());
+                events
+                    .borrow_mut()
+                    .push(super::super::AskProgress::StartingCodex);
+                Ok("Codex answered after warming".into())
+            },
+        );
+        assert_eq!(result.unwrap(), "Codex answered after warming");
+        assert_eq!(calls, ["Codex"]);
+        assert_eq!(*events.borrow(), [super::super::AskProgress::StartingCodex]);
+    }
+    #[test]
+    fn fallback_retries_once_with_normal_preferences_and_clears_partial_text() {
+        use std::cell::RefCell;
+        let options = Options {
+            thinking: Thinking::Low,
+            meeting_agent: true,
+            fallback: Some(Fallback {
+                runner: "normal".into(),
+                model: Some("normal-model".into()),
+                thinking: Thinking::Medium,
+            }),
+            ..Default::default()
+        };
+        for primary_error in [
+            "not installed",
+            "not signed in",
+            "failed after partial text",
+        ] {
+            let calls = RefCell::new(Vec::new());
+            let events = RefCell::new(Vec::new());
+            let result = options.try_fallback(
+                "Codex",
+                &|event| events.borrow_mut().push(event),
+                |name, options| {
+                    calls.borrow_mut().push(name.to_owned());
+                    if name == "Codex" {
+                        return Err(primary_error.into());
+                    }
+                    assert_eq!(options.model.as_deref(), Some("normal-model"));
+                    assert_eq!(options.thinking, Thinking::Medium);
+                    assert!(options.fallback.is_none());
+                    Ok("saved question answered".into())
+                },
+            );
+            assert_eq!(result.unwrap(), "saved question answered");
+            assert_eq!(*calls.borrow(), ["Codex", "normal"]);
+            assert!(
+                matches!(&events.borrow()[0], super::super::AskProgress::Fallback { runner } if runner == "normal")
+            );
+            assert!(
+                matches!(&events.borrow()[1], super::super::AskProgress::Text { text } if text.is_empty())
+            );
+        }
+        let cancel = super::super::ask::Cancel::new();
+        cancel.stop();
+        super::super::ask::with_cancel_for_test(cancel, || {
+            let result =
+                options.try_fallback("Codex", &|_| panic!("Cancelled Ask retried"), |_, _| {
+                    Err(super::super::ask::STOPPED.into())
+                });
+            assert_eq!(result.unwrap_err(), super::super::ask::STOPPED);
+        });
+    }
     #[test]
     fn no_id_follow_up_uses_the_matching_finished_transcript_and_rejects_ambiguous_folders() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

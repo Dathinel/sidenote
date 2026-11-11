@@ -156,6 +156,14 @@ pub fn prewarm(runner: Runner, options: &super::ask_options::Options, chat: Stri
         super::ask_session::warm(runner, chat);
     }
 }
+pub fn prewarm_meeting(
+    runner: Runner,
+    options: &super::ask_options::Options,
+    chat: String,
+) -> Result<std::sync::mpsc::Receiver<Result<(), String>>, String> {
+    let runner = options.runner(read_only_runner(runner)?)?;
+    Ok(super::ask_session::warm_meeting(runner, chat))
+}
 
 /// Sends the final progress event for a finished call and passes the result through.
 pub(super) fn report(
@@ -211,10 +219,8 @@ pub fn ask_with_options(
             .ok_or("Could not read the meeting summary or transcript")?;
         let folder = super::state_dir();
         std::fs::create_dir_all(&folder).map_err(|_| "Could not open app state folder")?;
-        let runner = pick_runner(runner_name)?;
-        let runner = options.runner(read_only_runner(runner)?)?;
-        super::ask_session::run(
-            &runner,
+        options.run(
+            runner_name,
             options.prompt(prompt(&meeting, history))?,
             meeting_id,
             &progress,
@@ -245,6 +251,12 @@ thread_local! {
 /// True on a worker whose own Ask was stopped by `Cancel::stop`.
 pub(super) fn cancel_requested() -> bool {
     CURRENT.with(|c| c.borrow().as_ref().is_some_and(Cancel::stopped))
+}
+#[cfg(test)]
+pub(super) fn with_cancel_for_test(cancel: Cancel, job: impl FnOnce()) {
+    CURRENT.with(|current| *current.borrow_mut() = Some(cancel));
+    job();
+    CURRENT.with(|current| *current.borrow_mut() = None);
 }
 static STOP: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
@@ -300,6 +312,29 @@ pub fn spawn_with_options(
 ) -> std::sync::mpsc::Receiver<Result<String, String>> {
     spawn_job(
         move |step| ask_with_options(&meeting_id, &history, &runner_name, &options, step),
+        cancel,
+        progress,
+    )
+}
+pub fn live_prompt(history: &[Message]) -> String {
+    format!(
+        "{RULES}\nAnswer only about this live meeting using its notes and transcript so far. Do not read other meetings.\n\nConversation so far:\n{}\n\nYou:",
+        chat(history)
+    )
+}
+pub fn spawn_live(
+    key: String,
+    history: Vec<Message>,
+    runner: String,
+    options: super::ask_options::Options,
+    cancel: Cancel,
+    progress: impl Fn(AskProgress) + Send + 'static,
+) -> std::sync::mpsc::Receiver<Result<String, String>> {
+    spawn_job(
+        move |step| {
+            check_question(&history)?;
+            options.run(&runner, options.prompt(live_prompt(&history))?, &key, &step)
+        },
         cancel,
         progress,
     )
