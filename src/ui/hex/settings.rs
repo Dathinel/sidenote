@@ -259,7 +259,7 @@ pub(crate) fn pc(p: Palette) -> El {
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
-        "ask-agent-row" => &icons::BOT,
+        "ask-agent-row" | "ask-meeting-agent-row" => &icons::BOT,
         "ask-model-row" => &icons::CPU,
         "ask-meeting-thinking-row" => &icons::TIMER,
         "ask-chat-thinking-row" => &icons::MESSAGE_SQUARE,
@@ -574,6 +574,14 @@ fn app_index() -> Vec<Destination> {
             "ask-model-row",
             "Ask model",
             "models and agents model",
+            Page::Helpers,
+            0,
+            false,
+        ),
+        entry(
+            "ask-meeting-agent-row",
+            "Agent during meetings",
+            "Codex Claude OpenCode live recording model low medium",
             Page::Helpers,
             0,
             false,

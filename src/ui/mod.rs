@@ -153,6 +153,8 @@ pub struct AskRun {
     pub _alive: std::sync::Arc<()>,
     pub submitted_message_id: Option<String>,
     pub generation: u64,
+    pub meeting_epoch: u64,
+    pub meeting_request: bool,
     pub runner: String,
     pub text: String,
     pub rx: Receiver<Result<String, String>>,
@@ -172,6 +174,8 @@ impl AskRun {
             _alive: Default::default(),
             submitted_message_id: None,
             generation: 0,
+            meeting_epoch: 0,
+            meeting_request: false,
             runner: runner.into(),
             text: String::new(),
             rx,
@@ -929,7 +933,7 @@ impl State {
         if text.is_empty() || self.asks.contains_key(&id) {
             return;
         }
-        let Some(runner) = self.runner.clone() else {
+        let Some(runner) = self.ask_runner_name().map(str::to_owned) else {
             self.ask_errors
                 .insert(id, "Choose a runner before asking.".into());
             return;
@@ -965,6 +969,24 @@ impl State {
             thinking: self.ask_thinking(),
             model: self.ask_model(),
             meeting: self.ask_in_meeting(),
+            meeting_agent: self.ask_live_meeting(),
+            fallback: if self.ask_live_meeting()
+                && self
+                    .runners
+                    .iter()
+                    .find(|r| r.name == runner)
+                    .is_none_or(|r| core::ask_options::agent_name(r) == "Codex")
+            {
+                self.runner
+                    .as_ref()
+                    .map(|name| core::ask_options::Fallback {
+                        runner: name.clone(),
+                        model: self.normal_ask_model(),
+                        thinking: self.ask_settings.chat,
+                    })
+            } else {
+                None
+            },
             live: if self.ask_settings.recording {
                 self.ask_settings.recording_source.clone()
             } else if self.hex_recording() {
@@ -1041,6 +1063,8 @@ impl State {
                 _alive: alive,
                 submitted_message_id: Some(submitted_message_id),
                 generation,
+                meeting_epoch: self.ask_settings.meeting_epoch,
+                meeting_request: self.ask_live_meeting(),
                 runner,
                 text: String::new(),
                 rx,
@@ -1083,7 +1107,11 @@ impl State {
             Err(message) => {
                 // Take the unanswered question back out so a retry does not repeat it.
                 let mut taken = None;
+                let can_restore = self.ask_key() == id && self.question.text.is_empty();
                 let result = self.store.update(id, |s| {
+                    if run.meeting_request && !can_restore {
+                        return;
+                    }
                     if let Some(at) = s.messages.iter().position(|m| {
                         m.role == "user" && m.id.is_some() && m.id == run.submitted_message_id
                     }) {
@@ -1295,6 +1323,22 @@ impl State {
                 }
                 match event {
                     AskProgress::Started { .. } => {}
+                    AskProgress::Fallback { runner } => {
+                        run.runner = runner.clone();
+                        let name = self
+                            .runners
+                            .iter()
+                            .find(|r| r.name == runner)
+                            .map(core::ask_options::agent_name)
+                            .unwrap_or(&runner);
+                        self.notice = Some(format!("Codex isn't available, using {name}."));
+                        let epoch = run.meeting_epoch;
+                        if self.ask_live_meeting() && epoch == self.ask_settings.meeting_epoch {
+                            self.ask_settings.meeting_override =
+                                Some((runner, self.normal_ask_model()));
+                            self.ask_settings.meeting_level = Some(self.ask_settings.chat);
+                        }
+                    }
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => run.text = text,
                     AskProgress::Finished => {
@@ -2865,6 +2909,30 @@ pub fn spec() -> AppSpec<State> {
                         left: 3,
                     });
                 }
+            }),
+            ("meeting-agent-settings", |s| {
+                hex::settings::scene(s, "settings-helpers");
+            }),
+            ("meeting-agent-picker", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ask_settings.select_open = Some("ask-meeting-agent".into());
+            }),
+            ("meeting-agent-live", |s| {
+                scene_live(s, SCENE_NOTES, SCENE_LINES, true);
+            }),
+            ("meeting-agent-fallback", |s| {
+                scene_live(s, SCENE_NOTES, SCENE_LINES, true);
+                s.question = TextEdit::new("What did we decide?");
+                let id = s.ask_key();
+                s.asks.insert(id.clone(), AskRun::stand_in("Codex", &[], 0));
+                s.apply_event(Event::Progress {
+                    id: id.clone(),
+                    generation: 0,
+                    event: AskProgress::Fallback {
+                        runner: "Claude Sonnet".into(),
+                    },
+                });
+                s.asks.remove(&id);
             }),
             ("settings-model-menu", |s| {
                 hex::settings::scene(s, "settings-helpers");

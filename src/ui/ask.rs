@@ -396,29 +396,35 @@ fn runner_note(tools: bool) -> &'static str {
 /// The model's name, muted, inside the pill. Pressing it opens a small menu of agents. An agent
 /// whose program is not on PATH says "Not installed" and cannot be picked.
 fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
-    let name = s.runner.as_deref().unwrap_or("Choose a model");
+    let name = s.ask_runner_name().unwrap_or("Choose a model");
     let tools = s
         .runners
         .iter()
-        .find(|r| Some(&r.name) == s.runner.as_ref())
+        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
         .is_some_and(|r| r.tools);
     let chevron = if s.runner_open {
         k.glyph.chevron_up
     } else {
         k.glyph.chevron_down
     };
-    let shown = s
-        .ask_settings
-        .models
-        .get(name)
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            if s.runner.is_some() {
-                short_runner(name)
-            } else {
-                name
-            }
-        });
+    let selected_model = if s.ask_live_meeting() {
+        s.ask_model()
+    } else {
+        s.ask_settings.models.get(name).cloned()
+    };
+    let shown = selected_model
+        .as_deref()
+        .unwrap_or_else(|| short_runner(name));
+    let shown = if s.ask_live_meeting()
+        && s.runners
+            .iter()
+            .find(|r| r.name == name)
+            .is_some_and(|r| core::ask_options::agent_name(r) == "Codex")
+    {
+        format!("Codex \u{b7} {}", s.ask_thinking().label())
+    } else {
+        shown.to_string()
+    };
     let trigger = pressable(
         row()
             .gap(2.0)
@@ -435,12 +441,12 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
     .key("ask-model")
     .role("combobox")
     .label(format!("Model: {name}"))
-    .help(if s.runner.is_some() {
-        let model = s.ask_model().unwrap_or_else(|| shown.into());
+    .help(if s.ask_runner_name().is_some() {
+        let model = s.ask_model().unwrap_or_else(|| shown.clone());
         let thinking = s
             .runners
             .iter()
-            .find(|r| Some(&r.name) == s.runner.as_ref())
+            .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
             .filter(|r| !core::ask_options::supports_thinking(r))
             .map(|_| super::ask_settings::OPENCODE_THINKING)
             .unwrap_or("");
@@ -479,11 +485,21 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         menu = menu.item(
             MenuItem::new(menu_name(&r.name))
                 .description(runner_note(r.tools))
-                .checked(s.runner.as_deref() == Some(r.name.as_str()))
+                .checked(s.ask_runner_name() == Some(r.name.as_str()))
                 .on_select(move |s: &mut State| {
                     s.choose_ask_runner(chosen.clone());
                 }),
         );
+    }
+    if s.ask_live_meeting() {
+        for (label, name, model) in super::ask_settings::meeting_choices(s) {
+            let chosen = s.ask_runner_name() == Some(name.as_str()) && s.ask_model() == model;
+            menu = menu.item(MenuItem::new(label).checked(chosen).on_select(
+                move |s: &mut State| {
+                    s.choose_meeting_model(name.clone(), model.clone());
+                },
+            ));
+        }
     }
     for r in missing {
         menu = menu.item(
@@ -499,7 +515,7 @@ fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Optio
     let runner = s
         .runners
         .iter()
-        .find(|r| Some(&r.name) == s.runner.as_ref())?;
+        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())?;
     if !core::ask_options::supports_thinking(runner) {
         return None;
     }

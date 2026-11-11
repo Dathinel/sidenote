@@ -503,6 +503,7 @@ impl State {
                     });
             }
             if recording != self.ask_settings.recording {
+                self.meeting_agent_transition();
                 self.ask_settings.recording = recording;
                 if self.waker.is_some() {
                     sidenote::core::ask_session::recording(recording);
