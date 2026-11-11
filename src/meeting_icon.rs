@@ -247,10 +247,6 @@ fn run(isolated: bool, replay: bool) {
                 host = None;
             }
         }
-        if let Some(host) = &mut host {
-            host.pump();
-        } else {
-            std::thread::sleep(Duration::from_millis(if replay { 100 } else { 250 }));
-        }
+        std::thread::sleep(Duration::from_millis(if replay { 100 } else { 250 }));
     }
 }

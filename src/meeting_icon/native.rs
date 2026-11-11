@@ -1,6 +1,6 @@
 use super::{card_text, draft_seen};
 use crate::core::{self, store_io};
-use std::{cell::RefCell, io, mem::size_of, ptr};
+use std::{cell::RefCell, io, mem::size_of, ptr, sync::mpsc, thread::JoinHandle};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::Gdi::*,
@@ -41,12 +41,104 @@ struct View {
     render: bool,
 }
 
+struct Frame {
+    id: String,
+    recording: bool,
+    pill: bool,
+    elapsed: u64,
+    raw: Option<String>,
+}
+
 pub(super) struct Host {
-    view: Box<RefCell<View>>,
+    send: Option<mpsc::SyncSender<Frame>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Host {
     pub(super) fn new(render: bool) -> io::Result<Self> {
+        let (send, receive) = mpsc::sync_channel::<Frame>(1);
+        let (ready, started) = mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("meeting-icon-window".into())
+            .spawn(move || {
+                let mut window = match NativeWindow::new(render) {
+                    Ok(window) => window,
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                        return;
+                    }
+                };
+                if ready.send(Ok(())).is_err() {
+                    return;
+                }
+                loop {
+                    match receive.try_recv() {
+                        Ok(frame) => window.update(
+                            &frame.id,
+                            frame.recording,
+                            frame.pill,
+                            frame.elapsed,
+                            frame.raw,
+                        ),
+                        Err(mpsc::TryRecvError::Empty) => (),
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    }
+                    window.pump();
+                }
+            })?;
+        if let Err(error) = started
+            .recv()
+            .unwrap_or_else(|_| Err(io::Error::other("Icon host stopped during startup")))
+        {
+            let _ = worker.join();
+            return Err(error);
+        }
+        Ok(Self {
+            send: Some(send),
+            worker: Some(worker),
+        })
+    }
+
+    pub(super) fn update(
+        &self,
+        id: &str,
+        recording: bool,
+        pill: bool,
+        elapsed: u64,
+        raw: Option<String>,
+    ) {
+        if let Some(send) = &self.send
+            && let Err(mpsc::TrySendError::Disconnected(_)) = send.try_send(Frame {
+                id: id.into(),
+                recording,
+                pill,
+                elapsed,
+                raw,
+            })
+        {
+            crate::listener::log("floating icon window thread stopped");
+        }
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        // Ending the GUI thread also releases Windows' per-thread IME/helper windows.
+        self.send.take();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            crate::listener::log("floating icon window thread could not finish");
+        }
+    }
+}
+
+struct NativeWindow {
+    view: Box<RefCell<View>>,
+}
+
+impl NativeWindow {
+    fn new(render: bool) -> io::Result<Self> {
         unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(ptr::null());
@@ -134,14 +226,7 @@ impl Host {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        id: &str,
-        recording: bool,
-        pill: bool,
-        elapsed: u64,
-        raw: Option<String>,
-    ) {
+    fn update(&mut self, id: &str, recording: bool, pill: bool, elapsed: u64, raw: Option<String>) {
         let mut v = self.view.borrow_mut();
         let changed = v.id != id
             || v.recording != recording
@@ -164,7 +249,7 @@ impl Host {
         }
     }
 
-    pub(super) fn pump(&mut self) {
+    fn pump(&mut self) {
         unsafe {
             let mut message = std::mem::zeroed();
             while PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
@@ -176,7 +261,7 @@ impl Host {
     }
 }
 
-impl Drop for Host {
+impl Drop for NativeWindow {
     fn drop(&mut self) {
         unsafe {
             let v = self.view.borrow();

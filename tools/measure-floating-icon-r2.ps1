@@ -37,7 +37,7 @@ public static class FloatingR2 {
   [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr obj);
   [DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr process,uint kind);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr hwnd,uint msg,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
-  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd,IntPtr dc,uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd,uint command);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   public static IntPtr[] Windows(uint owned) {
     var found = new System.Collections.Generic.List<IntPtr>();
@@ -48,6 +48,10 @@ public static class FloatingR2 {
   public static void Message(IntPtr h,uint owned,uint msg) {
     uint p;GetWindowThreadProcessId(h,out p);if(p!=owned)throw new Exception("Refusing message to another process");
     IntPtr result;if(SendMessageTimeoutW(h,msg,IntPtr.Zero,IntPtr.Zero,2,2000,out result)==IntPtr.Zero)throw new Exception("Own-window message timed out");
+  }
+  public static bool RenderClient(IntPtr h,uint owned,IntPtr dc) {
+    uint p;GetWindowThreadProcessId(h,out p);if(p!=owned)throw new Exception("Refusing render from another process");
+    IntPtr result;return SendMessageTimeoutW(h,0x0318,dc,(IntPtr)28,2,2000,out result)!=IntPtr.Zero;
   }
 }
 '@
@@ -109,7 +113,8 @@ function Region($h) {
         $b = Geometry $h
         $empty = [FloatingR2]::PtInRegion($r,5,[int]($b.height/2))
         $cap = [FloatingR2]::PtInRegion($r,$b.width-10,[int]($b.height/2))
-        $atEmpty = [FloatingR2]::WindowFromPoint((New-Object FloatingR2+Point($b.left+5,[int](($b.top+$b.bottom)/2))))
+        $point = [FloatingR2+Point]::new([int]($b.left+5),[int](($b.top+$b.bottom)/2))
+        $atEmpty = [FloatingR2]::WindowFromPoint($point)
         [ordered]@{left_in_region=$empty;right_cap_in_region=$cap;empty_point_resolves_to_icon=($atEmpty -eq $h)}
     } finally { [void][FloatingR2]::DeleteObject($r) }
 }
@@ -184,11 +189,13 @@ try {
     Check-Foreground
     $result.card_affinity=Affinity $card
     $result.card_bounds=Geometry $card
-    $bounds=Geometry $card
-    $bitmap=New-Object Drawing.Bitmap($bounds.width,$bounds.height)
+    $edit=[FloatingR2]::GetWindow($card,5)
+    if ($edit -eq [IntPtr]::Zero -or [FloatingR2]::Class($edit) -ne 'Edit') { throw 'Own card text control unavailable.' }
+    $bounds=Geometry $edit
+    $bitmap=[Drawing.Bitmap]::new($bounds.width,$bounds.height)
     $graphics=[Drawing.Graphics]::FromImage($bitmap)
     $dc=$graphics.GetHdc()
-    try { $result.card_rendered=[FloatingR2]::PrintWindow($card,$dc,2) }
+    try { $result.card_rendered=[FloatingR2]::RenderClient($edit,$child.Id,$dc) }
     finally { $graphics.ReleaseHdc($dc);$graphics.Dispose() }
     $bitmap.Save((Join-Path $run 'floating-icon-card.png'),[Drawing.Imaging.ImageFormat]::Png)
     $bitmap.Dispose()
@@ -211,6 +218,7 @@ try {
     $result.pending_after_ack=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-meetings.json') | ConvertFrom-Json
     Sample 'torn_down'
     $result.gui_resources_returned_to_idle = ($result.torn_down[-1].gdi -eq $result.idle[-1].gdi -and $result.torn_down[-1].user -eq $result.idle[-1].user)
+    $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'measurements.json') -Encoding UTF8
     if (!$result.gui_resources_returned_to_idle) { throw 'Native window resources did not return to their idle counts.' }
     # A second meeting proves classes and resources can be created again after teardown.
     Write-Snapshot $true $false 1 '1794440000000-2'
