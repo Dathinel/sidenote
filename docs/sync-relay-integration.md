@@ -1,5 +1,7 @@
 # Relay integration
 
+Security follow-up contract: `docs/sync-relay-security-fixes.md` (review at 030a513).
+
 ## Slice 5 local qualification: threat model and contract
 
 1. A hostile relay may replay, truncate or oversize ciphertext, route a wrong
