@@ -1187,6 +1187,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
             roles::SMALL
                 .wrap(s.store.root.display().to_string(), p.ink)
                 .key("sync-folder")
+                .fill(highlight(s, "sync-folder", p))
                 .padding(14.0),
             p,
         ))
