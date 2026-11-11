@@ -207,6 +207,19 @@ impl Driver {
                 prefs.save(root)?;
                 Ok(Value::Null)
             }
+            "local-settings" => {
+                let mut prefs = super::super::UiPrefs::load(root);
+                prefs.sidebar_collapsed = Some(true);
+                prefs.save(root)?;
+                let mut notes = super::super::Config::load_in(root)?
+                    .notes
+                    .unwrap_or_default();
+                notes.model = "synthetic-local-model".into();
+                super::super::Config::save_notes(root, &notes)?;
+                Ok(
+                    serde_json::json!({"sidebar":super::super::UiPrefs::load(root).sidebar_collapsed,"model":super::super::Config::load_in(root)?.notes.unwrap().model}),
+                )
+            }
             "profile-name" => {
                 let mut notes = super::super::Config::load_in(root)?
                     .notes

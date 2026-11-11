@@ -832,11 +832,19 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
     let before = journals(&a);
     older.request(json!({"op":"folder-note"}));
     assert_ne!(journals(&a), before, "folder-only writes stopped");
+    assert_eq!(
+        older.request(json!({"op":"local-settings"})),
+        json!({"sidebar":true,"model":"synthetic-local-model"})
+    );
     older.stop();
     let mut older = App::start(&a);
     assert_eq!(
         older.request(json!({"op":"relay-state"}))["read_only"],
         true
+    );
+    assert_eq!(
+        older.request(json!({"op":"local-settings"})),
+        json!({"sidebar":true,"model":"synthetic-local-model"})
     );
     older.rejected(json!({"op":"add","task":{"task":"Must not commit after restart"}}));
     assert!(

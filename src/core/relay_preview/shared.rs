@@ -464,7 +464,9 @@ pub(crate) fn load(root: &Path, store: &str, default: Value) -> io::Result<Value
 pub(crate) fn edit(root: &Path, store: &str, before: &Value, after: &Value) -> io::Result<bool> {
     let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
     if let Some(preview) = get(root)? {
-        preview.shared_edit(store, before, after)?;
+        if before != after {
+            preview.shared_edit(store, before, after)?;
+        }
         Ok(true)
     } else {
         Ok(false)
