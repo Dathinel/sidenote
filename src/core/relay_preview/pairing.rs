@@ -54,6 +54,10 @@ pub fn start(
     join: Option<SecretCode>,
 ) -> io::Result<(Pairing, mpsc::Receiver<Update>)> {
     let preview = get(root)?.ok_or_else(|| store_io::invalid("Turn on relay preview first"))?;
+    preview
+        .device
+        .store(|s| s.check_compatible())
+        .map_err(failed)?;
     let settings = Settings::load(root)?;
     let relay = endpoint(&settings.address)?;
     let name = super::super::DeviceSettings::read_in(root)?.name;
@@ -204,6 +208,9 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
 impl Preview {
     fn adopt(&self, group: &Group, peer: &Confirmation) -> io::Result<()> {
         self.online(false)?;
+        self.device
+            .store(|s| s.check_compatible())
+            .map_err(failed)?;
         let mut settings = Settings::load(&self.root)?;
         if !settings.enabled {
             return Err(store_io::invalid("Relay preview was turned off"));
@@ -242,9 +249,6 @@ impl Preview {
         self.online(true)
     }
     pub fn remove_device(&self, target: &str) -> io::Result<()> {
-        self.device
-            .store(|s| s.check_compatible())
-            .map_err(failed)?;
         let mut settings = Settings::load(&self.root)?;
         let group = self
             .device
@@ -258,6 +262,9 @@ impl Preview {
             return Err(store_io::invalid("Device is no longer paired"));
         }
         self.online(false)?;
+        self.device
+            .store(|s| s.check_compatible())
+            .map_err(failed)?;
         let fresh = Group::new(&self.device.identity);
         self.device.merge_group(&fresh).map_err(failed)?;
         settings.room = fresh.room();

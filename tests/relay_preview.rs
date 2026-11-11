@@ -782,8 +782,17 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
     let a = fixture.path().join("older");
     let b = fixture.path().join("newer");
     let (_relay, address) = start_relay(&fixture.path().join("relay"));
-    for root in [&a, &b] {
+    for (root, name, id) in [
+        (&a, "Synthetic older PC", "c"),
+        (&b, "Synthetic newer PC", "d"),
+    ] {
         std::fs::create_dir_all(root).unwrap();
+        std::fs::write(
+            root.join("device.json"),
+            serde_json::to_vec(&json!({"name":name,"id":id.repeat(32),"daily_check":false}))
+                .unwrap(),
+        )
+        .unwrap();
         relay_preview::Settings {
             enabled: true,
             address: address.clone(),
@@ -826,6 +835,13 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
         );
         thread::sleep(Duration::from_millis(70));
     }
+    older.rejected(json!({"op":"host"}));
+    let authority = relay_preview::Settings::load(&a).unwrap().room;
+    older.rejected(json!({"op":"remove","name":"Synthetic newer PC"}));
+    assert!(
+        relay_preview::Settings::load(&a).unwrap().room == authority,
+        "incompatible removal reset the group"
+    );
     older.rejected(json!({"op":"add","task":{"task":"Must not commit"}}));
     older.request(json!({"op":"offline"}));
     older.rejected(json!({"op":"add","task":{"task":"Must not commit offline"}}));

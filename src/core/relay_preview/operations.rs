@@ -216,6 +216,15 @@ mod tests {
         let parent = std::env::temp_dir().join("sidenote-relay-preview");
         std::fs::create_dir_all(&parent).unwrap();
         let root = tempfile::tempdir_in(parent).unwrap();
+        store_io::write(
+            &root.path().join("device.json"),
+            &super::super::super::DeviceSettings {
+                name: "Synthetic health PC".into(),
+                id: "e".repeat(32),
+                daily_check: false,
+            },
+        )
+        .unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let worker = std::thread::spawn(move || {
