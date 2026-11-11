@@ -1,0 +1,22 @@
+name = "sidenote-relay"
+main = "src/index.ts"
+compatibility_date = "2026-11-09"
+workers_dev = true
+send_metrics = false
+
+[vars]
+# Optional comma-separated public genesis / pairing-host keys. Empty keeps open enrollment.
+ALLOWED_GENESIS = ""
+# Required public sync room IDs. Empty denies sync and pairing before allocation.
+ALLOWED_ROOMS = ""
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

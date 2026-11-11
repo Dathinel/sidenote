@@ -280,6 +280,19 @@ impl MemoryStore {
     }
     fn load_locked(&self) -> io::Result<MemoryFile> {
         let file: MemoryFile = super::sync_state::load(&self.root, "memory/records.json")?;
+        if let Some(preview) = super::relay_preview::get(&self.root)?
+            && preview.conflicts()?.iter().any(|c| {
+                c.task_id == "memory/records.json"
+                    && serde_json::from_str::<Vec<String>>(&c.field).is_ok_and(|p| {
+                        p.first().is_some_and(|v| v == "o:proposals")
+                            && p.last().is_some_and(|v| v == "o:status")
+                    })
+            })
+        {
+            return Err(invalid(
+                "Resolve Memory decision versions in Settings > Sync before using these records",
+            ));
+        }
         if file.schema_version != 1 {
             return Err(invalid("Unsupported memory schema version"));
         }

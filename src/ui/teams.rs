@@ -108,6 +108,11 @@ fn save(s: &mut State) {
         store: s.tasks.store.clone(),
         original: editor.original.clone(),
         replacement: Some(core::Team {
+            id: editor
+                .original
+                .as_ref()
+                .map(|t| t.id.clone())
+                .unwrap_or_default(),
             name,
             members,
             aliases,

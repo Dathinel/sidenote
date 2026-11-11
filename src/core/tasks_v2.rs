@@ -153,6 +153,8 @@ pub struct Teams {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Team {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     pub members: Vec<String>,
     /// Alias spelling to member name.
@@ -247,11 +249,18 @@ impl TaskStore {
         replacement: Option<&Team>,
     ) -> io::Result<Teams> {
         let mut teams = self.load_teams()?;
+        let before = serde_json::to_value(&teams)?;
         if let Some(original) = original {
             let index = teams
                 .teams
                 .iter()
-                .position(|t| name(&t.name) == name(&original.name))
+                .position(|t| {
+                    if original.id.is_empty() {
+                        name(&t.name) == name(&original.name)
+                    } else {
+                        t.id == original.id
+                    }
+                })
                 .ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::NotFound,
@@ -265,17 +274,39 @@ impl TaskStore {
                 ));
             }
             if let Some(replacement) = replacement {
-                teams.teams[index] = replacement.clone();
+                let mut replacement = replacement.clone();
+                replacement.id = original.id.clone();
+                teams.teams[index] = replacement;
             } else {
                 teams.teams.remove(index);
             }
         } else if let Some(replacement) = replacement {
             teams.teams.push(replacement.clone());
         }
-        self.save_teams(&teams)?;
+        if super::relay_preview::Settings::load(&self.root)?.enabled {
+            super::relay_preview::shared::team_ids(&mut teams);
+            validate_teams(&teams)?;
+            super::relay_preview::shared::edit(
+                &self.root,
+                "teams.json",
+                &before,
+                &serde_json::to_value(&teams)?,
+            )?;
+        } else {
+            self.save_teams(&teams)?;
+        }
         Ok(teams)
     }
     pub fn load_teams(&self) -> io::Result<Teams> {
+        let raw = self.folder_teams()?;
+        serde_json::from_value(super::relay_preview::shared::load(
+            &self.root,
+            "teams.json",
+            serde_json::to_value(raw)?,
+        )?)
+        .map_err(io::Error::from)
+    }
+    pub(crate) fn folder_teams(&self) -> io::Result<Teams> {
         let path = self.root.join("teams.json");
         match super::store_io::read_bounded(&path, super::file_reads::JOURNAL_MAX) {
             Ok(bytes) => {
@@ -287,15 +318,10 @@ impl TaskStore {
         }
     }
     pub fn save_teams(&self, teams: &Teams) -> io::Result<()> {
-        let mut seen = std::collections::BTreeSet::new();
-        if teams
-            .teams
-            .iter()
-            .any(|t| t.name.trim().is_empty() || !seen.insert(name(&t.name)))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Use a different name for each team",
+        validate_teams(teams)?;
+        if super::relay_preview::Settings::load(&self.root)?.enabled {
+            return Err(super::store_io::invalid(
+                "Edit a team individually while relay preview is on",
             ));
         }
         super::store_io::write(&self.root.join("teams.json"), teams)
@@ -613,6 +639,22 @@ impl TaskStore {
         Ok(())
     }
 }
+
+fn validate_teams(teams: &Teams) -> io::Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+    if teams
+        .teams
+        .iter()
+        .any(|t| t.name.trim().is_empty() || !seen.insert(name(&t.name)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Use a different name for each team",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,11 +944,13 @@ mod tests {
         let teams = Teams {
             teams: vec![
                 Team {
+                    id: String::new(),
                     name: "Design".into(),
                     members: vec!["Alex Chen".into()],
                     aliases: BTreeMap::from([("Alex C".into(), "Alex Chen".into())]),
                 },
                 Team {
+                    id: String::new(),
                     name: "Delivery".into(),
                     ..Default::default()
                 },
@@ -972,11 +1016,13 @@ mod tests {
         let f = Fixture::new(json!([]));
         let store = f.store();
         let original = Team {
+            id: String::new(),
             name: "Design".into(),
             members: vec!["Alex Chen".into()],
             ..Default::default()
         };
         let other = Team {
+            id: String::new(),
             name: "Delivery".into(),
             ..Default::default()
         };
@@ -986,6 +1032,7 @@ mod tests {
             })
             .unwrap();
         let renamed = Team {
+            id: String::new(),
             name: "Product".into(),
             ..original.clone()
         };

@@ -309,7 +309,7 @@ impl TaskStore {
         let base = self.root.join("local/project-merges");
         let backup = base.join(&merge.id).join("backup.json");
         // Old local receipts stored this absolute path; never use the peer-provided path.
-        if merge.backup != backup {
+        if merge.backup != backup && merge.backup != PathBuf::from(&merge.id).join("backup.json") {
             return Err(invalid("Backup location does not match this device"));
         }
         store_io::reject_reparse(&backup)?;

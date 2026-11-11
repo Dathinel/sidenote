@@ -32,6 +32,7 @@ mod people;
 mod project;
 mod project_merge;
 mod refresh;
+mod relay;
 mod roles;
 mod sync_scene;
 mod tasks;
@@ -98,6 +99,10 @@ fn default_runner(
 }
 
 pub enum Event {
+    RelayPair {
+        generation: u64,
+        update: sidenote::core::relay_preview::pairing::Update,
+    },
     Settled {
         redo: bool,
         result: Result<core::settle::Entry, String>,
@@ -205,6 +210,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub relay_ui: relay::RelayUi,
     button_sheet: bool,
     pub annotations: annotations::Annotations,
     pub meeting_ui: meeting::ReadingUi,
@@ -412,6 +418,7 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
         let mut s = Self {
+            relay_ui: relay::RelayUi::default(),
             button_sheet: false,
             annotations: annotations::Annotations::default(),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
@@ -508,6 +515,15 @@ impl State {
             waker: None,
         };
         s.load_annotation_options();
+        match core::relay_preview::Settings::load(&s.store.root) {
+            Ok(settings) => {
+                s.hex.shell.relay_address = TextEdit::new(&settings.address);
+                s.hex.shell.relay = settings;
+            }
+            Err(_) => {
+                s.hex.shell.relay_error = Some("Could not read relay preview settings.".into())
+            }
+        }
         s.rebuild_nav();
         s.refresh_areas();
         s.refresh_list();
@@ -1179,6 +1195,7 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::RelayPair { generation, update } => self.relay_update(generation, update),
             Event::Settled { redo, result } => self.settle_finished(redo, result),
             Event::AiNotes {
                 generation,
@@ -1259,6 +1276,7 @@ impl State {
                     cutoff,
                     saved,
                     memory,
+                    profile,
                     check,
                     notes_jobs,
                     ..
@@ -1276,6 +1294,22 @@ impl State {
                 }
                 if let Some(recordings) = short_recordings {
                     self.short_recordings = recordings;
+                }
+                if let Some(profile) = profile {
+                    content_changed |= self.people.prefs.people_sides != profile.people_sides;
+                    self.people.prefs.people_sides = profile.people_sides;
+                    self.people.prefs.relay_people_base = profile
+                        .relay
+                        .then(|| self.people.prefs.people_sides.clone());
+                    if let Some(settings) = &mut self.ai_notes.settings
+                        && self.ai_notes.name.text == settings.your_name
+                    {
+                        content_changed |= settings.your_name != profile.your_name;
+                        settings.your_name = profile.your_name.clone();
+                        settings.relay_name_base =
+                            profile.relay.then_some(profile.your_name.clone());
+                        self.ai_notes.name = TextEdit::new(profile.your_name);
+                    }
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -1551,6 +1585,7 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= s.live_tick();
     changed |= s.expire_toast();
     changed |= hex::settings_tick(s);
+    changed |= relay::tick(s, tx);
     if let Some(until) = s
         .hex
         .shell
@@ -2676,6 +2711,22 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-appearance", |s| {
                 hex::settings::scene(s, "settings-appearance")
+            }),
+            ("relay-preview", |s| relay::scene(s, "preview")),
+            ("relay-timeout", |s| relay::scene(s, "timeout")),
+            ("relay-unconfirmed", |s| relay::scene(s, "unconfirmed")),
+            ("relay-operational", |s| relay::scene(s, "operational")),
+            ("relay-unreachable", |s| relay::scene(s, "unreachable")),
+            ("relay-wrong-address", |s| relay::scene(s, "wrong-address")),
+            ("relay-update-required", |s| {
+                relay::scene(s, "update-required")
+            }),
+            ("relay-pair-code", |s| relay::scene(s, "code")),
+            ("relay-pair-confirm", |s| relay::scene(s, "confirm")),
+            ("relay-paired", |s| relay::scene(s, "paired")),
+            ("relay-conflict", |s| relay::scene(s, "conflict")),
+            ("relay-shared-conflict", |s| {
+                relay::scene(s, "shared-conflict")
             }),
             ("settings-sync", |s| {
                 hex::settings::scene(s, "settings-sync")

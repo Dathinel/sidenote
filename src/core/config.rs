@@ -152,11 +152,13 @@ impl Config {
                     ));
                     store_io::write(&path, &config)?;
                 }
+                config.overlay_profile(root)?;
                 Ok(config)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let config = Self::migrate(root)?;
+                let mut config = Self::migrate(root)?;
                 store_io::write(&path, &config)?;
+                config.overlay_profile(root)?;
                 Ok(config)
             }
             Err(e) => Err(e),
@@ -165,7 +167,29 @@ impl Config {
 
     pub fn save(&self, root: &Path) -> io::Result<()> {
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
-        store_io::write(&root.join("config.json"), self)
+        let mut local = self.clone();
+        if super::relay_preview::Settings::load(root)?.enabled
+            && let Some(notes) = &mut local.notes
+        {
+            notes.your_name = super::relay_preview::shared::local_profile(root)?["your_name"]
+                .as_str()
+                .unwrap_or("")
+                .into();
+        }
+        store_io::write(&root.join("config.json"), &local)
+    }
+    fn overlay_profile(&mut self, root: &Path) -> io::Result<()> {
+        if let Some(notes) = &mut self.notes
+            && let Some(preview) = super::relay_preview::get(root)?
+        {
+            let value = preview.shared_value(
+                "profile.json",
+                serde_json::json!({"your_name":notes.your_name}),
+            )?;
+            notes.your_name = value["your_name"].as_str().unwrap_or("").into();
+            notes.relay_name_base = Some(notes.your_name.clone());
+        }
+        Ok(())
     }
 
     fn migrate(root: &Path) -> io::Result<Self> {
@@ -269,6 +293,21 @@ impl Config {
             }
         } else {
             notes.enabled_at_ms = None;
+        }
+        if super::relay_preview::Settings::load(root)?.enabled {
+            let original = config
+                .notes
+                .as_ref()
+                .map(|n| n.your_name.clone())
+                .unwrap_or_default();
+            let baseline = notes.relay_name_base.as_ref().unwrap_or(&original);
+            super::relay_preview::shared::edit(
+                root,
+                "profile.json",
+                &serde_json::json!({"your_name":baseline}),
+                &serde_json::json!({"your_name":notes.your_name}),
+            )?;
+            notes.your_name = original;
         }
         config.notes = Some(notes);
         store_io::write(&path, &config)

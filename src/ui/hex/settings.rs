@@ -27,6 +27,9 @@ pub struct Settings {
     pub language_query: TextEdit,
     pub recommended: bool,
     pub model_recommended: bool,
+    pub relay: sidenote::core::relay_preview::Settings,
+    pub relay_address: TextEdit,
+    pub relay_error: Option<String>,
 }
 
 struct ReturnTo {
@@ -331,6 +334,10 @@ fn ownership(page: Page, p: Palette) -> El {
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
+        "relay-preview" => &icons::REFRESH_CW,
+        "relay-address" => &icons::NETWORK,
+        "relay-last-contact" => &icons::CLOCK,
+        key if key.starts_with("relay-paired-device-") => &icons::DEVICE,
         "ask-agent-row" | "ask-meeting-agent-row" => &icons::BOT,
         "ask-model-row" => &icons::CPU,
         "ask-meeting-thinking-row" => &icons::TIMER,
@@ -416,7 +423,7 @@ pub(crate) fn setting_row(
     crate::ui::cards::row_shell()
         .key(key)
         .flex_wrap()
-        .fill(highlight(s, key, p))
+        .fill(group_highlight(s, key, p))
         .child(icon_tile(row_icon(key), p))
         .child(crate::ui::cards::copy(title, help, p))
         .child(control)
@@ -424,6 +431,7 @@ pub(crate) fn setting_row(
 pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
     col()
         .w_full()
+        .min_w(0.0)
         .gap(8.0)
         .mt(18.0)
         .child(if title.starts_with("Hex") {
@@ -882,6 +890,24 @@ fn app_index() -> Vec<Destination> {
 }
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
+    entries.push(entry(
+        "relay-preview",
+        "Relay sync (preview)",
+        "Labs experimental tasks",
+        Page::Sync,
+        0,
+        true,
+    ));
+    if s.hex.shell.relay.enabled {
+        entries.push(entry(
+            "relay-address",
+            "Relay address",
+            "sync endpoint server",
+            Page::Sync,
+            0,
+            true,
+        ));
+    }
     entries.retain(|dest| {
         (dest.key != "speech-model-anuvani-lid-int8"
             || s.models.has_local_files("anuvani-lid-int8"))
@@ -1291,7 +1317,7 @@ fn feature(s: &State, k: &Kit, feature: AppFeature, name: &str, help: &str, p: P
             .hide_label()
             .on_toggle(move |s: &mut State| s.toggle_feature(feature))
             .build(k),
-        true,
+        !matches!(feature, AppFeature::OtherDevices),
         p,
     )
 }
@@ -1389,6 +1415,138 @@ fn devices(s: &State, p: Palette) -> El {
     }
     out
 }
+fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
+    setting_row(
+        s,
+        "relay-preview",
+        "Relay sync (preview)",
+        "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC.\nA lost or stolen device can't be removed in this preview. If that happens, turn off relay sync on all devices.",
+        Switch::new(s.hex.shell.relay.enabled)
+            .label("Relay sync (preview)")
+            .hide_label()
+            .on_toggle(|s: &mut State| {
+                let mut settings = s.hex.shell.relay.clone();
+                settings.enabled = !settings.enabled;
+                if !settings.enabled {
+                    s.relay_cancel();
+                }
+                match settings.save(&s.store.root) {
+                    Ok(()) => {
+                        s.hex.shell.relay =
+                            sidenote::core::relay_preview::Settings::load(&s.store.root)
+                                .unwrap_or(settings);
+                        s.relay_refresh();
+                        s.request_refresh();
+                        s.hex.shell.relay_error = None;
+                        s.toast = Some((
+                            "Relay preview changed. Your folder data is kept.".into(),
+                            Instant::now(),
+                        ));
+                    }
+                    Err(error) => {
+                        s.feature_error = Some(
+                            sidenote::core::validation_message(&error)
+                                .unwrap_or("Could not save relay preview settings.")
+                                .into(),
+                        );
+                    }
+                }
+            })
+            .build(k),
+        true,
+        p,
+    )
+}
+fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
+    if !s.hex.shell.relay.enabled {
+        return col();
+    }
+    let mut out = col().w_full().child(setting_row(
+        s,
+        "relay-address",
+        "Relay address",
+        "Your relay's address, like wss://relay.example.com. Press Enter to save.",
+        TextInput::new(&s.hex.shell.relay_address)
+            .label("Relay address")
+            .placeholder("wss://relay.example.com")
+            .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
+            .on_submit(|s: &mut State, _| {
+                let mut settings = s.hex.shell.relay.clone();
+                settings.address = s.hex.shell.relay_address.text.trim().into();
+                match settings.save(&s.store.root) {
+                    Ok(()) => {
+                        s.relay_cancel();
+                        s.relay_refresh();
+                        let connected = sidenote::core::relay_preview::get(&s.store.root)
+                            .and_then(|preview| preview.map(|p| p.online(true)).unwrap_or(Ok(())));
+                        s.hex.shell.relay_error = connected.err().map(|_| {
+                            "Address saved. Restart Sidenote if sync does not reconnect.".into()
+                        });
+                    }
+                    Err(_) => {
+                        s.hex.shell.relay_error =
+                            Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into())
+                    }
+                }
+            })
+            .build(k)
+            .key("relay-address-input")
+            .w(300.0),
+        false,
+        p,
+    ));
+    let operational = &s.relay_ui.operational;
+    let contact = operational
+        .last_contact
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%-d %b %Y, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "Not yet contacted".into());
+    out = out.child(setting_row(
+        s,
+        "relay-last-contact",
+        "Last relay contact",
+        "Last time this PC reached the relay.",
+        roles::SMALL.wrap(contact, p.soft),
+        false,
+        p,
+    ));
+    if !operational.message.is_empty() {
+        out = out.child(
+            roles::SMALL
+                .wrap(
+                    &operational.message,
+                    if operational.read_only {
+                        p.warn
+                    } else {
+                        p.soft
+                    },
+                )
+                .padding(14.0)
+                .key("relay-contact-status")
+                .role("status"),
+        );
+    }
+    if operational.read_only {
+        out = out.child(
+            roles::SMALL
+                .wrap(
+                    "Relay changes are read-only. Folder sync keeps working.",
+                    p.soft,
+                )
+                .padding(14.0)
+                .key("relay-read-only-note"),
+        );
+    }
+    if let Some(error) = &s.hex.shell.relay_error {
+        out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
+    }
+    out
+}
 fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     let mut out = col()
         .key("hex-vocabulary")
@@ -1413,6 +1571,36 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
         out = out.child(vocabulary_section(s, k, p).padding(14.0));
     }
     out
+}
+fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
+    let devices = col().w_full().child(card(
+        "Devices",
+        devices(s, p).child(hairline(p)).child(feature(
+            s,
+            k,
+            AppFeature::OtherDevices,
+            "Other devices",
+            &match s.nav.peers {
+                0 => "Show meetings recorded on your other devices.".into(),
+                1 => "1 meeting from another device.".into(),
+                n => format!("{n} meetings from other devices."),
+            },
+            p,
+        )),
+        p,
+    ));
+    if s.hex.shell.relay.enabled {
+        col()
+            .w_full()
+            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
+            .child(super::super::relay::section(s, k, p))
+            .child(devices)
+    } else {
+        col()
+            .w_full()
+            .child(devices)
+            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
+    }
 }
 fn jump_groups(page: Page, _tab: usize) -> &'static [&'static str] {
     if page == Page::Hex { &HEX_GROUPS } else { &[] }
@@ -1870,27 +2058,8 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         ),
         (Page::Sync, _) => col()
             .w_full()
-            .child(card(
-                "Devices",
-                devices(s, p).child(hairline(p)).child(feature(
-                    s,
-                    k,
-                    AppFeature::OtherDevices,
-                    "Other devices",
-                    "Show meetings recorded on your other devices.",
-                    p,
-                )),
-                p,
-            ))
-            .child(
-                roles::SMALL
-                    .wrap(
-                        format!("{} meetings from other devices.", s.nav.peers),
-                        p.soft,
-                    )
-                    .mt(12.0),
-            )
-            .child(named_folder(s, p)),
+            .child(sync_page(s, k, p))
+            .child(named_folder(s, k, p)),
         (Page::Privacy, _) => col()
             .w_full()
             .child(privacy(s, k, p))
@@ -1926,16 +2095,24 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             )),
     }
 }
-fn named_folder(s: &State, p: Palette) -> El {
+fn named_folder(s: &State, k: &Kit, p: Palette) -> El {
     let open = s.hex.shell.advanced.contains(Page::Sync.name());
     let mut out = col().w_full().mt(18.0).child(
-        crate::ui::cards::fold_control("Folder location", "settings-advanced", open, p).on_press(
-            |s: &mut State| {
-                if !s.hex.shell.advanced.remove(Page::Sync.name()) {
-                    s.hex.shell.advanced.insert(Page::Sync.name());
-                }
+        crate::ui::cards::fold_control(
+            if s.hex.shell.relay.enabled {
+                "Advanced"
+            } else {
+                "Folder location"
             },
-        ),
+            "settings-advanced",
+            open,
+            p,
+        )
+        .on_press(|s: &mut State| {
+            if !s.hex.shell.advanced.remove(Page::Sync.name()) {
+                s.hex.shell.advanced.insert(Page::Sync.name());
+            }
+        }),
     );
     if open {
         out = out.child(card(
@@ -1946,6 +2123,9 @@ fn named_folder(s: &State, p: Palette) -> El {
                 .padding(14.0),
             p,
         ));
+        if s.hex.shell.relay.enabled {
+            out = out.child(card("Relay address", relay_address(s, k, p), p));
+        }
     }
     out
 }
@@ -1978,6 +2158,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_w(0.0)
         .min_h(0.0)
         .h_full()
+        .children(
+            (page == Page::Sync)
+                .then(|| super::super::relay::status_banner(s, p))
+                .flatten(),
+        )
         .child(
             col().w_full().items_center().child(
                 col()

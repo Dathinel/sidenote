@@ -151,6 +151,7 @@ mod tests {
         assert_eq!(meetings.len(), 1);
         let teams = Teams {
             teams: vec![super::super::Team {
+                id: String::new(),
                 name: "Design".into(),
                 members: vec!["Alex Chen".into()],
                 aliases: BTreeMap::from([("Alex C".into(), "Alex Chen".into())]),

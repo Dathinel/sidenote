@@ -93,6 +93,14 @@ fn main() {
         }
         return;
     }
+    if args.iter().any(|a| a == "--relay-preview-headless") {
+        #[cfg(any(debug_assertions, feature = "relay-qualification"))]
+        std::process::exit(i32::from(
+            sidenote::core::relay_preview::headless(&args).is_err(),
+        ));
+        #[cfg(not(any(debug_assertions, feature = "relay-qualification")))]
+        std::process::exit(2);
+    }
     if args.iter().any(|a| a == "--version") {
         println!("Sidenote {}", sidenote::updates::VERSION);
         return;

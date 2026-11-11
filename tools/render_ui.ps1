@@ -3,6 +3,7 @@ param(
     # Another output folder (for example a before set), and an optional list of shot names.
     [string]$Out = "",
     [switch]$Dev3,
+    [switch]$SyncProofs,
     [ValidateRange(1, 4)][int]$Throttle = 1,
     [string[]]$Only = @(),
     # Themes to render; dark first is enough for a quick look.
@@ -24,6 +25,22 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('relay-preview', 'relay-preview', '1280x800', $null, @()),
+    @('relay-timeout', 'relay-timeout', '1280x800', $null, @()),
+    @('relay-unconfirmed', 'relay-unconfirmed', '1280x800', $null, @()),
+    @('relay-operational', 'relay-operational', '1280x800', $null, @()),
+    @('relay-unreachable', 'relay-unreachable', '1280x800', $null, @()),
+    @('relay-wrong-address', 'relay-wrong-address', '1280x800', $null, @()),
+    @('relay-update-required', 'relay-update-required', '1280x800', $null, @()),
+    @('relay-pair-code', 'relay-pair-code', '1280x800', $null, @()),
+    @('relay-pair-confirm', 'relay-pair-confirm', '1280x800', $null, @()),
+    @('relay-paired', 'relay-paired', '1280x800', $null, @()),
+    @('relay-removal-unavailable', 'relay-paired', '1280x800', $null, @()),
+    @('relay-conflict', 'relay-conflict', '1280x800', $null, @()),
+    @('relay-shared-conflict', 'relay-shared-conflict', '1280x800', $null, @()),
+    @('relay-shared-resolved', 'relay-shared-conflict', '1280x800', 'relay-shared-resolve.json', @('--at','mark:end')),
+    @('relay-entry', 'relay-preview', '1280x800', 'relay-entry.json', @('--at','mark:end')),
+    @('relay-conflict-resolved', 'relay-conflict', '1280x800', 'relay-resolve.json', @('--at','mark:end')),
     @('profile-menu-narrow', 'profile-menu', '560x900', $null, @()),
     @('tasks-v2-owner-narrow', 'tasks-v2-owner', '560x1000', $null, @()),
     @('tasks-v2-legacy-panel', 'tasks-v2-legacy-panel', '1320x1000', $null, @()),
@@ -440,6 +457,19 @@ foreach ($scene in @('notebooks','notebook','notebook-note','share-confirmation'
         $script = if ($width -eq 640) { 'dev3-close-drawer.json' } else { $null }
         $extra = if ($script) { @('--at','mark:end') } else { @() }
         $shots += ,@("${scene}-${width}", $scene, "${width}x800", $script, $extra)
+    }
+}
+if ($SyncProofs) {
+    $syncProofScenes = @($shots | Where-Object { $_[1] -like 'relay-*' -or $_[1] -like 'sync-*' -or $_[1] -in @('settings-sync', 'settings-sync-expanded') })
+    $shots = @()
+    $seen = @{}
+    foreach ($shot in $syncProofScenes) {
+        $name = $shot[0] -replace '-(1280|640)$', ''
+        if ($seen.ContainsKey($name)) { continue }
+        $seen[$name] = $true
+        foreach ($width in @(1280, 390)) {
+            $shots += ,@("${name}-${width}", $shot[1], "${width}x800", $shot[3], $shot[4])
+        }
     }
 }
 $priorAppData = $env:APPDATA

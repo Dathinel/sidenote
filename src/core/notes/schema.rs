@@ -503,6 +503,7 @@ mod tests {
     fn team_owner_match_wins_only_when_unambiguous() {
         let v = fixture();
         let teams = vec![Team {
+            id: String::new(),
             name: "Delivery".into(),
             members: vec!["You".into()],
             ..Default::default()
