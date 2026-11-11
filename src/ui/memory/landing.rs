@@ -439,7 +439,7 @@ pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
             ));
         }
     } else {
-        doc = doc.child(recent(s, p));
+        doc = doc.child(super::settled::section(s, p)).child(recent(s, p));
     }
     col().grow(1.0).min_w(0.0).min_h(0.0).child(scroll(
         col().w_full().items_center().child(doc),

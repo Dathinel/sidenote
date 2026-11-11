@@ -703,7 +703,7 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
                 .collect(),
         ));
     }
-    body
+    body.child(super::memory::settled::meeting_footer(s, m, p))
 }
 
 fn document(

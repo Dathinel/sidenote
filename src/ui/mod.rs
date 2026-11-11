@@ -97,6 +97,10 @@ fn default_runner(
 }
 
 pub enum Event {
+    Settled {
+        redo: bool,
+        result: Result<core::settle::Entry, String>,
+    },
     Annotations(annotations::Msg),
     AiNotes {
         generation: u64,
@@ -367,6 +371,7 @@ impl State {
     }
 
     pub fn new() -> Self {
+        let settle_recovery_error = core::settle::Store::default().recover().err();
         let (meetings, scan_errors) = core::scan();
         let (events_tx, events_rx) = mpsc::channel();
         let store = StateStore::default();
@@ -405,7 +410,9 @@ impl State {
             cursor: 0,
             store,
             saved: Saved::default(),
-            notice: None,
+            notice: settle_recovery_error.map(|_| {
+                "Some settled changes could not be recovered. Reopen Sidenote to try again.".into()
+            }),
             transcript_open: false,
             transcript_original: false,
             transcript_filter: TextEdit::new(""),
@@ -1061,6 +1068,7 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::Settled { redo, result } => self.settle_finished(redo, result),
             Event::AiNotes {
                 generation,
                 worker,
@@ -1346,6 +1354,15 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
 fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     let headless = rune::tooling::headless_run().is_some();
     let (mut changed, _) = apply_pending(s, headless);
+    if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
+        s.show_toast(message, tx);
+        s.memory.settle_toast_action = Some((id, redo));
+        if let Some((_, until)) = &mut s.toast {
+            *until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        }
+        tx.wake_after(std::time::Duration::from_secs(8));
+        changed = true;
+    }
     let minute = s
         .last_updated
         .map(|at| at.elapsed().as_secs() / 60)
@@ -1750,7 +1767,17 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         app = app.child(finder);
     }
     if let Some((text, _)) = &s.toast {
-        app = app.child(widgets::toast(text, p));
+        let action = s.memory.settle_toast_action.as_ref().map(|(id, redo)| {
+            let (id, redo) = (id.clone(), *redo);
+            widgets::link(if redo { "Redo" } else { "Undo" }, p)
+                .key("settle-toast-action")
+                .on_press(move |s: &mut State| s.settle_undo(id.clone(), redo))
+        });
+        app = app.child(if action.is_some() {
+            widgets::toast_with_action(text, action, p)
+        } else {
+            widgets::toast(text, p)
+        });
     }
     rune_kit::root(app, layer)
 }
@@ -3204,6 +3231,7 @@ pub fn spec() -> AppSpec<State> {
                 s.ask_open = true;
             }),
             ("memory", scene_memory),
+            ("memory-settled", memory::settled::scene),
             ("memory-panel", scene_memory_panel),
             ("memory-review", |s| {
                 scene_memory(s);

@@ -48,6 +48,7 @@ impl Part {
 impl State {
     /// A short confirmation near the top of the window. `poll` takes it down after two seconds.
     pub fn show_toast(&mut self, text: impl Into<String>, tx: &mut Tx) {
+        self.memory.settle_toast_action = None;
         self.toast = Some((text.into(), Instant::now() + TOAST_FOR));
         tx.wake_after(TOAST_FOR + Duration::from_millis(60));
     }
