@@ -6,7 +6,7 @@ use super::{
     widgets::{hairline, pressable},
 };
 use rune::{El, TextEdit, col, row};
-use rune_kit::{Kit, Select, SelectAppearance, TextInput};
+use rune_kit::{Kit, Menu, MenuItem, Placement, Select, SelectAppearance, TextInput};
 use sidenote::core::{
     self, UiPrefs,
     ask_options::{self, Thinking},
@@ -497,31 +497,40 @@ fn meeting_agent(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
     let current = selected
         .map(|(label, _, _)| label.as_str())
         .unwrap_or(&s.ask_settings.meeting_agent);
-    Select::new("ask-meeting-agent", &options)
+    let open = s.ask_settings.select_open.as_deref() == Some("ask-meeting-agent");
+    let trigger = Select::new("ask-meeting-agent", &options)
         .label("Agent during meetings")
         .current(Some(current))
         .appearance(SelectAppearance::Field)
         .width(220.0)
         .disabled(options.is_empty())
-        .open(s.ask_settings.select_open.as_deref() == Some("ask-meeting-agent"))
+        .open(open)
         .on_toggle(|s: &mut State| {
             s.ask_settings.select_open = (s.ask_settings.select_open.as_deref()
                 != Some("ask-meeting-agent"))
             .then(|| "ask-meeting-agent".into());
         })
-        .on_close(|s: &mut State| s.ask_settings.select_open = None)
-        .on_choose(|s: &mut State, value: &str, _| {
-            if let Some((_, name, model)) = meeting_choices(s)
-                .into_iter()
-                .find(|(label, _, _)| label == value)
-            {
-                s.ask_settings.meeting_agent = name;
-                s.ask_settings.meeting_model = model;
-                s.save_ask_preferences();
-            }
-            s.ask_settings.select_open = None;
-        })
-        .build(k, layer)
+        .trigger(k);
+    let mut menu = Menu::new("ask-meeting-agent-menu")
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::BottomEnd)
+        .min_width(320.0)
+        .on_close(|s: &mut State| s.ask_settings.select_open = None);
+    for (label, name, model) in choices {
+        let checked = name == s.ask_settings.meeting_agent && model == s.ask_settings.meeting_model;
+        menu = menu.item(
+            MenuItem::new(label)
+                .checked(checked)
+                .on_select(move |s: &mut State| {
+                    s.ask_settings.meeting_agent = name.clone();
+                    s.ask_settings.meeting_model = model.clone();
+                    s.save_ask_preferences();
+                    s.ask_settings.select_open = None;
+                }),
+        );
+    }
+    menu.build(k, layer)
 }
 
 pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
@@ -726,6 +735,28 @@ mod tests {
         state.finish_ask(&id, run, Some("Both agents unavailable".into()));
         assert_eq!(state.question.text, "Synthetic retained question");
         assert!(state.store.load(&id).unwrap().messages.is_empty());
+
+        let (_, message_id) = state
+            .store
+            .append_message_identified(
+                &id,
+                core::Message {
+                    role: "user".into(),
+                    text: "Keep this unanswered question too".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut run = super::super::AskRun::stand_in("Codex", &[], 0);
+        run.submitted_message_id = Some(message_id);
+        run.meeting_request = true;
+        state.question = TextEdit::new("A newer draft");
+        state.finish_ask(&id, run, Some("Both agents unavailable".into()));
+        assert_eq!(state.question.text, "A newer draft");
+        assert_eq!(
+            state.store.load(&id).unwrap().messages.last().unwrap().text,
+            "Keep this unanswered question too"
+        );
 
         let (_, message_id) = state
             .store
