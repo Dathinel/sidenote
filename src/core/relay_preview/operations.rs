@@ -211,4 +211,36 @@ mod tests {
             Err(ProbeError::Unreachable)
         );
     }
+    #[test]
+    fn successful_contact_survives_outage_and_a_fresh_status_cache() {
+        let parent = std::env::temp_dir().join("sidenote-relay-preview");
+        std::fs::create_dir_all(&parent).unwrap();
+        let root = tempfile::tempdir_in(parent).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            use std::io::{Read, Write};
+            let mut request = [0; 2048];
+            let _ = socket.read(&mut request);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\nsidenote-relay-v1").unwrap();
+        });
+        Settings {
+            enabled: true,
+            address: format!("ws://{address}"),
+            ..Default::default()
+        }
+        .save(root.path())
+        .unwrap();
+        let first = check_now(root.path()).unwrap();
+        worker.join().unwrap();
+        assert!(first.last_contact.is_some());
+        let failed = check_now(root.path()).unwrap();
+        assert!(failed.message.starts_with("Relay unavailable."));
+        assert_eq!(failed.last_contact, first.last_contact);
+        health().lock().unwrap().remove(root.path());
+        let reloaded = status(root.path()).unwrap();
+        assert_eq!(reloaded.last_contact, first.last_contact);
+        disconnect(root.path()).unwrap();
+    }
 }

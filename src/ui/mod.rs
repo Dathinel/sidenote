@@ -2510,6 +2510,12 @@ pub fn spec() -> AppSpec<State> {
                 hex::settings::scene(s, "settings-appearance")
             }),
             ("relay-preview", |s| relay::scene(s, "preview")),
+            ("relay-operational", |s| relay::scene(s, "operational")),
+            ("relay-unreachable", |s| relay::scene(s, "unreachable")),
+            ("relay-wrong-address", |s| relay::scene(s, "wrong-address")),
+            ("relay-update-required", |s| {
+                relay::scene(s, "update-required")
+            }),
             ("relay-pair-code", |s| relay::scene(s, "code")),
             ("relay-pair-confirm", |s| relay::scene(s, "confirm")),
             ("relay-paired", |s| relay::scene(s, "paired")),

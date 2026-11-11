@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub struct RelayUi {
     pub fixture: bool,
+    pub operational: core::operations::Operational,
+    pub status_checked: Option<Instant>,
     job: Option<Pairing>,
     generation: u64,
     pub code: Option<SecretCode>,
@@ -132,6 +134,9 @@ impl State {
             self.relay_ui.conflicts.clear();
             return;
         }
+        if let Ok(status) = core::operations::status(&self.store.root) {
+            self.relay_ui.operational = status;
+        }
         if let Ok(peers) = core::pairing::devices(&self.store.root) {
             self.relay_ui.peers = peers;
         }
@@ -232,7 +237,7 @@ impl State {
                 self.relay_refresh();
                 self.request_refresh();
                 self.toast = Some((
-                    "Device paired. Manual tasks will sync when both devices are online.".into(),
+                    "Device paired. Shared data will sync when both devices are online.".into(),
                     Instant::now(),
                 ));
             }
@@ -245,6 +250,19 @@ impl State {
 }
 
 pub fn tick(s: &mut State, tx: &mut Tx) -> bool {
+    if s.hex.shell.relay.enabled && !s.relay_ui.fixture {
+        tx.wake_after(Duration::from_secs(5));
+        if s.relay_ui
+            .status_checked
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
+        {
+            s.relay_ui.status_checked = Some(Instant::now());
+            if let Ok(status) = core::operations::status(&s.store.root) {
+                s.relay_ui.operational = status;
+                return true;
+            }
+        }
+    }
     if let Some(expires) = s.relay_ui.expires {
         if Instant::now() >= expires {
             s.relay_cancel();
@@ -261,6 +279,16 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         return col();
     }
     let mut out = col().w_full().min_w(0.0).gap(8.0);
+    if s.relay_ui.operational.read_only {
+        return out.child(card(
+            "Relay sync is read-only",
+            roles::SMALL
+                .wrap(&s.relay_ui.operational.message, p.warn)
+                .padding(14.0)
+                .role("alert"),
+            p,
+        ));
+    }
     for conflict in &s.relay_ui.conflicts {
         out = out.child(chooser(s, conflict, p));
     }
@@ -536,6 +564,22 @@ pub fn scene(s: &mut State, kind: &str) {
         local: true,
     }];
     match kind {
+        "operational" | "unreachable" | "wrong-address" | "update-required" => {
+            s.hex.shell.relay.address = "ws://127.0.0.1:8787".into();
+            s.hex.shell.relay_address = TextEdit::new(&s.hex.shell.relay.address);
+            s.hex.shell.advanced.insert("Sync");
+            s.relay_ui.operational=core::operations::Operational {
+                read_only:kind=="update-required",
+                message:match kind {
+                    "unreachable"=>"Relay unavailable. Check the address and your connection. Edits stay on this PC.",
+                    "wrong-address"=>"This address did not answer as a Sidenote relay. Check the address in Advanced.",
+                    "update-required"=>core::operations::UPDATE_REQUIRED,
+                    _=>"Relay reachable. Both devices must be online to exchange changes."
+                }.into(),
+                last_contact:(kind!="wrong-address").then(||chrono::Utc::now().to_rfc3339()),
+            };
+            super::scene_scroll(s, "relay-last-contact");
+        }
         "code" => {
             let sample = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

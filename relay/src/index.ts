@@ -29,7 +29,10 @@ async function verify(key: string, message: string, signature: string) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return new Response("sidenote-relay-v1");
+    if (url.pathname === "/health") {
+      if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", {status:405,headers:{Allow:"GET, HEAD"}});
+      return new Response(request.method === "HEAD" ? null : "sidenote-relay-v1", {headers:{"Content-Type":"text/plain; charset=utf-8","Cache-Control":"no-store"}});
+    }
     const match = /^\/(pair|sync)\/([a-f0-9]{64})$/.exec(url.pathname);
     if (!match || request.method !== "GET") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket required", { status: 426 });

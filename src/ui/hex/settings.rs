@@ -262,6 +262,7 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
         "relay-preview" => &icons::REFRESH_CW,
         "relay-address" => &icons::NETWORK,
+        "relay-last-contact" => &icons::CLOCK,
         key if key.starts_with("relay-paired-device-") => &icons::DEVICE,
         "ask-agent-row" => &icons::BOT,
         "ask-model-row" => &icons::CPU,
@@ -1131,6 +1132,53 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
                     Err(_) => s.hex.shell.relay_error = Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into()),
                 }
             }).build(k).key("relay-address-input").w(300.0), true, p));
+    let operational = &s.relay_ui.operational;
+    let contact = operational
+        .last_contact
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%-d %b %Y, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "Not yet contacted".into());
+    out = out.child(setting_row(
+        s,
+        "relay-last-contact",
+        "Last relay contact",
+        "A successful health check. This does not mean changes reached another device.",
+        roles::SMALL.wrap(contact, p.soft),
+        true,
+        p,
+    ));
+    if !operational.message.is_empty() {
+        out = out.child(
+            roles::SMALL
+                .wrap(
+                    &operational.message,
+                    if operational.read_only {
+                        p.warn
+                    } else {
+                        p.soft
+                    },
+                )
+                .padding(14.0)
+                .key("relay-contact-status")
+                .role("status"),
+        );
+    }
+    if operational.read_only {
+        out = out.child(
+            roles::SMALL
+                .wrap(
+                    "Relay changes are read-only. Folder sync keeps working.",
+                    p.soft,
+                )
+                .padding(14.0)
+                .key("relay-read-only-note"),
+        );
+    }
     if let Some(error) = &s.hex.shell.relay_error {
         out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
     }

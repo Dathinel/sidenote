@@ -287,3 +287,12 @@ test("production worker exposes no local expiry control", async () => {
   expect(response.status).toBe(404);
   expect(routed).toBe(false);
 });
+
+
+test("health checks are public, bounded and do not allocate a room", async () => {
+ let calls=0;const env={ROOMS:{getByName(){calls++;throw Error("must not allocate");}}};
+ const get=await worker.fetch(new Request("http://127.0.0.1/health"),env);
+ expect(get.status).toBe(200);expect(await get.text()).toBe("sidenote-relay-v1");expect(get.headers.get("Cache-Control")).toBe("no-store");
+ const head=await worker.fetch(new Request("http://127.0.0.1/health",{method:"HEAD"}),env);expect(await head.text()).toBe("");
+ expect((await worker.fetch(new Request("http://127.0.0.1/health",{method:"POST"}),env)).status).toBe(405);expect(calls).toBe(0);
+});
