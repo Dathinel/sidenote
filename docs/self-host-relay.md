@@ -186,6 +186,13 @@ device that shows a pairing code must be listed. Guests still need valid
 pairing and enrollment proofs. Include the trusted pairing hosts, not private
 keys or pairing codes. Changing this setting is not device revocation.
 
+`ALLOWED_ROOMS` is an additional optional comma-separated list of public sync
+room IDs. Its empty default accepts any well-formed room. When set, other sync
+routes are refused before allocating a Durable Object. Use the seed device's
+non-secret `room` value in `local/relay/settings.json`; guests adopt that room
+after pairing. This bounds unknown-room allocation more tightly than a device
+allowlist alone. A new group needs an updated allowlist. Health checks stay public.
+
 Test the configuration only with synthetic identities and numeric-loopback
 Wrangler using the existing local commands above. Tests cover empty/default,
 listed and unlisted keys. No account configuration was performed in this round.

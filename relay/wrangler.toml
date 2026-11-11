@@ -7,6 +7,8 @@ send_metrics = false
 [vars]
 # Optional comma-separated public genesis / pairing-host keys. Empty keeps open enrollment.
 ALLOWED_GENESIS = ""
+# Optional public sync room IDs. Refuse other sync routes before allocating a room.
+ALLOWED_ROOMS = ""
 
 [observability]
 enabled = false

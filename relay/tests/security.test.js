@@ -322,6 +322,16 @@ test("allowlist refuses unlisted genesis without persisting a sync room",async()
   expect(good.closed).toBe(false);expect(allowed.room.meta().pins).toEqual([publicKey]);
 });
 
+test("group allowlist refuses unknown sync rooms before object allocation",async()=>{
+  let calls=0;
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(){calls++;return {fetch:async()=>new Response("accepted")};}}};
+  const request=room=>new Request(`https://relay.test/sync/${room}?role=device`,{headers:{Upgrade:"websocket"}});
+  expect((await worker.fetch(request("b".repeat(64)),env)).status).toBe(403);
+  expect(calls).toBe(0);
+  expect((await worker.fetch(request(key),env)).status).toBe(200);
+  expect(calls).toBe(1);
+});
+
 test("pair-owner allowlist and three pending slots are enforced across rooms",async()=>{
   const {attachment,auth}=await signedLogin(false,"owner");
   const publicKey=JSON.parse(auth).key;

@@ -43,6 +43,8 @@ export default {
     const match = /^\/(pair|sync)\/([a-f0-9]{64})$/.exec(url.pathname);
     if (!match || request.method !== "GET") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket required", { status: 426 });
+    const allowedRooms=(env.ALLOWED_ROOMS ?? "").trim();
+    if (match[1] === "sync" && allowedRooms && !allowedRooms.split(",").map(value=>value.trim()).includes(match[2])) return new Response("group not allowed",{status:403});
     if (match[1] === "pair" && !PAIR_LOCATORS.has(match[2])) return new Response("invalid locator", { status: 404 });
     if (match[1] === "pair" && url.searchParams.get("role") === "owner") {
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
