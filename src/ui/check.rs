@@ -136,6 +136,8 @@ pub struct CheckState {
     pub totals: HashMap<NaiveDate, (usize, Option<usize>)>,
     /// The check's paragraph about each day, by the day it describes, from the recent reports.
     pub day_summaries: HashMap<NaiveDate, String>,
+    pub diary_reports: Vec<core::diary::Report>,
+    pub diary_read_error: bool,
     /// The Diary sections the owner opened, by `diary::part_key`. All start folded.
     pub open_parts: BTreeSet<String>,
 }
@@ -154,6 +156,8 @@ pub(super) struct Refresh {
     pub done_on: HashMap<(String, usize), NaiveDate>,
     pub totals: HashMap<NaiveDate, (usize, Option<usize>)>,
     pub day_summaries: HashMap<NaiveDate, String>,
+    pub diary_reports: Vec<core::diary::Report>,
+    pub diary_read_error: bool,
 }
 impl Default for CheckState {
     fn default() -> Self {
@@ -194,6 +198,8 @@ impl Default for CheckState {
             done_on: HashMap::new(),
             totals: HashMap::new(),
             day_summaries: HashMap::new(),
+            diary_reports: Vec::new(),
+            diary_read_error: false,
             open_parts: BTreeSet::new(),
         }
     }
@@ -368,6 +374,8 @@ impl CheckState {
             done_on: fresh.done_on,
             totals: fresh.totals,
             day_summaries: fresh.day_summaries,
+            diary_reports: fresh.diary_reports,
+            diary_read_error: fresh.diary_read_error,
         }
     }
     pub(super) fn apply_refresh(&mut self, fresh: Refresh) {
@@ -384,6 +392,8 @@ impl CheckState {
         self.done_on = fresh.done_on;
         self.totals = fresh.totals;
         self.day_summaries = fresh.day_summaries;
+        self.diary_reports = fresh.diary_reports;
+        self.diary_read_error = fresh.diary_read_error;
     }
     /// Titles for the ids in the comparison, from the baseline report.
     fn load_baseline(&mut self, r: &DailyCheck) {
@@ -405,10 +415,27 @@ impl CheckState {
         // enough to read on each rescan; earlier days just link to their report.
         self.totals = HashMap::new();
         self.day_summaries = HashMap::new();
-        for &d in self.dates.iter().take(30) {
+        self.diary_reports.clear();
+        self.diary_read_error = self.notice.is_some();
+        for &d in &self.dates {
             let Ok(r) = core::load_check(d) else {
+                self.diary_read_error = true;
                 continue;
             };
+            let handled = match load_handled(&r, self.today) {
+                Ok(h) => h,
+                Err(()) => {
+                    self.diary_read_error = true;
+                    continue;
+                }
+            };
+            let open = (0..r.content.findings.len())
+                .filter(|&i| !handled.contains_key(&key_of(&r, i)))
+                .collect();
+            self.diary_reports.push(core::diary::Report {
+                report: r.clone(),
+                open,
+            });
             let new = is_v2(&r).then_some(r.content.comparison.new.len());
             self.totals.insert(d, (r.content.findings.len(), new));
             if let Some(day) = r.content.day_summary_date
