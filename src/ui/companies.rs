@@ -41,6 +41,7 @@ impl Edit {
 }
 #[derive(Default)]
 pub struct CompanyUi {
+    pub expanded_decisions: std::collections::BTreeSet<String>,
     pub open: bool,
     pub selected: Option<String>,
     pub tab: usize,
@@ -78,6 +79,7 @@ impl State {
         self.companies.open = true;
         self.companies.selected = id;
         self.companies.tab = 0;
+        self.companies.expanded_decisions.clear();
         self.companies.editing = false;
         self.companies.merging = false;
         self.question = TextEdit::default();
@@ -338,6 +340,83 @@ fn meeting_row(
     .label(format!("{}: {}", title, m.title))
     .on_press_tx(move |s: &mut State, tx| s.select(&id, tx))
 }
+fn decision_row(s: &State, group: &core::companies::DecisionGroup<'_>, i: usize, p: Palette) -> El {
+    let first = group.citations[0];
+    let expanded = s.companies.expanded_decisions.contains(&group.key);
+    let key = group.key.clone();
+    let date = first
+        .started
+        .map(|d| d.format("%-d %b").to_string())
+        .unwrap_or_else(|| "Date unknown".into());
+    let earlier = group.citations.len() - 1;
+    let extra = match earlier {
+        0 => String::new(),
+        1 => " \u{b7} also in 1 earlier meeting".into(),
+        n => format!(" \u{b7} also in {n} earlier meetings"),
+    };
+    let source = first.id.clone();
+    let copy = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(4.0)
+        .child(
+            super::widgets::pressable(
+                row()
+                    .w_full()
+                    .items_center()
+                    .gap(8.0)
+                    .child(
+                        roles::NAME
+                            .wrap(group.text, p.ink)
+                            .max_lines(2)
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(icons::draw(
+                        if expanded {
+                            &icons::CHEVRON_DOWN
+                        } else {
+                            &icons::CHEVRON_RIGHT
+                        },
+                        16.0,
+                        p.soft,
+                    )),
+            )
+            .key(format!("company-decision-{i}"))
+            .label(format!("Meeting citations for {}", group.text))
+            .expanded(expanded)
+            .on_press(move |s: &mut State| {
+                if !s.companies.expanded_decisions.remove(&key) {
+                    s.companies.expanded_decisions.insert(key.clone());
+                }
+            }),
+        )
+        .child(
+            super::widgets::pressable(
+                roles::META.wrap(format!("{} \u{b7} {date}{extra}", first.title), p.soft),
+            )
+            .key(format!("company-decision-source-{i}"))
+            .label(format!("Open {}", first.title))
+            .on_press_tx(move |s: &mut State, tx| s.select(&source, tx)),
+        );
+    let mut out = col().w_full().child(
+        cards::row_shell()
+            .child(cards::icon_tile(&icons::FLAG, p))
+            .child(copy),
+    );
+    if expanded {
+        for (j, meeting) in group.citations.iter().enumerate() {
+            out = out.child(meeting_row(
+                meeting,
+                &meeting.title,
+                &icons::MEETINGS,
+                format!("company-decision-citation-{i}-{j}"),
+                p,
+            ));
+        }
+    }
+    out
+}
 fn task_group(
     title: String,
     empty: String,
@@ -386,6 +465,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .gap(12.0);
     doc = doc.child(
         link("People / External", p)
+            .px(0.0)
             .key("company-back")
             .on_press(|s: &mut State| {
                 s.open_hex();
@@ -472,9 +552,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .w_full()
                 .items_center()
                 .gap(10.0)
-                .child(icons::draw(&icons::BUILDING_2, 18.0, p.soft))
                 .child(
                     super::list::text_title(&c.name, 32.0, p)
+                        .key("company-title")
                         .max_lines(2)
                         .grow(1.0)
                         .min_w(0.0),
@@ -518,7 +598,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         doc = doc.child(cards::panel(p).child(merge_dialog(s, p)));
     }
     doc = doc.child(ask::overlay(s, k, p, narrow, layer));
-    let mut shortcuts = row().w_full().flex_wrap().gap(6.0);
+    let mut shortcuts = row().key("company-shortcuts").w_full().flex_wrap().gap(6.0);
     for (i, q) in [
         "Where do things stand?",
         "What are they waiting on from us?",
@@ -567,9 +647,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     if i > 0 {
                         panel = panel.child(hairline(p));
                     }
-                    panel = panel.child(people::person_row(s, person, k, narrow, p));
+                    panel = panel.child(people::person_row(s, person, k, narrow, p, layer));
                 }
-                doc = doc.child(people::heading(narrow, true, p)).child(panel);
+                doc = doc.child(people::heading(narrow, None, p)).child(panel);
             }
         }
         2 => {
@@ -593,24 +673,19 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             }
         }
         3 => {
-            if data.decisions.is_empty() {
+            let groups = core::companies::group_decisions(&data.decisions);
+            if groups.is_empty() {
                 doc = doc.child(roles::SMALL.wrap(
                     "No decisions in this company's Meeting summaries yet.",
                     p.soft,
                 ));
             } else {
                 let mut panel = cards::panel(p);
-                for (i, (m, point)) in data.decisions.iter().enumerate() {
+                for (i, group) in groups.iter().enumerate() {
                     if i > 0 {
                         panel = panel.child(hairline(p));
                     }
-                    panel = panel.child(meeting_row(
-                        m,
-                        &point.text,
-                        &icons::FLAG,
-                        format!("company-decision-{i}"),
-                        p,
-                    ));
+                    panel = panel.child(decision_row(s, group, i, p));
                 }
                 doc = doc.child(panel);
             }
@@ -661,9 +736,6 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 &icons::CIRCLE,
                 p,
             );
-            doc = doc.child(
-                roles::SMALL.wrap("A status appears after the next meeting summary.", p.soft),
-            );
             doc = doc.child(if narrow {
                 col().w_full().gap(18.0).child(theirs).child(ours)
             } else {
@@ -689,6 +761,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 
 pub fn scene(s: &mut State, tab: usize, empty: bool, merge: bool) {
     s.go_home();
+    super::hex::scene(s, false);
     super::scene_agents(s, super::ALL_AGENTS);
     s.refresh_ask_model_input();
     let company = Company {

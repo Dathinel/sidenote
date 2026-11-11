@@ -1,6 +1,60 @@
 use super::*;
 use std::fs;
 
+#[test]
+fn decisions_group_normalized_text_keep_first_source_and_each_distinct_meeting() {
+    let f = Fixture::new();
+    for (id, at, text) in [
+        (
+            "100-1",
+            1000,
+            "  use THE small   prototype for the next workshop  ",
+        ),
+        (
+            "200-1",
+            2000,
+            "Use the small prototype for the next workshop",
+        ),
+        (
+            "300-1",
+            3000,
+            "Use the small prototype for the next workshop.",
+        ),
+    ] {
+        let dir = f.0.join("meetings").join(id);
+        fs::create_dir_all(&dir).unwrap();
+        store_io::write(&dir.join("english-summary.json"), &serde_json::json!({"title":id,"topics":[{"title":"Plan","points":[{"type":"decided","text":text},{"type":"decided","text":text},{"type":"decided","text":"Use the large prototype instead."},{"type":"decided","text":" . "}]}]})).unwrap();
+        store_io::write(
+            &dir.join("manifest.json"),
+            &serde_json::json!({"created_at_ms":at}),
+        )
+        .unwrap();
+    }
+    let (meetings, errors) = super::super::scan_in(&f.0.join("meetings"));
+    assert!(errors.is_empty());
+    let decisions: Vec<_> = meetings
+        .iter()
+        .flat_map(|m| m.points().map(move |p| (m, p)))
+        .collect();
+    let groups = group_decisions(&decisions);
+    assert_eq!(groups.len(), 2);
+    assert_eq!(
+        groups[0].text,
+        "Use the small prototype for the next workshop."
+    );
+    assert_eq!(
+        groups[0]
+            .citations
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["300-1", "200-1", "100-1"]
+    );
+    assert_eq!(groups[1].text, "Use the large prototype instead.");
+    assert_eq!(groups[1].citations.len(), 3);
+    assert!(group_decisions(&[]).is_empty());
+}
+
 struct Fixture(std::path::PathBuf);
 impl Fixture {
     fn new() -> Self {

@@ -349,9 +349,11 @@ fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
         .key("ask-suggestions")
         .w_full()
         .flex_wrap()
-        .justify_center()
         .items_center()
         .gaps(8.0, 8.0);
+    if !s.companies.open {
+        r = r.justify_center();
+    }
     // Three chips always, a fourth when it still fits on the line: a chip is about 7 points a
     // letter plus its padding and gap.
     let room = if narrow { 320.0 } else { 640.0 };
@@ -642,12 +644,13 @@ pub fn overlay_with(
 ) -> El {
     let id = s.ask_key();
     let pending = s.asks.contains_key(&id);
-    let mut stack = col()
-        .w_full()
-        .max_w(COLUMN)
-        .px(if narrow { 12.0 } else { 28.0 })
-        .items_center()
-        .gap(10.0);
+    let mut stack = col().w_full().gap(10.0);
+    if !s.companies.open {
+        stack = stack
+            .max_w(COLUMN)
+            .px(if narrow { 12.0 } else { 28.0 })
+            .items_center();
+    }
     if s.back.is_some() && !(s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open) {
         stack = stack.child(
             row().w_full().justify_end().child(
@@ -778,24 +781,17 @@ pub fn overlay_with(
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
     pill = if beside_lead {
         pill.grow(1.0).min_w(0.0)
+    } else if s.companies.open {
+        pill.w_full()
     } else {
-        pill.w_full().max_w(if wide || s.companies.open {
-            COLUMN
-        } else {
-            IDLE_W
-        })
+        pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
     };
     place(s, beside(stack, lead, pill, narrow), narrow, p)
 }
 
 fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
     if s.companies.open {
-        col()
-            .key("company-ask")
-            .w_full()
-            .min_w(0.0)
-            .items_center()
-            .child(stack)
+        col().key("company-ask").w_full().min_w(0.0).child(stack)
     } else {
         dock(stack, narrow, p)
     }

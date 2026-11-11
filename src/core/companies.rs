@@ -317,6 +317,41 @@ pub struct CompanyData<'a> {
     pub ours: Vec<&'a TaskItem>,
     pub decisions: Vec<(&'a Meeting, &'a super::Point)>,
 }
+pub struct DecisionGroup<'a> {
+    pub key: String,
+    pub text: &'a str,
+    pub citations: Vec<&'a Meeting>,
+}
+
+/// Keep the query's newest-first order and one citation per source meeting.
+pub fn group_decisions<'a>(
+    decisions: &[(&'a Meeting, &'a super::Point)],
+) -> Vec<DecisionGroup<'a>> {
+    let mut groups: Vec<DecisionGroup<'a>> = Vec::new();
+    let mut positions = BTreeMap::new();
+    for (meeting, point) in decisions {
+        let key = people::key(point.text.trim().trim_end_matches('.').trim());
+        if key.is_empty() {
+            continue;
+        }
+        let index = *positions.entry(key.clone()).or_insert_with(|| {
+            groups.push(DecisionGroup {
+                key,
+                text: &point.text,
+                citations: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let citations = &mut groups[index].citations;
+        if !citations
+            .iter()
+            .any(|m| m.id == meeting.id && m.device == meeting.device)
+        {
+            citations.push(meeting);
+        }
+    }
+    groups
+}
 impl CompanyData<'_> {
     pub fn ask_context(
         &self,

@@ -1090,7 +1090,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .child(feature(s,k,AppFeature::Tasks,"Tasks","Show Tasks in the sidebar.",p))
                 .child(feature(s,k,AppFeature::Projects,"Projects","Show Projects in the sidebar.",p)),p),p)),
         (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
-        (Page::People, _) => super::super::people::section(s,k,p,tab),
+        (Page::People, _) => super::super::people::section(s,k,p,tab,layer),
         (Page::Helpers, 0) => col().w_full().child(super::super::ask_settings::section(s,k,p,layer))
             .child(roles::GROUP.wrap("Meeting summary agent",p.soft).mt(22.0))
             .child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
