@@ -25,6 +25,7 @@ def main():
         ["node", "node_modules/wrangler/bin/wrangler.js", "--version"],
     ]
     results = []
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def record(command, code, log):
         results.append({"command": subprocess.list2cmdline(command), "exit": code, "log": str(log)})
@@ -53,7 +54,7 @@ def main():
                 if process.poll() is not None:
                     raise RuntimeError("Local Worker exited before health check")
                 try:
-                    with urllib.request.urlopen("http://127.0.0.1:8787/health", timeout=1) as response:
+                    with opener.open("http://127.0.0.1:8787/health", timeout=1) as response:
                         if response.read(65) == b"sidenote-relay-v1":
                             break
                 except (urllib.error.URLError, TimeoutError):
@@ -63,7 +64,7 @@ def main():
                 time.sleep(0.1)
             record(command, 0, log)
             for index, args in enumerate(([], ["--head"]), 7):
-                curl = ["curl.exe", "--fail", "--silent", "--show-error", *args, "http://127.0.0.1:8787/health"]
+                curl = ["curl.exe", "--fail", "--silent", "--show-error", "--noproxy", "127.0.0.1", *args, "http://127.0.0.1:8787/health"]
                 captured = output / f"command-{index}.txt"
                 with captured.open("w", encoding="utf-8") as target:
                     result = subprocess.run(curl, cwd=relay, env=env, stdout=target, stderr=subprocess.STDOUT, timeout=10, **hidden)

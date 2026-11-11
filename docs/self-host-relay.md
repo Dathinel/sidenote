@@ -66,8 +66,8 @@ running the automated local-check helper, because both use port 8787.
 In a second terminal, check it:
 
 ```powershell
-curl.exe --fail --silent --show-error http://127.0.0.1:8787/health
-curl.exe --fail --silent --show-error --head http://127.0.0.1:8787/health
+curl.exe --fail --silent --show-error --noproxy 127.0.0.1 http://127.0.0.1:8787/health
+curl.exe --fail --silent --show-error --noproxy 127.0.0.1 --head http://127.0.0.1:8787/health
 ```
 
 GET returns `sidenote-relay-v1`. HEAD returns HTTP 200 and no body. Both disable
@@ -164,7 +164,7 @@ before choosing a plan. Monitor usage in the dashboard and set appropriate CPU
 limits; a CPU limit is not a cap on every billing meter.
 
 The relay limits a frame to 128 KiB, a room to 32 sockets and a pairing exchange
-to 64 messages. Authentication, invitation and rate limits can close connections.
+to 64 messages. A group supports at most 16 enrolled devices. Authentication, invitation and rate limits can close connections.
 Room routing/membership metadata expires; no task-content queue is retained.
 The app currently bounds a document to 32 MiB and its replica store to 2 GiB.
 These are safety bounds, not capacity promises. Larger collections need release
