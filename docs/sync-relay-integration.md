@@ -161,7 +161,8 @@ bump the version, push, deploy or begin slice 2. Stop after 90 minutes if needed
 5. **L: release qualification.** Two-device matrix, adversarial/recovery tests,
    independent security review, revocation/rotation and packaging evidence.
 
-Slice 1 is complete. Slice 2 is authorized separately; do not begin slice 3.
+Slices 1 and 2 are accepted. Slice 3 is authorized on feat/sync-relay-2 after
+Round 1 UI acceptance (28fc734). Stop before slices 4 and 5.
 
 ## Slice 1 evidence and limits
 
@@ -184,3 +185,53 @@ same-field conflict UI need later qualification. GUI interactions, MCP access
 while a GUI owns the preview replica, physical devices, a deployed self-hosted
 Worker, release packaging and independent security review remain unverified.
 No version bump, push, Cloudflare login or deployment was performed.
+
+## Slice 3 implementation contract
+
+Purpose: extend the opt-in, full local replica to the remaining shared app data,
+while retaining folder transport for meeting source files and a verified way back.
+Keep all existing security limits and off-by-default behavior. Include the two
+Remove-confirmation nits: hide the row action while confirming and use the shared
+destructive button, or primary if the app has no shared destructive style.
+
+Success criteria:
+- Route meeting task overrides, checks, assignments and stable subtasks through
+  field registers. Keep generated tasks, recordings and meeting files in folder sync.
+- Share teams, memberships and aliases by stable identity, plus explicit People
+  classifications. People discovery and historical-corpus eligibility stay local.
+- Share projects/areas, aliases, assignments and operation receipts; retain existing
+  validation, conflict guards, merge/undo ownership and recovery checks.
+- Share Memory records, proposals, provenance and decisions without accepting a
+  proposal merely because it arrived. Keep legacy text migration explicit.
+- Share an explicit You allowlist: your display name and People classifications.
+  Device paths, credentials, helper/model choices, hardware, UI layout and corpus
+  cutoffs stay local. Hex language/vocabulary files remain folder/device inputs
+  until an isolated adapter for that external application's configuration exists.
+- Preserve IDs on import, use source receipts, and freeze only migrated folder
+  fields. Verify backups and rollback without publishing relay projections into
+  the original journals. Enabling again must retain the relay collection.
+- Keep concurrent field alternatives with device/time and a Sync chooser. Merge
+  different fields, independent members and stable subtask IDs without a clock
+  winner. Deletes must not be undone by a stale import or unrelated field edit.
+- Exercise the real app APIs on two isolated headless processes using confirmed
+  pairing and a numeric-loopback Worker. Check offline/restart convergence for
+  each new domain, same-field choice, migration retry, rollback, local settings
+  exclusion and a peer change during a guarded project operation.
+- Run fmt, both strict clippy variants, both locked workspace test variants, build,
+  MCP smoke, relay Bun tests and typecheck. Re-render all Sync states, including
+  Remove confirmation, in light/dark at 1280x800 and inspect the affected domains.
+
+Edge cases: existing slice 2 replicas need a separate idempotent shared-data
+upgrade; missing stores must not replace remote data with defaults. Preserve
+unknown fields, tombstones, alias cycles and generated-task source matching.
+Collections need identity-based members, not array-position winners. Stale UI
+saves must not reset unrelated peer fields or machine-local settings. Reject
+corrupt backups, partial journals, invalid domains, mixed-version writes and
+changed undo baselines. Keep operation receipts immutable where required.
+
+Out of scope: relay transfer of meeting source files/audio, Ask chat, daily-check
+reports, external Hex configuration, selective multi-peer rekey, hosted backlog,
+login, deployment, pushing, version changes or owner-screen interaction. Slice 4
+covers the Worker self-host guide and local operational checks. Actual hosted
+self-host evidence, two real devices and an independent security review remain
+release gates in slice 5, requiring separate authorization where applicable.
