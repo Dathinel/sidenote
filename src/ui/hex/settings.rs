@@ -1064,28 +1064,48 @@ fn devices(s: &State, p: Palette) -> El {
     out
 }
 fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
-    setting_row(s, "relay-preview", "Relay sync (preview)",
-        "Use a separate manual-task preview collection. Folder tasks return when this is off. Pairing UI is not available yet.",
-        Switch::new(s.hex.shell.relay.enabled).label("Relay sync (preview)").hide_label()
+    setting_row(
+        s,
+        "relay-preview",
+        "Relay sync (preview)",
+        "Back up manual tasks and sync them through the relay. Turning this off restores the unchanged folder view.",
+        Switch::new(s.hex.shell.relay.enabled)
+            .label("Relay sync (preview)")
+            .hide_label()
             .on_toggle(|s: &mut State| {
                 let mut settings = s.hex.shell.relay.clone();
                 settings.enabled = !settings.enabled;
+                if !settings.enabled {
+                    s.relay_cancel();
+                }
                 match settings.save(&s.store.root) {
                     Ok(()) => {
-                        s.hex.shell.relay = settings;
+                        s.hex.shell.relay =
+                            sidenote::core::relay_preview::Settings::load(&s.store.root)
+                                .unwrap_or(settings);
+                        s.relay_refresh();
                         s.hex.shell.relay_error = None;
-                        s.toast = Some(("Relay preview changed. Reopen Sidenote to refresh the task collection.".into(), Instant::now()));
+                        s.toast = Some((
+                            "Relay preview changed. Your folder data is kept.".into(),
+                            Instant::now(),
+                        ));
                     }
-                    Err(_) => s.feature_error = Some("Could not save relay preview settings.".into()),
+                    Err(_) => {
+                        s.feature_error = Some("Could not save relay preview settings.".into())
+                    }
                 }
-            }).build(k), true, p)
+            })
+            .build(k),
+        true,
+        p,
+    )
 }
 fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
     if !s.hex.shell.relay.enabled {
         return col();
     }
     let mut out = col().w_full().child(setting_row(s, "relay-address", "Relay address",
-        "WSS origin, or ws://127.0.0.1:port for local tests. Press Enter to save, then reopen Sidenote. Provisioned test devices only.",
+        "WSS origin, or ws://127.0.0.1:port for local tests. Press Enter to save. Pairing requires confirmation on both devices.",
         TextInput::new(&s.hex.shell.relay_address).label("Relay address").placeholder("ws://127.0.0.1:8787")
             .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
             .on_submit(|s: &mut State, _| {
@@ -1126,6 +1146,64 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     }
     out
 }
+fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
+    let devices = col()
+        .w_full()
+        .child(card(
+            "Devices",
+            devices(s, p).child(hairline(p)).child(feature(
+                s,
+                k,
+                AppFeature::OtherDevices,
+                "Other devices",
+                "Show meetings recorded on your other devices.",
+                p,
+            )),
+            p,
+        ))
+        .child(
+            roles::SMALL
+                .wrap(
+                    format!("{} meetings from other devices.", s.nav.peers),
+                    p.soft,
+                )
+                .mt(12.0),
+        );
+    let advanced_body = col()
+        .w_full()
+        .child(card(
+            "Sync folder",
+            roles::SMALL
+                .wrap(s.store.root.display().to_string(), p.ink)
+                .key("sync-folder")
+                .padding(14.0),
+            p,
+        ))
+        .children(
+            s.hex
+                .shell
+                .relay
+                .enabled
+                .then(|| card("Relay address", relay_address(s, k, p), p)),
+        );
+    if s.hex.shell.relay.enabled {
+        col()
+            .w_full()
+            .child(card("Labs", relay_labs(s, k, p), p))
+            .child(super::super::relay::section(s, k, p))
+            .child(advanced(
+                s,
+                col().w_full().child(devices).child(advanced_body),
+                p,
+            ))
+    } else {
+        col()
+            .w_full()
+            .child(devices)
+            .child(card("Labs", relay_labs(s, k, p), p))
+            .child(advanced(s, advanced_body, p))
+    }
+}
 fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: usize) -> El {
     match (page, tab) {
         (Page::General, _) => col().w_full().child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
@@ -1158,10 +1236,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(card("Shortcuts and dictation",hex_rows(s,k,p,layer,page,tab,false),p))
             .child(advanced(s,card("Dictation overrides",hex_rows(s,k,p,layer,page,tab,true),p),p)),
         (Page::Appearance, _) => card("Preferences",hex_rows(s,k,p,layer,page,tab,false),p),
-        (Page::Sync, _) => col().w_full().child(card("Devices",devices(s,p).child(hairline(p)).child(feature(s,k,AppFeature::OtherDevices,"Other devices","Show meetings recorded on your other devices.",p)),p))
-            .child(roles::SMALL.wrap(format!("{} meetings from other devices.",s.nav.peers),p.soft).mt(12.0))
-            .child(card("Labs",relay_labs(s,k,p),p))
-            .child(advanced(s,col().w_full().child(card("Sync folder",roles::SMALL.wrap(s.store.root.display().to_string(),p.ink).key("sync-folder").fill(highlight(s,"sync-folder",p)).padding(14.0),p)).children(s.hex.shell.relay.enabled.then(||card("Relay sync",relay_address(s,k,p),p))),p)),
+        (Page::Sync, _) => sync_page(s,k,p),
         (Page::Updates, _) => col().w_full().child(super::super::updates::section(s,p).fill(highlight(s,"updates-section",p)))
             .child(advanced(s,card("Labs and rarely used",col().w_full().child(hex_rows(s,k,p,layer,page,tab,true)).child(super::super::updates::source(s,p).padding(14.0)),p),p)),
     }

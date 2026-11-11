@@ -31,6 +31,7 @@ mod people;
 mod project;
 mod project_merge;
 mod refresh;
+mod relay;
 mod roles;
 mod sync_scene;
 mod tasks;
@@ -97,6 +98,10 @@ fn default_runner(
 }
 
 pub enum Event {
+    RelayPair {
+        generation: u64,
+        update: sidenote::core::relay_preview::pairing::Update,
+    },
     Annotations(annotations::Msg),
     AiNotes {
         generation: u64,
@@ -192,6 +197,7 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    pub relay_ui: relay::RelayUi,
     pub annotations: annotations::Annotations,
     pub meeting_ui: meeting::ReadingUi,
     pub people: people::PeopleUi,
@@ -392,6 +398,7 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
         let mut s = Self {
+            relay_ui: relay::RelayUi::default(),
             annotations: annotations::Annotations::default(),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
@@ -1080,6 +1087,7 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::RelayPair { generation, update } => self.relay_update(generation, update),
             Event::AiNotes {
                 generation,
                 worker,
@@ -1400,6 +1408,7 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= s.live_tick();
     changed |= s.expire_toast();
     changed |= hex::settings_tick(s);
+    changed |= relay::tick(s, tx);
     if let Some(until) = s
         .hex
         .shell
@@ -2483,6 +2492,11 @@ pub fn spec() -> AppSpec<State> {
             ("settings-appearance", |s| {
                 hex::settings::scene(s, "settings-appearance")
             }),
+            ("relay-preview", |s| relay::scene(s, "preview")),
+            ("relay-pair-code", |s| relay::scene(s, "code")),
+            ("relay-pair-confirm", |s| relay::scene(s, "confirm")),
+            ("relay-paired", |s| relay::scene(s, "paired")),
+            ("relay-conflict", |s| relay::scene(s, "conflict")),
             ("settings-sync", |s| {
                 hex::settings::scene(s, "settings-sync")
             }),

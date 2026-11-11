@@ -367,6 +367,7 @@ impl State {
         matches.next().is_none().then_some(first)
     }
     pub fn rebuild_tasks(&mut self) {
+        self.relay_refresh();
         self.refresh_areas();
     }
 
@@ -1733,13 +1734,30 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     } else {
         &t.description
     };
-    let open_title = pressable(col().min_w(0.0).gap(3.0).child(title).children(
-        (!preview.is_empty()).then(|| {
-            roles::META
-                .line(preview, p.soft)
-                .key(format!("task-preview-{id}-{index}"))
-        }),
-    ))
+    let open_title = pressable(
+        col()
+            .min_w(0.0)
+            .gap(3.0)
+            .child(title)
+            .children(
+                s.relay_ui
+                    .conflicts
+                    .iter()
+                    .filter(|c| Some(c.task_id.as_str()) == id.strip_prefix("manual/"))
+                    .map(|c| c.choices.len())
+                    .max()
+                    .map(|count| {
+                        roles::SMALL
+                            .wrap(format!("{count} versions"), p.warn)
+                            .role("status")
+                    }),
+            )
+            .children((!preview.is_empty()).then(|| {
+                roles::META
+                    .line(preview, p.soft)
+                    .key(format!("task-preview-{id}-{index}"))
+            })),
+    )
     .key(format!("ttask-{id}-{index}"))
     .label(format!("Open the task: {}", t.task))
     .w_full()
@@ -2978,6 +2996,7 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
         .on_press(|s: &mut State| s.tasks.ui.due_open = true)
     };
     body = body
+        .children(super::relay::task_chooser(s, t, p))
         .child(detail_property(
             "Owner",
             &super::icons::USER,
