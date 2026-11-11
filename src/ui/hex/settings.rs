@@ -1326,7 +1326,7 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k, layer);
     card("Labs", col().w_full()
         .child(setting_row(s, "labs-stop-forgotten", "Stop forgotten recordings",
-            &format!("Stop forgotten recordings: if a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
+            &format!("If a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
             Switch::new(s.config.labs.stop_forgotten_recordings)
                 .label("Stop forgotten recordings").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.stop_forgotten_recordings = !labs.stop_forgotten_recordings)).build(k).key("labs-stop-forgotten-toggle"), true, p))
