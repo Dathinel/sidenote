@@ -156,6 +156,7 @@ impl Preview {
                 );
             }
         }
+        out.sort_by(|a, b| a.at.cmp(&b.at));
         Ok(out)
     }
     pub fn resolve(&self, task_id: &str, field: &str, chosen: &Choice) -> io::Result<()> {

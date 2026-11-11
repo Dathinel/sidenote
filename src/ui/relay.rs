@@ -77,7 +77,13 @@ impl State {
         self.relay_ui.join = TextEdit::default();
     }
     fn relay_pair(&mut self, joining: bool) {
-        let code = joining.then(|| SecretCode::new(std::mem::take(&mut self.relay_ui.join.text)));
+        let code = joining.then(|| {
+            SecretCode::new(
+                std::mem::take(&mut self.relay_ui.join.text)
+                    .split_whitespace()
+                    .collect(),
+            )
+        });
         self.relay_cancel();
         self.relay_ui.error = None;
         match core::pairing::start(&self.store.root, code) {
