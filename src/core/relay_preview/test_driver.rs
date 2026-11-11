@@ -272,6 +272,9 @@ impl Driver {
                     .stage_agent_proposal(&proposal)?;
                 Ok(Value::Null)
             }
+            "binary-version" => Ok(
+                serde_json::json!({"capabilities":operations::build_capabilities(),"version":env!("CARGO_PKG_VERSION"),"debug":cfg!(debug_assertions)}),
+            ),
             "check-relay" => Ok(serde_json::to_value(operations::check_now(root)?)?),
             "relay-state" => Ok(serde_json::to_value(operations::status(root)?)?),
             "folder-note" => {

@@ -215,6 +215,25 @@ pub fn endpoint(address: &str) -> io::Result<RelayUrl> {
     result.map_err(|_| store_io::invalid("Use a WSS origin on port 443 or ws://127.0.0.1:port"))
 }
 
+fn qualification_point(root: &Path, point: &str) -> io::Result<()> {
+    if !super::is_proof_path(root, "sidenote-relay-preview")
+        || !std::env::args_os().any(|a| a == "--relay-preview-headless")
+    {
+        return Ok(());
+    }
+    let request: Value = store_io::read(&root.join("local/relay/qualification-control.json"))?;
+    if request["pause"] == point {
+        store_io::write(
+            &root.join("local/relay/qualification-state.json"),
+            &serde_json::json!({"stage":point}),
+        )?;
+        loop {
+            std::thread::park();
+        }
+    }
+    Ok(())
+}
+
 fn failed(_: impl std::fmt::Display) -> io::Error {
     io::Error::other("Relay preview could not read or save its local replica")
 }

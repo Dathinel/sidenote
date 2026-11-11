@@ -228,4 +228,51 @@ mod tests {
         assert!(fresh.decrypt(&encrypted[0]).is_err());
         Ok(())
     }
+    #[test]
+    fn qualification_three_member_rotation_rejects_old_key_and_old_group_frames() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let a = Identity::load_or_create(&Store::open(&dir.path().join("a"), b"a")?)?;
+        let b = Identity::load_or_create(&Store::open(&dir.path().join("b"), b"b")?)?;
+        let c = Identity::load_or_create(&Store::open(&dir.path().join("c"), b"c")?)?;
+        let mut old = Group::new(&a);
+        old.enroll(&a, b.public());
+        old.enroll(&a, c.public());
+        let mut fresh = Group::new(&a);
+        fresh.enroll(&a, b.public());
+        assert!(old.key() != fresh.key(), "rotation reused the old key");
+        assert_eq!(old.members().len(), 3);
+        assert_eq!(fresh.members().len(), 2);
+        let nonce = [8; 64];
+        let mut sender = handshake(&fresh, a.public(), b.public(), true, &nonce)?;
+        let mut removed = handshake(&old, b.public(), a.public(), false, &nonce)?;
+        let mut bytes = [0; 1024];
+        let mut clear = [0; 1024];
+        let n = sender.write_message(&[], &mut bytes)?;
+        assert!(
+            removed.read_message(&bytes[..n], &mut clear).is_err(),
+            "old group key opened the new handshake"
+        );
+        let frame = seal(
+            &c,
+            &old,
+            a.public(),
+            3,
+            [0; 32],
+            b"Synthetic old-room traffic",
+        );
+        assert!(open(&a, &fresh, &frame).is_err());
+        let mut survivor = handshake(&fresh, b.public(), a.public(), false, &nonce)?;
+        survivor.read_message(&bytes[..n], &mut clear)?;
+        let n = survivor.write_message(&[], &mut bytes)?;
+        sender.read_message(&bytes[..n], &mut clear)?;
+        let (mut sender, mut survivor) = (
+            Cipher::from_handshake(sender)?,
+            Cipher::from_handshake(survivor)?,
+        );
+        let content = b"Synthetic new content only for the re-paired survivor";
+        let (encrypted, end) = sender.encrypt_fragment(content, 0)?;
+        assert_eq!(end, content.len());
+        assert_eq!(survivor.decrypt(&encrypted)?, Some(content.to_vec()));
+        Ok(())
+    }
 }

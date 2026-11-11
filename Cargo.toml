@@ -40,6 +40,8 @@ velopack = "=0.0.1298"
 
 [features]
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
+# Qualification build with a higher relay capability floor; no app version change.
+relay-capability-v2 = []
 default = ["ui-kit"]
 ui-kit = ["dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
 

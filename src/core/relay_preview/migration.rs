@@ -42,6 +42,7 @@ pub(super) fn enable(root: &Path, settings: &mut Settings) -> io::Result<()> {
             "Task backup manifest verification failed",
         ));
     }
+    qualification_point(root, "migration-backup")?;
     let device = open_device(root, settings)?;
     let name = super::super::DeviceSettings::read_in(root)?.name;
     device
@@ -80,6 +81,7 @@ pub(super) fn enable(root: &Path, settings: &mut Settings) -> io::Result<()> {
             })
         })
         .map_err(failed)?;
+    qualification_point(root, "migration-import")?;
     settings.backup = receipt;
     Ok(())
 }
@@ -196,6 +198,7 @@ pub(super) fn enable_shared(root: &Path, settings: &mut Settings) -> io::Result<
                 })
             })
             .map_err(failed)?;
+        qualification_point(root, "shared-import")?;
     }
     settings.shared_backup = receipt;
     Ok(())

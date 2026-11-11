@@ -3,16 +3,27 @@ use super::*;
 use sidenote_sync::capabilities::Capabilities;
 pub const UPDATE_REQUIRED: &str =
     "Another device runs a newer Sidenote. Update this one to keep syncing.";
+pub fn build_capabilities() -> Capabilities {
+    Capabilities {
+        schema: Capabilities::CURRENT.schema,
+        features: if cfg!(feature = "relay-capability-v2") {
+            2
+        } else {
+            Capabilities::CURRENT.features
+        },
+    }
+}
 pub(super) fn supported(root: &Path) -> Capabilities {
     // Only the isolated headless proof can impersonate a future application build.
     if super::super::is_proof_path(root, "sidenote-relay-preview")
         && std::env::args_os().any(|a| a == "--relay-preview-headless")
+        && root.join("local/relay/test-capabilities.json").is_file()
         && let Ok(c) =
             store_io::read::<Capabilities>(&root.join("local/relay/test-capabilities.json"))
     {
         return c;
     }
-    Capabilities::CURRENT
+    build_capabilities()
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Operational {

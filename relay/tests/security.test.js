@@ -296,3 +296,17 @@ test("health checks are public, bounded and do not allocate a room", async () =>
  const head=await worker.fetch(new Request("http://127.0.0.1/health",{method:"HEAD"}),env);expect(await head.text()).toBe("");
  expect((await worker.fetch(new Request("http://127.0.0.1/health",{method:"POST"}),env)).status).toBe(405);expect(calls).toBe(0);
 });
+
+
+test("oversized binary frame closes the sender without delivery or state changes",async()=>{
+ const f=fixture();f.room.save({...pair(),kind:"sync"});const sender=f.socket({...state("device"),kind:"sync"});const recipient=f.socket({...state("device"),kind:"sync",key:"b".repeat(64)});
+ const before=JSON.stringify(f.room.meta());await f.room.webSocketMessage(sender,new ArrayBuffer(128*1024+1));
+ expect(sender.closed).toBe(true);expect(recipient.sent.length).toBe(0);expect(JSON.stringify(f.room.meta())).toBe(before);
+});
+
+
+test("production does not expose sync-interruption qualification controls",async()=>{
+ let calls=0;const env={ROOMS:{getByName(){calls++;throw Error("unexpected room");}}};
+ for(const mode of ["pause","resume","status"]){const response=await worker.fetch(new Request(`http://127.0.0.1/__test/sync-${mode}/${"a".repeat(64)}`,{method:"POST"}),env);expect(response.status).toBe(404);}
+ expect(calls).toBe(0);
+});

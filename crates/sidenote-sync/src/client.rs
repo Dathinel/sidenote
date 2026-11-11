@@ -2051,4 +2051,133 @@ mod tests {
         }
         Ok(())
     }
+    #[tokio::test]
+    async fn qualification_hostile_frames_preserve_heads_and_allow_a_fresh_session() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let owner = Arc::new(Device::open(&dir.path().join("owner.sqlite"))?);
+        let sender = Device::open(&dir.path().join("sender.sqlite"))?;
+        owner.store(|s| {
+            s.edit("tasks", |d| {
+                crate::model::create(d, "retained", "Synthetic retained content")
+            })
+        })?;
+        let mut group = Group::new(&owner.identity);
+        group.enroll(&owner.identity, sender.identity.public());
+        let client = client(owner.clone(), group.clone())?;
+        let heads = owner.store(|s| s.heads("tasks"))?;
+        let id = sender.identity.public();
+        for mode in [
+            "replay",
+            "truncated",
+            "oversized",
+            "wrong-group",
+            "expired-session",
+        ] {
+            let (mut peer, mut cipher) = peer_pair(&group, id, owner.identity.public())?;
+            peer.domains.insert("tasks".into());
+            let session_id = peer.cipher.session;
+            let mut session = Session::default();
+            session.peers.insert(id, peer);
+            let mut bans = BTreeMap::new();
+            let ping = Inner::Ping([7; 32]).encode()?;
+            let encrypted = cipher.encrypt_control(&ping)?;
+            let mut frame = crypto::seal(
+                &sender.identity,
+                &group,
+                owner.identity.public(),
+                3,
+                session_id,
+                &encrypted,
+            );
+            match mode {
+                "replay" => {
+                    client
+                        .envelope(&mut Sink, &mut session, frame.clone(), &group, &mut bans)
+                        .await?;
+                }
+                "truncated" => {
+                    frame.pop();
+                }
+                "oversized" => {
+                    frame = crypto::seal(
+                        &sender.identity,
+                        &group,
+                        owner.identity.public(),
+                        3,
+                        session_id,
+                        &vec![0; crate::transport::MAX_FRAME + 1],
+                    );
+                }
+                "wrong-group" => {
+                    let mut wrong = Group::new(&sender.identity);
+                    wrong.enroll(&sender.identity, owner.identity.public());
+                    frame = crypto::seal(
+                        &sender.identity,
+                        &wrong,
+                        owner.identity.public(),
+                        3,
+                        session_id,
+                        &encrypted,
+                    );
+                }
+                "expired-session" => {
+                    let (_, mut expired) = peer_pair(&group, id, owner.identity.public())?;
+                    assert!(expired.session != session_id);
+                    let bytes = expired.encrypt_control(&ping)?;
+                    frame = crypto::seal(
+                        &sender.identity,
+                        &group,
+                        owner.identity.public(),
+                        3,
+                        expired.session,
+                        &bytes,
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let result = client
+                .envelope(&mut Sink, &mut session, frame, &group, &mut bans)
+                .await;
+            if matches!(mode, "replay" | "oversized") {
+                assert!(result.is_err(), "invalid ciphertext was accepted");
+            } else {
+                result?;
+            }
+            assert_eq!(
+                owner.store(|s| s.heads("tasks"))?,
+                heads,
+                "hostile frame changed accepted heads"
+            );
+            assert_eq!(session.operations(), 0, "hostile data was queued");
+            let (mut fresh, mut honest) = peer_pair(&group, id, owner.identity.public())?;
+            fresh.domains.insert("tasks".into());
+            let session_id = fresh.cipher.session;
+            session.peers.insert(id, fresh);
+            let message = Inner::Inventory {
+                done: true,
+                domains: vec![("tasks".into(), heads.clone())],
+            }
+            .encode()?;
+            let (encrypted, end) = honest.encrypt_fragment(&message, 0)?;
+            assert_eq!(end, message.len());
+            let frame = crypto::seal(
+                &sender.identity,
+                &group,
+                owner.identity.public(),
+                3,
+                session_id,
+                &encrypted,
+            );
+            client
+                .envelope(&mut Sink, &mut session, frame, &group, &mut bans)
+                .await?;
+            assert!(
+                session.peers[&id].inventory_received
+                    && session.peers[&id].synced.contains("tasks"),
+                "fresh honest session did not resume"
+            );
+            assert_eq!(owner.store(|s| s.heads("tasks"))?, heads);
+        }
+        Ok(())
+    }
 }

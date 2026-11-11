@@ -40,7 +40,15 @@ struct App {
 }
 impl App {
     fn start(root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_sidenote"))
+        Self::start_binary(root, Path::new(env!("CARGO_BIN_EXE_sidenote")))
+    }
+    fn start_binary(root: &Path, binary: &Path) -> Self {
+        let app = Self::spawn(root, binary);
+        assert_eq!(app.receive(), json!({"ready":true}), "app startup");
+        app
+    }
+    fn spawn(root: &Path, binary: &Path) -> Self {
+        let mut child = Command::new(binary)
             .arg("--relay-preview-headless")
             .arg("--data-dir")
             .arg(root)
@@ -66,13 +74,11 @@ impl App {
                 }
             }
         });
-        let app = Self {
+        Self {
             process: Process(child),
             input,
             output,
-        };
-        assert_eq!(app.receive(), json!({"ready":true}), "app startup");
-        app
+        }
     }
     fn receive(&self) -> Value {
         let line = self
@@ -802,9 +808,30 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
         .unwrap();
     }
     let caps = b.join("local/relay/test-capabilities.json");
-    std::fs::write(&caps, br#"{"schema":2,"features":2}"#).unwrap();
-    let mut older = App::start(&a);
-    let mut newer = App::start(&b);
+    let release = std::env::var_os("SIDENOTE_RELEASE_PROOF_V1")
+        .zip(std::env::var_os("SIDENOTE_RELEASE_PROOF_V2"));
+    if release.is_none() {
+        std::fs::write(&caps, br#"{"schema":2,"features":2}"#).unwrap();
+    }
+    let old_binary = release
+        .as_ref()
+        .map(|(a, _)| PathBuf::from(a))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_sidenote")));
+    let new_binary = release
+        .as_ref()
+        .map(|(_, b)| PathBuf::from(b))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_sidenote")));
+    let mut older = App::start_binary(&a, &old_binary);
+    let mut newer = App::start_binary(&b, &new_binary);
+    if release.is_some() {
+        let av = older.request(json!({"op":"binary-version"}));
+        let bv = newer.request(json!({"op":"binary-version"}));
+        assert_eq!(av["debug"], false);
+        assert_eq!(bv["debug"], false);
+        assert_eq!(av["capabilities"]["features"], 1);
+        assert_eq!(bv["capabilities"]["features"], 2);
+        assert_eq!(av["version"], bv["version"]);
+    }
     let health = older.request(json!({"op":"check-relay"}));
     assert!(
         health["message"]
@@ -853,7 +880,7 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
         json!({"sidebar":true,"model":"synthetic-local-model"})
     );
     older.stop();
-    let mut older = App::start(&a);
+    let mut older = App::start_binary(&a, &old_binary);
     assert_eq!(
         older.request(json!({"op":"relay-state"}))["read_only"],
         true
@@ -870,10 +897,12 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
             .unwrap()
             .is_empty()
     );
-    newer.request(json!({"op":"add","task":{"task":"Future group keeps working"}}));
+    let future = newer.request(json!({"op":"add","task":{"task":"Future group keeps working"}}));
     newer.stop();
-    std::fs::write(&caps, br#"{"schema":1,"features":1}"#).unwrap();
-    let mut downgraded = App::start(&b);
+    if release.is_none() {
+        std::fs::write(&caps, br#"{"schema":1,"features":1}"#).unwrap();
+    }
+    let mut downgraded = App::start_binary(&b, &old_binary);
     assert_eq!(
         downgraded.request(json!({"op":"relay-state"}))["read_only"],
         true
@@ -881,4 +910,226 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
     downgraded.rejected(json!({"op":"add","task":{"task":"Downgrade must not commit"}}));
     downgraded.stop();
     older.stop();
+    if release.is_some() {
+        let mut upgraded = App::start_binary(&a, &new_binary);
+        let mut peer = App::start_binary(&b, &new_binary);
+        wait_for(&mut upgraded, |t| find(t, &future).is_some());
+        assert_eq!(
+            upgraded.request(json!({"op":"relay-state"}))["read_only"],
+            false
+        );
+        let id = upgraded
+            .request(json!({"op":"add","task":{"task":"Synthetic after real binary upgrade"}}));
+        wait_for(&mut peer, |tasks| find(tasks, &id).is_some());
+        upgraded.stop();
+        peer.stop();
+    }
+}
+
+fn synthetic_root(root: &Path, name: &str, id: &str, address: &str) {
+    std::fs::create_dir_all(root).unwrap();
+    std::fs::write(
+        root.join("device.json"),
+        serde_json::to_vec(&json!({"name":name,"id":id.repeat(32),"daily_check":false})).unwrap(),
+    )
+    .unwrap();
+    relay_preview::Settings {
+        enabled: true,
+        address: address.into(),
+        ..Default::default()
+    }
+    .save(root)
+    .unwrap();
+}
+fn pair_apps(owner: &mut App, guest: &mut App, owner_root: &Path) {
+    owner.request(json!({"op":"host"}));
+    status(owner, "code");
+    guest.request(json!({"op":"join","from":owner_root}));
+    status(owner, "confirm");
+    status(guest, "confirm");
+    owner.request(json!({"op":"confirm","accept":true}));
+    guest.request(json!({"op":"confirm","accept":true}));
+    status(owner, "paired");
+    status(guest, "paired");
+}
+#[test]
+fn migration_recovers_after_process_kill_at_durable_boundaries() {
+    let parent = std::env::temp_dir().join("sidenote-relay-preview");
+    std::fs::create_dir_all(&parent).unwrap();
+    let fixture = tempfile::tempdir_in(parent).unwrap();
+    for point in ["migration-backup", "migration-import", "shared-import"] {
+        let root = fixture.path().join(point);
+        std::fs::create_dir_all(root.join("local/relay")).unwrap();
+        std::fs::write(
+            root.join("device.json"),
+            serde_json::to_vec(
+                &json!({"name":"Synthetic migration PC","id":"e".repeat(32),"daily_check":false}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let original = serde_json::to_vec(
+            &json!({"manual":[{"id":"synthetic-migrated-id","task":"Synthetic migration source"}]}),
+        )
+        .unwrap();
+        std::fs::write(root.join("task-overrides.json"), &original).unwrap();
+        std::fs::write(
+            root.join("local/relay/settings.json"),
+            br#"{"enabled":true}"#,
+        )
+        .unwrap();
+        let control = root.join("local/relay/qualification-control.json");
+        std::fs::write(
+            &control,
+            serde_json::to_vec(&json!({"pause":point})).unwrap(),
+        )
+        .unwrap();
+        let crashed = App::spawn(&root, Path::new(env!("CARGO_BIN_EXE_sidenote")));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !root.join("local/relay/qualification-state.json").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "migration did not reach crash boundary"
+            );
+            thread::sleep(Duration::from_millis(30));
+        }
+        drop(crashed);
+        std::fs::remove_file(control).unwrap();
+        let mut recovered = App::start(&root);
+        let tasks = recovered.request(json!({"op":"list"}));
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["id"], "synthetic-migrated-id");
+        recovered.request(json!({"op":"disable"}));
+        assert_eq!(
+            std::fs::read(root.join("task-overrides.json")).unwrap(),
+            original
+        );
+        recovered.request(json!({"op":"enable","enabled":true}));
+        assert_eq!(
+            recovered
+                .request(json!({"op":"list"}))
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        recovered.stop();
+    }
+}
+#[test]
+fn three_peers_repair_survivor_after_rotation_and_exclude_removed_peer() {
+    let parent = std::env::temp_dir().join("sidenote-relay-preview");
+    std::fs::create_dir_all(&parent).unwrap();
+    let fixture = tempfile::tempdir_in(parent).unwrap();
+    let a = fixture.path().join("a");
+    let b = fixture.path().join("b");
+    let c = fixture.path().join("c");
+    let (_relay, address) = start_relay(&fixture.path().join("relay"));
+    for (root, name, id) in [
+        (&a, "Synthetic A", "a"),
+        (&b, "Synthetic B", "b"),
+        (&c, "Synthetic C", "c"),
+    ] {
+        synthetic_root(root, name, id, &address);
+    }
+    let (mut aa, mut bb, mut cc) = (App::start(&a), App::start(&b), App::start(&c));
+    pair_apps(&mut aa, &mut bb, &a);
+    pair_apps(&mut aa, &mut cc, &a);
+    let initial =
+        aa.request(json!({"op":"add","task":{"task":"Synthetic shared before rotation"}}));
+    for app in [&mut bb, &mut cc] {
+        wait_for(app, |t| find(t, &initial).is_some());
+    }
+    aa.request(json!({"op":"remove","name":"Synthetic C"}));
+    pair_apps(&mut aa, &mut bb, &a);
+    let private =
+        aa.request(json!({"op":"add","task":{"task":"Synthetic private after rotation"}}));
+    wait_for(&mut bb, |t| find(t, &private).is_some());
+    for _ in 0..25 {
+        assert!(
+            find(&cc.request(json!({"op":"list"})), &private).is_none(),
+            "removed peer received new content"
+        );
+        thread::sleep(Duration::from_millis(60));
+    }
+    assert!(
+        find(&cc.request(json!({"op":"list"})), &initial).is_some(),
+        "revocation erased previously held content"
+    );
+    aa.stop();
+    bb.stop();
+    cc.stop();
+}
+
+fn sync_control(address: &str, root: &Path, action: &str) -> Value {
+    let room = relay_preview::Settings::load(root).unwrap().room;
+    let url = format!(
+        "{}/__test/sync-{action}/{room}",
+        address.replacen("ws://", "http://", 1)
+    );
+    let agent = ureq::Agent::config_builder()
+        .proxy(None)
+        .timeout_global(Some(Duration::from_secs(3)))
+        .build()
+        .new_agent();
+    let response = agent
+        .post(&url)
+        .send_empty()
+        .unwrap()
+        .body_mut()
+        .read_to_string()
+        .unwrap();
+    serde_json::from_str(&response).unwrap()
+}
+#[test]
+fn killed_sender_recovers_after_relay_observed_an_interrupted_exchange() {
+    let parent = std::env::temp_dir().join("sidenote-relay-preview");
+    std::fs::create_dir_all(&parent).unwrap();
+    let fixture = tempfile::tempdir_in(parent).unwrap();
+    let a = fixture.path().join("a");
+    let b = fixture.path().join("b");
+    let (_relay, address) = start_relay(&fixture.path().join("relay"));
+    synthetic_root(&a, "Synthetic crash sender", "a", &address);
+    synthetic_root(&b, "Synthetic crash receiver", "b", &address);
+    let (mut aa, mut bb) = (App::start(&a), App::start(&b));
+    pair_apps(&mut aa, &mut bb, &a);
+    let first = aa.request(json!({"op":"add","task":{"task":"Synthetic before crash"}}));
+    wait_for(&mut bb, |t| find(t, &first).is_some());
+    sync_control(&address, &a, "pause");
+    let mut committed = Vec::new();
+    for i in 0..12 {
+        let mut rng = (i as u32 + 1).wrapping_mul(0x9e3779b9);
+        committed.push(aa.request(json!({"op":"add","task":{"task":format!("Synthetic durable edit {i}: {}",(0..8000).map(|_|{rng^=rng<<13;rng^=rng>>17;rng^=rng<<5;(b'a'+(rng%26) as u8) as char}).collect::<String>())}})));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sync_control(&address, &a, "status")["observed"] != 1 {
+        assert!(
+            Instant::now() < deadline,
+            "no active exchange reached the relay"
+        );
+        thread::sleep(Duration::from_millis(30));
+    }
+    let pending = bb.request(json!({"op":"list"}));
+    assert!(
+        committed.iter().any(|id| find(&pending, id).is_none()),
+        "exchange was already complete before kill"
+    );
+    drop(aa);
+    sync_control(&address, &a, "resume");
+    let mut restarted = App::start(&a);
+    let local = restarted.request(json!({"op":"list"}));
+    for id in &committed {
+        assert!(
+            find(&local, id).is_some(),
+            "acknowledged local commit lost after kill"
+        );
+    }
+    wait_for(&mut bb, |t| {
+        committed.iter().all(|id| find(t, id).is_some())
+    });
+    let after =
+        bb.request(json!({"op":"add","task":{"task":"Synthetic honest edit after recovery"}}));
+    wait_for(&mut restarted, |t| find(t, &after).is_some());
+    restarted.stop();
+    bb.stop();
 }
