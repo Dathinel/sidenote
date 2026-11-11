@@ -211,10 +211,8 @@ pub fn ask_with_options(
             .ok_or("Could not read the meeting summary or transcript")?;
         let folder = super::state_dir();
         std::fs::create_dir_all(&folder).map_err(|_| "Could not open app state folder")?;
-        let runner = pick_runner(runner_name)?;
-        let runner = options.runner(read_only_runner(runner)?)?;
-        super::ask_session::run(
-            &runner,
+        options.run(
+            runner_name,
             options.prompt(prompt(&meeting, history))?,
             meeting_id,
             &progress,
@@ -245,6 +243,12 @@ thread_local! {
 /// True on a worker whose own Ask was stopped by `Cancel::stop`.
 pub(super) fn cancel_requested() -> bool {
     CURRENT.with(|c| c.borrow().as_ref().is_some_and(Cancel::stopped))
+}
+#[cfg(test)]
+pub(super) fn with_cancel_for_test(cancel: Cancel, job: impl FnOnce()) {
+    CURRENT.with(|current| *current.borrow_mut() = Some(cancel));
+    job();
+    CURRENT.with(|current| *current.borrow_mut() = None);
 }
 static STOP: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicUsize = AtomicUsize::new(0);

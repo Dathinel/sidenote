@@ -17,6 +17,7 @@ use std::{
 };
 
 const IDLE: Duration = Duration::from_secs(600);
+const MEETING_IDLE: Duration = Duration::from_secs(120);
 const CAP: usize = 4 * 1024 * 1024;
 static ACTOR: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
 static CLOSED: AtomicBool = AtomicBool::new(true);
@@ -180,6 +181,7 @@ enum Reply {
 }
 enum Work {
     Warm(Key),
+    Release,
     Reset(String),
     Ask {
         key: Key,
@@ -218,6 +220,12 @@ pub fn recording(active: bool) {
 pub fn reset(chat: &str) {
     if let Some(actor) = ACTOR.get() {
         let _ = actor.send(Work::Reset(chat.into()));
+    }
+}
+/// Release the idle transport after any current answer has completed.
+pub fn release() {
+    if let Some(actor) = ACTOR.get() {
+        let _ = actor.send(Work::Release);
     }
 }
 pub(super) fn close() {
@@ -280,7 +288,7 @@ struct Lifetime {
 }
 impl Lifetime {
     fn expired(&self, now: Instant) -> bool {
-        now.duration_since(self.activity) >= IDLE
+        now.duration_since(self.activity) >= if self.recording { MEETING_IDLE } else { IDLE }
             || (!self.recording
                 && self
                     .ended
@@ -310,9 +318,14 @@ fn serve(rx: Receiver<Work>) {
         let work = rx.recv_timeout(Duration::from_secs(1));
         match work {
             Ok(Work::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Work::Release) => {
+                session = None;
+                desired = None;
+            }
             Ok(Work::Recording(active)) => {
-                if active && !lifetime.recording {
+                if active != lifetime.recording {
                     session = None;
+                    desired = None;
                 }
                 lifetime.recording(active, Instant::now());
                 continue;
@@ -725,6 +738,8 @@ mod tests {
         assert!(!lifetime.expired(now + IDLE - Duration::from_millis(1)));
         assert!(lifetime.expired(now + IDLE));
         lifetime.recording(true, now);
+        assert!(!lifetime.expired(now + MEETING_IDLE - Duration::from_millis(1)));
+        assert!(lifetime.expired(now + MEETING_IDLE));
         assert!(lifetime.expired(now + IDLE * 3));
         lifetime.activity = now + IDLE * 3;
         assert!(!lifetime.expired(now + IDLE * 3));
