@@ -1051,3 +1051,25 @@ fn meeting_standard_choice_uses_builtin_without_overwriting_custom_instructions(
         saved
     );
 }
+
+#[test]
+fn hex_labs_original_transcript_fallback_contract() {
+    let temp = Temp::new();
+    let folder = temp.0.join("synthetic");
+    fs::create_dir_all(folder.join("hex-original")).unwrap();
+    let original = include_str!("../../../tests/fixtures/hex-labs/original.ndjson");
+    fs::write(folder.join("hex-original/transcript.ndjson"), original).unwrap();
+    fs::write(folder.join("transcript.ndjson"), "invalid replacement").unwrap();
+    assert!(
+        transcript::read(&folder)
+            .unwrap()
+            .contains("Synthetic original transcript")
+    );
+    fs::remove_file(folder.join("hex-original/transcript.ndjson")).unwrap();
+    fs::write(folder.join("transcript.ndjson"), original).unwrap();
+    assert!(
+        transcript::read(&folder)
+            .unwrap()
+            .contains("Synthetic original transcript")
+    );
+}

@@ -1,0 +1,4 @@
+{"covered_ms":5000}
+{"source":"system","start_ms":2000,"end_ms":3000,"text":"Synthetic second line","future":true}
+{"source":"microphone","start_ms":1000,"end_ms":1500,"text":"Synthetic first line"}
+{"source":"system","start_ms":4000,"text":"unfinished

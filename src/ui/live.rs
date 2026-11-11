@@ -1607,6 +1607,7 @@ mod writer_tests {
         state.live_open = true;
         state.live_notes = TextEdit::new("Typed notes must survive");
         let status = |name: &str| EngineState {
+            labs: Default::default(),
             running: true,
             version: "test".into(),
             protocol: 4,

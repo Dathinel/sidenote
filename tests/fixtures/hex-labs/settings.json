@@ -1,0 +1,56 @@
+{
+  "settings": [
+    {
+      "key": "labs.live_chapters",
+      "value": true,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.subtitle_export",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.future_synthetic_lab",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "available": true
+    },
+    {
+      "key": "labs.api_timestamps",
+      "value": "invalid",
+      "kind": "bool",
+      "writable": true
+    },
+    {
+      "key": "labs.unload_idle_minutes",
+      "value": "30",
+      "kind": "choice",
+      "writable": true
+    },
+    {
+      "key": "labs.not_on_this_platform",
+      "value": false,
+      "kind": "bool",
+      "writable": true,
+      "available": false
+    },
+    {
+      "key": "keyboard_model_switching.enabled",
+      "value": true,
+      "kind": "bool",
+      "writable": true
+    },
+    {
+      "key": "labs.standalone_special_keys",
+      "value": false,
+      "kind": "bool",
+      "writable": true
+    }
+  ]
+}

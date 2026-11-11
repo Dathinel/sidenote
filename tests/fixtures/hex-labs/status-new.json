@@ -1,0 +1,11 @@
+{
+  "labs": [
+    "api-processing",
+    "future-synthetic-lab",
+    null,
+    42
+  ],
+  "future": {
+    "ignored": true
+  }
+}

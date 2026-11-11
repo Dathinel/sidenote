@@ -1,0 +1,16 @@
+{
+  "status": "complete",
+  "title": "Synthetic compatibility meeting",
+  "created_at_ms": 1793946600000,
+  "duration_ms": 5000,
+  "chapters": [
+    {
+      "at_ms": 0,
+      "title": "Synthetic chapter",
+      "future": true
+    }
+  ],
+  "unknown_future_field": {
+    "revision": 99
+  }
+}
