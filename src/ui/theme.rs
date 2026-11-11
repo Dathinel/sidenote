@@ -148,6 +148,7 @@ pub fn kit(p: &Palette) -> Kit {
     };
     kit.c.bg_accent = p.button_fill;
     kit.c.knob_on = p.button_ink;
+    kit.c.knob = Color::WHITE;
     kit.c.text_faint = p.faint;
     kit.ty.small = super::roles::META.style();
     kit
@@ -188,6 +189,16 @@ pub fn fonts() -> &'static [&'static [u8]] {
 #[cfg(test)]
 mod quiet_ink_switch_tests {
     use super::*;
+
+    #[test]
+    fn off_switches_keep_a_light_knob_in_both_themes() {
+        for dark in [false, true] {
+            let k = kit(&palette(dark));
+            assert_eq!(k.c.knob, Color::WHITE);
+            assert_ne!(k.c.knob, k.c.layer_04);
+        }
+    }
+
     #[test]
     fn switches_use_primary_button_ink_in_both_themes() {
         for dark in [false, true] {
