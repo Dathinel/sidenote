@@ -1,5 +1,9 @@
 # Local slice 5 qualification
 
+The independent review at 030a513 supersedes the revocation claim below. See
+`sync-relay-security-fixes.md` for the fixes and remaining limits. Remove is now
+unavailable in the UI and backend. This earlier receipt is historical evidence.
+
 Decisions needed: none. The pre-test threat model and contract are at the top of
 `sync-relay-integration.md`. Evidence here is rung 4: executed locally. It does
 not establish physical-device, hosted-service or independent-review results.
@@ -32,11 +36,11 @@ accepted heads unchanged and enqueue no mutations. A fresh authenticated session
 works after each refusal. Worker tests separately refuse oversized binary input.
 This is protocol-level evidence, not an independent penetration test.
 
-Three real paired processes prove that removal creates a fresh group, the
-survivor can explicitly re-pair, and the removed process retains old content but
-receives no new task. A crypto test also proves its old key cannot authenticate
-the new session and its old-group envelope is refused. Removal does not erase
-content already held by another device.
+The earlier three-process test covered the remover's new group only. It did
+not prove that other survivors stop sharing with the removed device or prevent
+old-group edits from entering a new group. That revocation claim is withdrawn.
+The crypto test still covers old-key refusal for a genuinely distinct group;
+that primitive alone does not establish a safe removal workflow.
 
 ## UI and artifacts
 
@@ -82,10 +86,10 @@ unmodified focused retry and the subsequent full default suite passed.
 | Migration crash and rollback | done locally | Three durable boundaries, stable task identity, original bytes unchanged. |
 | Interrupted exchange and restart | done locally | Relay-observed frame, killed sender, durable recovery and convergence. |
 | Adversarial frames | done locally | Real protocol handler/store plus Worker boundary tests. |
-| Three-peer removal and rotation | done locally | Survivor re-pairs; removed peer cannot receive or authenticate new content. |
+| Three-peer removal and rotation | needs owner | Claim withdrawn after review; removal disabled pending distributed retirement and history isolation. |
 | Two real devices | needs owner | Run the release matrix on distinct physical devices. |
 | Owner-account hosted relay | needs owner | Deploy and qualify on the owner's account; include quotas and operations. |
-| Independent security review | needs owner | External review of pairing, sessions, storage, migration and revocation. |
+| Independent security review | needs owner | Review received and blocking findings recorded; fixes need independent re-review. |
 
 Release remains blocked on the three owner gates. Installer and signing evidence,
 power-loss/storage faults, and any encrypted offline backlog are not established

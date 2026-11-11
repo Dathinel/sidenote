@@ -355,6 +355,16 @@ test("IP pairing cap refuses a ninth pending room before room allocation",async(
   expect(allocated).toBe(8);
 });
 
+test("public entry point cannot change internal pairing budgets",async()=>{
+  let calls=0;
+  const env={ROOMS:{getByName(){calls++;throw Error("unexpected allocation");}}};
+  for(const action of ["0","1"]) {
+    const response=await worker.fetch(new Request(`https://relay.test/pair-budget?room=${key}&limit=3&release=${action}`),env);
+    expect(response.status).toBe(404);
+  }
+  expect(calls).toBe(0);
+});
+
 test("connection byte budget refuses more than four MiB per second",async()=>{
   const f=fixture();f.room.save({...pair(),kind:"sync",pins:[key,"b".repeat(64)]});
   f.room.rateNow=()=>1000;
