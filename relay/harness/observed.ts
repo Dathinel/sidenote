@@ -6,7 +6,7 @@ function capture(kind: string, bytes: Uint8Array, negative = false) {
   console.log(JSON.stringify({event:"relay-proof",kind,negative,bytes:Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("")}));
 }
 export default {
-  async fetch(request: Request, env: Env & { RATE_ROOMS: DurableObjectNamespace }) {
+  async fetch(request: Request, env: Env & { RATE_ROOMS: Env["ROOMS"] }) {
     if (new URL(request.url).pathname === "/__proof/negative") {
       return env.ROOMS.getByName("proof:negative").fetch("https://proof.internal/plant-marker");
     }
@@ -15,7 +15,7 @@ export default {
     }
     return worker.fetch(request,env);
   },
-} satisfies ExportedHandler<Env & { RATE_ROOMS: DurableObjectNamespace }>;
+} satisfies ExportedHandler<Env & { RATE_ROOMS: Env["ROOMS"] }>;
 // Local emulation and proof logging must not turn the quota burst into several clock windows.
 export class RateRoom extends ProductionRoom {
   protected override rateNow(): number { return 0; }

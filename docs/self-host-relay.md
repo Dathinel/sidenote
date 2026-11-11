@@ -125,16 +125,22 @@ need separate release evidence. Do not infer them from the local emulator.
 
 ## Revoke, rotate, upgrade and recover
 
-In Settings > Sync, choose **Remove** beside a device and confirm. This creates
-a fresh group key and room for the retained local replica. The removed device
-loses access to new changes. All other devices must pair again; selective rekey
-is not implemented. Removal does not erase data the device already received.
-Never display, export or manually edit the group key.
+**Removing a device is not available in this preview.** The previous local-only
+rotation did not revoke other peers' old-group sessions. Remove is hidden and
+the backend refuses it. Do not use this preview with a lost or stolen paired
+device. A prior removal must not be treated as proof that access was revoked.
+Distributed retirement, offline notification and old-history isolation still
+need implementation and independent re-review before removal can return.
 
-To rotate the whole group, perform that removal and pair the trusted devices
-again. Keep a trusted full replica available throughout. Update Sidenote on all
-devices together; do not delete the capability record to make an older build
-writable. If the relay is read-only because of a newer requirement, update first.
+A device refuses a group it has durably retired, in either pairing direction.
+After switching groups, earlier local groups cannot be adopted again. This is a
+local guard, not a distributed revocation system. Never display, export or
+manually edit group keys or delete retirement records to bypass that guard.
+
+Update Sidenote on all devices together; do not delete capability records to
+make an older build writable. If a newer requirement makes the relay read-only,
+update this device. Neither changing the relay URL nor its abuse allowlist
+rotates encryption keys or removes a member from an existing group.
 
 For a Worker update, keep the binding/class names and migration history, run the
 local commands again, then have the account owner perform a separately approved
@@ -146,9 +152,8 @@ Each device stores a full replica. The relay has **no offline content backlog**:
 both devices must be online at overlapping times to exchange changes. An outage
 does not delete local edits. Back up device data with Sidenote stopped, including
 the local replica and its OS-protected identity, in a private backup outside
-synchronized folders. A backup may depend on the original Windows account.
-Do not treat relay room state as a backup. Turning preview off restores the
-verified folder collection, retaining the relay collection for later.
+synchronized folders. A backup restored to another Windows account cannot unwrap the DPAPI-protected keys.
+Do not treat relay room state as a backup. Turning preview off returns to the folder collection and retains the relay collection. If newer folder files arrived while preview was on, disabling safely refuses and asks you to keep those newer files. Do not restore older backups over them. Re-enabling applies folder-field changes against the previous verified snapshot. Older previews without that snapshot safely refuse an ambiguous changed import.
 
 ## Costs and limits
 
@@ -171,3 +176,34 @@ These are safety bounds, not capacity promises. Larger collections need release
 qualification. Cloudflare can observe IPs, public keys, room identifiers, timing
 and sizes. Encrypted content and group keys stay with the devices. A paired
 device can read and change shared content, so approve only devices you trust.
+
+## Optional abuse controls
+
+`[vars] ALLOWED_GENESIS` in `relay/wrangler.toml` is an optional comma-separated
+list of lowercase 64-hex **public** device keys. Empty is the default and keeps
+open enrollment. When set, a sync room's genesis key must be listed, and every
+device that shows a pairing code must be listed. Guests still need valid
+pairing and enrollment proofs. Include the trusted pairing hosts, not private
+keys or pairing codes. Changing this setting is not device revocation.
+
+Test the configuration only with synthetic identities and numeric-loopback
+Wrangler using the existing local commands above. Tests cover empty/default,
+listed and unlisted keys. No account configuration was performed in this round.
+
+The Worker caps pending pairing rooms at eight per source IP and three per
+verified host key across rooms. Claims expire after ten minutes and release on
+completion or owner disconnect. Source IP comes from Cloudflare's trusted
+`CF-Connecting-IP` header; local tests use synthetic header values. Each socket
+has a 4 MiB/s input budget, a 600-message/s cap and the existing frame limits.
+These bounds do not make an open public endpoint immune to a distributed attack.
+
+Before hosting, the account owner should add a Cloudflare rate-limiting rule for
+`/pair/` and `/sync/` upgrade requests, keyed by source IP, and monitor requests,
+Durable Object activity and billing. Choose thresholds for the actual fleet and
+plan. Edge-rule setup and effectiveness require the real account and were not
+run locally. See the official [rate-limiting guide](https://developers.cloudflare.com/waf/rate-limiting-rules/).
+
+At enable, Sidenote prepends `/local` to the share's `.stignore` ahead of existing
+rules, preserving those rules. It leaves that exclusion in place when disabled,
+because the retained replica and protected keys must stay on this PC. The
+replica content is plaintext at rest; DPAPI protects its keys, not all content.

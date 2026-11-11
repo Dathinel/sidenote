@@ -4,6 +4,10 @@ compatibility_date = "2026-11-09"
 workers_dev = true
 send_metrics = false
 
+[vars]
+# Optional comma-separated public genesis / pairing-host keys. Empty keeps open enrollment.
+ALLOWED_GENESIS = ""
+
 [observability]
 enabled = false
 

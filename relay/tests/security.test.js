@@ -9,12 +9,13 @@ globalThis.WebSocket = { OPEN: 1 };
 const { default: worker, Room } = await import("../src/index.ts");
 const { PAIR_LOCATORS } = await import("../src/locators.ts");
 
-function fixture(env) {
+function fixture(overrides) {
+  let env;
   const budgets = new Map();
-  env ??= {ROOMS:{getByName(name) {
+  env = {ROOMS:{getByName(name) {
     if(!budgets.has(name)) budgets.set(name,fixture(env).room);
     return {fetch:request=>budgets.get(name).fetch(new Request(request))};
-  }}};
+  }},...overrides};
   let db = new Database(":memory:");
   const sockets = [];
   let deletes = 0, writes = 0, alarm = null;
@@ -65,7 +66,7 @@ test("R1 only the 1000 public locator hashes reach a DO", async () => {
   expect((await worker.fetch(request("f".repeat(64)),env)).status).toBe(404);
   expect(calls).toBe(0);
   await worker.fetch(request([...PAIR_LOCATORS][0]),env);
-  expect(calls).toBe(1);
+  expect(calls).toBe(2);
 });
 test("R1 strict device login budget survives handler turns", async () => {
   const f=fixture();
@@ -178,17 +179,17 @@ test("R5 grant consumes before exactly one bundle; retry cannot reopen it", asyn
 });
 
 const hex = bytes => Array.from(new Uint8Array(bytes), b=>b.toString(16).padStart(2,"0")).join("");
-async function signedLogin(invalidMember = false) {
+async function signedLogin(invalidMember = false, role = "device") {
   const keys=await crypto.subtle.generateKey("Ed25519",true,["sign","verify"]);
   const publicKey=hex(await crypto.subtle.exportKey("raw",keys.publicKey));
   const sign=async text=>hex(await crypto.subtle.sign("Ed25519",keys.privateKey,new TextEncoder().encode(text)));
-  const attachment={...state("device"),kind:"sync",nonce:"c".repeat(64),key:undefined};
+  const attachment={...state(role),kind:role==="owner"?"pair":"sync",nonce:"c".repeat(64),key:undefined};
   const enrollments=[{sponsor:publicKey,member:publicKey,signature:await sign(`sidenote-enroll-v1:${key}:${publicKey}`)}];
   if(invalidMember) {
     const member="q".repeat(64);
     enrollments.push({sponsor:publicKey,member,signature:await sign(`sidenote-enroll-v1:${key}:${member}`)});
   }
-  return {attachment,auth:JSON.stringify({type:"auth",key:publicKey,signature:await sign(`sidenote-auth-v1:${key}:device:${attachment.nonce}`),enrollments})};
+  return {attachment,auth:JSON.stringify({type:"auth",key:publicKey,signature:await sign(`sidenote-auth-v1:${key}:${role}:${attachment.nonce}`),enrollments})};
 }
 test("R4 even a valid sponsor signature cannot enroll a malformed member key",async()=>{
   const f=fixture(),{attachment,auth}=await signedLogin(true),ws=f.socket(attachment);
@@ -309,4 +310,60 @@ test("production does not expose sync-interruption qualification controls",async
  let calls=0;const env={ROOMS:{getByName(){calls++;throw Error("unexpected room");}}};
  for(const mode of ["pause","resume","status"]){const response=await worker.fetch(new Request(`http://127.0.0.1/__test/sync-${mode}/${"a".repeat(64)}`,{method:"POST"}),env);expect(response.status).toBe(404);}
  expect(calls).toBe(0);
+});
+
+test("allowlist refuses unlisted genesis without persisting a sync room",async()=>{
+  const f=fixture({ALLOWED_GENESIS:"f".repeat(64)}),{attachment,auth}=await signedLogin();
+  const ws=f.socket(attachment);await f.room.webSocketMessage(ws,auth);
+  expect(ws.closed).toBe(true);expect(f.room.meta()).toBeUndefined();expect(ws.sent).toEqual([]);
+  const publicKey=JSON.parse(auth).key;
+  const allowed=fixture({ALLOWED_GENESIS:publicKey}),good=allowed.socket({...attachment});
+  await allowed.room.webSocketMessage(good,auth);
+  expect(good.closed).toBe(false);expect(allowed.room.meta().pins).toEqual([publicKey]);
+});
+
+test("pair-owner allowlist and three pending slots are enforced across rooms",async()=>{
+  const {attachment,auth}=await signedLogin(false,"owner");
+  const publicKey=JSON.parse(auth).key;
+  const denied=fixture({ALLOWED_GENESIS:"f".repeat(64)});
+  const ws=denied.socket({...attachment,kind:"pair",role:"owner"});
+  await denied.room.webSocketMessage(ws,auth);expect(ws.closed).toBe(true);
+  expect(denied.room.meta()).toBeUndefined();
+  const allowed=fixture({ALLOWED_GENESIS:publicKey}),owner=allowed.socket({...attachment});
+  await allowed.room.webSocketMessage(owner,auth);
+  expect(owner.closed).toBe(false);expect(allowed.room.meta().pins).toEqual([publicKey]);
+  const budget=fixture();
+  const claim=(room,release=false)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=${release?1:0}`));
+  const rooms=[1,2,3,4].map(i=>i.toString(16).padStart(64,"0"));
+  for(const room of rooms.slice(0,3))expect((await claim(room)).status).toBe(204);
+  expect((await claim(rooms[0])).status).toBe(204);
+  expect((await claim(rooms[3])).status).toBe(429);
+  expect((await claim(rooms[0],true)).status).toBe(204);
+  expect((await claim(rooms[3])).status).toBe(204);
+  expect(publicKey.length).toBe(64);
+});
+
+test("IP pairing cap refuses a ninth pending room before room allocation",async()=>{
+  const router=fixture();let allocated=0;
+  const env={ROOMS:{getByName(name){
+    if(name.startsWith("pair-budget:"))return {fetch:request=>router.room.fetch(new Request(request))};
+    allocated++;return {fetch:async()=>new Response("accepted")};
+  }}};
+  const rooms=[...PAIR_LOCATORS].slice(0,9);
+  for(const room of rooms.slice(0,8))expect((await worker.fetch(new Request(`https://relay.test/pair/${room}?role=owner`,{headers:{Upgrade:"websocket","CF-Connecting-IP":"192.0.2.10"}}),env)).status).toBe(200);
+  expect((await worker.fetch(new Request(`https://relay.test/pair/${rooms[8]}?role=owner`,{headers:{Upgrade:"websocket","CF-Connecting-IP":"192.0.2.10"}}),env)).status).toBe(429);
+  expect(allocated).toBe(8);
+});
+
+test("connection byte budget refuses more than four MiB per second",async()=>{
+  const f=fixture();f.room.save({...pair(),kind:"sync",pins:[key,"b".repeat(64)]});
+  f.room.rateNow=()=>1000;
+  const ws=f.socket({...state("device"),kind:"sync"}),peer=f.socket({...state("device"),kind:"sync",key:"b".repeat(64)});
+  ws.serializeAttachment({...ws.deserializeAttachment(),window:1000});
+  const bytes=new Uint8Array(128*1024);bytes[0]=1;bytes[1]=3;
+  bytes.fill(0xaa,2,34);bytes.fill(0xbb,34,66);
+  for(let i=0;i<32;i++)await f.room.webSocketMessage(ws,bytes.buffer);
+  expect(ws.closed).toBe(false);expect(peer.sent.length).toBe(32);
+  await f.room.webSocketMessage(ws,bytes.buffer);
+  expect(ws.closed).toBe(true);expect(peer.sent.length).toBe(32);
 });
