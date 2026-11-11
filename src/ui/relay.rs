@@ -105,6 +105,12 @@ fn human_time_at(at: &str, now: chrono::DateTime<chrono::Local>) -> String {
 }
 
 fn field_name(field: &str) -> String {
+    let path: Option<Vec<String>> = serde_json::from_str(field).ok();
+    let field = path
+        .as_ref()
+        .and_then(|p| p.last())
+        .map(|p| p.strip_prefix("o:").unwrap_or(p))
+        .unwrap_or(field);
     let text = field.replace('_', " ");
     let mut chars = text.chars();
     chars
@@ -272,13 +278,13 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                     "{} chose {} for {}. {}. Both earlier versions are kept.",
                     record.device,
                     value,
-                    record.field,
+                    field_name(&record.field).to_lowercase(),
                     human_time(&record.at)
                 ),
                 p.soft,
             ));
         }
-        out = out.child(card("Recent task choices", history, p));
+        out = out.child(card("Recent choices", history, p));
     }
     let mut pair = col().w_full().gap(12.0).padding(14.0);
     if let Some((local, peer, phrase)) = &s.relay_ui.confirmation {
@@ -364,18 +370,19 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if !s.relay_ui.peers.is_empty() {
         let mut peers = col().w_full();
         for (index, peer) in s.relay_ui.peers.iter().enumerate() {
-            let control = if peer.local {
-                col()
-            } else {
-                let target = peer.token.clone();
-                button("Remove", format!("relay-remove-{index}"), p)
-                    .on_press(move |s: &mut State| s.relay_ui.removing = Some(target.clone()))
-            };
+            let control =
+                if peer.local || s.relay_ui.removing.as_deref() == Some(peer.token.as_str()) {
+                    col()
+                } else {
+                    let target = peer.token.clone();
+                    button("Remove", format!("relay-remove-{index}"), p)
+                        .on_press(move |s: &mut State| s.relay_ui.removing = Some(target.clone()))
+                };
             peers = peers.child(setting_row(
                 s,
                 &format!("relay-paired-device-{index}"),
                 &peer.name,
-                "Paired for manual-task sync.",
+                "Paired for relay sync.",
                 control,
                 peer.local,
                 p,
@@ -394,7 +401,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
                 col().w_full().padding(14.0).gap(12.0).key("relay-remove-prompt")
                     .child(roles::SMALL.wrap(format!("Remove {name}? It stops syncing. Your other devices will need to pair again."), p.ink).role("alert"))
                     .child(row().gap(8.0)
-                        .child(button("Remove", "relay-remove-confirm", p)
+                        .child(primary_button("Remove", "relay-remove-confirm", p)
                             .on_press(move |s: &mut State| {
                                 s.relay_cancel();
                                 let result = core::get(&s.store.root)
@@ -437,11 +444,7 @@ fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
             p.soft,
         ));
     for (index, choice) in conflict.choices.iter().enumerate() {
-        let (id, field, chosen) = (
-            conflict.task_id.clone(),
-            conflict.field.clone(),
-            choice.clone(),
-        );
+        let (chosen, conflict) = (choice.clone(), conflict.clone());
         let value = choice
             .value
             .as_str()
@@ -479,7 +482,7 @@ fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
                     .on_press(move |s: &mut State| {
                         let result = core::get(&s.store.root)
                             .and_then(|p| p.ok_or_else(|| std::io::Error::other("preview off")))
-                            .and_then(|p| p.resolve(&id, &field, &chosen));
+                            .and_then(|p| p.resolve_conflict(&conflict, &chosen));
                         if result.is_ok() {
                             s.toast = Some((
                                 "Choice saved. Both earlier versions remain in history.".into(),
@@ -495,7 +498,7 @@ fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
                 ),
         );
     }
-    card("Resolve task versions", body, p).key(format!(
+    card("Resolve versions", body, p).key(format!(
         "relay-conflict-chooser-{}-{}",
         conflict.task_id, conflict.field
     ))
@@ -507,7 +510,7 @@ pub fn task_chooser(s: &State, task: &sidenote::core::TaskItem, p: Palette) -> O
         .relay_ui
         .conflicts
         .iter()
-        .filter(|c| c.task_id == id)
+        .filter(|c| c.task_id == id || c.task_id.strip_prefix("$manual:") == Some(id))
         .collect();
     if items.is_empty() {
         None
@@ -554,8 +557,12 @@ pub fn scene(s: &mut State, kind: &str) {
             name: "Travel laptop".into(),
             local: false,
         }),
-        "conflict" => {
-            core::seed_render_conflict(&s.store.root).expect("isolated synthetic conflict");
+        "conflict" | "shared-conflict" => {
+            if kind == "shared-conflict" {
+                core::seed_shared_render_conflict(&s.store.root).expect("isolated shared conflict");
+            } else {
+                core::seed_render_conflict(&s.store.root).expect("isolated synthetic conflict");
+            }
             s.hex.shell.relay =
                 core::Settings::load(&s.store.root).expect("synthetic relay settings");
             s.relay_ui.fixture = false;

@@ -30,6 +30,8 @@ $shots = @(
     @('relay-paired', 'relay-paired', '1280x800', $null, @()),
     @('relay-remove-confirm', 'relay-paired', '1280x800', 'relay-remove-confirm.json', @('--at','mark:end')),
     @('relay-conflict', 'relay-conflict', '1280x800', $null, @()),
+    @('relay-shared-conflict', 'relay-shared-conflict', '1280x800', $null, @()),
+    @('relay-shared-resolved', 'relay-shared-conflict', '1280x800', 'relay-shared-resolve.json', @('--at','mark:end')),
     @('relay-entry', 'relay-preview', '1280x800', 'relay-entry.json', @('--at','mark:end')),
     @('relay-remove-cancelled', 'relay-paired', '1280x800', 'relay-remove-cancel.json', @('--at','mark:end')),
     @('relay-conflict-resolved', 'relay-conflict', '1280x800', 'relay-resolve.json', @('--at','mark:end')),

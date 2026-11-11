@@ -1165,6 +1165,7 @@ impl State {
                     cutoff,
                     saved,
                     memory,
+                    profile,
                     check,
                     notes_jobs,
                     ..
@@ -1179,6 +1180,22 @@ impl State {
                         self.saved = Saved::default();
                     }
                     self.refresh_list();
+                }
+                if let Some(profile) = profile {
+                    content_changed |= self.people.prefs.people_sides != profile.people_sides;
+                    self.people.prefs.people_sides = profile.people_sides;
+                    self.people.prefs.relay_people_base = profile
+                        .relay
+                        .then(|| self.people.prefs.people_sides.clone());
+                    if let Some(settings) = &mut self.ai_notes.settings
+                        && self.ai_notes.name.text == settings.your_name
+                    {
+                        content_changed |= settings.your_name != profile.your_name;
+                        settings.your_name = profile.your_name.clone();
+                        settings.relay_name_base =
+                            profile.relay.then_some(profile.your_name.clone());
+                        self.ai_notes.name = TextEdit::new(profile.your_name);
+                    }
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -2497,6 +2514,9 @@ pub fn spec() -> AppSpec<State> {
             ("relay-pair-confirm", |s| relay::scene(s, "confirm")),
             ("relay-paired", |s| relay::scene(s, "paired")),
             ("relay-conflict", |s| relay::scene(s, "conflict")),
+            ("relay-shared-conflict", |s| {
+                relay::scene(s, "shared-conflict")
+            }),
             ("settings-sync", |s| {
                 hex::settings::scene(s, "settings-sync")
             }),

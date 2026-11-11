@@ -57,18 +57,26 @@ def main():
             assert any(device in text and re.search(r"today, \d{2}:\d{2}", text) for text in before_text), theme
         assert sum("relay-use-version-" in key for key in strings(before, "key")) >= 2, theme
         assert not any("relay-use-version-" in key for key in strings(after, "key")), theme
-        assert "Recent task choices" in after_text, theme
+        assert "Recent choices" in after_text, theme
         assert any("chose Morgan for owner" in text for text in after_text), theme
         for scene in ("preview", "paired", "entry", "remove-confirm"):
             tree = frame(args.proof, scene, theme)
             text = list(strings(tree, "text"))
-            assert "Only tasks you add by hand use the relay. A backup stays on this PC." in text, scene
+            assert "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC." in text, scene
             assert "This device" not in text, scene
             labs = element(tree, "relay-labs-card")["rect"]
             for key in ("relay-pair-card", "relay-peers-card"):
                 other = element(tree, key)["rect"]
                 assert abs(labs[0] - other[0]) < 0.5 and abs(labs[2] - other[2]) < 0.5, (scene, key)
             assert element(tree, "relay-preview")["fill"].endswith("00"), "row paint covers the shared border"
+        shared_before = frame(args.proof, "shared-conflict", theme)
+        shared_after = frame(args.proof, "shared-resolved", theme)
+        shared_text = list(strings(shared_before, "text"))
+        assert "Memory \u00b7 Text has 2 versions" in shared_text, theme
+        for value in ("Ship the revised field guide", "Review the field guide with the team"):
+            assert value in shared_text, theme
+        assert not any("relay-use-version-" in key for key in strings(shared_after, "key")), theme
+        assert "Recent choices" in list(strings(shared_after, "text")), theme
         preview = frame(args.proof, "preview", theme)
         assert not any(n.get("key") == "relay-join-code" for n in preview["elements"]), "entry is not folded"
         host = element(preview, "relay-host")
@@ -81,10 +89,12 @@ def main():
         removal = frame(args.proof, "remove-confirm", theme)
         assert "Remove Travel laptop? It stops syncing. Your other devices will need to pair again." in list(strings(removal, "text")), theme
         assert element(removal, "relay-remove-confirm") and element(removal, "relay-remove-cancel"), theme
+        assert not any(n.get("key")=="relay-remove-1" for n in removal["elements"]), "duplicate row Remove remains"
+        assert element(removal, "relay-remove-confirm")["fill"] == host["fill"], "confirm Remove is not primary"
         cancelled = frame(args.proof, "remove-cancelled", theme)
         assert not any(n.get("key") == "relay-remove-prompt" for n in cancelled["elements"]), "Cancel kept the prompt"
         assert element(cancelled, "relay-paired-device-1"), "Cancel removed the device"
-    print("PASS: 12 frames at 1280x800; aligned cards, folded guarded entry, removal/Cancel and conflict choice in both themes")
+    print("PASS: 12 requested frames plus shared Memory choice proof; aligned cards, folded guarded entry, removal/Cancel and conflict choice in both themes")
 
 
 if __name__ == "__main__":

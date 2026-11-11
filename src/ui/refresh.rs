@@ -40,6 +40,7 @@ pub(super) struct Data {
     pub cutoff: Option<Option<chrono::NaiveDate>>,
     pub saved: HashMap<String, Saved>,
     pub memory: Option<core::memory::MemoryFile>,
+    pub profile: Option<core::relay_preview::SharedProfile>,
     pub check: Option<check::Refresh>,
 }
 pub(crate) struct Result {
@@ -85,6 +86,7 @@ impl Data {
             .chain(std::iter::once(core::ALL_KEY))
             .filter_map(|id| loaded(saved_store.load(id)).map(|s| (id.to_string(), s)))
             .collect();
+        let profile = loaded(core::relay_preview::profile(&store.root));
         let projects = loaded(store.load_projects());
         let overrides = loaded(store.load_overrides());
         let cutoff = loaded(store.load_settings()).map(|s| s.cutoff());
@@ -128,6 +130,7 @@ impl Data {
             cutoff,
             saved,
             memory,
+            profile,
             check,
         }
     }
@@ -149,6 +152,7 @@ pub(super) struct Metadata {
     files: Vec<(PathBuf, u64, Option<SystemTime>)>,
     pub skipped: usize,
     temporary: bool,
+    relay_revision: Option<String>,
 }
 fn walk(path: &Path, out: &mut Metadata, depth: usize) {
     use std::os::windows::fs::MetadataExt;
@@ -216,6 +220,9 @@ pub(super) fn metadata() -> Metadata {
         files: Vec::new(),
         skipped: 0,
         temporary: false,
+        relay_revision: core::relay_preview::revision(&core::state_dir())
+            .ok()
+            .flatten(),
     };
     let root = core::state_dir();
     for folder in [
@@ -333,6 +340,7 @@ fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Da
                     cutoff: None,
                     saved: HashMap::new(),
                     memory: None,
+                    profile: None,
                     check: None,
                 },
                 true,

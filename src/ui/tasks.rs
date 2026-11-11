@@ -1743,7 +1743,10 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
                 s.relay_ui
                     .conflicts
                     .iter()
-                    .filter(|c| Some(c.task_id.as_str()) == id.strip_prefix("manual/"))
+                    .filter(|c| {
+                        Some(c.task_id.strip_prefix("$manual:").unwrap_or(&c.task_id))
+                            == id.strip_prefix("manual/")
+                    })
                     .map(|c| c.choices.len())
                     .max()
                     .map(|count| {

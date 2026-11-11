@@ -1072,7 +1072,7 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
         s,
         "relay-preview",
         "Relay sync (preview)",
-        "Only tasks you add by hand use the relay. A backup stays on this PC.",
+        "Tasks, teams, People labels, projects, Memory and your name use the relay. A backup stays on this PC.",
         Switch::new(s.hex.shell.relay.enabled)
             .label("Relay sync (preview)")
             .hide_label()
