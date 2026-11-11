@@ -1865,11 +1865,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 .child(spaced_caps("Why the check suggests it", p))
                 .child(roles::SMALL.wrap(&pr.rationale, p.ink)),
         );
-    let stale = target.is_some_and(|t| {
-        pr.target_updated_at
-            .as_deref()
-            .is_some_and(|u| u != t.updated_at)
-    });
+    let stale = target.is_some_and(|t| !pr.matches_target_version(t));
     if pr.op != ProposalOp::Add && target.is_none() {
         body = body.child(roles::SMALL.medium().wrap(
             "The claim this refers to is gone or no longer active. Accepting will refuse.",

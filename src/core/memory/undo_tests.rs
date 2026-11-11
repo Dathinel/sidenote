@@ -1,16 +1,15 @@
 use super::*;
 
 fn fixture() -> MemoryStore {
-    let root = std::env::temp_dir().join(format!(
-        "sidenote-memory-undo-{}-{}",
-        std::process::id(),
-        Local::now().timestamp_nanos_opt().unwrap()
-    ));
+    fixture_at(Local::now().to_rfc3339())
+}
+
+fn fixture_at(stamp: String) -> MemoryStore {
+    let root = fixture_root(Local::now().timestamp_nanos_opt().unwrap());
     let store = MemoryStore::new(root);
     let source = MemorySource::Meeting {
         reference: "[[1800000000000-1@00:05]]".into(),
     };
-    let stamp = Local::now().to_rfc3339();
     let record = MemoryRecord {
         assignment: None,
         id: "demo-date".into(),
@@ -54,6 +53,89 @@ fn fixture() -> MemoryStore {
     proposal.id = proposal_id(&proposal);
     store.stage_proposals(&[proposal]).unwrap();
     store
+}
+
+fn fixture_root(tick: i64) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "sidenote-memory-undo-{}-{tick}-{sequence}",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn fixture_roots_are_distinct_within_the_same_clock_tick() {
+    assert_ne!(
+        fixture_root(1794386244294324100),
+        fixture_root(1794386244294324100)
+    );
+}
+
+#[test]
+fn proposal_acceptance_compares_timestamp_instants_after_comment_and_restart() {
+    let stamp = "2026-11-11T12:00:00.123456700+05:30";
+    for equivalent in [
+        "2026-11-11T12:00:00.1234567+05:30",
+        "2026-11-11T06:30:00.123456700Z",
+    ] {
+        let store = fixture_at(stamp.into());
+        let before = store.load().unwrap();
+        assert_eq!(before.records[0].updated_at, stamp);
+        assert_eq!(
+            before.proposals[0].proposal.target_updated_at.as_deref(),
+            Some(stamp)
+        );
+        let id = before.proposals[0].proposal.id.clone();
+        let mut file = before.clone();
+        file.records[0].updated_at = equivalent.into();
+        store.save(&before, &file).unwrap();
+        store
+            .comment_proposal(&id, "Keep the venue booking.")
+            .unwrap();
+        let restarted = MemoryStore::new(store.root.clone());
+        let loaded = restarted.load().unwrap();
+        assert_eq!(loaded.records[0].updated_at, equivalent);
+        assert_eq!(
+            loaded.proposals[0].proposal.target_updated_at.as_deref(),
+            Some(stamp)
+        );
+        restarted.accept_proposal(&id).unwrap();
+        let accepted = restarted.load().unwrap();
+        assert_eq!(accepted.records[0].status, RecordStatus::Superseded);
+        assert_eq!(accepted.proposals[0].status, ProposalStatus::Accepted);
+    }
+}
+
+#[test]
+fn proposal_acceptance_refuses_changed_missing_and_invalid_timestamp_guards() {
+    let stamp = "2026-11-11T12:00:00.123456700+05:30";
+    for (target, current) in [
+        (Some(stamp), "2026-11-11T12:00:00.123456701+05:30"),
+        (None, stamp),
+        (Some("invalid"), stamp),
+        (Some(stamp), "invalid"),
+        (Some("invalid"), "invalid"),
+    ] {
+        let store = fixture_at(stamp.into());
+        let before = store.load().unwrap();
+        let mut file = before.clone();
+        file.records[0].updated_at = current.into();
+        file.proposals[0].proposal.target_updated_at = target.map(str::to_owned);
+        file.proposals[0].proposal.id = proposal_id(&file.proposals[0].proposal);
+        let id = file.proposals[0].proposal.id.clone();
+        store.save(&before, &file).unwrap();
+        let error = store.accept_proposal(&id).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Record changed since this proposal; review a new proposal"
+        );
+        let unchanged = store.load().unwrap();
+        assert_eq!(
+            serde_json::to_value(unchanged).unwrap(),
+            serde_json::to_value(file).unwrap()
+        );
+    }
 }
 
 #[test]
