@@ -149,6 +149,7 @@ fn meeting_store(store: &str) -> bool {
         return false;
     };
     stem == "all"
+        || super::persistence::is_company_ask_key(stem)
         || stem.split_once('-').is_some_and(|(a, b)| {
             !a.is_empty() && !b.is_empty() && a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit())
         })
@@ -165,6 +166,7 @@ fn supported(store: &str) -> bool {
         || matches!(
             store,
             "projects.json"
+                | "companies.json"
                 | "task-overrides.json"
                 | "tasks-settings.json"
                 | "agent-instructions.json"
@@ -719,6 +721,9 @@ fn validate_legacy(store: &str, value: &Value) -> io::Result<()> {
         return Err(invalid("Legacy state must be an object"));
     }
     match store {
+        "companies.json" => {
+            serde_json::from_value::<super::companies::Companies>(value.clone())?;
+        }
         "projects.json" => {
             serde_json::from_value::<super::Projects>(value.clone())?;
         }
