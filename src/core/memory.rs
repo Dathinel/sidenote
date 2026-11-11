@@ -117,6 +117,15 @@ pub struct MemoryProposal {
     #[serde(default)]
     pub target_updated_at: Option<String>,
 }
+impl MemoryProposal {
+    pub fn matches_target_version(&self, record: &MemoryRecord) -> bool {
+        self.target_updated_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .zip(chrono::DateTime::parse_from_rfc3339(&record.updated_at).ok())
+            .is_some_and(|(expected, current)| expected == current)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {
@@ -492,7 +501,7 @@ impl MemoryStore {
             }
             if let Some(target) = &proposal.target_id {
                 let record = active_record(&mut file, target)?;
-                if proposal.target_updated_at.as_deref() != Some(&record.updated_at) {
+                if !proposal.matches_target_version(record) {
                     return Err(invalid(
                         "Record changed since this proposal; review a new proposal",
                     ));

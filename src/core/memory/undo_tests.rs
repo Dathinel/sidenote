@@ -56,8 +56,10 @@ fn fixture_at(stamp: String) -> MemoryStore {
 }
 
 fn fixture_root(tick: i64) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "sidenote-memory-undo-{}-{tick}",
+        "sidenote-memory-undo-{}-{tick}-{sequence}",
         std::process::id()
     ))
 }
