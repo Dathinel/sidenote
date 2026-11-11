@@ -38,6 +38,8 @@ public static class FloatingR2 {
   [DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr process,uint kind);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr hwnd,uint msg,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd,uint command);
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode,EntryPoint="SendMessageTimeoutW")] static extern IntPtr ReadText(IntPtr hwnd,uint msg,IntPtr count,StringBuilder text,uint flags,uint timeout,out IntPtr result);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   public static IntPtr[] Windows(uint owned) {
     var found = new System.Collections.Generic.List<IntPtr>();
@@ -49,9 +51,11 @@ public static class FloatingR2 {
     uint p;GetWindowThreadProcessId(h,out p);if(p!=owned)throw new Exception("Refusing message to another process");
     IntPtr result;if(SendMessageTimeoutW(h,msg,IntPtr.Zero,IntPtr.Zero,2,2000,out result)==IntPtr.Zero)throw new Exception("Own-window message timed out");
   }
-  public static bool RenderClient(IntPtr h,uint owned,IntPtr dc) {
+  public static string CardText(IntPtr h,uint owned) {
     uint p;GetWindowThreadProcessId(h,out p);if(p!=owned)throw new Exception("Refusing render from another process");
-    IntPtr result;return SendMessageTimeoutW(h,0x0318,dc,(IntPtr)28,2,2000,out result)!=IntPtr.Zero;
+    var text=new StringBuilder(8192);IntPtr result;
+    if(ReadText(h,0x000D,(IntPtr)text.Capacity,text,2,2000,out result)==IntPtr.Zero)throw new Exception("Own card text read timed out");
+    return text.ToString();
   }
 }
 '@
@@ -62,6 +66,11 @@ function Write-Snapshot([bool]$Recording,[bool]$Speaking,[int]$Elapsed=754,[stri
     $path = Join-Path $local 'floating-icon-replay.json'
     [IO.File]::WriteAllText($path+'.next',$body,$utf8)
     Move-Item -LiteralPath ($path+'.next') -Destination $path -Force
+}
+function Write-Draft([string]$Id) {
+    $draft=Join-Path $local 'draft-summaries'
+    New-Item -ItemType Directory -Force -Path $draft | Out-Null
+    [IO.File]::WriteAllText((Join-Path $draft ($Id+'.json')),'{"title":"Synthetic review","context":["The team agreed to review the sample tomorrow."],"topics":[],"todo":[],"to_settle":[]}',$utf8)
 }
 function Find-Window([string]$Class) {
     @([FloatingR2]::Windows($child.Id) | Where-Object { [FloatingR2]::Class($_) -eq $Class }) | Select-Object -First 1
@@ -194,9 +203,15 @@ try {
     $bounds=Geometry $edit
     $bitmap=[Drawing.Bitmap]::new($bounds.width,$bounds.height)
     $graphics=[Drawing.Graphics]::FromImage($bitmap)
-    $dc=$graphics.GetHdc()
-    try { $result.card_rendered=[FloatingR2]::RenderClient($edit,$child.Id,$dc) }
-    finally { $graphics.ReleaseHdc($dc);$graphics.Dispose() }
+    $cardText=[FloatingR2]::CardText($edit,$child.Id)
+    if (!$cardText.StartsWith('Meeting is recording.')) { throw 'Own card did not receive the recording text.' }
+    $font=[Drawing.Font]::new('Segoe UI',[single](13.0*[FloatingR2]::GetDpiForWindow($edit)/96),[Drawing.FontStyle]::Regular,[Drawing.GraphicsUnit]::Pixel)
+    try {
+        $graphics.Clear([Drawing.Color]::White)
+        $graphics.DrawString($cardText,$font,[Drawing.Brushes]::Black,[Drawing.RectangleF]::new(0,0,$bounds.width,$bounds.height))
+        $result.card_text_characters=$cardText.Length
+        $result.card_render_method='Headless preview of owned EDIT text; native pixels remain capture-excluded.'
+    } finally { $font.Dispose();$graphics.Dispose() }
     $bitmap.Save((Join-Path $run 'floating-icon-card.png'),[Drawing.Imaging.ImageFormat]::Png)
     $bitmap.Dispose()
     [FloatingR2]::Message($card,$child.Id,0x10)
@@ -204,9 +219,7 @@ try {
     Write-Snapshot $false $false
     Start-Sleep -Milliseconds 500
     if (!(Find-Window 'SidenoteListenerMeetingIcon')) { throw 'Stopped meeting vanished before draft was seen.' }
-    $draft=Join-Path $local 'draft-summaries'
-    New-Item -ItemType Directory -Force -Path $draft | Out-Null
-    [IO.File]::WriteAllText((Join-Path $draft '1794440000000-1.json'),'{"title":"Synthetic review","context":["The team agreed to review the sample tomorrow."],"topics":[],"todo":[],"to_settle":[]}',$utf8)
+    Write-Draft '1794440000000-1'
     Start-Sleep -Milliseconds 500
     if (!(Find-Window 'SidenoteListenerMeetingIcon')) { throw 'Unseen draft removed icon.' }
     [FloatingR2]::Message($icon,$child.Id,0x8028)
@@ -219,16 +232,28 @@ try {
     Sample 'torn_down'
     $result.gui_resources_returned_to_idle = ($result.torn_down[-1].gdi -eq $result.idle[-1].gdi -and $result.torn_down[-1].user -eq $result.idle[-1].user)
     $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'measurements.json') -Encoding UTF8
-    if (!$result.gui_resources_returned_to_idle) { throw 'Native window resources did not return to their idle counts.' }
     # A second meeting proves classes and resources can be created again after teardown.
     Write-Snapshot $true $false 1 '1794440000000-2'
     $second=Wait-Window 'SidenoteListenerMeetingIcon'
     $result.second_icon_affinity=Affinity $second
     Check-Foreground
+    Write-Snapshot $false $false 1 '1794440000000-2'
+    Write-Draft '1794440000000-2'
+    Start-Sleep -Milliseconds 500
+    [FloatingR2]::Message($second,$child.Id,0x8028)
+    $secondCard=Wait-Window 'SidenoteListenerMeetingCard'
+    Start-Sleep -Milliseconds 200
+    [FloatingR2]::Message($secondCard,$child.Id,0x10)
+    Wait-Window 'SidenoteListenerMeetingIcon' $false | Out-Null
+    Wait-Window 'SidenoteListenerMeetingCard' $false | Out-Null
+    Sample 'second_torn_down'
+    $result.second_gui_resources_returned_to_idle = ($result.second_torn_down[-1].gdi -eq $result.idle[-1].gdi -and $result.second_torn_down[-1].user -eq $result.idle[-1].user)
+    $result.gui_resources_stable_across_teardowns = ($result.second_torn_down[-1].gdi -eq $result.torn_down[-1].gdi -and $result.second_torn_down[-1].user -eq $result.torn_down[-1].user)
     $result.foreground_checks=$foregroundChecks
     $result.completed_utc=[DateTime]::UtcNow.ToString('o')
     $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'measurements.json') -Encoding UTF8
     Write-Output "Evidence: $run/measurements.json"
+    if (!$result.gui_resources_returned_to_idle -or !$result.second_gui_resources_returned_to_idle) { throw 'Native window resources did not return to their cold idle counts. Measurements were retained.' }
 } finally {
     if (!$child.HasExited) {
         [IO.File]::WriteAllText((Join-Path $local 'floating-icon-exit'),'exit',$utf8)

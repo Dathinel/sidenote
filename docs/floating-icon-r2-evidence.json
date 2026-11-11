@@ -1,0 +1,188 @@
+﻿{
+    "units":  "MB = 1,000,000 bytes",
+    "exe":  "E:\\Personal-Projects\\hex-meetings\\.worktrees\\floating-icon-r2\\artifacts\\floating-icon-r2\\sidenote.exe",
+    "sha256":  "ADA35A9032D4DAE11A8990CDDA9CEB1976CFEF54A297350EDD52827E99EC65F6",
+    "isolated":  true,
+    "pid":  35264,
+    "foreground_checks":  1115,
+    "idle":  [
+                 {
+                     "working_set_mb":  11.006,
+                     "private_bytes_mb":  2.351,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  162,
+                     "windows":  [
+
+                                 ]
+                 },
+                 {
+                     "working_set_mb":  11.006,
+                     "private_bytes_mb":  2.351,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  162,
+                     "windows":  [
+
+                                 ]
+                 },
+                 {
+                     "working_set_mb":  11.006,
+                     "private_bytes_mb":  2.351,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  162,
+                     "windows":  [
+
+                                 ]
+                 }
+             ],
+    "icon_affinity":  17,
+    "icon_ex_style":  134742152,
+    "bead_region":  {
+                        "left_in_region":  false,
+                        "right_cap_in_region":  true,
+                        "empty_point_resolves_to_icon":  false
+                    },
+    "shown":  [
+                  {
+                      "working_set_mb":  12.37,
+                      "private_bytes_mb":  2.515,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  169,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon",
+                                      "IME"
+                                  ]
+                  },
+                  {
+                      "working_set_mb":  12.37,
+                      "private_bytes_mb":  2.515,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  169,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon",
+                                      "IME"
+                                  ]
+                  },
+                  {
+                      "working_set_mb":  12.37,
+                      "private_bytes_mb":  2.515,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  169,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon",
+                                      "IME"
+                                  ]
+                  }
+              ],
+    "idle_icon_cpu":  {
+                          "cpu_ms":  78.125,
+                          "wall_ms":  10989.4797,
+                          "percent_one_core":  0.71063054263966541
+                      },
+    "cycles":  20,
+    "geometry_samples":  1000,
+    "right_edges":  [
+                        1910
+                    ],
+    "right_edge_range_px":  0,
+    "widths":  [
+                   130
+               ],
+    "card_affinity":  17,
+    "card_bounds":  {
+                        "left":  1320,
+                        "top":  10,
+                        "right":  1770,
+                        "bottom":  385,
+                        "width":  450,
+                        "height":  375
+                    },
+    "card_text_characters":  65,
+    "card_render_method":  "Headless preview of owned EDIT text; native pixels remain capture-excluded.",
+    "pending_after_ack":  {
+
+                          },
+    "torn_down":  [
+                      {
+                          "working_set_mb":  14.25,
+                          "private_bytes_mb":  2.699,
+                          "gdi":  4,
+                          "user":  1,
+                          "handles":  177,
+                          "windows":  [
+
+                                      ]
+                      },
+                      {
+                          "working_set_mb":  14.23,
+                          "private_bytes_mb":  2.662,
+                          "gdi":  4,
+                          "user":  1,
+                          "handles":  177,
+                          "windows":  [
+
+                                      ]
+                      },
+                      {
+                          "working_set_mb":  14.23,
+                          "private_bytes_mb":  2.662,
+                          "gdi":  4,
+                          "user":  1,
+                          "handles":  177,
+                          "windows":  [
+
+                                      ]
+                      }
+                  ],
+    "gui_resources_returned_to_idle":  false,
+    "second_icon_affinity":  17,
+    "second_torn_down":  [
+                             {
+                                 "working_set_mb":  14.279,
+                                 "private_bytes_mb":  2.671,
+                                 "gdi":  4,
+                                 "user":  1,
+                                 "handles":  177,
+                                 "windows":  [
+
+                                             ]
+                             },
+                             {
+                                 "working_set_mb":  14.279,
+                                 "private_bytes_mb":  2.671,
+                                 "gdi":  4,
+                                 "user":  1,
+                                 "handles":  177,
+                                 "windows":  [
+
+                                             ]
+                             },
+                             {
+                                 "working_set_mb":  14.279,
+                                 "private_bytes_mb":  2.671,
+                                 "gdi":  4,
+                                 "user":  1,
+                                 "handles":  177,
+                                 "windows":  [
+
+                                             ]
+                             }
+                         ],
+    "second_gui_resources_returned_to_idle":  false,
+    "gui_resources_stable_across_teardowns":  true,
+    "completed_utc":  "2026-11-11T21:08:37.8977627Z",
+    "source_commit":  "64accf5c0e8f572c95869feedbd64e911388a8ca",
+    "mandated_gates":  {
+                           "fmt_check":  "pass",
+                           "clippy_locked_all_targets":  "pass",
+                           "clippy_locked_all_targets_asr_runtime":  "pass",
+                           "release_build_asr_runtime":  "pass",
+                           "tests_run":  0
+                       },
+    "probe_exit_code":  1
+}
