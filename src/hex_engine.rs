@@ -66,6 +66,42 @@ fn discovery() -> Result<Discovery> {
     }
     Ok(d)
 }
+/// Privacy-filtered status for the headless listener. No model or title is retained.
+pub(crate) fn listener_status() -> Result<Value> {
+    let v = control_response(json!({"command":"status"}), STATUS_TIMEOUT)?;
+    if v["status"] != "status" {
+        return Err(failed("unexpected status reply"));
+    }
+    Ok(json!({
+        "app_version": safe_label(&v["app_version"]), "protocol": v["version"].as_u64(),
+        "meeting_state": known_state(&v["meeting"]["state"]),
+        "capture_state": known_state(&v["capture"]["state"]),
+        "capture_kind": v["capture"]["recording"].as_str().filter(|s| matches!(*s,"dictation"|"service")),
+        "can_process": v["version"].as_u64()==Some(PROTOCOL) && v["capture"]["state"]=="idle" && v["model"]["preparing"].is_null(),
+        "elapsed": v["meeting"]["elapsed_seconds"].as_u64(),
+        "id": v["meeting"]["id"].as_str().filter(|id| !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit() || c == b'-')),
+        "has_elapsed": !v["meeting"]["elapsed_seconds"].is_null(),
+        "has_id": !v["meeting"]["id"].is_null()
+    }))
+}
+fn known_state(value: &Value) -> &str {
+    match value.as_str() {
+        Some(
+            s @ ("starting" | "recording" | "paused" | "stopping" | "finishing" | "idle"
+            | "stopped" | "complete" | "finished" | "transcribing"),
+        ) => s,
+        _ => "unknown",
+    }
+}
+fn safe_label(value: &Value) -> Option<&str> {
+    value.as_str().filter(|s| {
+        s.len() <= 80
+            && !s.is_empty()
+            && s.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+    })
+}
+
 fn hex_dir() -> Result<PathBuf> {
     std::env::var_os("APPDATA")
         .map(|p| PathBuf::from(p).join("hex"))
@@ -128,7 +164,14 @@ fn read_bytes(
     }
     Ok(())
 }
-fn control(mut request: Value, timeout: Duration) -> Result<Value> {
+fn control(request: Value, timeout: Duration) -> Result<Value> {
+    let response = control_response(request, timeout)?;
+    if response["version"].as_u64() != Some(PROTOCOL) {
+        return Err(HexError::Unsupported);
+    }
+    Ok(response)
+}
+fn control_response(mut request: Value, timeout: Duration) -> Result<Value> {
     let deadline = Instant::now() + timeout;
     let d = discovery()?;
     request["version"] = json!(PROTOCOL);
@@ -249,9 +292,6 @@ fn control(mut request: Value, timeout: Duration) -> Result<Value> {
                 stderr_summary: "Hex refused the command; message and values suppressed",
             },
         });
-    }
-    if response["version"].as_u64() != Some(PROTOCOL) {
-        return Err(HexError::Unsupported);
     }
     Ok(response)
 }

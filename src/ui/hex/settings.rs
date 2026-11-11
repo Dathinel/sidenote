@@ -607,6 +607,14 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "labs-process-windows",
+            "Process meetings in 5-minute windows (test)",
+            "Labs evidence audio windows timing backlog",
+            Page::Diagnostics,
+            0,
+            false,
+        ),
+        entry(
             "notes-identity",
             "Your name",
             "identity profile",
@@ -1379,7 +1387,13 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             "Save file sizes, WAV header details and transcript line counts during recordings. No audio or text is saved.",
             Switch::new(s.config.labs.measure_recording_files)
                 .label("Measure recording files (diagnostics)").hide_label()
-                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p)), p)
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p))
+        .child(hairline(p))
+        .child(setting_row(s, "labs-process-windows", "Process meetings in 5-minute windows (test)",
+            "Test calls only. Runs Telugu and Hindi models while recording and saves audio windows, results and timings in Sidenote. May slow live transcription. Your meeting notes stay as they are.",
+            Switch::new(s.config.labs.process_meeting_windows)
+                .label("Process meetings in 5-minute windows (test)").hide_label()
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.process_meeting_windows = !labs.process_meeting_windows)).build(k).key("labs-process-windows-toggle"), true, p)), p)
 }
 fn devices(s: &State, p: Palette) -> El {
     let name = if rune::tooling::headless_run().is_some() {

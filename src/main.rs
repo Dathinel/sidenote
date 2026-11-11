@@ -179,6 +179,7 @@ fn main() {
     if std::env::args().any(|a| a == "--daily-check") {
         std::process::exit(sidenote::core::daily_check::run_cli());
     }
+    // The listener owns continuous status detection and the opt-in evidence worker.
     if std::env::args().any(|a| a == "--listen") {
         listener::run()
     }

@@ -44,6 +44,7 @@ static WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// Called once with the window's handle, so the indicator can tell shown from minimized.
 pub fn remember_window(hwnd: isize) {
     WINDOW.store(hwnd, Ordering::Relaxed);
+    sidenote::listener::status::remember_window(hwnd);
 }
 
 /// On screen and not minimized. Before the handle is known the window counts as shown.

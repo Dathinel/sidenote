@@ -12,6 +12,8 @@ pub mod asr;
 pub mod check_state;
 pub mod config;
 pub mod export;
+pub mod growing_wav;
+pub(crate) mod meeting_evidence;
 pub mod meeting_router;
 pub mod meeting_watch;
 pub mod recording_guard;

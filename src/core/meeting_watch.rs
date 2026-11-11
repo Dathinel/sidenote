@@ -20,6 +20,7 @@ pub struct Labs {
     pub stop_forgotten_recordings: bool,
     pub silence_minutes: SilenceMinutes,
     pub measure_recording_files: bool,
+    pub process_meeting_windows: bool,
 }
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(try_from = "u64", into = "u64")]
@@ -63,7 +64,7 @@ fn valid_id(id: &str) -> bool {
         && id.bytes().any(|b| b.is_ascii_digit())
         && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
-fn shared_read(path: &Path) -> io::Result<File> {
+pub(crate) fn shared_read(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
@@ -149,30 +150,32 @@ impl SilenceTimer {
 }
 
 #[derive(Clone, Serialize)]
-struct WavHeader {
-    riff_bytes: u32,
-    format_tag: u16,
-    channels: u16,
-    sample_rate: u32,
-    byte_rate: u32,
-    block_align: u16,
-    bits_per_sample: u16,
-    declared_data_bytes: u32,
-    data_offset: u64,
-    visible_data_bytes: u64,
+pub(crate) struct WavHeader {
+    pub(crate) riff_bytes: u32,
+    pub(crate) format_tag: u16,
+    pub(crate) encoding_tag: u16,
+    pub(crate) channels: u16,
+    pub(crate) sample_rate: u32,
+    pub(crate) byte_rate: u32,
+    pub(crate) block_align: u16,
+    pub(crate) bits_per_sample: u16,
+    pub(crate) declared_data_bytes: u32,
+    pub(crate) data_offset: u64,
+    pub(crate) visible_data_bytes: u64,
     /// Complete sample frames per channel, ignoring an incomplete final frame.
-    sample_count: u64,
-    trailing_bytes: u64,
+    pub(crate) sample_count: u64,
+    pub(crate) trailing_bytes: u64,
 }
-fn wav_header(reader: &mut (impl Read + Seek), length: u64) -> io::Result<WavHeader> {
+pub(crate) fn wav_header(reader: &mut (impl Read + Seek), length: u64) -> io::Result<WavHeader> {
     let mut riff = [0; 12];
     reader.read_exact(&mut riff)?;
     if &riff[..4] != b"RIFF" || &riff[8..] != b"WAVE" {
         return Err(io::ErrorKind::InvalidData.into());
     }
     let mut fmt = None;
+    let mut encoding_tag = 0;
     let mut offset = 12u64;
-    // Only chunk headers and the first 16 fmt bytes are read. Unknown chunks are skipped.
+    // Read format metadata, including the extensible subtype. Unknown chunks are skipped.
     while offset <= 64 * 1024 && offset.saturating_add(8) <= length {
         reader.seek(SeekFrom::Start(offset))?;
         let mut chunk = [0; 8];
@@ -191,6 +194,7 @@ fn wav_header(reader: &mut (impl Read + Seek), length: u64) -> io::Result<WavHea
             return Ok(WavHeader {
                 riff_bytes: u32::from_le_bytes(riff[4..8].try_into().unwrap()),
                 format_tag: u16_at(0),
+                encoding_tag,
                 channels: u16_at(2),
                 sample_rate: u32_at(4),
                 byte_rate: u32_at(8),
@@ -209,6 +213,21 @@ fn wav_header(reader: &mut (impl Read + Seek), length: u64) -> io::Result<WavHea
             }
             let mut bytes = [0; 16];
             reader.read_exact(&mut bytes)?;
+            encoding_tag = u16::from_le_bytes(bytes[..2].try_into().unwrap());
+            if encoding_tag == 0xfffe {
+                if size < 40 || offset + 40 > length {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
+                let mut extension = [0; 24];
+                reader.read_exact(&mut extension)?;
+                let guid_tail = [0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
+                if u16::from_le_bytes(extension[..2].try_into().unwrap()) < 22
+                    || extension[10..] != guid_tail
+                {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                encoding_tag = u16::from_le_bytes(extension[8..10].try_into().unwrap());
+            }
             fmt = Some(bytes);
         }
         offset += u64::from(size) + u64::from(size % 2);
