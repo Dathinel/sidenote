@@ -162,7 +162,7 @@ bump the version, push or deploy. Stop at the authorized slice and 90-minute lim
    independent security review, revocation/rotation and packaging evidence.
 
 Slices 1 and 2 are accepted. Slice 3 is authorized on feat/sync-relay-2 after
-Round 1 UI acceptance (28fc734). Stop before slices 4 and 5.
+Round 1 UI acceptance (28fc734). Slice 3 is accepted at 742acee; slice 4 is authorized.
 
 ## Earlier evidence and limits
 
@@ -171,79 +171,54 @@ fixture was replaced in slice 2 with the real confirmed pairing flow. See
 `docs/sync-relay-2.md` for the accepted receipts. Local automated evidence is
 rung 4 and does not replace physical-device or independent security qualification.
 
-## Slice 3 implementation contract
+## Accepted slice 3
 
-Purpose: extend the opt-in, full local replica to the remaining shared app data,
-while retaining folder transport for meeting source files and a verified way back.
-Keep all existing security limits and off-by-default behavior. Include the two
-Remove-confirmation nits: hide the row action while confirming and use the shared
-destructive button, or primary if the app has no shared destructive style.
+Slice 3 (742acee) shares meeting task edits/checks, stable subtasks, teams and
+aliases, People classifications, projects/areas, Memory and your name. Selected
+folder fields are backed up and frozen; source meeting files keep folder sync.
+Helper/model choices, credentials, UI layout and People corpus eligibility stay
+local. External Hex configuration has no adapter. Stable IDs, field alternatives,
+tombstones, source receipts and existing project/Memory guards are retained.
 
-Success criteria:
-- Route meeting task overrides, checks, assignments and stable subtasks through
-  field registers. Keep generated tasks, recordings and meeting files in folder sync.
-- Share teams, memberships and aliases by stable identity, plus explicit People
-  classifications. People discovery and historical-corpus eligibility stay local.
-- Share projects/areas, aliases, assignments and operation receipts; retain existing
-  validation, conflict guards, merge/undo ownership and recovery checks.
-- Share Memory records, proposals, provenance and decisions without accepting a
-  proposal merely because it arrived. Keep legacy text migration explicit.
-- Share an explicit You allowlist: your display name and People classifications.
-  Device paths, credentials, helper/model choices, hardware, UI layout and People
-  corpus eligibility stay local. The existing task cutoff retains its folder policy.
-  Hex language/vocabulary stays outside this app until its own adapter exists.
-- Preserve IDs on import, use source receipts, and freeze only migrated folder
-  fields. Verify backups and rollback without publishing relay projections into
-  the original journals. Enabling again must retain the relay collection.
-- Keep concurrent field alternatives with device/time and a Sync chooser. Merge
-  different fields, independent members and stable subtask IDs without a clock
-  winner. Deletes must not be undone by a stale import or unrelated field edit.
-- Exercise the real app APIs on two isolated headless processes using confirmed
-  pairing and a numeric-loopback Worker. Check offline/restart convergence for
-  each new domain, same-field choice, migration retry, rollback, local settings
-  exclusion and a peer change during a guarded project operation.
-- Run fmt, both strict clippy variants, both locked workspace test variants, build,
-  MCP smoke, relay Bun tests and typecheck. Re-render all Sync states, including
-  Remove confirmation, in light/dark at 1280x800 and inspect the affected domains.
+Two real headless app processes proved confirmed pairing, offline field/member
+merges, Memory text and accept/reject choices, stale project merge refusal,
+owner-only undo, duplicate-free migration, unchanged folder bytes and durable
+re-enable. Both feature gate variants, MCP, 21 Bun tests and typecheck passed.
+The 44 offscreen frames and commands are indexed in artifacts/relay3-evidence.json.
+This is rung 4 evidence. The pre-build slice 3 contract is retained in f9b56e6.
+Mixed-version negotiation was not implemented or qualified in that slice.
 
-Edge cases: existing slice 2 replicas need a separate idempotent shared-data
-upgrade; missing stores must not replace remote data with defaults. Preserve
-unknown fields, tombstones, alias cycles and generated-task source matching.
-Collections need identity-based members, not array-position winners. Stale UI
-saves must not reset unrelated peer fields or machine-local settings. Reject
-corrupt backups, partial journals, invalid domains and changed undo baselines.
-Mixed-version writable clients must stay out of preview; capability negotiation
-and downgrade rejection still need release qualification. Keep operation receipts
-immutable where required.
+## Slice 4 implementation contract
 
-Out of scope: relay transfer of meeting source files/audio, Ask chat, daily-check
-reports, external Hex configuration, selective multi-peer rekey, hosted backlog,
-login, deployment, pushing, version changes or owner-screen interaction. Slice 4
-covers the Worker self-host guide and local operational checks. Actual hosted
-self-host evidence, two real devices and an independent security review remain
-release gates in slice 5, requiring separate authorization where applicable.
+Purpose: prevent incompatible relay writers first, then make a local Worker
+installation and its status understandable to a first-time self-hosting user.
+The preview remains opt-in and source meeting files keep their folder transport.
 
-## Slice 3 local receipt
+Success criteria, in order:
+1. Negotiate authenticated schema/capability requirements before document exchange.
+   Persist the highest group requirement so reconnect, restart and downgrade cannot
+   regain write access. Unsupported clients keep relay reads safe, refuse every
+   relay mutation and show: "Another device runs a newer Sidenote. Update this one
+   to keep syncing." Folder-only writes must still work. Prove two isolated app
+   processes with different supported versions against numeric-loopback Wrangler.
+2. Write docs/self-host-relay.md with prerequisites, pinned local commands, exact
+   config values, Settings > Sync > Advanced setup, pairing/removal/rotation,
+   cost/limit explanations and account-only steps. Execute every shell command
+   shown locally, capturing output under artifacts. Account actions are prose,
+   clearly unexecuted. Do not log protocol payloads, invitations, keys or secrets.
+3. Check /health, distinguish an invalid endpoint from unreachable service, and
+   show the configured address and last successful contact under Advanced.
+   Render normal, unreachable and update-required states in both themes.
+4. Run all existing gates: fmt, strict locked workspace clippy/tests with and
+   without asr-runtime, locked build, MCP smoke, Bun tests and relay typecheck.
 
-The preview now uses field registers for meeting task edits/checks, stable
-subtasks, teams and aliases, People classifications, projects/areas, Memory and
-your name. Selected folder fields are backed up and frozen; meeting source files
-and nonselected settings retain their existing transport. Device helper/model
-choices, UI preferences and People corpus eligibility are excluded.
+Edge cases: old/missing negotiation, future schema versus future feature version,
+forged or stale announcements, offline edits after incompatibility, downgrade
+across restarts, malformed health replies, timeouts, invalid addresses and no
+previous contact. Keep successful-contact time per device and never call a queued
+local edit delivered. Group removal must not retain another group's authority.
 
-The two real headless app processes pair through numeric-loopback Wrangler.
-Tests cover independent offline fields and members, Memory text and proposal
-accept/reject conflicts, a stale project merge, owner-only undo, duplicate-free
-migration, unchanged folder bytes and disable/re-enable durability. Shared-field
-choices and their history use the real Sync chooser. Remove confirmation hides
-the row action and uses the existing primary style; no shared destructive style
-was found in the UI components.
-
-All requested local gates passed, including both feature variants, MCP, 21 Bun
-tests and relay typecheck. The requested 12 Sync PNGs, four shared Memory PNGs,
-18 interaction-proof frames and ten affected-domain frames were rendered. See
-artifacts/relay3-evidence.json and artifacts/relay3-png-paths.json locally.
-Evidence is rung 4. Mixed-version negotiation/downgrade rejection is unqualified;
-do not mix writable app versions. Slices 4 and 5 and all physical-device, hosted
-self-host and independent security release gates remain. No login, deployment,
-push, version change or owner-screen interaction was performed.
+Out of scope: login, deployment, push, version bump, hosted services, screen
+windows, backlog, selective rekey or slice 5. Physical devices, an owner-hosted
+Worker and independent security review remain release gates. Stop at a clean
+commit around 60 minutes and report any remaining work.
