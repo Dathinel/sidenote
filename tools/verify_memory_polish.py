@@ -42,7 +42,7 @@ def main():
     nodes = render('empty-retired', [tap('memory-browse'), tap('memory-filter-state', .7), tap('memory-filter-state-menu-item2', 1.1)])
     assert 'memory-clear-state' in nodes and 'memory-filter-type' in nodes
     assert not any(key.startswith('memory-group-') for key in nodes)
-    nodes = render('breadcrumb', [tap('memory-browse'), tap('memory-home', .7)])
+    nodes = render('breadcrumb', [tap('memory-browse'), tap('memory-breadcrumb-parent', .7)])
     assert 'memory-browse' in nodes and 'memory-filter-type' not in nodes
     print('PASS: immediate menu selection, two filters, persistence after restart, collapse, individual removal, Clear all, empty results and breadcrumb navigation')
 

@@ -35,7 +35,9 @@ def main():
             assert search[2] <= 480.1, search
             for name in ['type', 'state', 'project']:
                 keyed(nodes, 'memory-filter-' + name)
-            assert keyed(nodes, 'memory-home')['role'] == 'button'
+            assert keyed(nodes, 'memory-breadcrumb')['role'] == 'navigation'
+            assert keyed(nodes, 'memory-breadcrumb-parent')['text'] == 'Memory'
+            assert keyed(nodes, 'memory-breadcrumb-current')['text'] == 'All'
             assert not any(node.get('text') == 'Back to Memory' for node in nodes)
             if 'active' in Path(shot['path']).name:
                 keyed(nodes, 'memory-clear-type')
