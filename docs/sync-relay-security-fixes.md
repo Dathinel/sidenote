@@ -1,6 +1,9 @@
 # Security follow-up contract
 
 Decisions needed: none. Source: the independent read-only review at 030a513.
+The final Labs contract in `sync-relay-preview-final.md` supersedes the earlier
+L1/L2 recovery requirements here. Their limitations and unavailable Remove are
+accepted for the owner's trusted-device preview.
 
 ## Threat model
 

@@ -43,3 +43,10 @@ failure. Leave the unrelated Memory undo failure and the accepted UI style alone
 
 Out of scope: capability recovery, restricted-token sandboxing, device removal,
 distributed retirement, rekey, grant recovery, edge-limiter code and hosted work.
+
+## Accepted limits
+
+For this default-off, own-device Labs preview, capability lockout by a malicious
+paired peer, the parser's normal user token, and unavailable Remove are accepted
+limitations. No capability recovery, additional sandbox, removal or rekeying
+mechanism is added. A paired peer is already trusted with all shared data.

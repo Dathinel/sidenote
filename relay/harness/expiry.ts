@@ -3,6 +3,9 @@ import worker, { Room as ProductionRoom } from "../src/index";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Explicit admission for isolated synthetic numeric-loopback tests only.
+    const url=new URL(request.url);
+    if (url.hostname==="127.0.0.1") env={...env,ALLOWED_ROOMS:/^\/sync\/([a-f0-9]{64})$/.exec(url.pathname)?.[1] ?? "0".repeat(64)};
     const match = /^\/__test\/expire\/([a-f0-9]{64})$/.exec(new URL(request.url).pathname);
     if (match && request.method === "POST") {
       return env.ROOMS.getByName(`pair:${match[1]}`).fetch("https://test.internal/expire", { method: "POST" });

@@ -12,7 +12,7 @@ const { PAIR_LOCATORS } = await import("../src/locators.ts");
 function fixture(overrides) {
   let env;
   const budgets = new Map();
-  env = {ROOMS:{getByName(name) {
+  env = {ALLOWED_ROOMS:key,ROOMS:{getByName(name) {
     if(!budgets.has(name)) budgets.set(name,fixture(env).room);
     return {fetch:request=>budgets.get(name).fetch(new Request(request))};
   }},...overrides};
@@ -61,7 +61,7 @@ test("expired invitation rejects a guest before a socket or bundle exists", asyn
 test("R1 only the 1000 public locator hashes reach a DO", async () => {
   expect(PAIR_LOCATORS.size).toBe(1000);
   let calls=0;
-  const env={ROOMS:{getByName(){ calls++; return {fetch:async()=>new Response("ok")}; }}};
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(){ calls++; return {fetch:async()=>new Response("ok")}; }}};
   const request=name=>new Request(`https://relay.test/pair/${name}?role=owner`,{headers:{Upgrade:"websocket"}});
   expect((await worker.fetch(request("f".repeat(64)),env)).status).toBe(404);
   expect(calls).toBe(0);
@@ -249,7 +249,7 @@ test("F8 authenticated logins consume the real cross-room device budget",async()
 test("local proof routes only the quota burst to the production room",async()=>{
   const {default:proof}=await import("../harness/observed.ts");
   const namespace=label=>({getByName:()=>({fetch:async()=>new Response(label)})});
-  const env={ROOMS:namespace("observed"),RATE_ROOMS:namespace("production")};
+  const env={ALLOWED_ROOMS:key,ROOMS:namespace("observed"),RATE_ROOMS:namespace("production")};
   for(const [query,expected] of [["","observed"],["&__proof_rate=1","production"]]) {
     const request=new Request(`https://relay.test/sync/${key}?role=device${query}`,{headers:{Upgrade:"websocket"}});
     expect(await (await proof.fetch(request,env)).text()).toBe(expected);
@@ -291,7 +291,7 @@ test("production worker exposes no local expiry control", async () => {
 
 
 test("health checks are public, bounded and do not allocate a room", async () => {
- let calls=0;const env={ROOMS:{getByName(){calls++;throw Error("must not allocate");}}};
+ let calls=0;const env={ALLOWED_ROOMS:key,ROOMS:{getByName(){calls++;throw Error("must not allocate");}}};
  const get=await worker.fetch(new Request("http://127.0.0.1/health"),env);
  expect(get.status).toBe(200);expect(await get.text()).toBe("sidenote-relay-v1");expect(get.headers.get("Cache-Control")).toBe("no-store");
  const head=await worker.fetch(new Request("http://127.0.0.1/health",{method:"HEAD"}),env);expect(await head.text()).toBe("");
@@ -307,7 +307,7 @@ test("oversized binary frame closes the sender without delivery or state changes
 
 
 test("production does not expose sync-interruption qualification controls",async()=>{
- let calls=0;const env={ROOMS:{getByName(){calls++;throw Error("unexpected room");}}};
+ let calls=0;const env={ALLOWED_ROOMS:key,ROOMS:{getByName(){calls++;throw Error("unexpected room");}}};
  for(const mode of ["pause","resume","status"]){const response=await worker.fetch(new Request(`http://127.0.0.1/__test/sync-${mode}/${"a".repeat(64)}`,{method:"POST"}),env);expect(response.status).toBe(404);}
  expect(calls).toBe(0);
 });
@@ -343,7 +343,8 @@ test("pair-owner allowlist and three pending slots are enforced across rooms",as
   await allowed.room.webSocketMessage(owner,auth);
   expect(owner.closed).toBe(false);expect(allowed.room.meta().pins).toEqual([publicKey]);
   const budget=fixture();
-  const claim=(room,release=false)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=${release?1:0}`));
+  const claimOwner=crypto.randomUUID();
+  const claim=(room,release=false)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=${release?1:0}&owner=${claimOwner}`));
   const rooms=[1,2,3,4].map(i=>i.toString(16).padStart(64,"0"));
   for(const room of rooms.slice(0,3))expect((await claim(room)).status).toBe(204);
   expect((await claim(rooms[0])).status).toBe(204);
@@ -355,7 +356,7 @@ test("pair-owner allowlist and three pending slots are enforced across rooms",as
 
 test("IP pairing cap refuses a ninth pending room before room allocation",async()=>{
   const router=fixture();let allocated=0;
-  const env={ROOMS:{getByName(name){
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(name){
     if(name.startsWith("pair-budget:"))return {fetch:request=>router.room.fetch(new Request(request))};
     allocated++;return {fetch:async()=>new Response("accepted")};
   }}};
@@ -367,7 +368,7 @@ test("IP pairing cap refuses a ninth pending room before room allocation",async(
 
 test("public entry point cannot change internal pairing budgets",async()=>{
   let calls=0;
-  const env={ROOMS:{getByName(){calls++;throw Error("unexpected allocation");}}};
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(){calls++;throw Error("unexpected allocation");}}};
   for(const action of ["0","1"]) {
     const response=await worker.fetch(new Request(`https://relay.test/pair-budget?room=${key}&limit=3&release=${action}`),env);
     expect(response.status).toBe(404);
@@ -379,7 +380,8 @@ test("expired pairing claims release capacity and delete empty budget storage",a
   const originalNow=Date.now;let now=1000;Date.now=()=>now;
   try {
     const f=fixture();
-    const claim=room=>f.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=0`));
+    const claimOwner=crypto.randomUUID();
+    const claim=room=>f.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=0&owner=${claimOwner}`));
     for(const room of ["a","b","c"].map(c=>c.repeat(64)))expect((await claim(room)).status).toBe(204);
     expect((await claim("d".repeat(64))).status).toBe(429);
     now+=600_001;await f.room.alarm();expect(f.deletes).toBe(1);
@@ -398,4 +400,43 @@ test("connection byte budget refuses more than four MiB per second",async()=>{
   expect(ws.closed).toBe(false);expect(peer.sent.length).toBe(32);
   await f.room.webSocketMessage(ws,bytes.buffer);
   expect(ws.closed).toBe(true);expect(peer.sent.length).toBe(32);
+});
+
+test("empty room allowlist denies owners guests and sync before any object allocation",async()=>{
+  let calls=0;
+  for(const value of [undefined,"","   "]) {
+    const env={ALLOWED_ROOMS:value,ROOMS:{getByName(){calls++;throw Error("unexpected allocation");}}};
+    for(const [kind,room,role] of [["sync",key,"device"],["pair",[...PAIR_LOCATORS][0],"owner"],["pair",[...PAIR_LOCATORS][0],"guest"]]) {
+      const response=await worker.fetch(new Request(`https://relay.test/${kind}/${room}?role=${role}`,{headers:{Upgrade:"websocket"}}),env);
+      expect(response.status).toBe(403);
+    }
+  }
+  expect(calls).toBe(0);
+});
+
+test("closing a second unauthenticated owner socket cannot release the first IP claim",async()=>{
+  const budget=fixture();
+  const env={ROOMS:{getByName(){return {fetch:request=>budget.room.fetch(new Request(request))};}}};
+  const f=fixture(env),first=crypto.randomUUID(),second=crypto.randomUUID();
+  const claim=(room,owner)=>budget.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=8&owner=${owner}`));
+  expect((await claim(key,first)).status).toBe(204);
+  expect((await claim(key,second)).status).toBe(204);
+  const duplicate=f.socket({...state("owner"),key:undefined,pairIp:"synthetic-ip",pairOwner:second});
+  await f.room.webSocketClose(duplicate,1000);
+  for(let i=1;i<=7;i++)expect((await claim(i.toString().repeat(64),crypto.randomUUID())).status).toBe(204);
+  expect((await claim("f".repeat(64),crypto.randomUUID())).status).toBe(429);
+  const owner=f.socket({...state("owner"),key:undefined,pairIp:"synthetic-ip",pairOwner:first});
+  await f.room.webSocketClose(owner,1000);
+  expect((await claim("f".repeat(64),crypto.randomUUID())).status).toBe(204);
+});
+
+test("public owner requests replace any caller supplied claim token",async()=>{
+  const supplied=crypto.randomUUID();let replaced=false;
+  const env={ALLOWED_ROOMS:key,ROOMS:{getByName(name){return {fetch:async request=>{
+    if(name.startsWith("pair-budget:"))return new Response(null,{status:204});
+    replaced=request.headers.get("X-Sidenote-Pair-Owner")!==supplied;
+    return new Response("accepted");
+  }};}}};
+  await worker.fetch(new Request(`https://relay.test/pair/${[...PAIR_LOCATORS][0]}?role=owner`,{headers:{Upgrade:"websocket","X-Sidenote-Pair-Owner":supplied}}),env);
+  expect(replaced).toBe(true);
 });

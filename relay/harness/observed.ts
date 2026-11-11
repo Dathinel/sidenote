@@ -7,6 +7,10 @@ function capture(kind: string, bytes: Uint8Array, negative = false) {
 }
 export default {
   async fetch(request: Request, env: Env & { RATE_ROOMS: Env["ROOMS"] }) {
+    // This fixture admits only its synthetic numeric-loopback traffic.
+    const url=new URL(request.url);
+    if (url.hostname==="127.0.0.1") env={...env,ALLOWED_ROOMS:/^\/sync\/([a-f0-9]{64})$/.exec(url.pathname)?.[1] ?? "0".repeat(64)};
+
     if (new URL(request.url).pathname === "/__proof/negative") {
       return env.ROOMS.getByName("proof:negative").fetch("https://proof.internal/plant-marker");
     }

@@ -10,7 +10,7 @@ type Role = "owner" | "guest" | "device";
 type Meta = { kind: Kind; pins: string[]; expires: number; attempts: number; used: boolean; retries: number; messages: number; grantForwarded: boolean; receiptForwarded: boolean; cleanupAt: number };
 type Attachment = {
   room: string; kind: Kind; role: Role; nonce: string; key?: string;
-  deadline: number; window: number; messages: number; bytes: number; pairIp?: string;
+  deadline: number; window: number; messages: number; bytes: number; pairIp?: string; pairOwner?: string;
 };
 type Enrollment = { sponsor: string; member: string; signature: string };
 const enc = new TextEncoder();
@@ -24,8 +24,8 @@ function allowedGenesis(env: Env, key: string): boolean {
   const entries = (env.ALLOWED_GENESIS ?? "").trim();
   return !entries || entries.split(",").map(value => value.trim()).includes(key);
 }
-async function pairBudget(env: Env, principal: string, room: string, limit: number, release = false): Promise<boolean> {
-  return (await env.ROOMS.getByName(`pair-budget:${principal}`).fetch(`https://budget.internal/pair-budget?room=${room}&limit=${limit}&release=${release ? 1 : 0}`)).ok;
+async function pairBudget(env: Env, principal: string, room: string, limit: number, owner: string, release = false): Promise<boolean> {
+  return (await env.ROOMS.getByName(`pair-budget:${principal}`).fetch(`https://budget.internal/pair-budget?room=${room}&limit=${limit}&release=${release ? 1 : 0}&owner=${owner}`)).ok;
 }
 async function verify(key: string, message: string, signature: string) {
   if (!validKey(key) || !/^[a-f0-9]{128}$/.test(signature)) throw Error("invalid proof");
@@ -44,14 +44,19 @@ export default {
     if (!match || request.method !== "GET") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket required", { status: 426 });
     const allowedRooms=(env.ALLOWED_ROOMS ?? "").trim();
-    if (match[1] === "sync" && allowedRooms && !allowedRooms.split(",").map(value=>value.trim()).includes(match[2])) return new Response("group not allowed",{status:403});
+    if (!allowedRooms) return new Response("Relay allowlist is not configured",{status:403});
+    if (match[1] === "sync" && !allowedRooms.split(",").map(value=>value.trim()).includes(match[2])) return new Response("group not allowed",{status:403});
     if (match[1] === "pair" && !PAIR_LOCATORS.has(match[2])) return new Response("invalid locator", { status: 404 });
+    let forwarded=request;
     if (match[1] === "pair" && url.searchParams.get("role") === "owner") {
+      const owner=crypto.randomUUID();
       const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
       const principal = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(ip))));
-      if (!await pairBudget(env, `ip:${principal}`, match[2], 8)) return new Response("pairing capacity reached", {status:429});
+      if (!await pairBudget(env, `ip:${principal}`, match[2], 8,owner)) return new Response("pairing capacity reached", {status:429});
+      const headers=new Headers(request.headers);headers.set("X-Sidenote-Pair-Owner",owner);
+      forwarded=new Request(request,{headers});
     }
-    return env.ROOMS.getByName(`${match[1]}:${match[2]}`).fetch(request);
+    return env.ROOMS.getByName(`${match[1]}:${match[2]}`).fetch(forwarded);
   },
 } satisfies ExportedHandler<Env>;
 
@@ -63,7 +68,8 @@ export class Room extends DurableObject<Env> {
     if (this.schema) return;
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS login_budget (id INTEGER PRIMARY KEY CHECK(id=1), window INTEGER NOT NULL, count INTEGER NOT NULL)");
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS pair_claims (room TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS pair_claims (room TEXT PRIMARY KEY, expires INTEGER NOT NULL, owner TEXT NOT NULL)");
+    if (!this.ctx.storage.sql.exec<{name:string}>("PRAGMA table_info(pair_claims)").toArray().some(column=>column.name==="owner")) this.ctx.storage.sql.exec("ALTER TABLE pair_claims ADD COLUMN owner TEXT NOT NULL DEFAULT ''");
     this.schema = true;
   }
   async admitLogin(): Promise<boolean> {
@@ -116,17 +122,18 @@ export class Room extends DurableObject<Env> {
     const url = new URL(request.url);
     if (url.pathname === "/pair-budget") {
       const room = url.searchParams.get("room"), limit = Number(url.searchParams.get("limit"));
-      if (!validKey(room) || ![3,8].includes(limit)) return new Response(null,{status:400});
+      const owner=url.searchParams.get("owner");
+      if (!validKey(room) || !owner || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner) || ![3,8].includes(limit)) return new Response(null,{status:400});
       this.ensureSchema();
       this.ctx.storage.sql.exec("DELETE FROM pair_claims WHERE expires<=?",Date.now());
       if (url.searchParams.get("release") === "1") {
-        this.ctx.storage.sql.exec("DELETE FROM pair_claims WHERE room=?",room);
+        this.ctx.storage.sql.exec("DELETE FROM pair_claims WHERE room=? AND owner=?",room,owner);
         return new Response(null,{status:204});
       }
       const existing=this.ctx.storage.sql.exec("SELECT room FROM pair_claims WHERE room=?",room).toArray();
       const count=this.ctx.storage.sql.exec<{count:number}>("SELECT COUNT(*) AS count FROM pair_claims").toArray()[0].count;
       if (!existing.length && count>=limit) return new Response(null,{status:429});
-      this.ctx.storage.sql.exec("INSERT OR IGNORE INTO pair_claims VALUES(?,?)",room,Date.now()+PAIR_TTL);
+      this.ctx.storage.sql.exec("INSERT OR IGNORE INTO pair_claims VALUES(?,?,?)",room,Date.now()+PAIR_TTL,owner);
       await this.schedule(Date.now()+PAIR_TTL);
       return new Response(null,{status:204});
     }
@@ -154,7 +161,8 @@ export class Room extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server);
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
     const pairIp = kind === "pair" && role === "owner" ? hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(ip)))) : undefined;
-    server.serializeAttachment({ room, kind, role, nonce, deadline, window: this.rateNow(), messages: 0, bytes: 0, pairIp } satisfies Attachment);
+    const pairOwner=kind==="pair" && role==="owner" ? request.headers.get("X-Sidenote-Pair-Owner") ?? crypto.randomUUID() : undefined;
+    server.serializeAttachment({ room, kind, role, nonce, deadline, window: this.rateNow(), messages: 0, bytes: 0, pairIp,pairOwner } satisfies Attachment);
     this.send(server, { type: "challenge", nonce });
     await this.schedule(deadline);
     return new Response(null, { status: 101, webSocket: client });
@@ -183,7 +191,7 @@ export class Room extends DurableObject<Env> {
       if (a.role === "owner") {
         if (!allowedGenesis(this.env,msg.key)) throw Error("owner not allowed");
         if (meta && meta.expires > Date.now() && meta.pins.length) throw Error("invitation occupied");
-        if (!await pairBudget(this.env,`device:${msg.key}`,a.room,3)) throw Error("pairing capacity reached");
+        if (!await pairBudget(this.env,`device:${msg.key}`,a.room,3,a.pairOwner ??= crypto.randomUUID())) throw Error("pairing capacity reached");
         meta=this.meta();
         if (meta && meta.expires > Date.now() && meta.pins.length) throw Error("invitation occupied");
         for (const old of this.ctx.getWebSockets()) if (old !== ws) this.close(old,1008, "previous invitation expired");
@@ -291,9 +299,9 @@ export class Room extends DurableObject<Env> {
     }
   }
   private async releasePair(a: Attachment) {
-    if (a.kind !== "pair" || a.role !== "owner") return;
-    if (a.key) await pairBudget(this.env,`device:${a.key}`,a.room,3,true);
-    if (a.pairIp) await pairBudget(this.env,`ip:${a.pairIp}`,a.room,8,true);
+    if (a.kind !== "pair" || a.role !== "owner" || !a.pairOwner) return;
+    if (a.key) await pairBudget(this.env,`device:${a.key}`,a.room,3,a.pairOwner,true);
+    if (a.pairIp) await pairBudget(this.env,`ip:${a.pairIp}`,a.room,8,a.pairOwner,true);
   }
   async webSocketClose(ws: WebSocket, _code: number, reason: string = "", _clean: boolean = false) {
     this.observe("in","close",enc.encode(reason));

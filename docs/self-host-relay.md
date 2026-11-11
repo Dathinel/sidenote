@@ -177,18 +177,16 @@ qualification. Cloudflare can observe IPs, public keys, room identifiers, timing
 and sizes. Encrypted content and group keys stay with the devices. A paired
 device can read and change shared content, so approve only devices you trust.
 
-## Optional abuse controls
+## Relay admission and abuse controls
 
 `[vars] ALLOWED_GENESIS` in `relay/wrangler.toml` is an optional comma-separated
-list of lowercase 64-hex **public** device keys. Empty is the default and keeps
-open enrollment. When set, a sync room's genesis key must be listed, and every
+list of lowercase 64-hex **public** device keys. Empty is the default for this optional device filter. When set, a sync room's genesis key must be listed, and every
 device that shows a pairing code must be listed. Guests still need valid
 pairing and enrollment proofs. Include the trusted pairing hosts, not private
 keys or pairing codes. Changing this setting is not device revocation.
 
-`ALLOWED_ROOMS` is an additional optional comma-separated list of public sync
-room IDs. Its empty default accepts any well-formed room. When set, other sync
-routes are refused before allocating a Durable Object. Use the seed device's
+`ALLOWED_ROOMS` is a required comma-separated list of public sync
+room IDs. Its empty default refuses both sync and pairing requests before allocating any Durable Object. Configure it before pairing. With a list set, unlisted sync routes are refused before allocating a Durable Object. Use the seed device's
 non-secret `room` value in `local/relay/settings.json`; guests adopt that room
 after pairing. This bounds unknown-room allocation more tightly than a device
 allowlist alone. A new group needs an updated allowlist. Health checks stay public.
@@ -202,13 +200,26 @@ verified host key across rooms. Claims expire after ten minutes and release on
 completion or owner disconnect. Source IP comes from Cloudflare's trusted
 `CF-Connecting-IP` header; local tests use synthetic header values. Each socket
 has a 4 MiB/s input budget, a 600-message/s cap and the existing frame limits.
-These bounds do not make an open public endpoint immune to a distributed attack.
+These bounds do not make a public endpoint immune to a distributed attack. Each pending claim belongs to one server-generated socket token; a second socket cannot release it.
 
-Before hosting, the account owner should add a Cloudflare rate-limiting rule for
-`/pair/` and `/sync/` upgrade requests, keyed by source IP, and monitor requests,
-Durable Object activity and billing. Choose thresholds for the actual fleet and
-plan. Edge-rule setup and effectiveness require the real account and were not
-run locally. See the official [rate-limiting guide](https://developers.cloudflare.com/waf/rate-limiting-rules/).
+Before hosting, the account owner must configure a Cloudflare rate-limiting rule
+covering both routes, including unauthenticated guests. In the domain's
+Security rules > Create rule > Rate limiting rules, match:
+
+```text
+starts_with(http.request.uri.path, "/pair/") or
+starts_with(http.request.uri.path, "/sync/")
+```
+
+Count by source IP, include WebSocket upgrade requests, and choose a request
+threshold, window and block duration for the actual fleet and plan. For example,
+start evaluation at 60 upgrade requests per IP per minute and a one-minute block;
+measure reconnect behavior before relying on that value. Rule syntax, plan
+availability and enforcement must be verified by the account owner. No edge
+limiter is implemented in this Worker. Monitor requests, Durable Object activity
+and billing. Edge-rule setup and effectiveness require the real account and were
+not run locally. See the official [dashboard guide](https://developers.cloudflare.com/waf/rate-limiting-rules/create-zone-dashboard/)
+and [matching/counting parameters](https://developers.cloudflare.com/waf/rate-limiting-rules/parameters/).
 
 At enable, Sidenote prepends `/local` to the share's `.stignore` ahead of existing
 rules, preserving those rules. It leaves that exclusion in place when disabled,
@@ -217,3 +228,23 @@ replica content is plaintext at rest; DPAPI protects its keys, not all content.
 Use the application data folder as the share root. If you share a parent folder,
 configure its own ignore rules to exclude the application's `local` directory;
 Sidenote cannot inspect or qualify the Syncthing service's external configuration.
+
+
+## Accepted Labs preview limits
+
+Use this default-off preview only with your own trusted devices. A paired peer
+already has all shared data. A malicious paired peer can raise the capability
+requirement and make the group read-only; this preview has no capability-recovery
+flow. The parser retains the Windows user's token and file/DPAPI rights despite
+its job-object limits. These risks are accepted for this preview, not fixed by
+its cryptography or relay allowlists.
+
+A lost or stolen device can't be removed in this preview. If that happens, turn
+off relay sync on all devices. Remove stays unavailable. No recovery or rekeying
+is added in this round. The hosted development relay configures its own room
+allowlist; this task does not change, log in to or deploy that service.
+
+An uncertain pairing receipt is shown as Pairing not confirmed. The other device
+may already have joined. Check it; if it is not trusted, turn off relay sync on
+all devices and pair again. Local test relays explicitly admit only synthetic
+numeric-loopback traffic. They do not change the production default-deny policy.
