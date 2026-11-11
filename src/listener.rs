@@ -285,7 +285,7 @@ impl Read for Body {
         Ok(n)
     }
 }
-fn listen() -> Result<(), Problem> {
+fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
     let path =
         PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/local-api.json");
     let config: Discovery = serde_json::from_slice(&fs::read(path)?).map_err(|_| Problem::Value)?;
@@ -378,6 +378,9 @@ fn listen() -> Result<(), Problem> {
             let valid = !id.is_empty()
                 && id.bytes().any(|c| c.is_ascii_digit())
                 && id.bytes().all(|c| c.is_ascii_digit() || c == b'-');
+            if valid {
+                let _ = finished.send(id.to_owned());
+            }
             continue_after_pipeline(pipeline(valid.then_some(id)), log);
         }
     }
@@ -398,6 +401,7 @@ pub fn run() -> ! {
         std::process::exit(0);
     }
     // The watcher scans completed meetings even when the event API is unavailable.
+    let finished = crate::core::meeting_watch::start(log);
     if catch_up().is_err() {
         log("startup catch-up could not start; retrying on the next connection");
     }
@@ -434,7 +438,7 @@ pub fn run() -> ! {
     });
     let mut last = String::new();
     loop {
-        let problem = match listen() {
+        let problem = match listen(&finished) {
             Ok(()) => "stream ended".into(),
             Err(e) => e.message(),
         };
