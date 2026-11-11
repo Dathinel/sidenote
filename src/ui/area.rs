@@ -105,6 +105,7 @@ impl State {
                     folder: m.folder.clone(),
                     device: m.device.clone(),
                     summary_raw: String::new(),
+                    draft_raw: String::new(),
                     transcript_raw: String::new(),
                     routed: None,
                     routed_revision: String::new(),

@@ -13,7 +13,7 @@ use super::{
 };
 use rune::{El, Key, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
-use sidenote::core::{Meeting, Point};
+use sidenote::core::{self, Meeting, Point};
 use std::ops::Range;
 pub(super) mod reading;
 
@@ -723,8 +723,29 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
 
 // ---- the page ----------------------------------------------------------------------------
 
+fn draft_summary(m: &Meeting) -> Option<core::Summary> {
+    if m.has_summary() {
+        None
+    } else {
+        serde_json::from_str(&m.draft_raw).ok()
+    }
+}
+
+const DRAFT_NOTICE: &str = "Draft from the English transcript. Improving with Telugu and Hindi.";
+
 fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
-    if !m.has_summary() {
+    let draft = draft_summary(m);
+    let is_draft = draft.is_some();
+    let summary = draft.as_ref().unwrap_or(&m.summary);
+    if is_draft {
+        body = body.child(
+            roles::META
+                .wrap(DRAFT_NOTICE, p.soft)
+                .key("draft-summary-notice")
+                .mt(16.0),
+        );
+    }
+    if !m.has_summary() && !is_draft {
         if !m.lines.is_empty() {
             body = body.child(
                 super::widgets::link("Open the Transcript tab", p)
@@ -737,13 +758,20 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
         return body;
     }
 
-    let decided: Vec<&Point> = m.points().filter(|pt| pt.kind == "decided").collect();
-    body = body.child(counts(m, p));
+    let decided: Vec<&Point> = summary
+        .topics
+        .iter()
+        .flat_map(|t| &t.points)
+        .filter(|pt| pt.kind == "decided")
+        .collect();
+    if !is_draft {
+        body = body.child(counts(m, p));
+    }
 
-    if !m.summary.context.is_empty() {
+    if !summary.context.is_empty() {
         body = body.child(heading("Context", None, "sec-context", p));
         body = body.child(points(
-            m.summary
+            summary
                 .context
                 .iter()
                 .enumerate()
@@ -780,22 +808,22 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
         ));
     }
 
-    if !m.summary.todo.is_empty() {
+    if !is_draft && !summary.todo.is_empty() {
         body = body
-            .child(heading("Tasks", Some(m.summary.todo.len()), "sec-todo", p))
+            .child(heading("Tasks", Some(summary.todo.len()), "sec-todo", p))
             .children(super::notes_status::tasks_notice(s, m, p))
             .child(todo::section(s, m, p));
     }
 
-    if !m.summary.to_settle.is_empty() {
+    if !summary.to_settle.is_empty() {
         body = body.child(heading(
             "Still to settle",
-            Some(m.summary.to_settle.len()),
+            Some(summary.to_settle.len()),
             "sec-settle",
             p,
         ));
         body = body.child(points(
-            m.summary
+            summary
                 .to_settle
                 .iter()
                 .enumerate()
@@ -811,17 +839,17 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
         ));
     }
 
-    if !m.summary.topics.is_empty() {
+    if !summary.topics.is_empty() {
         body = body.child(spaced_caps("Discussion", p).key("sec-discussion").mt(40.0));
     }
-    for (ti, t) in m.summary.topics.iter().enumerate() {
+    for (ti, t) in summary.topics.iter().enumerate() {
         body = body.child(topic(s, ti, &t.title, &t.points, p));
     }
 
-    if !m.summary.verify.is_empty() {
+    if !summary.verify.is_empty() {
         body = body.child(heading("Check before acting", None, "sec-verify", p));
         body = body.child(points(
-            m.summary
+            summary
                 .verify
                 .iter()
                 .enumerate()
@@ -837,7 +865,11 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
                 .collect(),
         ));
     }
-    body.child(super::memory::settled::meeting_footer(s, m, p))
+    if is_draft {
+        body
+    } else {
+        body.child(super::memory::settled::meeting_footer(s, m, p))
+    }
 }
 
 fn document(

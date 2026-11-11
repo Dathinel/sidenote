@@ -673,6 +673,7 @@ mod tests {
             diary_title: "Launch".into(),
             summary,
             summary_raw: String::new(),
+            draft_raw: String::new(),
             transcript_raw: String::new(),
             routed: None,
             routed_revision: String::new(),

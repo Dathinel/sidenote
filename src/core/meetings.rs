@@ -269,6 +269,8 @@ pub struct Meeting {
     pub diary_title: String,
     pub summary: Summary,
     pub summary_raw: String,
+    /// Display-only English preview. Task and Memory consumers use the final summary above.
+    pub draft_raw: String,
     pub transcript_raw: String,
     pub routed: Option<super::meeting_router::Transcript>,
     pub routed_revision: String,
@@ -445,6 +447,11 @@ impl Meeting {
             .transpose()?
             .unwrap_or_default();
         let summary_raw = summary_raw.unwrap_or_default();
+        let draft_raw = if folder.parent().is_some_and(|p| p == meetings_dir()) {
+            super::notes::draft::read(&state_dir(), folder, &id)?
+        } else {
+            String::new()
+        };
         let manifest: Manifest =
             match super::file_reads::text(&folder.join("manifest.json"), 1024 * 1024) {
                 Ok(raw) => serde_json::from_str(&raw)?,
@@ -538,6 +545,7 @@ impl Meeting {
             diary_title,
             summary,
             summary_raw,
+            draft_raw,
             transcript_raw,
             routed,
             routed_revision,

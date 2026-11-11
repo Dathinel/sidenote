@@ -10,6 +10,7 @@ use std::{
 };
 
 const HIDDEN: u32 = 0x08000000;
+mod timings;
 #[derive(Deserialize)]
 struct Discovery {
     port: u16,
@@ -45,7 +46,7 @@ impl Problem {
         }
     }
 }
-fn log(message: &str) {
+pub(crate) fn log(message: &str) {
     log_at(&crate::core::log_path(), message);
 }
 fn log_at(path: &std::path::Path, message: &str) {
@@ -88,7 +89,8 @@ fn pipeline_in(
             log("routing remains queued for the next drain");
         }
     }
-    let script = match crate::core::notes::settings()?.engine() {
+    let settings = crate::core::notes::settings()?;
+    let script = match settings.engine() {
         crate::core::notes::Engine::App => {
             if let Some(id) = meeting_id {
                 crate::core::notes::queue::enqueue(id)?;
@@ -98,7 +100,17 @@ fn pipeline_in(
             }
             return Ok(());
         }
-        crate::core::notes::Engine::Scripts(script) => script,
+        crate::core::notes::Engine::Scripts(script) => {
+            if let Some(id) = meeting_id {
+                crate::core::notes::draft::start(
+                    state.to_owned(),
+                    meetings.to_owned(),
+                    id.to_owned(),
+                    settings,
+                );
+            }
+            script
+        }
         crate::core::notes::Engine::Off => return Ok(()),
     };
     if !script.is_file() {
@@ -120,13 +132,26 @@ fn pipeline_in(
     if !filtered {
         folders = legacy_script_folders(meetings, meeting_id)?;
     }
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
     let child = command.spawn();
     std::thread::spawn(move || {
         let _script_lock = script_lock;
         let _activity = activity;
         let succeeded = child
-            .and_then(|mut child| child.wait())
+            .and_then(|mut child| {
+                if let Some(stdout) = child.stdout.take() {
+                    timings::capture(stdout, &folders, |message| log(&message));
+                }
+                child.wait()
+            })
             .is_ok_and(|status| status.success());
+        for folder in &folders {
+            if let Some(id) = folder.file_name().and_then(|n| n.to_str()) {
+                let _ = crate::core::notes::draft::read(&crate::core::state_dir(), folder, id);
+            }
+        }
         script_markers(&folders, succeeded);
         if !succeeded {
             log("Notes pipeline failed; the recording and personal notes are saved");

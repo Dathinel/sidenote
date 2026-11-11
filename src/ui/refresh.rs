@@ -245,6 +245,7 @@ pub(super) fn metadata() -> Metadata {
         root.join("memory"),
         root.join("checks"),
         root.join("local/notes-jobs"),
+        root.join("local/draft-summaries"),
         root.join("local/recording-guard"),
         core::meetings_dir(),
         core::peers_dir(),
