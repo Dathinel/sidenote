@@ -10,6 +10,7 @@ use std::{
 };
 
 const HIDDEN: u32 = 0x08000000;
+pub mod status;
 mod timings;
 #[derive(Deserialize)]
 struct Discovery {
@@ -425,6 +426,7 @@ pub fn run() -> ! {
         }
         std::process::exit(0);
     }
+    status::start();
     // The watcher scans completed meetings even when the event API is unavailable.
     let finished = crate::core::meeting_watch::start(log);
     if catch_up().is_err() {

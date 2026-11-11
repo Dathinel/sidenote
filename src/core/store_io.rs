@@ -93,7 +93,7 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     }
     unreachable!()
 }
-pub(super) fn write(path: &Path, value: &impl Serialize) -> io::Result<()> {
+pub(crate) fn write(path: &Path, value: &impl Serialize) -> io::Result<()> {
     atomic_write(path, &serde_json::to_vec_pretty(value)?)
 }
 struct Temp {
