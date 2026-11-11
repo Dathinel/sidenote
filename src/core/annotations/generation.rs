@@ -251,6 +251,7 @@ impl Stream {
     }
 }
 struct Input<'a> {
+    schema: Option<&'a str>,
     prompt: String,
     images: &'a [PathBuf],
     effort: &'a str,
@@ -258,7 +259,8 @@ struct Input<'a> {
 }
 fn invoke(
     options: &Options,
-    approved: &ApprovedCapture,
+    approved: Option<&ApprovedCapture>,
+    folder: &Path,
     input: Input<'_>,
     ticket: &Ticket,
     delta: impl Fn(String),
@@ -268,6 +270,7 @@ fn invoke(
         images,
         effort,
         final_note,
+        schema,
     } = input;
     ticket.check()?;
     if let Some(ledger) = &ticket.live_calls {
@@ -288,15 +291,39 @@ fn invoke(
         )
         .map_err(|e| e.to_string())?;
     }
-    let _pinned_images = approved.pin_images(images).map_err(|e| e.to_string())?;
+    let _pinned_images = if let Some(approved) = approved {
+        approved.pin_images(images).map_err(|e| e.to_string())?
+    } else {
+        if !images.is_empty() {
+            return Err("Notebook generation cannot send unapproved images.".into());
+        }
+        Vec::new()
+    };
     let input = if options.helper == Helper::Claude {
         claude_message(&prompt, images)?
     } else {
         prompt
     };
+    let mut args = command_args(options, effort, images, final_note);
+    if let Some(schema) = schema {
+        if options.helper == Helper::Claude {
+            args.extend(["--json-schema".into(), schema.into()]);
+        } else {
+            crate::core::store_io::atomic_write(
+                &folder.join("notebook.schema.json"),
+                schema.as_bytes(),
+            )
+            .map_err(|e| e.to_string())?;
+            let at = args.len().saturating_sub(1);
+            args.splice(
+                at..at,
+                ["--output-schema".into(), "notebook.schema.json".into()],
+            );
+        }
+    }
     let mut child = Command::new(executable(options)?)
-        .args(command_args(options, effort, images, final_note))
-        .current_dir(&approved.folder)
+        .args(args)
+        .current_dir(folder)
         .creation_flags(0x08000000)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -474,8 +501,10 @@ fn run_with_plan(
                         draft_images.verify().map_err(|e| e.to_string())?;
                         let answer = invoke(
                             draft_options,
-                            draft_images,
+                            Some(draft_images),
+                            &draft_images.folder,
                             Input {
+                                schema: None,
                                 prompt: note::frame_prompt(frame),
                                 images: &draft_images.images_for(frame),
                                 effort: "low",
@@ -519,8 +548,10 @@ fn run_with_plan(
         .collect();
     let answer = invoke(
         options,
-        approved,
+        Some(approved),
+        &approved.folder,
         Input {
+            schema: None,
             prompt: note::notebook_prompt(approved, &drafts),
             images: &images,
             effort: "medium",
@@ -768,4 +799,39 @@ pub fn benchmark(variant: &str, root: &Path) -> Result<(), String> {
         result.is_ok()
     );
     result.map(|_| ())
+}
+
+/// Notebook synthesis is text-only; approved figures and callouts are copied locally.
+pub fn run_notebook(
+    book: &super::notebook::Notebook,
+    inputs: &[super::notebook::Input],
+    options: &Options,
+    folder: &Path,
+    ticket: &Ticket,
+    delta: impl Fn(String),
+) -> Result<super::notebook::Document, String> {
+    available(options)?;
+    ticket.check()?;
+    for input in inputs {
+        input.approved.verify().map_err(|e| e.to_string())?;
+        note::validate(&input.note, &input.approved)?;
+    }
+    std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    let schema = super::notebook::text_schema().to_string();
+    let answer = invoke(
+        options,
+        None,
+        folder,
+        Input {
+            prompt: super::notebook::prompt(book, inputs),
+            images: &[],
+            effort: "medium",
+            final_note: false,
+            schema: Some(&schema),
+        },
+        ticket,
+        delta,
+    )?;
+    ticket.check()?;
+    super::notebook::assemble(book, inputs, note::parse_json(&answer)?)
 }

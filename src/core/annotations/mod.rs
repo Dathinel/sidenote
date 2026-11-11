@@ -2,6 +2,8 @@
 pub mod generation;
 pub mod media;
 pub mod note;
+pub mod notebook;
+pub mod share;
 use super::file_reads;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -296,3 +298,6 @@ pub fn scan(folder: &Path) -> Scan {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod notebook_tests;

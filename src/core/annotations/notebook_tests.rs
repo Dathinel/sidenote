@@ -1,0 +1,164 @@
+use super::{
+    notebook::{self, Input},
+    share, *,
+};
+use std::{fs, path::PathBuf};
+struct Temp(PathBuf);
+impl Temp {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "sidenote-notebook-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        assert!(self.0.starts_with(std::env::temp_dir()));
+        assert!(
+            self.0
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("sidenote-notebook-test-")
+        );
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+#[test]
+fn notebook_order_survives_storage_and_changes_keep_the_previous_note() {
+    let temp = Temp::new();
+    let (mut b, inputs, captures) = notebook::synthetic(&temp.0, 3).unwrap();
+    let original = fs::read(captures[0].folder.join("scrawl.json")).unwrap();
+    b.note = Some(notebook::synthetic_document(&b, &inputs).unwrap());
+    b.note_revision = b.revision;
+    assert!(b.fresh());
+    let first = b.captures[0].key.clone();
+    assert!(b.reorder(0, 2));
+    assert_eq!(b.captures[2].key, first);
+    assert!(b.fresh());
+    assert_eq!(
+        b.note.as_ref().unwrap().value["sections"][2]["capture_key"],
+        first
+    );
+    assert!(b.note.is_some());
+    assert!(!b.add(&captures[0]));
+    assert!(b.remove(1));
+    notebook::save(&temp.0, &b).unwrap();
+    let stored = notebook::list(&temp.0).unwrap();
+    assert_eq!(stored[0].captures[1].key, first);
+    assert_eq!(
+        fs::read(captures[0].folder.join("scrawl.json")).unwrap(),
+        original
+    );
+    b.id = "../outside".into();
+    assert!(notebook::save(&temp.0, &b).is_err());
+}
+#[test]
+fn notebook_synthesis_preserves_capture_order_and_deduplicates_questions_and_todos() {
+    let temp = Temp::new();
+    let (b, mut inputs, _) = notebook::synthetic(&temp.0, 3).unwrap();
+    for i in &mut inputs {
+        i.note["open_questions"] = serde_json::json!(["What is next?", "what is NEXT"]);
+        i.note["todos"] = serde_json::json!([{"action":"Bring two versions","owner":null,"due_date":null,"evidence_refs":[i.note["figures"][0]["figure_id"]]}]);
+    }
+    let doc = notebook::synthetic_document(&b, &inputs).unwrap();
+    notebook::validate(&doc).unwrap();
+    assert_eq!(doc.value["open_questions"].as_array().unwrap().len(), 1);
+    assert_eq!(doc.value["todos"].as_array().unwrap().len(), 1);
+    for (section, input) in doc.value["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(&inputs)
+    {
+        assert_eq!(section["capture_key"], input.key);
+        assert_eq!(section["figures"], input.note["figures"]);
+    }
+    let mut bad = doc.clone();
+    bad.value["sections"].as_array_mut().unwrap().swap(0, 1);
+    assert!(notebook::validate(&bad).is_err());
+    let mut bad = doc.clone();
+    bad.value["sections"][0]["figures"][0]["callouts"][0]["mark_number"] = serde_json::json!(999);
+    assert!(notebook::validate(&bad).is_err());
+    let prompt = notebook::prompt(&b, &inputs);
+    assert!(prompt.contains("Whole-notebook"));
+    assert!(prompt.contains("Never invent names"));
+}
+#[test]
+fn notebook_rejects_unapproved_assets_and_stale_jobs_before_starting_a_model() {
+    let temp = Temp::new();
+    let (b, inputs, _) = notebook::synthetic(&temp.0, 2).unwrap();
+    let mut unapproved: Vec<Input> = inputs.clone();
+    unapproved[0].approved.approval.approved_at_ms = 0;
+    assert!(notebook::synthetic_document(&b, &unapproved).is_err());
+    let epochs = generation::Epoch::default();
+    let old = epochs.begin();
+    epochs.invalidate();
+    assert!(old.check().is_err());
+}
+#[test]
+fn shared_html_is_static_pathless_and_contains_exactly_the_approved_marked_pngs() {
+    let temp = Temp::new();
+    let (b, inputs, _) = notebook::synthetic(&temp.0, 3).unwrap();
+    let mut doc = notebook::synthetic_document(&b, &inputs).unwrap();
+    doc.value["summary"] = serde_json::json!(
+        "Use <script>alert(1)</script>, https://example.invalid and C:\\private\\capture.png"
+    );
+    let html = share::notebook(&doc).unwrap();
+    assert!(!html.to_lowercase().contains("<script"));
+    assert!(
+        !regex::Regex::new(r"(?i)https?://|file://|[a-z]:[\\/]|\\\\")
+            .unwrap()
+            .is_match(&html)
+    );
+    assert!(!html.contains(&temp.0.to_string_lossy().to_string()));
+    assert!(html.contains("&lt;script&gt;"));
+    assert!(html.contains("prefers-color-scheme:dark"));
+    assert!(html.contains("@media print"));
+    assert!(html.contains("Made with Sidenote"));
+    let mut expected = std::collections::BTreeMap::new();
+    for input in &inputs {
+        for frame in &input.approved.approval.frames {
+            *expected
+                .entry(input.approved.approval.file_hashes[&frame.marked].clone())
+                .or_insert(0usize) += 1;
+        }
+    }
+    assert_eq!(share::image_hashes(&html).unwrap(), expected);
+    let capture = share::capture(&inputs[0].note, &inputs[0].approved).unwrap();
+    assert_eq!(
+        share::image_hashes(&capture)
+            .unwrap()
+            .values()
+            .sum::<usize>(),
+        2
+    );
+    let f = &inputs[0].approved.approval.frames[0];
+    fs::write(inputs[0].approved.folder.join(&f.marked), b"changed").unwrap();
+    assert!(share::notebook(&doc).is_err());
+}
+#[test]
+fn share_names_are_portable_and_cannot_choose_a_path() {
+    assert_eq!(share::default_name("CON"), "annotation-note.html");
+    assert_eq!(
+        share::default_name("Plan: paper / Friday?"),
+        "Plan paper  Friday.html"
+    );
+    assert_eq!(share::default_name(""), "annotation-note.html");
+    assert!(!share::default_name("../bad\\file").contains('/'));
+}
+
+#[test]
+fn export_never_writes_inside_a_bundle_or_overwrites_other_file_formats() {
+    let temp = Temp::new();
+    let (_, _, captures) = notebook::synthetic(&temp.0, 1).unwrap();
+    let target = captures[0].folder.join("share.html");
+    assert!(share::save(&target, "test").is_err());
+    assert!(!target.exists());
+    assert!(share::save(&temp.0.join("scrawl.json"), "test").is_err());
+    assert!(!temp.0.join("scrawl.json").exists());
+}
