@@ -20,7 +20,7 @@ for theme in ("light", "dark"):
         assert "0 meetings from other devices." not in text, stem
         if scene in ("unreachable", "wrong-address", "update-required"):
             banner = by_key["relay-status-banner"]
-            assert banner["role"] == "alert" and 57 <= banner["rect"][1] <= 59, stem
+            assert banner["role"] == "alert" and 0 <= banner["rect"][1] <= 1, stem
             icons = [node for node in elements if node.get("role") == "icon" and node.get("path", "").startswith(banner["path"] + "/")]
             assert len(icons) == 1 and icons[0]["rect"][2:] == [16.0, 16.0], stem
             assert by_key["relay-contact-status"]["text"] in text, stem
