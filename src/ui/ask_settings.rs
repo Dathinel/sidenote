@@ -717,6 +717,42 @@ mod tests {
         state.ask_settings.recording = false;
         state.meeting_agent_transition();
         assert_eq!(state.ask_runner_name(), Some("Claude Sonnet"));
+        state.ask_settings.recording = true;
+        state.meeting_agent_transition();
+        let id = state.ask_key();
+        state
+            .asks
+            .insert(id.clone(), super::super::AskRun::stand_in("Codex", &[], 0));
+        for event in [
+            core::AskProgress::StartingCodex,
+            core::AskProgress::Started {
+                runner: "Codex".into(),
+            },
+            core::AskProgress::Text {
+                text: String::new(),
+            },
+        ] {
+            state.apply_event(super::super::Event::Progress {
+                id: id.clone(),
+                generation: 0,
+                event,
+            });
+            assert!(state.asks[&id].starting_codex);
+            assert_eq!(state.ask_runner_name(), Some("Codex"));
+            assert!(state.ask_settings.fallback_notice.is_none());
+        }
+        state.apply_event(super::super::Event::Progress {
+            id: id.clone(),
+            generation: 0,
+            event: core::AskProgress::Text {
+                text: "First answer text".into(),
+            },
+        });
+        assert!(!state.asks[&id].starting_codex);
+        assert_eq!(state.asks[&id].runner, "Codex");
+        state.asks.remove(&id);
+        state.ask_settings.recording = false;
+        state.meeting_agent_transition();
         assert_eq!(state.ask_thinking(), Thinking::High);
         state.ask_settings.recording = true;
         assert_eq!(state.ask_runner_name(), Some("Codex"));

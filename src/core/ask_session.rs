@@ -9,7 +9,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
@@ -22,6 +22,7 @@ const WARMUP: &str = "Reply exactly Ready. This is a synthetic connection warm-u
 const CAP: usize = 4 * 1024 * 1024;
 static ACTOR: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
 static CLOSED: AtomicBool = AtomicBool::new(true);
+static WARMING: AtomicUsize = AtomicUsize::new(0);
 static CATALOG: Mutex<BTreeMap<String, Vec<Model>>> = Mutex::new(BTreeMap::new());
 static CATALOG_VERSION: AtomicU64 = AtomicU64::new(0);
 static OPENCODE_DISCOVERY: AtomicBool = AtomicBool::new(false);
@@ -180,8 +181,26 @@ enum Reply {
     Progress(AskProgress),
     Result(Result<String, String>),
 }
+struct Warmup {
+    ready: SyncSender<Result<(), String>>,
+}
+impl Warmup {
+    fn new(ready: SyncSender<Result<(), String>>) -> Self {
+        WARMING.fetch_add(1, Ordering::SeqCst);
+        Self { ready }
+    }
+}
+impl Drop for Warmup {
+    fn drop(&mut self) {
+        WARMING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+fn starting(runner: &Runner) -> Option<AskProgress> {
+    (runners::kind(runner) == Ok("codex") && WARMING.load(Ordering::SeqCst) > 0)
+        .then_some(AskProgress::StartingCodex)
+}
 enum Work {
-    Warm(Key, Option<SyncSender<Result<(), String>>>),
+    Warm(Key, Option<Warmup>),
     Release,
     Reset(String),
     Ask {
@@ -217,7 +236,7 @@ pub fn warm(runner: Runner, chat: String) {
 pub fn warm_meeting(runner: Runner, chat: String) -> Receiver<Result<(), String>> {
     let (ready, receiver) = mpsc::sync_channel(1);
     if !ask::stop_requested() && runner.stdin && runners::kind(&runner) == Ok("codex") {
-        let _ = actor().send(Work::Warm(Key { runner, chat }, Some(ready)));
+        let _ = actor().send(Work::Warm(Key { runner, chat }, Some(Warmup::new(ready))));
     } else {
         let _ = ready.send(Err("Codex is not available for warming.".into()));
     }
@@ -261,6 +280,9 @@ pub fn run(
         return super::run_runner(runner, prompt, &super::state_dir(), progress);
     }
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    if let Some(event) = starting(runner) {
+        progress(event);
+    }
     let (tx, rx) = mpsc::sync_channel(8);
     actor()
         .send(Work::Ask {
@@ -355,7 +377,7 @@ fn serve(rx: Receiver<Work>) {
                     retry_at = Instant::now();
                 }
                 desired = Some(key.clone());
-                if let Some(ready) = ready {
+                if let Some(warmup) = ready {
                     let cancel = AtomicBool::new(false);
                     let result = (|| {
                         if session.as_mut().is_none_or(|s| !s.alive()) {
@@ -368,7 +390,7 @@ fn serve(rx: Receiver<Work>) {
                         desired = None;
                     }
                     lifetime.activity = Instant::now();
-                    let _ = ready.send(result);
+                    let _ = warmup.ready.send(result);
                 }
             }
             Ok(Work::Ask {
@@ -777,6 +799,26 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_warmup_reports_starting_for_codex_and_releases_on_drop() {
+        let runners: Vec<Runner> =
+            serde_json::from_str(include_str!("../../default-runners.json")).unwrap();
+        let codex = runners
+            .iter()
+            .find(|r| runners::kind(r) == Ok("codex"))
+            .unwrap();
+        let claude = runners
+            .iter()
+            .find(|r| runners::kind(r) == Ok("claude"))
+            .unwrap();
+        let (ready, _) = mpsc::sync_channel(1);
+        assert!(starting(codex).is_none());
+        let warmup = Warmup::new(ready);
+        assert_eq!(starting(codex), Some(AskProgress::StartingCodex));
+        assert!(starting(claude).is_none());
+        drop(warmup);
+        assert!(starting(codex).is_none());
+    }
     #[test]
     fn warm_lifetime_covers_recording_and_expires_at_either_ten_minute_limit() {
         let now = Instant::now();

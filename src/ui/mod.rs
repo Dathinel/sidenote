@@ -155,6 +155,7 @@ pub struct AskRun {
     pub generation: u64,
     pub meeting_epoch: u64,
     pub meeting_request: bool,
+    pub starting_codex: bool,
     pub runner: String,
     pub text: String,
     pub rx: Receiver<Result<String, String>>,
@@ -176,6 +177,7 @@ impl AskRun {
             generation: 0,
             meeting_epoch: 0,
             meeting_request: false,
+            starting_codex: false,
             runner: runner.into(),
             text: String::new(),
             rx,
@@ -1065,6 +1067,7 @@ impl State {
                 generation,
                 meeting_epoch: self.ask_settings.meeting_epoch,
                 meeting_request: self.ask_live_meeting(),
+                starting_codex: false,
                 runner,
                 text: String::new(),
                 rx,
@@ -1322,8 +1325,10 @@ impl State {
                     return;
                 }
                 match event {
+                    AskProgress::StartingCodex => run.starting_codex = true,
                     AskProgress::Started { .. } => {}
                     AskProgress::Fallback { runner } => {
+                        run.starting_codex = false;
                         run.runner = runner.clone();
                         let name = self
                             .runners
@@ -1341,7 +1346,12 @@ impl State {
                         }
                     }
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
-                    AskProgress::Text { text } => run.text = text,
+                    AskProgress::Text { text } => {
+                        if !text.is_empty() {
+                            run.starting_codex = false;
+                        }
+                        run.text = text;
+                    }
                     AskProgress::Finished => {
                         if let Some(run) = self.asks.remove(&id) {
                             self.finish_ask(&id, run, None);
@@ -2920,6 +2930,26 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("meeting-agent-live", |s| {
                 scene_live(s, SCENE_NOTES, SCENE_LINES, true);
+            }),
+            ("meeting-agent-warming", |s| {
+                scene_live(s, SCENE_NOTES, SCENE_LINES, true);
+                s.saved.messages.push(Message {
+                    role: "user".into(),
+                    text: "What did we decide?".into(),
+                    ..Default::default()
+                });
+                let id = s.ask_key();
+                s.asks.insert(id.clone(), AskRun::stand_in("Codex", &[], 3));
+                s.apply_event(Event::Progress {
+                    id,
+                    generation: 0,
+                    event: AskProgress::StartingCodex,
+                });
+            }),
+            ("meeting-agent-normal", |s| {
+                scene_agents(s, ALL_AGENTS);
+                s.choose_normal_ask_runner("Codex".into());
+                s.set_ask_thinking(core::ask_options::Thinking::Low);
             }),
             ("meeting-agent-fallback", |s| {
                 scene_live(s, SCENE_NOTES, SCENE_LINES, true);

@@ -113,3 +113,38 @@ Implementation commits before this verification receipt:
 Every commit has the requested Co-Authored-By trailer. Version 0.0.1-dev.15 is unchanged. Nothing was pushed, packaged or installed. The probe, renderer and final report are committed together in the verification receipt.
 
 Elapsed: about 80 minutes including orientation, implementation, cold compilation, feature builds, UI corrections and final verification. Verification and rebuilds took most of the time. The largest avoidable rework was discovering picker clipping and notice placement after the first full gate pass.
+
+## Round 1 accepted follow-up
+
+Scope: remove thinking from the model picker in live and normal Ask. A question queued while Codex is still warming shows a muted `Starting Codex…` line under the box until non-empty answer text arrives. Warm-up progress must not trigger fallback. The existing error fallback remains unchanged.
+
+Keep the same branch, isolated target, gates, version and screen restrictions. Add regression tests, re-render both live themes plus one warming state, and make no additional live provider calls. Final verification follows. No additional live provider calls were made; the six-call budget from the first round is unchanged.
+
+The model field now contains only agent/model identity in both live and normal Ask. The live default displays its pinned `gpt-6.1-terra` model; normal Ask retains its existing `Codex` preset label. Low appears once, in the thinking picker.
+
+Queued Codex warm-up work emits a starting progress event without changing the selected agent. The muted `Starting Codex?` line appears under a submitted question and survives initialization and empty text events. The first non-empty answer text clears it. Actual agent failures retain the existing fallback policy. Tests cover queue-state release, no fallback solely for warming, and the UI transition.
+
+| Follow-up gate | Result | Seconds |
+|---|---|---:|
+| `cargo fmt --all --check` | PASS, exit 0 | 5.70 |
+| `cargo clippy --workspace --locked --all-targets -- -D warnings` | PASS, exit 0 | 132.14 |
+| `cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings` | PASS, exit 0 | 62.62 |
+| `cargo test --workspace --locked` | PASS, exit 0 | 451.08 |
+| `cargo test --workspace --locked --features asr-runtime` | PASS, exit 0 | 727.97 |
+| `cargo build --locked` | PASS, exit 0 | 192.03 |
+| `python tools/mcp-smoke.py E:\Personal-Projects\hex-meetings\.worktrees\meeting-agent\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 2.12 |
+| `python artifacts/meeting-agent/round1-fixes/gates/verify-focused.py` | PASS, exit 0 | 81.66 |
+
+Both test configurations passed 263 tests: 1 domain unit test, 14 domain integration tests, 198 app library tests and 50 UI tests. All 49 legacy expectations are unchanged. There were no Rust test, formatting, Clippy, build or MCP smoke failures this round. Automated checks are rung 4 evidence.
+
+The offscreen run checked live and normal Ask in both themes, the warming line below the box, model preference persistence and the existing settings views. All 41 PNG/tree pairs match the final executable timestamp, have 1280 by 800 dimensions and no layout warnings. Requested views and both normal Ask views were inspected visually, rung 5 for those synthetic states.
+
+A checker assumption that the live label must read Codex was corrected to use the configured model. The legacy search row was reachable, but its two-second highlight expired during a loaded capture. Its focused recapture and the unchanged reachability checker passed. One broader replay timed out during startup; that log is retained. No visibility/color assertion, application timeout or gate was weakened. Final receipts are in `artifacts/meeting-agent/round1-fixes`.
+
+Updated requested PNGs:
+
+- `artifacts/meeting-agent/live-ask-codex-low-1280-light.png`
+- `artifacts/meeting-agent/live-ask-codex-low-1280-dark.png`
+- `artifacts/meeting-agent/live-ask-warming-1280-light.png`
+
+The same branch and isolated target were retained. No push, version change, packaging, installation or owner-screen input was performed.

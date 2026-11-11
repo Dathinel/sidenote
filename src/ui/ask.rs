@@ -415,16 +415,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
     let shown = selected_model
         .as_deref()
         .unwrap_or_else(|| short_runner(name));
-    let shown = if s.ask_live_meeting()
-        && s.runners
-            .iter()
-            .find(|r| r.name == name)
-            .is_some_and(|r| core::ask_options::agent_name(r) == "Codex")
-    {
-        format!("Codex \u{b7} {}", s.ask_thinking().label())
-    } else {
-        shown.to_string()
-    };
+    let shown = shown.to_string();
     let trigger = pressable(
         row()
             .gap(2.0)
@@ -816,7 +807,21 @@ pub fn overlay_with(
     } else {
         pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
     };
-    place(s, beside(stack, lead, pill, narrow), narrow, p)
+    let mut stack = beside(stack, lead, pill, narrow);
+    if s.asks
+        .get(&id)
+        .is_some_and(|run| run.starting_codex && run.text.is_empty())
+    {
+        stack = stack.child(
+            roles::META
+                .wrap("Starting Codex\u{2026}", p.faint)
+                .key("ask-starting-codex")
+                .role("status")
+                .w_full()
+                .px(20.0),
+        );
+    }
+    place(s, stack, narrow, p)
 }
 
 fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {

@@ -279,6 +279,33 @@ fn recent_meeting_for(
 mod tests {
     use super::*;
     #[test]
+    fn waiting_for_codex_warmup_does_not_select_the_fallback() {
+        let options = Options {
+            fallback: Some(Fallback {
+                runner: "slower default".into(),
+                model: None,
+                thinking: Thinking::Medium,
+            }),
+            ..Default::default()
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let mut calls = Vec::new();
+        let result = options.try_fallback(
+            "Codex",
+            &|event| events.borrow_mut().push(event),
+            |name, _| {
+                calls.push(name.to_owned());
+                events
+                    .borrow_mut()
+                    .push(super::super::AskProgress::StartingCodex);
+                Ok("Codex answered after warming".into())
+            },
+        );
+        assert_eq!(result.unwrap(), "Codex answered after warming");
+        assert_eq!(calls, ["Codex"]);
+        assert_eq!(*events.borrow(), [super::super::AskProgress::StartingCodex]);
+    }
+    #[test]
     fn fallback_retries_once_with_normal_preferences_and_clears_partial_text() {
         use std::cell::RefCell;
         let options = Options {
