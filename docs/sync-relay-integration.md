@@ -1,6 +1,7 @@
 # Relay integration
 
-Decisions needed: none. This is the implementation contract for slice 1.
+Decisions needed: none. Slice 1 contract and evidence are retained below.
+Slice 2 is authorized on dev.13 at d85f637; see docs/sync-relay-2.md for its contract.
 Base: settings at 74150f0, version 0.0.1-dev.10. Core source: synccore-r1
 at 461afde. The owner requires folder sync, independent offline field edits,
 two-instance and two-device qualification, self-hosting and independent review.
@@ -160,7 +161,7 @@ bump the version, push, deploy or begin slice 2. Stop after 90 minutes if needed
 5. **L: release qualification.** Two-device matrix, adversarial/recovery tests,
    independent security review, revocation/rotation and packaging evidence.
 
-Only slice 1 is authorized for implementation here.
+Slice 1 is complete. Slice 2 is authorized separately; do not begin slice 3.
 
 ## Slice 1 evidence and limits
 
@@ -177,8 +178,8 @@ relay's bun suite passed 19 tests; its TypeScript check and the scanner's five
 tests also passed. Local relay tooling used the locked Wrangler 4.158.0 through
 its executable shim, not the older global 4.81.0 or the unsupported Bun JS runtime.
 
-No pairing UI or journal migration is implemented. The fixture provisions only
-synthetic memberships through the core API. Nested task collections and
+At the end of slice 1, no pairing UI or journal migration was implemented.
+The fixture provisions only synthetic memberships through the core API. Nested task collections and
 same-field conflict UI need later qualification. GUI interactions, MCP access
 while a GUI owns the preview replica, physical devices, a deployed self-hosted
 Worker, release packaging and independent security review remain unverified.
