@@ -214,3 +214,6 @@ At enable, Sidenote prepends `/local` to the share's `.stignore` ahead of existi
 rules, preserving those rules. It leaves that exclusion in place when disabled,
 because the retained replica and protected keys must stay on this PC. The
 replica content is plaintext at rest; DPAPI protects its keys, not all content.
+Use the application data folder as the share root. If you share a parent folder,
+configure its own ignore rules to exclude the application's `local` directory;
+Sidenote cannot inspect or qualify the Syncthing service's external configuration.

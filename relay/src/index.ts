@@ -323,6 +323,7 @@ export class Room extends DurableObject<Env> {
     }
     const budget=this.ctx.storage.sql.exec<{window:number}>("SELECT window FROM login_budget WHERE id=1").toArray()[0];
     if (!meta && budget && budget.window+60_000<=now) {await this.ctx.storage.deleteAll();this.schema=false;return;}
+    if (!meta && !budget && !claims) {this.closeAll("inactive room");await this.ctx.storage.deleteAll();this.schema=false;return;}
     let next = meta ? meta.kind === "pair" ? Math.min(meta.expires,meta.used ? meta.cleanupAt : Infinity) : meta.expires : budget ? budget.window+60_000 : Infinity;
     for (const ws of this.ctx.getWebSockets()) {
       const a = this.state(ws);

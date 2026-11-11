@@ -375,6 +375,18 @@ test("public entry point cannot change internal pairing budgets",async()=>{
   expect(calls).toBe(0);
 });
 
+test("expired pairing claims release capacity and delete empty budget storage",async()=>{
+  const originalNow=Date.now;let now=1000;Date.now=()=>now;
+  try {
+    const f=fixture();
+    const claim=room=>f.room.fetch(new Request(`https://budget.internal/pair-budget?room=${room}&limit=3&release=0`));
+    for(const room of ["a","b","c"].map(c=>c.repeat(64)))expect((await claim(room)).status).toBe(204);
+    expect((await claim("d".repeat(64))).status).toBe(429);
+    now+=600_001;await f.room.alarm();expect(f.deletes).toBe(1);
+    expect((await claim("d".repeat(64))).status).toBe(204);
+  } finally {Date.now=originalNow;}
+});
+
 test("connection byte budget refuses more than four MiB per second",async()=>{
   const f=fixture();f.room.save({...pair(),kind:"sync",pins:[key,"b".repeat(64)]});
   f.room.rateNow=()=>1000;
