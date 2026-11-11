@@ -238,3 +238,10 @@ The local self-host guide and all nine commands passed without an account.
 Health checks, retained contact time, all gates and 52 offscreen frames passed.
 See artifacts/relay4-evidence.json and docs/self-host-relay.md. Hosted evidence,
 physical devices and independent security review remain owner release gates.
+
+## Slice 5 local evidence
+
+The UI fixes, optimized two-capability release proof, crash recovery,
+adversarial protocol cases and three-peer rotation are recorded in
+`docs/sync-relay-release-gates.md`. Evidence is local, rung 4. See that receipt
+for the gate results, artifact paths and the three owner release gates.
