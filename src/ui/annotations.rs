@@ -1,4 +1,5 @@
 //! Capture review, explicit approval and locally saved annotation notes.
+pub(super) mod notebooks;
 mod workflow;
 use super::{
     Event, State, hex, nav, roles,
@@ -27,6 +28,7 @@ use workflow::*;
 #[derive(Default)]
 pub struct Annotations {
     pub open: bool,
+    notebooks: notebooks::Ui,
     captures: Vec<Capture>,
     errors: Vec<String>,
     selected: Option<PathBuf>,
@@ -61,6 +63,16 @@ pub struct Annotations {
     other_model: bool,
 }
 pub enum Msg {
+    NotebookDelta {
+        id: u64,
+        text: String,
+    },
+    NotebookReady {
+        id: u64,
+        book_id: String,
+        revision: u64,
+        result: Result<sidenote::core::annotations::notebook::Document, String>,
+    },
     Scanned {
         scan: Scan,
         shortcut: Option<String>,
@@ -133,6 +145,10 @@ impl State {
     pub fn open_annotations(&mut self) {
         self.go_home();
         self.annotations.open = true;
+        self.annotations.notebooks.selected = None;
+        self.annotations.notebooks.shared = None;
+        self.annotations.notebooks.pending = None;
+        self.load_notebooks();
         self.annotations.selected = None;
         self.annotations.images.clear();
         self.load_annotation_options();
@@ -215,6 +231,18 @@ impl State {
     }
     pub fn apply_annotations(&mut self, msg: Msg) {
         match msg {
+            Msg::NotebookDelta { id, text } if self.annotation_job_current(id) => {
+                self.annotations.stream = text
+            }
+            Msg::NotebookReady {
+                id,
+                book_id,
+                revision,
+                result,
+            } if self.annotation_job_current(id) => {
+                self.apply_notebook_ready(book_id, revision, result)
+            }
+            Msg::NotebookDelta { .. } | Msg::NotebookReady { .. } => {}
             Msg::Scanned {
                 scan,
                 shortcut,
@@ -241,6 +269,12 @@ impl State {
             } if self.annotations.selected.as_ref() == Some(&folder) => {
                 self.annotations.images = images;
                 self.annotations.source_fingerprint = fingerprint;
+                if self.annotations.notebooks.pending.is_some()
+                    && self.annotations.review.is_none()
+                    && self.annotations.source_fingerprint.is_some()
+                {
+                    self.review_annotation();
+                }
             }
             Msg::Images { .. } => {}
             Msg::Recording(result) => {
@@ -289,6 +323,9 @@ impl State {
                     }
                     self.annotations.note_open = true;
                     self.load_annotation_note_images();
+                    if self.annotations.notebooks.pending.is_some() {
+                        self.continue_notebook();
+                    }
                 }
             },
             Msg::Finished { id, result } if self.annotation_job_current(id) => {
@@ -317,6 +354,9 @@ impl State {
 pub fn on_key(s: &mut State, e: &rune::KeyEvent) -> bool {
     if e.key == Key::Escape {
         if s.annotations.review.take().is_some() {
+            if let Some(id) = s.annotations.notebooks.pending.take() {
+                s.open_notebook(&id);
+            }
             return true;
         }
         if s.annotations.note_open {
@@ -537,6 +577,11 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
                     .on_press(|s: &mut State| s.annotations.note_open = true)
             })),
     );
+    page = page.child(
+        link("Add to notebook", p)
+            .key("capture-add-notebook")
+            .on_press(|s: &mut State| s.choose_notebook_for_capture()),
+    );
     let folder = c.folder.clone();
     page = page.child(link("Show files", p).key("annotation-show-files").on_press(
         move |s: &mut State| {
@@ -669,7 +714,13 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
 pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
     let width = (s.app_w.get() - nav::width(s) - 1.0 - if narrow { 32.0 } else { 64.0 })
         .clamp(240.0, 1040.0);
-    let mut content = if let Some(c) = s
+    let mut content = if s.annotations.notebooks.shared.is_some() {
+        notebooks::confirmation(s, p)
+    } else if s.annotations.notebooks.picker.is_some() {
+        notebooks::picker(s, p)
+    } else if s.annotations.notebooks.selected.is_some() {
+        notebooks::page(s, width, p)
+    } else if let Some(c) = s
         .annotations
         .captures
         .iter()
@@ -704,7 +755,8 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
                     ),
             )
             .child(roles::SMALL.wrap("Screen captures and the words around each mark.", p.soft))
-            .child(roles::META.wrap("Local on this PC", p.faint));
+            .child(roles::META.wrap("Local on this PC", p.faint))
+            .child(notebooks::list_section(s, p));
         if s.annotations.captures.is_empty() {
             let title = if s.annotations.loading {
                 "Looking for captures..."

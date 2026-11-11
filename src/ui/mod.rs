@@ -2141,6 +2141,19 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("notebooks", |s| {
+                annotations::notebooks::scene(s, "notebooks")
+            }),
+            ("notebook", |s| annotations::notebooks::scene(s, "notebook")),
+            ("notebook-needs-review", |s| {
+                annotations::notebooks::scene(s, "notebook-needs-review")
+            }),
+            ("notebook-note", |s| {
+                annotations::notebooks::scene(s, "notebook-note")
+            }),
+            ("share-confirmation", |s| {
+                annotations::notebooks::scene(s, "share-confirmation")
+            }),
             ("annotations-list", |s| {
                 annotations::scene(s, "annotations-list")
             }),
