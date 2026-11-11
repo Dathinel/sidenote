@@ -169,6 +169,7 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
     let Some(preview) = get(root)? else {
         return Ok(Vec::new());
     };
+    let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
     let settings = Settings::load(root)?;
     let group = preview
         .device
@@ -219,11 +220,6 @@ impl Preview {
             .store(|s| s.check_group_active(&group.room()))
             .map_err(failed)?;
         self.device.merge_group(group).map_err(failed)?;
-        if settings.room != group.room() {
-            self.device
-                .store(|s| s.retire_group(&settings.room))
-                .map_err(failed)?;
-        }
         settings.room = group.room();
         self.device
             .store(|s| {
@@ -253,7 +249,7 @@ impl Preview {
                 })
             })
             .map_err(failed)?;
-        settings.save_authority(&self.root)?;
+        settings.save_authority(&self.root, &self.device)?;
         self.online(true)
     }
     pub fn remove_device(&self, _target: &str) -> io::Result<()> {

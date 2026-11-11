@@ -1323,6 +1323,15 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .max_w(940.0)
         .px(if narrow { 16.0 } else { 40.0 })
         .pb(40.0);
+    if page == Page::Sync {
+        doc = doc.child(
+            roles::SECTION
+                .wrap(page.name(), p.ink)
+                .key("settings-title")
+                .mt(22.0)
+                .pb(4.0),
+        );
+    }
     if let Some(note_) = s
         .hex
         .page_note()
@@ -1368,7 +1377,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .flatten(),
         )
         .child(hairline(p))
-        .child(
+        .children((page != Page::Sync).then(|| {
             col().w_full().fill(p.bg).items_center().child(
                 col()
                     .w_full()
@@ -1382,8 +1391,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     )
                     .children((!page.tabs().is_empty()).then(|| tab_bar(s, p)))
                     .pb(4.0),
-            ),
-        )
+            )
+        }))
         .child(scroll(col().w_full().items_center().child(doc), "hex-scroll").clip_rounded(0.0))
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {

@@ -196,15 +196,23 @@ impl Settings {
         }
         Ok(())
     }
-    fn save_authority(&self, root: &Path) -> io::Result<()> {
+    fn save_authority(&self, root: &Path, device: &Device) -> io::Result<()> {
         let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
         let mut current = Self::load(root)?;
         if !current.enabled {
             return Err(store_io::invalid("Relay preview was turned off"));
         }
+        let previous_room = current.room.clone();
         current.room = self.room.clone();
         current.peers = self.peers.clone();
-        store_io::write(&root.join("local/relay/settings.json"), &current)
+        // Startup retires inactive groups if a crash interrupts this durable handoff.
+        store_io::write(&root.join("local/relay/settings.json"), &current)?;
+        if previous_room != current.room {
+            device
+                .store(|s| s.retire_group(&previous_room))
+                .map_err(failed)?;
+        }
+        Ok(())
     }
 }
 
@@ -806,7 +814,7 @@ mod tests {
         preview.device.merge_group(&fresh)?;
         let mut authority = Settings::load(root)?;
         authority.room = fresh.room();
-        authority.save_authority(root)?;
+        authority.save_authority(root, &preview.device)?;
         stale.address = "ws://127.0.0.1:9".into();
         stale.save(root)?;
         assert!(Settings::load(root)?.room == fresh.room());
