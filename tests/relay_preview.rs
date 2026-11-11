@@ -556,6 +556,19 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
                 && v["memory"]["records"][0]["last_confirmed"].is_string()
                 && v["memory"]["proposals"][0]["status"] == "pending"
                 && v["checked"].as_array().is_some_and(|a| a.len() == 2)
+                && v["projects"]["projects"]
+                    .as_array()
+                    .is_some_and(|projects| {
+                        projects.contains(&json!("Offline A"))
+                            && projects.contains(&json!("Offline B"))
+                    })
+                && v["projects"].as_object().is_some_and(|projects| {
+                    projects
+                        .keys()
+                        .filter(|key| key.starts_with("area:"))
+                        .count()
+                        == 2
+                })
         });
         assert!(
             value["model"] == model && value["sidebar"] == sidebar,
