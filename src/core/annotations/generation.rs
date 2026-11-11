@@ -607,6 +607,81 @@ pub fn stream_preview(text: &str) -> String {
     out.join("\n\n")
 }
 
+/// Read only visible prose from incomplete notebook JSON, including sections-first output.
+pub fn notebook_stream_preview(text: &str) -> String {
+    fn string(s: &str) -> Option<(String, usize, bool)> {
+        if !s.starts_with('"') {
+            return None;
+        }
+        let mut escaped = false;
+        for (i, c) in s[1..].char_indices() {
+            if c == '"' && !escaped {
+                let length = i + 2;
+                return serde_json::from_str::<String>(&s[..length])
+                    .ok()
+                    .map(|value| (value, length, true));
+            }
+            escaped = c == '\\' && !escaped;
+        }
+        let mut raw = &s[1..];
+        loop {
+            if let Ok(value) = serde_json::from_str::<String>(&format!("\"{raw}\"")) {
+                return Some((value, s.len(), false));
+            }
+            let i = raw.rfind('\\')?;
+            raw = &raw[..i];
+        }
+    }
+    static KEYS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let keys = KEYS.get_or_init(|| {
+        regex::Regex::new(r#""(title|summary|heading|paragraphs)"\s*:\s*"#).unwrap()
+    });
+    let mut title = None;
+    let mut summary = None;
+    let mut body = Vec::new();
+    for key in keys.captures_iter(text) {
+        let mut tail = &text[key.get(0).unwrap().end()..];
+        match &key[1] {
+            "paragraphs" => {
+                let Some(rest) = tail.strip_prefix('[') else {
+                    continue;
+                };
+                tail = rest;
+                loop {
+                    tail = tail.trim_start().trim_start_matches(',').trim_start();
+                    let Some((value, used, complete)) = string(tail) else {
+                        break;
+                    };
+                    if !value.is_empty() {
+                        body.push(value);
+                    }
+                    if !complete {
+                        break;
+                    }
+                    tail = &tail[used..];
+                }
+            }
+            kind => {
+                if let Some((value, _, _)) = string(tail)
+                    && !value.is_empty()
+                {
+                    match kind {
+                        "title" => title = Some(value),
+                        "summary" => summary = Some(value),
+                        _ => body.push(value),
+                    }
+                }
+            }
+        }
+    }
+    title
+        .into_iter()
+        .chain(summary)
+        .chain(body)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// Explicitly authorized proof entry point. Its input can only be the invented fixture.
 pub fn live_proof(model: &str, root: &Path) -> Result<(), String> {
     let started = Instant::now();

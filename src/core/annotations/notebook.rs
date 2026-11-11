@@ -61,9 +61,11 @@ fn path(root: &Path, id: &str) -> io::Result<PathBuf> {
 }
 impl Notebook {
     pub fn new(title: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
             id: format!(
-                "{}-{}",
+                "{}-{}-{nonce:020}",
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
                 std::process::id()
             ),
@@ -235,7 +237,7 @@ pub fn prompt(book: &Notebook, inputs: &[Input]) -> String {
                 }
             }
         }
-        let prose = json!({"title":input.note["title"],"summary":input.note["summary"],"points":points,"open_questions":input.note["open_questions"],"todos":input.note["todos"].as_array().unwrap().iter().map(|t|json!({"action":t["action"],"owner":t["owner"],"due_date":t["due_date"]})).collect::<Vec<_>>()});
+        let prose = json!({"title":input.note["title"],"summary":input.note["summary"],"points":points,"open_questions":merged_questions(&input.note),"todos":input.note["todos"].as_array().unwrap().iter().map(|t|json!({"action":t["action"],"owner":t["owner"],"due_date":t["due_date"]})).collect::<Vec<_>>()});
         let fingerprint = prose.to_string();
         let index = if let Some(index) = known.get(&fingerprint) {
             *index
@@ -266,6 +268,46 @@ fn normalized(s: &str) -> String {
         .to_lowercase()
 }
 
+/// Keep legacy inline uncertainty at the end as well as explicit open questions.
+pub(super) fn merged_questions(value: &Value) -> Vec<Value> {
+    fn collect(value: &Value, output: &mut Vec<String>) {
+        match value {
+            Value::Object(fields) => {
+                for (key, v) in fields {
+                    if key == "uncertainty" {
+                        if let Some(s) = v.as_str() {
+                            output.push(s.into());
+                        }
+                    } else {
+                        collect(v, output);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect(item, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut candidates = value["open_questions"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    collect(value, &mut candidates);
+    let mut seen = BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter(|s| !s.trim().is_empty() && seen.insert(normalized(s)))
+        .map(Value::String)
+        .collect()
+}
 pub fn assemble(book: &Notebook, inputs: &[Input], text: Value) -> Result<Document, String> {
     if !jsonschema::validator_for(&text_schema())
         .map_err(|e| e.to_string())?
@@ -290,13 +332,32 @@ pub fn assemble(book: &Notebook, inputs: &[Input], text: Value) -> Result<Docume
         input.approved.verify().map_err(|e| e.to_string())?;
         note::validate(&input.note, &input.approved)?;
         let mut section = section.clone();
-        section["figures"] = input.note["figures"].clone();
+        section["figures"] = json!(
+            input.note["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|s| s["figure_refs"].as_array().unwrap())
+                .map(|id| input.note["figures"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|f| &f["figure_id"] == id)
+                    .unwrap()
+                    .clone())
+                .collect::<Vec<_>>()
+        );
+        for figure in section["figures"].as_array_mut().unwrap() {
+            for callout in figure["callouts"].as_array_mut().unwrap() {
+                callout["uncertainty"] = Value::Null;
+            }
+        }
         figures.push(section);
         assets.push(Asset {
             key: input.key.clone(),
             approved: input.approved.clone(),
         });
-        for q in input.note["open_questions"].as_array().unwrap() {
+        for q in merged_questions(&input.note) {
             let s = q.as_str().unwrap();
             if qseen.insert(normalized(s)) {
                 questions.push(q.clone());
@@ -473,6 +534,8 @@ pub fn live_proof(root: &Path) -> Result<(), String> {
     save(root, &book).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let first = std::sync::Mutex::new(None::<f64>);
+    let first_header = std::sync::Mutex::new(None::<f64>);
+    let preview_events = std::sync::Mutex::new(Vec::<Value>::new());
     let ticket = super::generation::Epoch::default().begin();
     let options = super::generation::Options {
         helper: crate::core::notes::Helper::Claude,
@@ -485,17 +548,24 @@ pub fn live_proof(root: &Path) -> Result<(), String> {
         &root.join("job"),
         &ticket,
         |text| {
-            if super::generation::stream_preview(&text)
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .count()
-                >= 12
-            {
+            let elapsed = started.elapsed().as_secs_f64();
+            let preview = super::generation::notebook_stream_preview(&text);
+            if !preview.trim().is_empty() {
                 let mut first = first.lock().unwrap();
                 if first.is_none() {
-                    *first = Some(started.elapsed().as_secs_f64());
+                    *first = Some(elapsed);
                 }
             }
+            if !super::generation::stream_preview(&text).trim().is_empty() {
+                let mut first = first_header.lock().unwrap();
+                if first.is_none() {
+                    *first = Some(elapsed);
+                }
+            }
+            preview_events
+                .lock()
+                .unwrap()
+                .push(json!({"seconds":elapsed,"visible_text":preview}));
         },
     )?;
     let total = started.elapsed().as_secs_f64();
@@ -509,7 +579,12 @@ pub fn live_proof(root: &Path) -> Result<(), String> {
         &serde_json::to_vec_pretty(&doc.value).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    store_io::atomic_write(&root.join("timing.json"),&serde_json::to_vec_pretty(&json!({"model":options.model,"captures":3,"first_text_seconds":*first.lock().unwrap(),"complete_seconds":total,"valid":true,"images_sent":0,"existing_notes_only":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    store_io::atomic_write(&root.join("timing.json"),&serde_json::to_vec_pretty(&json!({"model":options.model,"captures":3,"first_text_seconds":*first.lock().unwrap(),"first_title_summary_seconds":*first_header.lock().unwrap(),"complete_seconds":total,"valid":true,"images_sent":0,"existing_notes_only":true})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    store_io::atomic_write(
+        &root.join("stream-proof.json"),
+        &serde_json::to_vec_pretty(&*preview_events.lock().unwrap()).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     println!(
         "Notebook proof: first text {:?} s, complete {total:.2} s",
         *first.lock().unwrap()

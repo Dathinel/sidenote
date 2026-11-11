@@ -6,8 +6,10 @@ use std::{fs, path::PathBuf};
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "sidenote-notebook-test-{}-{}",
+            "sidenote-notebook-test-{}-{}-{nonce}",
             std::process::id(),
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         ));
@@ -161,4 +163,34 @@ fn export_never_writes_inside_a_bundle_or_overwrites_other_file_formats() {
     assert!(!target.exists());
     assert!(share::save(&temp.0.join("scrawl.json"), "test").is_err());
     assert!(!temp.0.join("scrawl.json").exists());
+}
+
+#[test]
+fn notebook_stream_shows_sections_before_title_without_exposing_reference_keys() {
+    let partial = r#"{"sections":[{"capture_key":"private-key","heading":"Workshop setup","paragraphs":["Use paper ca"#;
+    assert!(generation::stream_preview(partial).is_empty());
+    let visible = generation::notebook_stream_preview(partial);
+    assert!(visible.contains("Workshop setup"));
+    assert!(visible.contains("Use paper ca"));
+    assert!(!visible.contains("private-key"));
+    assert!(!visible.contains("capture_key"));
+    let complete = r#"{"sections":[{"capture_key":"opaque","heading":"First","paragraphs":["One.","Two."]},{"capture_key":"opaque2","heading":"Second","paragraphs":["Three."]}],"summary":"Overall point.","title":"Notebook"}"#;
+    let visible = generation::notebook_stream_preview(complete);
+    assert!(visible.starts_with("Notebook\n\nOverall point."));
+    assert!(visible.contains("One.\n\nTwo.\n\nSecond\n\nThree."));
+    assert!(generation::notebook_stream_preview(r#"{"title":"Paper \u12"#).contains("Paper"));
+}
+
+#[test]
+fn conflicting_questions_remain_distinct_and_legacy_uncertainty_moves_to_the_end() {
+    let temp = Temp::new();
+    let (b, mut inputs, _) = notebook::synthetic(&temp.0, 1).unwrap();
+    inputs[0].note["open_questions"] = serde_json::json!(["Is x < 1?", "Is x > 1?"]);
+    inputs[0].note["figures"][0]["callouts"][0]["uncertainty"] =
+        serde_json::json!("Which overview is intended?");
+    let doc = notebook::synthetic_document(&b, &inputs).unwrap();
+    assert_eq!(doc.value["open_questions"].as_array().unwrap().len(), 3);
+    assert!(doc.value["sections"][0]["figures"][0]["callouts"][0]["uncertainty"].is_null());
+    let html = share::capture(&inputs[0].note, &inputs[0].approved).unwrap();
+    assert!(html.contains("Which overview is intended?"));
 }
