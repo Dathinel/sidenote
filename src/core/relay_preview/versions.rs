@@ -10,6 +10,8 @@ pub struct Choice {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conflict {
+    #[serde(default)]
+    pub domain: String,
     pub task_id: String,
     pub title: String,
     pub field: String,
@@ -63,6 +65,20 @@ pub(super) fn apply(
     source: &str,
 ) -> anyhow::Result<()> {
     let (before, after) = (fields(before)?, fields(after)?);
+    let mut nested = Vec::new();
+    for (id, new) in &after {
+        let old = before.get(id);
+        let view = |fields: Option<&Map<String, Value>>| {
+            serde_json::json!({
+                "subtasks":fields.and_then(|v|v.get("subtasks")).cloned().unwrap_or_else(||serde_json::json!([])),
+                "subtask_ticks":fields.and_then(|v|v.get("subtask_ticks")).cloned().unwrap_or_else(||serde_json::json!({})),
+            })
+        };
+        let (a, b) = (view(old), view(Some(new)));
+        if a != b {
+            nested.push((id.clone(), a, b));
+        }
+    }
     let mut tx = doc.transaction();
     for id in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
         let (old, new) = (before.get(id), after.get(id));
@@ -81,7 +97,7 @@ pub(super) fn apply(
         for name in names {
             anyhow::ensure!(name.len() <= 128 && name != "$present", "invalid field");
             let (a, b) = (old.and_then(|f| f.get(name)), new.and_then(|f| f.get(name)));
-            if a != b && new.is_some() {
+            if a != b && new.is_some() && !matches!(name.as_str(), "subtasks" | "subtask_ticks") {
                 tx.put(
                     ROOT,
                     serde_json::to_string(&[id, name])?,
@@ -91,6 +107,9 @@ pub(super) fn apply(
         }
     }
     tx.commit();
+    for (id, before, after) in nested {
+        super::shared::nested_manual(doc, &id, &before, &after, device, source)?;
+    }
     Ok(())
 }
 
@@ -123,6 +142,7 @@ pub(super) fn conflicts(doc: &Automerge) -> anyhow::Result<Vec<Conflict>> {
         let choices = choices(doc, &key)?;
         if choices.len() > 1 {
             conflicts.push(Conflict {
+                domain: String::new(),
                 task_id: id,
                 title: task.title.clone().unwrap_or_else(|| task.task.clone()),
                 field,
@@ -135,25 +155,30 @@ pub(super) fn conflicts(doc: &Automerge) -> anyhow::Result<Vec<Conflict>> {
 
 impl Preview {
     pub fn conflicts(&self) -> io::Result<Vec<Conflict>> {
-        conflicts(&self.device.load("tasks").map_err(failed)?).map_err(failed)
+        let mut out = conflicts(&self.device.load("tasks").map_err(failed)?).map_err(failed)?;
+        out.extend(self.shared_conflicts()?);
+        Ok(out)
     }
     pub fn resolutions(&self) -> io::Result<Vec<Resolution>> {
-        let doc = self.device.load("tasks").map_err(failed)?;
+        let domains = self.device.store(|s| s.inventory()).map_err(failed)?;
         let mut out: Vec<Resolution> = Vec::new();
-        for key in doc.keys(ROOT) {
-            let [kind, _]: [String; 2] = serde_json::from_str(&key)?;
-            if kind == "$resolution" {
-                let value = doc
-                    .get(ROOT, key)
-                    .map_err(failed)?
-                    .ok_or_else(|| failed("missing resolution"))?
-                    .0;
-                out.push(
-                    serde_json::from_str(
-                        value.as_str().ok_or_else(|| failed("invalid resolution"))?,
-                    )
-                    .map_err(failed)?,
-                );
+        for domain in domains {
+            let doc = self.device.load(&domain).map_err(failed)?;
+            for key in doc.keys(ROOT) {
+                let [kind, _]: [String; 2] = serde_json::from_str(&key)?;
+                if kind == "$resolution" {
+                    let value = doc
+                        .get(ROOT, key)
+                        .map_err(failed)?
+                        .ok_or_else(|| failed("missing resolution"))?
+                        .0;
+                    out.push(
+                        serde_json::from_str(
+                            value.as_str().ok_or_else(|| failed("invalid resolution"))?,
+                        )
+                        .map_err(failed)?,
+                    );
+                }
             }
         }
         out.sort_by(|a, b| a.at.cmp(&b.at));

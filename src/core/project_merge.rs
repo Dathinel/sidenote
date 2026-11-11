@@ -205,9 +205,6 @@ impl TaskStore {
         ))
     }
     pub fn merge_projects(&self, preview: &MergePreview) -> io::Result<Projects> {
-        if super::relay_preview::Settings::load(&self.root)?.enabled {
-            return Err(invalid("Turn off relay preview before merging projects"));
-        }
         sync_state::update_checked_validated(
             &self.root,
             "projects.json",
@@ -312,7 +309,7 @@ impl TaskStore {
         let base = self.root.join("local/project-merges");
         let backup = base.join(&merge.id).join("backup.json");
         // Old local receipts stored this absolute path; never use the peer-provided path.
-        if merge.backup != backup {
+        if merge.backup != backup && merge.backup != PathBuf::from(&merge.id).join("backup.json") {
             return Err(invalid("Backup location does not match this device"));
         }
         store_io::reject_reparse(&backup)?;
@@ -322,11 +319,6 @@ impl TaskStore {
         Ok(backup)
     }
     pub fn undo_project_merge(&self, from: &str, expected_id: &str) -> io::Result<Projects> {
-        if super::relay_preview::Settings::load(&self.root)?.enabled {
-            return Err(invalid(
-                "Turn off relay preview before undoing a project merge",
-            ));
-        }
         let projects = self.load_projects()?;
         let merge = projects
             .merges

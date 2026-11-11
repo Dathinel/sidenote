@@ -291,14 +291,14 @@ impl Session {
         };
         let view = read_view(root, store, &own)?;
         let relay_mode_lock = if !read_only
-            && store == "task-overrides.json"
+            && super::relay_preview::shared::domain(store).is_some()
             && root.join("local/relay/settings.json").try_exists()?
         {
             Some(store_io::lock(&root.join("local/relay/mode.lock"))?)
         } else {
             None
         };
-        let preview = if use_preview && store == "task-overrides.json" {
+        let preview = if use_preview && super::relay_preview::shared::domain(store).is_some() {
             super::relay_preview::get(root)?
         } else {
             None
@@ -318,7 +318,7 @@ impl Session {
                 "Own journal is unreadable; refusing to edit or import",
             ));
         }
-        if !super::file_reads::refreshing() {
+        if !super::file_reads::refreshing() || !use_preview {
             session.import_legacy()?;
         }
         Ok(session)
@@ -427,7 +427,7 @@ impl Session {
                 self.view.warnings.push("Could not import a legacy state file within the journal limit; it was retained".into());
                 continue;
             }
-            if self.read_only || (self.preview.is_some() && self.store == "task-overrides.json") {
+            if self.read_only || self.preview.is_some() {
                 // Apply exactly the same seed registers in memory without migration or backups.
                 journal.sources.clear();
                 self.view.merge(&journal);
@@ -481,7 +481,16 @@ impl Session {
         }
         let mut value = inflate(&self.store, valid, default)?;
         if let Some(preview) = &self.preview {
-            value["manual"] = serde_json::to_value(preview.tasks()?)?;
+            let shared = preview.shared_value(
+                &self.store,
+                super::relay_preview::shared::selected(&self.store, value.clone()),
+            )?;
+            if let (Some(target), Some(fields)) = (value.as_object_mut(), shared.as_object()) {
+                target.extend(fields.clone());
+            }
+            if self.store == "task-overrides.json" {
+                value["manual"] = serde_json::to_value(preview.tasks()?)?;
+            }
         }
         Ok((value, skipped))
     }
@@ -502,37 +511,74 @@ impl Session {
             .filter(|k| before.get(*k) != after.get(*k))
             .map(|k| (k.clone(), before.get(k).cloned(), after.get(k).cloned()))
             .collect();
-        if self.store == "task-overrides.json"
+        if super::relay_preview::shared::domain(&self.store).is_some()
             && super::relay_preview::Settings::load(&self.root)?.enabled != self.preview.is_some()
         {
             return Err(invalid("Relay preview mode changed. Reload before saving."));
         }
-        let mut relay_changes = None;
-        if let Some(preview) = &self.preview {
-            let manual = |items: &Items| -> io::Result<Vec<super::ManualTask>> {
-                items
-                    .iter()
-                    .filter(|(key, _)| key.first().is_some_and(|k| k == "manual"))
-                    .map(|(_, value)| {
-                        serde_json::from_value(value.clone()).map_err(io::Error::from)
-                    })
-                    .collect()
-            };
-            let (old, new) = (manual(&before)?, manual(&after)?);
-            before.retain(|key, _| key.first().is_none_or(|k| k != "manual"));
-            after.retain(|key, _| key.first().is_none_or(|k| k != "manual"));
-            if old != new {
-                if before != after {
-                    return Err(invalid(
-                        "Save preview tasks separately from folder task edits",
-                    ));
-                }
-                relay_changes = Some((preview, old, new));
-            }
+        if self.store == "task-overrides.json"
+            && let Some(preview) = &self.preview
+        {
+            super::area_version::guard_changes(&self.root, &self.store, &edits)?;
+            preview.edit_overrides(
+                &inflate(
+                    &self.store,
+                    before,
+                    serde_json::to_value(super::Overrides::default())?,
+                )?,
+                &inflate(
+                    &self.store,
+                    after,
+                    serde_json::to_value(super::Overrides::default())?,
+                )?,
+            )?;
+            fence_local_mutation();
+            return Ok(());
         }
         super::area_version::guard_changes(&self.root, &self.store, &edits)?;
-        if let Some((preview, old, new)) = relay_changes {
-            preview.edit(&old, &new)?;
+        if let Some(preview) = &self.preview {
+            let selected = |key: &Key| {
+                self.store != "task-overrides.json" || key.first().is_none_or(|k| k != "manual")
+            };
+            let keys: BTreeSet<_> = before
+                .keys()
+                .chain(after.keys())
+                .filter(|k| selected(k))
+                .cloned()
+                .collect();
+            let mut relay_before = Items::new();
+            let mut relay_after = Items::new();
+            for key in keys {
+                if self.store != "task-overrides.json"
+                    && super::relay_preview::shared::domain(&self.store)
+                        .is_some_and(|d| d.starts_with("meeting:"))
+                    && key.first().is_none_or(|k| k != "checked")
+                {
+                    continue;
+                }
+                if let Some(value) = before.remove(&key) {
+                    relay_before.insert(key.clone(), value);
+                }
+                if let Some(value) = after.remove(&key) {
+                    relay_after.insert(key, value);
+                }
+            }
+            if relay_before != relay_after {
+                preview.shared_edit(
+                    &self.store,
+                    &inflate(
+                        &self.store,
+                        relay_before,
+                        super::relay_preview::shared::defaults(&self.store)?,
+                    )?,
+                    &inflate(
+                        &self.store,
+                        relay_after,
+                        super::relay_preview::shared::defaults(&self.store)?,
+                    )?,
+                )?;
+                fence_local_mutation();
+            }
         }
         let keys: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
         let changes = keys
@@ -566,6 +612,87 @@ pub(super) fn load_report<T: Serialize + DeserializeOwned + Default>(
 }
 pub(super) fn prepare(root: &Path, store: &str) -> io::Result<()> {
     Session::open(root, store).map(|_| ())
+}
+pub(super) fn folder_shared(root: &Path, store: &str) -> io::Result<Value> {
+    fn read<T: Serialize + DeserializeOwned + Default>(
+        root: &Path,
+        store: &str,
+    ) -> io::Result<Value> {
+        let s = Session::open_mode_preview(root, store, true, false)?;
+        let (v, skipped) = s.value_report::<T>()?;
+        if s.view.own_bad || !s.view.warnings.is_empty() || skipped > 0 {
+            return Err(invalid(
+                "Repair unreadable shared journals before enabling relay sync",
+            ));
+        }
+        serde_json::from_value::<T>(v.clone())?;
+        Ok(super::relay_preview::shared::selected(store, v))
+    }
+    match store {
+        "projects.json" => read::<super::Projects>(root, store),
+        "task-overrides.json" => read::<super::Overrides>(root, store),
+        "memory/records.json" => read::<super::memory::MemoryFile>(root, store),
+        _ => read::<super::Saved>(root, store),
+    }
+}
+pub(super) fn shared_files(root: &Path) -> io::Result<BTreeMap<String, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    for store in stores(root)?
+        .into_iter()
+        .filter(|s| super::relay_preview::shared::domain(s).is_some())
+    {
+        for path in legacy_sources(root, &store)? {
+            let bytes = store_io::read_bounded(&path, super::file_reads::STORE_MAX)?;
+            files.insert(
+                path.strip_prefix(root)
+                    .map_err(|_| invalid("backup path"))?
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                bytes,
+            );
+        }
+        for owner in entries(&root.join("state"))? {
+            let name = owner.file_name().to_string_lossy().into_owned();
+            if !device::valid_id(&name) {
+                continue;
+            }
+            for entry in entries(&owner.path().join(hash(store.as_bytes())))? {
+                if entry.path().extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let journal = read_journal(&entry.path(), &name, Some(&store))?;
+                if store != "task-overrides.json"
+                    && super::relay_preview::shared::domain(&store)
+                        .is_some_and(|d| d.starts_with("meeting:"))
+                    && journal
+                        .changes
+                        .iter()
+                        .all(|c| c.key.first().is_none_or(|k| k != "checked"))
+                {
+                    continue;
+                }
+                files.insert(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .map_err(|_| invalid("backup path"))?
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    store_io::read_bounded(&entry.path(), super::file_reads::JOURNAL_MAX)?,
+                );
+            }
+        }
+    }
+    if root.join("teams.json").try_exists()? {
+        files.insert(
+            "teams.json".into(),
+            store_io::read_bounded(&root.join("teams.json"), super::file_reads::JOURNAL_MAX)?,
+        );
+    }
+    if files.values().map(Vec::len).sum::<usize>() as u64 > super::file_reads::STORE_MAX {
+        return Err(invalid("Shared backup exceeds store limit"));
+    }
+    Ok(files)
 }
 pub(super) fn folder_manual(root: &Path) -> io::Result<(Vec<super::ManualTask>, Vec<String>)> {
     let session = Session::open_mode_preview(root, "task-overrides.json", true, false)?;
@@ -637,6 +764,9 @@ pub(super) fn manual_journal_files(root: &Path) -> io::Result<BTreeMap<String, V
 }
 pub(super) fn writer(root: &Path, store: &str, key: Vec<String>) -> io::Result<Option<String>> {
     let session = Session::open_mode(root, store, true)?;
+    if let Some(preview) = &session.preview {
+        return preview.shared_writer(store, key.into_iter().map(|k| format!("o:{k}")).collect());
+    }
     Ok(session.view.items.get(&key).map(|r| r.device.clone()))
 }
 pub(super) fn diagnostics<T: Serialize + DeserializeOwned + Default>(
@@ -651,14 +781,28 @@ pub(super) fn diagnostics<T: Serialize + DeserializeOwned + Default>(
 /// way as `load`. Values imported from a legacy file carry no time and read as 0.
 pub(super) fn stamps(root: &Path, store: &str) -> io::Result<BTreeMap<Key, u64>> {
     let session = Session::open_mode(root, store, true)?;
-    Ok(session
+    let mut out: BTreeMap<_, _> = session
         .view
         .items
         .iter()
         .filter(|(_, r)| r.value.is_some())
         .map(|(k, r)| (k.clone(), r.at & !(1 << 63)))
-        .collect())
+        .collect();
+    if let Some(preview) = &session.preview
+        && super::relay_preview::shared::domain(store).is_some_and(|d| d.starts_with("meeting:"))
+    {
+        let prior = out.clone();
+        out.retain(|k, _| k.first().is_none_or(|k| k != "checked"));
+        for (key, at) in preview.check_stamps(store)? {
+            out.insert(
+                key.clone(),
+                at.unwrap_or_else(|| prior.get(&key).copied().unwrap_or(0)),
+            );
+        }
+    }
+    Ok(out)
 }
+
 pub(super) fn update<T: Serialize + DeserializeOwned + Default>(
     root: &Path,
     store: &str,

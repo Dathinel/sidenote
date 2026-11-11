@@ -41,7 +41,7 @@ impl Default for Limits {
 }
 
 pub fn valid_domain(id: &str) -> bool {
-    ["tasks", "memory", "projects", "diary"].contains(&id)
+    ["tasks", "memory", "projects", "diary", "people", "settings"].contains(&id)
         || id.strip_prefix("meeting:").is_some_and(|s| {
             !s.is_empty()
                 && s.len() <= 128

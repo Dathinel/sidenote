@@ -17,9 +17,51 @@ use std::{
 };
 mod migration;
 pub mod pairing;
+pub(crate) mod shared;
 mod test_driver;
 mod versions;
 pub use versions::{Choice, Conflict, Resolution, current as conflicts};
+
+#[derive(Clone)]
+pub struct SharedProfile {
+    pub your_name: String,
+    pub people_sides: BTreeMap<String, super::people::Side>,
+    pub relay: bool,
+}
+pub fn profile(root: &Path) -> io::Result<SharedProfile> {
+    let mut name = shared::local_profile(root)?;
+    let mut people = shared::local_people(root)?;
+    let preview = get(root)?;
+    if let Some(p) = &preview {
+        name = p.shared_value("profile.json", name)?;
+        people = p.shared_value("people.json", people)?;
+    }
+    Ok(SharedProfile {
+        your_name: name["your_name"].as_str().unwrap_or("").into(),
+        people_sides: serde_json::from_value(people["sides"].clone())?,
+        relay: preview.is_some(),
+    })
+}
+/// A document revision, not a delivery acknowledgement. No keys or content leave this API.
+pub fn revision(root: &Path) -> io::Result<Option<String>> {
+    let Some(preview) = get(root)? else {
+        return Ok(None);
+    };
+    let heads = preview
+        .device
+        .store(|s| {
+            s.inventory()?
+                .into_iter()
+                .map(|d| Ok((d.clone(), s.heads(&d)?)))
+                .collect::<anyhow::Result<Vec<_>>>()
+        })
+        .map_err(failed)?;
+    Ok(Some(
+        blake3::hash(&serde_json::to_vec(&heads)?)
+            .to_hex()
+            .to_string(),
+    ))
+}
 
 /// Builds a trusted synthetic conflict for the offscreen renderer, never a live data root.
 #[doc(hidden)]
@@ -73,6 +115,37 @@ pub fn seed_render_conflict(root: &Path) -> io::Result<()> {
         .map_err(failed)
 }
 
+#[doc(hidden)]
+pub fn seed_shared_render_conflict(root: &Path) -> io::Result<()> {
+    let resolved = root.canonicalize()?;
+    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()?
+        .join("target");
+    if !resolved.starts_with(target) && !super::is_proof_path(root, "sidenote-relay-preview") {
+        return Err(store_io::invalid(
+            "Shared render requires an isolated proof folder",
+        ));
+    }
+    let mut device = super::DeviceSettings::load_in(root)?;
+    device.name = "DEMO-PC".into();
+    store_io::write(&root.join("device.json"), &device)?;
+    let mut settings = Settings::load(root)?;
+    settings.enabled = true;
+    settings.address.clear();
+    settings.save(root)?;
+    let preview = get(root)?.ok_or_else(|| failed("preview off"))?;
+    preview.device.store(|s|s.edit("memory",|doc| {
+        let base=serde_json::json!({"schema_version":1,"records":[{"id":"synthetic-render-memory","type":"story","text":"Initial field guide","project":null,"people":[],"sources":[],"first_seen":null,"last_confirmed":null,"status":"active","basis":"owner_confirmed","supersedes":null,"updated_at":"2030-01-01T00:00:00Z","source_fingerprint":"synthetic","source_fingerprints":[]}],"proposals":[],"events":[],"migration":null});
+        shared::apply(doc,"memory/records.json",&Value::Null,&base,"DEMO-PC","render",true)?;
+        let mut other=doc.fork();other.set_actor(automerge::ActorId::from(&[78;32][..]));
+        let mut a=base.clone();a["records"][0]["text"]=Value::String("Ship the revised field guide".into());
+        let mut b=base.clone();b["records"][0]["text"]=Value::String("Review the field guide with the team".into());
+        shared::apply(doc,"memory/records.json",&base,&a,"DEMO-PC","render-a",false)?;
+        shared::apply(&mut other,"memory/records.json",&base,&b,"Travel laptop","render-b",false)?;
+        doc.merge(&mut other)?;Ok(())
+    })).map_err(failed)
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -80,6 +153,7 @@ pub struct Settings {
     pub address: String,
     pub room: String,
     pub backup: String,
+    pub shared_backup: String,
     pub peers: BTreeMap<String, String>,
 }
 
@@ -101,11 +175,17 @@ impl Settings {
             next.room = prior.room.clone();
             next.peers = prior.peers.clone();
             next.backup = prior.backup.clone();
+            next.shared_backup = prior.shared_backup.clone();
         }
         if next.enabled && (!prior.enabled || prior.backup.is_empty()) {
             migration::enable(root, &mut next)?;
         } else if !next.enabled && prior.enabled {
             migration::verify(root, &prior.backup)?;
+        }
+        if next.enabled && next.shared_backup.is_empty() {
+            migration::enable_shared(root, &mut next)?;
+        } else if !next.enabled && prior.enabled {
+            migration::verify_shared(root, &prior.shared_backup)?;
         }
         store_io::write(&root.join("local/relay/settings.json"), &next)?;
         if !self.enabled {
@@ -155,6 +235,9 @@ impl Preview {
         let mut settings = settings;
         if settings.backup.is_empty() {
             migration::enable(root, &mut settings)?;
+        }
+        if settings.shared_backup.is_empty() {
+            migration::enable_shared(root, &mut settings)?;
         }
         std::fs::create_dir_all(root.join("local/relay"))?;
         let device = open_device(root, &mut settings)?;
@@ -353,9 +436,10 @@ fn project(doc: &Automerge) -> anyhow::Result<Vec<ManualTask>> {
     present
         .into_iter()
         .map(|id| {
-            let row = rows
+            let mut row = rows
                 .remove(&id)
                 .ok_or_else(|| anyhow::anyhow!("missing task"))?;
+            shared::manual_fields(doc, &id, &mut row)?;
             let task: ManualTask = serde_json::from_value(Value::Object(row))?;
             anyhow::ensure!(task.id == id, "task ID mismatch");
             Ok(task)
@@ -531,8 +615,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn mixed_folder_and_preview_edit_is_rejected_before_either_store_changes() -> anyhow::Result<()>
-    {
+    fn manual_and_meeting_edits_commit_together_without_folder_writes() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
         std::fs::create_dir_all(root.join("local/relay"))?;
@@ -562,9 +645,26 @@ mod tests {
                 },
             );
         });
-        assert!(result.is_err());
+        assert!(result.is_ok());
         let preview = get(root)?.unwrap();
-        assert!(preview.tasks()?.is_empty());
+        assert_eq!(preview.tasks()?.len(), 1);
+        assert_eq!(
+            store.load_overrides()?.tasks["100-1"]["0"].title.as_deref(),
+            Some("Synthetic folder edit")
+        );
+        let heads = preview.device.load("tasks")?.get_heads();
+        let invalid = store.update_overrides(|o| {
+            o.manual.push(o.manual[0].clone());
+            o.tasks
+                .get_mut("100-1")
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .title = Some("Must not commit".into());
+        });
+        assert!(invalid.is_err());
+        assert_eq!(preview.device.load("tasks")?.get_heads(), heads);
         disconnect(root)?;
         drop(preview);
         Settings::default().save(root)?;

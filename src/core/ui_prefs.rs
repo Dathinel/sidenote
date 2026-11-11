@@ -13,6 +13,8 @@ pub struct UiPrefs {
     pub people_since_ms: Option<i64>,
     pub people_existing_meetings: Option<std::collections::BTreeSet<String>>,
     pub people_sides: std::collections::BTreeMap<String, super::people::Side>,
+    #[serde(skip)]
+    pub relay_people_base: Option<std::collections::BTreeMap<String, super::people::Side>>,
     pub show_full_titles: bool,
     /// Task filters belong to this PC. Missing keys keep the first visit on Everyone/Open.
     pub tasks_mine: bool,
@@ -36,6 +38,7 @@ impl Default for UiPrefs {
             people_since_ms: None,
             people_existing_meetings: None,
             people_sides: Default::default(),
+            relay_people_base: None,
             show_full_titles: false,
             tasks_mine: false,
             tasks_include_unassigned: false,
@@ -57,11 +60,36 @@ fn path(root: &Path) -> PathBuf {
 impl UiPrefs {
     /// A missing or unreadable file is the defaults. A preference is never worth an error.
     pub fn load(root: &Path) -> Self {
-        store_io::read(&path(root)).unwrap_or_default()
+        let mut prefs: Self = store_io::read(&path(root)).unwrap_or_default();
+        if let Ok(Some(preview)) = super::relay_preview::get(root) {
+            let before = serde_json::json!({"sides":prefs.people_sides});
+            if let Ok(value) = preview.shared_value("people.json", before)
+                && let Ok(sides) = serde_json::from_value(value["sides"].clone())
+            {
+                prefs.people_sides = sides;
+                prefs.relay_people_base = Some(prefs.people_sides.clone());
+            }
+        }
+        prefs
     }
 
     pub fn save(&self, root: &Path) -> std::io::Result<()> {
-        store_io::write(&path(root), self)
+        let mut local = self.clone();
+        if super::relay_preview::Settings::load(root)?.enabled {
+            let prior: Self = store_io::read(&path(root))?;
+            let before = self
+                .relay_people_base
+                .as_ref()
+                .unwrap_or(&prior.people_sides);
+            super::relay_preview::shared::edit(
+                root,
+                "people.json",
+                &serde_json::json!({"sides":before}),
+                &serde_json::json!({"sides":self.people_sides}),
+            )?;
+            local.people_sides = prior.people_sides;
+        }
+        store_io::write(&path(root), &local)
     }
 }
 

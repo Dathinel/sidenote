@@ -73,6 +73,8 @@ pub struct NotesSettings {
     pub enabled_at_ms: Option<i64>,
     pub script: Option<PathBuf>,
     pub your_name: String,
+    #[serde(skip)]
+    pub relay_name_base: Option<String>,
 }
 impl Default for NotesSettings {
     fn default() -> Self {
@@ -84,6 +86,7 @@ impl Default for NotesSettings {
             enabled_at_ms: None,
             script: None,
             your_name: String::new(),
+            relay_name_base: None,
         }
     }
 }
