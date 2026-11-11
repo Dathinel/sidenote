@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
+    pub meeting_tabs: bool,
+    pub meeting_summary_templates: std::collections::BTreeMap<String, String>,
     pub people_since_ms: Option<i64>,
     pub people_existing_meetings: Option<std::collections::BTreeSet<String>>,
     pub people_sides: std::collections::BTreeMap<String, super::people::Side>,
@@ -29,6 +31,8 @@ pub struct UiPrefs {
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
+            meeting_tabs: false,
+            meeting_summary_templates: Default::default(),
             people_since_ms: None,
             people_existing_meetings: None,
             people_sides: Default::default(),
@@ -69,6 +73,8 @@ mod tests {
         let mut prefs: UiPrefs =
             serde_json::from_str(r#"{"show_full_titles":true,"settings_tabs":{"Meetings":1}}"#)
                 .unwrap();
+        assert!(!prefs.meeting_tabs);
+        assert!(prefs.meeting_summary_templates.is_empty());
         assert_eq!(prefs.people_since_ms, None);
         assert_eq!(prefs.people_existing_meetings, None);
         assert!(prefs.people_sides.is_empty());

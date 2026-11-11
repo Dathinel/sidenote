@@ -991,3 +991,48 @@ fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting()
         }
     }
 }
+
+#[test]
+fn meeting_standard_choice_uses_builtin_without_overwriting_custom_instructions() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    agent_instructions::save(&root.0, Agent::Notes, "CUSTOM NOTES").unwrap();
+    let mut prefs = crate::core::UiPrefs::default();
+    prefs
+        .meeting_summary_templates
+        .insert(ID.into(), "standard".into());
+    prefs.save(&root.0).unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(!fake.calls[0].0.contains("CUSTOM NOTES"));
+    assert!(
+        fake.calls[0]
+            .0
+            .contains(agent_instructions::default_base(Agent::Notes))
+    );
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().instructions,
+        "default"
+    );
+    assert!(
+        agent_instructions::load(&root.0)
+            .unwrap()
+            .get(Agent::Notes)
+            .is_some()
+    );
+    let saved = fs::read(folder.join("english-summary.json")).unwrap();
+    prefs
+        .meeting_summary_templates
+        .insert(ID.into(), "custom".into());
+    prefs.save(&root.0).unwrap();
+    enqueue(&root.0, &s, None);
+    let mut no_calls = Fake::new(vec![]);
+    drain(&root.0, &s, &mut no_calls);
+    assert!(no_calls.calls.is_empty());
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        saved
+    );
+}

@@ -149,6 +149,7 @@ pub(super) struct Answer<T> {
 }
 
 pub(super) struct Call<'a> {
+    pub base_override: Option<(String, bool)>,
     pub root: &'a Path,
     pub helper: Helper,
     pub model: &'a str,
@@ -172,8 +173,12 @@ impl Call<'_> {
         validate: impl Fn(&str) -> Result<T, &'static str>,
         output: Option<&str>,
     ) -> Result<Answer<T>, Failure> {
-        let (base, custom) =
-            instructions::base(self.root, agent).map_err(|_| Failure::Backend { exit: None })?;
+        let (base, custom) = match &self.base_override {
+            Some(base) => base.clone(),
+            None => {
+                instructions::base(self.root, agent).map_err(|_| Failure::Backend { exit: None })?
+            }
+        };
         let default = instructions::default_base(agent);
         let mut reason = None;
         for attempt in 0..if custom { 3 } else { 2 } {

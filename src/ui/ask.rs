@@ -642,7 +642,7 @@ pub fn overlay_with(
         .px(if narrow { 12.0 } else { 28.0 })
         .items_center()
         .gap(10.0);
-    if s.back.is_some() {
+    if s.back.is_some() && !(s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open) {
         stack = stack.child(
             row().w_full().justify_end().child(
                 pressable(roles::CONTROL.icon_label(
@@ -710,7 +710,11 @@ pub fn overlay_with(
             if e.key == Key::Escape {
                 s.runner_open = false;
                 s.ask_settings.thinking_open = false;
-                tx.blur();
+                if s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open {
+                    s.close_transcript_sheet();
+                } else {
+                    tx.blur();
+                }
                 return true;
             }
             false

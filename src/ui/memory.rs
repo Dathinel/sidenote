@@ -55,6 +55,7 @@ pub enum Ask {
 }
 
 pub struct MemState {
+    pub meeting: Option<String>,
     pub browse: bool,
     pub filters_open: bool,
     pub comment_for: Option<String>,
@@ -97,6 +98,7 @@ pub struct MemState {
 impl Default for MemState {
     fn default() -> Self {
         Self {
+            meeting: None,
             browse: false,
             filters_open: false,
             comment_for: None,
@@ -399,6 +401,10 @@ impl MemState {
                 .as_ref()
                 .is_none_or(|p| r.project.as_deref() == Some(p.as_str()))
             && self.matches_query(r)
+            && self.matches_meeting(&r.sources)
+    }
+    fn matches_meeting(&self, sources: &[MemorySource]) -> bool {
+        self.meeting.as_ref().is_none_or(|id| sources.iter().any(|s| matches!(s,MemorySource::Meeting{reference} if reference == &format!("[[{id}]]") || reference.starts_with(&format!("[[{id}@")))))
     }
     fn matches_query(&self, r: &MemoryRecord) -> bool {
         let q = self.search.text.trim().to_lowercase();
@@ -426,6 +432,7 @@ impl MemState {
             return self
                 .proposals
                 .iter()
+                .filter(|p| self.matches_meeting(&p.proposal.sources))
                 .map(|p| p.proposal.id.clone())
                 .collect();
         }
@@ -458,7 +465,11 @@ impl MemState {
     fn count_kind(&self, t: Option<RecordType>) -> usize {
         self.records
             .iter()
-            .filter(|r| r.status == RecordStatus::Active && t.is_none_or(|t| r.record_type == t))
+            .filter(|r| {
+                r.status == RecordStatus::Active
+                    && t.is_none_or(|t| r.record_type == t)
+                    && self.matches_meeting(&r.sources)
+            })
             .count()
     }
 }
@@ -534,6 +545,7 @@ impl State {
         }
         self.go_home();
         self.memory_open = true;
+        self.memory.meeting = None;
         self.memory.browse = false;
         self.memory.panel = self.memory.editing;
         self.memory.prepare_after_refresh = true;
@@ -1176,7 +1188,12 @@ fn record_list(s: &State, lay: Lay, p: Palette) -> El {
 
 fn proposal_list(s: &State, lay: Lay, p: Palette) -> El {
     let m = &s.memory;
-    if m.proposals.is_empty() {
+    let proposals: Vec<_> = m
+        .proposals
+        .iter()
+        .filter(|p| m.matches_meeting(&p.proposal.sources))
+        .collect();
+    if proposals.is_empty() {
         return empty_note(
             "No proposals waiting",
             "When the daily check suggests a change to memory, it waits here for you to accept or reject it.",
@@ -1190,7 +1207,7 @@ fn proposal_list(s: &State, lay: Lay, p: Palette) -> El {
             .mb(6.0),
         );
     }
-    for pp in &m.proposals {
+    for pp in proposals {
         g = g.child(proposal_row(s, pp, lay, p));
     }
     g.child(
@@ -1270,10 +1287,19 @@ fn list_column(
                     |s: &mut State| {
                         s.close_record();
                         s.memory.browse = false;
+                        s.memory.meeting = None;
                     },
                 )),
         )
         .mb(14.0);
+    if let Some(id) = &m.meeting {
+        let title = s
+            .meetings
+            .iter()
+            .find(|meeting| &meeting.id == id)
+            .map_or(id.as_str(), |meeting| meeting.title.as_str());
+        doc = doc.child(roles::META.wrap(format!("From {title}"), p.soft).mb(10.0));
+    }
     if !m.migrated {
         doc = doc.child(migration_banner(s, narrow, p).mb(14.0));
         match m.before {
@@ -2024,6 +2050,7 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.memory.search = TextEdit::default();
             } else if s.memory.browse {
                 s.memory.browse = false;
+                s.memory.meeting = None;
             } else {
                 s.go_home();
             }
@@ -2038,6 +2065,26 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
+
+    #[test]
+    fn meeting_filter_matches_whole_references_and_timestamps_only() {
+        let m = MemState {
+            meeting: Some("123-1".into()),
+            ..Default::default()
+        };
+        for reference in ["[[123-1]]", "[[123-1@02:10]]"] {
+            assert!(m.matches_meeting(&[MemorySource::Meeting {
+                reference: reference.into()
+            }]));
+        }
+        for reference in ["[[123-10]]", "[[123-10@02:10]]", "[[other]]"] {
+            assert!(!m.matches_meeting(&[MemorySource::Meeting {
+                reference: reference.into()
+            }]));
+        }
+        assert!(!m.matches_meeting(&[]));
+        assert!(MemState::default().matches_meeting(&[]));
+    }
 
     fn snapshot(mutation_generation: u64, legacy: &str) -> Snapshot {
         Snapshot {

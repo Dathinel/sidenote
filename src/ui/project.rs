@@ -197,6 +197,19 @@ impl State {
 
 /// The project chip, or None for a meeting without to-dos.
 pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Option<El> {
+    chip_with(s, k, id, p, layer, false)
+}
+pub fn reading_chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Option<El> {
+    chip_with(s, k, id, p, layer, true)
+}
+fn chip_with(
+    s: &State,
+    k: &Kit,
+    id: &str,
+    p: Palette,
+    layer: &mut Vec<El>,
+    quiet: bool,
+) -> Option<El> {
     if !s.config.features.projects {
         return None;
     }
@@ -233,7 +246,7 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         });
     let name_ink = if mp.confirmed { p.soft } else { p.ink };
     let mut trigger_row = row().gap(4.0).items_center();
-    if mp.name.is_some() && !mp.confirmed {
+    if mp.name.is_some() && !mp.confirmed && !quiet {
         trigger_row = trigger_row.child(roles::META.wrap(
             if new_project {
                 "New project:"
@@ -279,6 +292,18 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         menu = menu
             .on_close(|s: &mut State| s.project_menu = None)
             .group_label("Choose an existing project");
+        if quiet && let Some(name) = mp.name.as_ref().filter(|_| !mp.confirmed) {
+            let (id, name) = (id.to_string(), name.clone());
+            menu = menu.item(MenuItem::new("Use suggested project").on_select(
+                move |s: &mut State| {
+                    if new_project {
+                        s.create_meeting_project(&id, &name);
+                    } else {
+                        s.set_meeting_project(&id, &name);
+                    }
+                },
+            ));
+        }
         for n in &s.tasks.names {
             let (id, n_owned) = (id.to_string(), n.clone());
             menu = menu.item(
@@ -321,6 +346,8 @@ pub fn chip(s: &State, k: &Kit, id: &str, p: Palette, layer: &mut Vec<El>) -> Op
         .child(menu.shrink());
     if mp.name.is_some() && !mp.confirmed {
         wrap = wrap.border_dash(4.0, 3.0);
+    }
+    if mp.name.is_some() && !mp.confirmed && !quiet {
         let dismiss_id = id.to_string();
         let id = id.to_string();
         let name = mp.name.clone().unwrap_or_default();
