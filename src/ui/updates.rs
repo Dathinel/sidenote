@@ -474,8 +474,8 @@ pub fn footer(s: &State, p: Palette, wide: bool) -> Option<El> {
     )
 }
 pub fn scene(s: &mut State, phase: Phase) {
-    hex::scene(s, false);
     s.open_updates();
+    hex::scene(s, false);
     s.updates.scene = true;
     s.updates.status = Status { version: if phase == Phase::Idle { String::new() } else { "0.2.0".into() },
         progress: if phase == Phase::Downloading { 40 } else { 100 },

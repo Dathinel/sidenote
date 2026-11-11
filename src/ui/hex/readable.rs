@@ -15,10 +15,11 @@ pub(super) fn supported_choice(value: &Value) -> bool {
 }
 pub(super) fn value_label(st: &Setting, value: &Value) -> String {
     let Some(raw) = value.as_str() else {
-        return if value.is_object() || value.is_array() {
-            "Managed in Hex".into()
-        } else {
-            setting_text(value)
+        return match value {
+            Value::Object(_) | Value::Array(_) => "Managed in Hex".into(),
+            Value::Bool(true) => "On".into(),
+            Value::Bool(false) => "Off".into(),
+            _ => setting_text(value),
         };
     };
     if !supported_choice(value) {
@@ -65,7 +66,8 @@ pub(super) fn value_label(st: &Setting, value: &Value) -> String {
         "openai/gpt-6.1-terra-fast" => "GPT-6.1 Terra Fast",
         "parakeet-v3" => "Parakeet v3",
         _ if st.key.contains("model") => "Custom model",
-        _ => return pretty(raw),
+        _ if st.kind == "choice" => return pretty(raw),
+        _ => return raw.to_string(),
     }
     .into()
 }
@@ -210,6 +212,10 @@ mod tests {
             value_label(&st, &Value::String("top_right".into())),
             "Top right"
         );
+        st.key = "about.build".into();
+        st.kind = "text".into();
+        st.value = Value::String("2.4.1 (build 812)".into());
+        assert_eq!(current_label(&st), "2.4.1 (build 812)");
         st.secret = true;
         st.value = Value::String("should never be displayed".into());
         assert_eq!(current_label(&st), "Hidden by Hex");
