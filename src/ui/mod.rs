@@ -737,6 +737,7 @@ impl State {
         self.thread_hidden = false;
         self.pending_scroll = None;
         self.load_saved();
+        self.acknowledge_floating_draft();
         if let Some(n) = self
             .groups
             .iter()
@@ -746,6 +747,32 @@ impl State {
             self.cursor = n;
         }
         tx.scroll_to_y("meeting-scroll", 0.0);
+    }
+
+    fn acknowledge_floating_draft(&self) {
+        if !hex::window_shown()
+            || self.companies.open
+            || self.annotations.open
+            || self.view == tasks::View::Tasks
+            || self.on_check()
+            || self.on_memory()
+            || self.on_hex()
+            || self.on_live()
+            || self.transcript_covers()
+            || self.meeting_tab != meeting::Tab::Summary
+        {
+            return;
+        }
+        if let Some(m) = self.current()
+            && m.folder.parent().is_some_and(|p| p == core::meetings_dir())
+        {
+            let raw = if m.summary_raw.is_empty() {
+                &m.draft_raw
+            } else {
+                &m.summary_raw
+            };
+            sidenote::meeting_icon::draft_seen(&m.id, raw);
+        }
     }
 
     pub fn open_cursor(&mut self, tx: &mut Tx) {
@@ -1310,6 +1337,7 @@ impl State {
                     }
                     self.refresh_list();
                 }
+                self.acknowledge_floating_draft();
                 if let Some(recordings) = short_recordings {
                     self.short_recordings = recordings;
                 }
@@ -1981,6 +2009,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .on_window_focus(|s: &mut State, focused, _| {
             if focused {
                 s.request_refresh();
+                s.acknowledge_floating_draft();
                 if s.annotations.open {
                     s.refresh_annotations();
                 }

@@ -208,6 +208,7 @@ impl State {
         if self.transcript_covers() {
             self.transcript_open = false;
         }
+        self.acknowledge_floating_draft();
     }
 
     /// The "Go to" box: lands on the line for a time such as 14:22 or 1:02:30.
