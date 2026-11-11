@@ -66,6 +66,9 @@ Fmt, both strict clippy commands, the default workspace test suite, MCP smoke,
 compiled-binary upgrade proof passed. The ASR-enabled workspace test command
 compiled for 11 minutes and began running, then was stopped at the requested
 time boundary. It is incomplete, not a pass. No test or gate was weakened.
+The standalone `cargo build --locked` waited for that build lock and was stopped
+while recompiling at the time limit. The earlier workspace bins/examples debug
+build and both optimized release builds passed, but do not replace this gate.
 An earlier Memory undo test encountered Windows file-sharing error 32; its
 unmodified focused retry and the subsequent full default suite passed.
 
@@ -74,7 +77,7 @@ unmodified focused retry and the subsequent full default suite passed.
 | Requested Sync UI fixes and ten renders | done | Shared notice, tree checks and offscreen PNGs. |
 | Fmt, both strict clippy variants, default tests, MCP, relay tests/typecheck | done locally | Exit 0; 24 Bun tests; see gate logs. |
 | ASR-enabled workspace tests | needs owner | Local command compiled and began tests; rerun to completion after time-limited stop. |
-| Standalone locked debug build | pending | Started separately; see artifacts/relay5-build-result.json. |
+| Standalone locked debug build | needs owner | Rerun locally after time-limited stop; earlier debug and optimized builds passed. |
 | Compiled release upgrade and downgrade | done locally | Real capability 1 and 2 optimized app processes, confirmed pairing. |
 | Migration crash and rollback | done locally | Three durable boundaries, stable task identity, original bytes unchanged. |
 | Interrupted exchange and restart | done locally | Relay-observed frame, killed sender, durable recovery and convergence. |
