@@ -527,6 +527,30 @@ impl HexEngine {
     pub fn model_status(&self) -> Result<ModelState> {
         Ok(self.status()?.model)
     }
+
+    /// Only the setup button calls this. Never use `labs on meetings` on Windows.
+    pub fn enable_meetings(&self) -> Result<EngineState> {
+        let state = self.status()?;
+        if state.labs.state("meetings") == Some(true) {
+            return Ok(state);
+        }
+        if state.labs.state("meetings") != Some(false)
+            || self.capabilities()?.get(&Feature::SettingsSet) != Some(&Support::Supported)
+            || !crate::hex_labs::meetings_setting_can_enable(
+                &self.settings_get("meetings.enabled")?,
+            )
+        {
+            return Err(HexError::Unsupported);
+        }
+        self.settings_set("meetings.enabled", "true")?;
+        let state = self.status()?;
+        if state.labs.state("meetings") != Some(true) {
+            return Err(failed(
+                "Hex did not confirm that Meetings is on. Check again.",
+            ));
+        }
+        Ok(state)
+    }
     pub(crate) fn stop_forgotten(&self, id: &str) -> Result<()> {
         // Recheck immediately before the CLI call, including after a slow file read.
         let status = self.status()?;

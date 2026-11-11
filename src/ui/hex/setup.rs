@@ -3,6 +3,27 @@ use crate::ui::widgets::{ButtonRole, button};
 use sidenote::hex_install::{self, Installation, State as InstallState};
 
 impl State {
+    fn enable_hex_meetings(&mut self) {
+        if super::super::isolated()
+            || meetings_step(&self.hex) != Some(true)
+            || self.hex.busy_keys.contains("meetings.enabled")
+        {
+            return;
+        }
+        self.hex.busy_keys.insert("meetings.enabled".into());
+        self.hex.row_errors.remove("meetings.enabled");
+        self.hex_spawn(|engine| Msg::Meetings(engine.enable_meetings()));
+    }
+
+    fn recheck_hex_meetings(&mut self) {
+        if super::super::isolated() || self.hex.busy_keys.contains("meetings.enabled") {
+            return;
+        }
+        self.hex.data_dirty = true;
+        self.hex_refresh_if_due();
+        self.hex_spawn(|engine| Msg::Status(engine.status()));
+    }
+
     pub fn hex_needs_install(&self) -> bool {
         self.hex.installation == Installation::Missing
     }
@@ -87,10 +108,55 @@ impl State {
     }
 }
 
+/// None means no step, false means manual instructions, true allows an explicit supported write.
+fn meetings_step(h: &HexState) -> Option<bool> {
+    (h.state()?.labs.state("meetings") == Some(false)).then(|| {
+        h.can(Feature::SettingsGet)
+            && h.can(Feature::SettingsSet)
+            && sidenote::hex_labs::meetings_setting_can_enable(&h.settings)
+    })
+}
+
+fn meetings_card(s: &State, p: Palette) -> Option<El> {
+    let can_enable = meetings_step(&s.hex)?;
+    let busy = s.hex.busy_keys.contains("meetings.enabled");
+    let mut actions = row().w_full().flex_wrap().gap(8.0);
+    if can_enable {
+        actions = actions.child(
+            button(
+                "Turn on Meetings",
+                "hex-meetings-enable",
+                ButtonRole::Primary,
+                p,
+            )
+            .disabled(busy)
+            .on_press(|s: &mut State| s.enable_hex_meetings()),
+        );
+    }
+    actions = actions.child(
+        button(
+            "Check again",
+            "hex-meetings-recheck",
+            ButtonRole::Secondary,
+            p,
+        )
+        .disabled(busy)
+        .on_press(|s: &mut State| s.recheck_hex_meetings()),
+    );
+    Some(col().key("hex-meetings-setup").w_full().px(20.0).py(20.0).mt(16.0).mb(16.0).gap(12.0)
+        .fill(p.card).border(1.0, p.line).radius(10.0)
+        .child(roles::SECTION.wrap("Turn on Meetings in Hex", p.ink))
+        .child(roles::SMALL.wrap("Meetings is a beta feature in Hex Labs. Turn it on so Sidenote can record and transcribe meetings.", p.soft))
+        .child(roles::SMALL.wrap("In Hex, open Settings > Labs > Meetings and turn it on, then check again.", p.soft).key("hex-meetings-instructions"))
+        .children(busy.then(|| roles::SMALL.wrap("Turning on Meetings and checking Hex.", p.soft).role("status")))
+        .children(s.hex.row_errors.get("meetings.enabled").map(|error| roles::SMALL.wrap(error, p.warn).role("alert")))
+        .child(actions))
+}
+
 pub(super) fn card(s: &State, p: Palette) -> Option<El> {
     let h = &s.hex;
     if h.running() && !h.install.busy() {
-        return None;
+        return meetings_card(s, p);
     }
     let (title, message) = match (&h.install, &h.installation) {
         (InstallState::Idle, Installation::Installed { version, .. }) => (
@@ -156,4 +222,80 @@ pub(super) fn card(s: &State, p: Palette) -> Option<El> {
         .children((h.install == InstallState::Idle && h.installation == Installation::Missing).then(||
             roles::META.wrap("Downloads the latest stable Windows installer from Hex on GitHub. Checks its SHA-256 and publisher before installing. No administrator access. Hex may download a speech model when you open it.", p.faint)))
         .child(actions))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meetings_off_requires_setup_and_only_offers_a_supported_writable_command() {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../../tools/ui-fixtures/hex.json")).unwrap();
+        let mut hex = HexState {
+            status: Some(Ok(EngineState {
+                running: true,
+                version: "3.4.0".into(),
+                protocol: 4,
+                recording: None,
+                meeting_state: "idle".into(),
+                dictating: Some(false),
+                capture_state: "idle".into(),
+                model: fixture.model,
+                labs: Box::new(sidenote::hex_labs::Snapshot::status(&serde_json::json!({
+                    "features": {"meetings": false}, "labs": []
+                }))),
+            })),
+            ..HexState::default()
+        };
+        assert_eq!(meetings_step(&hex), Some(false));
+        hex.caps = Some(
+            [
+                (Feature::SettingsGet, Support::Supported),
+                (Feature::SettingsSet, Support::Supported),
+            ]
+            .into(),
+        );
+        assert_eq!(meetings_step(&hex), Some(false));
+        hex.settings = vec![serde_json::from_value(serde_json::json!({
+            "key": "meetings.enabled", "value": false, "kind": "bool", "writable": true, "available": true
+        })).unwrap()];
+        assert_eq!(meetings_step(&hex), Some(true));
+        for support in [Support::Unsupported, Support::Unknown] {
+            hex.caps
+                .as_mut()
+                .unwrap()
+                .insert(Feature::SettingsSet, support);
+            assert_eq!(meetings_step(&hex), Some(false));
+        }
+        hex.caps
+            .as_mut()
+            .unwrap()
+            .insert(Feature::SettingsSet, Support::Supported);
+        hex.settings[0].writable = false;
+        assert_eq!(meetings_step(&hex), Some(false));
+        hex.settings[0].writable = true;
+        hex.settings[0].available = Some(false);
+        assert_eq!(meetings_step(&hex), Some(false));
+        hex.status
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .labs
+            .states
+            .insert("meetings".into(), Some(true));
+        assert_eq!(meetings_step(&hex), None);
+        hex.status
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .labs
+            .states
+            .clear();
+        assert_eq!(meetings_step(&hex), None);
+        hex.status = Some(Err(HexError::HexNotRunning));
+        assert_eq!(meetings_step(&hex), None);
+    }
 }

@@ -2728,6 +2728,12 @@ pub fn spec() -> AppSpec<State> {
             ("settings-hex-installed", |s| {
                 hex::settings::scene(s, "settings-hex-installed")
             }),
+            ("settings-hex-meetings-off", |s| {
+                hex::settings::scene(s, "settings-hex-meetings-off")
+            }),
+            ("settings-hex-meetings-enable", |s| {
+                hex::settings::scene(s, "settings-hex-meetings-enable")
+            }),
             ("settings-helpers", |s| {
                 hex::settings::scene(s, "settings-helpers")
             }),

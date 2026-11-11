@@ -2302,7 +2302,9 @@ pub fn scene(s: &mut State, name: &str) {
         | "settings-hex-setup"
         | "settings-hex-installing"
         | "settings-hex-install-failed"
-        | "settings-hex-installed" => (Page::Hex, 0),
+        | "settings-hex-installed"
+        | "settings-hex-meetings-off"
+        | "settings-hex-meetings-enable" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
         "settings-speech" => (Page::Helpers, 1),
         "settings-helper-advanced" => (Page::Diagnostics, 0),
@@ -2319,6 +2321,35 @@ pub fn scene(s: &mut State, name: &str) {
     }
     navigate(s, page, tab);
     match name {
+        "settings-hex-meetings-off" | "settings-hex-meetings-enable" => {
+            let supported = name == "settings-hex-meetings-enable";
+            let state = s.hex.status.as_mut().unwrap().as_mut().unwrap();
+            state.version = "3.4.0".into();
+            *state.labs = sidenote::hex_labs::Snapshot::status(&serde_json::json!({
+                "features": {"meetings": false}, "labs": []
+            }));
+            s.hex.installation = sidenote::hex_install::Installation::Installed {
+                version: "3.4.0".into(),
+                exe: "fixture/hex.exe".into(),
+            };
+            if supported {
+                s.hex.install = sidenote::hex_install::State::Complete;
+            }
+            let support = if supported {
+                Support::Supported
+            } else {
+                Support::Unsupported
+            };
+            for feature in [Feature::SettingsGet, Feature::SettingsSet] {
+                s.hex.caps.as_mut().unwrap().insert(feature, support);
+            }
+            s.hex
+                .settings
+                .retain(|setting| setting.key != "meetings.enabled");
+            s.hex.settings.push(serde_json::from_value(serde_json::json!({
+                "key": "meetings.enabled", "value": false, "kind": "bool", "writable": true, "available": true
+            })).unwrap());
+        }
         "settings-hex-setup"
         | "settings-hex-installing"
         | "settings-hex-install-failed"

@@ -61,8 +61,23 @@ def main():
                     assert control["focusable"] == (state != "hex-installing" or key == "hex-download-page"), (path, key)
                     x, y, w, h = control["rect"]
                     assert 0 <= x < x + w <= width and 0 <= y < y + h <= 900, (path, key)
+            for state in ("hex-meetings-off", "hex-meetings-enable"):
+                path = folder / f"settings-{state}-{width}-{theme}.json"
+                tree = json.loads(path.read_text(encoding="utf-8-sig"))
+                controls = {n["key"]: n for n in tree["elements"] if n.get("key")}
+                assert "hex-meetings-setup" in controls, path
+                assert "Settings > Labs > Meetings" in controls["hex-meetings-instructions"]["text"], path
+                assert any(n.get("text") == "Turn on Meetings in Hex" for n in tree["elements"]), path
+                assert any(n.get("text") == "Hex is running. Check its status here before recording." for n in tree["elements"]), path
+                assert ("hex-meetings-enable" in controls) == (state == "hex-meetings-enable"), path
+                actions = ["hex-meetings-recheck"] + (["hex-meetings-enable"] if state == "hex-meetings-enable" else [])
+                for key in actions:
+                    assert controls[key]["focusable"], (path, key)
+                    x, y, w, h = controls[key]["rect"]
+                    assert 0 <= x < x + w <= width and 0 <= y < y + h <= 900, (path, key)
     print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; eleven pages and search reveal verified in {len(trees)} render trees.")
     print("PASS: all 16 Hex setup renders show the expected copy, controls, busy state and visible actions.")
+    print("PASS: all 8 Meetings-off renders show instructions, re-check and only supported enable actions.")
 
 
 if __name__ == "__main__":

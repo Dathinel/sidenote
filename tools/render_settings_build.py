@@ -49,7 +49,7 @@ def main():
  parser=argparse.ArgumentParser();parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true');args=parser.parse_args()
  OUT.mkdir(parents=True,exist_ok=True)
  jobs=[]
- setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed')]
+ setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed'),('hex-meetings-off','settings-hex-meetings-off'),('hex-meetings-enable','settings-hex-meetings-enable')]
  for theme in ('dark','light'):
   for width in (1280,390):
    for name,scene in setup_scenes:
