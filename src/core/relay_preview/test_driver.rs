@@ -259,6 +259,18 @@ impl Driver {
                     .stage_agent_proposal(&proposal)?;
                 Ok(Value::Null)
             }
+            "check-relay" => Ok(serde_json::to_value(operations::check_now(root)?)?),
+            "relay-state" => Ok(serde_json::to_value(operations::status(root)?)?),
+            "folder-note" => {
+                super::super::StateStore::new(root.clone()).update("100-2", |s| {
+                    s.messages.push(super::super::Message {
+                        role: "user".into(),
+                        text: "Synthetic folder note".into(),
+                        ..Default::default()
+                    })
+                })?;
+                Ok(Value::Null)
+            }
             "status" => {
                 let peers = pairing::devices(root)?;
                 Ok(

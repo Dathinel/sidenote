@@ -773,3 +773,88 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
     app_a.stop();
     app_b.stop();
 }
+
+#[test]
+fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
+    let parent = std::env::temp_dir().join("sidenote-relay-preview");
+    std::fs::create_dir_all(&parent).unwrap();
+    let fixture = tempfile::tempdir_in(parent).unwrap();
+    let a = fixture.path().join("older");
+    let b = fixture.path().join("newer");
+    let (_relay, address) = start_relay(&fixture.path().join("relay"));
+    for root in [&a, &b] {
+        std::fs::create_dir_all(root).unwrap();
+        relay_preview::Settings {
+            enabled: true,
+            address: address.clone(),
+            ..Default::default()
+        }
+        .save(root)
+        .unwrap();
+    }
+    let caps = b.join("local/relay/test-capabilities.json");
+    std::fs::write(&caps, br#"{"schema":2,"features":2}"#).unwrap();
+    let mut older = App::start(&a);
+    let mut newer = App::start(&b);
+    let health = older.request(json!({"op":"check-relay"}));
+    assert!(
+        health["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Relay reachable.")
+    );
+    assert!(health["last_contact"].is_string());
+    older.request(json!({"op":"host"}));
+    status(&mut older, "code");
+    newer.request(json!({"op":"join","from":a}));
+    status(&mut older, "confirm");
+    status(&mut newer, "confirm");
+    older.request(json!({"op":"confirm","accept":true}));
+    newer.request(json!({"op":"confirm","accept":true}));
+    status(&mut older, "paired");
+    status(&mut newer, "paired");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = older.request(json!({"op":"relay-state"}));
+        if state["read_only"] == true {
+            assert_eq!(state["message"], relay_preview::operations::UPDATE_REQUIRED);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "older instance did not refuse newer capabilities"
+        );
+        thread::sleep(Duration::from_millis(70));
+    }
+    older.rejected(json!({"op":"add","task":{"task":"Must not commit"}}));
+    older.request(json!({"op":"offline"}));
+    older.rejected(json!({"op":"add","task":{"task":"Must not commit offline"}}));
+    let before = journals(&a);
+    older.request(json!({"op":"folder-note"}));
+    assert_ne!(journals(&a), before, "folder-only writes stopped");
+    older.stop();
+    let mut older = App::start(&a);
+    assert_eq!(
+        older.request(json!({"op":"relay-state"}))["read_only"],
+        true
+    );
+    older.rejected(json!({"op":"add","task":{"task":"Must not commit after restart"}}));
+    assert!(
+        older
+            .request(json!({"op":"list"}))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    newer.request(json!({"op":"add","task":{"task":"Future group keeps working"}}));
+    newer.stop();
+    std::fs::write(&caps, br#"{"schema":1,"features":1}"#).unwrap();
+    let mut downgraded = App::start(&b);
+    assert_eq!(
+        downgraded.request(json!({"op":"relay-state"}))["read_only"],
+        true
+    );
+    downgraded.rejected(json!({"op":"add","task":{"task":"Downgrade must not commit"}}));
+    downgraded.stop();
+    older.stop();
+}

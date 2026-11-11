@@ -1,4 +1,5 @@
 //! Standalone, opt-in-to-integration device synchronization. No app or global paths.
+pub mod capabilities;
 pub mod client;
 mod crypto;
 pub mod identity;

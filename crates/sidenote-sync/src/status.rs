@@ -17,6 +17,7 @@ pub enum Reason {
     Transport,
     Membership,
     ConcurrentEdit,
+    Incompatible,
 }
 
 #[derive(Debug)]

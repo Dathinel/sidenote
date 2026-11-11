@@ -16,6 +16,7 @@ use std::{
     thread,
 };
 mod migration;
+pub mod operations;
 pub mod pairing;
 pub(crate) mod shared;
 mod test_driver;
@@ -266,6 +267,9 @@ impl Preview {
         if settings.address.is_empty() || group.members().len() < 2 {
             return Ok(());
         }
+        if device.store(|s| s.check_compatible()).is_err() {
+            return Ok(());
+        }
         let relay = endpoint(&settings.address)?;
         let (ready, receiver) = mpsc::sync_channel(1);
         let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -349,6 +353,9 @@ fn open_device(root: &Path, settings: &mut Settings) -> io::Result<Arc<Device>> 
             .store(|s| Group::load(s, &settings.room))
             .map_err(failed)?;
     }
+    device
+        .store(|s| s.configure_capabilities(&settings.room, operations::supported(root)))
+        .map_err(failed)?;
     Ok(device)
 }
 

@@ -103,7 +103,11 @@ fn reason(error: &anyhow::Error) -> Reason {
 fn local_failure(reason: Reason) -> bool {
     matches!(
         reason,
-        Reason::LocalStore | Reason::CorruptDocument | Reason::StoreFull | Reason::LockPoisoned
+        Reason::LocalStore
+            | Reason::CorruptDocument
+            | Reason::StoreFull
+            | Reason::LockPoisoned
+            | Reason::Incompatible
     )
 }
 
@@ -351,6 +355,7 @@ impl SyncClient {
         s.peers.insert(
             id,
             Peer {
+                negotiated: self.device.store(|s| Ok(s.requirements().is_none()))?,
                 cipher: Cipher::from_handshake(state)?,
                 worker: Some(worker),
                 busy: false,
@@ -372,6 +377,12 @@ impl SyncClient {
                 born: Instant::now(),
             },
         );
+        if let Some(caps) = self.device.store(|s| Ok(s.requirements()))? {
+            s.peers
+                .get_mut(&id)
+                .ok_or(Failure(Reason::Protocol))?
+                .queue(Inner::Capabilities(caps))?;
+        }
         s.peers
             .get_mut(&id)
             .ok_or(Failure(Reason::Protocol))?
@@ -525,10 +536,16 @@ impl SyncClient {
                     let peer = s.peers.get_mut(&id).ok_or(Failure(Reason::Protocol))?;
                     if let Some(bytes) = bytes {
                         match Inner::decode(bytes)? {
+                            Inner::Capabilities(caps) => {
+                                self.device.store(|s| s.observe_capabilities(caps))?;
+                                peer.negotiated = true;
+                            }
                             Inner::Membership(proofs) => {
                                 self.update_membership(proofs)?;
                             }
                             Inner::Inventory { done, domains } => {
+                                ensure!(peer.negotiated, Failure(Reason::Protocol));
+                                self.device.store(|s| s.check_compatible())?;
                                 peer.inventory_received |= done;
                                 for (domain, heads) in domains {
                                     peer.advertised.insert(domain.clone());
@@ -550,6 +567,8 @@ impl SyncClient {
                                 }
                             }
                             Inner::Sync { domain, bytes } => {
+                                ensure!(peer.negotiated, Failure(Reason::Protocol));
+                                self.device.store(|s| s.check_compatible())?;
                                 ensure!(peer.domains.contains(&domain), Failure(Reason::Protocol));
                                 s.enqueue(
                                     id,
@@ -601,7 +620,8 @@ impl SyncClient {
         Ok(())
     }
     fn inventory_page(&self, peer: &mut Peer) -> Result<()> {
-        if peer.inventory_sent
+        if !peer.negotiated
+            || peer.inventory_sent
             || peer.outbound.len() >= 2
             || peer.operations() + INVENTORY_PAGE > PEER_OPERATIONS
         {
@@ -654,6 +674,9 @@ impl SyncClient {
         bans: &mut BTreeMap<[u8; 32], Ban>,
     ) -> Result<()> {
         self.peer_action(s, id, bans, |peer| {
+            if !peer.negotiated {
+                return Ok(());
+            }
             peer.domains.insert(domain.to_owned());
             peer.synced.remove(domain);
             peer.queue(Inner::Inventory {
@@ -1013,6 +1036,7 @@ struct Operation {
     incoming: Vec<u8>,
 }
 struct Peer {
+    negotiated: bool,
     cipher: Cipher,
     worker: Option<Worker>,
     busy: bool,
@@ -1220,6 +1244,7 @@ mod tests {
         first.read_message(&buffer[..n], &mut output)?;
         Ok((
             Peer {
+                negotiated: true,
                 cipher: Cipher::from_handshake(second)?,
                 worker: None,
                 busy: false,

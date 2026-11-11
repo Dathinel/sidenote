@@ -71,6 +71,7 @@ pub(crate) struct Snapshot {
 }
 
 pub struct Store {
+    pub(crate) capabilities: Option<crate::capabilities::Policy>,
     db: Connection,
     edit_cache: Option<(String, i64, Automerge)>,
     actor: ActorId,
@@ -121,6 +122,7 @@ impl Store {
         ))?;
         Ok(Self {
             db,
+            capabilities: None,
             edit_cache: None,
             actor: ActorId::from(actor),
             path: path.to_owned(),
@@ -246,6 +248,7 @@ impl Store {
         }
     }
     pub fn edit<T>(&mut self, id: &str, f: impl FnOnce(&mut Automerge) -> Result<T>) -> Result<T> {
+        self.check_compatible()?;
         let version = self.version(id)?;
         let mut doc = match self.edit_cache.take() {
             Some((cached, loaded, doc)) if cached == id && loaded == version => doc,
@@ -257,6 +260,7 @@ impl Store {
         Ok(result)
     }
     pub fn save(&mut self, id: &str, doc: &Automerge) -> Result<()> {
+        self.check_compatible()?;
         ensure!(
             self.heads(id)?
                 .iter()
@@ -300,6 +304,7 @@ impl Store {
         commit: Commit,
         sender: &[u8],
     ) -> Result<i64> {
+        self.check_compatible()?;
         let Commit {
             creator,
             chunks,

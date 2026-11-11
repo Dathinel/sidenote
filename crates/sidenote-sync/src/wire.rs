@@ -10,6 +10,7 @@ use automerge::ChangeHash;
 pub const PING: u8 = 4;
 pub const PONG: u8 = 5;
 pub(crate) enum Inner {
+    Capabilities(crate::capabilities::Capabilities),
     Inventory {
         done: bool,
         domains: Vec<(String, Vec<ChangeHash>)>,
@@ -39,6 +40,11 @@ impl Inner {
     pub fn encode(self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         match self {
+            Self::Capabilities(c) => {
+                out.push(6);
+                out.extend_from_slice(&c.schema.to_be_bytes());
+                out.extend_from_slice(&c.features.to_be_bytes());
+            }
             Self::Inventory { done, domains } => {
                 ensure!(domains.len() <= INVENTORY_PAGE, "page cap");
                 out.extend_from_slice(&[1, u8::from(done)]);
@@ -119,6 +125,10 @@ impl Inner {
                 r.take(r.rest().len())?;
                 Self::Membership(proofs)
             }
+            6 => Self::Capabilities(crate::capabilities::Capabilities {
+                schema: u32::from_be_bytes(r.take(4)?.try_into()?),
+                features: u32::from_be_bytes(r.take(4)?.try_into()?),
+            }),
             PING => Self::Ping(r.take(32)?.try_into()?),
             PONG => Self::Pong(r.take(32)?.try_into()?),
             _ => anyhow::bail!("inner version"),

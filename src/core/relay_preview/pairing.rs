@@ -210,6 +210,11 @@ impl Preview {
         }
         self.device.merge_group(group).map_err(failed)?;
         settings.room = group.room();
+        self.device
+            .store(|s| {
+                s.configure_capabilities(&settings.room, super::operations::supported(&self.root))
+            })
+            .map_err(failed)?;
         settings
             .peers
             .insert(token(&peer.peer), peer.peer_name.clone());
@@ -237,6 +242,9 @@ impl Preview {
         self.online(true)
     }
     pub fn remove_device(&self, target: &str) -> io::Result<()> {
+        self.device
+            .store(|s| s.check_compatible())
+            .map_err(failed)?;
         let mut settings = Settings::load(&self.root)?;
         let group = self
             .device
@@ -253,6 +261,11 @@ impl Preview {
         let fresh = Group::new(&self.device.identity);
         self.device.merge_group(&fresh).map_err(failed)?;
         settings.room = fresh.room();
+        self.device
+            .store(|s| {
+                s.configure_capabilities(&settings.room, super::operations::supported(&self.root))
+            })
+            .map_err(failed)?;
         settings.peers.clear();
         settings.save_authority(&self.root)?;
         self.online(true)
