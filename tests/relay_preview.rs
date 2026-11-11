@@ -132,6 +132,8 @@ fn start_relay(state: &Path) -> (Process, String) {
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("relay"))
         .args([
             "dev",
+            "--config",
+            "harness/expiry.toml",
             "--local",
             "--ip",
             "127.0.0.1",
@@ -225,6 +227,31 @@ fn confirmation(root: &Path) -> Value {
     let plain = sidenote_sync::identity::unprotect(&bytes).expect("protected confirmation");
     serde_json::from_slice(&plain).expect("confirmation shape")
 }
+fn expire_invitation(root: &Path, address: &str) {
+    let encrypted = std::fs::read(root.join("local/relay/test-code.dpapi")).unwrap();
+    let code = sidenote_sync::identity::unprotect(&encrypted).expect("protected invitation");
+    let locator: String = sidenote_sync::identity::hash(
+        format!(
+            "sidenote-pair-v1:{}",
+            std::str::from_utf8(&code[..3]).unwrap()
+        )
+        .as_bytes(),
+    )
+    .iter()
+    .map(|b| format!("{b:02x}"))
+    .collect();
+    let mut socket = TcpStream::connect(address.strip_prefix("ws://").unwrap()).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(socket, "POST /__test/expire/{locator} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(
+        response.starts_with("HTTP/1.1 204"),
+        "test invitation expiry failed"
+    );
+}
 fn find<'a>(tasks: &'a Value, id: &Value) -> Option<&'a Value> {
     tasks.as_array()?.iter().find(|t| &t["id"] == id)
 }
@@ -293,6 +320,22 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
     );
     let unique_a = app_a.request(json!({"op":"add","task":{"task":"Synthetic private A"}}));
     let unique_b = app_b.request(json!({"op":"add","task":{"task":"Synthetic private B"}}));
+    app_a.request(json!({"op":"host"}));
+    status(&mut app_a, "code");
+    expire_invitation(&a, &address);
+    app_b.request(json!({"op":"join","from":a}));
+    status(&mut app_b, "failed");
+    assert!(
+        find(&app_b.request(json!({"op":"list"})), &unique_a).is_none(),
+        "expired code leaked tasks"
+    );
+    assert_eq!(
+        app_b.request(json!({"op":"status"}))["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     app_a.request(json!({"op":"host"}));
     status(&mut app_a, "code");
     app_b.request(json!({"op":"join","from":a,"wrong":true}));

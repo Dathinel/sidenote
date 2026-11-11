@@ -276,3 +276,14 @@ test("sync quota rejects message 601 and resets after a full second",async()=>{
     expect(next.deserializeAttachment().messages).toBe(1);
   } finally {Date.now=originalNow;}
 });
+
+
+test("production worker exposes no local expiry control", async () => {
+  const { default: worker } = await import("../src/index.ts");
+  let routed = false;
+  const response = await worker.fetch(new Request("https://relay.test/__test/expire/" + "a".repeat(64), { method: "POST" }), {
+    ROOMS: { getByName() { routed = true; throw Error("unexpected test route"); } },
+  });
+  expect(response.status).toBe(404);
+  expect(routed).toBe(false);
+});

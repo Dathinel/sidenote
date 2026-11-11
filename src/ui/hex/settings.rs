@@ -1084,14 +1084,19 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
                             sidenote::core::relay_preview::Settings::load(&s.store.root)
                                 .unwrap_or(settings);
                         s.relay_refresh();
+                        s.request_refresh();
                         s.hex.shell.relay_error = None;
                         s.toast = Some((
                             "Relay preview changed. Your folder data is kept.".into(),
                             Instant::now(),
                         ));
                     }
-                    Err(_) => {
-                        s.feature_error = Some("Could not save relay preview settings.".into())
+                    Err(error) => {
+                        s.feature_error = Some(
+                            sidenote::core::validation_message(&error)
+                                .unwrap_or("Could not save relay preview settings.")
+                                .into(),
+                        );
                     }
                 }
             })
@@ -1112,7 +1117,13 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
                 let mut settings = s.hex.shell.relay.clone();
                 settings.address = s.hex.shell.relay_address.text.trim().into();
                 match settings.save(&s.store.root) {
-                    Ok(()) => { s.hex.shell.relay = settings; s.hex.shell.relay_error = None; }
+                    Ok(()) => {
+                        s.relay_cancel();
+                        s.relay_refresh();
+                        let connected = sidenote::core::relay_preview::get(&s.store.root)
+                            .and_then(|preview| preview.map(|p| p.online(true)).unwrap_or(Ok(())));
+                        s.hex.shell.relay_error = connected.err().map(|_| "Address saved. Restart Sidenote if sync does not reconnect.".into());
+                    }
                     Err(_) => s.hex.shell.relay_error = Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into()),
                 }
             }).build(k).key("relay-address-input").w(300.0), true, p));
