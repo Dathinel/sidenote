@@ -117,3 +117,24 @@ Physical-device tests, crash/disk-full recovery, adversarial protocol review,
 mixed-version writable clients, selective multi-peer rekey, deployed self-host
 operations and independent security review remain release gates. Follow the
 original integration plan for later shared domains and Worker self-hosting.
+
+## Local execution receipt
+
+The merge commit is bf6ada3. Its full gate set passed before slice 2 edits.
+Final fmt, both strict workspace clippy variants, both locked workspace test
+variants, locked build, MCP smoke, 21 relay Bun tests and TypeScript checking
+passed. The final Settings search-highlight correction also passed fmt and both
+clippy variants. The MCP handshake still reports version 0.0.1-dev.13.
+
+Local command receipts and full logs are in artifacts/relay2-merge-gates,
+artifacts/relay2-verified-gates and artifacts/relay2-style-gates. Requested PNGs
+are in artifacts/relay2-renders. The real offscreen conflict click and saved
+choice are in artifacts/relay2-chooser-proof. These artifacts are ignored by Git.
+
+One earlier ASR-feature workspace run timed out waiting for a pairing phase.
+The isolated rerun, five additional real-pairing repetitions and both final
+workspace variants passed. The timeout's cause was not reproduced. Secret-free
+phase diagnostics are retained; no timeout, quota or security gate was weakened.
+
+No physical device, Cloudflare deployment, login, push or version change was
+performed. Slice 3 has not started.
