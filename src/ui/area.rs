@@ -460,7 +460,11 @@ impl State {
                 self.tasks.today = chrono::Local::now().date_naive();
                 self.tasks.checked = snapshot.checked;
                 self.tasks.all = snapshot.all_tasks;
-                self.tasks.items = snapshot.task_items;
+                self.tasks.items = if self.tasks.diary_filter.is_some() {
+                    self.tasks.all.clone()
+                } else {
+                    snapshot.task_items
+                };
                 self.tasks.names = snapshot.task_names;
                 self.tasks.counts = snapshot.task_counts;
                 self.areas.meeting_projects = snapshot.meeting_projects;

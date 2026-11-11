@@ -280,26 +280,19 @@ pub struct Meeting {
     pub export_path: Option<String>,
     pub search: String,
 }
-fn diary_title(
-    manifest: Option<&str>,
-    source: Option<&str>,
-    summary: &str,
-    quick: Option<&str>,
-) -> String {
+fn diary_title(manifest: Option<&str>, source: Option<&str>, summary: &str) -> String {
+    static TIME_TITLE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:Meeting(?: at)?[ :]+)?\d{1,2}:\d{2}(?: ?[APap][Mm])?$").unwrap()
+    });
     let meaningful = |value: &str| {
         let value = value.trim();
-        !value.is_empty()
-            && !value.starts_with("Meeting on ")
-            && !Regex::new(r"^(?:Meeting(?: at)?[ :]+)?\d{1,2}:\d{2}(?: ?[APap][Mm])?$")
-                .unwrap()
-                .is_match(value)
+        !value.is_empty() && !value.starts_with("Meeting on ") && !TIME_TITLE.is_match(value)
     };
     let explicit = manifest
         .filter(|v| !v.trim().is_empty())
         .filter(|v| matches!(source, Some("user" | "calendar" | "call")) || meaningful(v));
     explicit
         .or_else(|| (!summary.trim().is_empty()).then_some(summary))
-        .or_else(|| quick.filter(|v| meaningful(v)))
         .unwrap_or("Untitled meeting")
         .trim()
         .to_string()
@@ -489,7 +482,6 @@ impl Meeting {
             manifest.title.as_deref(),
             manifest.title_source.as_deref(),
             &summary.title,
-            read_quick_title(folder).as_deref(),
         );
         let transcript_raw = match super::file_reads::text(
             &folder.join("english-transcript.md"),
@@ -872,26 +864,15 @@ mod diary_title_tests {
     use super::diary_title;
     #[test]
     fn provenance_and_empty_titles() {
+        assert_eq!(diary_title(Some("11:00"), None, " "), "Untitled meeting");
         assert_eq!(
-            diary_title(Some("11:00"), None, " ", None),
-            "Untitled meeting"
-        );
-        assert_eq!(
-            diary_title(
-                Some("Meeting on 11 Nov at 11:00"),
-                None,
-                "Paper workshop",
-                None
-            ),
+            diary_title(Some("Meeting on 11 Nov at 11:00"), None, "Paper workshop"),
             "Paper workshop"
         );
         assert_eq!(
-            diary_title(Some("11:00"), Some("user"), "Paper workshop", None),
+            diary_title(Some("11:00"), Some("user"), "Paper workshop"),
             "11:00"
         );
-        assert_eq!(
-            diary_title(Some(" "), Some("user"), " Summary ", None),
-            "Summary"
-        );
+        assert_eq!(diary_title(Some(" "), Some("user"), " Summary "), "Summary");
     }
 }

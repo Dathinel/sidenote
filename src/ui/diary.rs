@@ -1,10 +1,5 @@
-//! The Diary: one entry per day, newest first. Each entry is a short paragraph about the day's
-//! meetings, the meetings as compact links, and folded sections with counts: tasks created,
-//! memories created, tasks done and what the daily check wants you to look at. The paragraph
-//! is the `day_summary` the daily check wrote in its one run the morning after; a day without
-//! one joins the first sentence of each meeting's own summary. Nothing here calls a model.
-//! The newest check's findings open the same panel as the full report (Apply, Dismiss,
-//! Snooze). Days with nothing are left out.
+//! Daily history with inline outcomes, a month calendar and current follow-ups across days.
+//! Report briefs stay in the full check. Opening Diary never calls a model.
 use super::{
     State, check,
     list::text_title,
@@ -12,7 +7,7 @@ use super::{
     roles,
     tasks::chevron,
     theme::Palette,
-    widgets::{label, link, pressable},
+    widgets::{ButtonDisabled, label, link, pressable},
 };
 use chrono::{DateTime, Datelike, Duration, Local, Months, NaiveDate};
 use rune::{El, Key, KeyEvent, Tx, col, el, row};
@@ -230,12 +225,12 @@ fn meetings_decisions(meetings: &[&core::Meeting]) -> Vec<(String, String)> {
 /// Free-form model copy containing technical evidence is withheld, rather than partially scrubbed.
 fn display_text(value: &str, fallback: &str) -> String {
     static INTERNAL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(?:\[\[|\b(?:finding|claim|proposal|record|decision)[-_:][a-z0-9_-]+|\b(?:DEC|D)[-_]\d+\b|\b[a-f0-9]{8,}\b|\b\d{13}-\d+\b|\brev(?:ision)?\s*[:#=])").unwrap()
+        regex::Regex::new(r"(?i)(?:\[\[|\b(?:finding|claim|proposal|record|decision|memory|task)[-_:][a-z0-9_-]+|\b(?:DEC|D)[-_]?\d+\b|\b[a-f0-9]{7,}\b|\b\d{13}-\d+\b|\brev(?:ision)?\s*[:#=])").unwrap()
     });
     if INTERNAL.is_match(value) {
         return fallback.into();
     }
-    value.trim().replace('\u{2014}', ",")
+    value.trim().replace('\u{2014}', ", ")
 }
 
 fn short_summary(value: &str) -> (String, bool) {
@@ -297,7 +292,7 @@ fn summary(s: &State, d: &Day) -> String {
 // ---- pieces of an entry --------------------------------------------------------------------
 
 /// A meeting as one compact link: its time, its title and its length.
-fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
+fn meeting_row(m: &core::Meeting, origin: String, p: Palette) -> El {
     let time = m
         .started
         .map(|t| t.format("%H:%M").to_string())
@@ -308,7 +303,6 @@ fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
         .map(|n| format!("{n} min"))
         .unwrap_or_default();
     let id = m.id.clone();
-    let origin = format!("diary-{date}");
     pressable(
         row()
             .w_full()
@@ -323,7 +317,7 @@ fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
                     .gap(roles::META_GAP)
                     .child(
                         roles::NAME
-                            .wrap(m.diary_title.replace('\u{2014}', ","), p.ink)
+                            .wrap(display_text(&m.diary_title, "Untitled meeting"), p.ink)
                             .w_full(),
                     )
                     .children((!m.summary.people.is_empty()).then(|| {
@@ -340,7 +334,7 @@ fn meeting_row(m: &core::Meeting, date: NaiveDate, p: Palette) -> El {
     .key(format!("diary-meeting-{}", m.id))
     .label(format!(
         "Open the meeting: {}",
-        m.diary_title.replace('\u{2014}', ",")
+        display_text(&m.diary_title, "Untitled meeting")
     ))
     .w_full()
     .px(8.0)
@@ -376,7 +370,7 @@ fn more(n: usize, what: &str, p: Palette) -> El {
         .py(2.0)
 }
 
-fn task_rows(tasks: &[&TaskItem], with_owner: bool, p: Palette) -> El {
+fn task_rows(tasks: &[&TaskItem], with_owner: bool, date: NaiveDate, p: Palette) -> El {
     let mut out = col().w_full().pb(6.0);
     for t in tasks.iter().take(MOST) {
         let who = match (t.mine, t.owner.as_deref()) {
@@ -389,7 +383,7 @@ fn task_rows(tasks: &[&TaskItem], with_owner: bool, p: Palette) -> El {
             facts.insert(0, who);
         }
         let id = t.meeting_id.clone();
-        let stable = t.stable_id.clone();
+        let stable = core::diary::task_identity(t);
         let index = t.index;
         out = out.child(
             pressable(item(
@@ -415,11 +409,27 @@ fn task_rows(tasks: &[&TaskItem], with_owner: bool, p: Palette) -> El {
             ))
             .label("Open this task")
             .hover(p.chip)
-            .on_press(move |s: &mut State| s.diary_task(&id, &stable, index)),
+            .on_press(move |s: &mut State| {
+                s.check.diary_selected = Some(date);
+                s.diary_task(&id, &stable, index);
+            }),
         );
     }
     if tasks.len() > MOST {
-        out = out.child(more(tasks.len() - MOST, "on the Tasks page", p));
+        let keys: BTreeSet<_> = tasks
+            .iter()
+            .map(|t| core::diary::task_route(t).key())
+            .collect();
+        out = out.child(
+            link(format!("See all {} tasks", tasks.len()), p)
+                .key(format!("diary-tasks-all-{date}-{with_owner}"))
+                .on_press(move |s: &mut State| {
+                    s.diary_tasks_filter(
+                        "Tasks from this day".into(),
+                        core::diary::TaskSelection::Keys(keys.clone()),
+                    )
+                }),
+        );
     }
     out
 }
@@ -428,6 +438,7 @@ fn memory_rows(d: &Day, p: Palette) -> El {
     let mut out = col().w_full().pb(6.0);
     for (id, text) in d.memories.iter().take(MOST) {
         let id = id.clone();
+        let date = d.date;
         out = out.child(
             pressable(item(
                 el().size(5.0, 5.0).radius(3.0).fill(p.faint).mt(8.0),
@@ -437,9 +448,9 @@ fn memory_rows(d: &Day, p: Palette) -> El {
             .label("Open this memory claim")
             .radius(6.0)
             .hover(p.chip)
-            .on_press(move |s: &mut State| {
-                s.open_memory();
-                s.open_record(&id);
+            .on_press_tx(move |s: &mut State, tx| {
+                s.check.diary_selected = Some(date);
+                s.diary_route(&core::diary::Route::Memory(id.clone()), tx);
             }),
         );
     }
@@ -460,16 +471,13 @@ fn memory_rows(d: &Day, p: Palette) -> El {
             .label("Review the memory proposals")
             .ml(24.0)
             .mt(2.0)
-            .on_press(|s: &mut State| {
-                s.open_memory();
-                s.memory.tab = Tab::Review;
-            }),
+            .on_press(|s: &mut State| s.diary_memory_review()),
         );
     }
     out
 }
 
-fn day_head(d: &Day, today: NaiveDate, p: Palette) -> El {
+fn day_head(d: &Day, today: NaiveDate, p: Palette, compact: bool) -> El {
     let mut name = d.date.format("%A %-d %B").to_string();
     if d.date.year() != today.year() {
         name.push_str(&format!(" {}", d.date.year()));
@@ -485,7 +493,11 @@ fn day_head(d: &Day, today: NaiveDate, p: Palette) -> El {
     if let Some(w) = when {
         head = head.child(roles::SMALL.wrap(w, p.faint));
     }
-    head.child(roles::SECTION.wrap(name, p.ink))
+    head.child(if compact {
+        roles::COMPACT_SECTION.wrap(name, p.ink)
+    } else {
+        roles::SECTION.wrap(name, p.ink)
+    })
 }
 
 fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
@@ -493,16 +505,20 @@ fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
         .key(format!("diary-{}", d.date))
         .w_full()
         .gap(12.0)
-        .child(day_head(d, s.check.today, p));
+        .child(day_head(d, s.check.today, p, s.app_w.get() < 600.0));
     let line = display_text(&summary(s, d), "");
     if !line.is_empty() {
         let (short, more) = short_summary(&line);
         let key = part_key(d.date, Part::Summary);
         let on = s.check.open_parts.contains(&key);
         out = out.child(
-            roles::READ
-                .wrap(if on { line } else { short }, p.soft)
-                .max_w(720.0),
+            (if s.app_w.get() < 600.0 {
+                roles::COMPACT_READ
+            } else {
+                roles::READ
+            })
+            .wrap(if on { line } else { short }, p.soft)
+            .max_w(720.0),
         );
         if more {
             out = out.child(disclosure(
@@ -517,7 +533,7 @@ fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
     }
     let mut list = col().w_full();
     for m in &d.meetings {
-        list = list.child(meeting_row(m, d.date, p));
+        list = list.child(meeting_row(m, format!("diary-{}", d.date), p));
     }
     out = out.child(list);
     let mut counts = Vec::new();
@@ -554,7 +570,7 @@ fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
             if !d.created.is_empty() {
                 detail = detail
                     .child(roles::GROUP.wrap("Tasks from this day", p.soft))
-                    .child(task_rows(&d.created, true, p));
+                    .child(task_rows(&d.created, true, d.date, p));
             }
             if !d.decisions.is_empty() {
                 detail = detail.child(roles::GROUP.wrap("Decisions", p.soft));
@@ -580,7 +596,7 @@ fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
             if !d.done.is_empty() {
                 detail = detail
                     .child(roles::GROUP.wrap("Completed", p.soft))
-                    .child(task_rows(&d.done, false, p));
+                    .child(task_rows(&d.done, false, d.date, p));
             }
             if d.check {
                 detail = detail.child(check::day_line(s, d.date, p));
@@ -607,6 +623,18 @@ fn disclosure(key: String, words: &str, open: bool, p: Palette) -> El {
     .py(8.0)
     .radius(6.0)
     .hover(p.chip)
+    .on_key({
+        let toggle = toggle.clone();
+        move |s: &mut State, event: &KeyEvent, _| {
+            if event.key == Key::Enter {
+                if !s.check.open_parts.remove(&toggle) {
+                    s.check.open_parts.insert(toggle.clone());
+                }
+                return true;
+            }
+            false
+        }
+    })
     .on_press(move |s: &mut State| {
         if !s.check.open_parts.remove(&toggle) {
             s.check.open_parts.insert(toggle.clone());
@@ -623,6 +651,7 @@ fn month_start(date: NaiveDate) -> NaiveDate {
 fn calendar(s: &State, p: Palette) -> El {
     use super::widgets::{ButtonRole, button};
     let selected = s.check.diary_selected.unwrap_or(s.check.today);
+    let cursor = s.check.diary_cursor.unwrap_or(selected);
     let month = month_start(s.check.diary_month.unwrap_or(selected));
     let mut out = col()
         .w_full()
@@ -670,6 +699,21 @@ fn calendar(s: &State, p: Palette) -> El {
         .iter()
         .filter_map(|m| m.started.map(|t| t.date_naive()))
         .collect();
+    let mut grid = col()
+        .w_full()
+        .gap(8.0)
+        .key(format!(
+            "diary-calendar-grid-{}",
+            s.check.diary_calendar_epoch
+        ))
+        .focusable(true)
+        .role("group")
+        .label(format!(
+            "Calendar, {}. Arrow keys move by day or week. Enter selects. Escape returns to Diary.",
+            cursor.format("%A %-d %B %Y")
+        ))
+        .on_key(calendar_key)
+        .focus_return("check-top");
     let offset = month.weekday().num_days_from_monday() as i64;
     for week in 0..6 {
         let mut line = row().w_full();
@@ -700,13 +744,15 @@ fn calendar(s: &State, p: Palette) -> El {
                     date.format("%A %-d %B %Y"),
                     if dot { ", meetings" } else { ", no meetings" }
                 ))
+                .focusable(false)
                 .checked(selected == date)
                 .radius(6.0)
-                .hover(p.chip)
-                .on_key(calendar_key)
+                .hover(if selected == date { p.ink } else { p.chip })
                 .on_press(move |s: &mut State| s.diary_jump(date));
                 if selected == date {
                     action.fill(p.ink)
+                } else if cursor == date {
+                    action.border(1.0, p.soft)
                 } else {
                     action
                 }
@@ -716,10 +762,10 @@ fn calendar(s: &State, p: Palette) -> El {
             line = line.child(col().grow(1.0).min_w(0.0).child(cell));
         }
         if any {
-            out = out.child(line);
+            grid = grid.child(line);
         }
     }
-    out.child(
+    out.child(grid).child(
         row()
             .w_full()
             .justify_between()
@@ -735,7 +781,12 @@ fn calendar(s: &State, p: Palette) -> El {
 fn calendar_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     let delta = match e.key {
         Key::Enter => {
-            s.diary_jump(s.check.diary_selected.unwrap_or(s.check.today));
+            s.diary_jump(
+                s.check
+                    .diary_cursor
+                    .or(s.check.diary_selected)
+                    .unwrap_or(s.check.today),
+            );
             return true;
         }
         Key::Left => -1,
@@ -743,14 +794,19 @@ fn calendar_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         Key::Up => -7,
         Key::Down => 7,
         Key::Escape => {
-            tx.blur();
+            s.check.diary_calendar_epoch = !s.check.diary_calendar_epoch;
             tx.scroll_into_view("check-top");
             return true;
         }
         _ => return false,
     };
-    let date = s.check.diary_selected.unwrap_or(s.check.today) + Duration::days(delta);
-    s.check.diary_selected = Some(date);
+    let date = s
+        .check
+        .diary_cursor
+        .or(s.check.diary_selected)
+        .unwrap_or(s.check.today)
+        + Duration::days(delta);
+    s.check.diary_cursor = Some(date);
     s.check.diary_month = Some(month_start(date));
     tx.scroll_into_view(format!("diary-date-{date}"));
     true
@@ -783,24 +839,26 @@ impl State {
     }
 
     pub(super) fn diary_task(&mut self, id: &str, stable: &str, index: usize) {
-        let target = self
+        let matches: Vec<_> = self
             .tasks
             .all
             .iter()
-            .find(|t| {
+            .filter(|t| {
                 t.meeting_id == id
                     && if stable.is_empty() {
                         t.index == index
                     } else {
-                        t.stable_id == stable
+                        core::diary::task_identity(t) == stable
                     }
             })
-            .cloned();
-        let Some(t) = target else {
+            .cloned()
+            .collect();
+        if matches.len() != 1 {
             self.check.notice =
                 Some("Source unavailable. Open Tasks to browse current work.".into());
             return;
-        };
+        }
+        let t = matches.into_iter().next().unwrap();
         if !self.close_panel() {
             self.check.notice =
                 Some("Your task draft is kept. Save or cancel it in Tasks first.".into());
@@ -816,7 +874,7 @@ impl State {
         {
             self.tasks.items.push(t.clone());
         }
-        self.tasks.diary_rows = None;
+        self.tasks.diary_filter = None;
         self.tasks.diary_label = None;
         self.open_task(&t.meeting_id, t.index);
     }
@@ -824,6 +882,7 @@ impl State {
     /// The day picker: show enough days to reach it, then scroll to its entry.
     pub(super) fn diary_jump(&mut self, date: NaiveDate) {
         self.check.diary_selected = Some(date);
+        self.check.diary_cursor = Some(date);
         self.check.diary_month = Some(month_start(date));
         let index = days(self).iter().position(|d| *d == date).unwrap_or(0);
         // Historical summaries are read only when their date is visited.
@@ -881,12 +940,52 @@ fn attention(s: &State) -> Vec<core::diary::Attention> {
     .filter(|a| match a.route {
         core::diary::Route::Task { .. } => s.config.features.tasks,
         core::diary::Route::Memory(_) | core::diary::Route::Proposal(_) => s.config.features.memory,
+        core::diary::Route::Review { date, ref finding } => {
+            let source = s
+                .check
+                .diary_reports
+                .iter()
+                .find(|r| r.report.date == date)
+                .and_then(|r| {
+                    if let Some(index) = finding
+                        .strip_prefix("v1:")
+                        .and_then(|i| i.parse::<usize>().ok())
+                    {
+                        r.report.content.findings.get(index)
+                    } else {
+                        r.report.content.findings.iter().find(|f| f.id == *finding)
+                    }
+                });
+            source.is_none_or(|f| {
+                (s.config.features.tasks
+                    || (f.action.is_none()
+                        && !f.subject_refs.iter().any(|r| r.starts_with("task:"))))
+                    && (s.config.features.memory
+                        || !f
+                            .subject_refs
+                            .iter()
+                            .any(|r| r.starts_with("memory:") || r.starts_with("proposal:")))
+            })
+        }
         _ => true,
     })
     .collect()
 }
 
 impl State {
+    fn diary_memory_review(&mut self) {
+        if self.memory.editing || !self.close_panel() {
+            self.check.notice =
+                Some("Your draft is kept. Save or cancel it before opening Memory Review.".into());
+            return;
+        }
+        self.remember_diary();
+        self.open_memory();
+        self.memory.tab = Tab::Review;
+        self.memory.project = None;
+        self.memory.meeting = None;
+        self.memory.search = rune::TextEdit::default();
+    }
     fn remember_diary(&mut self) {
         self.check.diary_return = Some(format!(
             "diary-{}",
@@ -955,11 +1054,23 @@ impl State {
             ),
             Route::Review { date, finding } => {
                 self.open_report(*date);
-                self.open_finding(finding);
+                if self
+                    .check
+                    .report
+                    .as_ref()
+                    .is_some_and(|report| report.date == *date)
+                {
+                    self.open_finding(finding);
+                } else {
+                    self.check.report_open = false;
+                    self.check.diary_review_open = true;
+                    self.check.notice =
+                        Some("Source unavailable. Review the remaining follow-ups.".into());
+                }
             }
         }
     }
-    fn diary_tasks_filter(&mut self, label: String, keys: BTreeSet<String>) {
+    fn diary_tasks_filter(&mut self, label: String, filter: core::diary::TaskSelection) {
         if !self.close_panel() {
             self.check.notice =
                 Some("Your task draft is kept. Save or cancel it in Tasks first.".into());
@@ -968,12 +1079,12 @@ impl State {
         self.remember_diary();
         self.set_view(super::tasks::View::Tasks);
         self.tasks.items = self.tasks.all.clone();
-        self.tasks.done = core::DoneFilter::Open;
+        self.tasks.done = core::DoneFilter::All;
         self.tasks.who = core::Who::Everyone;
         self.tasks.search = rune::TextEdit::default();
         self.tasks.collapsed.clear();
         self.tasks.grouping = core::TaskGrouping::Due;
-        self.tasks.diary_rows = Some(keys);
+        self.tasks.diary_filter = Some(filter);
         self.tasks.diary_label = Some(label);
     }
     pub(super) fn diary_return(&mut self) {
@@ -1052,6 +1163,16 @@ fn source_row(
     .py(10.0)
     .radius(6.0)
     .hover(p.chip)
+    .on_key({
+        let route = route.clone();
+        move |s: &mut State, event: &KeyEvent, tx| {
+            if event.key == Key::Enter {
+                s.diary_route(&route, tx);
+                return true;
+            }
+            false
+        }
+    })
     .on_press_tx(move |s: &mut State, tx| s.diary_route(&route, tx))
 }
 fn rail_heading(name: &str, count: usize, action: El, p: Palette) -> El {
@@ -1073,6 +1194,27 @@ fn rail_heading(name: &str, count: usize, action: El, p: Palette) -> El {
 }
 fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
     let mut out = col().w_full().pb(24.0).child(calendar(s, p));
+    if s.config.features.memory && s.memory.refresh_pending {
+        out = out.child(
+            roles::META
+                .wrap("Loading Memory follow-ups...", p.faint)
+                .role("status")
+                .py(8.0),
+        );
+    } else if s.config.features.memory && s.memory.refresh_error.is_some() {
+        out = out
+            .child(
+                roles::SMALL
+                    .wrap("Could not load Memory follow-ups", p.warn)
+                    .role("alert")
+                    .py(8.0),
+            )
+            .child(
+                super::widgets::action("Retry Memory", p)
+                    .key("diary-memory-retry")
+                    .on_press(|s: &mut State| s.refresh_memory(true)),
+            );
+    }
     if s.check.diary_read_error {
         out = out
             .child(
@@ -1103,7 +1245,10 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
                     if only_other {
                         s.check.diary_review_open = true;
                     } else {
-                        s.diary_tasks_filter("Needs you".into(), keys.clone());
+                        s.diary_tasks_filter(
+                            "Needs you".into(),
+                            core::diary::TaskSelection::Needs(keys.clone()),
+                        );
                     }
                 }),
             p,
@@ -1152,10 +1297,14 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
             if tasks.is_empty() {
                 continue;
             }
-            let keys: BTreeSet<_> = tasks
-                .iter()
-                .map(|t| core::diary::task_route(t).key())
-                .collect();
+            let selection = if waiting {
+                core::diary::TaskSelection::Waiting
+            } else {
+                core::diary::TaskSelection::Due {
+                    start: s.check.today,
+                    end: core::diary::week_end(s.check.today),
+                }
+            };
             let title = if waiting {
                 "Waiting on others"
             } else {
@@ -1180,7 +1329,7 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
                         "diary-due-all"
                     })
                     .on_press(move |s: &mut State| {
-                        s.diary_tasks_filter(label.clone(), keys.clone())
+                        s.diary_tasks_filter(label.clone(), selection.clone())
                     }),
                 p,
             ));
@@ -1221,16 +1370,7 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
                 link("Open Memory", p)
                     .key("diary-memory-all")
                     .on_press(|s: &mut State| {
-                        if s.memory.editing {
-                            s.check.notice = Some("Save or cancel your Memory draft first.".into());
-                            return;
-                        }
-                        s.remember_diary();
-                        s.open_memory();
-                        s.memory.tab = Tab::Review;
-                        s.memory.project = None;
-                        s.memory.meeting = None;
-                        s.memory.search = rune::TextEdit::default();
+                        s.diary_memory_review();
                     }),
                 p,
             ));
@@ -1271,10 +1411,21 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, _layer: &mut Vec<El>) 
             ));
         }
     } else {
-        if all.is_empty() {
+        if all.is_empty() && s.meetings.is_empty() {
             timeline = timeline
                 .child(roles::SECTION.wrap("No meetings yet", p.ink).mt(24.0))
-                .child(roles::SMALL.wrap("Record a meeting to begin your Diary.", p.soft));
+                .child(roles::SMALL.wrap("Record a meeting to begin your Diary.", p.soft))
+                .child(
+                    super::widgets::button(
+                        "New meeting",
+                        "diary-new-meeting",
+                        super::widgets::ButtonRole::Primary,
+                        p,
+                    )
+                    .button_disabled(super::hex::start_blocked(s).is_some())
+                    .on_press(|s: &mut State| s.new_meeting())
+                    .mt(12.0),
+                );
         }
         let newest_check = s.check.report.as_ref().map(|r| r.date);
         for (n, &date) in all.iter().take(s.check.shown).enumerate() {
@@ -1285,6 +1436,18 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, _layer: &mut Vec<El>) 
                     roles::SECTION_TOP + 8.0
                 }),
             );
+        }
+        let undated: Vec<_> = s.meetings.iter().filter(|m| m.started.is_none()).collect();
+        if !undated.is_empty() {
+            let mut group = col()
+                .w_full()
+                .key("diary-undated")
+                .mt(roles::SECTION_TOP)
+                .child(roles::SECTION.wrap("Date unknown", p.ink));
+            for meeting in undated {
+                group = group.child(meeting_row(meeting, "diary-undated".into(), p));
+            }
+            timeline = timeline.child(group);
         }
         if all.len() > s.check.shown {
             timeline = timeline.child(
@@ -1319,7 +1482,7 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, _layer: &mut Vec<El>) 
                 .min_h(0.0)
                 .items_start()
                 .gap(48.0)
-                .child(super::widgets::scroll(timeline, "check-scroll"))
+                .child(super::widgets::scroll(timeline, "check-scroll").h_full())
                 .child(
                     col().w(320.0).h_full().min_h(0.0).pt(24.0).child(
                         super::widgets::scroll(rail(s, &followups, p), "diary-rail-scroll")
@@ -1331,10 +1494,48 @@ pub fn feed(s: &State, k: &Kit, p: Palette, narrow: bool, _layer: &mut Vec<El>) 
                 ),
         )
     } else {
+        let open = s.check.diary_week_open;
+        let week_label = if s.check.diary_read_error
+            || (s.config.features.memory && s.memory.refresh_error.is_some())
+        {
+            format!("This week{}Could not load follow-ups", roles::DOT)
+        } else if s.config.features.memory && s.memory.refresh_pending {
+            format!("This week{}Loading follow-ups", roles::DOT)
+        } else {
+            format!("This week{}{} need attention", roles::DOT, followups.len())
+        };
+        let toggle = pressable(
+            row()
+                .w_full()
+                .items_center()
+                .gap(8.0)
+                .child(chevron(open, p))
+                .child(
+                    roles::CONTROL
+                        .wrap(week_label.clone(), p.soft)
+                        .grow(1.0)
+                        .min_w(0.0),
+                ),
+        )
+        .key("diary-week-toggle")
+        .label(week_label)
+        .expanded(open)
+        .py(12.0)
+        .radius(6.0)
+        .hover(p.chip)
+        .on_key(|s: &mut State, event: &KeyEvent, _| {
+            if event.key == Key::Enter {
+                s.check.diary_week_open = !s.check.diary_week_open;
+                return true;
+            }
+            false
+        })
+        .on_press(|s: &mut State| s.check.diary_week_open = !s.check.diary_week_open);
         page.child(super::widgets::scroll(
             col()
                 .w_full()
-                .child(rail(s, &followups, p).mt(16.0))
+                .child(toggle)
+                .children(open.then(|| rail(s, &followups, p).focus_return("diary-week-toggle")))
                 .child(timeline),
             "check-scroll",
         ))
@@ -1359,7 +1560,7 @@ mod tests {
             "Review the update"
         );
         assert_eq!(display_text("Paper workshop", ""), "Paper workshop");
-        assert_eq!(display_text("Two\u{2014}parts", ""), "Two,parts");
+        assert_eq!(display_text("Two\u{2014}parts", ""), "Two, parts");
         assert_eq!(
             short_summary("One. Two. Three."),
             ("One. Two.".into(), true)

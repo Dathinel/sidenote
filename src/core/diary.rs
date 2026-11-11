@@ -84,10 +84,17 @@ pub struct Attention {
     pub rank: u8,
     pub due: Option<NaiveDate>,
 }
+pub fn task_identity(t: &TaskItem) -> String {
+    if t.stable_id.is_empty() {
+        format!("text:{}", super::store_io::fingerprint([t.task.as_str()]))
+    } else {
+        t.stable_id.clone()
+    }
+}
 pub fn task_route(t: &TaskItem) -> Route {
     Route::Task {
         meeting: t.meeting_id.clone(),
-        stable: t.stable_id.clone(),
+        stable: task_identity(t),
         index: t.index,
     }
 }
@@ -109,7 +116,30 @@ pub fn waiting(t: &TaskItem) -> bool {
             .waiting_label
             .as_ref()
             .is_some_and(|v| !v.trim().is_empty())
-            || t.waiting_on.is_some())
+            || t.waiting_on.as_ref().is_some_and(|w| {
+                w.task_id.as_ref().is_some_and(|v| !v.trim().is_empty())
+                    || w.text.as_ref().is_some_and(|v| !v.trim().is_empty())
+            }))
+}
+
+#[derive(Clone)]
+pub enum TaskSelection {
+    Needs(BTreeSet<String>),
+    Keys(BTreeSet<String>),
+    Due { start: NaiveDate, end: NaiveDate },
+    Waiting,
+}
+impl TaskSelection {
+    pub fn matches(&self, t: &TaskItem) -> bool {
+        match self {
+            Self::Needs(keys) => !t.done && keys.contains(&task_route(t).key()),
+            Self::Keys(keys) => keys.contains(&task_route(t).key()),
+            Self::Due { start, end } => {
+                owned(t) && t.due_date.is_some_and(|d| d >= *start && d <= *end)
+            }
+            Self::Waiting => waiting(t),
+        }
+    }
 }
 
 fn task_subject<'a>(
@@ -198,7 +228,18 @@ pub fn aggregate(
         for id in &report.content.comparison.resolved {
             resolved.insert(id.clone());
         }
-        for (index, f) in report.content.findings.iter().enumerate() {
+        let mut findings: Vec<_> = report.content.findings.iter().enumerate().collect();
+        findings.sort_by_key(|(i, f)| {
+            (
+                match f.severity {
+                    Severity::High => 0,
+                    Severity::Medium => 1,
+                    Severity::Low => 2,
+                },
+                *i,
+            )
+        });
+        for (index, f) in findings {
             let finding = finding_key(report, index);
             if resolved.contains(&finding) {
                 continue;
@@ -237,12 +278,33 @@ pub fn aggregate(
                     finding: finding.clone(),
                 }
             };
-            let key = route.key();
-            if !seen.insert(key.clone()) || !seen.insert(format!("finding:{finding}")) {
+            let key = if matches!(route, Route::Meeting(_)) && !f.id.is_empty() {
+                format!("question:{}", f.id)
+            } else if matches!(route, Route::Review { .. }) && !f.subject_keys.is_empty() {
+                let mut subjects = f.subject_keys.clone();
+                subjects.sort();
+                format!("subjects:{}", subjects.join("|"))
+            } else {
+                route.key()
+            };
+            if !seen.insert(key.clone())
+                || !seen.insert(if report.schema_version == 1 {
+                    format!("finding:{}:{finding}", report.date)
+                } else {
+                    format!("finding:{finding}")
+                })
+            {
                 continue;
             }
             if !snapshot.open.contains(&index)
-                || task.is_some_and(|t| t.done)
+                || task.is_some_and(|t| {
+                    t.done
+                        || (matches!(f.kind, FindingKind::TaskWithoutOwner)
+                            && (t.mine == Some(true)
+                                || t.owner
+                                    .as_ref()
+                                    .is_some_and(|owner| !owner.trim().is_empty())))
+                })
                 || record.is_some_and(|r| r.status != RecordStatus::Active)
                 || pending.is_some_and(|p| p.status != ProposalStatus::Pending)
             {
@@ -374,5 +436,327 @@ mod tests {
                 end
             );
         }
+    }
+    fn date(value: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
+    }
+    fn meeting(n: usize) -> Meeting {
+        Meeting {
+            folder: Default::default(),
+            device: None,
+            id: "synthetic-meeting".into(),
+            title: "Paper workshop".into(),
+            diary_title: "Paper workshop".into(),
+            summary: super::super::Summary {
+                schema: 2,
+                title: "Paper workshop".into(),
+                todo: (0..n)
+                    .map(|i| super::super::Todo {
+                        id: format!("task-{i}"),
+                        task: format!("Check paper sample {i}"),
+                        title: format!("Check sample {i}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            summary_raw: String::new(),
+            transcript_raw: String::new(),
+            routed: None,
+            routed_revision: String::new(),
+            notes: String::new(),
+            lines: Vec::new(),
+            started: None,
+            minutes: None,
+            export_path: None,
+            search: String::new(),
+        }
+    }
+    fn tasks(m: &Meeting) -> Vec<TaskItem> {
+        let mut tasks = super::super::build_tasks(
+            std::slice::from_ref(m),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+        for task in &mut tasks {
+            task.mine = Some(true);
+        }
+        tasks
+    }
+    fn finding(m: &Meeting, index: usize) -> Finding {
+        let subject = format!("task:{}:{index}", m.id);
+        serde_json::from_value(serde_json::json!({"id":format!("finding-{index}"), "kind":"missing_followup", "severity":"high", "title":"DEC-123 revision abcdef123456", "explanation":"Internal model evidence", "evidence":[format!("[[{}@00:05]]", m.id)], "subject_refs":[subject], "subject_keys":[format!("{subject}@{}", super::super::store_io::fingerprint([m.summary.todo[index].task.as_str()]))], "evidence_keys":["synthetic"], "material_state":"synthetic"})).unwrap()
+    }
+    fn report(day: &str, findings: Vec<Finding>) -> Report {
+        let open = (0..findings.len()).collect();
+        Report {
+            report: DailyCheck {
+                schema_version: 2,
+                date: date(day),
+                runner: "Synthetic fixture".into(),
+                prompt_bytes: 0,
+                elapsed_seconds: 0.0,
+                meeting_count: 1,
+                task_count: findings.len(),
+                kb: super::super::daily_check::KbSnapshot {
+                    revision: "synthetic".into(),
+                    captured_at: String::new(),
+                    path: Default::default(),
+                    stale: false,
+                },
+                warnings: Vec::new(),
+                memory_updated: false,
+                content: super::super::daily_check::CheckContent {
+                    findings,
+                    ..Default::default()
+                },
+            },
+            open,
+        }
+    }
+    #[test]
+    fn fifty_plus_items_dedupe_across_days_and_sort_stably() {
+        let m = meeting(60);
+        let tasks = tasks(&m);
+        let findings: Vec<_> = (0..60).map(|i| finding(&m, i)).collect();
+        let old = report("2026-11-09", findings.clone());
+        let new = report("2026-11-11", findings);
+        let results = aggregate(&[old, new], &tasks, &[m], &[], &[], date("2026-11-11"));
+        assert_eq!(results.len(), 60);
+        assert!(results.iter().all(|a| !a.title.contains("DEC-123")));
+        let keys: Vec<_> = results.iter().map(|a| a.route.key()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+    #[test]
+    fn latest_triage_done_and_explicit_resolution_suppress_old_findings() {
+        let m = meeting(1);
+        let mut tasks = tasks(&m);
+        let f = finding(&m, 0);
+        let old = report("2026-11-09", vec![f.clone()]);
+        let mut new = report("2026-11-11", vec![f.clone()]);
+        new.open.clear();
+        tasks[0].due_date = Some(date("2026-11-10"));
+        assert!(
+            aggregate(
+                &[old.clone(), new],
+                &tasks,
+                std::slice::from_ref(&m),
+                &[],
+                &[],
+                date("2026-11-11")
+            )
+            .is_empty()
+        );
+        tasks[0].done = true;
+        assert!(
+            aggregate(
+                std::slice::from_ref(&old),
+                &tasks,
+                std::slice::from_ref(&m),
+                &[],
+                &[],
+                date("2026-11-11")
+            )
+            .is_empty()
+        );
+        tasks[0].done = false;
+        tasks[0].due_date = None;
+        let mut resolved = report("2026-11-11", Vec::new());
+        resolved.report.content.comparison.resolved.push(f.id);
+        assert!(aggregate(&[old, resolved], &tasks, &[m], &[], &[], date("2026-11-11")).is_empty());
+    }
+    #[test]
+    fn regenerated_task_indexes_are_guarded_and_removed_sources_open_review() {
+        let mut m = meeting(2);
+        let f = finding(&m, 0);
+        m.summary.todo.swap(0, 1);
+        let tasks = tasks(&m);
+        let r = report("2026-11-11", vec![f]);
+        let result = aggregate(
+            std::slice::from_ref(&r),
+            &tasks,
+            std::slice::from_ref(&m),
+            &[],
+            &[],
+            date("2026-11-11"),
+        );
+        assert!(
+            matches!(&result[0].route, Route::Task { stable, index: 1, .. } if stable == "task-0")
+        );
+        let result = aggregate(&[r], &[], &[m], &[], &[], date("2026-11-11"));
+        assert!(matches!(result[0].route, Route::Review { .. }));
+        assert_eq!(result[0].reason, Reason::Unavailable);
+    }
+    #[test]
+    fn ownership_and_waiting_are_explicit() {
+        let m = meeting(1);
+        let mut tasks = tasks(&m);
+        let t = &mut tasks[0];
+        t.due_date = Some(date("2026-11-13"));
+        assert!(due_week(t, date("2026-11-11")));
+        t.mine = None;
+        assert!(!due_week(t, date("2026-11-11")));
+        t.mine = Some(true);
+        t.status = TaskStatus::Waiting;
+        assert!(!waiting(t));
+        t.waiting_on = Some(super::super::WaitingOn {
+            task_id: None,
+            text: Some("Venue reply".into()),
+        });
+        assert!(waiting(t));
+        t.done = true;
+        assert!(!waiting(t));
+        assert!(!due_week(t, date("2026-11-11")));
+    }
+    #[test]
+    fn memory_and_proposal_routes_respect_current_source_status() {
+        let m = meeting(1);
+        let mut f = finding(&m, 0);
+        f.subject_refs = vec!["memory:claim-sample".into()];
+        f.subject_keys = f.subject_refs.clone();
+        let mut record: MemoryRecord = serde_json::from_value(serde_json::json!({"id":"claim-sample", "type":"decision", "text":"Use a folded paper format.", "sources":[], "status":"active", "basis":"source_supported", "updated_at":"2026-11-11T08:00:00Z", "source_fingerprint":"synthetic"})).unwrap();
+        let r = report("2026-11-11", vec![f.clone()]);
+        let result = aggregate(
+            std::slice::from_ref(&r),
+            &[],
+            std::slice::from_ref(&m),
+            std::slice::from_ref(&record),
+            &[],
+            date("2026-11-11"),
+        );
+        assert!(matches!(&result[0].route, Route::Memory(id) if id == "claim-sample"));
+        record.status = RecordStatus::Retired;
+        assert!(
+            aggregate(
+                &[r],
+                &[],
+                std::slice::from_ref(&m),
+                &[record],
+                &[],
+                date("2026-11-11")
+            )
+            .is_empty()
+        );
+        f.subject_refs = vec!["proposal:proposal-sample".into()];
+        f.subject_keys = f.subject_refs.clone();
+        let mut proposal: PendingProposal = serde_json::from_value(serde_json::json!({"id":"proposal-sample", "op":"add", "text":"Keep exercises short.", "sources":[], "rationale":"Review the outcome", "status":"pending", "created_at":"2026-11-11T08:00:00Z"})).unwrap();
+        let r = report("2026-11-11", vec![f]);
+        let result = aggregate(
+            std::slice::from_ref(&r),
+            &[],
+            std::slice::from_ref(&m),
+            &[],
+            std::slice::from_ref(&proposal),
+            date("2026-11-11"),
+        );
+        assert!(matches!(&result[0].route, Route::Proposal(id) if id == "proposal-sample"));
+        for status in [ProposalStatus::Accepted, ProposalStatus::Rejected] {
+            proposal.status = status;
+            assert!(
+                aggregate(
+                    std::slice::from_ref(&r),
+                    &[],
+                    std::slice::from_ref(&m),
+                    &[],
+                    std::slice::from_ref(&proposal),
+                    date("2026-11-11")
+                )
+                .is_empty()
+            );
+        }
+    }
+    #[test]
+    fn expired_snooze_reenters_the_aggregate() {
+        use super::super::check_state::{TriageEntry, TriageFile, TriageStatus};
+        let m = meeting(1);
+        let tasks = tasks(&m);
+        let f = finding(&m, 0);
+        let mut triage = TriageFile::default();
+        triage.findings.insert(
+            f.id.clone(),
+            TriageEntry {
+                finding_id: f.id.clone(),
+                status: TriageStatus::Snoozed,
+                updated_at: "2026-11-11T08:00:00Z".into(),
+                snooze_until: Some(date("2026-11-12")),
+                evidence_fingerprint: super::super::check_v2::evidence_fingerprint(&f),
+                evidence_keys: f.evidence_keys.clone(),
+                note: None,
+            },
+        );
+        for (today, count) in [("2026-11-11", 0), ("2026-11-12", 1)] {
+            let mut r = report(today, vec![f.clone()]);
+            if triage.status_for(&f, date(today)) != TriageStatus::Open {
+                r.open.clear();
+            }
+            assert_eq!(
+                aggregate(
+                    &[r],
+                    &tasks,
+                    std::slice::from_ref(&m),
+                    &[],
+                    &[],
+                    date(today)
+                )
+                .len(),
+                count
+            );
+        }
+    }
+    #[test]
+    fn legacy_findings_without_a_shared_source_are_date_scoped() {
+        let m = meeting(1);
+        let mut f = finding(&m, 0);
+        f.id.clear();
+        f.subject_refs.clear();
+        f.subject_keys.clear();
+        f.evidence.clear();
+        let mut older = report("2026-11-09", vec![f.clone()]);
+        older.report.schema_version = 1;
+        let mut newer = report("2026-11-11", vec![f]);
+        newer.report.schema_version = 1;
+        assert_eq!(
+            aggregate(&[older, newer], &[], &[], &[], &[], date("2026-11-11")).len(),
+            2
+        );
+    }
+    #[test]
+    fn assigning_an_owner_resolves_the_old_owner_gap() {
+        let m = meeting(1);
+        let mut tasks = tasks(&m);
+        let mut f = finding(&m, 0);
+        f.kind = FindingKind::TaskWithoutOwner;
+        let r = report("2026-11-11", vec![f]);
+        assert!(
+            aggregate(
+                std::slice::from_ref(&r),
+                &tasks,
+                std::slice::from_ref(&m),
+                &[],
+                &[],
+                date("2026-11-11")
+            )
+            .is_empty()
+        );
+        tasks[0].mine = None;
+        tasks[0].owner = None;
+        let results = aggregate(&[r], &tasks, &[m], &[], &[], date("2026-11-11"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].reason, Reason::MissingOwner);
+    }
+    #[test]
+    fn legacy_task_identity_survives_reordering_but_not_replacement() {
+        let m = meeting(1);
+        let mut t = tasks(&m).remove(0);
+        t.stable_id.clear();
+        let original = task_route(&t).key();
+        t.index = 8;
+        assert_eq!(task_route(&t).key(), original);
+        t.task = "A different paper sample task".into();
+        assert_ne!(task_route(&t).key(), original);
     }
 }

@@ -148,7 +148,7 @@ pub struct TasksState {
     pub collapsed: BTreeSet<String>,
     /// The Done section at the end of the page is open.
     pub done_open: bool,
-    pub diary_rows: Option<BTreeSet<String>>,
+    pub diary_filter: Option<core::diary::TaskSelection>,
     pub diary_label: Option<String>,
 }
 
@@ -233,7 +233,7 @@ impl TasksState {
             keyboard: false,
             collapsed: BTreeSet::new(),
             done_open: false,
-            diary_rows: None,
+            diary_filter: None,
             diary_label: None,
         }
     }
@@ -265,8 +265,8 @@ impl TasksState {
     /// The page as laid out now: the groups and the folded Done section.
     pub fn arranged(&self) -> TaskView {
         let mut view = core::arrange(&self.items, &self.filter(), self.grouping, self.today);
-        if let Some(keys) = &self.diary_rows {
-            let keep = |i: &usize| keys.contains(&core::diary::task_route(&self.items[*i]).key());
+        if let Some(filter) = &self.diary_filter {
+            let keep = |i: &usize| filter.matches(&self.items[*i]);
             for group in &mut view.groups {
                 group.rows.retain(keep);
                 group.rows.sort_by_key(|&i| {
@@ -3318,7 +3318,7 @@ fn list_column(
                 .child(
                     button("Clear", "diary-task-filter-clear", false, p).on_press(
                         |s: &mut State| {
-                            s.tasks.diary_rows = None;
+                            s.tasks.diary_filter = None;
                             s.tasks.diary_label = None;
                         },
                     ),

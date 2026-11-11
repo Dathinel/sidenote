@@ -106,7 +106,7 @@ pub struct MemState {
     pub refresh_pending: bool,
     refresh_generation: u64,
     refresh_again: Option<bool>,
-    refresh_error: Option<String>,
+    pub(super) refresh_error: Option<String>,
     prepare_after_refresh: bool,
     pub today: NaiveDate,
 }

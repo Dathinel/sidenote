@@ -1,6 +1,5 @@
-//! The daily check. Its newest open findings live in the Diary (`diary.rs`) as that day's
-//! "Needs your attention"; the full report of any day opens from there, in the style of an
-//! inbox: a header with coverage, a three-line brief, a triage list with a right-hand panel,
+//! The daily check. Diary aggregates current findings across report dates. The full report
+//! of any day opens from there, in the style of an inbox: a header with coverage, a three-line brief, a triage list with a right-hand panel,
 //! what changed since the last check, story alignment per project, and a seven-day history.
 //! Reports are written by the engine only; this page reads them, records the owner's triage
 //! decisions and applies a proposed task action when the owner presses Apply. Reports from
@@ -128,6 +127,8 @@ pub struct CheckState {
     /// How many Diary days are listed.
     pub shown: usize,
     pub diary_selected: Option<NaiveDate>,
+    pub diary_cursor: Option<NaiveDate>,
+    pub diary_calendar_epoch: bool,
     pub diary_month: Option<NaiveDate>,
     pub diary_week_open: bool,
     pub diary_return: Option<String>,
@@ -195,6 +196,8 @@ impl Default for CheckState {
             report_open: false,
             shown: diary::PAGE,
             diary_selected: None,
+            diary_cursor: None,
+            diary_calendar_epoch: false,
             diary_month: None,
             diary_week_open: false,
             diary_return: None,
@@ -295,8 +298,7 @@ fn modified(path: std::path::PathBuf) -> Option<DateTime<Local>> {
 
 impl CheckState {
     /// Reads the report list, the report on screen (the newest when none is chosen), the
-    /// triage state, the newest report's open counts and the seven-day strip. Cheap enough to
-    /// repeat on a rescan.
+    /// triage state, the newest report's open counts and the seven-day strip.
     pub fn refresh(&mut self) {
         self.notice = None;
         self.today = Local::now().date_naive();
@@ -415,8 +417,7 @@ impl CheckState {
     }
 
     fn build_strip(&mut self) {
-        // Older days in the Diary say what their check found. Thirty days of reports is
-        // enough to read on each rescan; earlier days just link to their report.
+        // Scan every date so unresolved older findings do not disappear at a cutoff.
         self.totals = HashMap::new();
         self.day_summaries = HashMap::new();
         self.diary_reports.clear();
@@ -503,6 +504,9 @@ impl State {
         self.check.panel = false;
         self.check.report_open = false;
         self.check.open_parts.clear();
+        self.check.diary_return = None;
+        self.check.diary_review_open = false;
+        self.check.diary_week_open = false;
         self.check.shown = diary::PAGE;
         self.check.filter = Filter::Open;
         self.check.refresh();
@@ -2575,6 +2579,9 @@ fn move_cursor(s: &mut State, delta: isize, tx: &mut Tx) {
 
 /// The Check page's keys. Letters only count while no text box has the keyboard.
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    if !s.check.report_open {
+        return false;
+    }
     let Key::Text(t) = &e.key else {
         return match e.key {
             Key::Down => {

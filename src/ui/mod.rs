@@ -3002,6 +3002,7 @@ pub fn spec() -> AppSpec<State> {
                 scene_diary_open(
                     s,
                     &[
+                        diary::Part::Outcomes,
                         diary::Part::Tasks,
                         diary::Part::Memories,
                         diary::Part::Done,
