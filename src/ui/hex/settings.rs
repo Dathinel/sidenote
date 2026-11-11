@@ -7,6 +7,10 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub struct Settings {
     pub navigation_open: bool,
+    jump_active: usize,
+    jump_positions: BTreeMap<usize, f32>,
+    jump_offset: std::rc::Rc<std::cell::Cell<f32>>,
+    jump_max: std::rc::Rc<std::cell::Cell<f32>>,
     pub last_tabs: BTreeMap<String, usize>,
     back: Option<ReturnTo>,
     pub advanced: HashSet<&'static str>,
@@ -48,10 +52,12 @@ pub enum Page {
     Helpers,
     Appearance,
     Sync,
+    Privacy,
     Updates,
+    Diagnostics,
 }
 impl Page {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 11] = [
         Self::General,
         Self::Meetings,
         Self::Prompts,
@@ -60,7 +66,9 @@ impl Page {
         Self::Helpers,
         Self::Appearance,
         Self::Sync,
+        Self::Privacy,
         Self::Updates,
+        Self::Diagnostics,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -72,14 +80,16 @@ impl Page {
             Self::Helpers => "Models and agents",
             Self::Appearance => "Appearance and startup",
             Self::Sync => "Sync",
+            Self::Privacy => "Privacy and data",
             Self::Updates => "Updates",
+            Self::Diagnostics => "Diagnostics",
         }
     }
     fn tabs(self) -> &'static [&'static str] {
         match self {
-            Self::People => &["Our team", "External", "Import"],
+            Self::People => &["Our team", "External"],
             Self::Meetings => &["Recording", "Summaries", "Tasks"],
-            Self::Helpers => &["Agents", "Speech model", "Advanced"],
+            Self::Helpers => &["Agents", "Speech model"],
             _ => &[],
         }
     }
@@ -101,12 +111,14 @@ impl Page {
             },
             Self::Appearance => Section::General,
             Self::Sync => Section::Sync,
+            Self::Privacy => Section::Privacy,
             Self::Updates => Section::Updates,
+            Self::Diagnostics => Section::Diagnostics,
         }
     }
     fn icon(self) -> &'static rune::Icon {
         match self {
-            Self::General => &icons::SETTINGS,
+            Self::General => &icons::USER,
             Self::Meetings => &icons::MEETINGS,
             Self::Prompts => &icons::PROMPTS,
             Self::People => &icons::PEOPLE,
@@ -114,7 +126,9 @@ impl Page {
             Self::Helpers => &icons::BRAIN,
             Self::Appearance => &icons::PALETTE,
             Self::Sync => &icons::DEVICE,
-            Self::Updates => &icons::UPDATES,
+            Self::Privacy => &icons::SHIELD_CHECK,
+            Self::Updates => &icons::REFRESH_CW,
+            Self::Diagnostics => &icons::SLIDERS,
         }
     }
 }
@@ -127,12 +141,16 @@ fn current(section: Section) -> (Page, usize) {
         Section::Features => (Page::Meetings, 2),
         Section::PromptLibrary => (Page::Prompts, 0),
         Section::Teams => (Page::People, 0),
-        Section::Model | Section::MeetingModels => (Page::Helpers, 1),
+        Section::Model => (Page::Hex, 0),
+        Section::MeetingModels => (Page::Helpers, 1),
         Section::Connect => (Page::Helpers, 0),
-        Section::HelpersAdvanced => (Page::Helpers, 2),
+        Section::HelpersAdvanced => (Page::Diagnostics, 0),
+        Section::Privacy => (Page::Privacy, 0),
+        Section::Diagnostics => (Page::Diagnostics, 0),
         Section::General => (Page::Appearance, 0),
         Section::Sync => (Page::Sync, 0),
-        Section::Updates | Section::Advanced => (Page::Updates, 0),
+        Section::Updates => (Page::Updates, 0),
+        Section::Advanced => (Page::Diagnostics, 0),
         Section::Dictation | Section::Shortcuts => (Page::Hex, 0),
     }
 }
@@ -151,6 +169,10 @@ fn active(s: &State) -> (Page, usize) {
 
 fn navigate(s: &mut State, page: Page, tab: usize) {
     s.hex.shell.navigation_open = false;
+    s.hex.shell.jump_active = 0;
+    s.hex.shell.jump_positions.clear();
+    s.hex.shell.jump_offset.set(0.0);
+    s.hex.shell.jump_max.set(0.0);
     let tab = tab.min(page.tabs().len().saturating_sub(1));
     s.hex.section = page.section(tab);
     if page == Page::People {
@@ -190,6 +212,33 @@ fn back(s: &mut State) {
 
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
+    if s.on_hex() && !jump_groups(active(s).0, active(s).1).is_empty() {
+        let offset = s.hex.shell.jump_offset.get();
+        let first = s.hex.shell.jump_positions.get(&0).copied().unwrap_or(0.0);
+        let selected =
+            if s.hex.shell.jump_max.get() > 0.0 && offset + 1.0 >= s.hex.shell.jump_max.get() {
+                s.hex
+                    .shell
+                    .jump_positions
+                    .keys()
+                    .next_back()
+                    .copied()
+                    .unwrap_or(0)
+            } else {
+                s.hex
+                    .shell
+                    .jump_positions
+                    .iter()
+                    .filter(|(_, y)| **y - first <= offset + 24.0)
+                    .map(|(i, _)| *i)
+                    .next_back()
+                    .unwrap_or(0)
+            };
+        if selected != s.hex.shell.jump_active {
+            s.hex.shell.jump_active = selected;
+            changed = true;
+        }
+    }
     if s.on_hex() {
         let (page, tab) = active(s);
         if s.hex.shell.last_tabs.get(page.name()) != Some(&tab) {
@@ -248,14 +297,21 @@ pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
     }
 }
 pub(crate) use crate::ui::cards::{icon_tile, panel};
-pub(crate) fn pc(p: Palette) -> El {
-    roles::META
-        .line("This PC", p.soft)
-        .px(6.0)
-        .py(2.0)
-        .radius(4.0)
-        .fill(p.chip)
-        .help("Kept on this PC only. Your other devices have their own.")
+fn ownership_text(page: Page) -> &'static str {
+    if page == Page::Hex {
+        "These settings live in Hex and also change Hex."
+    } else {
+        "Settings marked ⬡ Hex live in Hex and also change Hex."
+    }
+}
+fn ownership(page: Page, p: Palette) -> El {
+    row()
+        .w_full()
+        .items_center()
+        .gap(6.0)
+        .mt(10.0)
+        .children((page == Page::Hex).then(|| icons::draw(&icons::HEX_MARK, 14.0, p.soft)))
+        .child(roles::SMALL.wrap(ownership_text(page), p.soft))
 }
 pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
     match key.trim_start_matches("hs-") {
@@ -263,6 +319,15 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
         "ask-model-row" => &icons::CPU,
         "ask-meeting-thinking-row" => &icons::TIMER,
         "ask-chat-thinking-row" => &icons::MESSAGE_SQUARE,
+        key if key.starts_with("hex-call-app-") => {
+            if key.contains("Teams") {
+                &icons::PEOPLE
+            } else if key.contains("Meet") {
+                &icons::GLOBE
+            } else {
+                &icons::PHONE_CALL
+            }
+        }
         "meetings.auto_start" => &icons::PHONE_CALL,
         "meetings.record_my_microphone" => &icons::MIC,
         "languages-row" | "meeting-language-mode" => &icons::LANGUAGES,
@@ -308,7 +373,14 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
         "notes-helper-1" => &icons::CODE_XML,
         "notes-helper-2" => &icons::SQUARE_TERMINAL,
         key if key.starts_with("sync-device-") => &icons::SMARTPHONE,
-        _ => &icons::SETTINGS,
+        "update-version" => &icons::REFRESH_CW,
+        "meetings.providers" | "labs.meetings" | "meetings.enabled" => &icons::PHONE_CALL,
+        "meetings.summaries" => &icons::FILE_TEXT,
+        "meetings.opencode_model" => &icons::CPU,
+        "meetings.show_recording_indicator" | "meetings.recording_indicator_corner" => {
+            &icons::MONITOR
+        }
+        _ => &icons::SLIDERS,
     }
 }
 pub(crate) fn setting_row(
@@ -317,17 +389,14 @@ pub(crate) fn setting_row(
     name: &str,
     help: &str,
     control: El,
-    local: bool,
+    _local: bool,
     p: Palette,
 ) -> El {
-    let mut title = row()
+    let title = row()
         .items_center()
         .flex_wrap()
         .gap(8.0)
         .child(roles::NAME.wrap(name, p.ink));
-    if local {
-        title = title.child(pc(p));
-    }
     crate::ui::cards::row_shell()
         .key(key)
         .flex_wrap()
@@ -341,7 +410,15 @@ pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
         .w_full()
         .gap(8.0)
         .mt(18.0)
-        .child(roles::GROUP.wrap(title, p.soft))
+        .child(if title.starts_with("Hex") {
+            row()
+                .items_center()
+                .gap(6.0)
+                .child(icons::draw(&icons::HEX_MARK, 14.0, p.soft))
+                .child(roles::GROUP.wrap(title, p.soft))
+        } else {
+            roles::GROUP.wrap(title, p.soft)
+        })
         .child(panel(p).child(body.w_full()))
 }
 fn advanced(s: &State, body: El, p: Palette) -> El {
@@ -391,31 +468,66 @@ fn entry(
         advanced,
     }
 }
-pub(super) fn is_meeting_setting(st: &Setting) -> bool {
-    location(st).0 == Page::Meetings
-}
 fn location(st: &Setting) -> (Page, usize, bool) {
     let key = st.key.as_str();
-    if matches!(
-        key,
+    match key {
         "meetings.audio_retention"
-            | "labs.expire_meeting_audio"
-            | "meetings.retention"
-            | "meetings.silence_threshold"
-            | "meetings.output_folder"
-    ) {
-        return (Page::Meetings, 0, true);
-    }
-    match place(st) {
-        Place::In(Section::Meetings) => (Page::Meetings, 0, false),
-        Place::In(Section::General) => (Page::Appearance, 0, false),
-        Place::In(Section::Dictation) => (Page::Hex, 0, !key.contains("filler")),
-        Place::In(Section::Shortcuts) => (Page::Hex, 0, key.contains("paste_last")),
-        _ => (Page::Updates, 0, true),
+        | "labs.expire_meeting_audio"
+        | "meetings.retention"
+        | "meetings.output_folder" => (Page::Privacy, 0, false),
+        "meetings.silence_threshold" | "labs.meeting_finished_event" => (Page::Meetings, 0, true),
+        "labs.live_captions"
+        | "labs.meetings"
+        | "meetings.enabled"
+        | "meetings.show_recording_indicator"
+        | "meetings.recording_indicator_corner"
+        | "meetings.providers" => (Page::Meetings, 0, false),
+        "meetings.summaries" | "meetings.opencode_model" => (Page::Meetings, 1, false),
+        "about.build" | "diagnostics.log_level" | "labs.gpu_overlay" => {
+            (Page::Diagnostics, 0, false)
+        }
+        "cloud.api_key" | "network.proxy" => (Page::Hex, 0, true),
+        "sound_effects" | "sound_effect_volume" | "sound_theme" | "ui_language" => {
+            (Page::Appearance, 0, false)
+        }
+        "history_retention"
+        | "screenshots.folder"
+        | "capture.folder"
+        | "capture.media_days"
+        | "capture.bundle_days" => (Page::Privacy, 0, false),
+        "transcription.model" | "transcription.language" | "vocabulary_boost" => {
+            (Page::Hex, 0, false)
+        }
+        _ if st.key.contains("hotkey") || st.key.contains("shortcut") => (Page::Hex, 0, false),
+        _ if !st.key.contains('.') => (Page::Hex, 0, true),
+        _ => match place(st) {
+            Place::In(Section::Meetings) => (Page::Meetings, 0, false),
+            Place::In(Section::General) => (Page::Appearance, 0, false),
+            Place::In(Section::Dictation) => (
+                Page::Hex,
+                0,
+                matches!(key, "dictation.max_seconds" | "dictation.paste_method"),
+            ),
+            Place::In(Section::Shortcuts) => (Page::Hex, 0, false),
+            _ => (Page::Diagnostics, 0, false),
+        },
     }
 }
 pub(super) fn setting_name(st: &Setting) -> String {
     match st.key.as_str() {
+        "labs.meetings" | "meetings.enabled" => "Enable meeting recording".into(),
+        "meetings.providers" => "Call apps".into(),
+        "meetings.summaries" => "Hex summaries".into(),
+        "meetings.opencode_model" => "OpenCode summary model".into(),
+        "meetings.show_recording_indicator" => "Show recording indicator".into(),
+        "meetings.recording_indicator_corner" => "Indicator position".into(),
+        "dictation.max_seconds" => "Maximum dictation length (seconds)".into(),
+        "labs.gpu_overlay" => "GPU recording overlay".into(),
+        "cloud.api_key" => "Cloud credential".into(),
+        "about.build" => "Hex build".into(),
+        "network.proxy" => "Download proxy".into(),
+        "diagnostics.log_level" => "Log level".into(),
+        "labs.meeting_finished_event" => "Recording-finished notification".into(),
         "meetings.auto_start" => "Start when a call starts".into(),
         "meetings.record_my_microphone" => "Record my microphone".into(),
         "shortcuts.toggle_meeting" => "Start or stop a meeting".into(),
@@ -428,7 +540,27 @@ pub(super) fn setting_name(st: &Setting) -> String {
 }
 pub(super) fn setting_help(st: &Setting) -> String {
     match st.key.as_str() {
-        "meetings.auto_start" => "Sidenote starts recording on its own when a call starts.".into(),
+        "meetings.auto_start" => "Hex starts recording when a supported call starts.".into(),
+        "cloud.api_key" => {
+            "Optional Hex cloud credential. This value cannot be edited here.".into()
+        }
+        "meetings.summaries" => {
+            "Separate from Sidenote summaries. Turning this on may create a second summary.".into()
+        }
+        "meetings.opencode_model" => "Used when Hex writes a summary with OpenCode.".into(),
+        "meetings.providers" => "Choose what Hex does when a call starts in each app.".into(),
+        "labs.gpu_overlay" => "Experimental GPU rendering for the recording overlay.".into(),
+        "labs.meetings" | "meetings.enabled" => "Hex records calls for Sidenote.".into(),
+        _ if st.about.contains(&st.key)
+            || st.about.contains('{')
+            || st.about.to_ascii_lowercase().contains("json")
+            || st
+                .about
+                .split_whitespace()
+                .any(|word| word.contains('_') || word.trim_end_matches('.').contains('.')) =>
+        {
+            "Managed by Hex. Changes also apply in Hex.".into()
+        }
         _ => one_line(&st.about),
     }
 }
@@ -486,17 +618,17 @@ fn app_index() -> Vec<Destination> {
             "feature-Tasks",
             "Tasks",
             "features",
-            Page::Meetings,
-            2,
-            true,
+            Page::General,
+            0,
+            false,
         ),
         entry(
             "feature-Projects",
             "Projects",
             "features group projects by",
-            Page::Meetings,
-            2,
-            true,
+            Page::General,
+            0,
+            false,
         ),
         entry(
             "agent-instructions",
@@ -535,7 +667,7 @@ fn app_index() -> Vec<Destination> {
             "Import people",
             "People import contacts",
             Page::People,
-            2,
+            0,
             false,
         ),
         entry(
@@ -622,7 +754,7 @@ fn app_index() -> Vec<Destination> {
             "mcp-connect",
             "Connect AI apps",
             "MCP Claude Desktop Cursor",
-            Page::Helpers,
+            Page::Privacy,
             0,
             false,
         ),
@@ -635,11 +767,35 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
-            "helper-advanced",
-            "Model per agent",
-            "helper helpers meeting summary model sample sign in safety rules",
+            "notes-model-0",
+            "Summary model",
+            "Meeting summary model",
             Page::Helpers,
-            2,
+            0,
+            false,
+        ),
+        entry(
+            "notes-privacy",
+            "What is sent",
+            "privacy transcript audio requests",
+            Page::Privacy,
+            0,
+            false,
+        ),
+        entry(
+            "update-source",
+            "Update source",
+            "update folder diagnostics",
+            Page::Diagnostics,
+            0,
+            false,
+        ),
+        entry(
+            "helper-advanced",
+            "Agent diagnostics",
+            "helper helpers meeting summary model sample sign in safety rules",
+            Page::Diagnostics,
+            0,
             false,
         ),
         entry(
@@ -647,24 +803,24 @@ fn app_index() -> Vec<Destination> {
             "Language handling",
             "routing pipeline",
             Page::Helpers,
-            2,
-            false,
+            1,
+            true,
         ),
         entry(
             "speech-model-anuvani-lid-int8",
             "Anuvani language identification",
             "language identification detection",
             Page::Helpers,
-            2,
+            1,
             true,
         ),
         entry(
             "legacy-hex-models",
             "Hex dictation model",
             "model",
-            Page::Helpers,
-            2,
-            true,
+            Page::Hex,
+            0,
+            false,
         ),
         entry(
             "feature-Other devices",
@@ -695,36 +851,79 @@ fn app_index() -> Vec<Destination> {
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
     entries.retain(|dest| {
-        dest.key != "notes-scripts-card"
-            || s.ai_notes
-                .settings
-                .as_ref()
-                .is_some_and(|settings| settings.script.is_some())
+        (dest.key != "speech-model-anuvani-lid-int8"
+            || s.models.has_local_files("anuvani-lid-int8"))
+            && (dest.key != "notes-scripts-card"
+                || s.ai_notes
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.script.is_some()))
     });
-    entries.extend(s.hex.settings.iter().map(|st| {
-        let (page, tab, advanced) = location(st);
-        let key = if matches!(
-            st.key.as_str(),
-            "meetings.audio_retention" | "labs.expire_meeting_audio"
-        ) {
-            "keep-audio".into()
-        } else {
-            format!("hs-{}", st.key)
-        };
-        entry(
-            &key,
-            &if key == "keep-audio" {
-                "Keep audio".into()
-            } else {
-                setting_name(st)
-            },
-            &format!("{} {}", st.key, st.about),
-            page,
-            tab,
-            advanced,
-        )
-    }));
+    entries.extend(
+        s.hex
+            .settings
+            .iter()
+            .filter(|st| !readable::windows_only_hidden(st))
+            .map(|st| {
+                let (page, tab, advanced) = location(st);
+                let key = if matches!(
+                    st.key.as_str(),
+                    "meetings.audio_retention" | "labs.expire_meeting_audio"
+                ) {
+                    "keep-audio".into()
+                } else {
+                    format!("hs-{}", st.key)
+                };
+                entry(
+                    &key,
+                    &if key == "keep-audio" {
+                        "Keep audio".into()
+                    } else {
+                        setting_name(st)
+                    },
+                    &format!("{} {}", st.key, st.about),
+                    page,
+                    tab,
+                    advanced,
+                )
+            }),
+    );
+    let mut seen = HashSet::new();
+    entries.retain(|dest| seen.insert((dest.key.clone(), dest.page.name(), dest.tab)));
+    for alias in legacy_aliases() {
+        if let Some(dest) = entries.iter_mut().find(|d| d.key == alias.target) {
+            dest.words.push(' ');
+            dest.words.push_str(&alias.words);
+        }
+    }
     entries
+}
+struct LegacyAlias {
+    target: String,
+    words: String,
+}
+fn legacy_aliases() -> &'static [LegacyAlias] {
+    static ALIASES: std::sync::LazyLock<Vec<LegacyAlias>> = std::sync::LazyLock::new(|| {
+        let rows: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tools/ui-fixtures/settings-search-map.json"
+        ))
+        .expect("Settings search map");
+        rows.as_array()
+            .expect("Settings search rows")
+            .iter()
+            .map(|row| LegacyAlias {
+                target: row["target"].as_str().expect("Settings target").into(),
+                words: row["search_aliases"]
+                    .as_array()
+                    .expect("Settings aliases")
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            })
+            .collect()
+    });
+    &ALIASES
 }
 fn matches(item: &Destination, query: &str) -> bool {
     let hay = format!("{} {} {}", item.name, item.words, item.page.name()).to_lowercase();
@@ -745,6 +944,25 @@ fn jump(s: &mut State, dest: Destination) {
     if dest.advanced {
         s.hex.shell.advanced.insert(dest.page.name());
     }
+    if matches!(
+        dest.key.as_str(),
+        "hs-meetings.summaries" | "hs-meetings.opencode_model"
+    ) {
+        s.hex.open_groups.insert("hex-summaries");
+    }
+    if matches!(dest.key.as_str(), "ai-notes-settings" | "notes-model-0") {
+        s.ai_notes.model_open = true;
+    }
+    if dest.key == "settings-teams" {
+        let team = s.tasks.teams.teams.first().cloned();
+        super::super::teams::open(s, team);
+        if let Some(editor) = &mut s.people.team_editor {
+            editor.advanced = true;
+        }
+    }
+    if dest.key == "spoken-languages" {
+        s.hex.open_groups.insert("languages");
+    }
     if dest.key == "hex-vocabulary" {
         s.hex.open_groups.insert("vocabulary-edit");
     }
@@ -758,17 +976,17 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
     }
     let compact = s.app_w.get() < 700.0;
     let width = if compact { 184.0 } else { 248.0 };
-    let name = s
-        .ai_notes
-        .settings
-        .as_ref()
-        .map(|settings| settings.your_name.as_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("You");
     let mut list = col()
         .w_full()
         .gap(3.0)
-        .padding(12.0)
+        .padding(16.0)
+        .child(
+            rune::text("Sidenote")
+                .font(crate::ui::theme::display(26.0))
+                .color(p.ink)
+                .mt(4.0)
+                .mb(10.0),
+        )
         .child(
             pressable(
                 row()
@@ -776,40 +994,11 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                     .gap(8.0)
                     .py(8.0)
                     .child(icons::draw(&icons::CHEVRON_LEFT, 18.0, p.soft))
-                    .child(roles::CONTROL.line("Back", p.soft)),
+                    .child(roles::CONTROL.line("Back to meetings", p.soft)),
             )
             .key("settings-back")
             .label("Back (Esc)")
             .on_press(back),
-        )
-        .child(
-            col()
-                .w_full()
-                .gap(6.0)
-                .py(16.0)
-                .child(super::super::nav::profile_avatar(name, p))
-                .child(
-                    roles::NAME.wrap(
-                        s.ai_notes
-                            .settings
-                            .as_ref()
-                            .map(|settings| settings.your_name.as_str())
-                            .filter(|name| !name.is_empty())
-                            .unwrap_or("You"),
-                        p.ink,
-                    ),
-                )
-                .child(roles::META.wrap(
-                    if rune::tooling::headless_run().is_some() {
-                        "This PC: DEMO-PC".into()
-                    } else {
-                        format!(
-                            "This PC: {}",
-                            std::env::var("COMPUTERNAME").unwrap_or_default()
-                        )
-                    },
-                    p.soft,
-                )),
         )
         .child(
             TextInput::new(&s.hex.filter)
@@ -861,10 +1050,17 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
     } else {
         let (active, _) = active(s);
         for (i, page) in Page::ALL.into_iter().enumerate() {
-            if i == 0 || i == 4 {
+            if i == 0 || i == 4 || i == 8 {
                 list = list.child(
                     roles::GROUP
-                        .line(if i == 0 { "You" } else { "This PC" }, p.faint)
+                        .line(
+                            match i {
+                                0 => "You and meetings",
+                                4 => "This PC",
+                                _ => "Data and maintenance",
+                            },
+                            p.faint,
+                        )
                         .mt(16.0)
                         .mb(5.0),
                 );
@@ -929,16 +1125,31 @@ fn path(page: Page, tab: usize) -> String {
         |name| format!("{} / {name}", page.name()),
     )
 }
-fn tab_bar(s: &State, p: Palette) -> El {
-    let (page, active) = active(s);
+fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
+    let (page, selected) = active(s);
+    let active = if jumps {
+        s.hex.shell.jump_active
+    } else {
+        selected
+    };
+    let names = if jumps {
+        jump_groups(page, selected)
+    } else {
+        page.tabs()
+    };
     let mut tabs = row()
-        .key("settings-tabs")
+        .key(if jumps {
+            "settings-jump-tabs"
+        } else {
+            "settings-tabs"
+        })
         .role("tablist")
         .label(format!("{} sections", page.name()))
         .w_full()
         .gap(20.0)
+        .flex_wrap()
         .focus_group();
-    for (tab, name) in page.tabs().iter().enumerate() {
+    for (tab, name) in names.iter().enumerate() {
         tabs = tabs.child(
             pressable(
                 col()
@@ -955,11 +1166,27 @@ fn tab_bar(s: &State, p: Palette) -> El {
                         p.bg
                     })),
             )
-            .key(format!("settings-tab-{tab}"))
+            .key(format!(
+                "settings-{}-{tab}",
+                if jumps { "jump" } else { "tab" }
+            ))
             .role("tab")
             .focus_selected(tab == active)
             .label(*name)
-            .on_press(move |s: &mut State| navigate(s, page, tab)),
+            .on_press(move |s: &mut State| {
+                if jumps {
+                    if page == Page::Hex && tab >= 4 {
+                        s.hex.open_groups.insert(if tab == 4 {
+                            "hex-compatibility"
+                        } else {
+                            "hex-connection"
+                        });
+                    }
+                    super::super::scene_scroll(s, &format!("settings-group-{tab}"));
+                } else {
+                    navigate(s, page, tab);
+                }
+            }),
         );
     }
     tabs
@@ -973,12 +1200,27 @@ fn hex_rows(
     tab: usize,
     folded: bool,
 ) -> El {
-    let items: Vec<_> = s
+    let mut items: Vec<_> = s
         .hex
         .settings
         .iter()
-        .filter(|st| location(st) == (page, tab, folded))
+        .filter(|st| !readable::windows_only_hidden(st) && location(st) == (page, tab, folded))
+        .filter(|st| {
+            !matches!(
+                st.key.as_str(),
+                "meetings.summaries" | "meetings.opencode_model" | "meetings.providers"
+            )
+        })
         .collect();
+    items.sort_by_key(|st| match st.key.as_str() {
+        "meetings.enabled" | "labs.meetings" => 0,
+        "meetings.auto_start" => 1,
+        "meetings.record_my_microphone" => 2,
+        "meetings.show_recording_indicator" => 3,
+        "meetings.recording_indicator_corner" => 4,
+        "labs.live_captions" => 5,
+        _ => 6,
+    });
     let mut body = col().w_full();
     if items.iter().any(|st| {
         matches!(
@@ -1064,7 +1306,7 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
             s,
             "vocabulary-row",
             "Names and terms",
-            "Sidenote spells these right in transcripts and summaries.",
+            "Hex and Sidenote spell these right in transcripts and summaries.",
             crate::ui::widgets::action("Edit terms", p)
                 .key("vocabulary-edit")
                 .on_press(|s: &mut State| {
@@ -1080,44 +1322,378 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     }
     out
 }
+fn jump_groups(page: Page, _tab: usize) -> &'static [&'static str] {
+    if page == Page::Hex { &HEX_GROUPS } else { &[] }
+}
+const HEX_GROUPS: [&str; 6] = [
+    "Engine",
+    "Shortcuts",
+    "Dictation",
+    "Speech model",
+    "Compatibility",
+    "Connection",
+];
+fn hex_group(index: usize, body: El) -> El {
+    body.key(format!("settings-group-{index}"))
+        .on_layout(move |s: &mut State, rect| {
+            s.hex.shell.jump_positions.insert(index, rect[1]);
+        })
+}
+fn hex_group_rows(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, group: usize) -> El {
+    let mut body = col().w_full();
+    for st in &s.hex.settings {
+        if readable::windows_only_hidden(st) || location(st).0 != Page::Hex {
+            continue;
+        }
+        let index = if matches!(st.key.as_str(), "network.proxy" | "cloud.api_key") {
+            5
+        } else if location(st).2 {
+            4
+        } else if matches!(place(st), Place::In(Section::Shortcuts)) {
+            1
+        } else {
+            2
+        };
+        if index == group {
+            body = body
+                .child(super::setting_row(s, k, st, place(st), p, layer))
+                .child(hairline(p));
+        }
+    }
+    body
+}
+fn hex_fold(title: &str, key: &str, open: bool, p: Palette) -> El {
+    crate::ui::cards::fold_control(title, key, open, p).child(icons::draw(
+        &icons::HEX_MARK,
+        14.0,
+        p.soft,
+    ))
+}
+fn hex_summaries(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let settings: Vec<_> = s
+        .hex
+        .settings
+        .iter()
+        .filter(|st| {
+            matches!(
+                st.key.as_str(),
+                "meetings.summaries" | "meetings.opencode_model"
+            )
+        })
+        .collect();
+    if settings.is_empty() {
+        return rune::el();
+    }
+    let open = s.hex.open_groups.contains("hex-summaries");
+    let mut out = col().w_full().mt(18.0).child(
+        hex_fold("Hex · Summaries", "hex-summaries", open, p).on_press(|s: &mut State| {
+            if !s.hex.open_groups.remove("hex-summaries") {
+                s.hex.open_groups.insert("hex-summaries");
+            }
+        }),
+    );
+    if open {
+        let mut rows = col().w_full();
+        for st in settings {
+            rows = rows
+                .child(super::setting_row(s, k, st, place(st), p, layer))
+                .child(hairline(p));
+        }
+        out = out.child(card("Hex · Separate summary engine", rows, p));
+    }
+    out
+}
+fn privacy(s: &State, k: &Kit, p: Palette) -> El {
+    ai_notes::section(s, k, p, ai_notes::Part::Privacy)
+}
 fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: usize) -> El {
     match (page, tab) {
-        (Page::General, _) => col().w_full().child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
-            .children(ai_notes::setup_card(s, p)),
-        (Page::Meetings, 0) => col().w_full()
-            .child(card("Recording", hex_rows(s, k, p, layer, page, tab, false), p))
-            .child(card("Language and terms", col().w_full().child(super::super::models::language_picker(s,k,p)).child(hairline(p)).child(vocabulary(s,k,p)), p))
-            .child(advanced(s, card("Recording on this PC", hex_rows(s, k, p, layer, page, tab, true), p), p)),
-        (Page::Meetings, 1) => col().w_full().child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
-            .child(card("Memory", feature(s,k,AppFeature::Memory,"Remember across meetings","Use knowledge from earlier meetings.",p),p))
-            .child(advanced(s, ai_notes::section(s,k,p,ai_notes::Part::Scripts),p)),
-        (Page::Meetings, _) => col().w_full()
-            .child(card("Tasks", feature(s,k,AppFeature::DailyCheck,"Daily check","Sidenote checks your meeting knowledge for gaps and conflicts each day.",p),p))
-            .child(advanced(s, card("Sidebar features", col().w_full()
-                .child(roles::SMALL.wrap("These existing switches have no other home yet.",p.soft).padding(14.0))
-                .child(feature(s,k,AppFeature::Tasks,"Tasks","Show Tasks in the sidebar.",p))
-                .child(feature(s,k,AppFeature::Projects,"Projects","Show Projects in the sidebar.",p)),p),p)),
-        (Page::Prompts, _) => ai_notes::section(s,k,p,ai_notes::Part::Prompts),
-        (Page::People, _) => super::super::people::section(s,k,p,tab,layer),
-        (Page::Helpers, 0) => col().w_full().child(super::super::ask_settings::section(s,k,p,layer))
-            .child(roles::GROUP.wrap("Meeting summary agent",p.soft).mt(22.0))
-            .child(ai_notes::section(s,k,p,ai_notes::Part::Helpers))
-            .child(super::super::annotations::agents_section(s,k,p,layer))
-            .child(card("Connect AI apps",super::super::mcp_connect::section(s,p).key("mcp-connect").fill(highlight(s,"mcp-connect",p)),p)),
-        (Page::Helpers, 1) => super::super::models::view(s,p,rune::el()).key("speech-models").fill(highlight(s,"speech-models",p)),
-        (Page::Helpers, _) => col().key("helper-advanced").fill(group_highlight(s,"helper-advanced",p)).w_full().child(ai_notes::section(s,k,p,ai_notes::Part::Advanced))
-            .child(card("Routing",meeting_languages::section(s,k,p,layer),p))
-            .child(advanced(s, col().w_full().key("legacy-hex-models").child(roles::SMALL.wrap("Hex's existing dictation model selector is kept here because it controls a separate engine.",p.soft)).child(model_section(s,p)).child(super::super::models::advanced(s,p)),p)),
-        (Page::Hex, _) => col().w_full().child(card("Recording engine",summary_line(s,p),p))
-            .child(card("Shortcuts and dictation",hex_rows(s,k,p,layer,page,tab,false),p))
-            .child(advanced(s,card("Dictation overrides",hex_rows(s,k,p,layer,page,tab,true),p),p)),
-        (Page::Appearance, _) => card("Preferences",hex_rows(s,k,p,layer,page,tab,false),p),
-        (Page::Sync, _) => col().w_full().child(card("Devices",devices(s,p).child(hairline(p)).child(feature(s,k,AppFeature::OtherDevices,"Other devices","Show meetings recorded on your other devices.",p)),p))
-            .child(roles::SMALL.wrap(format!("{} meetings from other devices.",s.nav.peers),p.soft).mt(12.0))
-            .child(advanced(s,card("Sync folder",roles::SMALL.wrap(s.store.root.display().to_string(),p.ink).key("sync-folder").fill(highlight(s,"sync-folder",p)).padding(14.0),p),p)),
-        (Page::Updates, _) => col().w_full().child(super::super::updates::section(s,p).fill(highlight(s,"updates-section",p)))
-            .child(advanced(s,card("Labs and rarely used",col().w_full().child(hex_rows(s,k,p,layer,page,tab,true)).child(super::super::updates::source(s,p).padding(14.0)),p),p)),
+        (Page::General, _) => col()
+            .w_full()
+            .child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
+            .child(card(
+                "Sidebar features",
+                col()
+                    .w_full()
+                    .child(feature(
+                        s,
+                        k,
+                        AppFeature::Tasks,
+                        "Tasks",
+                        "Show Tasks in the sidebar.",
+                        p,
+                    ))
+                    .child(hairline(p))
+                    .child(feature(
+                        s,
+                        k,
+                        AppFeature::Projects,
+                        "Projects",
+                        "Show Projects in the sidebar.",
+                        p,
+                    )),
+                p,
+            )),
+        (Page::Meetings, 0) => col()
+            .w_full()
+            .child(hex_group(
+                0,
+                card(
+                    "Hex · Meeting recording",
+                    hex_rows(s, k, p, layer, page, tab, false),
+                    p,
+                ),
+            ))
+            .children(s.hex.setting("meetings.providers").map(|st| {
+                hex_group(
+                    1,
+                    card(
+                        "Hex · Call apps",
+                        readable::providers(s, k, st, p, layer),
+                        p,
+                    ),
+                )
+            }))
+            .child(hex_group(
+                2,
+                card(
+                    "Sidenote · Languages you speak",
+                    super::super::models::language_picker(s, k, p),
+                    p,
+                ),
+            ))
+            .child(hex_group(
+                3,
+                card("Hex · Names and terms", vocabulary(s, k, p), p),
+            ))
+            .child(hex_group(
+                4,
+                advanced(
+                    s,
+                    card(
+                        "Hex · Recording compatibility",
+                        hex_rows(s, k, p, layer, page, tab, true),
+                        p,
+                    ),
+                    p,
+                ),
+            )),
+        (Page::Meetings, 1) => col()
+            .w_full()
+            .child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
+            .child(card(
+                "Memory",
+                feature(
+                    s,
+                    k,
+                    AppFeature::Memory,
+                    "Remember across meetings",
+                    "Use knowledge from earlier meetings.",
+                    p,
+                ),
+                p,
+            ))
+            .child(advanced(
+                s,
+                ai_notes::section(s, k, p, ai_notes::Part::Scripts),
+                p,
+            ))
+            .child(hex_summaries(s, k, p, layer)),
+        (Page::Meetings, _) => card(
+            "Daily check",
+            feature(
+                s,
+                k,
+                AppFeature::DailyCheck,
+                "Daily check",
+                "Sidenote checks your meeting knowledge for gaps and conflicts each day.",
+                p,
+            ),
+            p,
+        ),
+        (Page::Prompts, _) => ai_notes::section(s, k, p, ai_notes::Part::Prompts),
+        (Page::People, _) => col()
+            .w_full()
+            .child(super::super::people::section(s, k, p, tab, layer))
+            .child(
+                roles::SMALL
+                    .wrap(
+                        "Import people is not available yet. Add people and teams here.",
+                        p.soft,
+                    )
+                    .key("people-import")
+                    .mt(18.0),
+            ),
+        (Page::Helpers, 0) => col()
+            .w_full()
+            .children(ai_notes::setup_card(s, p))
+            .child(super::super::ask_settings::section(s, k, p, layer))
+            .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
+            .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
+            .child(super::super::annotations::agents_section(s, k, p, layer)),
+        (Page::Helpers, _) => col()
+            .w_full()
+            .child(
+                super::super::models::view(s, p, rune::el())
+                    .key("speech-models")
+                    .fill(highlight(s, "speech-models", p)),
+            )
+            .child(
+                crate::ui::widgets::action("Choose meeting languages", p)
+                    .key("speech-language-link")
+                    .on_press(|s: &mut State| navigate(s, Page::Meetings, 0)),
+            )
+            .child(advanced(
+                s,
+                col()
+                    .w_full()
+                    .child(card(
+                        "Language handling",
+                        meeting_languages::section(s, k, p, layer),
+                        p,
+                    ))
+                    .child(super::super::models::advanced(s, p)),
+                p,
+            )),
+        (Page::Hex, _) => {
+            let mut out = col()
+                .w_full()
+                .child(hex_group(
+                    0,
+                    card("Recording engine", summary_line(s, p), p),
+                ))
+                .child(hex_group(
+                    1,
+                    card("Shortcuts", hex_group_rows(s, k, p, layer, 1), p),
+                ))
+                .child(hex_group(
+                    2,
+                    card("Dictation", hex_group_rows(s, k, p, layer, 2), p),
+                ))
+                .child(hex_group(
+                    3,
+                    card(
+                        "Speech model",
+                        model_section(s, p).padding(14.0).key("legacy-hex-models"),
+                        p,
+                    ),
+                ));
+            for index in [4, 5] {
+                let title = if index == 4 {
+                    "Dictation compatibility"
+                } else {
+                    "Connection"
+                };
+                let open = s.hex.open_groups.contains(if index == 4 {
+                    "hex-compatibility"
+                } else {
+                    "hex-connection"
+                }) || s.hex.shell.advanced.contains(page.name());
+                let key = if index == 4 {
+                    "hex-compatibility"
+                } else {
+                    "hex-connection"
+                };
+                let mut group = col().w_full().mt(18.0).child(
+                    crate::ui::cards::fold_control(title, key, open, p).on_press(
+                        move |s: &mut State| {
+                            if !s.hex.open_groups.remove(key) {
+                                s.hex.open_groups.insert(key);
+                            }
+                        },
+                    ),
+                );
+                if open {
+                    group = group.child(panel(p).child(hex_group_rows(s, k, p, layer, index)));
+                }
+                out = out.child(hex_group(index, group));
+            }
+            out
+        }
+        (Page::Appearance, _) => card(
+            "Hex · Preferences",
+            hex_rows(s, k, p, layer, page, tab, false),
+            p,
+        ),
+        (Page::Sync, _) => col()
+            .w_full()
+            .child(card(
+                "Devices",
+                devices(s, p).child(hairline(p)).child(feature(
+                    s,
+                    k,
+                    AppFeature::OtherDevices,
+                    "Other devices",
+                    "Show meetings recorded on your other devices.",
+                    p,
+                )),
+                p,
+            ))
+            .child(
+                roles::SMALL
+                    .wrap(
+                        format!("{} meetings from other devices.", s.nav.peers),
+                        p.soft,
+                    )
+                    .mt(12.0),
+            )
+            .child(named_folder(s, p)),
+        (Page::Privacy, _) => col()
+            .w_full()
+            .child(privacy(s, k, p))
+            .child(card(
+                "Connected AI apps",
+                super::super::mcp_connect::section(s, p)
+                    .key("mcp-connect")
+                    .fill(highlight(s, "mcp-connect", p)),
+                p,
+            ))
+            .child(card(
+                "Hex · Retention and files",
+                hex_rows(s, k, p, layer, page, 0, false),
+                p,
+            )),
+        (Page::Updates, _) => super::super::updates::section(s, p),
+        (Page::Diagnostics, _) => col()
+            .w_full()
+            .key("helper-advanced")
+            .child(ai_notes::section(s, k, p, ai_notes::Part::Advanced))
+            .child(card(
+                "Update source",
+                super::super::updates::source(s, p)
+                    .key("update-source")
+                    .padding(14.0),
+                p,
+            ))
+            .child(card(
+                "Hex · Diagnostics",
+                hex_rows(s, k, p, layer, page, 0, false),
+                p,
+            )),
     }
+}
+fn named_folder(s: &State, p: Palette) -> El {
+    let open = s.hex.shell.advanced.contains(Page::Sync.name());
+    let mut out = col().w_full().mt(18.0).child(
+        crate::ui::cards::fold_control("Folder location", "settings-advanced", open, p).on_press(
+            |s: &mut State| {
+                if !s.hex.shell.advanced.remove(Page::Sync.name()) {
+                    s.hex.shell.advanced.insert(Page::Sync.name());
+                }
+            },
+        ),
+    );
+    if open {
+        out = out.child(card(
+            "Sync folder",
+            roles::SMALL
+                .wrap(s.store.root.display().to_string(), p.ink)
+                .key("sync-folder")
+                .padding(14.0),
+            p,
+        ));
+    }
+    out
 }
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let (page, tab) = active(s);
@@ -1141,33 +1717,6 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         doc = doc.child(roles::SMALL.wrap(problem, p.warn).role("alert"));
     }
     doc = doc.child(body(s, k, p, layer, page, tab));
-    let crumb = row()
-        .w_full()
-        .min_h(58.0)
-        .px(24.0)
-        .items_center()
-        .gap(8.0)
-        .children((s.app_w.get() < 540.0).then(|| {
-            pressable(icons::draw(&icons::SETTINGS, 18.0, p.soft).padding(6.0))
-                .key("settings-navigation")
-                .label("Settings pages")
-                .help("Settings pages")
-                .expanded(s.hex.shell.navigation_open)
-                .on_press(|s: &mut State| {
-                    s.hex.shell.navigation_open = !s.hex.shell.navigation_open
-                })
-        }))
-        .child(
-            roles::CONTROL
-                .wrap(format!("Settings / {}", path(page, tab)), p.ink)
-                .grow(1.0),
-        )
-        .children(
-            s.hex
-                .shell
-                .saved
-                .map(|_| roles::SMALL.line("Saved", p.ok).role("status")),
-        );
     col()
         .key("hex-pane")
         .w_full()
@@ -1175,28 +1724,67 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_w(0.0)
         .min_h(0.0)
         .h_full()
-        .child(crumb)
-        .child(hairline(p))
         .child(
             col().w_full().items_center().child(
                 col()
                     .w_full()
                     .max_w(940.0)
                     .px(if narrow { 16.0 } else { 40.0 })
+                    .children((s.app_w.get() < 540.0).then(|| {
+                        crate::ui::widgets::icon_button(
+                            &icons::PANEL_OPEN,
+                            "Settings pages",
+                            "settings-navigation",
+                            crate::ui::widgets::ButtonRole::Ghost,
+                            p,
+                        )
+                        .expanded(s.hex.shell.navigation_open)
+                        .mt(10.0)
+                        .on_press(|s: &mut State| {
+                            s.hex.shell.navigation_open = !s.hex.shell.navigation_open
+                        })
+                    }))
+                    .children(
+                        s.hex
+                            .shell
+                            .saved
+                            .map(|_| roles::SMALL.line("Saved", p.ok).role("status")),
+                    )
                     .child(
-                        roles::SECTION
-                            .wrap(page.name(), p.ink)
+                        rune::text(page.name())
+                            .font(crate::ui::theme::display(32.0))
+                            .color(p.ink)
+                            .wrap()
                             .key("settings-title")
                             .mt(22.0),
                     )
-                    .children((!page.tabs().is_empty()).then(|| tab_bar(s, p)))
+                    .children(
+                        (!matches!(page, Page::Prompts | Page::People))
+                            .then(|| roles::META.wrap("Applies to this PC", p.faint).mt(6.0)),
+                    )
+                    .children(
+                        matches!(
+                            page,
+                            Page::Hex | Page::Appearance | Page::Privacy | Page::Diagnostics
+                        )
+                        .then(|| ownership(page, p)),
+                    )
+                    .children((page == Page::Meetings && tab <= 1).then(|| ownership(page, p)))
+                    .children((!page.tabs().is_empty()).then(|| tab_bar(s, p, false)))
+                    .children((!jump_groups(page, tab).is_empty()).then(|| tab_bar(s, p, true)))
                     .pb(4.0),
             ),
         )
-        .child(scroll(
-            col().w_full().items_center().child(doc),
-            "hex-scroll",
-        ))
+        .child(
+            scroll(col().w_full().items_center().child(doc), "hex-scroll").on_scroll_offset({
+                let offset = s.hex.shell.jump_offset.clone();
+                let max = s.hex.shell.jump_max.clone();
+                move |pos| {
+                    offset.set(pos.offset[1]);
+                    max.set(pos.max[1]);
+                }
+            }),
+        )
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape && s.hex.shell.navigation_open {
@@ -1258,7 +1846,9 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-hex" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
         "settings-speech" => (Page::Helpers, 1),
-        "settings-helper-advanced" => (Page::Helpers, 2),
+        "settings-helper-advanced" => (Page::Diagnostics, 0),
+        "settings-privacy" => (Page::Privacy, 0),
+        "settings-diagnostics" => (Page::Diagnostics, 0),
         "settings-appearance" => (Page::Appearance, 0),
         "settings-sync" => (Page::Sync, 0),
         "settings-updates" => (Page::Updates, 0),
@@ -1282,6 +1872,7 @@ pub fn scene(s: &mut State, name: &str) {
         s.ai_notes.model_open = true;
         s.connection.show_details = true;
         s.connection.show_all = true;
+        s.hex.open_groups.insert("hex-summaries");
         if page == Page::Meetings && tab == 0 {
             s.hex.open_groups.insert("languages");
             s.hex.open_groups.insert("vocabulary-edit");
@@ -1291,6 +1882,82 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
+        assert!(jump_groups(Page::Meetings, 0).is_empty());
+        assert_eq!(Page::Meetings.tabs(), ["Recording", "Summaries", "Tasks"]);
+        assert_eq!(jump_groups(Page::Hex, 0).len(), 6);
+        assert_eq!(
+            ownership_text(Page::Hex),
+            "These settings live in Hex and also change Hex."
+        );
+        assert_eq!(
+            ownership_text(Page::Meetings),
+            "Settings marked ⬡ Hex live in Hex and also change Hex."
+        );
+        let fixture: Vec<Setting> = serde_json::from_str(include_str!(
+            "../../../tools/ui-fixtures/settings-recording.json"
+        ))
+        .unwrap();
+        for st in fixture.iter().filter(|st| {
+            matches!(
+                st.key.as_str(),
+                "meetings.summaries" | "meetings.opencode_model"
+            )
+        }) {
+            assert_eq!(location(st), (Page::Meetings, 1, false));
+        }
+    }
+    #[test]
+    fn approved_legacy_search_map_keeps_all_49_destinations() {
+        let map: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tools/ui-fixtures/settings-search-map.json"
+        ))
+        .unwrap();
+        let rows = map.as_array().unwrap();
+        assert_eq!(rows.len(), 49);
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../../tools/ui-fixtures/hex.json")).unwrap();
+        let mut entries = app_index();
+        for st in fixture.settings {
+            let (page, tab, advanced) = location(&st);
+            let key = if matches!(
+                st.key.as_str(),
+                "meetings.audio_retention" | "labs.expire_meeting_audio"
+            ) {
+                "keep-audio".into()
+            } else {
+                format!("hs-{}", st.key)
+            };
+            entries.push(entry(
+                &key,
+                &setting_name(&st),
+                &st.key,
+                page,
+                tab,
+                advanced,
+            ));
+        }
+        for row in rows {
+            let key = row["key"].as_str().unwrap();
+            let alias = legacy_aliases()
+                .iter()
+                .find(|a| a.words.split_whitespace().any(|w| w == key))
+                .unwrap_or_else(|| panic!("Missing alias {key}"));
+            let dest = entries
+                .iter()
+                .find(|d| d.key == alias.target)
+                .unwrap_or_else(|| panic!("Missing destination {key}"));
+            assert!(
+                row["home"].as_str().unwrap().starts_with(dest.page.name()),
+                "Wrong page for {key}"
+            );
+            assert!(
+                dest.tab < dest.page.tabs().len().max(1),
+                "Invalid tab for {key}"
+            );
+        }
+    }
     #[test]
     fn ask_rows_have_distinct_requested_lucide_icons_at_the_shared_stroke() {
         let rows = [
@@ -1360,7 +2027,7 @@ mod tests {
     fn old_deep_links_and_tab_limits_are_preserved() {
         assert_eq!(current(Section::AiNotes), (Page::Meetings, 1));
         assert_eq!(current(Section::Teams), (Page::People, 0));
-        assert_eq!(current(Section::Model), (Page::Helpers, 1));
+        assert_eq!(current(Section::Model), (Page::Hex, 0));
         for page in Page::ALL {
             assert!(page.tabs().len() <= 4);
         }

@@ -10,6 +10,7 @@ use super::{
     widgets::{badge, hairline, pressable, scroll},
 };
 mod meeting_languages;
+mod readable;
 pub(super) mod settings;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
@@ -63,6 +64,7 @@ pub enum Action {
     Set(String),
     Add,
     Remove,
+    Model,
 }
 
 pub enum Msg {
@@ -126,6 +128,7 @@ pub struct HexState {
     vocab_error: Option<&'static str>,
     record_busy: bool,
     vocab_busy: bool,
+    model_busy: bool,
     busy_keys: HashSet<String>,
     /// Keys whose draft takes the value Hex reports next, because the write just went through.
     fresh: HashSet<String>,
@@ -165,6 +168,7 @@ impl Default for HexState {
             vocab_error: None,
             record_busy: false,
             vocab_busy: false,
+            model_busy: false,
             busy_keys: HashSet::new(),
             fresh: HashSet::new(),
             drafts: HashMap::new(),
@@ -259,10 +263,10 @@ fn editable(st: &Setting) -> bool {
     st.writable
         && st.available != Some(false)
         && !st.secret
-        && matches!(
+        && (matches!(
             st.kind.as_str(),
             "bool" | "choice" | "number" | "integer" | "text" | "path"
-        )
+        ) || (st.key == "meetings.providers" && st.kind == "json" && st.value.is_array()))
 }
 
 fn is_numeric(kind: &str) -> bool {
@@ -473,7 +477,12 @@ impl State {
 
     fn hex_status(&mut self, r: Result<EngineState, HexError>) {
         let running = r.is_ok();
-        if running && !self.hex.was_running {
+        let model_changed = r
+            .as_ref()
+            .ok()
+            .zip(self.hex.state())
+            .is_some_and(|(now, before)| now.model != before.model);
+        if running && (!self.hex.was_running || model_changed) {
             self.hex.data_dirty = true;
         }
         self.hex.was_running = running;
@@ -621,6 +630,17 @@ impl State {
                     }
                 }
             }
+            Action::Model => {
+                self.hex.model_busy = false;
+                match r {
+                    Ok(()) => {
+                        self.hex.models_note = None;
+                        self.hex.data_dirty = true;
+                        self.hex_refresh_if_due();
+                    }
+                    Err(e) => self.hex.models_note = Some(plain(&e)),
+                }
+            }
             Action::Add | Action::Remove => {
                 self.hex.vocab_busy = false;
                 match r {
@@ -633,6 +653,46 @@ impl State {
                 }
             }
         }
+    }
+
+    fn hex_change_model(&mut self, id: &str, action: ModelAction) {
+        if rune::tooling::headless_run().is_some()
+            || self.hex.model_busy
+            || self.hex_recording()
+            || self
+                .hex
+                .state()
+                .is_none_or(|st| st.dictating != Some(false) || st.model.preparing.is_some())
+        {
+            return;
+        }
+        let Some(model) = self.hex.models.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if model_action(model, self.hex.can(Feature::ModelInstall)) != Some(action) {
+            return;
+        }
+        let feature = match action {
+            ModelAction::Use => Feature::ModelUse,
+            ModelAction::Install => Feature::ModelInstall,
+            ModelAction::OpenHex => Feature::WindowShow,
+        };
+        if !self.hex.can(feature) {
+            return;
+        }
+        self.hex.model_busy = true;
+        self.hex.models_note = None;
+        let id = id.to_owned();
+        self.hex_spawn(move |e| {
+            Msg::Done(
+                Action::Model,
+                match action {
+                    ModelAction::Use => e.model_use(&id),
+                    ModelAction::Install => e.model_install(&id),
+                    ModelAction::OpenHex => e.open_models(),
+                },
+            )
+        });
     }
 
     pub fn hex_recording(&self) -> bool {
@@ -996,12 +1056,28 @@ fn summary_line(s: &State, p: Palette) -> El {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelAction {
+    Use,
+    Install,
+    OpenHex,
+}
+fn model_action(model: &ModelInfo, can_install: bool) -> Option<ModelAction> {
+    if !model.installed {
+        Some(if can_install {
+            ModelAction::Install
+        } else {
+            ModelAction::OpenHex
+        })
+    } else if model.selected {
+        None
+    } else {
+        Some(ModelAction::Use)
+    }
+}
 fn model_section(s: &State, p: Palette) -> El {
     let h = &s.hex;
-    let mut sec = col()
-        .key("hex-models")
-        .w_full()
-        .child(section_head(Section::Model, None, p));
+    let mut sec = col().key("hex-models").w_full();
     // The list below marks the selected model, so this line only stands in when it is empty.
     if let Some(st) = h.state().filter(|_| h.models.is_empty()) {
         let m = &st.model;
@@ -1064,7 +1140,29 @@ fn model_section(s: &State, p: Palette) -> El {
                 .w(100.0),
             );
         if m.selected {
-            r = r.child(badge("Selected", p.accent, Some(p.chip)));
+            r = r.child(roles::CONTROL.line("Selected", p.soft));
+        }
+        if let Some(action) = model_action(m, h.can(Feature::ModelInstall)) {
+            let (label, feature, key) = match action {
+                ModelAction::Use => ("Use", Feature::ModelUse, "use"),
+                ModelAction::Install => ("Install", Feature::ModelInstall, "install"),
+                ModelAction::OpenHex => ("Install in Hex", Feature::WindowShow, "open"),
+            };
+            let id = m.id.clone();
+            let idle = !h.model_busy
+                && h.recording().is_none()
+                && h.state()
+                    .is_some_and(|st| st.dictating == Some(false) && st.model.preparing.is_none());
+            r = r.child(
+                crate::ui::widgets::button(
+                    label,
+                    &format!("hex-model-{key}-{}", m.id),
+                    crate::ui::widgets::ButtonRole::Secondary,
+                    p,
+                )
+                .disabled(!idle || !h.can(feature))
+                .on_press(move |s: &mut State| s.hex_change_model(&id, action)),
+            );
         }
         sec = sec.child(r);
     }
@@ -1216,10 +1314,12 @@ pub enum Section {
     PromptLibrary,
     Sync,
     HelpersAdvanced,
+    Privacy,
+    Diagnostics,
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 9] = [
+const SECTIONS: [Section; 11] = [
     Section::Identity,
     Section::Meetings,
     Section::PromptLibrary,
@@ -1228,15 +1328,19 @@ const SECTIONS: [Section; 9] = [
     Section::Connect,
     Section::General,
     Section::Sync,
+    Section::Privacy,
     Section::Updates,
+    Section::Diagnostics,
 ];
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 9] = SECTIONS;
+    pub const ALL: [Section; 11] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Privacy => "Privacy and data",
+            Self::Diagnostics => "Diagnostics",
             Self::Identity => "General",
             Self::PromptLibrary => "Prompt library",
             Self::Sync => "Sync",
@@ -1259,6 +1363,8 @@ impl Section {
 
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::Privacy => "What is sent, connected apps and retained files.",
+            Self::Diagnostics => "Agent recovery and Hex diagnostics.",
             Self::Identity => "Your name and setup.",
             Self::PromptLibrary => "Edit Meeting summary instructions.",
             Self::Sync => "This PC and other devices.",
@@ -1448,6 +1554,9 @@ fn setting_row(
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
+    if st.key == "meetings.providers" && !st.secret {
+        return readable::providers(s, k, st, p, layer);
+    }
     let h = &s.hex;
     let key = st.key.clone();
     let name = settings::setting_name(st);
@@ -1457,14 +1566,13 @@ fn setting_row(
             .items_center()
             .flex_wrap()
             .gap(8.0)
-            .child(roles::NAME.wrap(name.clone(), p.ink))
-            .children((settings::is_meeting_setting(st)).then(|| settings::pc(p))),
+            .child(roles::NAME.wrap(name.clone(), p.ink)),
     );
     if !st.about.is_empty() {
         text = text.child(
             roles::SMALL
                 .wrap(settings::setting_help(st), p.soft)
-                .help_when_truncated(st.about.clone()),
+                .help_when_truncated(settings::setting_help(st)),
         );
     }
     if st.available == Some(false) {
@@ -1479,13 +1587,32 @@ fn setting_row(
         text = text.child(roles::SMALL.wrap("Saving.", p.soft));
     }
     // A folder or file path needs more room than a short value.
-    let width = if st.kind == "path" { 360.0 } else { 220.0 };
-    let control = if !editable(st) {
-        let shown = if st.secret {
-            "Hidden by Hex".into()
-        } else {
-            setting_text(&st.value)
-        };
+    let width = if st.kind == "path" {
+        360.0_f32.min((s.app_w.get() - 64.0).max(220.0))
+    } else {
+        220.0
+    };
+    let model_edit_key = format!("model-edit-{}", st.key);
+    let model_edit = s.hex.select_open.as_deref() == Some(model_edit_key.as_str());
+    let control = if st.kind == "json" || st.value.is_array() || st.value.is_object() {
+        roles::SMALL
+            .wrap("Structured setting. Open Hex to review or edit it.", p.soft)
+            .w(width)
+    } else if st.key.contains("model") && st.kind == "text" && !model_edit {
+        let edit_key = model_edit_key.clone();
+        row()
+            .w(width)
+            .flex_wrap()
+            .gap(8.0)
+            .items_center()
+            .child(roles::CONTROL.wrap(readable::current_label(st), p.ink))
+            .children(editable(st).then(|| {
+                crate::ui::widgets::action("Edit model", p)
+                    .key(model_edit_key)
+                    .on_press(move |s: &mut State| s.hex.select_open = Some(edit_key.clone()))
+            }))
+    } else if !editable(st) {
+        let shown = readable::current_label(st);
         roles::SMALL
             .line(
                 if shown.is_empty() {
@@ -1510,10 +1637,21 @@ fn setting_row(
                     .key(format!("hs-sw-{}", st.key))
             }
             "choice" => {
-                let options: Vec<String> = st.choices.iter().map(setting_text).collect();
-                let current = st.value.as_str();
+                let choices: Vec<_> = st
+                    .choices
+                    .iter()
+                    .filter(|v| readable::supported_choice(v))
+                    .cloned()
+                    .collect();
+                let options: Vec<String> = choices
+                    .iter()
+                    .map(|v| readable::value_label(st, v))
+                    .collect();
+                let current_label = readable::current_label(st);
+                let current = Some(current_label.as_str());
                 let open = can && h.select_open.as_deref() == Some(key.as_str());
                 let (toggle_key, choose_key) = (key.clone(), key.clone());
+                let labels = options.clone();
                 Select::new(format!("hs-sel-{key}"), &options)
                     .label(name)
                     .current(current)
@@ -1532,7 +1670,9 @@ fn setting_row(
                     })
                     .on_close(|s: &mut State| s.hex.select_open = None)
                     .on_choose(move |s: &mut State, v: &str, _: &mut Tx| {
-                        s.hex_choose(&choose_key, v)
+                        if let Some(index) = labels.iter().position(|label| label == v) {
+                            s.hex_choose(&choose_key, &setting_text(&choices[index]));
+                        }
                     })
                     .build(k, layer)
             }
@@ -1627,6 +1767,9 @@ pub fn scene(s: &mut State, recording: bool) {
         Feature::SettingsSet,
         Feature::VocabularyAdd,
         Feature::VocabularyRemove,
+        Feature::ModelUse,
+        Feature::ModelInstall,
+        Feature::WindowShow,
     ]
     .into_iter()
     .map(|feature| (feature, Support::Supported))
@@ -1653,4 +1796,37 @@ pub fn scene(s: &mut State, recording: bool) {
     s.hex.models = f.models;
     s.hex_set_settings(Ok(f.settings));
     s.hex_set_vocabulary(Ok(f.vocabulary));
+}
+
+#[cfg(test)]
+mod model_action_tests {
+    use super::*;
+    #[test]
+    fn installed_models_never_offer_download_and_selected_models_are_information() {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../tools/ui-fixtures/hex.json")).unwrap();
+        assert_eq!(model_action(&fixture.models[0], true), None);
+        assert_eq!(
+            model_action(&fixture.models[1], true),
+            Some(ModelAction::Use)
+        );
+        assert_eq!(
+            model_action(&fixture.models[1], false),
+            Some(ModelAction::Use)
+        );
+        assert_eq!(
+            model_action(&fixture.models[2], true),
+            Some(ModelAction::Install)
+        );
+        assert_eq!(
+            model_action(&fixture.models[2], false),
+            Some(ModelAction::OpenHex)
+        );
+        let mut missing_selected = fixture.models[2].clone();
+        missing_selected.selected = true;
+        assert_eq!(
+            model_action(&missing_selected, true),
+            Some(ModelAction::Install)
+        );
+    }
 }

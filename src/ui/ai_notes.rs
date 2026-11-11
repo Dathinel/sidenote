@@ -617,6 +617,7 @@ pub enum Part {
     Advanced,
     Scripts,
     Prompts,
+    Privacy,
 }
 pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     let a = &s.ai_notes;
@@ -633,9 +634,10 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         .children((part != Part::Helpers).then(|| {
             roles::GROUP.wrap(
                 match part {
+                    Part::Privacy => "Sidenote · Summary requests",
                     Part::Identity => "You",
                     Part::Helpers => "Models and agents",
-                    Part::Advanced => "Agent diagnostics and models",
+                    Part::Advanced => "Agent diagnostics",
                     Part::Summaries => "Meeting summary",
                     Part::Scripts => "Summary engine",
                     Part::Prompts => "Meeting summary instructions",
@@ -768,6 +770,18 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 false,
                 p,
             ));
+        c = c
+            .child(super::hex::settings::panel(p).child(summary))
+            .child(
+                button("What is sent", "summary-privacy-link", p)
+                    .self_start()
+                    .on_press(|s: &mut State| {
+                        s.hex.section = super::hex::Section::Privacy;
+                        super::scene_scroll(s, "notes-privacy");
+                    }),
+            );
+    }
+    if part == Part::Privacy {
         let mut privacy = super::hex::settings::setting_row(
             s,
             "notes-privacy",
@@ -793,10 +807,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             .child(roles::SMALL.wrap("Claude Code has no tools and no MCP access for these requests. It still loads your CLAUDE.md and hooks. Sidenote's logs do not contain meeting text or agent replies. Your file sync tool may copy saved meeting summaries and transcripts between your devices.", p.soft))
             .child(roles::SMALL.wrap("Only Claude Code is offered in 0.0.1. Codex and OpenCode may be detected, but cannot be selected.", p.soft));
         }
-        c = c.child(
-            super::hex::settings::panel(p)
-                .child(summary.child(super::widgets::hairline(p)).child(privacy)),
-        );
+        c = c.child(super::hex::settings::panel(p).child(privacy));
     }
     if matches!(part, Part::Helpers | Part::Advanced) {
         if part == Part::Helpers {
@@ -885,11 +896,13 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         p.soft,
                     ));
                 let action = if !offered {
-                    button("Ask only", &format!("notes-ask-only-{index}"), p).focusable(false)
+                    roles::CONTROL
+                        .line("Ask only", p.soft)
+                        .key(format!("notes-ask-only-{index}"))
                 } else if selected {
-                    button("In use", &format!("notes-use-{index}"), p)
-                        .color(p.ok)
-                        .focusable(false)
+                    roles::CONTROL
+                        .line("In use", p.ok)
+                        .key(format!("notes-use-{index}"))
                 } else if !found {
                     button("Set up", "notes-install-page", p)
                         .on_press(|s: &mut State| s.open_notes_install_page())
@@ -921,6 +934,44 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         .child(row().flex_wrap().gap(8.0)
                             .child(button("Switch to built-in meeting summaries","notes-confirm-switch",p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
                             .child(button("Keep scripts","notes-cancel-switch",p).on_press(|s: &mut State| s.ai_notes.switch_confirm=None))));
+                }
+                if offered {
+                    c = c.child(
+                        button(
+                            if a.model_open {
+                                "Hide model"
+                            } else {
+                                "Summary model"
+                            },
+                            "notes-change-model",
+                            p,
+                        )
+                        .self_start()
+                        .on_press(|s: &mut State| s.ai_notes.model_open = !s.ai_notes.model_open),
+                    );
+                    if a.model_open {
+                        c = c
+                            .child(
+                                field(&a.models[index], "Summary model")
+                                    .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
+                                    .build(k)
+                                    .key(format!("notes-model-{index}"))
+                                    .w_full(),
+                            )
+                            .child(
+                                button("Reset to recommended", "notes-model-reset", p)
+                                    .self_start()
+                                    .on_press(move |s: &mut State| {
+                                        s.ai_notes.models[index] =
+                                            TextEdit::new(HELPERS[index].default_model());
+                                    }),
+                            )
+                            .child(
+                                button("Save model", "notes-save-model", p)
+                                    .self_start()
+                                    .on_press(move |s: &mut State| s.choose_notes_helper(index)),
+                            );
+                    }
                 }
                 continue;
             }
@@ -969,80 +1020,14 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         .on_press_tx(|_: &mut State, tx| tx.copy("claude")),
                 );
             }
-            r = r.child(
-                button(
-                    if a.model_open {
-                        "Hide model"
-                    } else {
-                        "Change model"
-                    },
-                    "notes-change-model",
-                    p,
-                )
-                .self_start()
-                .on_press(|s: &mut State| s.ai_notes.model_open = !s.ai_notes.model_open),
-            );
-            if a.model_open {
-                r = r
-                    .child(roles::META.wrap("Model name", p.soft))
-                    .child(
-                        field(&a.models[index], "Model name")
-                            .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
-                            .build(k)
-                            .key(format!("notes-model-{index}"))
-                            .w_full(),
-                    )
-                    .child(
-                        button("Reset to recommended", "notes-model-reset", p)
-                            .self_start()
-                            .on_press(move |s: &mut State| {
-                                s.ai_notes.models[index] =
-                                    TextEdit::new(HELPERS[index].default_model())
-                            }),
-                    );
-                if selected && a.models[index].text.trim() != settings.model && a.pending.is_none()
-                {
-                    r = r.child(
-                        button("Save model", "notes-save-model", p)
-                            .self_start()
-                            .on_press(move |s: &mut State| s.choose_notes_helper(index)),
-                    );
-                }
-            }
             let mut actions = row().flex_wrap().gaps(8.0, 8.0);
-            let use_this = button(
-                if selected {
-                    "In use"
-                } else {
-                    "Turn on with Claude Code"
-                },
-                &format!("notes-use-{index}"),
-                p,
-            );
             let test = button("Send a sample", &format!("notes-test-{index}"), p);
-            if a.pending.is_none() {
-                actions = actions
-                    .child(if selected {
-                        use_this.color(p.ok).focusable(false)
-                    } else {
-                        use_this.on_press(move |s: &mut State| s.choose_notes_helper(index))
-                    })
-                    .child(test.on_press(move |s: &mut State| {
-                        let model = s.ai_notes.models[index].text.clone();
-                        s.notes_work(Work::Test(index, model), "Testing fixed sample text...");
-                    }));
-            } else {
-                actions = actions
-                    .child(
-                        use_this
-                            .help("Wait for the current operation to finish.")
-                            .focusable(false),
-                    )
-                    .child(
-                        test.help("Wait for the current operation to finish.")
-                            .focusable(false),
-                    );
-            }
+            actions = actions.child(test.disabled(a.pending.is_some()).on_press(
+                move |s: &mut State| {
+                    let model = s.ai_notes.models[index].text.clone();
+                    s.notes_work(Work::Test(index, model), "Testing fixed sample text...");
+                },
+            ));
             r = r.child(actions);
             if a.testing == Some(index) && a.pending.is_some() {
                 r = r.child(
@@ -1075,9 +1060,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             c = c.child(super::hex::settings::panel(p).child(helper_list));
         }
     }
-    if part == Part::Scripts {
-        if settings.script.is_some() {
-            c = c.child(
+    if part == Part::Scripts && settings.script.is_some() {
+        c = c.child(
             card(p)
                 .key("notes-scripts-card").fill(super::hex::settings::highlight(s,"notes-scripts-card",p))
                 .child(roles::TITLE.wrap("Your own scripts (advanced)", p.ink))
@@ -1096,7 +1080,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         }),
                 ),
         );
-        }
+    }
+    if part == Part::Summaries {
         let off = settings.engine != "scripts"
             && (settings.engine != "app" || settings.effective_helper().is_none());
         c = c.child(
@@ -1166,7 +1151,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
 pub fn setup_visible(s: &State) -> bool {
     s.view == super::tasks::View::Meetings
         && s.selected.is_none()
-        && (!s.on_hex() || s.hex.section == super::hex::Section::Identity)
+        && (!s.on_hex() || s.hex.section == super::hex::Section::Connect)
         && !s.on_memory()
         && !s.on_check()
         && !s.on_live()
@@ -1220,10 +1205,14 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
                     )
                     .on_press(|s: &mut State| s.open_ai_notes()),
                 )
-                .child(
-                    button("What is sent", "today-notes-privacy", p)
-                        .on_press(|s: &mut State| s.open_ai_notes()),
-                ),
+                .child(button("What is sent", "today-notes-privacy", p).on_press(
+                    |s: &mut State| {
+                        s.open_hex();
+                        s.hex.section = super::hex::Section::Privacy;
+                        s.ai_notes.privacy_open = true;
+                        super::scene_scroll(s, "notes-privacy");
+                    },
+                )),
         ),
     )
 }

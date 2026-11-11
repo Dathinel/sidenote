@@ -63,6 +63,11 @@ pub struct Annotations {
     model_open: bool,
     other_model: bool,
 }
+impl Annotations {
+    pub(super) fn working(&self) -> bool {
+        self.busy
+    }
+}
 pub enum Msg {
     Thumbnails(BTreeMap<PathBuf, Option<Image>>),
     NotebookDelta {
@@ -602,25 +607,16 @@ fn frame_image(
 }
 fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
     let mut page = col().w_full().gap(14.0).child(
-        row()
-            .w_full()
-            .min_w(0.0)
-            .gap(8.0)
-            .items_center()
-            .key("annotation-breadcrumb")
-            .child(
-                link("Annotations", p)
-                    .key("annotations-back")
-                    .on_press(|s: &mut State| {
-                        s.cancel_annotation_note();
-                        s.annotations.selected = None;
-                        s.annotations.images.clear();
-                        s.annotations.review = None;
-                        s.annotations.note_open = false;
-                    }),
-            )
-            .child(roles::META.line("/", p.faint))
-            .child(roles::META.line(c.title(), p.soft).grow(1.0).min_w(0.0)),
+        crate::ui::widgets::action("Back to annotations", p)
+            .key("annotations-back")
+            .self_start()
+            .on_press(|s: &mut State| {
+                s.cancel_annotation_note();
+                s.annotations.selected = None;
+                s.annotations.images.clear();
+                s.annotations.review = None;
+                s.annotations.note_open = false;
+            }),
     );
     if s.annotations.busy || s.annotations.note_open {
         return note_page(s, c, width, p, page);

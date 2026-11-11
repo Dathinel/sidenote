@@ -42,6 +42,9 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("mr", "Marathi"),
 ];
 impl Models {
+    pub fn has_local_files(&self, id: &str) -> bool {
+        self.installed.contains(id) || self.partial.contains(id)
+    }
     pub fn load(root: &Path) -> Self {
         let (languages, preference_error) = match model_catalog::load_meeting_languages(root) {
             Ok(languages) => (languages, None),
@@ -273,22 +276,7 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
             p,
         ));
     }
-    let k = super::theme::kit(&p);
-    row()
-        .w_full()
-        .flex_wrap()
-        .gap(18.0)
-        .mt(16.0)
-        .child(
-            col()
-                .w(160.0)
-                .gap(10.0)
-                .child(roles::GROUP.wrap("Meeting languages", p.soft))
-                .child(
-                    super::hex::settings::panel(p).child(language_column(s, &k, p).padding(14.0)),
-                ),
-        )
-        .child(catalog_view(s, p, routing, false).grow(1.0).min_w(240.0))
+    catalog_view(s, p, routing, false)
 }
 pub fn advanced(s: &State, p: Palette) -> El {
     catalog_view(s, p, rune::el(), true)
@@ -347,7 +335,9 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
         .iter()
         .filter(|m| {
             if advanced {
-                return m.role == model_catalog::Role::LanguageId || !cfg!(feature = "asr-runtime");
+                return (m.role == model_catalog::Role::LanguageId
+                    || !cfg!(feature = "asr-runtime"))
+                    && (models.installed.contains(m.id) || models.partial.contains(m.id));
             }
             if m.role == model_catalog::Role::LanguageId {
                 return false;
@@ -366,7 +356,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 return false;
             }
             if m.runtime == Runtime::Hex {
-                return true;
+                return false;
             }
             // Downloaded models stay listed so they can be removed after a language is dropped.
             if models.installed.contains(m.id) || models.progress.contains_key(m.id) {

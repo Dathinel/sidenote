@@ -1,0 +1,81 @@
+[
+  {
+    "key": "meetings.enabled",
+    "value": true,
+    "kind": "bool",
+    "choices": [],
+    "about": "Hex records calls for Sidenote.",
+    "writable": true,
+    "available": true
+  },
+  {
+    "key": "meetings.summaries",
+    "value": "opencode",
+    "kind": "choice",
+    "choices": [
+      "off",
+      "mac (Apple Intelligence)",
+      "opencode"
+    ],
+    "about": "Separate Hex summaries.",
+    "writable": true,
+    "available": true
+  },
+  {
+    "key": "meetings.opencode_model",
+    "value": "openai/gpt-6.1-terra-fast",
+    "kind": "text",
+    "choices": [],
+    "about": "Used by Hex summaries.",
+    "writable": true,
+    "available": true
+  },
+  {
+    "key": "meetings.show_recording_indicator",
+    "value": true,
+    "kind": "bool",
+    "choices": [],
+    "about": "Keep recording status visible over other apps.",
+    "writable": true,
+    "available": true
+  },
+  {
+    "key": "meetings.recording_indicator_corner",
+    "value": "top_right",
+    "kind": "choice",
+    "choices": [
+      "top_right",
+      "top_left",
+      "bottom_right",
+      "bottom_left"
+    ],
+    "about": "Choose where the recording indicator appears.",
+    "writable": true,
+    "available": true
+  },
+  {
+    "key": "meetings.providers",
+    "value": [
+      {
+        "key": "us.zoom.xos",
+        "label": "Zoom",
+        "policy": "ask"
+      },
+      {
+        "key": "com.microsoft.teams2",
+        "label": "Microsoft Teams",
+        "policy": "always_record"
+      },
+      {
+        "key": "meet.google.com",
+        "label": "Google Meet",
+        "policy": "never_offer"
+      }
+    ],
+    "kind": "json",
+    "choices": [],
+    "about": "Per-app recording choices.",
+    "writable": true,
+    "available": true
+  }
+]

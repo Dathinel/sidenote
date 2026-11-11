@@ -528,3 +528,19 @@ lucide!(
     "lucide-circle-pause",
     r#"<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 9v6M14 9v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
+lucide!(
+    HEX_MARK,
+    "hex-ownership",
+    r#"<path d="m12 2 9 5v10l-9 5-9-5V7z" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linejoin="round"/>"#
+);
+lucide!(
+    SLIDERS,
+    "lucide-sliders-horizontal",
+    r#"<path d="M21 4h-7M10 4H3m18 8H10m-4 0H3m18 8h-3m-4 0H3M14 1v6M6 9v6m12 2v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round"/>"#
+);
+
+lucide!(
+    REFRESH_CW,
+    "lucide-refresh-cw",
+    r#"<path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16m5 0H3v5" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
+);
