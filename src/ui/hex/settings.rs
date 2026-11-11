@@ -1,12 +1,18 @@
 //! Settings layout and destinations. Hex keys are routed, never renamed or migrated.
 use super::*;
-use crate::ui::{ai_notes, icons, nav, tasks};
+use crate::ui::{ai_notes, icons, nav, tasks, widgets::ButtonDisabled};
 use sidenote::core::{Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub struct Settings {
     pub navigation_open: bool,
+    pub labs: sidenote::hex_labs::Snapshot,
+    pub labs_loading: bool,
+    labs_show_all: bool,
+    labs_version: Option<String>,
+    lab_confirm: Option<String>,
+    pub lab_error: Option<String>,
     jump_active: usize,
     jump_positions: BTreeMap<usize, f32>,
     jump_offset: std::rc::Rc<std::cell::Cell<f32>>,
@@ -169,6 +175,7 @@ fn active(s: &State) -> (Page, usize) {
 
 fn navigate(s: &mut State, page: Page, tab: usize) {
     s.hex.shell.navigation_open = false;
+    s.hex.shell.lab_confirm = None;
     s.hex.shell.jump_active = 0;
     s.hex.shell.jump_positions.clear();
     s.hex.shell.jump_offset.set(0.0);
@@ -212,6 +219,15 @@ fn back(s: &mut State) {
 
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
+    if rune::tooling::headless_run().is_none()
+        && let Some(version) = s.hex.state().map(|state| state.version.clone())
+        && s.hex.shell.labs_version.as_ref() != Some(&version)
+        && !s.hex.shell.labs_loading
+    {
+        s.hex.shell.labs_version = Some(version);
+        refresh_labs(s, None);
+        changed = true;
+    }
     if s.on_hex() && !jump_groups(active(s).0, active(s).1).is_empty() {
         let offset = s.hex.shell.jump_offset.get();
         let first = s.hex.shell.jump_positions.get(&0).copied().unwrap_or(0.0);
@@ -1191,7 +1207,7 @@ fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
             .label(*name)
             .on_press(move |s: &mut State| {
                 if jumps {
-                    if page == Page::Hex && tab >= 4 {
+                    if page == Page::Hex && (4..=5).contains(&tab) {
                         s.hex.open_groups.insert(if tab == 4 {
                             "hex-compatibility"
                         } else {
@@ -1401,13 +1417,14 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
 fn jump_groups(page: Page, _tab: usize) -> &'static [&'static str] {
     if page == Page::Hex { &HEX_GROUPS } else { &[] }
 }
-const HEX_GROUPS: [&str; 6] = [
+const HEX_GROUPS: [&str; 7] = [
     "Engine",
     "Shortcuts",
     "Dictation",
     "Speech model",
     "Compatibility",
     "Connection",
+    "Hex Labs",
 ];
 fn hex_group(index: usize, body: El) -> El {
     body.key(format!("settings-group-{index}"))
@@ -1437,6 +1454,166 @@ fn hex_group_rows(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, group: us
         }
     }
     body
+}
+fn refresh_labs(s: &mut State, enable: Option<String>) {
+    if s.hex.shell.labs_loading || rune::tooling::headless_run().is_some() {
+        return;
+    }
+    s.hex.shell.labs_loading = true;
+    s.hex.shell.lab_error = None;
+    s.hex.shell.labs = Default::default();
+    s.hex_spawn(move |engine| {
+        let result = enable.as_deref().map_or(Ok(()), |id| engine.enable_lab(id));
+        let snapshot = engine.labs();
+        Msg::Labs(snapshot, result)
+    });
+}
+fn labs_group(s: &State, p: Palette) -> El {
+    use sidenote::hex_labs::{Group, Snapshot};
+    let unknown = Snapshot::default();
+    let snapshot = if s.hex.running() {
+        &s.hex.shell.labs
+    } else {
+        &unknown
+    };
+    let mut out = col().key("hex-labs").w_full().mt(18.0).child(
+        panel(p).child(setting_row(
+            s,
+            "hex-labs-refresh",
+            "Hex Labs",
+            "Hex Labs that change what Sidenote sees.",
+            crate::ui::widgets::action(
+                if s.hex.shell.labs_loading {
+                    "Reading..."
+                } else {
+                    "Refresh"
+                },
+                p,
+            )
+            .key("hex-labs-refresh-button")
+            .button_disabled(s.hex.shell.labs_loading || !s.hex.running())
+            .on_press(|s: &mut State| refresh_labs(s, None)),
+            false,
+            p,
+        )),
+    );
+    if let Some(error) = &s.hex.shell.lab_error {
+        out = out.child(roles::SMALL.wrap(error, p.warn).role("alert").padding(14.0));
+    }
+    let relevant = snapshot.relevant();
+    for group in Group::ALL {
+        let members: Vec<_> = relevant
+            .iter()
+            .filter(|(id, _, _)| snapshot.group(id, s.hex.shell.labs_show_all) == Some(group))
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        let mut rows = col().w_full();
+        for (index, (id, _, _)) in members.iter().enumerate() {
+            if index != 0 {
+                rows = rows.child(hairline(p));
+            }
+            rows = rows.child(lab_row(s, snapshot, id, p));
+        }
+        out = out.child(card(group.name(), rows, p).key(format!("hex-labs-group-{}", group.key())));
+    }
+    if relevant
+        .iter()
+        .any(|(id, _, _)| snapshot.group(id, false).is_none() && snapshot.group(id, true).is_some())
+    {
+        out = out.child(
+            crate::ui::cards::fold_control(
+                "Show all",
+                "hex-labs-show-all",
+                s.hex.shell.labs_show_all,
+                p,
+            )
+            .mt(12.0)
+            .on_press(|s: &mut State| s.hex.shell.labs_show_all = !s.hex.shell.labs_show_all),
+        );
+    }
+    out
+}
+fn lab_row(s: &State, snapshot: &sidenote::hex_labs::Snapshot, id: &str, p: Palette) -> El {
+    use sidenote::hex_labs::{UNKNOWN_EFFECT, find};
+    let lab = find(id);
+    let name = snapshot.name(id);
+    let effect = lab.map_or(UNKNOWN_EFFECT, |lab| lab.effect);
+    let state = snapshot.state(id);
+    let mut controls = row().items_center().gap(8.0).child(
+        roles::META
+            .wrap(
+                match state {
+                    Some(true) => "On",
+                    Some(false) => "Off",
+                    None => "Unknown",
+                },
+                p.soft,
+            )
+            .key(format!("hex-lab-state-{id}")),
+    );
+    if snapshot.can_enable(id) {
+        let id = id.to_owned();
+        controls = controls.child(
+            crate::ui::widgets::button("Turn on", "", crate::ui::widgets::ButtonRole::Primary, p)
+                .h(28.0)
+                .key(format!("hex-lab-enable-{id}"))
+                .label(format!("Turn on {name}"))
+                .button_disabled(s.hex.shell.labs_loading)
+                .on_press(move |s: &mut State| s.hex.shell.lab_confirm = Some(id.clone())),
+        );
+    }
+    let mut out = col().w_full().child(setting_row(
+        s,
+        &format!("hex-lab-{id}"),
+        &name,
+        effect,
+        controls,
+        false,
+        p,
+    ));
+    if s.hex.shell.lab_confirm.as_deref() == Some(id) && lab.is_some() {
+        let id = id.to_owned();
+        out = out.child(
+            col()
+                .key("hex-lab-confirm-dialog")
+                .role("dialog")
+                .label(format!("Turn on {name} in Hex?"))
+                .w_full()
+                .padding(14.0)
+                .gap(8.0)
+                .child(roles::NAME.wrap(format!("Turn on {name} in Hex?"), p.ink))
+                .child(roles::SMALL.wrap(effect, p.soft))
+                .child(roles::SMALL.wrap("You can turn it off in Hex \u{203a} Labs.", p.soft))
+                .child(
+                    row()
+                        .flex_wrap()
+                        .gap(8.0)
+                        .child(
+                            crate::ui::widgets::action("Cancel", p)
+                                .key("hex-lab-cancel")
+                                .on_press(|s: &mut State| s.hex.shell.lab_confirm = None),
+                        )
+                        .child(
+                            crate::ui::widgets::button(
+                                "Turn on",
+                                "",
+                                crate::ui::widgets::ButtonRole::Primary,
+                                p,
+                            )
+                            .h(28.0)
+                            .key("hex-lab-confirm")
+                            .on_press(move |s: &mut State| {
+                                if s.hex.shell.lab_confirm.take().as_ref() == Some(&id) {
+                                    refresh_labs(s, Some(id.clone()));
+                                }
+                            }),
+                        ),
+                ),
+        );
+    }
+    out
 }
 fn hex_fold(title: &str, key: &str, open: bool, p: Palette) -> El {
     crate::ui::cards::fold_control(title, key, open, p).child(icons::draw(
@@ -1684,7 +1861,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 }
                 out = out.child(hex_group(index, group));
             }
-            out
+            out.child(hex_group(6, labs_group(s, p)))
         }
         (Page::Appearance, _) => card(
             "Hex · Preferences",
@@ -1864,6 +2041,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         )
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    if e.key == Key::Escape && s.hex.shell.lab_confirm.take().is_some() {
+        tx.blur();
+        return true;
+    }
     if e.key == Key::Escape && s.hex.shell.navigation_open {
         s.hex.shell.navigation_open = false;
         tx.blur();
@@ -1963,7 +2144,7 @@ mod tests {
     fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
         assert!(jump_groups(Page::Meetings, 0).is_empty());
         assert_eq!(Page::Meetings.tabs(), ["Recording", "Summaries", "Tasks"]);
-        assert_eq!(jump_groups(Page::Hex, 0).len(), 6);
+        assert_eq!(jump_groups(Page::Hex, 0).len(), 7);
         assert_eq!(
             ownership_text(Page::Hex),
             "These settings live in Hex and also change Hex."

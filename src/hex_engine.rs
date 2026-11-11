@@ -329,10 +329,19 @@ pub struct EngineState {
     pub dictating: Option<bool>,
     pub capture_state: String,
     pub model: ModelState,
+    pub labs: Box<crate::hex_labs::Snapshot>,
 }
 #[derive(Clone, Deserialize)]
 pub struct Setting {
     pub key: String,
+    #[serde(
+        default,
+        rename = "name",
+        alias = "label",
+        alias = "title",
+        alias = "display_name"
+    )]
+    pub display_name: Option<String>,
     pub value: Value,
     pub kind: String,
     pub writable: bool,
@@ -452,6 +461,7 @@ impl HexEngine {
             _ => None,
         };
         Ok(EngineState {
+            labs: Box::new(crate::hex_labs::Snapshot::status(&v)),
             running: true,
             version,
             protocol: PROTOCOL,
@@ -462,6 +472,57 @@ impl HexEngine {
             model: serde_json::from_value(v["model"].clone())
                 .map_err(|_| failed("invalid model state"))?,
         })
+    }
+    pub fn labs(&self) -> Result<crate::hex_labs::Snapshot> {
+        let settings = lab_settings("labs");
+        if let Ok(mut settings) = settings {
+            for key in [
+                "paste_with_shift",
+                "share_dictation_shortcut",
+                "keyboard_model_switching.enabled",
+                "meetings.enabled",
+                "capture.enabled",
+            ] {
+                if let Ok(extra) = lab_settings(key) {
+                    settings.extend(extra);
+                }
+            }
+            let snapshot = crate::hex_labs::Snapshot::settings(&settings);
+            if !snapshot.states.is_empty() {
+                return Ok(snapshot);
+            }
+        }
+        let cli = newest_cli()?;
+        let text = hidden_help(&cli, &["labs", "list"], Instant::now() + CALL_TIMEOUT)?;
+        let mut snapshot = crate::hex_labs::Snapshot::list(&text);
+        if let Ok(state) = self.status() {
+            for (id, value) in state.labs.states {
+                snapshot.states.entry(id).or_insert(value);
+            }
+        }
+        if snapshot.states.is_empty() {
+            return Err(failed("Hex Labs state unavailable"));
+        }
+        Ok(snapshot)
+    }
+    /// Called only by the settings confirmation; never enable an unreviewed or unknown state.
+    pub fn enable_lab(&self, id: &str) -> Result<()> {
+        if !self.labs()?.can_enable(id) {
+            return Err(failed("lab is not eligible to enable"));
+        }
+        // Refuse an offline write: the CLI otherwise edits saved settings even when Hex is closed.
+        self.status()?;
+        hidden_help(
+            &newest_cli()?,
+            &["labs", "on", id],
+            Instant::now() + CALL_TIMEOUT,
+        )?;
+        if self.labs()?.state(id) != Some(true) {
+            return Err(failed(
+                "Hex did not confirm that the lab is on; refresh its state before trying again",
+            ));
+        }
+        Ok(())
     }
     pub fn model_status(&self) -> Result<ModelState> {
         Ok(self.status()?.model)
@@ -699,6 +760,35 @@ impl HexEngine {
 fn decode<T: serde::de::DeserializeOwned>(v: Value, field: &str) -> Result<T> {
     serde_json::from_value(v[field].clone())
         .map_err(|_| failed("invalid control data; values suppressed"))
+}
+fn lab_settings(key: &str) -> Result<Vec<Setting>> {
+    if let Ok(v) = control(json!({"command":"settings-get", "key":key}), STATUS_TIMEOUT)
+        && let Ok(settings) = decode(v, "settings")
+    {
+        return Ok(settings);
+    }
+    let text = hidden_help(
+        &newest_cli()?,
+        &["settings", "get", key, "--json"],
+        Instant::now() + CALL_TIMEOUT,
+    )?;
+    let value = serde_json::from_str(&text).map_err(|_| failed("invalid Labs settings JSON"))?;
+    decode(value, "settings")
+}
+fn newest_cli() -> Result<PathBuf> {
+    fs::read_dir(hex_dir()?.join("versions"))
+        .map_err(io_error)?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path().join("hex.com");
+            if !path.is_file() {
+                return None;
+            }
+            Some((entry.metadata().ok()?.modified().ok()?, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+        .ok_or(HexError::HexNotRunning)
 }
 fn hidden_help(path: &PathBuf, args: &[&str], deadline: Instant) -> Result<String> {
     remaining(deadline)?;

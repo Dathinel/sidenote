@@ -77,6 +77,10 @@ pub enum Msg {
     },
     Settings(Result<Vec<Setting>, HexError>),
     AudioSettings(Result<(), HexError>, Result<Vec<Setting>, HexError>),
+    Labs(
+        Result<sidenote::hex_labs::Snapshot, HexError>,
+        Result<(), HexError>,
+    ),
     Vocabulary(Result<Vec<VocabularyEntry>, HexError>),
     Done(Action, Result<(), HexError>),
 }
@@ -455,6 +459,24 @@ impl State {
                         self.hex.models_note = None;
                     }
                     Err(e) => self.hex.models_note = Some(plain(&e)),
+                }
+            }
+            Msg::Labs(snapshot, result) => {
+                self.hex.shell.labs_loading = false;
+                self.hex.shell.lab_error = result.err().map(|e| match &e {
+                    HexError::Failed { stderr_summary, .. } => {
+                        format!("{} {stderr_summary}", plain(&e))
+                    }
+                    _ => plain(&e).to_owned(),
+                });
+                match snapshot {
+                    Ok(snapshot) => self.hex.shell.labs = snapshot,
+                    Err(e) => {
+                        self.hex.shell.labs = Default::default();
+                        let previous = self.hex.shell.lab_error.take().unwrap_or_default();
+                        self.hex.shell.lab_error =
+                            Some(format!("{previous} Labs state unavailable. {}", plain(&e)));
+                    }
                 }
             }
             Msg::Settings(r) => self.hex_set_settings(r),
@@ -1789,11 +1811,18 @@ pub fn scene(s: &mut State, recording: bool) {
         meeting_state: if recording { "recording" } else { "idle" }.into(),
         dictating: Some(false),
         capture_state: "ready".into(),
+        labs: Box::default(),
         model: f.model,
     }));
     s.hex.was_running = true;
     s.hex.data_dirty = false;
     s.hex.models = f.models;
+    let labs: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/hex-labs/settings.json"))
+            .expect("synthetic Labs fixture");
+    let labs: Vec<Setting> =
+        serde_json::from_value(labs["settings"].clone()).expect("synthetic Labs settings");
+    s.hex.shell.labs = sidenote::hex_labs::Snapshot::settings(&labs);
     s.hex_set_settings(Ok(f.settings));
     s.hex_set_vocabulary(Ok(f.vocabulary));
 }

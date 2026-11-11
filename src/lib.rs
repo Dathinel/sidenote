@@ -1,5 +1,6 @@
 pub mod core;
 pub mod hex_engine;
+pub mod hex_labs;
 pub mod listener;
 pub mod mcp;
 pub mod platform;

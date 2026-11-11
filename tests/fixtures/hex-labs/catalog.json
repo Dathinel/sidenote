@@ -1,0 +1,372 @@
+[
+  {
+    "id": "meetings",
+    "name": "Meetings (beta)",
+    "setting": "meetings.enabled"
+  },
+  {
+    "id": "voice-filter",
+    "name": "Voice Filter",
+    "setting": "experimental.hex_microphone"
+  },
+  {
+    "id": "playground",
+    "name": "Playground",
+    "setting": "labs.playground"
+  },
+  {
+    "id": "live-text",
+    "name": "Live text",
+    "setting": "labs.live_text"
+  },
+  {
+    "id": "failure-notices",
+    "name": "Failure notices",
+    "setting": "labs.failure_notices"
+  },
+  {
+    "id": "live-typing",
+    "name": "Live typing",
+    "setting": "labs.live_typing"
+  },
+  {
+    "id": "live-chapters",
+    "name": "Live chapters",
+    "setting": "labs.live_chapters"
+  },
+  {
+    "id": "vocabulary-biasing",
+    "name": "Vocabulary biasing",
+    "setting": "labs.vocabulary_biasing"
+  },
+  {
+    "id": "terminal-paste",
+    "name": "Terminal paste",
+    "setting": "paste_with_shift"
+  },
+  {
+    "id": "keyboard-model-switching",
+    "name": "Switch model with keyboard language",
+    "setting": "keyboard_model_switching.enabled"
+  },
+  {
+    "id": "app-model-switching",
+    "name": "Switch model with app",
+    "setting": "labs.app_model_switching"
+  },
+  {
+    "id": "mouse-shortcuts",
+    "name": "Mouse shortcuts",
+    "setting": "labs.mouse_shortcuts"
+  },
+  {
+    "id": "pause-browser",
+    "name": "Also pause the browser",
+    "setting": "pause_browser_media"
+  },
+  {
+    "id": "share-shortcut",
+    "name": "Share dictation shortcut with other apps",
+    "setting": "share_dictation_shortcut"
+  },
+  {
+    "id": "unload-idle",
+    "name": "Unload model when idle",
+    "setting": "labs.unload_idle"
+  },
+  {
+    "id": "restore-shortcut-default",
+    "name": "Restore shortcut default",
+    "setting": "labs.restore_shortcut_default"
+  },
+  {
+    "id": "keep-on-clipboard",
+    "name": "Keep dictation on clipboard",
+    "setting": "labs.keep_on_clipboard"
+  },
+  {
+    "id": "copy-only",
+    "name": "Copy dictation only",
+    "setting": "labs.copy_only"
+  },
+  {
+    "id": "return-to-app",
+    "name": "Return to app",
+    "setting": "labs.return_to_app"
+  },
+  {
+    "id": "spoken-formatting",
+    "name": "Spoken formatting",
+    "setting": "labs.spoken_formatting"
+  },
+  {
+    "id": "filler-words",
+    "name": "Remove filler words",
+    "setting": "labs.filler_words"
+  },
+  {
+    "id": "subtitle-export",
+    "name": "Subtitle export",
+    "setting": "labs.subtitle_export"
+  },
+  {
+    "id": "second-dictation-shortcut",
+    "name": "Second dictation shortcut",
+    "setting": "labs.second_dictation_shortcut"
+  },
+  {
+    "id": "terminal-paste-shortcut",
+    "name": "Terminal paste shortcut",
+    "setting": "labs.terminal_paste_shortcut"
+  },
+  {
+    "id": "smart-spacing",
+    "name": "Smart spacing",
+    "setting": "labs.smart_spacing"
+  },
+  {
+    "id": "spoken-symbols",
+    "name": "Spoken symbols",
+    "setting": "labs.spoken_symbols"
+  },
+  {
+    "id": "picker-sort-filter",
+    "name": "Sort and filter models",
+    "setting": "labs.picker_sort_filter"
+  },
+  {
+    "id": "sided-modifier-chords",
+    "name": "Sided modifier chords",
+    "setting": "labs.sided_modifier_chords"
+  },
+  {
+    "id": "tap-or-hold",
+    "name": "Tap or hold",
+    "setting": "labs.tap_or_hold"
+  },
+  {
+    "id": "double-tap-modifiers",
+    "name": "Double-tap on a lone modifier",
+    "setting": "labs.double_tap_modifiers"
+  },
+  {
+    "id": "benchmark-details",
+    "name": "Benchmark details",
+    "setting": "labs.benchmark_details"
+  },
+  {
+    "id": "parakeet-ultra",
+    "name": "Parakeet Ultra",
+    "setting": "labs.parakeet_ultra"
+  },
+  {
+    "id": "special-keys",
+    "name": "Special keys alone",
+    "setting": "labs.standalone_special_keys"
+  },
+  {
+    "id": "history-stats",
+    "name": "Dictation stats",
+    "setting": "labs.history_stats"
+  },
+  {
+    "id": "history-multi-select",
+    "name": "Select multiple dictations",
+    "setting": "labs.history_multi_select"
+  },
+  {
+    "id": "recent-dictations",
+    "name": "Copy recent dictations",
+    "setting": "labs.recent_dictations"
+  },
+  {
+    "id": "skip-pauses",
+    "name": "Skip long pauses",
+    "setting": "labs.skip_pauses"
+  },
+  {
+    "id": "stop-when-call-ends",
+    "name": "Stop when the call ends",
+    "setting": "labs.stop_when_call_ends"
+  },
+  {
+    "id": "output-fixes",
+    "name": "Fix results in Output",
+    "setting": "labs.output_fixes"
+  },
+  {
+    "id": "picker-active-first",
+    "name": "Model in use first",
+    "setting": "labs.picker_active_first"
+  },
+  {
+    "id": "model-in-place",
+    "name": "Use model files where they are",
+    "setting": "labs.model_in_place"
+  },
+  {
+    "id": "picker-downloaded",
+    "name": "Downloaded models only",
+    "setting": "labs.picker_downloaded"
+  },
+  {
+    "id": "section-key",
+    "name": "Section key alone",
+    "setting": "labs.section_key_alone"
+  },
+  {
+    "id": "keep-recordings",
+    "name": "Keep recordings",
+    "setting": "labs.keep_recordings"
+  },
+  {
+    "id": "settings-search",
+    "name": "Settings search",
+    "setting": "labs.settings_search"
+  },
+  {
+    "id": "appearance",
+    "name": "Appearance",
+    "setting": "labs.appearance"
+  },
+  {
+    "id": "release-notes-link",
+    "name": "Release notes link",
+    "setting": "labs.release_notes_link"
+  },
+  {
+    "id": "hide-menu-bar-icon",
+    "name": "Hide menu bar icon",
+    "setting": "labs.hide_menu_bar_icon"
+  },
+  {
+    "id": "movable-meeting-capsules",
+    "name": "Movable meeting capsules",
+    "setting": "labs.movable_meeting_capsules"
+  },
+  {
+    "id": "gnome-clipboard-restore",
+    "name": "Restore clipboard on GNOME",
+    "setting": "labs.gnome_clipboard_restore"
+  },
+  {
+    "id": "typed-text",
+    "name": "Transform typed text",
+    "setting": "labs.typed_text"
+  },
+  {
+    "id": "meeting-notes-vocabulary",
+    "name": "Vocabulary in meeting notes",
+    "setting": "labs.meeting_notes_vocabulary"
+  },
+  {
+    "id": "notch-indicator",
+    "name": "Notch indicator",
+    "setting": "labs.notch_indicator"
+  },
+  {
+    "id": "meeting-finished-event",
+    "name": "Meeting finished event",
+    "setting": "labs.meeting_finished_event"
+  },
+  {
+    "id": "gnome-meeting-capsules",
+    "name": "Floating meeting capsules on GNOME",
+    "setting": "labs.gnome_meeting_capsules"
+  },
+  {
+    "id": "gnome-annotate",
+    "name": "Annotate on GNOME",
+    "setting": "labs.gnome_annotate"
+  },
+  {
+    "id": "screenshots",
+    "name": "Screenshots",
+    "setting": "labs.screenshots"
+  },
+  {
+    "id": "follow-live-transcript",
+    "name": "Follow live transcript",
+    "setting": "labs.follow_live_transcript"
+  },
+  {
+    "id": "more-call-apps",
+    "name": "More call apps",
+    "setting": "labs.more_call_apps"
+  },
+  {
+    "id": "annotate-replay",
+    "name": "Annotate 15 s replay",
+    "setting": "labs.annotate_replay"
+  },
+  {
+    "id": "meeting-import",
+    "name": "Import audio",
+    "setting": "labs.meeting_import"
+  },
+  {
+    "id": "meeting-descriptive-filenames",
+    "name": "Descriptive meeting file names",
+    "setting": "labs.meeting_descriptive_filenames"
+  },
+  {
+    "id": "meeting-notes-file",
+    "name": "Separate notes file",
+    "setting": "labs.meeting_notes_file"
+  },
+  {
+    "id": "quit-closes-window",
+    "name": "⌘Q closes Settings",
+    "setting": "labs.quit_closes_window"
+  },
+  {
+    "id": "expire-meeting-audio",
+    "name": "Expire meeting audio separately",
+    "setting": "labs.expire_meeting_audio"
+  },
+  {
+    "id": "caps-lock-dictation",
+    "name": "Caps Lock dictation",
+    "setting": "labs.caps_lock_dictation"
+  },
+  {
+    "id": "opencode-in-wsl",
+    "name": "OpenCode in WSL",
+    "setting": "labs.opencode_in_wsl"
+  },
+  {
+    "id": "transcribe-files",
+    "name": "Transcribe files",
+    "setting": "labs.transcribe_files"
+  },
+  {
+    "id": "api-processing",
+    "name": "Process API transcripts",
+    "setting": "labs.api_processing"
+  },
+  {
+    "id": "api-timestamps",
+    "name": "Timestamps in API transcripts",
+    "setting": "labs.api_timestamps"
+  },
+  {
+    "id": "speakers-only",
+    "name": "Only on speakers",
+    "setting": "labs.speakers_only"
+  },
+  {
+    "id": "pause-menu",
+    "name": "Pause from menu bar",
+    "setting": "labs.pause_menu"
+  },
+  {
+    "id": "more-dictation-shortcuts",
+    "name": "More dictation shortcuts",
+    "setting": "labs.more_dictation_shortcuts"
+  },
+  {
+    "id": "annotate",
+    "name": "Annotate",
+    "setting": "capture.enabled"
+  }
+]
