@@ -1030,7 +1030,7 @@ fn feature(s: &State, k: &Kit, feature: AppFeature, name: &str, help: &str, p: P
             .hide_label()
             .on_toggle(move |s: &mut State| s.toggle_feature(feature))
             .build(k),
-        true,
+        !matches!(feature, AppFeature::OtherDevices),
         p,
     )
 }
@@ -1114,9 +1114,14 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
     if !s.hex.shell.relay.enabled {
         return col();
     }
-    let mut out = col().w_full().child(setting_row(s, "relay-address", "Relay address",
-        "WSS origin, or ws://127.0.0.1:port for local tests. Press Enter to save. Pairing requires confirmation on both devices.",
-        TextInput::new(&s.hex.shell.relay_address).label("Relay address").placeholder("ws://127.0.0.1:8787")
+    let mut out = col().w_full().child(setting_row(
+        s,
+        "relay-address",
+        "Relay address",
+        "Your relay's address, like wss://relay.example.com. Press Enter to save.",
+        TextInput::new(&s.hex.shell.relay_address)
+            .label("Relay address")
+            .placeholder("wss://relay.example.com")
             .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
             .on_submit(|s: &mut State, _| {
                 let mut settings = s.hex.shell.relay.clone();
@@ -1127,11 +1132,22 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
                         s.relay_refresh();
                         let connected = sidenote::core::relay_preview::get(&s.store.root)
                             .and_then(|preview| preview.map(|p| p.online(true)).unwrap_or(Ok(())));
-                        s.hex.shell.relay_error = connected.err().map(|_| "Address saved. Restart Sidenote if sync does not reconnect.".into());
+                        s.hex.shell.relay_error = connected.err().map(|_| {
+                            "Address saved. Restart Sidenote if sync does not reconnect.".into()
+                        });
                     }
-                    Err(_) => s.hex.shell.relay_error = Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into()),
+                    Err(_) => {
+                        s.hex.shell.relay_error =
+                            Some("Use a WSS origin on port 443 or ws://127.0.0.1:port.".into())
+                    }
                 }
-            }).build(k).key("relay-address-input").w(300.0), true, p));
+            })
+            .build(k)
+            .key("relay-address-input")
+            .w(300.0),
+        false,
+        p,
+    ));
     let operational = &s.relay_ui.operational;
     let contact = operational
         .last_contact
@@ -1147,9 +1163,9 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
         s,
         "relay-last-contact",
         "Last relay contact",
-        "A successful health check. This does not mean changes reached another device.",
+        "Last time this PC reached the relay.",
         roles::SMALL.wrap(contact, p.soft),
-        true,
+        false,
         p,
     ));
     if !operational.message.is_empty() {
@@ -1210,28 +1226,22 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     out
 }
 fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
-    let devices = col()
-        .w_full()
-        .child(card(
-            "Devices",
-            devices(s, p).child(hairline(p)).child(feature(
-                s,
-                k,
-                AppFeature::OtherDevices,
-                "Other devices",
-                "Show meetings recorded on your other devices.",
-                p,
-            )),
+    let devices = col().w_full().child(card(
+        "Devices",
+        devices(s, p).child(hairline(p)).child(feature(
+            s,
+            k,
+            AppFeature::OtherDevices,
+            "Other devices",
+            &match s.nav.peers {
+                0 => "Show meetings recorded on your other devices.".into(),
+                1 => "1 meeting from another device.".into(),
+                n => format!("{n} meetings from other devices."),
+            },
             p,
-        ))
-        .child(
-            roles::SMALL
-                .wrap(
-                    format!("{} meetings from other devices.", s.nav.peers),
-                    p.soft,
-                )
-                .mt(12.0),
-        );
+        )),
+        p,
+    ));
     let advanced_body = col()
         .w_full()
         .child(card(
@@ -1352,6 +1362,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .min_h(0.0)
         .h_full()
         .child(crumb)
+        .children(
+            (page == Page::Sync)
+                .then(|| super::super::relay::status_banner(s, p))
+                .flatten(),
+        )
         .child(hairline(p))
         .child(
             col().w_full().items_center().child(

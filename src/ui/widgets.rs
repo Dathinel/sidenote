@@ -272,20 +272,27 @@ pub fn highlighted(
     role.wrap(text_, ink).spans(spans)
 }
 
-/// A warning strip above a page, with a Dismiss link.
-pub fn notice_bar(note: &str, p: Palette) -> El {
+fn notice_row(note: &str, p: Palette, icon: Option<&'static rune::Icon>) -> El {
     row()
         .px(24.0)
         .py(8.0)
         .gap(12.0)
         .items_center()
         .fill(p.warnbg)
+        .children(icon.map(|icon| super::icons::draw(icon, 16.0, p.warn)))
         .child(roles::CONTROL.wrap(note, p.warn).grow(1.0))
-        .child(
-            link("Dismiss", p)
-                .key("notice-dismiss")
-                .on_press(|s: &mut State| s.notice = None),
-        )
+}
+/// A persistent status strip using the same geometry as dismissible notices.
+pub fn status_notice(note: &str, icon: &'static rune::Icon, p: Palette) -> El {
+    notice_row(note, p, Some(icon)).role("alert")
+}
+/// A warning strip above a page, with a Dismiss link.
+pub fn notice_bar(note: &str, p: Palette) -> El {
+    notice_row(note, p, None).child(
+        link("Dismiss", p)
+            .key("notice-dismiss")
+            .on_press(|s: &mut State| s.notice = None),
+    )
 }
 
 /// A small rounded label on a tint: a status, a kind of change.

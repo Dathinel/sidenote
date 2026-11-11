@@ -274,20 +274,32 @@ pub fn tick(s: &mut State, tx: &mut Tx) -> bool {
     false
 }
 
+pub fn status_banner(s: &State, p: Palette) -> Option<El> {
+    if !s.hex.shell.relay.enabled {
+        return None;
+    }
+    let status = &s.relay_ui.operational;
+    let icon = if status.read_only {
+        &*super::icons::WARNING
+    } else if status.message.starts_with("Relay unavailable.") {
+        &*super::icons::CLOUD_OFF
+    } else if status.message.starts_with("This address")
+        || status.message.starts_with("Enter a valid")
+    {
+        &*super::icons::WARNING
+    } else {
+        return None;
+    };
+    Some(super::widgets::status_notice(&status.message, icon, p).key("relay-status-banner"))
+}
+
 pub fn section(s: &State, k: &Kit, p: Palette) -> El {
     if !s.hex.shell.relay.enabled {
         return col();
     }
     let mut out = col().w_full().min_w(0.0).gap(8.0);
     if s.relay_ui.operational.read_only {
-        return out.child(card(
-            "Relay sync is read-only",
-            roles::SMALL
-                .wrap(&s.relay_ui.operational.message, p.warn)
-                .padding(14.0)
-                .role("alert"),
-            p,
-        ));
+        return out;
     }
     for conflict in &s.relay_ui.conflicts {
         out = out.child(chooser(s, conflict, p));
