@@ -1,5 +1,9 @@
 # Sidenote on multiple Windows devices
 
+This page covers folder sync. For the opt-in relay preview, see the
+[self-host guide](self-host-relay.md). Relay preview keeps folder transport for
+meeting source files; its shared app data uses the relay collection instead.
+
 Syncthing moves files. Sidenote reads peer text and merges immutable state journals in
 memory. The app does not install Syncthing or configure shares or scheduled tasks.
 

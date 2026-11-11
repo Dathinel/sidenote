@@ -2,15 +2,13 @@
 
 Decisions needed: none for slice 1. Copied from synccore-r1 (461afde). The app integration contract and release gates are in [sync-relay-integration.md](../docs/sync-relay-integration.md). No deployment or account login is performed by this slice.
 
-## Lead deployment
+## Self-hosting
 
-With Bun/dependencies installed and Wrangler already authenticated, the only deployment step, from `relay/`, is:
-
-```powershell
-bunx wrangler deploy
-```
-
-`wrangler.toml` selects Worker `sidenote-relay`, workers.dev, binding `ROOMS`, and `new_sqlite_classes = ["Room"]`. No account is selected in the checked-in config. An operator selects their own account before an authorized deployment. Use the resulting origin as `wss://<worker-host>`. This branch does not deploy, authenticate, or change billing.
+Start with the [Sidenote self-host guide](../docs/self-host-relay.md). It covers
+prerequisites, the pinned local commands, configuration, Settings > Sync >
+Advanced, removal/rotation and costs. Every command in that guide was run locally;
+account provisioning and publication are clearly marked as unexecuted steps.
+No deployment, authentication or billing change was performed for this slice.
 
 ## Admission and residual risk
 
@@ -36,7 +34,7 @@ The relay can observe IPs, public membership, room/session IDs, sizes and timing
 
 Run `bun test tests` and, with the pinned dependencies installed, `bun run typecheck` from this folder. Run Rust workspace gates from the repository root. The app integration test starts installed Wrangler locally on numeric loopback with disposable state. It does not deploy or log in.
 
-`.github/workflows/ci.yml` installs relay dependencies with Bun and runs the workspace tests, including two headless app processes with local Wrangler. Build the debug helper and examples before running the tests directly. Product pairing and physical-device testing remain release gates.
+`.github/workflows/ci.yml` installs relay dependencies with Bun and runs the workspace tests, including two headless app processes with local Wrangler. Build the debug helper and examples before running the tests directly. Product pairing is exercised by the isolated app tests. Physical-device testing, a hosted relay and independent security review remain release gates.
 
 The CI harness command is `python harness/run.py` from `relay/`; `--quick` reduces measured edits/idle time. It starts only numeric-loopback Wrangler on ports 8787/9237 with fresh disposable state and TEMP client databases. The harness terminates its own process tree and opens no windows or browser. This is local emulation, not cloud deployment.
 

@@ -156,8 +156,9 @@ bump the version, push or deploy. Stop at the authorized slice and 90-minute lim
    receipts, per-domain authority, journal bridge, rollback and conflict UI.
 3. **L: remaining shared data.** Meeting task edits, people/teams, projects,
    memory and explicit You settings with domain-specific merge semantics.
-4. **M: Worker self-hosting.** Reproducible guide, operational checks and owner
-   deployment evidence. Decide separately whether to fund an encrypted backlog.
+4. **M: capability safety and Worker self-hosting.** Durable version requirements,
+   downgrade refusal, a local guide and operational checks. Hosted evidence and
+   any encrypted backlog remain separate work.
 5. **L: release qualification.** Two-device matrix, adversarial/recovery tests,
    independent security review, revocation/rotation and packaging evidence.
 
@@ -222,3 +223,27 @@ Out of scope: login, deployment, push, version bump, hosted services, screen
 windows, backlog, selective rekey or slice 5. Physical devices, an owner-hosted
 Worker and independent security review remain release gates. Stop at a clean
 commit around 60 minutes and report any remaining work.
+
+## Slice 4 local receipt
+
+Implemented authenticated requirements before inventory/document exchange and a
+per-room, OS-protected maximum. Incompatible replicas refuse document edits,
+pairing and group rotation; offline/restart/downgrade does not reset the barrier.
+Folder-only notes and per-device sidebar/helper settings remain writable.
+Two actual headless app processes prove this with declared capability versions
+1 and 2. The future declaration is confined to synthetic headless test roots;
+this is not qualification of an actual future release binary or unknown format.
+
+The self-host guide is docs/self-host-relay.md. All nine command lines passed
+locally; output is in artifacts/relay4-local/commands.json and adjacent logs.
+Account setup/publication steps are prose and remain unexecuted. Health GET/HEAD,
+wrong service, unreachable address, retained contact time and local-time display
+are checked. Contact means a health check, not peer delivery. The eight new status
+frames and 44 existing regression/interaction frames passed offscreen checks.
+
+All requested local gates passed, plus final fixture checks in both feature
+variants. See artifacts/relay4-evidence.json and artifacts/relay4-pngs.md.
+Evidence is rung 4. Slice 5 still needs real-device/real-binary upgrade testing,
+recovery/adversarial and multi-peer rekey qualification, packaging, a working
+owner-hosted relay and independent security review. Offline devices cannot know
+an unseen upgrade. No login, deployment, push, version bump or screen windows.
