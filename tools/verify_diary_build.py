@@ -29,9 +29,14 @@ GATES = {
 
 
 def main():
+    global OUT
     parser = argparse.ArgumentParser()
     parser.add_argument("gates", nargs="*", choices=list(GATES), default=list(GATES))
+    parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.out:
+        OUT = args.out.resolve()
+        GATES["settings"][-1] = str(OUT)
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = OUT / "gates.json"
     rows = json.loads(manifest.read_text()) if manifest.exists() else {}

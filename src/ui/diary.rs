@@ -543,24 +543,16 @@ fn entry(s: &State, _k: &Kit, d: &Day, _newest_check: bool, p: Palette) -> El {
         (d.memories.len(), "memory accepted", "memories accepted"),
         (d.proposals, "memory proposal", "memory proposals"),
         (d.done.len(), "completed task", "completed tasks"),
+        (usize::from(d.check), "check-in", "check-ins"),
     ] {
         if n > 0 {
             counts.push(format!("{n} {}", if n == 1 { singular } else { plural }));
         }
     }
-    if !counts.is_empty() || d.check {
+    if !counts.is_empty() {
         let key = part_key(d.date, Part::Outcomes);
         let on = s.check.open_parts.contains(&key);
-        out = out.child(disclosure(
-            key,
-            &if counts.is_empty() {
-                "Daily check".into()
-            } else {
-                counts.join(roles::DOT)
-            },
-            on,
-            p,
-        ));
+        out = out.child(disclosure(key, &counts.join(roles::DOT), on, p));
         if on {
             let mut detail = col()
                 .w_full()
@@ -1193,6 +1185,7 @@ fn rail_heading(name: &str, count: usize, action: El, p: Palette) -> El {
         )
 }
 fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
+    let mut claimed: BTreeSet<_> = followups.iter().map(|a| a.route.key()).collect();
     let mut out = col().w_full().pb(24.0).child(calendar(s, p));
     if s.config.features.memory && s.memory.refresh_pending {
         out = out.child(
@@ -1235,14 +1228,16 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
             .filter(|a| matches!(a.route, core::diary::Route::Task { .. }))
             .map(|a| a.route.key())
             .collect();
-        let only_other = keys.is_empty();
+        let mixed = followups
+            .iter()
+            .any(|a| !matches!(a.route, core::diary::Route::Task { .. }));
         out = out.child(rail_heading(
             "Needs you",
             followups.len(),
             link("See all", p)
                 .key("diary-needs-all")
                 .on_press(move |s: &mut State| {
-                    if only_other {
+                    if mixed {
                         s.check.diary_review_open = true;
                     } else {
                         s.diary_tasks_filter(
@@ -1262,49 +1257,24 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
                 p,
             ));
         }
-        if followups
-            .iter()
-            .any(|a| !matches!(a.route, core::diary::Route::Task { .. }))
-        {
-            out = out.child(
-                link("Review all follow-ups", p)
-                    .key("diary-other-followups")
-                    .on_press(|s: &mut State| s.check.diary_review_open = true),
-            );
-        }
     }
     if s.config.features.tasks {
         for waiting in [false, true] {
-            let mut tasks: Vec<_> = s
-                .tasks
-                .all
-                .iter()
-                .filter(|t| {
-                    if waiting {
-                        core::diary::waiting(t)
-                    } else {
-                        core::diary::due_week(t, s.check.today)
-                    }
-                })
-                .collect();
-            tasks.sort_by_key(|t| {
-                (
-                    t.due_date.unwrap_or(NaiveDate::MAX),
-                    core::diary::task_route(t).key(),
-                )
-            });
-            tasks.dedup_by_key(|t| core::diary::task_route(t).key());
-            if tasks.is_empty() {
-                continue;
-            }
             let selection = if waiting {
-                core::diary::TaskSelection::Waiting
+                core::diary::TaskSelection::Waiting {
+                    exclude: claimed.clone(),
+                }
             } else {
                 core::diary::TaskSelection::Due {
                     start: s.check.today,
                     end: core::diary::week_end(s.check.today),
+                    exclude: claimed.clone(),
                 }
             };
+            let tasks = core::diary::rail_tasks(&s.tasks.all, &selection, &mut claimed);
+            if tasks.is_empty() {
+                continue;
+            }
             let title = if waiting {
                 "Waiting on others"
             } else {
@@ -1362,6 +1332,7 @@ fn rail(s: &State, followups: &[core::diary::Attention], p: Palette) -> El {
             .proposals
             .iter()
             .filter(|p| p.status == ProposalStatus::Pending)
+            .filter(|p| claimed.insert(core::diary::Route::Proposal(p.proposal.id.clone()).key()))
             .collect();
         if !proposals.is_empty() {
             out = out.child(rail_heading(

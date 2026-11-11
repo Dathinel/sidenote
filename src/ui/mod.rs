@@ -2099,6 +2099,7 @@ fn scene_check(s: &mut State) {
 /// list.
 fn scene_diary(s: &mut State) {
     if isolated() {
+        hex::scene(s, false);
         let mut ticks: Vec<(String, String)> = s
             .meetings
             .iter()

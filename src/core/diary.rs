@@ -126,20 +126,44 @@ pub fn waiting(t: &TaskItem) -> bool {
 pub enum TaskSelection {
     Needs(BTreeSet<String>),
     Keys(BTreeSet<String>),
-    Due { start: NaiveDate, end: NaiveDate },
-    Waiting,
+    Due {
+        start: NaiveDate,
+        end: NaiveDate,
+        exclude: BTreeSet<String>,
+    },
+    Waiting {
+        exclude: BTreeSet<String>,
+    },
 }
 impl TaskSelection {
     pub fn matches(&self, t: &TaskItem) -> bool {
         match self {
             Self::Needs(keys) => !t.done && keys.contains(&task_route(t).key()),
             Self::Keys(keys) => keys.contains(&task_route(t).key()),
-            Self::Due { start, end } => {
-                owned(t) && t.due_date.is_some_and(|d| d >= *start && d <= *end)
+            Self::Due {
+                start,
+                end,
+                exclude,
+            } => {
+                owned(t)
+                    && t.due_date.is_some_and(|d| d >= *start && d <= *end)
+                    && !exclude.contains(&task_route(t).key())
             }
-            Self::Waiting => waiting(t),
+            Self::Waiting { exclude } => waiting(t) && !exclude.contains(&task_route(t).key()),
         }
     }
+}
+
+/// Reserve the full section before its preview is truncated, so overflow cannot repeat below it.
+pub fn rail_tasks<'a>(
+    tasks: &'a [TaskItem],
+    selection: &TaskSelection,
+    claimed: &mut BTreeSet<String>,
+) -> Vec<&'a TaskItem> {
+    let mut items: Vec<_> = tasks.iter().filter(|t| selection.matches(t)).collect();
+    items.sort_by_key(|t| (t.due_date.unwrap_or(NaiveDate::MAX), task_route(t).key()));
+    items.retain(|t| claimed.insert(task_route(t).key()));
+    items
 }
 
 fn task_subject<'a>(
@@ -485,6 +509,47 @@ mod tests {
         }
         tasks
     }
+    #[test]
+    fn rail_priority_reserves_overflow_and_destinations_exclude_higher_sections() {
+        let m = meeting(64);
+        let mut tasks = tasks(&m);
+        let today = date("2026-11-11");
+        for t in &mut tasks {
+            t.due_date = Some(today);
+            t.status = TaskStatus::Waiting;
+            t.waiting_label = Some("Paper review".into());
+        }
+        // The last task is waiting without a due date and belongs only in Waiting on others.
+        tasks[63].due_date = None;
+        tasks[61].title = tasks[60].title.clone();
+        let needs: BTreeSet<_> = tasks[..60].iter().map(|t| task_route(t).key()).collect();
+        let mut claimed = needs.clone();
+        let due = TaskSelection::Due {
+            start: today,
+            end: week_end(today),
+            exclude: claimed.clone(),
+        };
+        assert_eq!(rail_tasks(&tasks, &due, &mut claimed).len(), 3);
+        assert!(!due.matches(&tasks[59]));
+        assert!(due.matches(&tasks[62]));
+        let waiting = TaskSelection::Waiting {
+            exclude: claimed.clone(),
+        };
+        let remaining = rail_tasks(&tasks, &waiting, &mut claimed);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(task_route(remaining[0]).key(), task_route(&tasks[63]).key());
+        assert!(!waiting.matches(&tasks[62]));
+        assert!(waiting.matches(&tasks[63]));
+        assert_eq!(claimed.len(), 64);
+        // Repeated store rows never inflate a section count.
+        let duplicate = vec![tasks[63].clone(), tasks[63].clone()];
+        assert_eq!(
+            rail_tasks(&duplicate, &waiting, &mut needs.clone()).len(),
+            1
+        );
+        assert!(rail_tasks(&tasks, &due, &mut claimed).is_empty());
+    }
+
     fn finding(m: &Meeting, index: usize) -> Finding {
         let subject = format!("task:{}:{index}", m.id);
         serde_json::from_value(serde_json::json!({"id":format!("finding-{index}"), "kind":"missing_followup", "severity":"high", "title":"DEC-123 revision abcdef123456", "explanation":"Internal model evidence", "evidence":[format!("[[{}@00:05]]", m.id)], "subject_refs":[subject], "subject_keys":[format!("{subject}@{}", super::super::store_io::fingerprint([m.summary.todo[index].task.as_str()]))], "evidence_keys":["synthetic"], "material_state":"synthetic"})).unwrap()

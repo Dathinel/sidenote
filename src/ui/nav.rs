@@ -552,16 +552,16 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
             .opacity(0.5)
             .disabled(true),
     };
-    col().items_end().gap(2.0).child(action).children(
-        blocked
-            .filter(|reason| !reason.starts_with("Checking for Hex."))
-            .map(|reason| {
-                roles::META
-                    .wrap(reason, p.soft)
-                    .max_w(if narrow { 300.0 } else { 440.0 })
-                    .role("status")
-            }),
-    )
+    col()
+        .items_end()
+        .gap(2.0)
+        .child(action)
+        .children(blocked.map(|reason| {
+            roles::META
+                .wrap(reason, p.soft)
+                .max_w(if narrow { 300.0 } else { 440.0 })
+                .role("status")
+        }))
 }
 
 fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {

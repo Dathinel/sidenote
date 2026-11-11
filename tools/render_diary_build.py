@@ -64,6 +64,9 @@ def fixture(state, case):
             2: [("Read the meeting notes", None, "todo", None), ("Confirm the room booking", "2026-11-12", "waiting", "The venue team's reply"), ("Prepare the sample pack", "2026-11-13", "todo", None)],
             3: [("Share the revised print proof", "2026-11-12", "waiting", "The print proof review"), ("Confirm who sends the sample pack", None, "todo", None)],
         }.get(n, []) if case not in ["untitled", "future"] else []
+        if case == "rail-lower" and n == 3:
+            text, _, status, waiting = specs[0]
+            specs[0] = (text, None, status, waiting)
         if case == "stress" and n == 0: specs += [(f"Review paper sample {i + 1}", "2026-11-10", "todo", None) for i in range(60)]
         todos = [dict(id=f"task-{i}", task=text, title=text, description="Review the synthetic paper workshop material.", owner="Mira Vale", due=due, status=status, waiting_on=dict(text=waiting) if waiting else None) for i, (text, due, status, waiting) in enumerate(specs)]
         if case == "untitled":
@@ -91,6 +94,13 @@ def fixture(state, case):
         findings.append(dict(id=f"synthetic-finding-{n}-{index}", kind="missing_followup", severity="high" if index == 1 else "medium", title="DEC-123 revision abcdef123456 should never reach Diary", explanation="Raw internal evidence stays in the full report.", evidence=[f"[[{mid}@00:05]]"], subject_refs=[subject], subject_keys=[subject + "@" + fingerprint([summary["todo"][index]["task"]])], material_state="synthetic", evidence_keys=[f"[[{mid}@00:05]]"], change="changed" if n == 2 else "new"))
     findings.append(dict(id="synthetic-finding-memory", kind="conflicting_decisions", severity="high", title="Internal memory identity", explanation="Review source details.", evidence=[f"[[{first}@00:05]]"], subject_refs=["memory:synthetic-memory-fold"], subject_keys=["memory:synthetic-memory-fold"], material_state="synthetic", evidence_keys=[f"[[{first}@00:05]]"], change="changed"))
     findings.append(dict(id="synthetic-finding-unmapped", kind="other", severity="medium", title="Internal project reference", explanation="Review the original report.", evidence=["workshop.md"], subject_refs=["project:Paper workshop|open-question"], subject_keys=["project:Paper workshop|open-question"], material_state="synthetic", evidence_keys=["workshop.md"], change="new"))
+    if case == "proposal-attention":
+        for proposal in proposals:
+            subject = "proposal:" + proposal["id"]
+            findings.append(dict(id="finding-" + proposal["id"], kind="other", severity="high", title="Internal proposal reference", explanation="Review the proposal.", evidence=[], subject_refs=[subject], subject_keys=[subject], material_state="synthetic", evidence_keys=[], change="new"))
+    if case == "rail-lower":
+        f = next(f for f in findings if f["id"] == "synthetic-finding-2-1")
+        save(state / "checks/triage.json", dict(schema_version=1, findings={f["id"]: dict(finding_id=f["id"], status="dismissed", updated_at=stamp, snooze_until=None, evidence_fingerprint=fingerprint(f["evidence_keys"]), evidence_keys=f["evidence_keys"], note=None)}))
     def report(day, items):
         return dict(schema_version=2, date=day, runner="Synthetic fixture", prompt_bytes=0, elapsed_seconds=0, meeting_count=len(catalog), task_count=9, kb=dict(revision="0"*40, captured_at=stamp, path=str(state / "synthetic-kb"), stale=False), warnings=[], memory_updated=False, findings=items, brief=["Internal raw brief must not appear in Diary."], comparison=dict(baseline_date=None, complete=True, new=[], changed=[], carried=[], resolved=[], unmatched=[]), day_summary="The sample pack and invitation are nearly ready. The remaining work is a final copy check and print proof.", day_summary_date="2026-11-10")
     save(state / f"checks/{TODAY}.json", report(TODAY, findings))
@@ -110,7 +120,7 @@ def nodes(value):
 def render(exe, name, width=1440, theme="dark", case="default", events=None, scene="diary", height=1500, scale=1, expected=None):
     state = Path(tempfile.mkdtemp(prefix=name + "-", dir=ROOT / "target"))
     meetings = fixture(state, case)
-    if scene.startswith("settings-") or scene == "people-team-editor":
+    if scene.startswith("settings-") or scene == "people-team-editor" or (scene == "diary" and case != "hex-unavailable"):
         shutil.copy2(ROOT / "tools/ui-fixtures/hex.json", state / "hex-fixture.json")
     if scene == "people-team-editor":
         save(state / "teams.json", dict(teams=[dict(name="Paper workshop team", members=["Mira Vale", "Theo Moss"], aliases={})]))
@@ -157,13 +167,14 @@ def render(exe, name, width=1440, theme="dark", case="default", events=None, sce
         assert any(n.get("key") == "diary-proposal-0" and n.get("rect") and 52 <= n["rect"][1] < height for n in all_nodes), "Lower rail sections were not reachable"
         assert any(n.get("key") == "diary-2026-11-11" and n.get("rect") and 52 <= n["rect"][1] < 200 for n in all_nodes), "Rail scrolling moved the timeline"
     print("PASS " + base.name, flush=True)
-    return dict(png=str(base)+".png", tree=str(base)+".json", width=width, theme=theme, case=case, scene=scene, seconds=round(time.monotonic()-started, 2), sha256=hashlib.sha256(Path(str(base)+".png").read_bytes()).hexdigest())
+    return dict(png=str(base)+".png", tree=str(base)+".json", width=width, height=height, theme=theme, case=case, scene=scene, seconds=round(time.monotonic()-started, 2), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), sha256=hashlib.sha256(Path(str(base)+".png").read_bytes()).hexdigest())
 
 
 def tap(key, t=0.5): return dict(type="tap", key=key, t=t)
 
 
 def main():
+    global OUT
     parser = argparse.ArgumentParser()
     parser.add_argument("exe", type=Path)
     parser.add_argument("--quick", action="store_true")
@@ -171,9 +182,90 @@ def main():
     parser.add_argument("--settings", action="store_true")
     parser.add_argument("--case", default=None)
     parser.add_argument("--interactions", action="store_true")
+    parser.add_argument("--round2", action="store_true")
+    parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.out: OUT = args.out.resolve()
     OUT.mkdir(parents=True, exist_ok=True)
     exe = args.exe.resolve()
+    if args.round2:
+        if args.audit:
+            manifest = json.loads((OUT / "round2-manifest.json").read_text())
+            binary_hash = hashlib.sha256(exe.read_bytes()).hexdigest()
+            assert manifest["binary_sha256"] == binary_hash
+            required = {f"{name}-1440-{theme}.png" for name in ["diary", "diary-rail"] for theme in ["light", "dark"]} | {"diary-week-open-390-light.png"}
+            assert required <= {Path(row["png"]).name for row in manifest["rows"]}
+            settings = json.loads((OUT / "legacy-settings-manifest.json").read_text())
+            for shot in manifest["rows"] + settings:
+                raw = Path(shot["png"]).read_bytes()
+                assert hashlib.sha256(raw).hexdigest() == shot["sha256"]
+                assert struct.unpack(">II", raw[16:24]) == (shot["width"], shot["height"])
+                assert shot["binary_sha256"] == binary_hash
+                assert not json.loads(Path(shot["tree"]).read_text(encoding="utf-8-sig"))["warnings"]
+            gates = json.loads((OUT / "gates.json").read_text())
+            assert set(gates) == {"fmt", "clippy", "clippy-asr", "test", "test-asr", "build", "smoke", "settings"}
+            assert all(row["exit_code"] == 0 for row in gates.values())
+            save(OUT / "verification.json", dict(binary_sha256=binary_hash, diary_renders=len(manifest["rows"]), settings_renders=len(settings), gate_count=len(gates), verified_at=datetime.utcnow().isoformat()+"Z"))
+            print("PASS: round 2 binary, render hashes, native trees and all eight gates", flush=True)
+            return
+        rows = []
+        for theme in ["dark", "light"]:
+            rows.append(render(exe, "diary", 1440, theme))
+            rows.append(render(exe, "diary-rail", 1440, theme))
+        rows.append(render(exe, "diary-week-open", 390, "light", events=[tap("diary-week-toggle")]))
+        for shot in rows:
+            tree = json.loads(Path(shot["tree"]).read_text(encoding="utf-8-sig"))
+            layout = [n for n in nodes(tree) if n.get("rect")]
+            keys = {n.get("key") for n in layout}
+            assert not {"diary-due-all", "diary-waiting-all", "diary-other-followups"} & keys
+            assert {"diary-needs-all", "diary-memory-all"} <= keys
+            button = next(n for n in layout if n.get("key") == "new-meeting")
+            accessible = next(n for n in nodes(tree["accessibility"]) if n.get("key") == "new-meeting")
+            assert "disabled" not in accessible.get("states", []) and button["opacity"] == 1.0, button
+            assert button["fill"] == ("#ecececff" if shot["theme"] == "dark" else "#1f2328ff")
+            ink = [n["color"] for n in layout if n.get("role") == "text" and str(n.get("path", "")).startswith(button["path"] + "/")]
+            assert ink and all(color == ("#1f2328ff" if shot["theme"] == "dark" else "#ffffffff") for color in ink)
+            assert button["help"] == "Start recording a meeting"
+            rail = [n for n in layout if str(n.get("key", "")).startswith(("diary-needs-", "diary-proposal-")) and not str(n["key"]).endswith("all")]
+            labels = [n["label"] for n in rail]
+            assert len(labels) == len(set(labels)), labels
+            text = " ".join(str(n.get("text", "")) for n in layout)
+            assert "1 check-in" in text and "Daily check" not in [n.get("text") for n in layout]
+            assert "Needs you (9)" in text and "Memory proposals (3)" in text
+        rows.append(render(exe, "diary-check-in", 1440, "light", events=[tap("diary-fold-2026-11-09:outcomes")], expected=["diary-outcomes-2026-11-09"]))
+        tree = json.loads(Path(rows[-1]["tree"]).read_text(encoding="utf-8-sig"))
+        assert "The daily check flagged" in " ".join(str(n.get("text", "")) for n in nodes(tree))
+        rows.append(render(exe, "diary-disabled-reason", 1440, "light", case="hex-unavailable"))
+        tree = json.loads(Path(rows[-1]["tree"]).read_text(encoding="utf-8-sig"))
+        button = next(n for n in nodes(tree) if n.get("key") == "new-meeting" and n.get("rect"))
+        accessible = next(n for n in nodes(tree["accessibility"]) if n.get("key") == "new-meeting")
+        assert "disabled" in accessible["states"] and button["help"]
+        assert button["help"] in [n.get("text") for n in nodes(tree)]
+        rows.append(render(exe, "diary-stress-all", 1440, "light", case="stress", events=[tap("diary-needs-all")], expected=["diary-review-close"]))
+        rows.append(render(exe, "diary-proposal-priority", 1440, "light", case="proposal-attention"))
+        tree = json.loads(Path(rows[-1]["tree"]).read_text(encoding="utf-8-sig"))
+        assert "diary-memory-all" not in {n.get("key") for n in nodes(tree)}
+        assert "Needs you (12)" in [n.get("text") for n in nodes(tree)]
+        rows.append(render(exe, "diary-lower-sections", 1440, "light", case="rail-lower", expected=["diary-needs-all", "diary-due-all", "diary-waiting-all", "diary-memory-all"]))
+        tree = json.loads(Path(rows[-1]["tree"]).read_text(encoding="utf-8-sig"))
+        text = [n.get("text") for n in nodes(tree)]
+        assert "Due this week (1)" in text and "Waiting on others (1)" in text
+        for name, key, expected in [
+            ("diary-route-due", "diary-due-all", ["tasks-pane", "diary-task-filter-clear", "diary-return"]),
+            ("diary-route-waiting", "diary-waiting-0", ["tasks-pane", "tasks-panel", "diary-return"]),
+            ("diary-route-waiting-all", "diary-waiting-all", ["tasks-pane", "diary-task-filter-clear"]),
+        ]:
+            rows.append(render(exe, name, 1440, "light", case="rail-lower", events=[tap(key)], expected=expected))
+        for name, case, width, theme in [
+            ("diary-empty", "empty", 390, "light"),
+            ("diary-untitled", "untitled", 390, "light"),
+            ("diary-long", "long", 1440, "light"),
+            ("diary-future", "future", 1440, "dark"),
+        ]:
+            rows.append(render(exe, name, width, theme, case=case))
+        save(OUT / "round2-manifest.json", dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), rows=rows))
+        print(f"PASS: {len(rows)} round 2 renders and regression checks", flush=True)
+        return
     if args.audit:
         manifest = json.loads((OUT / "render-manifest.json").read_text())
         binary_hash = hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -206,19 +298,22 @@ def main():
     if args.interactions:
         cases = [
             ("diary-route-task", [tap("diary-needs-0")], ["tasks-pane", "tasks-panel", "diary-return"]),
-            ("diary-route-due", [tap("diary-due-all")], ["tasks-pane", "diary-task-filter-clear", "diary-return"]),
-            ("diary-route-waiting", [tap("diary-waiting-0")], ["tasks-pane", "tasks-panel", "diary-return"]),
-            ("diary-route-waiting-all", [tap("diary-waiting-all")], ["tasks-pane", "diary-task-filter-clear"]),
             ("diary-route-memory", [tap("diary-needs-2")], ["memory-pane", "diary-return"]),
             ("diary-route-proposal", [tap("diary-proposal-0")], ["memory-pane", "diary-return"]),
             ("diary-route-memory-review", [tap("diary-memory-all")], ["memory-pane", "diary-return"]),
-            ("diary-route-all", [tap("diary-other-followups")], ["diary-review-close"]),
-            ("diary-route-return", [tap("diary-due-all", .4), tap("diary-return", 1.0)], ["diary-timeline", "diary-calendar"]),
+            ("diary-route-all", [tap("diary-needs-all")], ["diary-review-close"]),
+            ("diary-route-return", [tap("diary-needs-0", .4), tap("diary-return", 1.0)], ["diary-timeline", "diary-calendar"]),
             ("diary-calendar-keyboard", [tap("diary-month-next", .3), dict(type="key", name="Tab", t=.5), dict(type="key", name="Right", t=.7), dict(type="key", name="Enter", t=1.0)], ["diary-2026-11-12"]),
             ("diary-calendar-escape", [tap("diary-month-next", .3), dict(type="key", name="Tab", t=.5), dict(type="key", name="Escape", t=.7)], ["diary-calendar-grid-true"]),
         ]
         rows = [render(exe, name, 1440, "light", events=events, expected=expected) for name, events, expected in cases]
-        rows.append(render(exe, "diary-stress-all", 1440, "light", case="stress", events=[tap("diary-other-followups")], expected=["diary-review-close"]))
+        for name, key, expected in [
+            ("diary-route-due", "diary-due-all", ["tasks-pane", "diary-task-filter-clear", "diary-return"]),
+            ("diary-route-waiting", "diary-waiting-0", ["tasks-pane", "tasks-panel", "diary-return"]),
+            ("diary-route-waiting-all", "diary-waiting-all", ["tasks-pane", "diary-task-filter-clear"]),
+        ]:
+            rows.append(render(exe, name, 1440, "light", case="rail-lower", events=[tap(key)], expected=expected))
+        rows.append(render(exe, "diary-stress-all", 1440, "light", case="stress", events=[tap("diary-needs-all")], expected=["diary-review-close"]))
         rows.append(render(exe, "diary-history", 1440, "light", case="history", events=[tap("diary-month-prev", .3), tap("diary-month-prev", .6), tap("diary-month-prev", .9), tap("diary-date-2026-08-03", 1.2)], expected=["diary-2026-08-03"]))
         rows.append(render(exe, "diary-feature-flags", 1440, "light", case="features-off"))
         rows.append(render(exe, "diary-read-error-folded", 390, "light", case="broken"))
