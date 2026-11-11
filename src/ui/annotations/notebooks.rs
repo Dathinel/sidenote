@@ -627,8 +627,8 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
                 .on_press(|s: &mut State| s.annotations.notebooks.note_open = true),
         );
     }
-    page = page.child(actions).child(roles::SMALL.wrap("Sends existing annotation notes, with no images. Captures without a note need your review first.",p.soft)).child(roles::SMALL.wrap(
-        "Drag cards to reorder, or focus a card and press Alt+Up or Alt+Down.",
+    page = page.child(actions).child(roles::SMALL.wrap(
+        "Uses each capture's note, no images sent. Drag or Alt+Up/Down to reorder.",
         p.soft,
     ));
     for (i, r) in book.captures.iter().enumerate() {
@@ -636,42 +636,66 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
         let keyboard_key = key.clone();
         let count = book.captures.len();
         let folder = r.folder.clone();
+        let capture = s.annotations.captures.iter().find(|c| c.folder == r.folder);
+        let meta = format!(
+            "{} {} {} marks {} {}",
+            capture.map_or_else(|| "Date unknown".into(), date),
+            roles::DOT,
+            capture.map_or(0, |c| c.data.marks.len()),
+            roles::DOT,
+            if s.annotations.thumbnails.contains_key(&r.folder) {
+                "Note ready"
+            } else {
+                "Needs review"
+            }
+        );
         let card = pressable(
-            col()
+            row()
                 .w_full()
-                .gap(12.0)
-                .padding(18.0)
+                .gap(10.0)
+                .padding(12.0)
+                .items_center()
+                .child(number(i + 1, p))
                 .child(
-                    row()
-                        .gap(12.0)
-                        .items_center()
-                        .child(number(i + 1, p))
-                        .child(roles::TITLE.wrap(&r.title, p.ink).max_lines(2)),
+                    crate::ui::icons::draw(&crate::ui::icons::GRIP_VERTICAL, 18.0, p.soft)
+                        .key(format!("notebook-grip-{i}"))
+                        .help("Drag to reorder"),
                 )
+                .child(thumbnail(
+                    s,
+                    &r.folder,
+                    format!("notebook-thumbnail-{i}"),
+                    p,
+                ))
                 .child(
-                    row()
-                        .gap(16.0)
-                        .child(roles::META.wrap("Drag to reorder", p.soft))
-                        .child(link("Open capture", p).on_press(move |s: &mut State| {
-                            if let Some(index) = s
-                                .annotations
-                                .captures
-                                .iter()
-                                .position(|c| c.folder == folder)
-                            {
-                                s.annotations.notebooks.selected = None;
-                                s.select_annotation(index);
-                            }
-                        }))
-                        .child(
-                            link("Remove", p)
-                                .key(format!("notebook-remove-{i}"))
-                                .on_press(move |s: &mut State| s.remove_book_capture(i)),
-                        ),
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(5.0)
+                        .child(roles::TITLE.wrap(&r.title, p.ink).max_lines(1))
+                        .child(roles::META.wrap(meta, p.soft).max_lines(1)),
+                )
+                .child(link("Open", p).key(format!("notebook-open-{i}")).on_press(
+                    move |s: &mut State| {
+                        if let Some(index) = s
+                            .annotations
+                            .captures
+                            .iter()
+                            .position(|c| c.folder == folder)
+                        {
+                            s.annotations.notebooks.selected = None;
+                            s.select_annotation(index);
+                        }
+                    },
+                ))
+                .child(
+                    link("Remove", p)
+                        .key(format!("notebook-remove-{i}"))
+                        .on_press(move |s: &mut State| s.remove_book_capture(i)),
                 ),
         )
         .key(format!("notebook-capture-{key}"))
-        .h(120.0)
+        .h(76.0)
         .border(
             1.0,
             if s.annotations.notebooks.dragging == Some(i) {
@@ -836,6 +860,11 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
             p.soft,
         ));
     };
+    if let Err(e) = notebook::validate(doc) {
+        return page
+            .child(roles::SMALL.wrap(format!("This notebook note needs review: {e}"), p.warn));
+    }
+    let reading = notebook::reading_value(doc);
     if !s.annotations.notebooks.editing.is_empty() {
         let kit = theme::kit(&p);
         let mut fields = s.annotations.notebooks.editing.iter().collect::<Vec<_>>();
@@ -851,12 +880,12 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
         for (path, input) in fields {
             let key = path.clone();
             page = page
-                .child(roles::GROUP.wrap(field_label(path, &doc.value), p.soft))
+                .child(roles::GROUP.wrap(field_label(path, &reading), p.soft))
                 .child(
                     TextArea::new(input)
                         .rows(3)
                         .width(None)
-                        .label(field_label(path, &doc.value))
+                        .label(field_label(path, &reading))
                         .on_edit(move |s: &mut State| {
                             s.annotations.notebooks.editing.get_mut(&key).unwrap()
                         })
@@ -867,17 +896,13 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
         }
         return page;
     }
-    if let Err(e) = notebook::validate(doc) {
-        return page
-            .child(roles::SMALL.wrap(format!("This notebook note needs review: {e}"), p.warn));
-    }
     if !book.fresh() {
         page = page.child(roles::SMALL.wrap(
             "Notebook changed. Write the note again before sharing.",
             p.warn,
         ));
     }
-    let value = &doc.value;
+    let value = &reading;
     page = page
         .child(
             roles::SECTION
@@ -905,7 +930,22 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
                     .selectable(true),
             );
         }
-        for figure in section["figures"].as_array().unwrap() {
+        for (fi, figure) in section["figures"].as_array().unwrap().iter().enumerate() {
+            if let Some(reference) = figure["same_screen"].as_str() {
+                page = page.child(
+                    roles::SMALL
+                        .wrap(reference, p.soft)
+                        .key(format!("notebook-reuse-{i}-{fi}")),
+                );
+                for explanation in figure["reuse_explanations"].as_array().unwrap() {
+                    page = page.child(
+                        roles::READ
+                            .wrap(explanation.as_str().unwrap(), p.ink)
+                            .selectable(true),
+                    );
+                }
+                continue;
+            }
             let frame = figure["keyframe_index"].as_u64().unwrap();
             let image_key = format!("{}:{frame}", section["capture_key"].as_str().unwrap());
             let side = width >= 860.0;
@@ -920,6 +960,51 @@ fn note_page(s: &State, book: &Notebook, width: f32, p: Palette, mut page: El) -
                 && let Some([w, h]) = img.size()
             {
                 image = image.h(iw * h as f32 / w as f32).pixels(img.pixels());
+                for c in figure["callouts"].as_array().unwrap() {
+                    let n = c["mark_number"].as_u64().unwrap();
+                    let old = c["original_mark_number"].as_u64().unwrap_or(n);
+                    if old != n
+                        && let Some(b) = c["boxNorm"].as_array()
+                    {
+                        let scale = iw / w as f32;
+                        let bw = ((old.to_string().len().max(n.to_string().len()) as f32 * 12.0
+                            + 6.0)
+                            .max(22.0))
+                            * scale;
+                        let bh = 22.0 * scale;
+                        let x = (b[0].as_f64().unwrap() as f32 * w as f32).floor() * scale;
+                        let y = (b[1].as_f64().unwrap() as f32 * h as f32).floor() * scale;
+                        image = image.child(
+                            el().absolute(
+                                x.min((iw - bw).max(0.0)),
+                                y.min((iw * h as f32 / w as f32 - bh).max(0.0)),
+                            )
+                            .w(bw)
+                            .h(bh)
+                            .fill(rune::Color {
+                                r: rune::color::srgb_decode(30.0 / 255.0),
+                                g: rune::color::srgb_decode(74.0 / 255.0),
+                                b: rune::color::srgb_decode(116.0 / 255.0),
+                                a: 1.0,
+                            })
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                roles::META
+                                    .wrap(
+                                        n.to_string(),
+                                        rune::Color {
+                                            r: 1.0,
+                                            g: 1.0,
+                                            b: 1.0,
+                                            a: 1.0,
+                                        },
+                                    )
+                                    .font(theme::display(16.0 * scale)),
+                            ),
+                        );
+                    }
+                }
             }
             let mut callouts = col().w(if side { 300.0 } else { width }).gap(10.0);
             for c in figure["callouts"].as_array().unwrap() {
@@ -1000,6 +1085,12 @@ pub(in crate::ui) fn scene(s: &mut State, name: &str) {
     book.note_revision = book.revision;
     notebook::save(&s.store.root, &book).unwrap();
     s.annotations.captures = captures;
+    s.annotations.thumbnails = thumbnails(
+        &s.store.root,
+        &s.annotations.captures,
+        s.waker.clone().unwrap_or_else(|| Arc::new(|| {})),
+        true,
+    );
     s.annotations.notebooks.books = vec![book.clone()];
     s.annotations.status.clear();
     if name == "notebook-needs-review" {

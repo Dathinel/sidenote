@@ -30,6 +30,7 @@ pub struct Annotations {
     pub open: bool,
     notebooks: notebooks::Ui,
     captures: Vec<Capture>,
+    thumbnails: BTreeMap<PathBuf, Option<Image>>,
     errors: Vec<String>,
     selected: Option<PathBuf>,
     transcript: bool,
@@ -63,6 +64,7 @@ pub struct Annotations {
     other_model: bool,
 }
 pub enum Msg {
+    Thumbnails(BTreeMap<PathBuf, Option<Image>>),
     NotebookDelta {
         id: u64,
         text: String,
@@ -123,6 +125,69 @@ fn images(capture: &Capture, wake: rune::Waker, wait: bool) -> Vec<Result<Image,
             Ok(image)
         })
         .collect()
+}
+fn thumbnails(
+    root: &std::path::Path,
+    captures: &[Capture],
+    wake: rune::Waker,
+    wait: bool,
+) -> BTreeMap<PathBuf, Option<Image>> {
+    let cache = ImageCache::new(wake);
+    captures
+        .iter()
+        .filter_map(|c| {
+            let (approved, _) = annotations::notebook::load_capture_note(root, c).ok()??;
+            let image = approved.approval.frames.first().and_then(|f| {
+                let bytes = file_reads::read(
+                    &approved.folder.join(&f.marked),
+                    annotations::IMAGE_MAX_BYTES,
+                )
+                .ok()?;
+                if blake3::hash(&bytes).to_hex().as_str()
+                    != approved.approval.file_hashes[&f.marked]
+                {
+                    return None;
+                }
+                let image = cache.load(bytes);
+                if wait {
+                    image.wait().ok()?;
+                }
+                Some(image)
+            });
+            Some((c.folder.clone(), image))
+        })
+        .collect()
+}
+fn thumbnail(s: &State, folder: &std::path::Path, key: String, p: Palette) -> El {
+    let mut view = el()
+        .w(72.0)
+        .h(44.0)
+        .radius(4.0)
+        .fill(p.chip)
+        .key(key)
+        .role("img")
+        .label("Approved frame thumbnail");
+    if let Some(Some(image)) = s.annotations.thumbnails.get(folder) {
+        view = view.pixels(image.pixels());
+    } else {
+        view = view.child(
+            super::icons::draw(&super::icons::ANNOTATIONS, 18.0, p.faint).absolute(27.0, 13.0),
+        );
+    }
+    view
+}
+impl State {
+    fn refresh_annotation_thumbnails(&mut self) {
+        let captures = self.annotations.captures.clone();
+        let root = self.store.root.clone();
+        let sender = self.events_tx.clone();
+        let wake = self.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
+        std::thread::spawn(move || {
+            let result = thumbnails(&root, &captures, wake.clone(), false);
+            let _ = sender.send(Event::Annotations(Msg::Thumbnails(result)));
+            wake();
+        });
+    }
 }
 fn hex_hints(settings: &[sidenote::hex_engine::Setting]) -> (Option<String>, bool) {
     let shortcut = settings.iter().filter(|s| !s.secret).find_map(|s| {
@@ -243,6 +308,7 @@ impl State {
                 self.apply_notebook_ready(book_id, revision, result)
             }
             Msg::NotebookDelta { .. } | Msg::NotebookReady { .. } => {}
+            Msg::Thumbnails(images) => self.annotations.thumbnails = images,
             Msg::Scanned {
                 scan,
                 shortcut,
@@ -255,6 +321,7 @@ impl State {
                 self.annotations.disabled = disabled;
                 self.annotations.can_record = can_record;
                 self.annotations.loading = false;
+                self.refresh_annotation_thumbnails();
                 if let Some(folder) = self.annotations.selected.clone()
                     && !self.annotations.captures.iter().any(|c| c.folder == folder)
                 {
@@ -322,6 +389,7 @@ impl State {
                         self.annotations.status="The note is saved, but Sidenote could not save its capture link. Save your edits to try again.".into();
                     }
                     self.annotations.note_open = true;
+                    self.refresh_annotation_thumbnails();
                     self.load_annotation_note_images();
                     if self.annotations.notebooks.pending.is_some() {
                         self.continue_notebook();
@@ -784,15 +852,27 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
             for (index, c) in s.annotations.captures.iter().enumerate() {
                 rows = rows.child(
                     pressable(
-                        col()
+                        row()
                             .w_full()
-                            .min_w(0.0)
-                            .gap(5.0)
+                            .gap(12.0)
                             .px(16.0)
-                            .py(14.0)
-                            .child(roles::META.wrap(c.app(), p.soft))
-                            .child(roles::TITLE.wrap(c.title(), p.ink).max_lines(2))
-                            .child(facts(c, p)),
+                            .py(12.0)
+                            .items_center()
+                            .child(thumbnail(
+                                s,
+                                &c.folder,
+                                format!("annotation-thumbnail-{index}"),
+                                p,
+                            ))
+                            .child(
+                                col()
+                                    .grow(1.0)
+                                    .min_w(0.0)
+                                    .gap(4.0)
+                                    .child(roles::META.wrap(c.app(), p.soft))
+                                    .child(roles::TITLE.wrap(c.title(), p.ink).max_lines(2))
+                                    .child(facts(c, p)),
+                            ),
                     )
                     .key(format!("annotation-row-{index}"))
                     .label(format!("{}: {}", c.app(), c.title()))

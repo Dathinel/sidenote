@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 VERSION = "1.61.0"
 ICONS = {'MEETINGS': 'notebook-pen',
  'ANNOTATIONS': 'pen-tool',
+ 'GRIP_VERTICAL': 'grip-vertical',
  'TASKS': 'list-checks',
  'MEMORY': 'library',
  'DIARY': 'calendar',

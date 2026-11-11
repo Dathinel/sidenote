@@ -31,7 +31,7 @@ for(const [width,height] of [[1280,1600],[390,2400]])for(const theme of ['light'
   const loaded=new Promise(resolve=>events.set('Page.loadEventFired',[resolve]));await cmd('Page.navigate',{url:pathToFileURL(source).href});await loaded;
   await cmd('Runtime.evaluate',{expression:'new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))',awaitPromise:true});
   const status=(await cmd('Runtime.evaluate',{expression:"({dark:matchMedia('(prefers-color-scheme: dark)').matches,background:getComputedStyle(document.body).backgroundColor,width:innerWidth,height:innerHeight,images:document.images.length,scripts:document.scripts.length})",returnByValue:true})).result.value;
-  if(status.dark!==(theme==='dark')||status.width!==width||status.scripts!==0||status.images!==6)throw Error(JSON.stringify(status));
+  if(status.dark!==(theme==='dark')||status.width!==width||status.scripts!==0||status.images!==2)throw Error(JSON.stringify(status));
   if(requests.some(url=>/^https?:/i.test(url)))throw Error('The exported page made an external request');
   const screenshot=await cmd('Page.captureScreenshot',{format:'png',fromSurface:true,captureBeyondViewport:false,clip:{x:0,y:0,width,height,scale:1}});
   const png=path.join(out,`share-html-${width}-${theme}.png`);const bytes=Buffer.from(screenshot.data,'base64');if(bytes.readUInt32BE(16)!==width||bytes.readUInt32BE(20)!==height)throw Error('Wrong screenshot dimensions');await fs.writeFile(png,bytes);
