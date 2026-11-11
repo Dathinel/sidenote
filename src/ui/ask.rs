@@ -11,7 +11,7 @@ use super::{
     meeting::COLUMN,
     roles,
     theme::Palette,
-    widgets::{hairline, quiet_button, spaced_caps},
+    widgets::{hairline, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
