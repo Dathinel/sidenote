@@ -226,8 +226,9 @@ impl Driver {
                 let mut notes = super::super::Config::load_in(root)?
                     .notes
                     .unwrap_or_default();
+                let baseline = notes.clone();
                 notes.model = "synthetic-local-model".into();
-                super::super::Config::save_notes(root, &notes)?;
+                super::super::Config::save_notes(root, &baseline, &notes)?;
                 Ok(
                     serde_json::json!({"sidebar":super::super::UiPrefs::load(root).sidebar_collapsed,"model":super::super::Config::load_in(root)?.notes.unwrap().model}),
                 )
@@ -236,8 +237,9 @@ impl Driver {
                 let mut notes = super::super::Config::load_in(root)?
                     .notes
                     .unwrap_or_default();
+                let baseline = notes.clone();
                 notes.your_name = command["name"].as_str().unwrap_or("Synthetic owner").into();
-                super::super::Config::save_notes(root, &notes)?;
+                super::super::Config::save_notes(root, &baseline, &notes)?;
                 Ok(Value::Null)
             }
             "memory-edit" => {

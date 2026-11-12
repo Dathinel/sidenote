@@ -158,7 +158,10 @@ pub enum Completion {
 }
 enum Work {
     Load,
-    Settings(NotesSettings),
+    Settings {
+        baseline: Box<NotesSettings>,
+        edited: NotesSettings,
+    },
     Save(usize, String),
     Reset(usize),
     Test(usize, String),
@@ -174,8 +177,8 @@ fn agent(index: usize) -> Agent {
 fn run(root: &Path, work: Work) -> Result<Completion, String> {
     match work {
         Work::Load => Snapshot::read(root).map(|s| Completion::Loaded(Box::new(s))),
-        Work::Settings(settings) => {
-            notes::save_settings(&settings).map_err(|_| {
+        Work::Settings { baseline, edited } => {
+            notes::save_settings(&baseline, &edited).map_err(|_| {
                 "Could not save Meeting summary settings. Your previous choice was kept."
                     .to_string()
             })?;
@@ -222,6 +225,17 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
     }
 }
 impl State {
+    fn notes_save_settings(&mut self, edited: NotesSettings, label: &'static str) {
+        if let Some(baseline) = self.ai_notes.settings.clone() {
+            self.notes_work(
+                Work::Settings {
+                    baseline: Box::new(baseline),
+                    edited,
+                },
+                label,
+            );
+        }
+    }
     fn notes_work(&mut self, work: Work, label: &'static str) {
         if self.ai_notes.pending.is_some() || self.ai_notes.scene {
             return;
@@ -345,7 +359,7 @@ impl State {
             }
             Ok(Completion::Settings(config)) => {
                 self.ai_notes.settings = config.notes.clone();
-                self.config = *config;
+                self.config.refresh_notes_from(&config);
                 self.ai_notes.fallback = None;
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
@@ -413,7 +427,7 @@ impl State {
         settings.helper = Some(HELPERS[index]);
         settings.model = self.ai_notes.models[index].text.trim().into();
         settings.your_name = self.ai_notes.name.text.trim().into();
-        self.notes_work(Work::Settings(settings), "Saving Meeting summary...");
+        self.notes_save_settings(settings, "Saving Meeting summary...");
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
         if let Some(problem) = self.notes_request_problem() {
@@ -746,8 +760,8 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     .on_toggle(|s: &mut State| {
                         if let Some(mut settings) = s.ai_notes.settings.clone() {
                             settings.auto = !settings.auto;
-                            s.notes_work(
-                                Work::Settings(settings),
+                            s.notes_save_settings(
+                                settings,
                                 "Saving automatic meeting summaries...",
                             );
                         }
@@ -1077,7 +1091,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         .on_press(|s: &mut State| {
                             if let Some(mut settings) = s.ai_notes.settings.clone() {
                                 settings.engine = "scripts".into();
-                                s.notes_work(Work::Settings(settings), "Switching to scripts...");
+                                s.notes_save_settings(settings, "Switching to scripts...");
                             }
                         }),
                 ),
@@ -1102,10 +1116,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         .on_press(|s: &mut State| {
                             if let Some(mut settings) = s.ai_notes.settings.clone() {
                                 settings.engine = "off".into();
-                                s.notes_work(
-                                    Work::Settings(settings),
-                                    "Turning off Meeting summary...",
-                                );
+                                s.notes_save_settings(settings, "Turning off Meeting summary...");
                             }
                         })
                 }),
@@ -1129,7 +1140,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 button("Save name", "notes-save-name", p).on_press(|s: &mut State| {
                     if let Some(mut settings) = s.ai_notes.settings.clone() {
                         settings.your_name = s.ai_notes.name.text.trim().into();
-                        s.notes_work(Work::Settings(settings), "Saving your name...");
+                        s.notes_save_settings(settings, "Saving your name...");
                     }
                 }),
             );

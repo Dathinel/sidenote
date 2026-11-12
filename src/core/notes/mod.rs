@@ -130,7 +130,7 @@ pub fn settings() -> io::Result<NotesSettings> {
         .notes
         .ok_or_else(|| io::Error::other("Missing notes settings"))
 }
-pub fn save_settings(s: &NotesSettings) -> io::Result<()> {
+pub fn save_settings(baseline: &NotesSettings, s: &NotesSettings) -> io::Result<()> {
     if !["app", "scripts", "off"].contains(&s.engine.as_str()) {
         return Err(super::store_io::invalid("Unknown notes engine"));
     }
@@ -150,7 +150,7 @@ pub fn save_settings(s: &NotesSettings) -> io::Result<()> {
     {
         return Err(super::store_io::invalid("Invalid notes model or name"));
     }
-    super::Config::save_notes(&super::state_dir(), s)
+    super::Config::save_notes(&super::state_dir(), baseline, s)
 }
 pub fn detect() -> Vec<(Helper, bool)> {
     [Helper::Claude, Helper::Codex, Helper::OpenCode]
