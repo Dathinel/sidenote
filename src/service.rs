@@ -225,7 +225,13 @@ fn supervise() {
     let mut listener = (role() == DeviceRole::Server).then(crate::listener::service_background);
     while !stopping() && !crate::updates::listener_stopping() {
         reap_children(false);
-        let (sync, relay) = sync_status(role(), &root, crate::core::reconcile_service);
+        let (sync, relay) = sync_status(role(), &root, || {
+            #[cfg(target_os = "linux")]
+            if role() != DeviceRole::Full {
+                return crate::sync_owner::snapshot().errors == 0;
+            }
+            crate::core::reconcile_service()
+        });
         let hex = if role() != DeviceRole::Hub
             && crate::core::meetings_dir()
                 .parent()
@@ -345,6 +351,13 @@ pub fn run() -> i32 {
                 if let Err(error) = result { eprintln!("{error}"); return 2; }
             }
         }
+        #[cfg(target_os = "linux")]
+        let sync_owner = if role() == DeviceRole::Full { None } else {
+            match crate::sync_owner::Owner::start(&crate::core::state_dir(), _instance) {
+                Ok(owner) => Some(owner),
+                Err(_) => { eprintln!("SYNC_OWNER_UNAVAILABLE: check private state and control socket"); return 2; }
+            }
+        };
         #[cfg(windows)]
         let _update_instance = match crate::listener::acquire_lock() {
             Ok(instance) => instance,
@@ -374,6 +387,8 @@ pub fn run() -> i32 {
         let lifetime = async {
             while !stopping() && !worker.is_finished() {
                 #[cfg(target_os = "linux")]
+                if sync_owner.as_ref().is_some_and(|owner| !owner.healthy()) { break; }
+                #[cfg(target_os = "linux")]
                 reap_orphans(false);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -390,8 +405,14 @@ pub fn run() -> i32 {
             _ = lifetime => {}
         }
         STOP.store(true, Ordering::Release);
+        #[cfg(target_os = "linux")]
+        let owner_failed = sync_owner.as_ref().is_some_and(|owner| !owner.healthy());
+        #[cfg(target_os = "linux")]
+        drop(sync_owner);
         crate::core::ask::cancel_all(Duration::from_secs(3));
         let result = if worker.join().is_ok() { 0 } else { 2 };
+        #[cfg(target_os = "linux")]
+        let result = if owner_failed { eprintln!("SYNC_OWNER_STOPPED"); 2 } else { result };
         #[cfg(target_os = "linux")]
         reap_orphans(true);
         crate::listener::log(if result == 0 {

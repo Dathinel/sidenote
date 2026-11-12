@@ -80,3 +80,13 @@ pub mod task_titles;
 pub fn reconcile_service() -> bool {
     sync_state::reconcile(&state_dir()).is_empty()
 }
+pub(crate) fn service_journal_revision(root: &std::path::Path) -> std::io::Result<String> {
+    sync_state::ingestion_revision(root)
+}
+
+pub(crate) fn scan_ingestion_source(
+    path: &std::path::Path,
+    pending: bool,
+) -> (Vec<Meeting>, Vec<String>) {
+    meetings::scan_in_mode(path, pending)
+}

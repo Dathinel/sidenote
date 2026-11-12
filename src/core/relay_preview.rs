@@ -288,6 +288,25 @@ pub struct Preview {
 }
 
 impl Preview {
+    pub(crate) fn session_status(&self) -> io::Result<String> {
+        let connection = self.connection.lock().map_err(failed)?;
+        let Some(connection) = connection.as_ref() else {
+            return Ok("offline".into());
+        };
+        let receiver = connection.client.subscribe_status();
+        let status = receiver.borrow().clone();
+        Ok(match status {
+            sidenote_sync::status::Status::Offline => "offline".into(),
+            sidenote_sync::status::Status::Connecting => "connecting".into(),
+            sidenote_sync::status::Status::Synced => "synced".into(),
+            sidenote_sync::status::Status::Failed(reason) => format!("failed:{reason:?}"),
+        })
+    }
+    pub(crate) fn public_fingerprint(&self) -> String {
+        hex::encode(sidenote_sync::identity::hash(
+            &self.device.identity.public(),
+        ))
+    }
     fn open(root: &Path, settings: Settings) -> io::Result<Self> {
         crate::platform::require_process_support()?;
         let mut settings = settings;

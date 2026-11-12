@@ -1290,6 +1290,28 @@ pub(super) fn stores(root: &Path) -> io::Result<Vec<String>> {
     }
     Ok(stores.into_iter().collect())
 }
+pub(super) fn ingestion_revision(root: &Path) -> io::Result<String> {
+    let mut journals = BTreeSet::new();
+    for owner in entries(&root.join("state"))? {
+        let name = owner.file_name().to_string_lossy().into_owned();
+        if !device::valid_id(&name) || !super::file_reads::directory(&owner.path()) {
+            continue;
+        }
+        for folder in entries(&owner.path())? {
+            if !super::file_reads::directory(&folder.path()) {
+                continue;
+            }
+            for file in entries(&folder.path())? {
+                if file.path().extension().is_some_and(|e| e == "json")
+                    && let Ok(journal) = read_journal(&file.path(), &name, None)
+                {
+                    journals.insert((journal.device, journal.id, journal.store, journal.checksum));
+                }
+            }
+        }
+    }
+    Ok(hash(&serde_json::to_vec(&journals)?))
+}
 pub(super) fn reconcile(root: &Path) -> Vec<String> {
     let mut errors = Vec::new();
     let inspect = || -> io::Result<Vec<String>> {
