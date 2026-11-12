@@ -52,6 +52,14 @@ impl Problem {
     }
 }
 pub(crate) fn log(message: &str) {
+    #[cfg(target_os = "linux")]
+    if crate::service::role() != crate::service::DeviceRole::Full || crate::service::active() {
+        let _ = crate::operations::record(
+            &crate::core::state_dir(),
+            crate::operations::EventKind::WorkerChanged,
+        );
+        return;
+    }
     if cfg!(not(windows)) && crate::service::active() {
         log_at(&crate::core::log_path(), "worker status=changed");
         return;

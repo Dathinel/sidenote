@@ -5,6 +5,10 @@ use std::sync::mpsc;
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 enum Request {
+    #[cfg(target_os = "linux")]
+    Operations {
+        kind: String,
+    },
     Mcp {
         method: String,
         params: Value,
@@ -150,6 +154,12 @@ impl Controller {
         let request: Request = serde_json::from_slice(bytes).map_err(|_| invalid())?;
         self.poll_pair();
         match request {
+            #[cfg(target_os = "linux")]
+            Request::Operations { kind } => match kind.as_str() {
+                "status" => Ok(crate::operations::status(&self.root, &snapshot())),
+                "logs" => crate::operations::logs(&self.root),
+                _ => Err(invalid()),
+            },
             Request::Mcp { .. } => Err(invalid()),
             Request::Status {} => Ok(pages::status(&self.state)),
             Request::Inventory { cursor } => pages::page(&self.state.meetings, cursor),

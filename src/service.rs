@@ -258,6 +258,10 @@ fn supervise() {
             hex,
             ui_allowed()
         );
+        #[cfg(target_os = "linux")]
+        if crate::operations::record(&root, crate::operations::EventKind::ServiceTick).is_err() {
+            eprintln!("OPS_LOG_UNAVAILABLE");
+        }
         pause(Duration::from_secs(30));
     }
     STOP.store(true, Ordering::Release);

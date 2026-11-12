@@ -93,6 +93,10 @@ fn write(root: &Path, id: &str, job: &mut Job, state: JobState, message: &str) -
     Ok(())
 }
 fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    if crate::service::role() != crate::service::DeviceRole::Full || crate::service::active() {
+        return crate::operations::record(root, crate::operations::EventKind::NotesChanged);
+    }
     fs::create_dir_all(root)?;
     let mut file = fs::OpenOptions::new()
         .create(true)

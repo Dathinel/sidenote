@@ -1,6 +1,16 @@
 //! Dispatch inside the replica owner; never include input or backend errors in diagnostics.
 use serde_json::{Value, json};
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
+static REQUESTS: AtomicU64 = AtomicU64::new(0);
+static FAILURES: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+pub(super) fn metrics() -> (u64, u64) {
+    (
+        REQUESTS.load(Ordering::Relaxed),
+        FAILURES.load(Ordering::Relaxed),
+    )
+}
 
 fn read_tool(name: &str) -> bool {
     matches!(
@@ -20,6 +30,14 @@ pub(super) fn dispatch(method: &str, params: Value, read_only: bool) -> io::Resu
     let _read = crate::core::ReadOnlyScope::begin(
         !(method == "call" && params["name"] == "propose_memory"),
     );
+    REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let result = dispatch_inner(method, params, read_only);
+    if result.is_err() {
+        FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+fn dispatch_inner(method: &str, params: Value, read_only: bool) -> io::Result<Value> {
     match method {
         "tools" => Ok(serde_json::to_value(
             crate::mcp::tools()

@@ -1,4 +1,4 @@
-#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
+﻿#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
 #[cfg(all(windows, feature = "desktop"))]
@@ -56,6 +56,10 @@ fn main() {
     #[cfg(target_os = "linux")]
     if args.iter().any(|a| a == "--mcp-access") {
         std::process::exit(sidenote::mcp::access::cli(&args));
+    }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--ops") {
+        std::process::exit(sidenote::operations::cli(&args));
     }
     if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
         std::process::exit(sidenote::service::run());

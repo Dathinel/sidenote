@@ -35,6 +35,10 @@ pub struct Ingested {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(skip)]
+    pub observed_at_ms: i64,
+    #[serde(skip)]
+    pub last_connected_observation_ms: Option<i64>,
     pub generation: u64,
     pub source_revision: String,
     pub meetings: Vec<Ingested>,
@@ -109,6 +113,10 @@ impl Controller {
         self.state.errors = errors;
         self.state.relay_enabled = settings.enabled;
         self.state.relay_status = relay_status;
+        self.state.observed_at_ms = chrono::Utc::now().timestamp_millis();
+        if self.state.relay_status == "synced" {
+            self.state.last_connected_observation_ms = Some(self.state.observed_at_ms);
+        }
         self.state.peers = settings.peers.len();
         self.state.identity = identity;
         let path = self.root.join("local/sync/index.json");
@@ -224,6 +232,10 @@ pub fn cli() -> i32 {
     } else {
         0
     }
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn mcp_metrics() -> (u64, u64) {
+    mcp::metrics()
 }
 /// A one-shot helper never opens the service's relay replica.
 #[cfg(target_os = "linux")]

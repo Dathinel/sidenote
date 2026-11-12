@@ -7,6 +7,8 @@ pub mod listener;
 pub mod mcp;
 #[cfg(all(windows, feature = "desktop"))]
 pub mod meeting_icon;
+#[cfg(target_os = "linux")]
+pub mod operations;
 pub mod platform;
 pub mod service;
 #[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
