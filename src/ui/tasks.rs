@@ -557,8 +557,8 @@ impl State {
         if view == View::Tasks && !self.config.features.tasks {
             return;
         }
-        let timing =
-            (view == View::Tasks).then(|| super::Operation::new(super::TimedAction::Tasks));
+        let timing = (view == View::Tasks && self.view != view)
+            .then(|| super::Operation::new(super::TimedAction::Tasks));
         if self.companies.open {
             self.go_home();
         }
@@ -877,10 +877,15 @@ impl State {
 
     /// Opens a task in the panel and selects its row.
     pub fn open_task(&mut self, id: &str, index: usize) -> bool {
+        let same = matches!(&self.tasks.panel, Some(Panel::Task((old, old_index))) if old == id && *old_index == index);
         self.open_task_timed(
             id,
             index,
-            super::Operation::new(super::TimedAction::TaskDetails),
+            if !same {
+                super::Operation::new(super::TimedAction::TaskDetails)
+            } else {
+                super::Operation::default()
+            },
         )
     }
 

@@ -10,7 +10,7 @@ use std::{
 
 const CAPACITY: usize = 2048;
 const WINDOW: usize = 256;
-pub const ACTIONS: [&str; 14] = [
+pub const ACTIONS: [&str; 15] = [
     "Open app",
     "Open meeting",
     "Meeting tab",
@@ -22,9 +22,10 @@ pub const ACTIONS: [&str; 14] = [
     "Task filter",
     "Task details",
     "Settings",
-    "Ask first text",
+    "Ask CLI first text",
     "Annotations",
     "Stop to notes ready",
+    "Ask connected first text",
 ];
 
 #[derive(Clone, Copy)]
@@ -44,6 +45,7 @@ pub enum Action {
     Ask,
     Annotations,
     Notes,
+    AskConnected,
 }
 
 #[derive(Clone, Default)]
@@ -98,6 +100,7 @@ thread_local! {
     static NEXT: Cell<u64> = const { Cell::new(0) };
     static LAUNCH: Cell<u64> = const { Cell::new(0) };
     static VISIBLE: Cell<usize> = const { Cell::new(usize::MAX >> 8) };
+    static VISIBLE_ASK: Cell<u64> = const { Cell::new(0) };
 }
 
 pub fn enabled() -> bool {
@@ -209,6 +212,9 @@ pub fn startup_ready() {
 #[derive(Default)]
 pub struct Operation(u64);
 impl Operation {
+    pub fn at(action: Action, at: Instant) -> Self {
+        Self(begin_at(action, Some(at)))
+    }
     pub fn new(action: Action) -> Self {
         Self(begin(action))
     }
@@ -227,13 +233,17 @@ impl Drop for Operation {
 pub fn frame(at: Instant) {
     RECORDER.with_borrow(|r| {
         if let Some(p) = r {
-            emit(p, u64::MAX, frame_tag(VISIBLE.get()), at);
+            emit(p, VISIBLE_ASK.get(), frame_tag(VISIBLE.get()), at);
         }
     });
 }
 
 pub fn view(mask: usize) {
     VISIBLE.set(mask);
+    VISIBLE_ASK.set(0);
+}
+pub fn visible_operation(id: u64) {
+    VISIBLE_ASK.set(id);
 }
 fn frame_tag(mask: usize) -> usize {
     (mask << 8) | (ACTIONS.len() + 2)
@@ -317,7 +327,8 @@ fn record(samples: &mut [Samples; ACTIONS.len()], id: u64, tag: usize, at: u64) 
     } else if tag & 255 == ACTIONS.len() + 2 {
         let mask = tag >> 8;
         for (index, s) in samples.iter_mut().enumerate() {
-            if mask & (1 << index) != 0 {
+            let ask = index == Action::Ask as usize || index == Action::AskConnected as usize;
+            if mask & (1 << index) != 0 && (!ask || s.pending.is_some_and(|p| p.id == id)) {
                 s.finish_frame(at);
             } else if s.pending.take().is_some() {
                 s.summary.superseded += 1;
@@ -412,6 +423,20 @@ mod tests {
         record(&mut s, 0, frame_tag(1 << Action::Settings as usize), 1000);
         let meeting = &s[Action::Meeting as usize].summary;
         assert_eq!((meeting.count, meeting.superseded), (0, 1));
+    }
+
+    #[test]
+    fn background_ask_cannot_complete_on_another_threads_frame() {
+        let mut s = std::array::from_fn(|_| Samples::default());
+        record(&mut s, 7, Action::Ask as usize, 0);
+        record(&mut s, 7, ACTIONS.len(), 100);
+        record(&mut s, 8, frame_tag(1 << Action::Ask as usize), 1000);
+        assert_eq!(s[Action::Ask as usize].summary.count, 0);
+        assert_eq!(s[Action::Ask as usize].summary.superseded, 1);
+        record(&mut s, 9, Action::Ask as usize, 2000);
+        record(&mut s, 9, ACTIONS.len(), 2100);
+        record(&mut s, 9, frame_tag(1 << Action::Ask as usize), 3000);
+        assert_eq!(s[Action::Ask as usize].summary.count, 1);
     }
 
     #[test]

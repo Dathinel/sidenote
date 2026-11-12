@@ -180,7 +180,13 @@ fn active(s: &State) -> (Page, usize) {
 }
 
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
-    let timing = crate::ui::Operation::new(crate::ui::TimedAction::Settings);
+    let changed =
+        !s.on_hex() || s.hex.section != page.section(tab.min(page.tabs().len().saturating_sub(1)));
+    let timing = if changed {
+        crate::ui::Operation::new(crate::ui::TimedAction::Settings)
+    } else {
+        crate::ui::Operation::default()
+    };
     if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
         load_kb(s);
     }
@@ -854,6 +860,14 @@ fn app_index() -> Vec<Destination> {
             "update-source",
             "Update source",
             "update folder diagnostics",
+            Page::Diagnostics,
+            0,
+            false,
+        ),
+        entry(
+            "response-times",
+            "Response times",
+            "latency timing performance",
             Page::Diagnostics,
             0,
             false,
@@ -2288,6 +2302,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Diagnostics, _) => col()
             .w_full()
             .key("helper-advanced")
+            .child(crate::ui::response_times::section(p))
             .child(labs(s, k, p, layer))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Advanced))
             .child(card(

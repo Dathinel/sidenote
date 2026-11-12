@@ -36,7 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -222,7 +222,12 @@ pub enum Saving {
     Failed(String),
 }
 
+static NEXT_RECORDING_ID: AtomicU64 = AtomicU64::new(1);
+
 pub struct Live {
+    // Session-local recording identity; never included in timing records.
+    pub(super) recording_id: u64,
+    pub(super) notes_response_time: u64,
     pub phase: Phase,
     /// The meetings that existed when this one began, so the new one can be told apart.
     known: HashSet<String>,
@@ -261,11 +266,20 @@ pub struct Live {
 
 impl Drop for Live {
     fn drop(&mut self) {
+        super::response_time::superseded(std::mem::take(&mut self.notes_response_time));
         self.cancel.store(true, Ordering::Relaxed);
     }
 }
 
 impl Live {
+    pub(super) fn take_notes_timing(&mut self, recording: u64) -> u64 {
+        if self.recording_id == recording {
+            std::mem::take(&mut self.notes_response_time)
+        } else {
+            0
+        }
+    }
+
     fn can_close(&self, text: &str) -> bool {
         self.queued.is_none() && (text == self.saved || self.recovered.as_deref() == Some(text))
     }
@@ -276,6 +290,8 @@ impl Live {
 
     fn new(phase: Phase, known: HashSet<String>) -> Self {
         Self {
+            recording_id: NEXT_RECORDING_ID.fetch_add(1, Ordering::Relaxed),
+            notes_response_time: 0,
             phase,
             known,
             began: Instant::now(),
@@ -648,9 +664,14 @@ impl State {
                 *meeting = fresh;
                 self.refresh_list();
             }
+            let timing = self
+                .live
+                .as_mut()
+                .map_or(0, |live| std::mem::take(&mut live.notes_response_time));
             self.live = None;
             self.live_open = false;
             // Opening a meeting needs the UI's scroll handle, so `poll` finishes the job.
+            super::response_time::ready(timing);
             if was_open {
                 self.live_ready = Some(id);
             }
@@ -1539,6 +1560,22 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+
+    #[test]
+    fn replacing_recording_discards_stop_and_rejects_old_reply() {
+        let mut first = Live::scene(Phase::Making, None);
+        first.notes_response_time = 17;
+        let first_id = first.recording_id;
+        let mut current = Some(first);
+        drop(current.replace(Live::scene(Phase::Recording, None)));
+        let second = current.as_mut().unwrap();
+        assert_ne!(second.recording_id, first_id);
+        assert_eq!(second.notes_response_time, 0);
+        second.notes_response_time = 29;
+        assert_eq!(second.take_notes_timing(first_id), 0);
+        assert_eq!(second.notes_response_time, 29);
+        assert_eq!(second.take_notes_timing(second.recording_id), 29);
+    }
 
     #[test]
     fn panel_budget_preserves_the_document_and_shrinks_transcript_first() {

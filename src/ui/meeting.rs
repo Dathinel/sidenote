@@ -210,7 +210,11 @@ impl State {
 
     /// Picks Summary or Your notes. Where the transcript covers the page, this also closes it.
     pub fn set_meeting_tab(&mut self, tab: Tab) {
-        let timing = super::Operation::new(super::TimedAction::Tab);
+        let timing = if self.meeting_tab != tab || self.transcript_covers() {
+            super::Operation::new(super::TimedAction::Tab)
+        } else {
+            super::Operation::default()
+        };
         self.meeting_tab = tab;
         if self.transcript_covers() {
             self.transcript_open = false;
