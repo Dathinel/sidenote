@@ -11,7 +11,7 @@ use super::{
     meeting::COLUMN,
     roles,
     theme::Palette,
-    widgets::{hairline, pressable, quiet_button, spaced_caps},
+    widgets::{ButtonDisabled, hairline, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
@@ -886,7 +886,17 @@ pub fn overlay_with(
     let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
     let model = if s.ask_settings.connection.settings.enabled {
         quiet_button("Connection", "ask-endpoint-settings", p)
-            .on_press(|s: &mut State| s.connection_recovery(2))
+            .button_disabled(pending)
+            .help(if pending {
+                "Available after this answer finishes"
+            } else {
+                "Open Ask connection settings"
+            })
+            .on_press(|s: &mut State| {
+                if !s.asks.contains_key(&s.ask_key()) {
+                    s.open_connection_settings();
+                }
+            })
     } else {
         match &s.runner_error {
             Some(e) => roles::META

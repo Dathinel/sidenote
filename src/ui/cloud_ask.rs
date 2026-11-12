@@ -15,6 +15,7 @@ pub struct Connection {
     url: TextEdit,
     model: TextEdit,
     key: TextEdit,
+    key_saved: bool,
     pub status: Option<String>,
     pub catalogue: Vec<String>,
     pub catalogue_busy: bool,
@@ -38,6 +39,7 @@ impl Connection {
             url: TextEdit::new(&settings.base_url),
             model: TextEdit::new(&settings.model),
             key,
+            key_saved: provider::key_available_for(&settings),
             settings,
             status,
             catalogue: provider::OPENROUTER_MODELS
@@ -49,6 +51,9 @@ impl Connection {
             labels: HashMap::new(),
             slow: HashSet::new(),
         }
+    }
+    fn refresh_key(&mut self) {
+        self.key_saved = provider::key_available_for(&self.settings);
     }
     fn fill(&mut self, settings: Settings) {
         self.url = TextEdit::new(&settings.base_url);
@@ -72,6 +77,7 @@ impl State {
         match next.save() {
             Ok(()) => {
                 self.ask_settings.connection.settings = next;
+                self.ask_settings.connection.refresh_key();
                 self.ask_settings.connection.status = Some("Connection saved on this device. Cloud Ask still requires opt-in for this endpoint and model.".into());
             }
             Err(e) => self.ask_settings.connection.status = Some(e),
@@ -84,7 +90,7 @@ impl State {
             self.finish_ask(&id, run, Some(sidenote::core::ask::STOPPED.into()));
         }
     }
-    fn open_connection_settings(&mut self) {
+    pub(super) fn open_connection_settings(&mut self) {
         let question = self.question.clone();
         self.open_hex();
         self.question = question;
@@ -217,16 +223,18 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .child(setting_row(s, "ask-connection-model-row", "Model", "Exact server model ID. OpenRouter suggestions are editable; availability and cost depend on the provider.", model, true, p))
         .child(models)
         .child(action("Save connection", "ask-connection-save", p).on_press(|s: &mut State| s.save_ask_connection()))
-        .child(setting_row(s, "ask-connection-key-row", "API key (optional)", if provider::key_available() { "A protected key is saved for this endpoint. Replace or delete it here." } else { "Stored using Windows current-user DPAPI, outside config and sync. Never displayed again." }, key, true, p))
+        .child(setting_row(s, "ask-connection-key-row", "API key (optional)", if c.key_saved { "A protected key is saved for this endpoint. Delete removes saved keys for every endpoint." } else { "Stored using Windows current-user DPAPI, outside config and sync. Delete removes keys for every endpoint." }, key, true, p))
         .child(row().gap(8.0).flex_wrap()
             .child(action("Save key", "ask-connection-key-save", p).on_press(|s: &mut State| {
                 let result = if s.ask_settings.connection.draft() != s.ask_settings.connection.settings { Err("Save the endpoint and model before saving its key".into()) } else { provider::save_key(s.ask_settings.connection.key.text.as_bytes()) };
                 s.ask_settings.connection.key = TextEdit::default();
                 s.ask_settings.connection.key.set_secure(true);
+                s.ask_settings.connection.refresh_key();
                 s.ask_settings.connection.status = Some(result.map(|_| "Protected key saved for this endpoint".into()).unwrap_or_else(|e| e));
             }))
-            .child(action("Delete key", "ask-connection-key-delete", p).on_press(|s: &mut State| {
-                s.ask_settings.connection.status = Some(provider::delete_key().map(|_| "Protected key deleted".into()).unwrap_or_else(|e| e));
+            .child(action("Delete all saved keys", "ask-connection-key-delete", p).on_press(|s: &mut State| {
+                s.ask_settings.connection.status = Some(provider::delete_key().map(|_| "Protected Ask keys deleted for every endpoint".into()).unwrap_or_else(|e| e));
+                s.ask_settings.connection.refresh_key();
             })))
         .child(roles::SMALL.wrap(format!("Ask recipient: {}. Sends the question, bounded conversation history and selected context: summaries, transcripts, typed notes, tasks and memory when included by the current Ask scope. Local gateways can forward content to another service. Other jobs keep their own settings and consent.", c.settings.label()), p.soft).key("ask-connection-consent-disclosure"))
         .child(row().gap(8.0).flex_wrap()

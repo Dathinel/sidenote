@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -15,7 +15,8 @@ use std::{
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const SLOW: Duration = Duration::from_secs(15);
-const DEADLINE: Duration = Duration::from_secs(120);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const FRAME: Duration = Duration::from_millis(33);
 pub const NAME: &str = "Chat completions";
 pub const LOCAL_URL: &str = "http://127.0.0.1:11434/v1";
 pub const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
@@ -152,6 +153,9 @@ fn key_path_for(settings: &Settings) -> Result<PathBuf, String> {
 pub fn key_available() -> bool {
     key_path().is_ok_and(|p| p.is_file())
 }
+pub fn key_available_for(settings: &Settings) -> bool {
+    key_path_for(settings).is_ok_and(|p| p.is_file())
+}
 pub fn save_key(key: &[u8]) -> Result<(), String> {
     let path = key_path()?;
     if key.is_empty() || key.len() > 8192 || key.iter().any(|b| b.is_ascii_control()) {
@@ -163,11 +167,34 @@ pub fn save_key(key: &[u8]) -> Result<(), String> {
         .map_err(|_| "Could not save the protected API key".into())
 }
 pub fn delete_key() -> Result<(), String> {
-    match std::fs::remove_file(key_path()?) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("Could not delete the protected API key".into()),
+    delete_keys_in(&directory()?)
+        .map_err(|_| "Could not delete all protected Ask keys. Try again.".into())
+}
+fn delete_keys_in(root: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut failure = None;
+    for entry in entries {
+        let result = entry.and_then(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("key-") && name.ends_with(".dpapi") {
+                match std::fs::remove_file(entry.path()) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    result => result,
+                }
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = result {
+            failure = Some(error);
+        }
     }
+    failure.map_or(Ok(()), Err)
 }
 
 /// A fixed diagnostic vocabulary prevents keys, URLs, bodies and prompts leaking through errors.
@@ -235,6 +262,7 @@ impl Metrics {
 #[derive(Default)]
 pub struct Stream {
     pending: Vec<u8>,
+    scanned: usize,
     data: Vec<String>,
     pub text: String,
     pub done: bool,
@@ -250,10 +278,18 @@ impl Stream {
         if self.received > MAX_BYTES {
             return Err("Endpoint response exceeded the size limit".into());
         }
-        let before = self.text.len();
         self.pending.extend_from_slice(bytes);
-        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
+        self.consume_lines()
+    }
+    fn consume_lines(&mut self) -> Result<bool, String> {
+        let before = self.text.len();
+        while let Some(offset) = self.pending[self.scanned..]
+            .iter()
+            .position(|b| *b == b'\n')
+        {
+            let end = self.scanned + offset;
             let line: Vec<_> = self.pending.drain(..=end).collect();
+            self.scanned = 0;
             let line = std::str::from_utf8(&line)
                 .map_err(|_| "Endpoint sent invalid UTF-8")?
                 .trim_end_matches(['\r', '\n']);
@@ -268,6 +304,7 @@ impl Stream {
                     .push(data.strip_prefix(' ').unwrap_or(data).to_owned());
             }
         }
+        self.scanned = self.pending.len();
         Ok(before != self.text.len())
     }
     fn event(&mut self) -> Result<(), String> {
@@ -308,7 +345,12 @@ impl Stream {
         }
         Ok(())
     }
-    pub fn finish(&self) -> Result<(), String> {
+    pub fn finish(&mut self) -> Result<(), String> {
+        if !self.done {
+            // EOF terminates both a partial line and its final event, without counting fake bytes.
+            self.pending.extend_from_slice(b"\n\n");
+            self.consume_lines()?;
+        }
         if !self.done {
             return Err("Endpoint stream ended before [DONE]. Retry starts a new attempt.".into());
         }
@@ -325,9 +367,9 @@ fn agent() -> ureq::Agent {
             .proxy(None)
             .max_redirects(0)
             .http_status_as_error(false)
-            .timeout_global(Some(DEADLINE))
+            .timeout_global(None)
             .timeout_connect(Some(SLOW))
-            .timeout_per_read(Some(Duration::from_secs(30)))
+            .timeout_per_read(Some(IDLE_TIMEOUT))
             .build()
             .into()
     });
@@ -378,13 +420,62 @@ pub fn openrouter_models() -> Result<Vec<String>, String> {
     }
     Ok(models)
 }
-enum Update {
-    Text(String),
-    Metrics(Metrics),
-    Complete(Result<(String, Metrics), String>),
+struct Live {
+    stream: Stream,
+    last_bytes: Instant,
 }
 
-/// The caller owns cancellation and UI progress; a blocked socket never blocks that channel.
+fn idle_expired(last_bytes: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(last_bytes) >= IDLE_TIMEOUT
+}
+
+struct SettingsWatch {
+    path: PathBuf,
+    stamp: Option<(std::time::SystemTime, u64)>,
+    next_check: Instant,
+    verified: Instant,
+}
+impl SettingsWatch {
+    fn new(started: Instant) -> Result<Self, String> {
+        Ok(Self {
+            path: directory()?.join("settings.json"),
+            stamp: None,
+            next_check: started,
+            verified: started,
+        })
+    }
+    fn check(&mut self, selected: &Settings, now: Instant) -> Result<(), String> {
+        if now < self.next_check {
+            return Ok(());
+        }
+        self.next_check = now + Duration::from_millis(100);
+        let stamp = std::fs::metadata(&self.path)
+            .ok()
+            .and_then(|m| m.modified().ok().map(|time| (time, m.len())));
+        if stamp.is_some() && stamp == self.stamp {
+            self.verified = now;
+            return Ok(());
+        }
+        match Settings::load() {
+            Ok(saved) if saved != *selected => {
+                return Err("Ask connection or consent changed. Start a new attempt.".into());
+            }
+            Ok(_) => {
+                self.stamp = stamp;
+                self.verified = now;
+            }
+            Err(_) if idle_expired(self.verified, now) => {
+                return Err(
+                    "Ask connection settings could not be verified. Retry the attempt.".into(),
+                );
+            }
+            Err(_) => {} // Retry temporary locks; never cache a failed read as a verified change.
+        }
+        Ok(())
+    }
+}
+
+/// Socket reads and parsing stay off the UI thread; snapshots are coalesced to 30 Hz.
 pub fn chat(
     settings: Settings,
     prompt: String,
@@ -400,9 +491,31 @@ pub fn chat(
     if prompt.len() > MAX_BYTES {
         return Err("Ask context exceeded the endpoint request size limit".into());
     }
-    let url = settings.endpoint()?;
     let started = Instant::now();
-    let (tx, rx) = mpsc::sync_channel(8);
+    let saved = Settings::load()?;
+    if saved != settings {
+        return Err("Ask connection changed. Start a new attempt.".into());
+    }
+    saved.authorize()?;
+    let key_path = key_path_for(&settings)?;
+    let key = if key_path.is_file() {
+        let encrypted = store_io::read_bounded(&key_path, 64 * 1024)
+            .map_err(|_| "Could not read the protected API key")?;
+        Some(Arc::new(
+            sidenote_sync::identity::unprotect(&encrypted)
+                .map_err(|_| "Secure credential store unavailable")?,
+        ))
+    } else {
+        None
+    };
+    let mut watch = SettingsWatch::new(started)?;
+    let live = Arc::new(Mutex::new(Live {
+        stream: Stream::default(),
+        last_bytes: started,
+    }));
+    let worker_live = live.clone();
+    let worker_key = key.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
     let selected = settings.clone();
@@ -417,22 +530,10 @@ pub fn chat(
             }
             saved.authorize()?;
             let mut post = agent()
-                .post(url.as_str())
+                .post(selected.endpoint()?.as_str())
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream");
-            // The decrypted buffer is zeroized by the existing DPAPI helper on drop.
-            let key_path = key_path_for(&selected)?;
-            let key = if key_path.is_file() {
-                let encrypted = store_io::read_bounded(&key_path, 64 * 1024)
-                    .map_err(|_| "Could not read the protected API key")?;
-                Some(
-                    sidenote_sync::identity::unprotect(&encrypted)
-                        .map_err(|_| "Secure credential store unavailable")?,
-                )
-            } else {
-                None
-            };
-            if let Some(key) = &key {
+            if let Some(key) = &worker_key {
                 let key = std::str::from_utf8(key).map_err(|_| "Protected API key is invalid")?;
                 let mut value = ureq::http::HeaderValue::from_str(&format!("Bearer {key}"))
                     .map_err(|_| "Protected API key is invalid")?;
@@ -461,95 +562,102 @@ pub fn chat(
                 return Err("Endpoint did not return an SSE stream".into());
             }
             let mut reader = response.into_body().into_reader();
-            let mut stream = Stream::default();
             let mut buffer = [0; 4096];
-            while !stream.done {
+            loop {
                 if worker_stop.load(Ordering::SeqCst) {
                     return Err(ask::STOPPED.into());
                 }
                 let n = reader
                     .read(&mut buffer)
                     .map_err(|_| transport_error(None))?;
+                let mut current = worker_live.lock().unwrap_or_else(|e| e.into_inner());
                 if n == 0 {
+                    current.stream.finish()?;
                     break;
                 }
-                let previous = stream.metrics.clone();
-                let changed = stream.push(&buffer[..n]);
-                if stream.metrics != previous {
-                    let mut metrics = stream.metrics.clone();
-                    metrics.total_ms = started.elapsed().as_millis() as u64;
-                    if tx.send(Update::Metrics(metrics)).is_err() {
-                        return Err(ask::STOPPED.into());
-                    }
-                }
-                if changed? {
-                    let text = answer_text(
-                        &stream.text,
-                        key.as_ref().and_then(|key| std::str::from_utf8(key).ok()),
-                        false,
-                    );
-                    if !text.is_empty() {
-                        stream
-                            .metrics
-                            .first_token_ms
-                            .get_or_insert(started.elapsed().as_millis() as u64);
-                    }
-                    if tx.send(Update::Text(text)).is_err() {
-                        return Err(ask::STOPPED.into());
-                    }
+                current.last_bytes = Instant::now();
+                current.stream.push(&buffer[..n])?;
+                if current.stream.done {
+                    break;
                 }
             }
-            stream.finish()?;
-            stream.metrics.total_ms = started.elapsed().as_millis() as u64;
+            let mut current = worker_live.lock().unwrap_or_else(|e| e.into_inner());
+            current.stream.finish()?;
+            current.stream.metrics.total_ms = started.elapsed().as_millis() as u64;
             let text = answer_text(
-                &stream.text,
-                key.as_ref().and_then(|key| std::str::from_utf8(key).ok()),
+                &current.stream.text,
+                worker_key
+                    .as_ref()
+                    .and_then(|key| std::str::from_utf8(key).ok()),
                 true,
             );
             if !text.is_empty() {
-                stream
+                current
+                    .stream
                     .metrics
                     .first_token_ms
                     .get_or_insert(started.elapsed().as_millis() as u64);
             }
-            Ok((text, stream.metrics))
+            Ok((text, current.stream.metrics.clone()))
         })();
-        let _ = tx.send(Update::Complete(result));
+        let _ = tx.send(result);
     });
     let mut slow_reported = false;
     let mut first_token_ms = None;
     let mut latest_metrics = Metrics::default();
+    let mut last_length = 0;
     let result = loop {
         if ask::cancel_requested() || ask::stop_requested() {
             break Err(ask::STOPPED.into());
         }
-        if started.elapsed() >= DEADLINE {
-            break Err("Endpoint exceeded the two-minute Ask deadline".into());
+        if let Err(error) = watch.check(&settings, Instant::now()) {
+            break Err(error);
         }
-        if Settings::load().ok().as_ref() != Some(&settings) {
-            break Err("Ask connection or consent changed. Start a new attempt.".into());
+        let completion = rx.recv_timeout(FRAME);
+        let (text, mut metrics, last_bytes) = {
+            let current = live.lock().unwrap_or_else(|e| e.into_inner());
+            let text = if current.stream.text.len() != last_length {
+                last_length = current.stream.text.len();
+                Some(answer_text(
+                    &current.stream.text,
+                    key.as_ref().and_then(|key| std::str::from_utf8(key).ok()),
+                    false,
+                ))
+            } else {
+                None
+            };
+            (text, current.stream.metrics.clone(), current.last_bytes)
+        };
+        if let Some(text) = text.filter(|_| !matches!(&completion, Ok(Ok(_)))) {
+            if !text.is_empty() {
+                first_token_ms.get_or_insert(started.elapsed().as_millis() as u64);
+            }
+            progress(AskProgress::Text { text });
         }
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Update::Metrics(metrics)) => {
-                latest_metrics = metrics.clone();
-                progress(AskProgress::Metrics(metrics));
-            }
-            Ok(Update::Text(text)) => {
-                if !text.is_empty() {
-                    first_token_ms.get_or_insert(started.elapsed().as_millis() as u64);
-                }
-                progress(AskProgress::Text { text });
-            }
-            Ok(Update::Complete(result)) => {
-                break result.map(|(text, metrics)| {
+        metrics.first_token_ms = first_token_ms;
+        if metrics != latest_metrics {
+            latest_metrics = metrics.clone();
+            metrics.total_ms = started.elapsed().as_millis() as u64;
+            progress(AskProgress::Metrics(metrics));
+        }
+        match completion {
+            Ok(result) => {
+                break result.map(|(text, mut metrics)| {
+                    metrics.first_token_ms = first_token_ms.or(metrics.first_token_ms);
+                    progress(AskProgress::Text { text: text.clone() });
                     progress(AskProgress::Metrics(metrics));
                     text
                 });
             }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err("Endpoint worker stopped before completing the answer".into());
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(_) => break Err("Endpoint worker stopped before completing the answer".into()),
         }
-        if !slow_reported && started.elapsed() >= SLOW {
+        if idle_expired(last_bytes, Instant::now()) {
+            break Err("Endpoint sent no data for 30 seconds. Retry the attempt.".into());
+        }
+        if !slow_reported && first_token_ms.is_none() && started.elapsed() >= SLOW {
             slow_reported = true;
             progress(AskProgress::Slow);
         }
@@ -568,6 +676,63 @@ pub fn chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delete_cleans_keys_for_every_endpoint_without_removing_settings() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["key-first.dpapi", "key-second.dpapi", "key-old.dpapi"] {
+            std::fs::write(root.path().join(name), b"synthetic ciphertext").unwrap();
+        }
+        for name in ["settings.json", "other.dpapi", "key-unrelated.txt"] {
+            std::fs::write(root.path().join(name), b"unchanged").unwrap();
+        }
+        delete_keys_in(root.path()).unwrap();
+        delete_keys_in(root.path()).unwrap();
+        for name in ["key-first.dpapi", "key-second.dpapi", "key-old.dpapi"] {
+            assert!(!root.path().join(name).exists());
+        }
+        for name in ["settings.json", "other.dpapi", "key-unrelated.txt"] {
+            assert_eq!(std::fs::read(root.path().join(name)).unwrap(), b"unchanged");
+        }
+        delete_keys_in(&root.path().join("missing")).unwrap();
+    }
+    #[test]
+    fn idle_timeout_resets_on_data_and_allows_a_healthy_ten_minute_answer() {
+        let start = Instant::now();
+        let mut last_bytes = start;
+        for seconds in 1..=600 {
+            let now = start + Duration::from_secs(seconds);
+            assert!(!idle_expired(last_bytes, now));
+            last_bytes = now;
+        }
+        assert!(!idle_expired(
+            last_bytes,
+            last_bytes + IDLE_TIMEOUT - Duration::from_millis(1)
+        ));
+        assert!(idle_expired(last_bytes, last_bytes + IDLE_TIMEOUT));
+    }
+    #[test]
+    fn eof_flushes_done_with_or_without_a_final_line_ending() {
+        for tail in ["data: [DONE]", "data: [DONE]\n", "data: [DONE]\r\n"] {
+            let input = format!(
+                "data: {{\"choices\":[{{\"delta\":{{\"content\":\"h\u{e9}llo\"}}}}]}}\n\n{tail}"
+            );
+            for size in 1..=input.len() {
+                let mut stream = Stream::default();
+                for bytes in input.as_bytes().chunks(size) {
+                    stream.push(bytes).unwrap();
+                }
+                assert!(!stream.done);
+                stream.finish().unwrap();
+                assert!(stream.done);
+                assert_eq!(stream.text, "h\u{e9}llo");
+            }
+        }
+        let mut truncated = Stream::default();
+        truncated
+            .push(b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}")
+            .unwrap();
+        assert!(truncated.finish().is_err());
+    }
     #[test]
     fn usage_survives_a_failed_streaming_event() {
         let mut stream = Stream::default();

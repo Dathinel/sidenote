@@ -30,14 +30,19 @@ gateway can itself forward content; the UI discloses that limitation. Consent is
 Ask-only and bound to the exact completion URL and model. Changes require fresh
 consent. Revocation or connection changes stop receiving the current attempt;
 already-transmitted content cannot be recalled. Cancellation returns promptly;
-the HTTP worker releases a blocked socket on its bounded read/global timeout
-(30/120 seconds) or when the server next responds.
+the HTTP worker releases a blocked socket after a 30-second idle read timeout
+or when the server next responds. Every received byte resets the idle deadline;
+there is no total-duration deadline for an active stream. The slow notice appears
+only before the first visible text and clears when text arrives. UI snapshots are
+coalesced to at most 30 per second, with an immediate final flush at completion.
 
 On Windows, the existing `sidenote-sync::identity` DPAPI helper protects the key
 for the current user. Ciphertext is stored separately from settings and bound to
 the endpoint URL. The UI uses Rune's secure input (masked rendering, redacted
 debug/accessibility/snapshots), supports replacement and deletion, and never
-reloads plaintext into a field. The HTTP authorization value is marked sensitive;
+reloads plaintext into a field. Delete removes saved keys for every endpoint, and
+key presence is cached in the UI until a save, delete or connection change.
+The HTTP authorization value is marked sensitive;
 transport errors use a fixed vocabulary and never include response/error bodies.
 The decrypted buffer is zeroized by the existing helper. No new crates are used;
 the existing ureq/rustls and DPAPI dependencies are retained unchanged.

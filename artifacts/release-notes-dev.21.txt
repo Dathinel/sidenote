@@ -1,0 +1,11 @@
+Sidenote 0.0.1-dev.21
+
+Tasks now has a board view with four columns over the same action items as the list. Move a card through its menu or keyboard controls, and keep its status when it returns from Done.
+
+People recognises you and your team using the knowledge base roster. A first-name-only match is a suggestion with a Confirm step, so a shared first name does not silently put someone on your team.
+
+Ask can use an OpenAI-compatible endpoint, cloud or local, after you choose and enable the connection. Cloud Ask requires opt-in for the exact endpoint and model before meeting content is sent. Existing CLI choices remain available. The connection and model stay visible, keys are protected on Windows, and Delete all saved keys removes keys for every endpoint.
+
+Connection settings cannot interrupt an answer through the composer's Connection button. Settings uses cached key status, streamed text updates are batched for the UI, healthy long answers can keep streaming, and the slow notice clears when text arrives. Streams also finish correctly when the server closes immediately after its final marker.
+
+Failure codes in the log now include the operating system error number when available, making device and file problems easier to identify.

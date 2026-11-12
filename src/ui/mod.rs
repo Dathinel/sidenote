@@ -1533,6 +1533,7 @@ impl State {
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => {
                         if run.runner == core::provider::NAME && !text.is_empty() {
+                            self.ask_settings.connection.slow.remove(&id);
                             let metrics = self
                                 .ask_settings
                                 .connection
