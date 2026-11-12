@@ -90,9 +90,40 @@ impl Store {
                 && limits.peer_documents <= MAX_PEER_DOCUMENTS,
             "limits cannot exceed hard bounds"
         );
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+            let parent = path.parent().context("store directory missing")?;
+            let meta = std::fs::symlink_metadata(parent)?;
+            ensure!(
+                meta.is_dir()
+                    && !meta.file_type().is_symlink()
+                    && meta.uid() == unsafe { libc::geteuid() },
+                "STORE_DIRECTORY_INVALID"
+            );
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(path)?;
+            ensure!(file.metadata()?.is_file(), "STORE_FILE_INVALID");
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         let mut lock_path = path.as_os_str().to_os_string();
         lock_path.push(".sync-lock");
-        let lock = OpenOptions::new()
+        let mut options = OpenOptions::new();
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let lock = options
             .read(true)
             .write(true)
             .create(true)

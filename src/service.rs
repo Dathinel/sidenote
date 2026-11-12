@@ -106,10 +106,10 @@ pub fn configure(args: &[OsString]) -> Result<(), &'static str> {
             });
         }
     }
-    let configured = selected
-        .map(crate::core::DeviceSettings::set_role)
-        .transpose()
-        .and_then(|_| load_role(&crate::core::state_dir()));
+    if let Some(selected) = selected {
+        crate::core::DeviceSettings::set_role(selected).map_err(|_| "DEVICE_CONFIG_FAILED")?;
+    }
+    let configured = load_role(&crate::core::state_dir());
     let role = role_or_full(configured, || {
         crate::listener::log("DEVICE_ROLE_UNAVAILABLE; using full");
     });
@@ -244,6 +244,29 @@ fn supervise() {
             hex,
             ui_allowed()
         );
+        #[cfg(target_os = "linux")]
+        {
+            let linger = std::process::Command::new("loginctl")
+                .args([
+                    "show-user",
+                    &unsafe { libc::geteuid() }.to_string(),
+                    "-p",
+                    "Linger",
+                    "--value",
+                ])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok());
+            eprintln!(
+                "service linger={}",
+                match linger.as_deref().map(str::trim) {
+                    Some("yes") => "enabled",
+                    Some("no") => "disabled",
+                    _ => "unknown",
+                }
+            );
+        }
         pause(Duration::from_secs(30));
     }
     STOP.store(true, Ordering::Release);
@@ -260,6 +283,10 @@ pub fn run() -> i32 {
         crate::listener::run();
     }
     HEADLESS.store(true, Ordering::Release);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::umask(0o077);
+    }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

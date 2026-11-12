@@ -59,16 +59,9 @@ pub(crate) fn log(message: &str) {
 }
 /// Existing catch-up and queue drains, owned by the service instead of a window.
 pub(crate) fn service_tick() -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        catch_up()?;
-        crate::core::meeting_router::jobs::start_worker()?;
-        crate::core::notes::queue::start_worker()
-    }
-    #[cfg(not(windows))]
-    {
-        Err(crate::platform::unavailable())
-    }
+    catch_up()?;
+    crate::core::meeting_router::jobs::start_worker()?;
+    crate::core::notes::queue::start_worker()
 }
 fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {

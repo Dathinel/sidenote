@@ -13,11 +13,11 @@ pub fn unavailable() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Unsupported, UNAVAILABLE)
 }
 pub fn require_process_support() -> std::io::Result<()> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Err(unavailable())
     }
@@ -52,8 +52,9 @@ pub trait CommandExt {
 #[cfg(not(windows))]
 impl CommandExt for std::process::Command {
     fn creation_flags(&mut self, _flags: u32) -> &mut Self {
-        use std::os::unix::process::CommandExt;
-        self.process_group(0)
+        #[cfg(target_os = "linux")]
+        sidenote_sync::containment::configure(self);
+        self
     }
 }
 

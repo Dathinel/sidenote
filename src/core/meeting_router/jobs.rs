@@ -218,7 +218,6 @@ fn resume(child: &std::process::Child) -> io::Result<()> {
         result
     }
 }
-#[cfg(windows)]
 fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outcome {
     // CREATE_SUSPENDED closes the spawn/attach gap before any descendants can be created.
     command
@@ -247,6 +246,7 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
             };
         }
     };
+    #[cfg(windows)]
     if resume(&child).is_err() {
         drop(job);
         let _ = child.kill();
@@ -734,13 +734,5 @@ mod recording_guard_tests {
         let before = fs::read(&path).unwrap();
         enqueue_in(&root, &meetings, id).unwrap();
         assert_eq!(fs::read(path).unwrap(), before);
-    }
-}
-
-#[cfg(not(windows))]
-fn supervise(_command: Command, _seconds: f64, _active: Option<&Path>) -> Outcome {
-    Outcome {
-        error: Some(crate::platform::UNAVAILABLE.into()),
-        ..Outcome::default()
     }
 }

@@ -29,16 +29,21 @@ pub struct Instance;
 pub fn single_instance() -> io::Result<Option<Instance>> {
     Err(super::unavailable())
 }
-// Subprocess execution stays unavailable until Unix containment is qualified.
-pub enum ProcessJob {}
+// Commands are configured before spawn by the Unix CommandExt adapter.
+pub struct ProcessJob(u32);
 impl ProcessJob {
-    pub fn attach(_child: &std::process::Child) -> io::Result<Self> {
-        Err(super::unavailable())
+    pub fn attach(child: &std::process::Child) -> io::Result<Self> {
+        let pid = child.id();
+        if unsafe { libc::getpgid(pid as i32) } != pid as i32 {
+            return Err(io::Error::other("WORKER_CONTAINMENT_REQUIRED"));
+        }
+        Ok(Self(pid))
     }
 }
 impl Drop for ProcessJob {
     fn drop(&mut self) {
-        match *self {}
+        #[cfg(target_os = "linux")]
+        sidenote_sync::containment::kill_group(self.0);
     }
 }
 pub fn set_window_icon(_hwnd: isize) {}
