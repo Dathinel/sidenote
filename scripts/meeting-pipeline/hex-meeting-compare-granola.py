@@ -3,7 +3,7 @@ import argparse, csv, datetime as dt, difflib, json, os, re, shutil, subprocess,
 
 ROOT = Path(os.environ['APPDATA']) / 'hex' / 'meetings'
 BASE = Path(os.environ['APPDATA']) / 'hex-meetings'
-SCRIPTS = Path.home() / '.config' / 'hex' / 'scripts'
+SCRIPTS = Path(__file__).resolve().parent
 FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
 
 
