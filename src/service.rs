@@ -125,10 +125,14 @@ pub fn configure(args: &[OsString]) -> Result<(), &'static str> {
 }
 
 fn load_role(root: &std::path::Path) -> std::io::Result<DeviceRole> {
-    let bytes = crate::core::store_io::read_bounded(
+    let bytes = match crate::core::store_io::read_bounded(
         &root.join("device.json"),
         crate::core::file_reads::SUMMARY_MAX,
-    )?;
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(DeviceRole::Full),
+        Err(error) => return Err(error),
+    };
     let settings: crate::core::DeviceSettings =
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
     Ok(settings.role)
@@ -334,14 +338,17 @@ mod tests {
     fn role_read_failures_fall_back_once_without_writing_device_settings() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("device.json");
+        assert_eq!(
+            role_or_full(load_role(root.path()), || panic!("missing file is normal")),
+            DeviceRole::Full
+        );
+        assert!(!path.exists());
         let fallback = || {
             let mut reports = 0;
             let role = role_or_full(load_role(root.path()), || reports += 1);
             assert_eq!(role, DeviceRole::Full);
             assert_eq!(reports, 1);
         };
-        fallback(); // Missing.
-        assert!(!path.exists());
         for bytes in [b"{".as_slice(), br#"{"role":"unknown"}"#] {
             std::fs::write(&path, bytes).unwrap();
             fallback();

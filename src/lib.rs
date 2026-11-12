@@ -5,6 +5,7 @@ pub mod hex_install;
 pub mod hex_labs;
 pub mod listener;
 pub mod mcp;
+#[cfg(all(windows, feature = "desktop"))]
 pub mod meeting_icon;
 pub mod platform;
 pub mod service;

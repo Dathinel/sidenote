@@ -1,0 +1,11 @@
+Sidenote 0.0.1-dev.20
+
+A floating meeting icon now lives in the background listener. It stays beside the screen while a meeting records and until its draft is seen, even when the main window is closed. Speech expands the bead into a time pill without moving its right edge. Click it for a keyboard-usable card with live words or meeting notes. Automatic updates never take focus. The icon and card are excluded from ordinary screen capture.
+
+Server-only mode follows the role saved in this device's settings. Server processes meetings without opening the desktop; Hub handles synchronization without meeting processing. Select a saved role with --device-role server or --device-role hub, then restart. Use --server to run without opening the main window. A Server or Hub device never loads the UI or starts a floating icon. The server-only build excludes desktop dependencies and the Windows icon module.
+
+Knowledge base saves preserve newer unrelated settings and other unsaved edits. Validation failures keep the edited fields available, show the save error and do not replace a valid saved configuration. Successful saves refresh the settings baseline so later saves do not overwrite newer values.
+
+Windows Full devices keep the dev.19 listener path, processing behaviour and update-stop handling. Existing devices and a missing device.json default to Full without an unavailable-role warning. Locked, unreadable or invalid device files retain the fallback warning.
+
+The local release-gate script is included for the release owner to run before packaging.

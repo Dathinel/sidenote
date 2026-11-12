@@ -29,9 +29,9 @@ Legacy config reads remain unchanged. They briefly hold `local/config.lock`, and
 `Config::overlay_profile` can still open a relay Preview retained by the process-wide
 registry in `relay_preview::get`. That inherited F1 writer-lock path remains unresolved
 by decision; these fixes remove only the supervisor's additional ownership.
-An unreadable, missing or unknown device role logs one fixed fallback message and
-runs as Full without creating device identity. Explicit one-shot commands remain
-available.
+A missing device.json uses Full without logging or creating device identity.
+A locked, unreadable or invalid device file logs one fixed fallback message and
+runs as Full. Explicit one-shot commands remain available.
 The local configuration and `local/` must stay excluded from file synchronization.
 
 | Role | Service | Desktop | Processing |
@@ -40,10 +40,10 @@ The local configuration and `local/` must stay excluded from file synchronizatio
 | Server | Ordinary launch or `--server` | Never | Configured backends |
 | Hub | Ordinary launch or `--server` | Never | Disabled |
 
-`service::ui_allowed()` is the floating icon's future guard. Call it before creating
-a thread, window or graphics context. It requires Full, a desktop build and a desktop
-session. A Full listener can allow the icon; Server and Hub never can. A build without
-`desktop` also returns false. The floating icon branch is separate.
+The Full listener checks `service::ui_allowed()` before starting the icon monitor.
+It requires Full, a desktop build and a desktop session. Server and Hub never start
+the icon. The icon module is compiled only on Windows with `desktop`; a server-only
+build excludes it entirely.
 
 The Server and Hub supervisor holds a device-local process lock, reconciles transported
 journals every 30 seconds and owns an enabled relay session. Windows also runs the

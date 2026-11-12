@@ -7,12 +7,16 @@ resolver = "3"
 [package]
 name = "sidenote"
 default-run = "sidenote"
-version = "0.0.1-dev.19"
+version = "0.0.1-dev.20"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [[example]]
 name = "gpu_inventory"
+required-features = ["desktop"]
+
+[[example]]
+name = "meeting-icon-spike"
 required-features = ["desktop"]
 
 [dependencies]
