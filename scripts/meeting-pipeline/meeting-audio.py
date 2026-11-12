@@ -235,10 +235,7 @@ def config_key(config):
     return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 
-def plan_routes(args):
-    config = routing_config(args.routing_config)
-    if config is None:
-        return
+def build_plan(args, config):
     temp = Path(args.temp)
     chunks = read_json(temp / 'chunks.json')
     passes = {lang: dict(model=model, version='unreported') for model, lang, _ in asr_passes()}
@@ -286,8 +283,42 @@ def plan_routes(args):
         plan['fallback_count'] += int(fallback)
         plan['chunks'].append(dict(id=chunk['Id'], identity=identity, models=models, reason=reason,
                                    fallback=fallback, route='+'.join(models) if models else 'en'))
-    save(temp / 'routing-plan.json', plan)
-    print(json.dumps(dict(stage='routing-plan', chunks=len(chunks), fallback_count=plan['fallback_count'])), flush=True)
+    return plan
+
+
+def plan_routes(args):
+    config = routing_config(args.routing_config)
+    if config is None:
+        return
+    plan = build_plan(args, config)
+    save(Path(args.temp) / 'routing-plan.json', plan)
+    print(json.dumps(dict(stage='routing-plan', chunks=len(plan['chunks']), fallback_count=plan['fallback_count'])), flush=True)
+
+
+def execution_routes(args, chunks):
+    config = routing_config(getattr(args, 'routing_config', None))
+    if config is None:
+        return None
+    models = {lang: dict(model=model, version='unreported') for model, lang, _ in asr_passes()}
+    routes = [dict(id=c['Id'], models=['te', 'hi'], route='te+hi', reason='invalid_plan',
+                   fallback=True) for c in chunks]
+    try:
+        saved = read_json(Path(args.temp) / 'routing-plan.json')
+        current = build_plan(args, config)
+        # Recompute against current PCM, config, model IDs and English coverage.
+        if saved != current:
+            raise ValueError('Incomplete or mismatched plan')
+        routes = current['chunks']
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, wave.Error):
+        pass
+    for row in routes:
+        row['planned_route'] = row['route']
+        if getattr(args, 'routing_mode', 'shadow') != 'execute':
+            row.update(models=['te', 'hi'], route='te+hi', reason='shadow:' + row['reason'])
+        row['model_versions'] = models
+        row['detector_version'] = LID_MODEL
+        row.pop('identity', None)
+    return routes
 
 
 def asr_passes():
@@ -459,12 +490,27 @@ def post_audio(client, model, lang, audio):
 
 def transcribe(args):
     temp=Path(args.temp); chunks=json.loads((temp/'chunks.json').read_text(encoding='utf-8'))
+    routes = execution_routes(args, chunks)
+    rerun = set(getattr(args, 'rerun_chunk', None) or [])
+    if rerun - {c['Id'] for c in chunks}:
+        raise ValueError('Unknown rerun chunk')
+    all_models = getattr(args, 'all_models', False)
+    if routes is not None and (all_models or rerun):
+        for row in routes:
+            if all_models or row['id'] in rerun:
+                row.update(models=['te', 'hi'], route='te+hi', reason='all_model_rerun', fallback=False)
+    by_id = {r['id']: r for r in routes} if routes is not None else None
     # No proxy, even on machines with a global HTTP proxy configured.
     client=urllib.request.build_opener(urllib.request.ProxyHandler({}))
     metrics={}; all_started=time.perf_counter()
     for model,lang,field in asr_passes():
         started=time.perf_counter(); segments=[]
         for index,chunk in enumerate(chunks):
+            if rerun and chunk['Id'] not in rerun:
+                continue
+            if by_id is not None and lang not in by_id[chunk['Id']]['models']:
+                chunk[field] = ''
+                continue
             tick=time.perf_counter()
             data=post_audio(client,model,lang,Path(chunk['Path']).read_bytes())
             if not isinstance(data.get('transcript'),str): raise RuntimeError('Hex API response missing transcript')
@@ -472,7 +518,32 @@ def transcribe(args):
             elapsed=time.perf_counter()-tick; segments.append(elapsed)
             print(f'{lang} {index+1}/{len(chunks)} {chunk["Id"]}: {elapsed:.3f}s',flush=True)
         metrics[lang]={'seconds':time.perf_counter()-started,'segment_seconds':segments}
+    if by_id is not None:
+        empty = {c['Id'] for c in chunks if (not rerun or c['Id'] in rerun)
+                 and by_id[c['Id']]['models'] and len(by_id[c['Id']]['models']) < 2
+                 and not (c['Telugu'].strip() or c['Hindi'].strip())}
+        # A selected recognizer returning no speech must retry the omitted recognizer.
+        for model, lang, field in asr_passes():
+            for chunk in chunks:
+                row = by_id[chunk['Id']]
+                if chunk['Id'] not in empty or lang in row['models']:
+                    continue
+                tick = time.perf_counter()
+                data = post_audio(client, model, lang, Path(chunk['Path']).read_bytes())
+                if not isinstance(data.get('transcript'), str):
+                    raise RuntimeError('Hex API response missing transcript')
+                chunk[field] = data['transcript'].strip()
+                elapsed = time.perf_counter() - tick
+                metrics[lang]['seconds'] += elapsed
+                metrics[lang]['segment_seconds'].append(elapsed)
+        for identity in empty:
+            by_id[identity].update(models=['te', 'hi'], route='te+hi', reason='empty_selected_reading', fallback=True)
     metrics['asr_seconds']=time.perf_counter()-all_started
+    if routes is not None:
+        metrics['routing'] = dict(chunks=routes, fallback_count=sum(r['fallback'] for r in routes),
+                                  mode=getattr(args, 'routing_mode', 'shadow'))
+        save(temp/'routing-execution.json', metrics['routing'])
+        print(json.dumps(dict(stage='routing-execute', fallback_count=metrics['routing']['fallback_count'])), flush=True)
     save(temp/'chunks.json',chunks)
     save(temp/'asr-timings.json',metrics)
 
@@ -487,5 +558,8 @@ if __name__=='__main__':
     parser.add_argument('--routing-config')
     parser.add_argument('--lid-exe')
     parser.add_argument('--english-reading')
+    parser.add_argument('--routing-mode',choices=['shadow','execute'],default='shadow')
+    parser.add_argument('--all-models',action='store_true')
+    parser.add_argument('--rerun-chunk',action='append')
     args=parser.parse_args()
     {'prepare': prepare, 'observe': observe, 'plan': plan_routes, 'transcribe': transcribe}[args.command](args)

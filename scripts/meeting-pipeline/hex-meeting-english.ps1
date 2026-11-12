@@ -11,6 +11,8 @@ param(
     # Explicit snapshot only; never discover installed settings for this experiment.
     [string]$RoutingConfig,
     [string]$LanguageDetectExe,
+    [ValidateSet('shadow','execute')][string]$RoutingMode = 'shadow',
+    [switch]$AllModels,
     # Rebuild only the summary from the existing english-transcript.md (no audio, no translation).
     [switch]$NotesOnly
 )
@@ -97,7 +99,10 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         [int][Math]::Min(3600, [Math]::Max(1800, [Math]::Ceiling(300 + $meetingSeconds * $asrPasses * $AsrSecondsPerAudioSecondPerPass * $AsrDeadlineHeadroom)))
     }
     Write-Host "Transcription deadline: $asrDeadline seconds; ASR passes: $asrPasses"
-    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) $asrDeadline 'transcribe'
+    $transcribeArgs = @('transcribe','--temp',$temp)
+    if ($RoutingConfig) { $transcribeArgs += $routeArgs + @('--routing-mode',$RoutingMode) }
+    if ($AllModels) { $transcribeArgs += '--all-models' }
+    Invoke-Native $uv.Source ($uvArgs + $transcribeArgs) $asrDeadline 'transcribe'
     $asrInfo = [IO.File]::ReadAllText((Join-Path $temp 'asr-timings.json'), $utf8) | ConvertFrom-Json
     foreach ($lang in 'te','hi') { Write-Host ('{0} transcription: {1:N1}s' -f $lang,$asrInfo.$lang.seconds) }
     $chunks = [IO.File]::ReadAllText((Join-Path $temp 'chunks.json'), $utf8) | ConvertFrom-Json
@@ -108,6 +113,20 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         analysis=$audioInfo
         transcription=$asrInfo
         segments=@($chunks | Select-Object Id,Start,End,AudioStart,AudioEnd,Speaker,Track,Telugu,Hindi)
+    }
+    $lidEvidenceFile = Join-Path $temp 'routing-observe.json'
+    if (Test-Path -LiteralPath $lidEvidenceFile) {
+        $lidEvidence = [IO.File]::ReadAllText($lidEvidenceFile, $utf8) | ConvertFrom-Json
+        $lidEvidence.PSObject.Properties.Remove('config')
+        foreach ($row in $lidEvidence.rows) {
+            $row.identity.chunk.PSObject.Properties.Remove('Path')
+            $row.sidecar.PSObject.Properties.Remove('source_wav')
+            if ($row.sidecar.settings) {
+                $row.sidecar.settings.PSObject.Properties.Remove('model')
+                $row.sidecar.settings.PSObject.Properties.Remove('runtime_dll')
+            }
+        }
+        $evidence['languageDetection'] = $lidEvidence
     }
     $evidencePath = Join-Path $dir.FullName 'audio-evidence.json'
     if (Test-Path -LiteralPath $evidencePath) { Copy-Item -LiteralPath $evidencePath -Destination "$evidencePath.$([DateTime]::Now.ToString('yyyyMMddHHmmssfff')).bak" }
