@@ -8,6 +8,9 @@ param(
     [ValidateRange(0,3600)][int]$TranscriptionTimeoutSeconds = $(if ($env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS) { [int]$env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS } else { 0 }),
     [ValidateRange(0.01,10.0)][double]$AsrSecondsPerAudioSecondPerPass = 0.20,
     [ValidateRange(1.0,10.0)][double]$AsrDeadlineHeadroom = 1.5,
+    # Explicit snapshot only; never discover installed settings for this experiment.
+    [string]$RoutingConfig,
+    [string]$LanguageDetectExe,
     # Rebuild only the summary from the existing english-transcript.md (no audio, no translation).
     [switch]$NotesOnly
 )
@@ -72,6 +75,10 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     $prepareArgs = @('prepare','--meeting',$dir.FullName,'--temp',$temp,'--models',$extraModels)
     if ($ffmpeg) { $prepareArgs += @('--ffmpeg',$ffmpeg.Source) }
     Invoke-Native $uv.Source ($uvArgs + $prepareArgs)
+    if ($RoutingConfig) {
+        $lidExe = if ($LanguageDetectExe) { $LanguageDetectExe } else { $hex }
+        Invoke-Native $uv.Source ($uvArgs + @('observe','--temp',$temp,'--routing-config',$RoutingConfig,'--lid-exe',$lidExe)) 360 'prepare'
+    }
     $audioInfo = [IO.File]::ReadAllText((Join-Path $temp 'audio-analysis.json'), $utf8) | ConvertFrom-Json
     $prepareSeconds = $step.Elapsed.TotalSeconds
     Write-Host ('Audio preparation: {0:N1}s; {1} speech segments; {2} remote speakers' -f $prepareSeconds,$audioInfo.segment_count,$audioInfo.remote_speakers)

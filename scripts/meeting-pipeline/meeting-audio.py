@@ -1,19 +1,146 @@
 """CPU diarization/VAD, bounded speech cuts, and sequential warm Hex API passes."""
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
+import struct
 from pathlib import Path
 import subprocess
 import time
 import urllib.error
 import urllib.request
+import wave
 
 import numpy as np
 import soundfile as sf
 
 RATE = 16000
+LID_MODEL = 'd787948f922bd699e1cbcbeeeb16bf830514ec138bbbb89b516dccbc7283bbe5'
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+
+
+def routing_config(path):
+    if not path:
+        return None
+    try:
+        config = read_json(path)
+        if config.get('labs', {}).get('language_detection') is True:
+            return dict(labs={k: v for k, v in config['labs'].items()
+                              if k in ('language_detection', 'language_detection_settings')},
+                        pipeline={k: v for k, v in config.get('pipeline', {}).items()
+                                  if k in ('language_mode', 'meeting_languages')})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def pcm_identity(path):
+    with wave.open(str(path), 'rb') as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, RATE, 'NONE'):
+            raise ValueError('Routing requires mono PCM16 at 16 kHz')
+        count = wav.getnframes()
+        pcm = wav.readframes(count)
+    if len(pcm) != count * 2 or count < 1600:
+        raise ValueError('Truncated or short routing WAV')
+    return pcm
+
+
+def pcm_hash(pcm):
+    # Match M5 pcm_sha256: signed PCM16 / 32768, encoded as little-endian f32.
+    digest = hashlib.sha256()
+    for (sample,) in struct.iter_unpack('<h', pcm):
+        digest.update(struct.pack('<f', sample / 32768.0))
+    return digest.hexdigest()
+
+
+def chunk_identity(chunk):
+    return {key: chunk[key] for key in
+            ('Id', 'Start', 'End', 'AudioStart', 'AudioEnd', 'Speaker', 'Track', 'Path')}
+
+
+def lid_request(chunks, languages):
+    jobs = []
+    identities = []
+    if len({c['Id'] for c in chunks}) != len(chunks):
+        raise ValueError('Duplicate chunk IDs')
+    for index, chunk in enumerate(chunks):
+        pcm = pcm_identity(chunk['Path'])
+        frames = len(pcm) // 2
+        # Equal slices cover padding too and avoid a tiny tail above the M5 limit.
+        count = math.ceil(frames / (24 * RATE))
+        windows = []
+        hashes = []
+        for part in range(count):
+            a, b = frames * part // count, frames * (part + 1) // count
+            windows.append(dict(id=f'{chunk["Id"]}-{part}', start=a / RATE,
+                                end=b / RATE, audio_start=a / RATE,
+                                track=chunk['Track'], speaker=chunk['Speaker'], turn=chunk['Id']))
+            hashes.append(pcm_hash(pcm[a*2:b*2]))
+        job = dict(id=f'chunk-{index}', wav=str(Path(chunk['Path']).resolve()), chunks=windows)
+        jobs.append(job)
+        identities.append(dict(chunk=chunk_identity(chunk), pcm=pcm_hash(pcm), hashes=hashes))
+    return dict(meeting_languages=languages, jobs=jobs), identities
+
+
+def checked_sidecars(request, identities, output, mode):
+    rows = []
+    for job, identity in zip(request['jobs'], identities):
+        sidecar = read_json(output / job['id'] / 'language-detect.v1.json')
+        if (sidecar.get('schema') != 'language-detect.v1' or sidecar.get('job') != job['id']
+                or sidecar.get('source_wav') != job['wav']
+                or sidecar.get('meeting_languages') != request['meeting_languages']
+                or sidecar.get('model_sha256') != LID_MODEL or sidecar.get('language_mode') != mode
+                or len(sidecar.get('chunks', [])) != len(job['chunks'])):
+            raise ValueError('Mismatched language sidecar')
+        for expected, actual, digest in zip(job['chunks'], sidecar['chunks'], identity['hashes']):
+            for key in ('start', 'end', 'track', 'speaker', 'turn', 'audio_start'):
+                if actual.get(key) != expected[key]:
+                    raise ValueError('Mismatched language window')
+            if actual.get('chunk') != expected['id']:
+                raise ValueError('Mismatched language chunk')
+            # Forced bypass has no detector PCM hash; adapter identity still binds the WAV.
+            if actual.get('pcm_f32le_sha256') != digest and actual.get('status') != 'forced':
+                raise ValueError('Mismatched language PCM')
+        rows.append(dict(identity=identity, sidecar=sidecar))
+    return rows
+
+
+def observe(args):
+    config = routing_config(args.routing_config)
+    if config is None:
+        return
+    temp = Path(args.temp)
+    # A fresh directory prevents a failed invocation from accepting older sidecars.
+    output = temp / ('lid-' + str(time.time_ns()))
+    output.mkdir()
+    report = dict(schema='routing-observe.v1', rows=[], fallback_count=0, reason='detection_failed')
+    try:
+        chunks = read_json(temp / 'chunks.json')
+        languages = config.get('pipeline', {}).get('meeting_languages', ['en', 'hi', 'te'])
+        request, identities = lid_request(chunks, languages)
+        request_path = output / 'request.json'
+        snapshot = output / 'config.json'
+        save(request_path, request)
+        save(snapshot, config)
+        mode = config.get('pipeline', {}).get('language_mode', 'auto')
+        subprocess.run([args.lid_exe, '--language-detect', str(request_path),
+                        '--lid-config', str(snapshot), '--lid-output', str(output)],
+                       check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        report['rows'] = checked_sidecars(request, identities, output, mode)
+        report['reason'] = 'observed'
+        report['config'] = config
+        report['fallback_count'] = sum(any(w['status'] not in ('guess', 'forced')
+                                         for w in r['sidecar']['chunks']) for r in report['rows'])
+    except (OSError, ValueError, KeyError, TypeError, wave.Error, subprocess.SubprocessError):
+        report['fallback_count'] = len(read_json(temp / 'chunks.json'))
+    save(temp / 'routing-observe.json', report)
+    print(json.dumps(dict(stage='routing-observe', reason=report['reason'],
+                          fallback_count=report['fallback_count'])), flush=True)
 
 
 def asr_passes():
@@ -205,10 +332,12 @@ def transcribe(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['prepare','transcribe'])
+    parser.add_argument('command',choices=['prepare','observe','transcribe'])
     parser.add_argument('--temp',required=True)
     parser.add_argument('--meeting')
     parser.add_argument('--models')
     parser.add_argument('--ffmpeg',default='')
+    parser.add_argument('--routing-config')
+    parser.add_argument('--lid-exe')
     args=parser.parse_args()
-    prepare(args) if args.command=='prepare' else transcribe(args)
+    {'prepare': prepare, 'observe': observe, 'transcribe': transcribe}[args.command](args)
