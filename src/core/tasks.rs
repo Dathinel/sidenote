@@ -886,7 +886,7 @@ pub enum PersonFilter {
     Owner(String),
     NoOwner,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TaskFilter {
     pub done: DoneFilter,
     pub who: Who,

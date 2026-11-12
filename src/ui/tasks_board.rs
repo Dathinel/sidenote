@@ -9,8 +9,14 @@ use super::{
 use crate::ui::{edit_worker::Job, theme::Palette};
 use rune::{El, Key, KeyEvent, Tx, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl};
-use sidenote::core::{self, BoardColumn, BoardView, TaskItem};
-use std::time::{Duration, Instant};
+use sidenote::core::{self, BoardColumn, BoardView, MoveIntent, TaskItem};
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    hash::Hash,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 fn row_of(t: &TaskItem) -> RowId {
     (t.meeting_id.clone(), t.index)
@@ -38,20 +44,29 @@ pub fn first_page(c: BoardColumn) -> usize {
 }
 
 impl State {
-    /// The task as it will be once every save still waiting has run.
+    /// The task as it will be once every save still waiting has run: the card over the merge of
+    /// every move made on it since the last idle save.
     fn effective(&self, t: &TaskItem) -> TaskItem {
         let mut eff = t.clone();
-        match self.tasks.board_pending.get(&row_of(t)) {
-            Some(BoardColumn::Done) => eff.done = true,
-            Some(c) => {
-                eff.done = false;
-                if let Some(status) = c.status() {
-                    eff.status = status;
-                }
+        if let Some(intent) = self.tasks.board_pending.get(&row_of(t)) {
+            if let Some(done) = intent.done {
+                eff.done = done;
             }
-            None => {}
+            if let Some(status) = intent.status {
+                eff.status = status;
+            }
         }
         eff
+    }
+
+    /// The card as the board draws it. Only a card with a move saving is copied.
+    fn shown_card<'a>(&self, t: &'a TaskItem) -> Cow<'a, TaskItem> {
+        if !self.tasks.board_pending.is_empty() && self.tasks.board_pending.contains_key(&row_of(t))
+        {
+            Cow::Owned(self.effective(t))
+        } else {
+            Cow::Borrowed(t)
+        }
     }
 
     /// The folder a task's status edit reads its source summary from: the meeting's, or the
@@ -66,58 +81,101 @@ impl State {
             .map(|m| m.folder.clone())
     }
 
-    /// Moves one card to `target`. One save does the whole move: the done tick, the status, or
-    /// both when a card leaves Done for another column. Each step is a set, so a move queued
-    /// behind another save, or run twice, ends in the same place.
+    /// Moves one card to `target`.
     pub(super) fn move_card(&mut self, id: &str, index: usize, target: BoardColumn) {
+        self.apply_intent(id, index, MoveIntent::to(target));
+    }
+
+    /// Saves what a move asks for. The card is drawn where it is going at once; its intent
+    /// merges with any move still waiting on the same card, and the save writes the final
+    /// status and tick as values, so a queue of quick moves ends where the last one said and
+    /// never forgets the status from before a trip through Done.
+    fn apply_intent(&mut self, id: &str, index: usize, intent: MoveIntent) {
         self.tasks.board_menu = None;
         let Some(t) = self.tasks.item(id, index).cloned() else {
             return;
         };
         let eff = self.effective(&t);
-        let plan = core::move_plan(&eff, target);
-        self.tasks.cursor = Some((id.to_string(), index));
+        let (from, to) = (BoardColumn::of(&eff), intent.column(&eff));
+        self.tasks.cursor = Some(row_of(&t));
         let title = shown_title(self, &t).to_string();
-        if plan.is_noop() {
+        if to == from {
             self.say(format!(
                 "\u{201c}{title}\u{201d} is already in {}",
-                target.label()
+                to.label()
             ));
             return;
         }
-        let Some(source) = self.edit_source(&t) else {
-            return;
+        let source = match self.edit_source(&t) {
+            Some(source) => source,
+            // A tick needs no summary file. A status does.
+            None if intent.status.is_none() => std::path::PathBuf::new(),
+            None => {
+                self.tasks.notice =
+                    Some("This task's meeting is on another device. Move it there.".into());
+                return;
+            }
         };
-        self.publish_edit(Job::Move {
+        self.publish_move(Job::Move {
             store: self.tasks.store.clone(),
             ticks: self.store.clone(),
             task: Box::new(t.clone()),
             source,
-            plan,
+            intent,
         });
-        self.tasks.board_pending.insert(row_of(&t), target);
-        self.say(if plan.tick == Some(false) && plan.status.is_none() {
-            format!("Marked \u{201c}{title}\u{201d} not done")
+        let slot = self.tasks.board_pending.entry(row_of(&t)).or_default();
+        *slot = slot.then(intent);
+        self.tasks.pending_rev += 1;
+        self.reveal_card(id, index);
+        self.say(if intent.status.is_none() && intent.done == Some(false) {
+            format!(
+                "Marked \u{201c}{title}\u{201d} not done. Now in {}",
+                to.label()
+            )
         } else {
-            format!("Moved \u{201c}{title}\u{201d} to {}", target.label())
+            format!("Moved \u{201c}{title}\u{201d} to {}", to.label())
         });
     }
 
-    /// The tick, from the card's checkbox or the menu. Out of Done goes back to the status the
-    /// card had.
-    fn toggle_done(&mut self, id: &str, index: usize) {
+    /// The tick, from the card's checkbox, the menu or the X key. It sets the opposite of what
+    /// the card will be once earlier saves run, so quick presses alternate and every one is
+    /// saved. Out of Done the card goes back to the status it had.
+    pub(super) fn toggle_done(&mut self, id: &str, index: usize) {
         let Some(t) = self.tasks.item(id, index).cloned() else {
             return;
         };
-        let eff = self.effective(&t);
-        let to = if eff.done {
-            let mut open = eff;
-            open.done = false;
-            BoardColumn::of(&open)
-        } else {
-            BoardColumn::Done
+        let now = self.effective(&t).done;
+        self.apply_intent(id, index, MoveIntent::tick(!now));
+    }
+
+    /// Draws a card that may be off the first page or in a folded Done column, opens the tab it
+    /// is under on a narrow board, and scrolls to it once it is on screen.
+    pub(super) fn reveal_card(&mut self, id: &str, index: usize) {
+        if self.tasks.layout != core::TasksLayout::Board {
+            return;
+        }
+        let view = self.tasks.board();
+        let Some(i) = self
+            .tasks
+            .items
+            .iter()
+            .position(|t| t.meeting_id == id && t.index == index)
+        else {
+            return;
         };
-        self.move_card(id, index, to);
+        let Some((c, n)) = BoardColumn::ALL
+            .into_iter()
+            .find_map(|c| view.column(c).iter().position(|&r| r == i).map(|n| (c, n)))
+        else {
+            return;
+        };
+        if c == BoardColumn::Done && view.done_folded {
+            self.tasks.done_open = true;
+        }
+        let shown = &mut self.tasks.board_shown[c.index()];
+        *shown = (*shown).max(first_page(c)).max(n + 1);
+        self.tasks.board_tab = c;
+        self.tasks.reveal = Some((format!("trow-{id}-{index}"), 3));
     }
 
     /// A short polite line under the toolbar. It goes after a few seconds or the next key.
@@ -125,20 +183,17 @@ impl State {
         self.tasks.board_live = Some((line, Instant::now() + LIVE_FOR));
     }
 
-    /// Shift+Left and Shift+Right: the card under the cursor one column over.
-    fn move_cursor_card(&mut self, delta: isize) {
-        let Some((id, index)) = self.cursor_row() else {
-            return;
-        };
+    /// Shift+Left and Shift+Right: one card one column over.
+    fn nudge_card(&mut self, id: &str, index: usize, delta: isize) {
         let Some(from) = self
             .tasks
-            .item(&id, index)
+            .item(id, index)
             .map(|t| BoardColumn::of(&self.effective(t)))
         else {
             return;
         };
         match from.neighbour(delta) {
-            Some(to) => self.move_card(&id, index, to),
+            Some(to) => self.move_card(id, index, to),
             None => self.say(format!(
                 "Nothing {} of {}",
                 if delta < 0 { "left" } else { "right" },
@@ -184,8 +239,9 @@ impl State {
                 if matches!(self.tasks.panel, Some(Panel::Task(_))) && !self.open_task(&id, index) {
                     return;
                 }
+                self.tasks.cursor = Some((id.clone(), index));
+                self.reveal_card(&id, index);
                 tx.scroll_into_view(format!("trow-{id}-{index}"));
-                self.tasks.cursor = Some((id, index));
                 return;
             }
             if at.is_none() {
@@ -198,26 +254,75 @@ impl State {
     }
 }
 
+/// The card a control's key belongs to. Card controls are keyed `<prefix>-<meeting>-<index>`,
+/// where the meeting id has dashes of its own and a subtask key carries more after the index,
+/// so each split is checked against the cards that exist.
+fn card_of_key(key: &str, exists: impl Fn(&str, usize) -> bool) -> Option<RowId> {
+    const PREFIXES: [&str; 9] = [
+        "trow-",
+        "ttask-",
+        "ttick-",
+        "tsource-",
+        "tgrip-",
+        "subtasks-toggle-",
+        "subtick-",
+        "tmove-menu-",
+        "tmove-",
+    ];
+    let rest = PREFIXES.iter().find_map(|p| key.strip_prefix(p))?;
+    rest.match_indices('-').find_map(|(at, _)| {
+        let id = &rest[..at];
+        let index = rest[at + 1..].split('-').next()?.parse().ok()?;
+        exists(id, index).then(|| (id.to_string(), index))
+    })
+}
+
+/// The card a move key acts on: the one whose control has the keyboard. Focus on anything else
+/// (a text box, a toolbar button) leaves the key alone. Only when nothing at all has focus does
+/// it fall to the card the j and k keys are showing, which is the one outlined on screen.
+fn move_target(
+    focused: Option<&str>,
+    cursor: Option<RowId>,
+    exists: impl Fn(&str, usize) -> bool,
+) -> Option<RowId> {
+    match focused {
+        Some(key) => card_of_key(key, exists),
+        None => cursor,
+    }
+}
+
 /// The board's own keys, tried before the list's. Returns whether the key was used.
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    let focused = tx.focused().map(str::to_string);
+    let exists = |s: &State, id: &str, index: usize| s.tasks.item(id, index).is_some();
+    s.tasks.card_focus = focused
+        .as_deref()
+        .and_then(|k| card_of_key(k, |id, i| exists(s, id, i)));
+    let target = move_target(
+        focused.as_deref(),
+        s.cursor_row().filter(|_| s.tasks.keyboard),
+        |id, i| exists(s, id, i),
+    );
     let shift = e.mods.shift;
     match &e.key {
         Key::Left | Key::Right => {
             let delta = if e.key == Key::Left { -1 } else { 1 };
             if shift {
-                s.move_cursor_card(delta);
+                let Some((id, index)) = target else {
+                    return false;
+                };
+                s.nudge_card(&id, index, delta);
             } else {
                 s.step_cursor_column(delta, tx);
             }
             true
         }
         Key::Text(t) => match t.as_str() {
-            "[" => {
-                s.move_cursor_card(-1);
-                true
-            }
-            "]" => {
-                s.move_cursor_card(1);
+            "[" | "]" => {
+                let Some((id, index)) = target else {
+                    return false;
+                };
+                s.nudge_card(&id, index, if t == "[" { -1 } else { 1 });
                 true
             }
             "h" => {
@@ -228,12 +333,12 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
                 s.step_cursor_column(1, tx);
                 true
             }
-            "m" => match s.cursor_row() {
-                Some(row) if s.tasks.keyboard => {
+            "m" => match target {
+                Some(row) => {
                     s.tasks.board_menu = Some(row);
                     true
                 }
-                _ => false,
+                None => false,
             },
             _ => false,
         },
@@ -241,10 +346,19 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
-/// Clears the live line when its time is up. Returns whether the page changed.
+/// Clears the live line when its time is up, and scrolls to a card that was just revealed.
+/// Returns whether the page changed.
 pub fn live_tick(s: &mut State, tx: &mut Tx) -> bool {
+    let mut changed = false;
+    if let Some((key, left)) = s.tasks.reveal.take() {
+        tx.scroll_into_view(key.clone());
+        if left > 0 {
+            s.tasks.reveal = Some((key, left - 1));
+        }
+        changed = true;
+    }
     let Some((_, until)) = &s.tasks.board_live else {
-        return false;
+        return changed;
     };
     let left = until.saturating_duration_since(Instant::now());
     if left.is_zero() {
@@ -252,7 +366,7 @@ pub fn live_tick(s: &mut State, tx: &mut Tx) -> bool {
         return true;
     }
     tx.wake_after(left);
-    false
+    changed
 }
 
 fn area_label(s: &State, t: &TaskItem) -> String {
@@ -356,7 +470,10 @@ fn card(
             .label(t.task.clone())
             .key(format!("ttick-{id}-{index}"))
             .radius(11.0)
-            .on_press(move |s: &mut State| s.toggle_done(&id, index))
+            .on_press(move |s: &mut State| {
+                s.tasks.card_focus = Some((id.clone(), index));
+                s.toggle_done(&id, index)
+            })
     };
     // The grip is the one place a drag starts, so a click on the card stays a click. Drag is
     // for the wide board only; the Move button and the keys work everywhere.
@@ -418,6 +535,7 @@ fn card(
         .grow(1.0)
         .min_w(0.0)
         .on_press(move |s: &mut State| {
+            s.tasks.card_focus = Some((id.clone(), index));
             s.open_task(&id, index);
         })
     };
@@ -453,16 +571,7 @@ fn card(
         .label(format!("Project: {}", t.project))
         .child(project_dot(&t.project, p))
         .child(roles::META.line(area_label(s, t), p.faint));
-    let conflicts = s
-        .relay_ui
-        .conflicts
-        .iter()
-        .filter(|c| {
-            Some(c.task_id.strip_prefix("$manual:").unwrap_or(&c.task_id))
-                == id.strip_prefix("manual/")
-        })
-        .map(|c| c.choices.len())
-        .max();
+    let conflicts = core::task_conflict_versions(&s.relay_ui.conflicts, t);
     let toggle = (!t.subtasks.is_empty()).then(|| {
         let expanded = tasks.expanded_subtasks.contains(&me);
         let row_id = me.clone();
@@ -481,11 +590,27 @@ fn card(
         ))
         .expanded(expanded)
         .on_press(move |s: &mut State| {
+            s.tasks.card_focus = Some(row_id.clone());
             if !s.tasks.expanded_subtasks.remove(&row_id) {
                 s.tasks.expanded_subtasks.insert(row_id.clone());
             }
         })
     });
+    // On the wide board the Move button shows while the pointer is over the card, while the card
+    // has the keyboard, and while its menu is open. Its room is always kept, so nothing jumps.
+    // On the narrow board, which is also the touch layout, it is always there.
+    let reveals = drag.is_none()
+        || tasks.hovered.as_ref() == Some(&me)
+        || tasks.card_focus.as_ref() == Some(&me)
+        || tasks.board_menu.as_ref() == Some(&me)
+        || selected
+        || at_cursor;
+    let move_control = move_menu(s, k, t, p, layer);
+    let move_control = if reveals {
+        move_control
+    } else {
+        move_control.opacity(0.0)
+    };
     let mut body = col()
         .w_full()
         .min_w(0.0)
@@ -524,7 +649,7 @@ fn card(
             .justify_between()
             .gap(8.0)
             .child(row().grow(1.0).min_w(0.0).children(toggle))
-            .child(move_menu(s, k, t, p, layer)),
+            .child(move_control),
     );
     for sub in t
         .subtasks
@@ -576,6 +701,17 @@ fn card(
         // When the card changes column it is rebuilt elsewhere. Focus follows it by key.
         .focus_return(format!("ttask-{id}-{index}"))
         .padding(CARD_PAD)
+        .on_hover_change({
+            let id = id.clone();
+            move |s: &mut State, inside, _| {
+                let me = Some((id.clone(), index));
+                if inside {
+                    s.tasks.hovered = me;
+                } else if s.tasks.hovered == me {
+                    s.tasks.hovered = None;
+                }
+            }
+        })
         .child(body);
     if dragged {
         shell = shell.dim(0.5);
@@ -642,7 +778,8 @@ fn column_cards(
     }
     let shown = tasks.board_shown[c.index()].max(first_page(c));
     for &i in rows.iter().take(shown) {
-        out = out.child(card(s, k, &tasks.items[i], drag, p, layer));
+        let t = s.shown_card(&tasks.items[i]);
+        out = out.child(card(s, k, &t, drag, p, layer));
     }
     if rows.len() > shown {
         let more = (rows.len() - shown).min(PAGE);
@@ -806,23 +943,33 @@ struct Choice<T> {
     name: String,
 }
 
-fn people(s: &State) -> Vec<Choice<core::PersonFilter>> {
-    let mut names: Vec<String> = s
-        .tasks
-        .items
+/// The first item for each key, in list order, in one pass. Items with no key are skipped.
+fn first_of_each<'a, T, K: Hash + Eq>(
+    items: &'a [T],
+    key: impl Fn(&'a T) -> Option<K>,
+) -> Vec<&'a T> {
+    let mut seen = HashSet::new();
+    items
         .iter()
-        .filter_map(|t| t.owner.clone())
+        .filter(|t| key(*t).is_some_and(|k| seen.insert(k)))
+        .collect()
+}
+
+fn people(s: &State) -> Vec<Choice<core::PersonFilter>> {
+    let items = &s.tasks.items;
+    let mut names: Vec<&str> = first_of_each(items, |t| t.owner.as_deref())
+        .into_iter()
+        .filter_map(|t| t.owner.as_deref())
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
-    names.dedup();
     let mut out: Vec<_> = names
         .into_iter()
         .map(|n| Choice {
-            name: n.clone(),
-            value: Some(core::PersonFilter::Owner(n)),
+            name: n.to_string(),
+            value: Some(core::PersonFilter::Owner(n.to_string())),
         })
         .collect();
-    if s.tasks.items.iter().any(|t| t.owner.is_none()) {
+    if items.iter().any(|t| t.owner.is_none()) {
         out.push(Choice {
             name: "No owner".into(),
             value: Some(core::PersonFilter::NoOwner),
@@ -832,16 +979,9 @@ fn people(s: &State) -> Vec<Choice<core::PersonFilter>> {
 }
 
 fn areas(s: &State) -> Vec<Choice<String>> {
-    let mut ids: Vec<&String> = s
-        .tasks
-        .items
-        .iter()
-        .filter_map(|t| t.area_id.as_ref())
-        .collect();
-    ids.sort();
-    ids.dedup();
-    let mut out: Vec<_> = ids
+    let mut out: Vec<_> = first_of_each(&s.tasks.items, |t| t.area_id.as_deref())
         .into_iter()
+        .filter_map(|t| t.area_id.as_ref())
         .map(|id| Choice {
             name: s
                 .areas
@@ -856,14 +996,11 @@ fn areas(s: &State) -> Vec<Choice<String>> {
     out
 }
 
-/// The newest meetings that have tasks, then the hand-made ones.
+/// The newest meetings that have tasks, then the hand-made ones. One pass over the tasks and a
+/// set of the meetings seen, so 2,000 meetings cost 2,000 lookups, not 2 million comparisons.
 fn meetings(s: &State) -> Vec<Choice<String>> {
-    let mut seen: Vec<&TaskItem> = Vec::new();
-    for t in s.tasks.items.iter().filter(|t| !t.manual) {
-        if !seen.iter().any(|x| x.meeting_id == t.meeting_id) {
-            seen.push(t);
-        }
-    }
+    let items = &s.tasks.items;
+    let mut seen = first_of_each(items, |t| (!t.manual).then_some(t.meeting_id.as_str()));
     seen.sort_by_key(|t| t.meeting_rank);
     let mut out: Vec<_> = seen
         .into_iter()
@@ -876,13 +1013,47 @@ fn meetings(s: &State) -> Vec<Choice<String>> {
             value: Some(t.meeting_id.clone()),
         })
         .collect();
-    if s.tasks.items.iter().any(|t| t.manual) {
+    if items.iter().any(|t| t.manual) {
         out.push(Choice {
             name: "Added by hand".into(),
             value: Some(core::MANUAL.to_string()),
         });
     }
     out
+}
+
+/// What the three filter menus offer, worked out once per change of the task list or the area
+/// names and shared by every frame after.
+pub struct Options {
+    people: Vec<Choice<core::PersonFilter>>,
+    areas: Vec<Choice<String>>,
+    meetings: Vec<Choice<String>>,
+}
+
+pub struct OptionsCache {
+    items_rev: u64,
+    catalog: String,
+    options: Rc<Options>,
+}
+
+fn options(s: &State) -> Rc<Options> {
+    if let Some(c) = &*s.tasks.options_cache.borrow()
+        && c.items_rev == s.tasks.items_rev
+        && c.catalog == s.areas.catalog_revision
+    {
+        return c.options.clone();
+    }
+    let options = Rc::new(Options {
+        people: people(s),
+        areas: areas(s),
+        meetings: meetings(s),
+    });
+    *s.tasks.options_cache.borrow_mut() = Some(OptionsCache {
+        items_rev: s.tasks.items_rev,
+        catalog: s.areas.catalog_revision.clone(),
+        options: options.clone(),
+    });
+    options
 }
 
 /// What one filter menu needs: its title, its "any" line, and how it sets the choice.
@@ -899,7 +1070,7 @@ fn filter_menu<T: Clone + PartialEq + 'static>(
     k: &Kit,
     spec: Filter<T>,
     current: Option<&T>,
-    choices: Vec<Choice<T>>,
+    choices: &[Choice<T>],
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
@@ -943,7 +1114,7 @@ fn filter_menu<T: Clone + PartialEq + 'static>(
         for choice in choices {
             let value = choice.value.clone();
             menu = menu.item(
-                MenuItem::new(choice.name)
+                MenuItem::new(choice.name.clone())
                     .checked(value.as_ref() == current)
                     .on_select(move |s: &mut State| {
                         s.tasks.filter_menu = None;
@@ -960,6 +1131,7 @@ fn filter_menu<T: Clone + PartialEq + 'static>(
 pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let t = &s.tasks;
     let any = t.person.is_some() || t.area.is_some() || t.meeting.is_some();
+    let options = options(s);
     row()
         .key("tasks-filter-row")
         .w_full()
@@ -977,7 +1149,7 @@ pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 set: |s, v| s.tasks.person = v,
             },
             t.person.as_ref(),
-            people(s),
+            &options.people,
             p,
             layer,
         ))
@@ -991,7 +1163,7 @@ pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 set: |s, v| s.tasks.area = v,
             },
             t.area.as_ref(),
-            areas(s),
+            &options.areas,
             p,
             layer,
         ))
@@ -1005,7 +1177,7 @@ pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 set: |s, v| s.tasks.meeting = v,
             },
             t.meeting.as_ref(),
-            meetings(s),
+            &options.meetings,
             p,
             layer,
         ))
@@ -1014,4 +1186,89 @@ pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 .label("Clear person, area and meeting")
                 .on_press(|s: &mut State| s.tasks.clear_scope())
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cards of one page: two meetings (one with dashes in its id) and a hand-made task.
+    fn exists(id: &str, index: usize) -> bool {
+        matches!(
+            (id, index),
+            ("20261112-0900", 2)
+                | ("20261112-0900", 12)
+                | ("20261111-1500", 0)
+                | ("manual/ab-cd", 0)
+        )
+    }
+
+    #[test]
+    fn every_control_of_a_card_names_that_card() {
+        let card = |key: &str| card_of_key(key, exists);
+        let here = Some(("20261112-0900".to_string(), 2));
+        for key in [
+            "trow-20261112-0900-2",
+            "ttask-20261112-0900-2",
+            "ttick-20261112-0900-2",
+            "tsource-20261112-0900-2",
+            "tgrip-20261112-0900-2",
+            "subtasks-toggle-20261112-0900-2",
+            "tmove-20261112-0900-2",
+            "tmove-menu-20261112-0900-2",
+            // A subtask's id can carry dashes of its own.
+            "subtick-20261112-0900-2-sub-a1-b2",
+        ] {
+            assert_eq!(card(key), here, "{key}");
+        }
+        // Index 12 is not index 2, and a hand-made task's id has a slash and a dash.
+        assert_eq!(
+            card("ttick-20261112-0900-12"),
+            Some(("20261112-0900".to_string(), 12))
+        );
+        assert_eq!(
+            card("ttask-manual/ab-cd-0"),
+            Some(("manual/ab-cd".to_string(), 0))
+        );
+        // Not a card control, or a card that is gone.
+        assert_eq!(card("tasks-filter-person"), None);
+        assert_eq!(card("tasks-board-more-1"), None);
+        assert_eq!(card("ttick-20261112-0900-7"), None);
+    }
+
+    #[test]
+    fn a_move_key_acts_on_the_focused_card_not_the_cursor() {
+        let cursor = Some(("20261111-1500".to_string(), 0));
+        // Focus is on one card, the outlined cursor on another: the focused card moves.
+        assert_eq!(
+            move_target(Some("ttask-20261112-0900-2"), cursor.clone(), exists),
+            Some(("20261112-0900".to_string(), 2))
+        );
+        // Focus on the Move button of a card, the same.
+        assert_eq!(
+            move_target(Some("tmove-20261112-0900-12"), cursor.clone(), exists),
+            Some(("20261112-0900".to_string(), 12))
+        );
+        // Focus on something that is not a card never falls back to the cursor.
+        assert_eq!(
+            move_target(Some("tasks-filter-person"), cursor.clone(), exists),
+            None
+        );
+        assert_eq!(move_target(Some("#3"), cursor.clone(), exists), None);
+        // With nothing focused, the cursor the j and k keys show is the target.
+        assert_eq!(move_target(None, cursor.clone(), exists), cursor);
+        assert_eq!(move_target(None, None, exists), None);
+    }
+
+    #[test]
+    fn the_first_item_of_each_key_is_kept_in_order_in_one_pass() {
+        let items = [("a", 1), ("b", 2), ("a", 3), ("", 4), ("c", 5), ("b", 6)];
+        let first = first_of_each(&items, |t| (!t.0.is_empty()).then_some(t.0));
+        assert_eq!(first.iter().map(|t| t.1).collect::<Vec<_>>(), vec![1, 2, 5]);
+        // 2,000 meetings with 5 tasks each.
+        let many: Vec<(String, usize)> = (0..10_000).map(|i| (format!("m{}", i / 5), i)).collect();
+        let first = first_of_each(&many, |t| Some(t.0.as_str()));
+        assert_eq!(first.len(), 2_000);
+        assert_eq!(first[1999].1, 9_995);
+    }
 }

@@ -865,6 +865,7 @@ impl State {
             .any(|row| row.meeting_id == t.meeting_id && row.index == t.index)
         {
             self.tasks.items.push(t.clone());
+            self.tasks.items_changed();
         }
         self.tasks.diary_filter = None;
         self.tasks.diary_label = None;
@@ -1071,6 +1072,7 @@ impl State {
         self.remember_diary();
         self.set_view(super::tasks::View::Tasks);
         self.tasks.items = self.tasks.all.clone();
+        self.tasks.items_changed();
         self.tasks.done = core::DoneFilter::All;
         self.tasks.who = core::Who::Everyone;
         self.tasks.search = rune::TextEdit::default();

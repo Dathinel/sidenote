@@ -24,6 +24,10 @@ use std::{
 mod board;
 pub use board::FilterMenu;
 
+/// What the cached board was built from: the list and the moves (by revision), the filters, and
+/// the diary selection.
+pub type BoardKey = (u64, u64, core::TaskFilter, Option<String>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Meetings,
@@ -160,9 +164,21 @@ pub struct TasksState {
     pub board_tab: core::BoardColumn,
     /// The card whose Move menu is open.
     pub board_menu: Option<RowId>,
-    /// Where each card moved since the last idle save sits once its queued save runs, so a
-    /// second move made before the first finishes starts from the right place.
-    pub board_pending: std::collections::BTreeMap<RowId, core::BoardColumn>,
+    /// What each card was asked to become since the last idle save: the merge of every move
+    /// made on it, status and done tick together. The board draws a card over this, so a second
+    /// move made before the first finishes starts from the right place. It clears when a
+    /// snapshot lands with nothing left to save.
+    pub board_pending: std::collections::BTreeMap<RowId, core::MoveIntent>,
+    /// The card whose own controls last had the keyboard, for showing its Move button.
+    pub card_focus: Option<RowId>,
+    /// Counts changes to the task list, and to `board_pending`. The column grouping and the
+    /// filter options are worked out from these once per change, then reused by every frame.
+    pub items_rev: u64,
+    pub pending_rev: u64,
+    pub board_cache: std::cell::RefCell<Option<(BoardKey, std::rc::Rc<core::BoardView>)>>,
+    pub options_cache: std::cell::RefCell<Option<board::OptionsCache>>,
+    /// A card to scroll into view once it is drawn, and the frames left to try.
+    pub reveal: Option<(String, u8)>,
     /// What the last move did, for the polite status line, and when it goes.
     pub board_live: Option<(String, std::time::Instant)>,
     /// Cards drawn per column before "Show more". Kept for this session only.
@@ -266,6 +282,12 @@ impl TasksState {
             board_tab: core::BoardColumn::Todo,
             board_menu: None,
             board_pending: Default::default(),
+            card_focus: None,
+            items_rev: 0,
+            pending_rev: 0,
+            board_cache: Default::default(),
+            options_cache: Default::default(),
+            reveal: None,
             board_live: None,
             board_shown: [0; 4],
             board_single: std::cell::Cell::new(false),
@@ -332,14 +354,44 @@ impl TasksState {
         view
     }
 
-    /// The board as laid out now: four columns of the tasks that pass the filters.
-    pub fn board(&self) -> core::BoardView {
-        let mut view = core::board_columns(&self.items, &self.filter());
+    /// The task list changed: everything worked out from it is built again on next use.
+    pub fn items_changed(&mut self) {
+        self.items_rev += 1;
+    }
+
+    /// The board as laid out now: four columns of the tasks that pass the filters, with every
+    /// card that has a move saving already in the column it is going to. Built once per change
+    /// of the list, the filters or the moves, then shared.
+    pub fn board(&self) -> std::rc::Rc<core::BoardView> {
+        let filter = self.filter();
+        let key: BoardKey = (
+            self.items_rev,
+            self.pending_rev,
+            filter,
+            self.diary_label.clone(),
+        );
+        if let Some((cached, view)) = &*self.board_cache.borrow()
+            && *cached == key
+        {
+            return view.clone();
+        }
+        let mut view = if self.board_pending.is_empty() {
+            core::board_columns(&self.items, &key.2)
+        } else {
+            core::board_columns_by(&self.items, &key.2, |t| {
+                match self.board_pending.get(&(t.meeting_id.clone(), t.index)) {
+                    Some(intent) => intent.column(t),
+                    None => core::BoardColumn::of(t),
+                }
+            })
+        };
         if let Some(filter) = &self.diary_filter {
             for column in &mut view.columns {
                 column.retain(|&i| filter.matches(&self.items[i]));
             }
         }
+        let view = std::rc::Rc::new(view);
+        *self.board_cache.borrow_mut() = Some((key, view.clone()));
         view
     }
 
@@ -560,7 +612,11 @@ impl State {
     /// Ticks any row: a meeting task through its meeting's tick file, a hand-made one in
     /// the overrides file.
     pub fn toggle_row(&mut self, id: &str, index: usize) {
-        if id == MANUAL || id.starts_with("manual/") {
+        // The tick is a set, worked out from what the row will be once earlier saves run, so
+        // pressing X twice quickly is on, then off, and both are saved.
+        if self.tasks.item(id, index).is_some() {
+            self.toggle_done(id, index);
+        } else if id == MANUAL || id.starts_with("manual/") {
             self.publish_edit(super::edit_worker::Job::ManualTick {
                 store: self.tasks.store.clone(),
                 id: id.strip_prefix("manual/").unwrap_or(id).into(),
@@ -1192,8 +1248,10 @@ impl State {
             return;
         }
         self.tasks.keyboard = true;
+        self.tasks.cursor = Some((id.clone(), index));
+        // A card past the first page is not drawn yet. Draw it, then scroll to it.
+        self.reveal_card(&id, index);
         tx.scroll_into_view(format!("trow-{id}-{index}"));
-        self.tasks.cursor = Some((id, index));
     }
 
     fn cursor_row(&self) -> Option<RowId> {
@@ -1837,20 +1895,11 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .gap(3.0)
             .child(title)
             .children(
-                s.relay_ui
-                    .conflicts
-                    .iter()
-                    .filter(|c| {
-                        Some(c.task_id.strip_prefix("$manual:").unwrap_or(&c.task_id))
-                            == id.strip_prefix("manual/")
-                    })
-                    .map(|c| c.choices.len())
-                    .max()
-                    .map(|count| {
-                        roles::SMALL
-                            .wrap(format!("{count} versions"), p.warn)
-                            .role("status")
-                    }),
+                core::task_conflict_versions(&s.relay_ui.conflicts, t).map(|count| {
+                    roles::SMALL
+                        .wrap(format!("{count} versions"), p.warn)
+                        .role("status")
+                }),
             )
             .children((!preview.is_empty()).then(|| {
                 roles::META

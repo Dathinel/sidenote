@@ -1490,14 +1490,9 @@ mod tests {
             .unwrap();
         let before = f.tasks(&store.load_overrides().unwrap()).remove(0);
         assert_eq!(before.waiting_label.as_deref(), Some("Legal"));
-        let plan = core::move_plan(&before, core::BoardColumn::Review);
-        assert_eq!(
-            plan,
-            core::MovePlan {
-                tick: None,
-                status: Some(TaskStatus::Review)
-            }
-        );
+        let plan = core::MoveIntent::to(core::BoardColumn::Review);
+        assert_eq!(plan.column(&before), core::BoardColumn::Review);
+        assert_eq!(plan.done, Some(false));
         let view = store
             .edit_v2(
                 &before,
@@ -1518,7 +1513,7 @@ mod tests {
         assert_eq!(after.project, before.project);
         assert!(!after.done);
         // Moving to the column a card is already in saves nothing.
-        assert!(core::move_plan(&after, core::BoardColumn::Review).is_noop());
+        assert_eq!(plan.column(&after), core::BoardColumn::of(&after));
     }
     #[test]
     fn leaving_done_is_the_tick_going_back_and_the_old_status_returns() {
@@ -1537,8 +1532,9 @@ mod tests {
             .remove(0)
         };
         // Into Done: only the tick, so the status behind it is left alone.
-        let plan = core::move_plan(&task, Done);
-        assert_eq!((plan.tick, plan.status), (Some(true), None));
+        let plan = core::MoveIntent::to(Done);
+        assert_eq!((plan.done, plan.status), (Some(true), None));
+        assert_eq!(plan.column(&task), Done);
         let view = ticks
             .set_task_tick_view(&f.meeting.id, &task.task, &task.stable_id, true)
             .unwrap();
@@ -1547,14 +1543,15 @@ mod tests {
         assert_eq!(finished.status, TaskStatus::Review);
         assert_eq!(core::BoardColumn::of(&finished), Done);
         // Out of Done to the status it had: the untick alone is enough.
-        let back = core::move_plan(&finished, Review);
-        assert_eq!((back.tick, back.status), (Some(false), None));
+        let back = core::MoveIntent::to(Review);
+        assert_eq!(back.column(&finished), Review);
         // Out of Done to another column: the untick, then the status.
-        let other = core::move_plan(&finished, Todo);
+        let other = core::MoveIntent::to(Todo);
         assert_eq!(
-            (other.tick, other.status),
+            (other.done, other.status),
             (Some(false), Some(TaskStatus::Todo))
         );
+        assert_eq!(other.column(&finished), Todo);
         // Both steps are sets, so running one twice changes nothing.
         for _ in 0..2 {
             let view = ticks
@@ -1588,9 +1585,9 @@ mod tests {
         };
         let done = build(&Overrides::default(), &checked);
         assert!(done.done);
-        let plan = core::move_plan(&done, core::BoardColumn::Todo);
+        let plan = core::MoveIntent::to(core::BoardColumn::Todo);
         assert_eq!(
-            (plan.tick, plan.status),
+            (plan.done, plan.status),
             (Some(false), Some(TaskStatus::Todo))
         );
         let (moved, error) = core::run_move(&store, &ticks, &done, &f.meeting.folder, plan);
@@ -1623,7 +1620,7 @@ mod tests {
             .unwrap();
         let task = f.tasks(&overrides).remove(0);
         assert!(task.done);
-        let plan = core::move_plan(&task, core::BoardColumn::Review);
+        let plan = core::MoveIntent::to(core::BoardColumn::Review);
         let (moved, error) = core::run_move(&store, &ticks, &task, &f.root, plan);
         assert!(error.is_none());
         let after = f.tasks(&moved.overrides.unwrap().value).remove(0);
@@ -1631,12 +1628,118 @@ mod tests {
         assert_eq!(after.status, TaskStatus::Review);
         assert_eq!(after.owner.as_deref(), Some("Robin"));
         // Done again is the tick alone, and a second run does not flip it back.
-        let plan = core::move_plan(&after, core::BoardColumn::Done);
+        let plan = core::MoveIntent::to(core::BoardColumn::Done);
         for _ in 0..2 {
             let (moved, error) = core::run_move(&store, &ticks, &after, &f.root, plan);
             assert!(error.is_none());
             assert!(f.tasks(&moved.overrides.unwrap().value)[0].done);
         }
+    }
+    #[test]
+    fn a_move_through_done_then_on_saves_the_final_column_and_keeps_the_old_status() {
+        use core::BoardColumn::{Done, Todo, Waiting};
+        let f = Fixture::new(json!([{"id":"a","title":"Read proof","status":"review"}]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        // The card the page showed when both moves were made. Neither run sees a newer one.
+        let stale = f.tasks(&Overrides::default()).remove(0);
+        let build = |o: &Overrides, checked: &HashMap<_, _>| {
+            core::build_tasks(
+                std::slice::from_ref(&f.meeting),
+                &HashMap::new(),
+                &core::Projects::default(),
+                o,
+                checked,
+            )
+            .remove(0)
+        };
+        // Review -> Done alone leaves the status Review under the tick.
+        let (first, error) = core::run_move(
+            &store,
+            &ticks,
+            &stale,
+            &f.meeting.folder,
+            core::MoveIntent::to(Done),
+        );
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), first.ticks.unwrap().value.checked)]);
+        let at_done = build(&store.load_overrides().unwrap(), &checked);
+        assert_eq!((at_done.status, at_done.done), (TaskStatus::Review, true));
+        // Done -> Waiting on, run from the same stale card: the final column wins.
+        let (second, error) = core::run_move(
+            &store,
+            &ticks,
+            &stale,
+            &f.meeting.folder,
+            core::MoveIntent::to(Waiting),
+        );
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), second.ticks.unwrap().value.checked)]);
+        let after = build(&second.overrides.unwrap().value, &checked);
+        assert_eq!(core::BoardColumn::of(&after), Waiting);
+        // The two merged into one job save the same end state in one go.
+        let merged = core::MoveIntent::to(Done).then(core::MoveIntent::to(Todo));
+        let (moved, error) = core::run_move(&store, &ticks, &stale, &f.meeting.folder, merged);
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), moved.ticks.unwrap().value.checked)]);
+        let after = build(&moved.overrides.unwrap().value, &checked);
+        assert_eq!(core::BoardColumn::of(&after), Todo);
+    }
+    #[test]
+    fn conflicts_are_matched_to_meeting_tasks_and_hand_made_ones() {
+        use core::relay_preview::{Choice, Conflict};
+        let f = Fixture::new(json!([
+            {"id":"a","title":"First"},
+            {"id":"b","title":"Second"}
+        ]));
+        let (overrides, _) = f
+            .store()
+            .add_manual(core::ManualTask {
+                task: "Print the cards".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let tasks = f.tasks(&overrides);
+        let version = |value: &str| Choice {
+            value: json!(value),
+            device: "laptop".into(),
+            at: "2026-11-12T08:00:00Z".into(),
+            source: String::new(),
+        };
+        let held = |task_id: &str, path: serde_json::Value, n: usize| Conflict {
+            domain: String::new(),
+            task_id: task_id.into(),
+            title: "t".into(),
+            field: path.to_string(),
+            choices: (0..n).map(|i| version(&i.to_string())).collect(),
+        };
+        let meeting = f.meeting.id.clone();
+        let first = tasks.iter().find(|t| t.stable_id == "a").unwrap();
+        let second = tasks.iter().find(|t| t.stable_id == "b").unwrap();
+        let by_hand = tasks.iter().find(|t| t.manual).unwrap();
+        let conflicts = vec![
+            held(
+                "task-overrides.json",
+                json!(["o:tasks", format!("o:{meeting}"), "o:id:a", "o:owner"]),
+                2,
+            ),
+            held(
+                &format!("{meeting}.json"),
+                json!(["o:checked", "o:task:b"]),
+                3,
+            ),
+            held(
+                &format!(
+                    "$manual:{}",
+                    by_hand.meeting_id.strip_prefix("manual/").unwrap()
+                ),
+                json!(["o:subtasks"]),
+                2,
+            ),
+        ];
+        assert_eq!(core::task_conflict_versions(&conflicts, first), Some(2));
+        assert_eq!(core::task_conflict_versions(&conflicts, second), Some(3));
+        assert_eq!(core::task_conflict_versions(&conflicts, by_hand), Some(2));
+        assert_eq!(core::task_conflict_versions(&[], first), None);
     }
     #[test]
     fn person_area_and_meeting_filters_narrow_the_board_and_the_list() {
