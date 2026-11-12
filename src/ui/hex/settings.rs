@@ -1993,7 +1993,7 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
         .padding(16.0)
         .gap(12.0)
         .child(roles::SMALL.wrap(
-            "Daily check reads these sources from your repository. Settings stay on this device.",
+            "Daily check reads these sources from your repository. People supports Markdown rosters only; YAML, JSON and TXT are unsupported. Settings stay on this device.",
             p.soft,
         ));
     for (index, label) in [

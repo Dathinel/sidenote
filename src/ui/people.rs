@@ -37,7 +37,7 @@ impl PeopleUi {
             None
         };
         Self {
-            affiliations: core::people::Affiliations::load(config),
+            affiliations: core::people::Affiliations::identity(config),
             tab: prefs
                 .settings_tabs
                 .get("People")
@@ -53,13 +53,12 @@ impl PeopleUi {
 }
 
 impl State {
-    fn set_person_side(&mut self, person: &str, side: Side) {
-        let id = core::people::key(person);
-        let mut prefs = core::UiPrefs::load(&self.store.root);
-        prefs.people_sides.insert(id, side);
-        match prefs.save(&self.store.root) {
+    fn set_person_side(&mut self, person: &str, side: Option<Side>) {
+        let mut prefs = self.people.prefs.clone();
+        match prefs.save_person_side(&self.store.root, person, &self.tasks.teams, side) {
             Ok(()) => {
                 self.people.prefs.people_sides = prefs.people_sides;
+                self.people.prefs.relay_people_base = prefs.relay_people_base;
                 self.people.notice = None;
             }
             Err(_) => {
@@ -84,9 +83,9 @@ fn side_control(person: &Person, k: &Kit, p: Palette) -> El {
         s.set_person_side(
             &name,
             if index == 0 {
-                Side::OurTeam
+                Some(Side::OurTeam)
             } else {
-                Side::External
+                Some(Side::External)
             },
         )
     })
@@ -157,6 +156,15 @@ fn person_menu(s: &State, person: &Person, k: &Kit, p: Palette, layer: &mut Vec<
                 s.edit_person_company(&edit_name);
             }),
         );
+    if person.manual_side {
+        let name = person.name.clone();
+        menu = menu.item(
+            MenuItem::new("Reset to automatic").on_select(move |s: &mut State| {
+                s.more_menu = None;
+                s.set_person_side(&name, None);
+            }),
+        );
+    }
     if let Some(email) = email {
         menu = menu.item(
             MenuItem::new("Copy email").on_select_tx(move |s: &mut State, tx| {
@@ -226,6 +234,8 @@ pub fn person_row(
         .then_some(person.company.as_deref())
         .flatten()
     });
+    let company_name =
+        company_name.filter(|_| !(person.manual_side && person.side == Some(Side::External)));
     if let Some(company_name) = company_name {
         name = name.child(roles::META.line(company_name, p.soft));
     }
@@ -239,7 +249,32 @@ pub fn person_row(
                 .key(format!("person-email-value-{id}")),
         );
     }
-    if person.side.is_none() {
+    if person.suggested {
+        let person_name = person.name.clone();
+        name = name.child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .child(
+                    roles::META
+                        .line("Suggested: Our team", p.soft)
+                        .key(format!("person-suggestion-{id}")),
+                )
+                .child(
+                    super::widgets::button(
+                        "Confirm",
+                        &format!("person-confirm-{id}"),
+                        super::widgets::ButtonRole::Ghost,
+                        p,
+                    )
+                    .h(28.0)
+                    .button_disabled(s.edit_busy)
+                    .on_press(move |s: &mut State| {
+                        s.set_person_side(&person_name, Some(Side::OurTeam))
+                    }),
+                ),
+        );
+    } else if person.side.is_none() {
         name = name.child(roles::META.line("Side not set", p.faint));
     }
     let identity = row()
@@ -335,22 +370,23 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
         .iter()
         .filter(|person| {
             let on_team = person.side == Some(Side::OurTeam);
+            let company = s
+                .companies
+                .data
+                .company_for(&person.name)
+                .filter(|_| !(person.manual_side && person.side == Some(Side::External)))
+                .map(|c| format!("{} {}", c.name, c.aliases.join(" ")))
+                .unwrap_or_default();
+            let searchable = format!(
+                "{} {} {} {} {}",
+                person.name,
+                person.aliases.join(" "),
+                person.team,
+                person.company.as_deref().unwrap_or(""),
+                company
+            );
             on_team == (tab == 0)
-                && (query.is_empty()
-                    || format!(
-                        "{} {} {} {} {}",
-                        person.name,
-                        person.aliases.join(" "),
-                        person.team,
-                        person.company.as_deref().unwrap_or(""),
-                        s.companies
-                            .data
-                            .company_for(&person.name)
-                            .map(|c| format!("{} {}", c.name, c.aliases.join(" ")))
-                            .unwrap_or_default()
-                    )
-                    .to_lowercase()
-                    .contains(&query))
+                && (query.is_empty() || searchable.to_lowercase().contains(&query))
         })
         .collect();
     let mut out = col()
@@ -433,14 +469,15 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
     } else {
         let mut groups = std::collections::BTreeMap::<Option<String>, Vec<&Person>>::new();
         for person in &filtered {
-            let company = if tab == 1 {
-                s.companies
-                    .data
-                    .company_for(&person.name)
-                    .map(|c| c.id.clone())
-            } else {
-                None
-            };
+            let company =
+                if tab == 1 && !(person.manual_side && person.side == Some(Side::External)) {
+                    s.companies
+                        .data
+                        .company_for(&person.name)
+                        .map(|c| c.id.clone())
+                } else {
+                    None
+                };
             groups.entry(company).or_default().push(person);
         }
         for (company, group) in groups {

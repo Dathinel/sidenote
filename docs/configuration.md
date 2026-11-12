@@ -32,19 +32,25 @@ Use source roots that contain only the material you intend to send to your agent
 Daily check fetches the configured repository and writes local snapshots and reports;
 it does not write KB content. Restoring your prior config restores your prior choices.
 
-People also reads the roster directly from the configured Git revision, so the file
-need not be present in the KB working tree. Use a Markdown table with a `Person`
-or `Name` column; `/`, commas and parentheses in that column list explicit name
-spellings or aliases. Matching ignores case and repeated whitespace, and never
-uses role text, email domains or partial names. Matched people appear on Our team
-with `company_name` as their company. Unrecognized roster formats show a notice.
+People loads owner identity and company from config at startup. Roster loading starts
+in the background after the first presented frame. The parsed Markdown roster is
+cached by repository path, resolved commit ID and roster path; warm refreshes read
+loose or packed local Git refs and launch no Git process. Worktree gitdir and
+commondir pointers are supported. Git is used only on a cache miss.
 
-The saved `notes.your_name` identifies you. A short first-name spelling identifies
-you only if the roster lists it explicitly and contains no competing name starting
-with that first name. Microphone transcript labels `You` and `Me` also identify the
-local speaker; microphone audio alone does not establish a person's name.
+People supports Markdown only; YAML, JSON and TXT are unsupported. This is explained
+in Knowledge base settings without leaving a permanent People alert. The first
+table with a `Person` column and a role column (header starting with `Role`) is the
+roster. Generic `Name` tables and subsequent tables are ignored. `/` and commas
+separate explicitly listed spellings; an optional `Aliases` column lists aliases.
+Parenthetical, square-bracket and brace annotations are stripped, never names.
 
-Automatic sides and companies are display-time projections, including for people
-already visible in People. No backfill or config save is needed. Entries in
-`people_sides` are manual overrides and always win; automatic evidence never enters
-that map. Saved company links, including an explicit no-company choice, also win.
+Full-name and explicit alias matches are automatic. A standalone first name only
+suggests Our team and requires Confirm; confirmation saves a manual side. The saved
+`notes.your_name` identifies you, and your short name explicitly listed on your own
+roster row is an alias. Other aliases on that row do not compete with it.
+
+Manual side choices win and can be cleared with Reset to automatic. Confirm, side
+changes and reset merge only that person's side fields and preserve unrelated data.
+Manual External hides the company label. Automatic classifications are display-time
+projections; no backfill or config save is needed.

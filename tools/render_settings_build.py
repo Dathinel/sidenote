@@ -41,6 +41,10 @@ def render(job):
  assert base.with_suffix('.png').is_file(),base
  tree=json.loads(base.with_suffix('.json').read_text(encoding='utf-8-sig'))
  assert not tree['warnings'],(base.name,tree['warnings'])
+ if scene=='people-suggestion':
+  elements=tree['elements']
+  assert any(n.get('text')=='Suggested: Our team' for n in elements), 'Suggestion missing'
+  assert any(n.get('key')=='person-confirm-jamie' for n in elements), 'Confirm missing'
  print(base.name,flush=True)
  return str(base.with_suffix('.png').relative_to(ROOT))
 
@@ -58,6 +62,7 @@ def main():
     jobs.append((name,scene,width,theme,height,None))
    for name,scene,events in [('updates-available','updates-ready',None),('updates-checking','updates-checking',None),('hex-scrolled','settings-hex-expanded',[tap('settings-jump-5')]),('recording-expanded','settings-recording-expanded',None),('summaries-expanded','settings-summaries-expanded',None),('helpers-expanded','settings-helpers-expanded',None),('speech-expanded','settings-speech-expanded',None),('privacy-expanded','settings-privacy',[tap('notes-privacy-details')]),('diagnostics-expanded','settings-diagnostics',None),('sync-expanded','settings-sync-expanded',None),('people-editor','people-team-editor',[tap('team-advanced')])]:
     jobs.append((name,scene,width,theme,2200 if 'expanded' in name or 'editor' in name else 900,events))
+ jobs.append(('people-suggestion','people-suggestion',1280,'dark',1800,None))
  # Existing legacy search proof keeps its original 800px viewport and exact interaction.
  events=json.loads((ROOT/'tools/ui-scripts/settings-search.json').read_text())['events'][:-1]
  jobs.append(('search','settings-search',1280,'light',800,events))

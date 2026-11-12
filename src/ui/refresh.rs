@@ -11,6 +11,10 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
+static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
+pub(super) fn first_frame() {
+    FIRST_FRAME.store(true, Ordering::Release);
+}
 const EVERY: Duration = Duration::from_secs(10);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Options {
@@ -87,8 +91,13 @@ impl Data {
         let pipeline = core::load_pipeline(&meetings);
         let store = core::TaskStore::default();
         let saved_store = core::StateStore::default();
-        let affiliations =
-            loaded(core::Config::load()).map(|config| core::people::Affiliations::load(&config));
+        let affiliations = loaded(core::Config::load()).map(|config| {
+            if FIRST_FRAME.load(Ordering::Acquire) {
+                core::people::Affiliations::load(&config)
+            } else {
+                core::people::Affiliations::identity(&config)
+            }
+        });
         let companies = loaded(core::companies::Companies::load(&core::state_dir()));
         let company_threads: Vec<_> = companies
             .iter()
@@ -392,7 +401,7 @@ pub(super) fn start(waker: Waker, initial: Options) -> Handle {
                 break;
             }
             next = Instant::now() + EVERY;
-            if !visible() {
+            if !FIRST_FRAME.load(Ordering::Acquire) || !visible() {
                 continue;
             }
             let generation = core::mutation_generation();

@@ -11,82 +11,218 @@ pub enum Side {
     External,
 }
 
-/// Automatic evidence is projected, never stored in the manual `people_sides` map.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RosterRow {
+    names: BTreeSet<String>,
+    automatic: BTreeSet<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Affiliations {
     pub your_name: String,
     pub company: Option<String>,
-    members: BTreeSet<String>,
+    members: Vec<RosterRow>,
     pub notice: Option<String>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RosterKey {
+    repo: std::path::PathBuf,
+    commit: String,
+    path: String,
+}
+#[derive(Default)]
+struct RosterCache {
+    reads: usize,
+    entry: Option<(RosterKey, Option<Vec<RosterRow>>)>,
+}
+impl RosterCache {
+    fn read(
+        &mut self,
+        key: RosterKey,
+        read: impl FnOnce() -> Option<Vec<RosterRow>>,
+    ) -> Option<Vec<RosterRow>> {
+        if let Some((cached, rows)) = &self.entry
+            && *cached == key
+        {
+            return rows.clone();
+        }
+        self.reads += 1;
+        let rows = read();
+        self.entry = Some((key, rows.clone()));
+        rows
+    }
+}
+static ROSTER_CACHE: std::sync::Mutex<RosterCache> = std::sync::Mutex::new(RosterCache {
+    reads: 0,
+    entry: None,
+});
+
+impl RosterKey {
+    fn resolve(kb: &super::config::KnowledgeBase) -> std::io::Result<Self> {
+        use std::{fs, path::PathBuf};
+        kb.validate().map_err(super::store_io::invalid)?;
+        let repo = PathBuf::from(&kb.repo_path);
+        let dot_git = repo.join(".git");
+        let git = if dot_git.is_file() {
+            let text = fs::read_to_string(&dot_git)?;
+            repo.join(
+                text.trim()
+                    .strip_prefix("gitdir: ")
+                    .ok_or_else(|| super::store_io::invalid("Invalid Git directory"))?,
+            )
+        } else {
+            dot_git
+        };
+        let common = match fs::read_to_string(git.join("commondir")) {
+            Ok(path) => git.join(path.trim()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => git.clone(),
+            Err(error) => return Err(error),
+        };
+        let mut reference = format!("refs/remotes/{}", kb.revision);
+        for _ in 0..8 {
+            let loose = fs::read_to_string(git.join(&reference))
+                .or_else(|_| fs::read_to_string(common.join(&reference)));
+            let commit = match loose {
+                Ok(value) => {
+                    if let Some(target) = value.trim().strip_prefix("ref: ") {
+                        if !target.starts_with("refs/") || target.split('/').any(|p| p == "..") {
+                            break;
+                        }
+                        reference = target.to_owned();
+                        continue;
+                    }
+                    value.trim().to_owned()
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::read_to_string(common.join("packed-refs"))?
+                        .lines()
+                        .filter_map(|line| line.split_once(' '))
+                        .find_map(|(sha, name)| (name == reference).then(|| sha.to_owned()))
+                        .ok_or_else(|| super::store_io::invalid("Missing roster revision"))?
+                }
+                Err(error) => return Err(error),
+            };
+            if matches!(commit.len(), 40 | 64) && commit.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(Self {
+                    repo,
+                    commit,
+                    path: kb.people_roster_source.clone(),
+                });
+            }
+            break;
+        }
+        Err(super::store_io::invalid("Invalid roster revision"))
+    }
+}
+
 impl Affiliations {
-    pub fn load(config: &Config) -> Self {
-        let kb = &config.knowledge_base;
-        let mut result = Self {
+    /// Diagnostic counter used to measure cold versus warm background roster reads.
+    pub fn cache_reads() -> usize {
+        ROSTER_CACHE.lock().unwrap_or_else(|e| e.into_inner()).reads
+    }
+
+    /// Startup identity is config-only: no roster filesystem access or subprocesses.
+    pub fn identity(config: &Config) -> Self {
+        Self {
             your_name: config
                 .notes
                 .as_ref()
                 .map(|n| n.your_name.clone())
                 .unwrap_or_default(),
-            company: (!kb.company_name.trim().is_empty())
-                .then(|| kb.company_name.trim().to_owned()),
+            company: (!config.knowledge_base.company_name.trim().is_empty())
+                .then(|| config.knowledge_base.company_name.trim().to_owned()),
             ..Default::default()
-        };
-        if kb.people_roster_source.is_empty() {
+        }
+    }
+
+    /// Background-only refresh. A warm call reads local refs, never starts Git.
+    pub fn load(config: &Config) -> Self {
+        let mut result = Self::identity(config);
+        let kb = &config.knowledge_base;
+        if !kb.people_roster_source.ends_with(".md") {
             return result;
         }
-        let read = || -> std::io::Result<String> {
-            kb.validate().map_err(super::store_io::invalid)?;
-            let bytes = super::daily_check::git(
-                &kb.repo_path,
-                &[
-                    "show",
-                    &format!("{}:{}", kb.revision, kb.people_roster_source),
-                ],
-            )?;
-            String::from_utf8(bytes).map_err(|_| super::store_io::invalid("Roster must be UTF-8"))
-        };
-        match read() {
-            Ok(text) => match Self::parse_members(&text) {
-                Some(members) => result.members = members,
-                None => result.notice = Some("Could not read the team roster. Use a Markdown table with a Person or Name column.".into()),
-            },
-            Err(_) => result.notice = Some("Could not read the configured team roster. Check the knowledge base repository, revision and roster path.".into()),
+        let rows = RosterKey::resolve(kb).ok().and_then(|cache_key| {
+            let mut cache = ROSTER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            cache.read(cache_key.clone(), || {
+                let bytes = super::daily_check::git(
+                    &kb.repo_path,
+                    &["show", &format!("{}:{}", cache_key.commit, cache_key.path)],
+                )
+                .ok()?;
+                Self::parse_members(std::str::from_utf8(&bytes).ok()?)
+            })
+        });
+        match rows {
+            Some(rows) => result.members = rows,
+            None => result.notice = Some("Could not read the configured Markdown team roster. Check the repository, revision and Person / Role table.".into()),
         }
         result
     }
 
-    fn parse_members(text: &str) -> Option<BTreeSet<String>> {
-        let mut column = None;
-        let mut members = BTreeSet::new();
+    pub fn with_roster(config: &Config, text: &str) -> Self {
+        Self {
+            members: Self::parse_members(text).unwrap_or_default(),
+            ..Self::identity(config)
+        }
+    }
+
+    fn parse_members(text: &str) -> Option<Vec<RosterRow>> {
+        let mut rows = Vec::new();
+        let mut columns = None;
         for line in text.lines() {
             let line = line.trim();
             if !line.starts_with('|') || !line.ends_with('|') {
-                column = None;
+                if columns.is_some() {
+                    break;
+                }
                 continue;
             }
             let cells: Vec<_> = line.trim_matches('|').split('|').map(str::trim).collect();
-            if let Some(index) = cells
-                .iter()
-                .position(|cell| matches!(key(cell).as_str(), "person" | "name"))
-            {
-                column = Some(index);
+            if columns.is_none() {
+                // Match the roster schema, never a generic contacts Name table.
+                let person = cells.iter().position(|cell| key(cell) == "person");
+                let role = cells.iter().any(|cell| key(cell).starts_with("role"));
+                if let Some(person) = person.filter(|_| role) {
+                    columns = Some((person, cells.iter().position(|cell| key(cell) == "aliases")));
+                }
                 continue;
             }
-            if let Some(cell) = column.and_then(|index| cells.get(index)) {
-                if cell.chars().all(|c| matches!(c, '-' | ':' | ' ')) {
-                    continue;
-                }
-                // Only explicit spellings in the name column count; roles and prose do not.
-                for name in cell.split(['/', ',', '(', ')']) {
-                    let name = key(name.trim().trim_matches(['*', '`']));
+            let (person, aliases) = columns?;
+            let Some(cell) = cells.get(person) else {
+                continue;
+            };
+            if cell.chars().all(|c| matches!(c, '-' | ':' | ' ')) {
+                continue;
+            }
+            let mut row = RosterRow::default();
+            for (index, cell) in std::iter::once((person, *cell))
+                .chain(aliases.and_then(|i| cells.get(i).map(|v| (i, *v))))
+            {
+                let clean = strip_brackets(cell);
+                for value in clean.split(['/', ',']) {
+                    let name = key(value.trim().trim_matches(['*', '`']));
                     if named(&name) {
-                        members.insert(name);
+                        if index != person || name.split_whitespace().count() > 1 {
+                            row.automatic.insert(name.clone());
+                        }
+                        row.names.insert(name);
                     }
                 }
             }
+            if row
+                .names
+                .iter()
+                .any(|name| name.split_whitespace().count() > 1)
+            {
+                row.automatic.extend(row.names.iter().cloned());
+            }
+            if !row.names.is_empty() {
+                rows.push(row);
+            }
         }
-        (!members.is_empty()).then_some(members)
+        (!rows.is_empty()).then_some(rows)
     }
 
     pub fn is_self(&self, name: &str, teams: &Teams) -> bool {
@@ -95,46 +231,83 @@ impl Affiliations {
         if matches!(name.as_str(), "you" | "me") || (!owner.is_empty() && name == owner) {
             return true;
         }
-        // Summaries use short names. Accept one only when the roster lists that exact
-        // spelling and has no competing person with the owner's first name.
-        owner.split_whitespace().next().is_some_and(|first| {
-            name == first
-                && self.members.contains(&name)
-                && !self.members.iter().any(|member| {
-                    member != &name
-                        && member != &owner
-                        && member.split_whitespace().next() == Some(first)
+        let Some(first) = owner.split_whitespace().next() else {
+            return false;
+        };
+        if name != first {
+            return false;
+        }
+        let matches: Vec<_> = self
+            .members
+            .iter()
+            .filter(|row| row.names.contains(&name))
+            .collect();
+        matches.len() == 1
+            && !self
+                .members
+                .iter()
+                .filter(|row| *row != matches[0])
+                .any(|row| {
+                    row.names
+                        .iter()
+                        .any(|other| other.split_whitespace().next() == Some(first))
                 })
+    }
+
+    pub fn manual_side(&self, name: &str, teams: &Teams, prefs: &UiPrefs) -> Option<Side> {
+        prefs.people_sides.get(&key(name)).copied().or_else(|| {
+            prefs
+                .people_sides
+                .get(&key(&teams.owner_name(name)))
+                .copied()
         })
     }
 
+    pub fn suggested(&self, name: &str, teams: &Teams, prefs: &UiPrefs) -> bool {
+        self.side(name, teams, prefs).is_none()
+            && self.members.iter().any(|row| {
+                row.names.contains(&key(name)) || row.names.contains(&key(&teams.owner_name(name)))
+            })
+    }
+
     pub fn company_for(&self, name: &str, teams: &Teams) -> Option<&str> {
-        (self.is_self(name, teams)
-            || self.members.contains(&key(name))
-            || self.members.contains(&key(&teams.owner_name(name))))
-        .then_some(self.company.as_deref())
-        .flatten()
+        (self.is_self(name, teams) || self.automatic(name, teams))
+            .then_some(self.company.as_deref())
+            .flatten()
+    }
+
+    fn automatic(&self, name: &str, teams: &Teams) -> bool {
+        self.members.iter().any(|row| {
+            row.automatic.contains(&key(name))
+                || row.automatic.contains(&key(&teams.owner_name(name)))
+        })
     }
 
     pub fn side(&self, name: &str, teams: &Teams, prefs: &UiPrefs) -> Option<Side> {
-        prefs
-            .people_sides
-            .get(&key(name))
-            .copied()
-            .or_else(|| {
-                prefs
-                    .people_sides
-                    .get(&key(&teams.owner_name(name)))
-                    .copied()
-            })
-            .or_else(|| {
-                (self.is_self(name, teams)
-                    || self.members.contains(&key(name))
-                    || self.members.contains(&key(&teams.owner_name(name)))
-                    || teams.resolve(Some(name), None) != "No team")
-                    .then_some(Side::OurTeam)
-            })
+        self.manual_side(name, teams, prefs).or_else(|| {
+            (self.is_self(name, teams)
+                || self.automatic(name, teams)
+                || teams.resolve(Some(name), None) != "No team")
+                .then_some(Side::OurTeam)
+        })
     }
+}
+
+fn strip_brackets(text: &str) -> String {
+    let mut depth = 0usize;
+    text.chars()
+        .filter(|c| match c {
+            '(' | '[' | '{' => {
+                depth += 1;
+                false
+            }
+            ')' | ']' | '}' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect()
 }
 
 pub fn key(name: &str) -> String {
@@ -186,6 +359,8 @@ pub struct Person {
     pub side: Option<Side>,
     pub company: Option<String>,
     pub is_self: bool,
+    pub suggested: bool,
+    pub manual_side: bool,
 }
 
 pub fn roster(
@@ -232,7 +407,12 @@ pub fn roster(
                     .filter(|(_, target)| key(target) == key(&name))
                     .map(|(alias, _)| alias.clone())
                     .collect(),
-                company: affiliations.company_for(&name, teams).map(str::to_owned),
+                company: (side == Some(Side::OurTeam))
+                    .then_some(affiliations.company.as_deref())
+                    .flatten()
+                    .map(str::to_owned),
+                suggested: affiliations.suggested(&name, teams, prefs),
+                manual_side: affiliations.manual_side(&name, teams, prefs).is_some(),
                 is_self: affiliations.is_self(&name, teams),
                 name,
                 team,
@@ -277,10 +457,134 @@ mod tests {
             your_name: "Casey Morgan".into(),
             company: Some("Example Company".into()),
             members: Affiliations::parse_members(
-                "# Team\n\n| Person | Role |\n|---|---|\n| Avery Reed / Avery R (A. Reed) | Engineer |\n| Blake Bell, Drew Day | Designer |\n\nOutside contact: Jordan Guest",
+                "# Team\n\n| Person | Role |\n|---|---|\n| Avery Reed / Avery R / A. Reed | Engineer |\n| Blake Bell, Drew Day | Designer |\n\nOutside contact: Jordan Guest",
             ).unwrap(),
             notice: None,
         }
+    }
+
+    #[test]
+    fn identity_does_not_load_roster_or_resolve_repository() {
+        let mut config = Config::default();
+        config.knowledge_base.repo_path = "//unreachable/synthetic".into();
+        config.knowledge_base.people_roster_source = "roster.md".into();
+        let value = Affiliations::identity(&config);
+        assert!(value.members.is_empty());
+        assert!(value.notice.is_none());
+    }
+
+    #[test]
+    fn cache_key_tracks_repo_resolved_commit_and_roster_path() {
+        let mut cache = RosterCache::default();
+        let base = RosterKey {
+            repo: "synthetic-a".into(),
+            commit: "a".repeat(40),
+            path: "people.md".into(),
+        };
+        cache.read(base.clone(), || Some(Vec::new()));
+        cache.read(base.clone(), || panic!("warm refresh must not read roster"));
+        assert_eq!(cache.reads, 1);
+        for changed in [
+            RosterKey {
+                repo: "synthetic-b".into(),
+                ..base.clone()
+            },
+            RosterKey {
+                commit: "b".repeat(40),
+                ..base.clone()
+            },
+            RosterKey {
+                path: "other.md".into(),
+                ..base
+            },
+        ] {
+            cache.read(changed, || Some(Vec::new()));
+        }
+        assert_eq!(cache.reads, 4);
+    }
+
+    #[test]
+    fn local_revision_resolution_handles_loose_packed_and_worktree_refs() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        let git = repo.join(".git");
+        std::fs::create_dir_all(git.join("refs/remotes/origin")).unwrap();
+        let mut kb = super::super::config::KnowledgeBase::default();
+        kb.repo_path = repo.to_str().unwrap().into();
+        kb.revision = "origin/main".into();
+        kb.source_roots = vec!["docs".into()];
+        kb.people_roster_source = "people.md".into();
+        let loose = git.join("refs/remotes/origin/main");
+        std::fs::write(&loose, "a".repeat(40)).unwrap();
+        assert_eq!(RosterKey::resolve(&kb).unwrap().commit, "a".repeat(40));
+        std::fs::remove_file(loose).unwrap();
+        std::fs::write(
+            git.join("packed-refs"),
+            format!("{} refs/remotes/origin/main\n", "b".repeat(40)),
+        )
+        .unwrap();
+        assert_eq!(RosterKey::resolve(&kb).unwrap().commit, "b".repeat(40));
+        let worktree = root.path().join("lane");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let lane = git.join("worktrees/lane");
+        std::fs::create_dir_all(&lane).unwrap();
+        std::fs::write(lane.join("commondir"), "../..").unwrap();
+        std::fs::write(worktree.join(".git"), format!("gitdir: {}", lane.display())).unwrap();
+        kb.repo_path = worktree.to_str().unwrap().into();
+        assert_eq!(RosterKey::resolve(&kb).unwrap().commit, "b".repeat(40));
+    }
+
+    #[test]
+    fn yaml_is_unsupported_without_a_permanent_notice() {
+        let mut config = Config::default();
+        config.knowledge_base.people_roster_source = "people.yaml".into();
+        let value = Affiliations::load(&config);
+        assert!(value.notice.is_none());
+        assert!(value.members.is_empty());
+    }
+
+    #[test]
+    fn first_name_only_is_a_suggestion_until_manually_confirmed() {
+        let evidence = Affiliations {
+            members: Affiliations::parse_members(
+                "| Person | Role |\n|---|---|\n| Avery | Engineer |",
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let teams = Teams::default();
+        let mut prefs = UiPrefs::default();
+        assert_eq!(evidence.side("Avery", &teams, &prefs), None);
+        assert!(evidence.suggested("Avery", &teams, &prefs));
+        prefs.people_sides.insert(key("Avery"), Side::OurTeam);
+        assert_eq!(evidence.side("Avery", &teams, &prefs), Some(Side::OurTeam));
+        assert!(!evidence.suggested("Avery", &teams, &prefs));
+    }
+
+    #[test]
+    fn roster_schema_and_brackets_exclude_contacts_and_annotations() {
+        let rows = Affiliations::parse_members("| Name | Company |\n|---|---|\n| Guest Person | Example |\n\n| Person | Role | Aliases |\n|---|---|---|\n| Avery Reed (External Adviser) [Firm Name] | Engineer | AR |\n\n| Person | Role |\n|---|---|\n| Later Person | Adviser |").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].names,
+            BTreeSet::from([key("Avery Reed"), key("AR")])
+        );
+        assert!(!rows[0].names.contains(&key("Firm Name")));
+    }
+
+    #[test]
+    fn manual_external_hides_inferred_company() {
+        let mut input = meetings();
+        input[0].summary.people = vec!["Avery Reed".into()];
+        let mut prefs = UiPrefs {
+            people_existing_meetings: Some(BTreeSet::new()),
+            people_since_ms: Some(0),
+            ..Default::default()
+        };
+        prefs.people_sides.insert(key("Avery Reed"), Side::External);
+        let people = roster(&input, &Teams::default(), &[], &prefs, &affiliations());
+        assert_eq!(people[0].company, None);
+        assert!(people[0].manual_side);
     }
 
     #[test]
@@ -303,10 +607,16 @@ mod tests {
     fn short_owner_name_requires_explicit_unambiguous_roster_evidence() {
         let mut evidence = affiliations();
         assert!(!evidence.is_self("Casey", &Teams::default()));
-        evidence.members.insert(key("Casey"));
+        evidence.members.push(RosterRow {
+            names: BTreeSet::from([key("Casey"), key("Casey M")]),
+            ..Default::default()
+        });
         assert!(evidence.is_self("CASEY", &Teams::default()));
         assert!(!evidence.is_self("Case", &Teams::default()));
-        evidence.members.insert(key("Casey Bell"));
+        evidence.members.push(RosterRow {
+            names: BTreeSet::from([key("Casey Bell")]),
+            ..Default::default()
+        });
         assert!(!evidence.is_self("Casey", &Teams::default()));
     }
 
