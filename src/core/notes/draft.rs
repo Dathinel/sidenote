@@ -128,7 +128,12 @@ pub(super) fn generate(
     }
     let _lock = match store_io::lock(&path(root, id).with_extension("lock")) {
         Ok(lock) => lock,
-        Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(Outcome::Skipped),
+        Err(e)
+            if (cfg!(windows) && matches!(e.raw_os_error(), Some(32 | 33)))
+                || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock) =>
+        {
+            return Ok(Outcome::Skipped);
+        }
         Err(e) => return Err(e),
     };
     if folder.join("english-summary.json").is_file() || path(root, id).is_file() {

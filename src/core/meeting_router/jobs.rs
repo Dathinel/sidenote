@@ -48,7 +48,11 @@ fn pending_lock(root: &Path, id: &str) -> io::Result<fs::File> {
     loop {
         match store_io::lock(&queue(root).join(format!("{id}.lock"))) {
             Ok(lock) => return Ok(lock),
-            Err(e) if e.raw_os_error() == Some(32) && start.elapsed() < Duration::from_secs(10) => {
+            Err(e)
+                if ((cfg!(windows) && e.raw_os_error() == Some(32))
+                    || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock))
+                    && start.elapsed() < Duration::from_secs(10) =>
+            {
                 thread::sleep(Duration::from_millis(10))
             }
             Err(e) => return Err(e),
@@ -413,7 +417,12 @@ pub fn run_pending() -> Result<()> {
     }
     let _lock = match store_io::lock(&root.join("local/meeting-router.lock")) {
         Ok(lock) => lock,
-        Err(e) if e.raw_os_error() == Some(32) => return Ok(()),
+        Err(e)
+            if ((cfg!(windows) && e.raw_os_error() == Some(32))
+                || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock)) =>
+        {
+            return Ok(());
+        }
         Err(e) => return Err(e.into()),
     };
     fs::create_dir_all(queue(&root))?;

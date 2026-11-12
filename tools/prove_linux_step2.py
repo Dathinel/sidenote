@@ -115,6 +115,10 @@ def main():
         assert not re.search(r"lib(vulkan|GLX|EGL|X11|wayland|nvidia|cuda)|wgpu|librune", maps, re.I)
         print(json.dumps({"role": "server", "idle_rss_kib": rss, "display_gpu_libraries": 0}), flush=True)
         run("systemctl", "--user", "show", unit_name, "-p", "MemoryMax", "-p", "CPUQuotaPerSecUSec", "-p", "KillMode")
+        group = run("systemctl", "--user", "show", unit_name, "-p", "ControlGroup", "--value")
+        for controller in ("memory.max", "cpu.max"):
+            path = Path("/sys/fs/cgroup") / group.lstrip("/") / controller
+            print(f"cgroup {controller}={path.read_text().strip() if path.exists() else 'not delegated'}", flush=True)
         run("systemctl", "--user", "stop", unit_name)
         assert run("systemctl", "--user", "show", unit_name, "-p", "ActiveState", "--value") == "inactive"
         db = root / "server/local/relay/replica.sqlite"
