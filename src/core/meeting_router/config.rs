@@ -10,6 +10,7 @@ pub struct RoutingConfig {
     #[serde(skip)]
     pub meeting_languages: Vec<String>,
     pub language_mode: String,
+    pub language_detection: super::super::lid::Settings,
     pub model_state_dir: PathBuf,
     pub runtime_dll: PathBuf,
     #[serde(flatten)]
@@ -22,6 +23,7 @@ impl Default for RoutingConfig {
             profile: "compat".into(),
             meeting_languages: vec!["en".into()],
             language_mode: "auto".into(),
+            language_detection: super::super::lid::Settings::default(),
             model_state_dir: PathBuf::new(),
             runtime_dll: PathBuf::new(),
             extra: BTreeMap::new(),

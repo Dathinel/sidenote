@@ -19,6 +19,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Labs {
+    pub language_detection: bool,
     pub stop_forgotten_recordings: bool,
     pub silence_minutes: SilenceMinutes,
     pub measure_recording_files: bool,
