@@ -2,15 +2,36 @@
 use serde_json::{Value, json};
 use std::io;
 
-pub(super) fn dispatch(method: &str, params: Value) -> io::Result<Value> {
+fn read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_meetings"
+            | "search_meetings"
+            | "get_meeting"
+            | "list_tasks"
+            | "list_teams"
+            | "get_memory"
+            | "list_projects"
+            | "get_daily_check"
+    )
+}
+pub(super) fn dispatch(method: &str, params: Value, read_only: bool) -> io::Result<Value> {
     // MCP reads inherit --mcp semantics inside the owner; explicit local proposals may write.
     let _read = crate::core::ReadOnlyScope::begin(
         !(method == "call" && params["name"] == "propose_memory"),
     );
     match method {
-        "tools" => Ok(serde_json::to_value(crate::mcp::tools())?),
+        "tools" => Ok(serde_json::to_value(
+            crate::mcp::tools()
+                .into_iter()
+                .filter(|t| !read_only || read_tool(&t.name))
+                .collect::<Vec<_>>(),
+        )?),
         "call" => {
             let name = params["name"].as_str().ok_or_else(super::invalid)?;
+            if read_only && !read_tool(name) {
+                return Err(super::invalid());
+            }
             let arguments = params["arguments"].clone();
             if !arguments.is_object() || !crate::mcp::tools().iter().any(|t| t.name == name) {
                 return Err(super::invalid());
@@ -157,9 +178,17 @@ mod tests {
             ("call", json!({"arguments": {}})),
             ("resource", json!({"uri": 42})),
         ] {
-            let error = dispatch(method, params).unwrap_err().to_string();
+            let error = dispatch(method, params, false).unwrap_err().to_string();
             assert_eq!(error, "SYNC_CONTROL_INVALID_REQUEST");
             assert!(!error.contains("synthetic-canary"));
         }
+    }
+    #[test]
+    fn remote_scope_is_a_closed_read_allowlist() {
+        for name in ["propose_memory", "configure", "future_write"] {
+            assert!(!read_tool(name));
+            assert!(dispatch("call", json!({"name":name,"arguments":{}}), true).is_err());
+        }
+        assert!(read_tool("get_meeting"));
     }
 }

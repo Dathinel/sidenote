@@ -53,6 +53,10 @@ fn main() {
             std::process::exit(2);
         }
     }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--mcp-access") {
+        std::process::exit(sidenote::mcp::access::cli(&args));
+    }
     if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
         std::process::exit(sidenote::service::run());
     }

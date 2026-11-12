@@ -8,6 +8,8 @@ enum Request {
     Mcp {
         method: String,
         params: Value,
+        #[cfg(target_os = "linux")]
+        grant: Option<crate::mcp::access::Grant>,
     },
     Status {},
     Configure {
@@ -313,10 +315,25 @@ pub(super) fn respond(control: &Mutex<Controller>, bytes: &[u8]) -> io::Result<V
     respond_with(control, bytes, mcp_request)
 }
 fn mcp_request(_root: &Path, request: Request) -> io::Result<Value> {
-    let Request::Mcp { method, params } = request else {
+    let Request::Mcp {
+        method,
+        params,
+        #[cfg(target_os = "linux")]
+        grant,
+    } = request
+    else {
         return Err(invalid());
     };
-    super::mcp::dispatch(&method, params)
+    #[cfg(target_os = "linux")]
+    let read_only = if let Some(grant) = grant {
+        crate::mcp::access::check(_root, &grant)?;
+        true
+    } else {
+        false
+    };
+    #[cfg(not(target_os = "linux"))]
+    let read_only = false;
+    super::mcp::dispatch(&method, params, read_only)
 }
 fn respond_with(
     control: &Mutex<Controller>,

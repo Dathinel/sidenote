@@ -2,6 +2,8 @@
 use crate::core::agent_tools;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
+pub mod access;
 
 fn string(description: &str) -> Value {
     json!({"type":"string","description":description})
