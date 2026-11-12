@@ -316,6 +316,20 @@ pub fn run() -> i32 {
                     return 2;
                 }
             };
+        #[cfg(target_os = "linux")]
+        if role() != DeviceRole::Full {
+            let root = crate::core::state_dir();
+            let provision = || -> std::io::Result<()> {
+                let _lock = crate::core::store_io::lock(&root.join("local/relay/identity.lock"))?;
+                sidenote_sync::client::Device::open(&root.join("local/relay/replica.sqlite"))
+                    .map_err(|_| std::io::Error::other("SECRET_STORE_UNAVAILABLE_OR_INVALID"))?;
+                Ok(())
+            };
+            if provision().is_err() {
+                eprintln!("SECRET_STORE_UNAVAILABLE_OR_INVALID: provision systemd-creds or unlock Secret Service");
+                return 2;
+            }
+        }
         #[cfg(windows)]
         let _update_instance = match crate::updates::listener_lock() {
             Ok(instance) if !crate::updates::listener_stopping() => instance,

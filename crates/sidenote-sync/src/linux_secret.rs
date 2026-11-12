@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 const HEADER: &[u8] = b"sidenote-secret-v1\0";
 
 pub fn protect(bytes: &[u8]) -> Result<Vec<u8>> {
-    let key = master()?;
+    let key = master(true)?;
     let mut nonce = [0; 12];
     OsRng.fill_bytes(&mut nonce);
     let encrypted = ChaCha20Poly1305::new(key.as_ref().into())
@@ -37,7 +37,7 @@ pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         bytes.starts_with(HEADER) && bytes.len() >= HEADER.len() + 28,
         "SECRET_ENVELOPE_INVALID"
     );
-    let key = master()?;
+    let key = master(false)?;
     let (nonce, encrypted) = bytes[HEADER.len()..].split_at(12);
     ChaCha20Poly1305::new(key.as_ref().into())
         .decrypt(
@@ -51,7 +51,7 @@ pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         .map_err(|_| anyhow::anyhow!("SECRET_DECRYPT_FAILED"))
 }
 
-fn master() -> Result<Zeroizing<[u8; 32]>> {
+fn master(create: bool) -> Result<Zeroizing<[u8; 32]>> {
     if let Some(directory) = std::env::var_os("CREDENTIALS_DIRECTORY") {
         // systemd decrypts LoadCredentialEncrypted into a private, read-only runtime directory.
         let path = Path::new(&directory);
@@ -120,7 +120,7 @@ fn master() -> Result<Zeroizing<[u8; 32]>> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(root.join("provider.lock"))?;
     lock.lock()?;
-    unsafe { keyring() }
+    unsafe { keyring(create) }
 }
 
 // libsecret is optional at runtime; Cargo.lock has no Secret Service client crate.
@@ -142,7 +142,7 @@ impl Library {
     }
 }
 
-unsafe fn keyring() -> Result<Zeroizing<[u8; 32]>> {
+unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
     let library = Library(unsafe {
         libc::dlopen(
             c"libsecret-1.so.0".as_ptr(),
@@ -211,6 +211,8 @@ unsafe fn keyring() -> Result<Zeroizing<[u8; 32]>> {
         decoded
             .map(|_| key)
             .map_err(|_| anyhow::anyhow!("SECRET_SERVICE_KEY_INVALID"))
+    } else if !create {
+        Err(anyhow::anyhow!("SECRET_SERVICE_KEY_MISSING"))
     } else {
         let key = Zeroizing::new(crate::identity::random32());
         let encoded = Zeroizing::new(hex::encode(key.as_ref()));
