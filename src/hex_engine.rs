@@ -866,7 +866,8 @@ fn hidden_help(path: &PathBuf, args: &[&str], deadline: Instant) -> Result<Strin
     if hex_dir()?.join("gpu-draw.pending").exists() {
         return Err(failed("Hex maintenance pending; CLI not launched"));
     }
-    let mut child = crate::platform::worker_command(path).map_err(io_error)?
+    let mut child = crate::platform::worker_command(path)
+        .map_err(io_error)?
         .args(args)
         .creation_flags(0x08000000)
         .stdin(Stdio::null())
