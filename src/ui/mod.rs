@@ -4019,6 +4019,9 @@ pub fn run() {
     let refresh_handle = app.handle();
     let mut first_frame = false;
     app = app.on_frame_encoded(move |f| {
+        if f.outcome() == rune::FrameOutcome::Drawn {
+            sidenote::response_time::frame(f.at());
+        }
         if !first_frame && f.outcome() == rune::FrameOutcome::Drawn {
             first_frame = true;
             refresh::first_frame();

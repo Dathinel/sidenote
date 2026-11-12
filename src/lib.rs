@@ -8,6 +8,7 @@ pub mod mcp;
 #[cfg(all(windows, feature = "desktop"))]
 pub mod meeting_icon;
 pub mod platform;
+pub mod response_time;
 pub mod service;
 pub mod updates;
 
