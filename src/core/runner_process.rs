@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc,
@@ -330,7 +330,8 @@ pub(super) fn run_runner_with_timeout(
     progress(AskProgress::Started {
         runner: runner.name.clone(),
     });
-    let mut child = Command::new(program)
+    let mut child = crate::platform::worker_command(program)
+        .map_err(|e| e.to_string())?
         .args(&args)
         .current_dir(working_dir)
         .creation_flags(0x08000000)

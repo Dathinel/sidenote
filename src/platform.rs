@@ -9,6 +9,46 @@ mod unix;
 pub use unix::*;
 
 pub const UNAVAILABLE: &str = "UNAVAILABLE_ON_PLATFORM";
+pub fn worker_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> std::io::Result<std::process::Command> {
+    #[cfg(target_os = "linux")]
+    {
+        sidenote_sync::tree_worker::command(program.as_ref())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(std::process::Command::new(program))
+    }
+}
+/// Call before configuring stdio; retain the original argv, cwd and explicit environment.
+pub fn contain_command(command: &mut std::process::Command) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<_> = command.get_args().map(std::ffi::OsStr::to_owned).collect();
+        let env: Vec<_> = command
+            .get_envs()
+            .map(|(k, v)| (k.to_owned(), v.map(std::ffi::OsStr::to_owned)))
+            .collect();
+        let cwd = command.get_current_dir().map(std::path::Path::to_owned);
+        let mut replacement = worker_command(command.get_program())?;
+        replacement.args(args);
+        if let Some(cwd) = cwd {
+            replacement.current_dir(cwd);
+        }
+        for (key, value) in env {
+            if let Some(value) = value {
+                replacement.env(key, value);
+            } else {
+                replacement.env_remove(key);
+            }
+        }
+        *command = replacement;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = command;
+    Ok(())
+}
 pub fn unavailable() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Unsupported, UNAVAILABLE)
 }

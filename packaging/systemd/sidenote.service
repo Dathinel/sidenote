@@ -2,11 +2,10 @@
 Description=Sidenote background server
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=60
-StartLimitBurst=5
+StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+Type=exec
 ExecStart=%h/.local/bin/sidenote --server --device-role server
 Restart=on-failure
 RestartSec=3

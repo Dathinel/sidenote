@@ -223,6 +223,12 @@ fn resume(child: &std::process::Child) -> io::Result<()> {
     }
 }
 fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outcome {
+    if let Err(error) = crate::platform::contain_command(&mut command) {
+        return Outcome {
+            error: Some(error.to_string()),
+            ..Outcome::default()
+        };
+    }
     // CREATE_SUSPENDED closes the spawn/attach gap before any descendants can be created.
     command
         .creation_flags(0x08000004)
@@ -639,7 +645,7 @@ pub fn start_worker() -> io::Result<()> {
     {
         return Ok(());
     }
-    let child = Command::new(std::env::current_exe()?)
+    let child = crate::platform::worker_command(std::env::current_exe()?)?
         .arg("--route-pending")
         .arg("--automatic")
         .arg("--data-dir")

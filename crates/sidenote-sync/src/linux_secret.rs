@@ -12,7 +12,23 @@ use std::{
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
 };
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
 use zeroize::Zeroizing;
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+const INIT_LIMIT: Duration = Duration::from_secs(5);
+pub(crate) const UNAVAILABLE: &str = "SECRET_SERVICE_UNAVAILABLE: unlock Secret Service or provision systemd-creds (5 second initialization limit)";
+pub(crate) fn cancel() {
+    CANCELLED.store(true, Ordering::Release);
+}
+fn expired(deadline: Instant) -> bool {
+    CANCELLED.load(Ordering::Acquire) || Instant::now() >= deadline
+}
 
 const HEADER: &[u8] = b"sidenote-secret-v1\0";
 
@@ -91,6 +107,7 @@ fn master(create: bool) -> Result<Zeroizing<[u8; 32]>> {
         std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
         "SECRET_STORE_UNAVAILABLE: provision systemd-creds or unlock Secret Service"
     );
+    let deadline = Instant::now() + INIT_LIMIT;
     // Serialize first-use key creation across processes. Never replace an existing key.
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -103,6 +120,7 @@ fn master(create: bool) -> Result<Zeroizing<[u8; 32]>> {
         .recursive(true)
         .mode(0o700)
         .create(&root)?;
+    let root = crate::secure_store::ancestors(&root)?;
     let meta = fs::symlink_metadata(&root)?;
     ensure!(
         meta.is_dir()
@@ -119,8 +137,23 @@ fn master(create: bool) -> Result<Zeroizing<[u8; 32]>> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(root.join("provider.lock"))?;
-    lock.lock()?;
-    unsafe { keyring(create) }
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(error) => {
+                if !matches!(error, fs::TryLockError::WouldBlock) {
+                    return Err(error.into());
+                }
+                ensure!(!expired(deadline), UNAVAILABLE);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    use std::os::unix::ffi::OsStrExt;
+    let install = CString::new(hex::encode(crate::identity::hash(
+        root.as_os_str().as_bytes(),
+    )))?;
+    unsafe { keyring(create, &install, deadline) }.map_err(|_| anyhow::anyhow!(UNAVAILABLE))
 }
 
 // libsecret is optional at runtime; Cargo.lock has no Secret Service client crate.
@@ -142,7 +175,7 @@ impl Library {
     }
 }
 
-unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
+unsafe fn keyring(create: bool, install: &CStr, deadline: Instant) -> Result<Zeroizing<[u8; 32]>> {
     let library = Library(unsafe {
         libc::dlopen(
             c"libsecret-1.so.0".as_ptr(),
@@ -174,25 +207,29 @@ unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
     let unref: Free = unsafe { std::mem::transmute(library.symbol(c"secret_schema_unref")?) };
     let free: Free = unsafe { std::mem::transmute(library.symbol(c"secret_password_free")?) };
     let error_free: Free = unsafe { std::mem::transmute(library.symbol(c"g_error_free")?) };
-    let null = std::ptr::null_mut();
+    let cancellable = unsafe { Cancel::new(&library, deadline)? };
     let schema = unsafe {
         new(
             c"org.sidenote.Identity".as_ptr(),
             0,
             c"application".as_ptr(),
             0i32,
+            c"install".as_ptr(),
+            0i32,
             std::ptr::null::<c_char>(),
         )
     };
     ensure!(!schema.is_null(), "SECRET_SERVICE_SCHEMA_FAILED");
-    let mut error = null;
+    let mut error = std::ptr::null_mut();
     let password = unsafe {
         lookup(
             schema,
-            null,
+            cancellable.pointer,
             &mut error,
             c"application".as_ptr(),
             c"sidenote".as_ptr(),
+            c"install".as_ptr(),
+            install.as_ptr(),
             std::ptr::null::<c_char>(),
         )
     };
@@ -223,10 +260,12 @@ unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
                 std::ptr::null(),
                 c"Sidenote identity encryption".as_ptr(),
                 encoded.as_mut_ptr().cast(),
-                null,
+                cancellable.pointer,
                 &mut error,
                 c"application".as_ptr(),
                 c"sidenote".as_ptr(),
+                c"install".as_ptr(),
+                install.as_ptr(),
                 std::ptr::null::<c_char>(),
             )
         };
@@ -235,8 +274,38 @@ unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
                 error_free(error);
             }
         }
-        if ok != 0 && error.is_null() {
-            Ok(key)
+        if ok != 0 && error.is_null() && !expired(deadline) {
+            let confirmed = unsafe {
+                lookup(
+                    schema,
+                    cancellable.pointer,
+                    &mut error,
+                    c"application".as_ptr(),
+                    c"sidenote".as_ptr(),
+                    c"install".as_ptr(),
+                    install.as_ptr(),
+                    std::ptr::null::<c_char>(),
+                )
+            };
+            let same = !confirmed.is_null()
+                && error.is_null()
+                && unsafe { CStr::from_ptr(confirmed) }.to_bytes()
+                    == encoded.as_slice().strip_suffix(&[0]).unwrap();
+            if !confirmed.is_null() {
+                unsafe {
+                    free(confirmed.cast());
+                }
+            }
+            if !error.is_null() {
+                unsafe {
+                    error_free(error);
+                }
+            }
+            if same {
+                Ok(key)
+            } else {
+                Err(anyhow::anyhow!(UNAVAILABLE))
+            }
         } else {
             Err(anyhow::anyhow!("SECRET_SERVICE_STORE_FAILED"))
         }
@@ -245,6 +314,68 @@ unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
         unref(schema);
     }
     result
+}
+
+// The cancellation thread never calls libsecret, only the thread-safe GCancellable API.
+struct Cancel {
+    pointer: *mut c_void,
+    stop: mpsc::Sender<()>,
+    timer: Option<std::thread::JoinHandle<()>>,
+    unref: unsafe extern "C" fn(*mut c_void),
+}
+impl Cancel {
+    unsafe fn new(library: &Library, deadline: Instant) -> Result<Self> {
+        type New = unsafe extern "C" fn() -> *mut c_void;
+        type Call = unsafe extern "C" fn(*mut c_void);
+        let new: New = unsafe { std::mem::transmute(library.symbol(c"g_cancellable_new")?) };
+        let cancel: Call = unsafe { std::mem::transmute(library.symbol(c"g_cancellable_cancel")?) };
+        let unref: Call = unsafe { std::mem::transmute(library.symbol(c"g_object_unref")?) };
+        let pointer = unsafe { new() };
+        ensure!(!pointer.is_null(), UNAVAILABLE);
+        let address = pointer as usize;
+        let (stop, rx) = mpsc::channel();
+        let timer = std::thread::Builder::new()
+            .name("secret-deadline".into())
+            .spawn(move || {
+                loop {
+                    if expired(deadline) {
+                        unsafe {
+                            cancel(address as *mut c_void);
+                        }
+                        break;
+                    }
+                    match rx.recv_timeout(Duration::from_millis(25)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            });
+        match timer {
+            Ok(timer) => Ok(Self {
+                pointer,
+                stop,
+                timer: Some(timer),
+                unref,
+            }),
+            Err(error) => {
+                unsafe {
+                    unref(pointer);
+                }
+                Err(error.into())
+            }
+        }
+    }
+}
+impl Drop for Cancel {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(timer) = self.timer.take() {
+            let _ = timer.join();
+        }
+        unsafe {
+            (self.unref)(self.pointer);
+        }
+    }
 }
 
 #[cfg(test)]

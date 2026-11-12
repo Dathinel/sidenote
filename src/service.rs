@@ -252,29 +252,6 @@ fn supervise() {
             hex,
             ui_allowed()
         );
-        #[cfg(target_os = "linux")]
-        {
-            let linger = std::process::Command::new("loginctl")
-                .args([
-                    "show-user",
-                    &unsafe { libc::geteuid() }.to_string(),
-                    "-p",
-                    "Linger",
-                    "--value",
-                ])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| String::from_utf8(o.stdout).ok());
-            eprintln!(
-                "service linger={}",
-                match linger.as_deref().map(str::trim) {
-                    Some("yes") => "enabled",
-                    Some("no") => "disabled",
-                    _ => "unknown",
-                }
-            );
-        }
         pause(Duration::from_secs(30));
     }
     STOP.store(true, Ordering::Release);
@@ -294,6 +271,10 @@ pub fn run() -> i32 {
     #[cfg(target_os = "linux")]
     unsafe {
         libc::umask(0o077);
+        if libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 {
+            eprintln!("SERVICE_SUBREAPER_UNAVAILABLE");
+            return 2;
+        }
     }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -325,17 +306,33 @@ pub fn run() -> i32 {
                 }
             };
         #[cfg(target_os = "linux")]
-        if role() != DeviceRole::Full {
-            let root = crate::core::state_dir();
-            let provision = || -> std::io::Result<()> {
-                let _lock = crate::core::store_io::lock(&root.join("local/relay/identity.lock"))?;
-                sidenote_sync::client::Device::open(&root.join("local/relay/replica.sqlite"))
-                    .map_err(|_| std::io::Error::other("SECRET_STORE_UNAVAILABLE_OR_INVALID"))?;
-                Ok(())
-            };
-            if provision().is_err() {
-                eprintln!("SECRET_STORE_UNAVAILABLE_OR_INVALID: provision systemd-creds or unlock Secret Service");
-                return 2;
+        {
+            tokio::task::spawn_blocking(|| eprintln!("service linger={}", linger_status()));
+            if role() != DeviceRole::Full {
+                let root = crate::core::state_dir();
+                let provision = tokio::task::spawn_blocking(move || {
+                    let _lock = crate::core::store_io::lock(&root.join("local/relay/identity.lock"))
+                        .map_err(|_| "STATE_STORAGE_UNAVAILABLE")?;
+                    sidenote_sync::client::Device::open(&root.join("local/relay/replica.sqlite"))
+                        .map_err(|error| {
+                            if error.to_string().starts_with("UNSAFE_STATE_ANCESTOR") {
+                                "UNSAFE_STATE_ANCESTOR: use private root/user-owned state ancestors"
+                            } else { sidenote_sync::identity::SECRET_INIT_ERROR }
+                        })?;
+                    Ok::<_, &'static str>(())
+                });
+                let result = tokio::select! {
+                    result = provision => result.unwrap_or(Err(sidenote_sync::identity::SECRET_INIT_ERROR)),
+                    _ = terminate.recv() => {
+                        sidenote_sync::identity::cancel_pending_initialization();
+                        Err("SECRET_INITIALIZATION_CANCELLED")
+                    },
+                    _ = tokio::signal::ctrl_c() => {
+                        sidenote_sync::identity::cancel_pending_initialization();
+                        Err("SECRET_INITIALIZATION_CANCELLED")
+                    }
+                };
+                if let Err(error) = result { eprintln!("{error}"); return 2; }
             }
         }
         #[cfg(windows)]
@@ -358,6 +355,8 @@ pub fn run() -> i32 {
         };
         let lifetime = async {
             while !stopping() && !worker.is_finished() {
+                #[cfg(target_os = "linux")]
+                reap_orphans(false);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         };
@@ -375,9 +374,64 @@ pub fn run() -> i32 {
         STOP.store(true, Ordering::Release);
         crate::core::ask::cancel_all(Duration::from_secs(3));
         let result = if worker.join().is_ok() { 0 } else { 2 };
+        #[cfg(target_os = "linux")]
+        reap_orphans(true);
         eprintln!("service status=stopped role={}", role().name());
         result
     })
+}
+
+#[cfg(target_os = "linux")]
+fn linger_status() -> &'static str {
+    static VALUE: OnceLock<&'static str> = OnceLock::new();
+    VALUE.get_or_init(|| {
+        let output = sidenote_sync::tree_worker::bounded_output(
+            std::process::Command::new("/usr/bin/loginctl").args([
+                "show-user",
+                &unsafe { libc::geteuid() }.to_string(),
+                "-p",
+                "Linger",
+                "--value",
+            ]),
+            Duration::from_secs(2),
+        );
+        match output.ok().filter(|o| o.status.success()).map(|o| o.stdout) {
+            Some(bytes) if bytes == b"yes\n" => "enabled",
+            Some(bytes) if bytes == b"no\n" => "disabled",
+            _ => "unknown",
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn reap_orphans(stopping: bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let children =
+            std::fs::read_to_string(format!("/proc/self/task/{}/children", std::process::id()))
+                .unwrap_or_default();
+        let mut found = false;
+        for pid in children
+            .split_whitespace()
+            .filter_map(|p| p.parse::<i32>().ok())
+        {
+            // systemd-run is only launched by the separate worker frontend, never directly
+            // by this service. These adopted proxies have no live Child handle here.
+            let proxy = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .is_ok_and(|n| n.trim() == "systemd-run");
+            if stopping || proxy {
+                found = true;
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG);
+                }
+            }
+        }
+        if !stopping || !found || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[cfg(test)]

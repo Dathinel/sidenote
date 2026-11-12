@@ -11,7 +11,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -726,7 +726,7 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
-    let child = Command::new(std::env::current_exe().at(Stage::NotesExePath)?)
+    let child = crate::platform::worker_command(std::env::current_exe().at(Stage::NotesExePath)?)?
         .arg("--notes-pending")
         .arg("--data-dir")
         .arg(core::state_dir())

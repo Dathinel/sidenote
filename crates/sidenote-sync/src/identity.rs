@@ -276,3 +276,11 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(target_os = "linux")]
+pub fn cancel_pending_initialization() {
+    crate::linux_secret::cancel();
+}
+
+#[cfg(target_os = "linux")]
+pub const SECRET_INIT_ERROR: &str = crate::linux_secret::UNAVAILABLE;

@@ -87,7 +87,7 @@ An invalid credential fails closed without trying another provider. No key is lo
 Otherwise a session bus and unlocked Secret Service keyring are required. Install
 `libsecret-1-0` and a Secret Service provider (for example GNOME Keyring). Sidenote calls
 libsecret's synchronous lookup/store API using the schema `org.sidenote.Identity`,
-attribute `application=sidenote`, storing a random master key in the default persistent
+attributes `application=sidenote` and a stable `install` attribute, storing a random master key in the default persistent
 collection on first use. Cargo.lock contains no libsecret/keyring client crate, so the
 small FFI adapter loads libsecret at runtime. A private provider lock serializes initial
 creation across processes. No session keyring means an explicit startup failure; no
@@ -95,19 +95,45 @@ plaintext or newly generated substitute key is used to decrypt an existing ident
 These calls can prompt the owner to unlock the desktop keyring. For an unattended host,
 use the credential provisioning below instead.
 
-Each Linux child receives a new process group, 512 MiB address-space limit, 120 CPU
-seconds, core dumps disabled, no-new-privileges and `PR_SET_PDEATHSIG=SIGKILL` before exec.
-The parent pid is checked again to close the parent-death race. Sync workers verify the
-limits and death signal at entry, use independent budgets, and keep the four-worker pool
-limit. Timeouts/drop kill and reap workers. Notes/routing and their CLI helpers use the
-same before-exec limits; normal shutdown kills their groups. These are CPU-time limits,
-not a CPU percentage, and address space rather than Windows committed-memory accounting.
-Long-running model CLIs may need a later, measured budget policy. A helper can create
-children outside the Rust adapter: full descendant cleanup after abrupt service death
-is supplied by systemd `KillMode=control-group`; the per-process death signal alone is
-not a general process-tree sandbox. No privileged cgroup operation is performed by the
-application. The user unit requests cgroup memory/CPU limits when its manager is delegated
-the controllers; rlimits remain mandatory even without that delegation.
+Notes, routing and native CLI helpers require a systemd user service with delegated
+memory, pids and CPU controllers. Otherwise helper construction returns the fixed
+`UNAVAILABLE_ON_THIS_LINUX_SETUP` error; no uncontained helper is executed.
+Each worker runs in a transient Type=exec service under a fresh 512 MiB, 32-task,
+one-CPU slice. Nested helper slices are children of the owning worker's slice, so
+the outer budget accounts for the entire tree. A guardian in the service watches
+pidfds for both the owning process and its launcher, checks PID start times, and
+exits when either disappears or when the real worker exits. KillMode=control-group
+and KillSignal=SIGKILL then kill all forked descendants, even after setsid.
+The 120-second wall deadline kills the complete service; RuntimeMaxSec supplies an
+independent manager-enforced deadline. This replaces an aggregate CPU-seconds
+counter: every tree gets at most 120 seconds of wall time at one CPU. The existing
+per-process 512 MiB address-space/120 CPU-second rlimits, core suppression,
+no-new-privileges and PDEATHSIG remain additional protection. The main service is
+a child subreaper; it kills/reaps adopted proxies and remaining orphans at shutdown.
+The main unit's 1 GiB cap applies to that unit; separate worker slices have their
+own aggregate caps. The sync-only worker retains its narrower non-forking path.
+
+SQLite state ancestors must be root/current-user owned and not group/other
+writable. A root-owned sticky directory is accepted only when its immediate next
+hop is a non-writable user-owned directory (for example /tmp/private-user-dir).
+Symlink ancestors are rejected. The final store directory must already be private;
+Sidenote does not chmod an unsafe path into apparent safety. SQLite uses NOFOLLOW,
+and the backend fstats the actual open database/WAL/SHM descriptors through procfs,
+requiring owned regular 0600 files. Missing procfs verification fails closed.
+
+Secret Service uses an additional stable nonsecret install attribute, SHA-256 of
+the validated canonical provider-directory path. Its namespace matches that
+directory's provider.lock. Different XDG roots cannot replace each other's keys;
+an existing item is only read, never rewritten. Creation is confirmed by a second
+lookup while the lock is held. This prerelease namespace change does not migrate
+old app-only keyring items: restore/re-enroll test state deliberately rather than
+silently substituting a key. Lock acquisition and lookup/store share a five-second
+initialization deadline. A live cancellation thread drives GCancellable and SIGTERM
+cancels initialization. Failure exits nonzero with a fixed action to unlock the
+keyring or provision systemd-creds; it never creates a fallback key or plaintext.
+The informational loginctl probe runs once in a separate execution context with
+null stdin, rlimits/PDEATHSIG, a two-second deadline, explicit kill/reap and a cached
+unknown result on failure. It never runs inside the supervisor loop.
 
 The pinned Windows ONNX DLL is unchanged. No Linux runtime artifact has been qualified
 against that pin; `asr-runtime` therefore returns `ONNX_RUNTIME_UNAVAILABLE` explicitly.
@@ -117,43 +143,41 @@ this step, which is one of the goal's permitted outcomes.
 
 ## Install a user service with headless credentials
 
-Install the built `sidenote` and adjacent `sidenote-sync-worker` in `~/.local/bin`.
-Do not copy identity state from another device. The following owner-run commands provision
-a fresh local key without putting it in arguments, terminal output or a plaintext disk file:
+Build and install as the unprivileged service owner. The installer maps the current
+username to its numeric UID and installs a system-manager drop-in for
+`user@UID.service` with After/Wants on `sidenote-credentials@UID.service`.
+It starts the broker before starting the current session's Sidenote; it does not
+restart an already running user manager or interrupt other user services.
 
 ```sh
-install -d -m 700 ~/.local/bin ~/.config/systemd/user
-install -m 755 target/x86_64-unknown-linux-gnu/release/sidenote ~/.local/bin/sidenote
-install -m 755 target/x86_64-unknown-linux-gnu/release/sidenote-sync-worker ~/.local/bin/sidenote-sync-worker
+RUSTUP_TOOLCHAIN=stable cargo build --release --locked --no-default-features --features server --target x86_64-unknown-linux-gnu
+owner=$(id -un)
+uid=$(id -u "$owner")
 sudo install -d -m 700 /etc/credstore.encrypted
-# Run exactly once. Never overwrite this encrypted key for an existing identity.
-sudo test ! -e "/etc/credstore.encrypted/sidenote-$USER" || exit 1
-head -c 32 /dev/urandom | sudo systemd-creds encrypt --with-key=host --name=sidenote-key - "/etc/credstore.encrypted/sidenote-$USER"
-sudo chmod 600 "/etc/credstore.encrypted/sidenote-$USER"
-sudo install -m 644 packaging/systemd/sidenote-credentials@.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now "sidenote-credentials@$USER.service"
-install -m 644 packaging/systemd/sidenote.service ~/.config/systemd/user/sidenote.service
-install -d -m 700 ~/.config/systemd/user/sidenote.service.d
-printf '[Service]\nLoadCredential=sidenote-key:/run/credentials/sidenote-credentials@%s.service/sidenote-key\n' "$USER" > ~/.config/systemd/user/sidenote.service.d/credential.conf
-sudo loginctl enable-linger "$USER"
-systemctl --user daemon-reload
-systemctl --user enable --now sidenote.service
-loginctl show-user "$USER" -p Linger
-systemctl --user status sidenote.service
+# Run once for a new identity. Do not replace a credential used by existing state.
+sudo test ! -e "/etc/credstore.encrypted/sidenote-$uid" || exit 1
+head -c 32 /dev/urandom | sudo systemd-creds encrypt --with-key=host --name=sidenote-key - "/etc/credstore.encrypted/sidenote-$uid"
+sudo chmod 600 "/etc/credstore.encrypted/sidenote-$uid"
+bash tools/install_linux_user_service.sh target/x86_64-unknown-linux-gnu/release
 ```
+
+Both units use Type=exec, so ordering includes credential/exec setup. Both disable
+permanent start-rate exhaustion with StartLimitIntervalSec=0 and retry on failure.
+A delayed or failed broker therefore cannot permanently strand the consumer after
+five attempts. The explicit user@UID dependency is required for lingering boot;
+ordering against systemd-user-sessions.service alone is insufficient.
 
 The root-managed credential broker is for systemd 255, whose user manager cannot directly
 decrypt host-key credentials. It decrypts into systemd's private runtime credential store
 and the user manager copies the credential into the service's private runtime store.
-The broker starts before user sessions; enable linger so the user manager starts at boot
+The broker orders the mapped user manager explicitly; linger lets the user manager start at boot
 and survives logout/screen-off. On newer systemd versions with user-scoped encrypted
 credentials, `LoadCredentialEncrypted` in the user unit can replace this broker after the
 owner qualifies that configuration. `--with-key=host` protects disk copies with the host
 key; root or a full-disk compromise can recover it. TPM sealing can strengthen that policy,
 but was not qualified here. Use encrypted disks for stronger offline protection.
 
-The service restarts on failure, limits its whole cgroup to 1 GiB and one CPU, caps tasks,
+The service restarts on failure, limits its main cgroup to 1 GiB and one CPU, caps tasks,
 stops its cgroup on shutdown, and logs `linger=enabled|disabled|unknown` along with fixed
 service status. To use Hub add `ExecStart=` then `ExecStart=%h/.local/bin/sidenote --server
 --device-role hub` in a user drop-in. Neither role loads UI/GPU dependencies in a server
@@ -163,7 +187,7 @@ Backup the encrypted credential, the host credential key through an approved sec
 and local replica together. Losing the master key requires re-enrollment; changing it
 without re-encrypting existing envelopes makes the identity unavailable. Stop both services
 before restoring a matched backup. To uninstall: disable/stop the user service, then the
-credential broker. Disable linger only if no other user service needs it. Keep identity and
+credential broker and remove its user@UID.service drop-in followed by systemctl daemon-reload. Disable linger only if no other user service needs it. Keep identity and
 credentials until the owner has decided on recovery; uninstall never deletes them.
 
 The synthetic process proof is `tools/prove_linux_server.py target/x86_64-unknown-linux-gnu/debug/sidenote`.

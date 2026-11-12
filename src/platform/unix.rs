@@ -34,6 +34,15 @@ pub struct ProcessJob(u32);
 impl ProcessJob {
     pub fn attach(child: &std::process::Child) -> io::Result<Self> {
         let pid = child.id();
+        #[cfg(target_os = "linux")]
+        if !std::fs::read_link(format!("/proc/{pid}/exe"))
+            .is_ok_and(|p| p.file_name() == Some(std::ffi::OsStr::new("sidenote-linux-worker")))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                sidenote_sync::tree_worker::UNAVAILABLE,
+            ));
+        }
         if unsafe { libc::getpgid(pid as i32) } != pid as i32 {
             return Err(io::Error::other("WORKER_CONTAINMENT_REQUIRED"));
         }
@@ -71,12 +80,15 @@ mod tests {
     use super::*;
     use crate::platform::CommandExt;
     #[test]
-    fn notes_process_adapter_sets_limits_and_kills_its_group() -> io::Result<()> {
+    fn direct_process_limits_do_not_substitute_for_a_worker_scope() -> io::Result<()> {
         let mut child = std::process::Command::new("/bin/sleep")
             .arg("60")
             .creation_flags(0)
             .spawn()?;
-        let job = ProcessJob::attach(&child)?;
+        let error = ProcessJob::attach(&child)
+            .err()
+            .expect("direct helpers must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         let limits = fs::read_to_string(format!("/proc/{}/limits", child.id()))?;
         let memory = limits
             .lines()
@@ -88,7 +100,7 @@ mod tests {
             .find(|l| l.starts_with("Max cpu time"))
             .unwrap();
         assert!(cpu.contains("120"));
-        drop(job);
+        sidenote_sync::containment::kill_group(child.id());
         assert!(!child.wait()?.success());
         Ok(())
     }

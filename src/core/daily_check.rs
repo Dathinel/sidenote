@@ -333,6 +333,7 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
 // Git and tar are hidden and contained just like the model runner. Never echo stderr.
 fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     crate::platform::require_process_support()?;
+    crate::platform::contain_command(command)?;
     let mut child = command
         .creation_flags(0x08000000)
         .stdin(Stdio::null())

@@ -92,16 +92,14 @@ impl Store {
         );
         #[cfg(target_os = "linux")]
         {
-            use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
             let parent = path.parent().context("store directory missing")?;
+            crate::secure_store::ancestors(parent)?;
             let meta = std::fs::symlink_metadata(parent)?;
             ensure!(
-                meta.is_dir()
-                    && !meta.file_type().is_symlink()
-                    && meta.uid() == unsafe { libc::geteuid() },
-                "STORE_DIRECTORY_INVALID"
+                meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0,
+                "STORE_DIRECTORY_NOT_PRIVATE: require an owned 0700 directory"
             );
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -110,8 +108,8 @@ impl Store {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(path)?;
-            ensure!(file.metadata()?.is_file(), "STORE_FILE_INVALID");
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            crate::secure_store::private_file(&file)?;
+            crate::secure_store::sidecars(path)?;
         }
         let mut lock_path = path.as_os_str().to_os_string();
         lock_path.push(".sync-lock");
@@ -129,9 +127,19 @@ impl Store {
             .create(true)
             .truncate(false)
             .open(Path::new(&lock_path))?;
+        #[cfg(target_os = "linux")]
+        crate::secure_store::private_file(&lock)?;
         lock.try_lock()
             .context("sync store already open; one writer per install is required")?;
+        #[cfg(target_os = "linux")]
+        let db = local(Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        ))?;
+        #[cfg(not(target_os = "linux"))]
         let db = local(Connection::open(path))?;
+        #[cfg(target_os = "linux")]
+        crate::secure_store::sqlite_descriptors(path, false)?;
         local(db.busy_timeout(std::time::Duration::from_secs(5)))?;
         local(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=256;
             CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,data BLOB NOT NULL);
@@ -144,6 +152,8 @@ impl Store {
             CREATE TABLE IF NOT EXISTS doc_senders(id TEXT PRIMARY KEY,sender BLOB NOT NULL);
             CREATE INDEX IF NOT EXISTS doc_sender ON doc_senders(sender,id);
             CREATE INDEX IF NOT EXISTS doc_creator ON doc_meta(creator,id);"))?;
+        #[cfg(target_os = "linux")]
+        crate::secure_store::sqlite_descriptors(path, true)?;
         let page_size: i64 = local(db.pragma_query_value(None, "page_size", |row| row.get(0)))?;
         ensure!(page_size > 0, Failure(Reason::CorruptDocument));
         local(db.pragma_update(
