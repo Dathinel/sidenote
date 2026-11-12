@@ -1,6 +1,7 @@
 //! Quiet update notices and the device's Updates settings.
 use super::{Event, State, hex, roles, theme::Palette, widgets::hairline};
 use rune::{El, col, el, row};
+use sidenote::listener::heartbeat;
 use sidenote::updates::{self, Phase, Status};
 
 pub struct Updates {
@@ -9,6 +10,8 @@ pub struct Updates {
     listener_busy: bool,
     listener_probe_busy: bool,
     listener_probed: Option<std::time::Instant>,
+    recorder_gap: Option<heartbeat::Gap>,
+    dismissed_gap: Option<heartbeat::Gap>,
     service: Option<std::sync::mpsc::Sender<updates::CheckRequest>>,
     dismissed: bool,
     notes_open: bool,
@@ -23,6 +26,8 @@ impl Default for Updates {
             listener_busy: false,
             listener_probe_busy: false,
             listener_probed: None,
+            recorder_gap: None,
+            dismissed_gap: None,
             service: None,
             dismissed: false,
             notes_open: false,
@@ -77,13 +82,23 @@ impl State {
         let events = self.events_tx.clone();
         let wake = self.waker.clone();
         std::thread::spawn(move || {
-            let _ = events.send(Event::ListenerProbed(updates::probe_listener()));
+            let status = updates::probe_listener();
+            let gap = heartbeat::pending_gap();
+            let _ = events.send(Event::ListenerProbed(status, gap));
             if let Some(wake) = wake {
                 wake();
             }
         });
     }
-    pub fn listener_probed(&mut self, status: Option<updates::ListenerStatus>) {
+    pub fn listener_probed(
+        &mut self,
+        status: Option<updates::ListenerStatus>,
+        gap: Option<heartbeat::Gap>,
+    ) {
+        if !self.updates.listener_busy && !self.updates.applying && status.is_some() {
+            self.updates.recorder_gap =
+                gap.filter(|gap| self.updates.dismissed_gap.as_ref() != Some(gap));
+        }
         self.updates.listener_probed(status);
     }
     pub fn updates_start(&mut self) {
@@ -550,7 +565,30 @@ pub fn settings_scene(s: &mut State) {
 }
 
 pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
-    let error = s.updates.listener.error.as_ref()?;
+    let Some(error) = s.updates.listener.error.as_ref() else {
+        let gap = s.updates.recorder_gap.as_ref()?;
+        return Some(
+            row()
+                .w_full()
+                .gap(8.0)
+                .items_center()
+                .mb(16.0)
+                .key("recorder-gap")
+                .child(roles::META.wrap(gap.notice(), p.soft).grow(1.0).min_w(0.0))
+                .child(
+                    super::widgets::action("Dismiss", p)
+                        .key("recorder-gap-dismiss")
+                        .on_press(|s: &mut State| {
+                            if let Some(gap) = s.updates.recorder_gap.clone()
+                                && heartbeat::dismiss(&gap).is_ok()
+                            {
+                                s.updates.dismissed_gap = Some(gap);
+                                s.updates.recorder_gap = None;
+                            }
+                        }),
+                ),
+        );
+    };
     let mut retry = super::area::button(
         if s.updates.listener_busy {
             "Trying again\u{2026}"

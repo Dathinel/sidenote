@@ -136,7 +136,10 @@ pub enum Event {
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     ListenerFinished(Result<(), String>),
-    ListenerProbed(Option<sidenote::updates::ListenerStatus>),
+    ListenerProbed(
+        Option<sidenote::updates::ListenerStatus>,
+        Option<sidenote::listener::heartbeat::Gap>,
+    ),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -1306,7 +1309,7 @@ impl State {
             Event::Update(status) => self.update_status(status),
             Event::UpdateFinished(result) => self.update_finished(result),
             Event::ListenerFinished(result) => self.listener_finished(result),
-            Event::ListenerProbed(status) => self.listener_probed(status),
+            Event::ListenerProbed(status, gap) => self.listener_probed(status, gap),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::Annotations(msg) => self.apply_annotations(msg),

@@ -13,6 +13,7 @@ use std::{
 
 #[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
+pub mod heartbeat;
 pub mod status;
 mod timings;
 #[derive(Deserialize)]
@@ -454,12 +455,15 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
 
 // Exit independently of catch-up and worker joins, within the updater's 8 s wait.
 pub(crate) fn watch_update_stop() {
-    std::thread::spawn(|| {
+    let mut recorder = heartbeat::Recorder::start();
+    std::thread::spawn(move || {
         loop {
             if let Some(source) = crate::updates::listener_stop_source() {
+                recorder.stop();
                 log(&format!("exit reason=stop source=watcher/{source}"));
                 std::process::exit(0);
             }
+            recorder.tick();
             std::thread::sleep(Duration::from_millis(250));
         }
     });
@@ -486,9 +490,8 @@ fn retry_lock<T>(
     unreachable!()
 }
 pub(crate) fn log_lock_exit(error: &io::Error) {
-    if cfg!(windows) && error.raw_os_error() == Some(32) {
-        log("exit reason=lock-contention retries-exhausted");
-    } else {
+    // The repeating task can race a manual start; an existing listener is expected.
+    if !(cfg!(windows) && error.raw_os_error() == Some(32)) {
         log(&format!("exit reason=lock-error kind={:?}", error.kind()));
     }
 }

@@ -3,6 +3,12 @@
 Sidenote uses Velopack 0.0.1298 (MIT). Packaging uses the matching CLI and the
 per-user .NET SDK 8.0.427. These builds are unsigned.
 
+`tools/release_gate.ps1` takes read-only process snapshots of the installed
+listener before and after its checks. Both states appear in its report table.
+If a listener was running at the start and is absent at the end, the gate fails
+with a recorder warning. An unreadable process snapshot also fails the gate.
+The snapshots never start, stop or reconfigure the installed app or its task.
+
 Installed copies check the public HTTPS feed at
 `https://github.com/harshanandak/hex-meetings/releases/latest/download/`.
 Velopack's built-in `HttpSource` reads `releases.win.json` from that base URL
@@ -90,6 +96,20 @@ daily-check commands do not acquire updater locks.
 
 Create a per-user scheduled task named `Sidenote meeting listener` whose sole
 action is the stable installed `current/sidenote.exe` with `--listen`.
+Registration adds a user-logon trigger and an indefinite five-minute repeating
+trigger, with `MultipleInstances IgnoreNew` and no execution time limit. The
+repeating trigger can recover a stopped listener while the window is closed.
+Startup registration migrates an existing task only after checking its action,
+user and privilege level, then re-reads and validates the saved definition.
+Expected duplicate starts quietly exit after the listener's three-second lock
+retry. Other lock errors remain logged.
+The listener writes start, last-heartbeat and controlled-stop timestamps to
+`<state-root>/local/recorder-heartbeat.json`, refreshing every 30 seconds. On
+restart, a gap over two minutes is logged and shown in the window as a
+dismissible "Recorder was off from X to Y" line in local time. After an abrupt
+exit the start of the gap is the last observed heartbeat, not an exact crash
+time. Dismissal is stored separately in `local/recorder-gap-dismissed.json`.
+These files contain timestamps only, with no meeting content.
 `SIDENOTE_LISTENER_TASK` can select another task beginning with `Sidenote `.
 Apply refuses a task with another action or executable. It never edits a task.
 The listener watches a stop request, closes its event stream and exits before
@@ -101,6 +121,11 @@ actual Velopack Update.exe child. Listeners delete and ignore markers whose PID
 is gone, whose timestamp is over ten minutes old, or whose contents are invalid.
 Every window start checks the listener lock and starts the configured task when
 no listener holds it. This also recovers after an asynchronous update failure.
+If PowerShell task validation reaches its ten-second deadline while the listener
+lock is held, the window keeps recording available and retries validation on its
+background worker after 30 seconds. A definite task validation failure remains
+visible until a successful validation; a later timeout cannot clear it. A free
+listener lock still reports that the listener is absent.
 Missing or mismatched task definitions produce a plain error, never a guessed
 replacement task.
 
