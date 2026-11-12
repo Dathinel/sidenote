@@ -22,7 +22,8 @@ function Get-Section([string]$name) {
 if ($Project -eq 'auto') {
     $pattern = $env:HEX_MEETING_PROJECT_PATTERN
     $hits = if ($pattern) { [regex]::Matches((Get-Section 'Transcript'), $pattern).Count } else { 0 }
-    $contextMatch = $pattern -and (Get-Section 'Context') -match $pattern
+    $contextPattern = $env:HEX_MEETING_PROJECT_CONTEXT_PATTERN
+    $contextMatch = $contextPattern -and (Get-Section 'Context') -match $contextPattern
     $Project = if ($contextMatch -or $hits -ge 2) { $env:HEX_MEETING_PROJECT } else { 'other' }
 }
 

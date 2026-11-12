@@ -6,7 +6,7 @@ Import commits keep file boundaries where practical. Private defaults must be
 supplied through the environment before deployment; processing logic is retained.
 
 `hex-meeting-english.ps1` accepts `auto`, `other`, or the project key supplied in
-`HEX_MEETING_PROJECT`. Set that environment variable to the existing private helper's
+`HEX_MEETING_PROJECT`. Set that environment variable to the prior private
 project key when explicitly selecting that project. The default remains `auto`.
 Private people, company context, credentials and runtime configuration are not packaged.
 
@@ -26,7 +26,8 @@ helper, scanned as source, and included beside the four entry scripts:
 - `hex-meeting-compare-delayed.ps1`
 - `hex-meeting-compare-granola.py`
 
-Private context now comes from the environment instead of source literals. `hex-meeting-check.ps1` is mentioned by the notes helper as an optional manual
+Private context now comes from the environment instead of source literals.
+`hex-meeting-check.ps1` is mentioned by the notes helper as an optional manual
 cross-check, not called by this pipeline. `hex-meeting-listen.py` is a caller of the
 watcher, not a called helper. Neither is part of the payload.
 
@@ -44,7 +45,8 @@ Before deploying the app update, configure the environment inherited by the app 
 its watcher. This lane does not read or write private configuration. Use the prior
 installation's values for `HEX_MEETING_PROJECT` (project key),
 `HEX_MEETING_PROJECT_PATTERN` (case-insensitive regex for the prior project/company
-keywords), `HEX_MEETING_KB_REPO` (private repository path),
+keywords), `HEX_MEETING_PROJECT_CONTEXT_PATTERN` (the prior context/title regex),
+`HEX_MEETING_KB_REPO` (private repository path),
 `HEX_MEETING_OWNER_NAME`, `HEX_MEETING_COMPANY_NAME`, `HEX_MEETING_PRODUCT_NAME`,
 and `HEX_TE_ASR_MODEL` (the existing Telugu model identifier).
 `HEX_MEETING_OWNER_ALIASES` optionally supplies semicolon-separated owner aliases.
@@ -55,3 +57,43 @@ the previous installation. With the original values supplied, project routing,
 roster/KB reads and model selection follow the prior behavior. Example people and
 company names in instruction templates use generic placeholders; their record
 schema and instruction rules are retained. Runtime equivalence is unverified.
+
+## App update installation
+
+The app update callback embeds all 14 files, their SHA-256 hashes, and a small
+stable watcher entrypoint. A version-bound pending marker retries through the
+updater on app reopen. Developer builds and PCs without an existing pipeline are
+not installed by this path. This lane never executes installation.
+
+A first migration copies all 14 owner scripts byte-for-byte into a new
+`.pipeline-backups/<id>` backup and an immutable, hash-verified legacy generation.
+The legacy comparison helper is relocated to read prompts beside itself; the
+separate owner backup remains byte-exact. It atomically publishes that legacy
+selection before replacing the sole root
+watcher with the pointer-only entrypoint. That entrypoint replacement is atomic
+and also backed up. The other original root scripts and all existing backups stay
+untouched. Before the bootstrap pointer exists, an interrupted migration still
+leaves the original legacy entrypoint unchanged.
+
+Updates write a fresh `.pipeline-generations/generation-<id>` folder. Each file is
+flushed and SHA-256 checked; a manifest seal is written last and verified. No
+selected generation is ever edited. Only after all bytes are verified does a
+flushed temporary `.pipeline-current.json` atomically replace the pointer. Its
+previous selection includes the old generation and manifest hash for rollback;
+old and partially staged generations are retained. No per-file recovery journal
+or in-memory rollback list is needed.
+
+The stable entrypoint reads the pointer once, verifies the selected manifest and
+all 14 hashes, then launches only that generation's watcher. Helpers resolve beside
+their own script, including the comparison prompt reader, so a pointer switch
+cannot move an in-flight job into another generation. There is no legacy-path
+fallback in this managed runner. Existing scheduled callers keep their entrypoint
+path; this lane does not modify their tasks or processes.
+
+Source walkthrough: a stop during staging leaves the old pointer; a stop at the
+atomic replacement exposes either the old sealed generation or the new sealed
+generation. The original files are not progressively overwritten. Runtime kill,
+power-loss/filesystem durability, bootstrap, rollback and concurrent-job behavior
+remain unverified and require an authorized host. The reverse path is the saved
+previous selection, atomically republished through the app updater. Private
+configuration and model/CLI provisioning remain external.

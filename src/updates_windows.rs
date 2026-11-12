@@ -755,6 +755,7 @@ pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
         .ok()
         .and_then(|mgr| mgr.get_update_pending_restart());
     ensure_listener()?;
+    complete_pipeline_install()?;
     if listener_stopping() {
         return Ok(());
     }
@@ -763,8 +764,145 @@ pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
     }
     Ok(())
 }
+const PIPELINE_INSTALL_ERROR: &str = "The update could not install the meeting scripts. Check private pipeline settings, close processing jobs and reopen Sidenote to retry; the previous generation and original script backups are retained.";
+
+fn complete_pipeline_install() -> Result<(), String> {
+    let marker = local("pipeline-install.pending");
+    if !marker.exists() {
+        return Ok(());
+    }
+    if fs::read(&marker).map_err(|_| PIPELINE_INSTALL_ERROR)? != VERSION.as_bytes() {
+        return Err(PIPELINE_INSTALL_ERROR.into());
+    }
+    install_pipeline_scripts()?;
+    let mut status = load();
+    if status.error.as_deref() == Some(PIPELINE_INSTALL_ERROR) {
+        status.phase = Phase::Idle;
+        status.error = None;
+        save(&status).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+    }
+    fs::remove_file(marker).map_err(|_| PIPELINE_INSTALL_ERROR.into())
+}
+
+fn install_pipeline_scripts() -> Result<(), String> {
+    // Only an installed app update or its pending retry reaches this path.
+    let files = std::collections::BTreeMap::from([
+        (
+            "hex-meeting-compare-delayed.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-compare-delayed.ps1"),
+        ),
+        (
+            "hex-meeting-compare-granola.py",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-compare-granola.py"),
+        ),
+        (
+            "hex-meeting-english.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-english.ps1"),
+        ),
+        (
+            "hex-meeting-notes.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-notes.ps1"),
+        ),
+        (
+            "hex-meeting-publish.py",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-publish.py"),
+        ),
+        (
+            "hex-meeting-quick-title.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-quick-title.ps1"),
+        ),
+        (
+            "hex-meeting-render.py",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-render.py"),
+        ),
+        (
+            "hex-meeting-tasks.py",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-tasks.py"),
+        ),
+        (
+            "hex-meeting-watch.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-meeting-watch.ps1"),
+        ),
+        (
+            "hex-pipeline-cli.ps1",
+            include_str!("../scripts/meeting-pipeline/hex-pipeline-cli.ps1"),
+        ),
+        (
+            "hex-pipeline-run.py",
+            include_str!("../scripts/meeting-pipeline/hex-pipeline-run.py"),
+        ),
+        (
+            "meeting-audio.py",
+            include_str!("../scripts/meeting-pipeline/meeting-audio.py"),
+        ),
+        (
+            "meeting-notes-prompt.md",
+            include_str!("../scripts/meeting-pipeline/meeting-notes-prompt.md"),
+        ),
+        (
+            "meeting-translate-prompt.md",
+            include_str!("../scripts/meeting-pipeline/meeting-translate-prompt.md"),
+        ),
+    ]);
+    let sha256 = |content: &str| {
+        Sha256::digest(content.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let hashes: std::collections::BTreeMap<_, _> = files
+        .iter()
+        .map(|(name, content)| (*name, sha256(content)))
+        .collect();
+    let entry = include_str!("pipeline_entry.ps1");
+    let payload = serde_json::json!({
+        "version": VERSION, "files": files, "hashes": hashes,
+        "entry": entry, "entry_hash": sha256(entry),
+    });
+    let error = PIPELINE_INSTALL_ERROR;
+    let mut child = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            include_str!("pipeline_install.ps1"),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x08000000)
+        .spawn()
+        .map_err(|_| error)?;
+    let written = child.stdin.take().ok_or(error).and_then(|mut stdin| {
+        stdin
+            .write_all(payload.to_string().as_bytes())
+            .map_err(|_| error)
+    });
+    // Wait for staging to finish even if stdin failed; publication is one pointer switch.
+    let status = child.wait().map_err(|_| error)?;
+    written?;
+    if !status.success() {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 pub fn after_update() {
     if !installed() {
+        return;
+    }
+    let result = (|| {
+        fs::create_dir_all(directory()).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+        fs::write(local("pipeline-install.pending"), VERSION.as_bytes())
+            .map_err(|_| PIPELINE_INSTALL_ERROR)?;
+        complete_pipeline_install()
+    })();
+    if let Err(error) = result {
+        let _ = save(&Status {
+            phase: Phase::Error,
+            error: Some(error),
+            ..load()
+        });
         return;
     }
     let _ = write_report(&load());
