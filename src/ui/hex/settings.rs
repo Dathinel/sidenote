@@ -1945,8 +1945,39 @@ fn save_kb(s: &mut State) {
         }
         Err(error) => {
             s.hex.shell.kb_error = Some(kb_save_error(&error));
+            if let Ok(fresh) = sidenote::core::Config::load_in(&s.store.root) {
+                rebase_kb(s, fresh);
+            }
         }
     }
+}
+/// After a failed save, refresh the card from disk: fields the user changed keep
+/// their draft text, untouched fields take the current value on disk.
+fn rebase_kb(s: &mut State, fresh: sidenote::core::Config) {
+    let was = &s
+        .hex
+        .shell
+        .kb_base
+        .as_ref()
+        .unwrap_or(&s.config)
+        .knowledge_base;
+    let now = &fresh.knowledge_base;
+    let pairs = [
+        (was.repo_path.clone(), now.repo_path.clone()),
+        (was.revision.clone(), now.revision.clone()),
+        (was.source_roots.join("\n"), now.source_roots.join("\n")),
+        (was.company_name.clone(), now.company_name.clone()),
+        (
+            was.people_roster_source.clone(),
+            now.people_roster_source.clone(),
+        ),
+    ];
+    for (field, (old, new)) in s.hex.shell.kb_fields.iter_mut().zip(pairs) {
+        if field.text == old {
+            *field = TextEdit::new(new);
+        }
+    }
+    s.hex.shell.kb_base = Some(fresh);
 }
 fn kb_save_error(error: &std::io::Error) -> String {
     error
