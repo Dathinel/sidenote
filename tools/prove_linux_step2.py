@@ -43,6 +43,29 @@ def main():
         env[name] = str(root / name.lower())
         Path(env[name]).mkdir(mode=0o700, exist_ok=True)
 
+    bad_credentials = root / "bad-credentials"
+    bad_credentials.mkdir(mode=0o700, exist_ok=True)
+    bad_key = bad_credentials / "sidenote-key"
+    assert not bad_key.exists() and not bad_key.is_symlink()
+    fd = os.open(bad_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(os.urandom(32))
+    os.chmod(bad_key, 0o644)
+    for mode in ("world-readable", "symlink", "missing-store"):
+        rejected_env = env.copy()
+        rejected_env["CREDENTIALS_DIRECTORY"] = str(bad_credentials)
+        if mode == "symlink":
+            bad_key.unlink()
+            bad_key.symlink_to(credentials / "sidenote-key")
+        if mode == "missing-store":
+            rejected_env.pop("CREDENTIALS_DIRECTORY")
+            rejected_env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        result = subprocess.run([str(example), "identity", str(root / f"rejected-{mode}.sqlite")],
+                                env=rejected_env, capture_output=True, text=True)
+        assert result.returncode != 0 and "SECRET_" in result.stderr
+        print(f"identity rejects {mode}: PASS", flush=True)
+    bad_key.unlink()
+
     # Verify the real worker pre-exec adapter outside systemd, including parent SIGKILL.
     parent = subprocess.Popen([str(example), "parent", str(fault)], stdout=subprocess.PIPE, text=True, env=env)
     try:

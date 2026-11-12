@@ -563,7 +563,7 @@ fn deny_media_read(path: &Path) -> Option<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o0)).unwrap();
         assert!(File::open(path).is_err(), "fixture must forbid media reads");
         None
     }
