@@ -315,7 +315,10 @@ impl Job {
         else {
             return false;
         };
-        if task.meeting_id != newer.meeting_id
+        // Legacy cards without a stable id can share text with another card, so they never fold:
+        // each such move is saved on its own.
+        if task.stable_id.is_empty()
+            || task.meeting_id != newer.meeting_id
             || task.stable_id != newer.stable_id
             || task.manual != newer.manual
             || task.task != newer.task
