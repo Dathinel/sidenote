@@ -1,6 +1,8 @@
 //! Small JSON stores share flushed replacements and an OS-released writer lock.
 use serde::{Serialize, de::DeserializeOwned};
-use std::{fs, io, io::Write, os::windows::fs::OpenOptionsExt, path::Path};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+use std::{fs, io, io::Write, path::Path};
 
 #[derive(Debug)]
 pub(crate) struct UserMessage(pub String);
@@ -33,6 +35,7 @@ struct Parent {
     path: std::path::PathBuf,
     _pins: Vec<fs::File>,
 }
+#[cfg(windows)]
 fn checked_parent(path: &Path) -> io::Result<Parent> {
     use std::os::windows::fs::MetadataExt;
     let parent = std::path::absolute(path.parent().ok_or_else(|| invalid("Missing parent"))?)?;
@@ -67,6 +70,7 @@ fn checked_parent(path: &Path) -> io::Result<Parent> {
         _pins: pins,
     })
 }
+#[cfg(windows)]
 pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     let _parent = checked_parent(path)?;
     for attempt in 0..5 {
@@ -107,6 +111,7 @@ impl Drop for Temp {
         let _ = fs::remove_file(&self.path);
     }
 }
+#[cfg(windows)]
 fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
     let parent = checked_parent(path)?;
     let name = parent.path.join(format!(
@@ -134,7 +139,14 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temp = temporary(path, bytes)?;
-    crate::platform::replace_file(&temp.path, path)
+    #[cfg(windows)]
+    let target = path.to_owned();
+    #[cfg(unix)]
+    let target = temp
+        ._parent
+        .path
+        .join(path.file_name().ok_or_else(|| invalid("Missing name"))?);
+    crate::platform::replace_file(&temp.path, &target)
 }
 
 /// Stable FNV-1a over length-delimited UTF-8 parts, independent of Rust's default hasher.
@@ -156,7 +168,14 @@ pub(super) fn fingerprint(parts: impl IntoIterator<Item = impl AsRef<str>>) -> S
 /// Publish a flushed immutable file with a write-through rename that refuses replacement.
 pub(super) fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temp = temporary(path, bytes)?;
-    crate::platform::publish_file(&temp.path, path)
+    #[cfg(windows)]
+    let target = path.to_owned();
+    #[cfg(unix)]
+    let target = temp
+        ._parent
+        .path
+        .join(path.file_name().ok_or_else(|| invalid("Missing name"))?);
+    crate::platform::publish_file(&temp.path, &target)
 }
 
 /// Windows scanners and sync clients can briefly deny sharing. Other errors fail immediately.
@@ -174,10 +193,9 @@ pub(crate) fn retry_sharing_violation<T>(
     unreachable!()
 }
 pub(super) fn reject_reparse(path: &Path) -> io::Result<()> {
-    use std::os::windows::fs::MetadataExt;
     for part in path.ancestors() {
         match fs::symlink_metadata(part) {
-            Ok(meta) if meta.file_attributes() & 0x400 != 0 => {
+            Ok(meta) if crate::platform::linked(&meta) => {
                 return Err(invalid("Linked state paths are not supported"));
             }
             Ok(_) => {}
@@ -194,5 +212,126 @@ pub(super) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
         read()
     } else {
         retry_sharing_violation(read)
+    }
+}
+
+#[cfg(unix)]
+fn checked_parent(path: &Path) -> io::Result<Parent> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+    let parent = std::path::absolute(path.parent().ok_or_else(|| invalid("Missing parent"))?)?;
+    if path
+        .components()
+        .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(invalid("INVALID_STATE_PATH"));
+    }
+    let mut pins = vec![fs::File::open("/")?];
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| invalid("Invalid path"))?;
+        let fd = pins
+            .last()
+            .ok_or_else(|| invalid("Missing parent"))?
+            .as_raw_fd();
+        // Resolve each component relative to its pinned ancestor, refusing symlinks.
+        let open = || unsafe {
+            libc::openat(
+                fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        let mut child = open();
+        if child < 0 && io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
+            if unsafe { libc::mkdirat(fd, name.as_ptr(), 0o700) } < 0
+                && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists
+            {
+                return Err(io::Error::last_os_error());
+            }
+            child = open();
+        }
+        if child < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        pins.push(unsafe { fs::File::from_raw_fd(child) });
+    }
+    // /proc/self/fd keeps all subsequent operations anchored to the pinned directory.
+    let pinned = Path::new("/proc/self/fd").join(
+        pins.last()
+            .ok_or_else(|| invalid("Missing parent"))?
+            .as_raw_fd()
+            .to_string(),
+    );
+    Ok(Parent {
+        path: pinned,
+        _pins: pins,
+    })
+}
+#[cfg(unix)]
+pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    let parent = checked_parent(path)?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(
+            parent
+                .path
+                .join(path.file_name().ok_or_else(|| invalid("Missing name"))?),
+        )?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid("Unsafe lock file"));
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
+}
+#[cfg(unix)]
+fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let parent = checked_parent(path)?;
+    let name = parent.path.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        super::device::random_id()?
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&name)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(Temp {
+        path: name,
+        file: None,
+        _parent: parent,
+    })
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    #[test]
+    fn parent_traversal_is_rejected_before_opening_directories() {
+        let error = super::checked_parent(std::path::Path::new(
+            "/tmp/../sidenote-traversal-proof/file.json",
+        ))
+        .err()
+        .expect("parent traversal must be rejected");
+        assert_eq!(super::message(&error), Some("INVALID_STATE_PATH"));
     }
 }

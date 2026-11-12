@@ -3,13 +3,15 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom},
-    os::windows::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::mpsc::{self, Sender},
     time::{Duration, Instant},
 };
+#[cfg(windows)]
+use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+#[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
@@ -65,11 +67,14 @@ fn valid_id(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
 pub(crate) fn shared_read(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
     let file = OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
+    #[cfg(not(windows))]
+    let file = super::file_reads::nofollow(path)?;
     if !super::file_reads::regular(&file.metadata()?) {
         return Err(io::ErrorKind::InvalidData.into());
     }
@@ -492,8 +497,11 @@ impl Watch {
 }
 
 pub(crate) fn start(log: fn(&str)) -> Sender<String> {
+    start_managed(log).0
+}
+pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::JoinHandle<()>) {
     let (send, receive) = mpsc::channel::<String>();
-    std::thread::spawn(move || {
+    let worker = std::thread::spawn(move || {
         let mut watch = Watch::default();
         let engine = crate::hex_engine::HexEngine::new();
         let start = Instant::now();
@@ -532,7 +540,7 @@ pub(crate) fn start(log: fn(&str)) -> Sender<String> {
             }
         }
     });
-    send
+    (send, worker)
 }
 
 #[cfg(test)]

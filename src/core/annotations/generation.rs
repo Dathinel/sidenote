@@ -5,11 +5,11 @@ use crate::core::{
     notes::Helper,
     runners::{self, Runner},
 };
+use crate::platform::CommandExt;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{

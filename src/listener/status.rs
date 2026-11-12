@@ -6,6 +6,7 @@ use std::{
     sync::{Mutex, mpsc},
     time::Duration,
 };
+#[cfg(all(windows, feature = "desktop"))]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, IsIconic, IsWindowVisible,
 };
@@ -41,7 +42,11 @@ pub fn remember_window(hwnd: isize) {
         &json!({"hwnd":hwnd,"pid":std::process::id()}),
     );
 }
+#[cfg(all(windows, feature = "desktop"))]
 fn visible() -> bool {
+    if !crate::service::ui_allowed() {
+        return false;
+    }
     let Some(v) = fs::read(crate::core::state_dir().join("local/status-window.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
@@ -105,7 +110,7 @@ fn record(status: Option<&Value>, error: Option<&str>, shown: bool) -> Value {
         "capture_kind":status.map(|s| &s["capture_kind"]), "has_elapsed":status.map(|s| &s["has_elapsed"]),
         "has_id":status.map(|s| &s["has_id"]), "status_error":error, "window_visible":shown})
 }
-pub(super) fn start() {
+pub(super) fn start() -> std::thread::JoinHandle<()> {
     std::thread::spawn(|| {
         let state = crate::core::state_dir();
         let Ok(_instance) = crate::core::store_io::lock(&state.join("local/status-listener.lock"))
@@ -116,7 +121,7 @@ pub(super) fn start() {
         let mut transitions = Transitions::default();
         let (measurement, samples) = mpsc::sync_channel::<(Value, bool)>(1);
         let evidence_state = state.clone();
-        std::thread::spawn(move || {
+        let evidence_worker = std::thread::spawn(move || {
             let mut evidence = crate::core::meeting_evidence::Collector::new(&evidence_state);
             let mut failed = false;
             while let Ok((status, enabled)) = samples.recv() {
@@ -128,7 +133,7 @@ pub(super) fn start() {
             }
         });
         let mut log_failed = false;
-        while !crate::updates::listener_stopping() {
+        'poll: while !crate::updates::listener_stopping() {
             let status = crate::hex_engine::listener_status();
             // Never format transport errors: a future server error could contain content.
             let error = status
@@ -166,12 +171,14 @@ pub(super) fn start() {
             }
             for _ in 0..12 {
                 if crate::updates::listener_stopping() {
-                    return;
+                    break 'poll;
                 }
                 std::thread::sleep(Duration::from_millis(250));
             }
         }
-    });
+        drop(measurement);
+        let _ = evidence_worker.join();
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -212,4 +219,9 @@ mod tests {
         }
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
     }
+}
+
+#[cfg(not(all(windows, feature = "desktop")))]
+fn visible() -> bool {
+    false
 }

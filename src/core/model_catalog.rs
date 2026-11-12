@@ -367,10 +367,7 @@ pub fn installed_model_paths(id: &str) -> io::Result<Option<Vec<PathBuf>>> {
     ModelStore::default().installed_paths(id)
 }
 fn reject_link(path: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(path).is_ok_and(|m| {
-        use std::os::windows::fs::MetadataExt;
-        m.file_attributes() & 0x400 != 0
-    }) {
+    if fs::symlink_metadata(path).is_ok_and(|m| crate::platform::linked(&m)) {
         return Err(store_io::invalid(
             "Model paths cannot be links or junctions",
         ));

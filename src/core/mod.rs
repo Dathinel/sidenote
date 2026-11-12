@@ -72,3 +72,8 @@ pub mod tasks_v2;
 pub use tasks_v2::*;
 
 pub mod task_titles;
+
+/// Reconcile transported journals without requiring a window or a Hex installation.
+pub fn reconcile_service() -> bool {
+    sync_state::reconcile(&state_dir()).is_empty()
+}

@@ -1,11 +1,11 @@
 //! One Ask transport, owned by a worker. No meeting text is written to disk or command lines.
 use super::{AskProgress, Runner, ask, runner_process::Output, runners};
+use crate::platform::CommandExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Read, Write},
-    os::windows::process::CommandExt,
     process::{Child, Command, Stdio},
     sync::{
         Mutex, OnceLock,

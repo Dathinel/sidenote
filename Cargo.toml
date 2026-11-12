@@ -26,9 +26,9 @@ kaldi-fbank = { version = "=0.1.0", optional = true }
 hound = "3.5"
 blake3 = "1"
 rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["rt", "io-std"] }
-wgpu = { version = "~30.0.1", default-features = false, features = ["std", "dx12", "vulkan"] }
-rune = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", default-features = false, features = ["accessibility"] }
+tokio = { version = "1", features = ["rt", "io-std", "signal"] }
+wgpu = { optional = true, version = "~30.0.1", default-features = false, features = ["std", "dx12", "vulkan"] }
+rune = { optional = true, git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", default-features = false, features = ["accessibility"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true, features = ["markdown"] }
 rune-motion = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
@@ -36,8 +36,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_Security", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_UI_Controls_Dialogs", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Input_KeyboardAndMouse"] }
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_StationsAndDesktops", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_Security", "Win32_Security_Cryptography", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_UI_Controls_Dialogs", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Input_KeyboardAndMouse"] }
 velopack = "=0.0.1298"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
@@ -45,8 +49,10 @@ asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
 relay-capability-v2 = []
 # Explicit opt-in for synthetic headless qualification in optimized builds.
 relay-qualification = []
-default = ["ui-kit"]
-ui-kit = ["dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
+default = ["desktop", "ui-kit"]
+desktop = ["dep:rune", "dep:wgpu"]
+server = []
+ui-kit = ["desktop", "dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
 
 [profile.dev]
 debug = "line-tables-only"

@@ -1,8 +1,8 @@
 use super::super::asr::{Result, write_wav};
+use crate::platform::CommandExt;
 use serde_json::Value;
 use std::{
     io::Read,
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -15,13 +15,13 @@ pub struct HexSpeech {
 impl Default for HexSpeech {
     fn default() -> Self {
         Self {
-            executable: PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default())
-                .join("hex/bin/hex.com"),
+            executable: default_executable(),
         }
     }
 }
 impl HexSpeech {
     fn run(&self, args: &[&str], wav: Option<&Path>) -> Result<String> {
+        crate::platform::require_process_support()?;
         let mut command = Command::new(&self.executable);
         command
             .args(args)
@@ -102,5 +102,19 @@ impl HexSpeech {
     pub fn samples(&self, path: &Path, samples: &[f32], model: &str) -> Result<String> {
         write_wav(path, samples)?;
         self.transcribe(path, model)
+    }
+}
+
+fn default_executable() -> PathBuf {
+    #[cfg(windows)]
+    {
+        crate::core::meetings_dir()
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join("bin/hex.com")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::new()
     }
 }

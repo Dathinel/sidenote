@@ -6,6 +6,7 @@ use super::{
     check_v2::{self, Comparison, Coverage, FindingChange, Resolution, StoryAlignment},
     memory::{self, MemoryProposal, MemoryRecord, MemorySource, MemoryStore, RecordStatus},
 };
+use crate::platform::CommandExt;
 use chrono::{Duration as Days, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,7 +14,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs::{self, OpenOptions},
     io::{self, Read, Write},
-    os::windows::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -332,6 +332,7 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
 
 // Git and tar are hidden and contained just like the model runner. Never echo stderr.
 fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
+    crate::platform::require_process_support()?;
     let mut child = command
         .creation_flags(0x08000000)
         .stdin(Stdio::null())
@@ -903,15 +904,7 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     fs::create_dir_all(root.join("local"))?;
     // The OS releases this lock after a crash. Readers can continue using immutable reports.
     let lock_path = root.join("local/daily-check.lock");
-    use std::os::windows::fs::OpenOptionsExt;
-    let _lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .share_mode(0)
-        .open(lock_path)
-        .at(Stage::CheckLock)?;
+    let _lock = super::store_io::lock(&lock_path).at(Stage::CheckLock)?;
     // Another run may have saved today's report before we acquired the lock.
     if !force && list_checks()?.contains(&today) {
         return Ok(None);

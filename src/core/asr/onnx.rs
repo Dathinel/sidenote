@@ -1,14 +1,15 @@
 use super::*;
 use kaldi_fbank::{FbankOptions, OnlineFbank, WindowType};
 use ort::{session::Session, value::Tensor};
+#[cfg(windows)]
 use sha2::{Digest, Sha256};
+use std::{fs, sync::OnceLock, time::Instant};
+#[cfg(windows)]
 use std::{
-    fs,
     io::Read,
     os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
-    sync::OnceLock,
-    time::Instant,
 };
+#[cfg(windows)]
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     LoadLibraryExW,
@@ -16,8 +17,10 @@ use windows_sys::Win32::System::LibraryLoader::{
 
 static RUNTIME: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// ONNX Runtime from sherpa-onnx v2.0.1 win-x64 shared MD no-TTS, API 22.
+#[cfg(windows)]
 pub const RUNTIME_SHA256: &str = "422d776ab0e3218260f7f628fcb84606aaa5c21116f720c8619a6da5e0b2e0f9";
 
+#[cfg(windows)]
 pub fn initialize(dll: &Path) -> Result<()> {
     if !dll.is_absolute() || !dll.is_file() {
         return Err("Choose an absolute path to the ONNX Runtime DLL".into());
@@ -50,6 +53,7 @@ pub fn initialize(dll: &Path) -> Result<()> {
         .map_err(Into::into)
 }
 
+#[cfg(windows)]
 fn preflight(dll: &Path) -> Result<()> {
     let wide: Vec<u16> = dll.as_os_str().encode_wide().chain(Some(0)).collect();
     // Pin for process lifetime, as ort keeps a global API pointer. Probe before its panic-based loader.
@@ -279,4 +283,9 @@ impl SpeechEngine for IndicConformer {
             confidence: None,
         })
     }
+}
+
+#[cfg(not(windows))]
+pub fn initialize(_library: &Path) -> Result<()> {
+    Err(crate::platform::unavailable().into())
 }

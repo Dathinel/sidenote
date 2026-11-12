@@ -4,7 +4,6 @@ use std::{
     collections::HashMap,
     fs,
     io::{self, Read},
-    os::windows::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -83,14 +82,14 @@ pub fn skipped() {
     });
 }
 pub fn regular(meta: &fs::Metadata) -> bool {
-    meta.is_file() && meta.file_attributes() & 0x400 == 0
+    meta.is_file() && !crate::platform::linked(meta)
 }
 pub fn directory(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && m.file_attributes() & 0x400 == 0)
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !crate::platform::linked(&m))
 }
 pub fn checked_metadata(path: &Path) -> io::Result<fs::Metadata> {
     for parent in path.ancestors().skip(1) {
-        if fs::symlink_metadata(parent).is_ok_and(|m| m.file_attributes() & 0x400 != 0) {
+        if fs::symlink_metadata(parent).is_ok_and(|m| crate::platform::linked(&m)) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "Reparse directory",
@@ -128,10 +127,7 @@ pub fn read(path: &Path, cap: u64) -> io::Result<Arc<[u8]>> {
                 "Read budget exceeded",
             ));
         }
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(0x00200000)
-            .open(path)?;
+        let file = nofollow(path)?;
         let m = file.metadata()?;
         if !regular(&m) || m.len() > cap {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "File skipped"));
@@ -191,7 +187,7 @@ pub fn entries(path: &Path) -> io::Result<Vec<Arc<fs::DirEntry>>> {
         match fs::symlink_metadata(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
             Err(e) => return Err(e),
-            Ok(m) if !m.is_dir() || m.file_attributes() & 0x400 != 0 => {
+            Ok(m) if !m.is_dir() || crate::platform::linked(&m) => {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Unsafe folder"));
             }
             Ok(_) => {}
@@ -206,7 +202,7 @@ pub fn entries(path: &Path) -> io::Result<Vec<Arc<fs::DirEntry>>> {
             }
             let e = e?;
             let m = fs::symlink_metadata(e.path())?;
-            if m.file_attributes() & 0x400 == 0 && (m.is_file() || m.is_dir()) {
+            if !crate::platform::linked(&m) && (m.is_file() || m.is_dir()) {
                 out.push(Arc::new(e));
             } else {
                 skipped();
@@ -228,4 +224,20 @@ pub fn entries(path: &Path) -> io::Result<Vec<Arc<fs::DirEntry>>> {
 }
 pub fn dir_iter(path: &Path) -> io::Result<impl Iterator<Item = io::Result<Arc<fs::DirEntry>>>> {
     Ok(entries(path)?.into_iter().map(Ok))
+}
+
+pub(crate) fn nofollow(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x00200000);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    options.open(path)
 }

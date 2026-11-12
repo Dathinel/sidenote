@@ -3955,6 +3955,7 @@ dependencies = [
  "image",
  "jsonschema",
  "kaldi-fbank",
+ "libc",
  "ort",
  "pollster",
  "regex",

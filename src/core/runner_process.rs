@@ -1,8 +1,8 @@
 use super::runners::{self, AskProgress, Runner};
+use crate::platform::CommandExt;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{

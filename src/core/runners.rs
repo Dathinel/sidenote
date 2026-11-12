@@ -191,6 +191,7 @@ pub fn validate(runner: &Runner) -> Result<(), String> {
 pub fn installed(runner: &Runner) -> bool {
     executable(runner).is_ok()
 }
+#[cfg(windows)]
 pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
     fn windows_exe(path: &Path) -> bool {
         use std::io::{Read, Seek, SeekFrom};
@@ -237,4 +238,9 @@ pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
         }
     }
     Err(format!("{} is not available on PATH", runner.program))
+}
+
+#[cfg(not(windows))]
+pub(super) fn executable(_runner: &Runner) -> Result<PathBuf, String> {
+    Err(crate::platform::UNAVAILABLE.into())
 }
