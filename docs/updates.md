@@ -3,6 +3,12 @@
 Sidenote uses Velopack 0.0.1298 (MIT). Packaging uses the matching CLI and the
 per-user .NET SDK 8.0.427. These builds are unsigned.
 
+`tools/release_gate.ps1` takes read-only process snapshots of the installed
+listener before and after its checks. Both states appear in its report table.
+If a listener was running at the start and is absent at the end, the gate fails
+with a recorder warning. An unreadable process snapshot also fails the gate.
+The snapshots never start, stop or reconfigure the installed app or its task.
+
 Installed copies check the public HTTPS feed at
 `https://github.com/harshanandak/hex-meetings/releases/latest/download/`.
 Velopack's built-in `HttpSource` reads `releases.win.json` from that base URL
