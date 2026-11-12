@@ -6,6 +6,9 @@ XML = """<node><interface name="org.freedesktop.Secret.Service">
 <method name="OpenSession"><arg type="s" direction="in"/>
 <arg type="v" direction="in"/><arg type="v" direction="out"/>
 <arg type="o" direction="out"/></method>
+<method name="SearchItems"><arg type="a{ss}" direction="in"/>
+<arg type="ao" direction="out"/><arg type="ao" direction="out"/></method>
+<method name="ReadAlias"><arg type="s" direction="in"/><arg type="o" direction="out"/></method>
 <property name="Collections" type="ao" access="read"/>
 </interface></node>"""
 held = []
