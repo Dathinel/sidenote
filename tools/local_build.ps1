@@ -1,8 +1,9 @@
 ﻿<# Run cargo through the two local build slots, or use -Pack for release_pack.ps1. #>
-param(
-    [switch]$Pack,
-    [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Arguments
-)
+# Plain $args, not a param block: an advanced script binds cargo flags such as -D and -- as
+# PowerShell common parameters and fails before cargo runs.
+$Pack = $false
+$Arguments = @($args)
+if ($Arguments.Count -and $Arguments[0] -ceq '-Pack') { $Pack = $true; $Arguments = @($Arguments | Select-Object -Skip 1) }
 $ErrorActionPreference = 'Stop'
 $slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
 $watchLog = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
