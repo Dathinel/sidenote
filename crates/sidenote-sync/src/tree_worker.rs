@@ -23,6 +23,13 @@ pub fn owner_unit() -> io::Result<(String, PathBuf)> {
         .find_map(|line| line.strip_prefix("0::"))
         .ok_or_else(unavailable)?;
     let path = PathBuf::from(group);
+    let manager = format!("user@{}.service", unsafe { libc::geteuid() });
+    if !path
+        .components()
+        .any(|part| part.as_os_str() == OsStr::new(&manager))
+    {
+        return Err(unavailable());
+    }
     let name = path
         .file_name()
         .and_then(OsStr::to_str)
@@ -336,5 +343,20 @@ pub fn run(args: Vec<OsString>) -> io::Result<i32> {
         Some("--launch") if args.len() >= 2 => launch(&args[1..]),
         Some("--guard") => guard(&args[1..]),
         _ => Err(unavailable()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn infrastructure_probe_has_a_short_deadline() {
+        let started = Instant::now();
+        let result = bounded_output(
+            Command::new("/bin/sleep").arg("30"),
+            Duration::from_millis(100),
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
