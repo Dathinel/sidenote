@@ -14,7 +14,7 @@ pub fn configure(command: &mut Command) {
                 || libc::getppid() != parent
                 || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
             {
-                return Err(io::Error::other("WORKER_CONTAINMENT_FAILED"));
+                return Err(io::Error::from_raw_os_error(libc::EPERM));
             }
             for (resource, value) in [
                 (libc::RLIMIT_AS, MEMORY_LIMIT),
@@ -58,5 +58,33 @@ pub fn verify() -> io::Result<()> {
 pub fn kill_group(pid: u32) {
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn failure_is_reported_before_exec() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let marker = dir.path().join("must-not-run");
+        let mut command = Command::new("/usr/bin/touch");
+        command.arg(&marker);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        // A session leader cannot enter a new process group.
+        configure(&mut command);
+        let error = command
+            .spawn()
+            .expect_err("containment must reject before exec");
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+        assert!(!marker.exists());
+        Ok(())
     }
 }
