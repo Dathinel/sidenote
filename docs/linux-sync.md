@@ -8,6 +8,20 @@ and credential backup. A second owner exits instead of taking over its database.
 
 ## File transport and ingestion
 
+Syncthing remains an independent, owner-managed transport. Sidenote does not start,
+stop, adopt or configure that daemon. If it is already a systemd user service, the
+owner can add `Wants=` and `After=` for that actual unit in a Sidenote drop-in.
+Ingestion also starts without it and retries arriving files each second, so a
+transport restart does not require a Sidenote restart. Do not point two Syncthing
+instances at the same configuration directory.
+
+Preserve existing share boundaries: device identity/configuration and all `local/`
+data, SQLite/WAL/SHM, locks, control sockets and credentials stay local. Relay setup
+adds `/local` to `.stignore`; retain the existing device exclusions too. Never share
+a replica database. Enabled relay domains are authoritative through the existing
+relay-mode migration/locks. File journals continue to serve the other supported
+stores; the ingestion loop does not copy relay projections back into journals.
+
 The loop validates/reconciles transported journals and scans complete local/peer
 meetings. `local/sync/index.json` records all source identities and an
 opaque revision, not a second copy of meeting text. Incomplete or invalid inputs
@@ -15,6 +29,11 @@ stay in place for retry and raise an error count. Unchanged inputs do not advanc
 the ingestion generation. Index state survives restart; source meetings/journals
 are never rewritten by the index. Remote meetings are discovered, not automatically
 queued for model/notes processing in this step.
+
+Readiness follows the existing core's saved-summary/notes rules. A valid saved
+summary can be ready while its manifest still says pending. Truncated/unreadable
+summaries are retried. The per-meeting content fingerprint includes title, summary,
+notes, transcript and routed revision, so a later edit updates the existing entry.
 
 ## Retained source revisions
 
@@ -103,3 +122,15 @@ For an isolated fixture dependency, use `npm install --ignore-scripts --no-audit
 --no-fund --package-lock=false --prefix /private/proof/node ws@8.18.3` and set
 `NODE_PATH=/private/proof/node/node_modules` for the proof process. This dependency
 belongs to the qualification runner, not the server executable.
+
+
+## Proof scope
+
+`--peer-command-json` takes a command adapter with `{root}` and `{relay}`
+placeholders. A future Windows adapter must choose native isolated proof paths,
+forward this same private NDJSON protocol, provide loopback relay access and stop
+its peer on EOF. Pairing/offline/conflict/reconnect/restart assertions remain the
+same. The Linux-only raw-journal arrival fixture is separate from those convergence
+assertions. Actual Windows Full pairing remains unverified until that peer is
+authorized. This run also does not establish Syncthing-daemon, physical reboot,
+phone, network-MCP or inference qualification.

@@ -263,3 +263,6 @@ pub fn proof_peer() -> io::Result<()> {
     let owner = Owner::start(&root, _lock)?;
     stream_commands(|bytes| owner.request(bytes))
 }
+
+#[cfg(test)]
+mod read_tests;
