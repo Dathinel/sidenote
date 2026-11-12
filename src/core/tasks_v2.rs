@@ -1565,4 +1565,140 @@ mod tests {
             assert_eq!(core::BoardColumn::of(&reopened), Review);
         }
     }
+    #[test]
+    fn moving_out_of_done_unticks_then_sets_the_status_and_keeps_other_fields() {
+        let f = Fixture::new(json!([{
+            "id":"a","title":"Read proof","status":"review","owner":"Alex","due":"2026-11-20"
+        }]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        let task = f.tasks(&Overrides::default()).remove(0);
+        let view = ticks
+            .set_task_tick_view(&f.meeting.id, &task.task, &task.stable_id, true)
+            .unwrap();
+        let checked = HashMap::from([(f.meeting.id.clone(), view.value.checked)]);
+        let build = |o: &Overrides, checked: &HashMap<_, _>| {
+            core::build_tasks(
+                std::slice::from_ref(&f.meeting),
+                &HashMap::new(),
+                &core::Projects::default(),
+                o,
+                checked,
+            )
+            .remove(0)
+        };
+        let done = build(&Overrides::default(), &checked);
+        assert!(done.done);
+        let plan = core::move_plan(&done, core::BoardColumn::Todo);
+        assert_eq!(
+            (plan.tick, plan.status),
+            (Some(false), Some(TaskStatus::Todo))
+        );
+        let (moved, error) = core::run_move(&store, &ticks, &done, &f.meeting.folder, plan);
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), moved.ticks.unwrap().value.checked)]);
+        let overrides = moved.overrides.unwrap().value;
+        let after = build(&overrides, &checked);
+        assert!(!after.done);
+        assert_eq!(core::BoardColumn::of(&after), core::BoardColumn::Todo);
+        assert_eq!(after.owner.as_deref(), Some("Alex"));
+        assert_eq!(after.due, done.due);
+        assert_eq!(after.title, done.title);
+        // Running the same move again changes nothing and does not fail.
+        let (_, again) = core::run_move(&store, &ticks, &done, &f.meeting.folder, plan);
+        assert!(again.is_none());
+        let reopened = build(&store.load_overrides().unwrap(), &checked);
+        assert_eq!(core::BoardColumn::of(&reopened), core::BoardColumn::Todo);
+    }
+    #[test]
+    fn a_hand_made_task_leaves_done_the_same_way() {
+        let f = Fixture::new(json!([]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        let (overrides, _) = store
+            .add_manual(core::ManualTask {
+                task: "Print the cards".into(),
+                owner: Some("Robin".into()),
+                done: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let task = f.tasks(&overrides).remove(0);
+        assert!(task.done);
+        let plan = core::move_plan(&task, core::BoardColumn::Review);
+        let (moved, error) = core::run_move(&store, &ticks, &task, &f.root, plan);
+        assert!(error.is_none());
+        let after = f.tasks(&moved.overrides.unwrap().value).remove(0);
+        assert!(!after.done);
+        assert_eq!(after.status, TaskStatus::Review);
+        assert_eq!(after.owner.as_deref(), Some("Robin"));
+        // Done again is the tick alone, and a second run does not flip it back.
+        let plan = core::move_plan(&after, core::BoardColumn::Done);
+        for _ in 0..2 {
+            let (moved, error) = core::run_move(&store, &ticks, &after, &f.root, plan);
+            assert!(error.is_none());
+            assert!(f.tasks(&moved.overrides.unwrap().value)[0].done);
+        }
+    }
+    #[test]
+    fn person_area_and_meeting_filters_narrow_the_board_and_the_list() {
+        let f = Fixture::new(json!([
+            {"id":"a","title":"First","owner":"Alex"},
+            {"id":"b","title":"Second","owner":"Robin"},
+            {"id":"c","title":"Third"}
+        ]));
+        let mut tasks = f.tasks(&Overrides::default());
+        tasks[1].area_id = Some("area-one".into());
+        let count = |filter: core::TaskFilter| {
+            core::board_columns(&tasks, &filter)
+                .columns
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>()
+        };
+        assert_eq!(count(core::TaskFilter::default()), 3);
+        let by = |person| core::TaskFilter {
+            person: Some(person),
+            ..Default::default()
+        };
+        assert_eq!(count(by(core::PersonFilter::Owner("Alex".into()))), 1);
+        assert_eq!(count(by(core::PersonFilter::NoOwner)), 1);
+        assert_eq!(
+            count(core::TaskFilter {
+                area: Some("area-one".into()),
+                ..Default::default()
+            }),
+            1
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                meeting: Some(f.meeting.id.clone()),
+                ..Default::default()
+            }),
+            3
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                meeting: Some(core::MANUAL.into()),
+                ..Default::default()
+            }),
+            0
+        );
+        // The filters combine with each other and with search.
+        assert_eq!(
+            count(core::TaskFilter {
+                person: Some(core::PersonFilter::Owner("Robin".into())),
+                area: Some("area-one".into()),
+                query: "second".into(),
+                ..Default::default()
+            }),
+            1
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                person: Some(core::PersonFilter::Owner("Alex".into())),
+                area: Some("area-one".into()),
+                ..Default::default()
+            }),
+            0
+        );
+    }
 }

@@ -87,6 +87,8 @@ $shots = @(
     @('tasks-board', 'tasks-v2-board', '1320x1000', $null, @()),
     @('tasks-board-390', 'tasks-v2-board', '390x1500', $null, @()),
     @('tasks-board-empty', 'tasks-v2-board-empty', '1320x800', $null, @()),
+    @('tasks-board-drag', 'tasks-v2-board-drag', '1320x1000', $null, @()),
+    @('tasks-board-filter', 'tasks-v2-board-filter', '1320x1000', $null, @()),
     @('tasks-v2-empty-560', 'tasks-v2-empty', '560x1400', $null, @()),
     @('tasks-v2-teams', 'tasks-v2-teams', '1320x1300', $null, @()),
     @('tasks-v2-teams-560', 'tasks-v2-teams', '560x1400', $null, @()),

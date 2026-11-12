@@ -3799,6 +3799,25 @@ pub fn spec() -> AppSpec<State> {
                 s.tasks.layout = core::TasksLayout::Board;
                 s.tasks.done = core::DoneFilter::All;
             }),
+            ("tasks-v2-board-drag", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                // A card from To do held over Waiting on, as a drag in progress shows it.
+                let first = s.tasks.board().column(core::BoardColumn::Todo)[0];
+                let item = &s.tasks.items[first];
+                s.tasks.board_drag = Some((
+                    (item.meeting_id.clone(), item.index),
+                    core::BoardColumn::Waiting,
+                ));
+            }),
+            ("tasks-v2-board-filter", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                s.tasks.person = Some(core::PersonFilter::Owner("Morgan Lee".into()));
+                s.tasks.filter_menu = Some(tasks::FilterMenu::Person);
+            }),
             ("tasks-v2-board-empty", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Status, None);
                 s.tasks.layout = core::TasksLayout::Board;

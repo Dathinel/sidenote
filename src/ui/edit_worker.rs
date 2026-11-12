@@ -122,6 +122,15 @@ pub enum Job {
         source: PathBuf,
         edit: core::TaskV2Edit,
     },
+    /// A board move. The steps run one after the other in this one save, so the page takes in
+    /// both at once.
+    Move {
+        store: TaskStore,
+        ticks: core::StateStore,
+        task: Box<core::TaskItem>,
+        source: PathBuf,
+        plan: core::MovePlan,
+    },
     Grouping {
         store: TaskStore,
         by: core::TaskGrouping,
@@ -171,6 +180,7 @@ impl Job {
             | Self::Tick { .. }
             | Self::ManualTick { .. }
             | Self::V2 { .. }
+            | Self::Move { .. }
             | Self::Grouping { .. }
             | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
@@ -190,6 +200,11 @@ pub enum Completion {
     V2 {
         result: Result<Box<core::EditView<core::Overrides>>, SaveError>,
         added: Option<String>,
+    },
+    Move {
+        id: String,
+        moved: Box<core::Moved>,
+        error: Option<SaveError>,
     },
     Preferences {
         teams: Option<core::Teams>,
@@ -226,6 +241,7 @@ impl Completion {
             | Self::ManualTick(_)
             | Self::Preferences { .. }
             | Self::V2 { .. }
+            | Self::Move { .. }
             | Self::Redo(_) => Target::Tick,
             Self::Task {
                 row,
@@ -303,6 +319,20 @@ impl State {
                                 .map(Box::new)
                                 .map_err(|e| SaveError::from(&e)),
                             added,
+                        }
+                    }
+                    Job::Move {
+                        store,
+                        ticks,
+                        task,
+                        source,
+                        plan,
+                    } => {
+                        let (moved, error) = core::run_move(&store, &ticks, &task, &source, plan);
+                        Completion::Move {
+                            id: task.meeting_id.clone(),
+                            moved: Box::new(moved),
+                            error: error.map(|e| SaveError::from(&e)),
                         }
                     }
                     Job::Grouping { store, by } => Completion::Preferences {
@@ -485,6 +515,35 @@ impl State {
                 }
                 Err(e) => self.tasks.notice = Some(e.message().into()),
             },
+            Completion::Move { id, moved, error } => {
+                // Both steps wrote, so only the newest view is current. The tick view is
+                // older than the status view by one write and is taken with it.
+                let newest = moved
+                    .overrides
+                    .as_ref()
+                    .map(|v| v.generation)
+                    .into_iter()
+                    .chain(moved.ticks.as_ref().map(|v| v.generation))
+                    .max();
+                if newest == Some(core::mutation_generation()) {
+                    let core::Moved { ticks, overrides } = *moved;
+                    if let Some(view) = ticks {
+                        self.tasks
+                            .checked
+                            .insert(id.clone(), view.value.checked.clone());
+                        if self.selected.as_deref() == Some(&id) {
+                            self.saved = view.value;
+                        }
+                    }
+                    if let Some(view) = overrides {
+                        self.tasks.overrides = view.value;
+                    }
+                }
+                if let Some(e) = error {
+                    self.tasks.notice = Some(e.message().into());
+                }
+                self.rebuild_tasks();
+            }
             Completion::ManualTick(result) => match result {
                 Ok(view) => {
                     if view.generation == core::mutation_generation() {

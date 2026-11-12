@@ -1,7 +1,11 @@
 //! The Tasks board: four columns drawn over the tasks the list already shows. A column is not a
 //! stored value. To do, Waiting on and In review are the existing `TaskStatus`; Done is the
 //! existing tick. Nothing here adds a status or touches a sync file.
-use super::{DoneFilter, TaskFilter, TaskItem, TaskStatus};
+use super::{
+    DoneFilter, EditView, Overrides, Saved, StateStore, TaskFilter, TaskItem, TaskStatus,
+    TaskStore, TaskV2Edit,
+};
+use std::{io, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BoardColumn {
@@ -157,6 +161,68 @@ pub fn move_plan(t: &TaskItem, target: BoardColumn) -> MovePlan {
     }
 }
 
+/// What a finished move leaves for the page to take in: the new tick file, the new overrides,
+/// or both.
+#[derive(Default)]
+pub struct Moved {
+    pub ticks: Option<EditView<Saved>>,
+    pub overrides: Option<EditView<Overrides>>,
+}
+
+/// Runs a move: the tick first, then the status. Each step is a set, so a retry after the
+/// second step failed finishes the job and a repeat changes nothing. The views of the steps
+/// that ran come back even when a later step failed, so the page shows what really happened.
+pub fn run_move(
+    store: &TaskStore,
+    ticks: &StateStore,
+    task: &TaskItem,
+    source: &Path,
+    plan: MovePlan,
+) -> (Moved, Option<io::Error>) {
+    let mut moved = Moved::default();
+    if let Some(on) = plan.tick {
+        let step = if task.manual {
+            let id = task
+                .meeting_id
+                .strip_prefix("manual/")
+                .unwrap_or(&task.meeting_id);
+            store
+                .set_manual_done_view(id, on)
+                .map(|v| moved.overrides = Some(v))
+        } else {
+            ticks
+                .set_task_tick_view(&task.meeting_id, &task.task, &task.stable_id, on)
+                .map(|v| moved.ticks = Some(v))
+        };
+        if let Err(e) = step {
+            return (moved, Some(e));
+        }
+    }
+    if let Some(status) = plan.status {
+        match store.edit_v2(task, source, TaskV2Edit::Status(status, None)) {
+            Ok(v) => moved.overrides = Some(v),
+            Err(e) => return (moved, Some(e)),
+        }
+    }
+    (moved, None)
+}
+
+/// The column a dragged card is over. `x_in_column` is where the pointer went down, measured
+/// from the left edge of the card's own column; `dx` is how far it has moved since. Columns
+/// are `width` wide with `gap` between, so this is plain arithmetic and needs no hit test.
+pub fn drop_column(
+    from: BoardColumn,
+    x_in_column: f32,
+    dx: f32,
+    width: f32,
+    gap: f32,
+) -> BoardColumn {
+    let step = (width + gap).max(1.0);
+    let shift = ((x_in_column + dx) / step).floor() as isize;
+    let at = (from.index() as isize + shift).clamp(0, 3) as usize;
+    BoardColumn::ALL[at]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +247,22 @@ mod tests {
                 assert_eq!(c.label(), status.label());
             }
         }
+    }
+
+    #[test]
+    fn a_drag_lands_in_the_column_under_the_pointer_and_stays_on_the_board() {
+        use BoardColumn::{Done, Review, Todo, Waiting};
+        // Columns 200 wide with 12 between: a step of 212. The pointer went down 30 in.
+        let drop = |from, dx| drop_column(from, 30.0, dx, 200.0, 12.0);
+        assert_eq!(drop(Todo, 0.0), Todo);
+        assert_eq!(drop(Todo, 100.0), Todo);
+        assert_eq!(drop(Todo, 200.0), Waiting);
+        assert_eq!(drop(Todo, 420.0), Review);
+        assert_eq!(drop(Todo, 5000.0), Done);
+        assert_eq!(drop(Review, -200.0), Waiting);
+        assert_eq!(drop(Review, -5000.0), Todo);
+        // Left of the board, or a zero-width layout, never panics.
+        assert_eq!(drop_column(Done, 0.0, -1.0, 0.0, 0.0), Review);
+        assert_eq!(drop(Waiting, 150.0), Waiting);
     }
 }

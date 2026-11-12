@@ -19,6 +19,9 @@ fn row_of(t: &TaskItem) -> RowId {
 /// Narrowest a column can be before the board falls back to one column at a time.
 const COLUMN_MIN: f32 = 220.0;
 const GAP: f32 = 12.0;
+/// Padding of a column and of a card, which the drag arithmetic adds up.
+const COLUMN_PAD: f32 = 8.0;
+const CARD_PAD: f32 = 11.0;
 /// The list width the four columns need, side padding included.
 pub const WIDE_MIN: f32 = 4.0 * COLUMN_MIN + 3.0 * GAP + 48.0;
 /// Cards drawn per column before "Show more". The page scrolls as one, so this bounds the work.
@@ -51,46 +54,21 @@ impl State {
         eff
     }
 
-    /// Sets the done tick. It is a set, not a flip: nothing is saved when the card already is
-    /// that way, so two quick clicks cannot cancel each other or run twice.
-    fn set_done(&mut self, t: &TaskItem, on: bool) {
-        if t.done == on {
-            return;
+    /// The folder a task's status edit reads its source summary from: the meeting's, or the
+    /// data folder for a hand-made task.
+    fn edit_source(&self, t: &TaskItem) -> Option<std::path::PathBuf> {
+        if t.manual {
+            return Some(self.tasks.store.root.clone());
         }
-        let job = if t.manual {
-            Job::ManualTick {
-                store: self.tasks.store.clone(),
-                id: t
-                    .meeting_id
-                    .strip_prefix("manual/")
-                    .unwrap_or(&t.meeting_id)
-                    .into(),
-            }
-        } else {
-            Job::Tick {
-                store: self.store.clone(),
-                id: t.meeting_id.clone(),
-                task: t.task.clone(),
-                stable_id: t.stable_id.clone(),
-                on,
-            }
-        };
-        self.publish_edit(job);
+        self.meetings
+            .iter()
+            .find(|m| m.id == t.meeting_id && m.device.is_none())
+            .map(|m| m.folder.clone())
     }
 
-    /// Takes a finished task out of Done. The status left behind comes back with it.
-    fn reopen(&mut self, t: &TaskItem) {
-        let title = shown_title(self, t).to_string();
-        let mut open = t.clone();
-        open.done = false;
-        self.set_done(t, false);
-        self.tasks
-            .board_pending
-            .insert(row_of(t), BoardColumn::of(&open));
-        self.say(format!("Marked \u{201c}{title}\u{201d} not done"));
-    }
-
-    /// Moves one card to `target`: the status edit the panel makes, or the done tick.
+    /// Moves one card to `target`. One save does the whole move: the done tick, the status, or
+    /// both when a card leaves Done for another column. Each step is a set, so a move queued
+    /// behind another save, or run twice, ends in the same place.
     pub(super) fn move_card(&mut self, id: &str, index: usize, target: BoardColumn) {
         self.tasks.board_menu = None;
         let Some(t) = self.tasks.item(id, index).cloned() else {
@@ -107,36 +85,39 @@ impl State {
             ));
             return;
         }
-        // Out of Done is the tick going back, which restores the status left behind. The card
-        // lands in that column, so the line says "not done" rather than naming one.
-        if plan.tick == Some(false) {
-            return self.reopen(&eff);
-        }
-        if let Some(on) = plan.tick {
-            self.set_done(&eff, on);
-        } else if let Some(status) = plan.status {
-            self.edit_task_v2(id, index, core::TaskV2Edit::Status(status, None));
-        }
+        let Some(source) = self.edit_source(&t) else {
+            return;
+        };
+        self.publish_edit(Job::Move {
+            store: self.tasks.store.clone(),
+            ticks: self.store.clone(),
+            task: Box::new(t.clone()),
+            source,
+            plan,
+        });
         self.tasks.board_pending.insert(row_of(&t), target);
-        self.say(format!(
-            "Moved \u{201c}{title}\u{201d} to {}",
-            target.label()
-        ));
+        self.say(if plan.tick == Some(false) && plan.status.is_none() {
+            format!("Marked \u{201c}{title}\u{201d} not done")
+        } else {
+            format!("Moved \u{201c}{title}\u{201d} to {}", target.label())
+        });
     }
 
-    /// The tick, from the card's checkbox or the menu.
+    /// The tick, from the card's checkbox or the menu. Out of Done goes back to the status the
+    /// card had.
     fn toggle_done(&mut self, id: &str, index: usize) {
-        self.tasks.board_menu = None;
         let Some(t) = self.tasks.item(id, index).cloned() else {
             return;
         };
-        self.tasks.cursor = Some((id.to_string(), index));
         let eff = self.effective(&t);
-        if eff.done {
-            self.reopen(&eff);
+        let to = if eff.done {
+            let mut open = eff;
+            open.done = false;
+            BoardColumn::of(&open)
         } else {
-            self.move_card(id, index, BoardColumn::Done);
-        }
+            BoardColumn::Done
+        };
+        self.move_card(id, index, to);
     }
 
     /// A short polite line under the toolbar. It goes after a few seconds or the next key.
@@ -149,7 +130,11 @@ impl State {
         let Some((id, index)) = self.cursor_row() else {
             return;
         };
-        let Some(from) = self.tasks.item(&id, index).map(BoardColumn::of) else {
+        let Some(from) = self
+            .tasks
+            .item(&id, index)
+            .map(|t| BoardColumn::of(&self.effective(t)))
+        else {
             return;
         };
         match from.neighbour(delta) {
@@ -349,7 +334,14 @@ fn move_menu(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) 
     menu.build(k, layer)
 }
 
-fn card(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El {
+fn card(
+    s: &State,
+    k: &Kit,
+    t: &TaskItem,
+    drag: Option<f32>,
+    p: Palette,
+    layer: &mut Vec<El>,
+) -> El {
     let (id, index) = (t.meeting_id.clone(), t.index);
     let me: RowId = (id.clone(), index);
     let tasks = &s.tasks;
@@ -366,6 +358,39 @@ fn card(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El
             .radius(11.0)
             .on_press(move |s: &mut State| s.toggle_done(&id, index))
     };
+    // The grip is the one place a drag starts, so a click on the card stays a click. Drag is
+    // for the wide board only; the Move button and the keys work everywhere.
+    let grip = drag.map(|width| {
+        let (id, from) = (id.clone(), BoardColumn::of(t));
+        let over = move |d: &rune::Drag| {
+            core::drop_column(from, COLUMN_PAD + CARD_PAD + d.start_x, d.dx, width, GAP)
+        };
+        col()
+            .key(format!("tgrip-{id}-{index}"))
+            .w(18.0)
+            .h(26.0)
+            .center()
+            .cursor(rune::Cursor::Pointer)
+            .help("Drag to another column")
+            .child(crate::ui::icons::draw(
+                &crate::ui::icons::GRIP_VERTICAL,
+                16.0,
+                p.faint,
+            ))
+            .on_drag(move |s: &mut State, d, _| match d.phase {
+                rune::Phase::Down => s.tasks.board_drag = Some(((id.clone(), index), from)),
+                rune::Phase::Move => {
+                    s.tasks.board_drag = Some(((id.clone(), index), over(d)));
+                }
+                rune::Phase::Up => {
+                    let to = over(d);
+                    s.tasks.board_drag = None;
+                    if !d.cancelled() && to != from {
+                        s.move_card(&id, index, to);
+                    }
+                }
+            })
+    });
     let title = if on {
         let shown = shown_title(s, t);
         roles::SMALL
@@ -470,6 +495,7 @@ fn card(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El
                 .w_full()
                 .gap(8.0)
                 .items_start()
+                .children(grip)
                 .child(tick)
                 .child(open_title),
         )
@@ -544,12 +570,16 @@ fn card(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El
             }),
         );
     }
+    let dragged = tasks.board_drag.as_ref().is_some_and(|(r, _)| *r == me);
     let mut shell = cards::panel(p)
         .key(format!("trow-{id}-{index}"))
         // When the card changes column it is rebuilt elsewhere. Focus follows it by key.
         .focus_return(format!("ttask-{id}-{index}"))
-        .padding(11.0)
+        .padding(CARD_PAD)
         .child(body);
+    if dragged {
+        shell = shell.dim(0.5);
+    }
     if selected {
         shell = shell.fill(p.sel).border(1.0, p.accent);
     } else if at_cursor {
@@ -558,7 +588,7 @@ fn card(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>) -> El
     shell
 }
 
-fn empty_column(p: Palette) -> El {
+fn empty_column(drag: bool, p: Palette) -> El {
     col()
         .w_full()
         .px(10.0)
@@ -566,7 +596,11 @@ fn empty_column(p: Palette) -> El {
         .radius(10.0)
         .border(1.0, p.line)
         .child(roles::META.wrap(
-            "Nothing here. Use Move on a card to bring it here.",
+            if drag {
+                "Nothing here. Drag a card here, or use Move on a card."
+            } else {
+                "Nothing here. Use Move on a card to bring it here."
+            },
             p.faint,
         ))
 }
@@ -577,6 +611,7 @@ fn column_cards(
     k: &Kit,
     view: &BoardView,
     c: BoardColumn,
+    drag: Option<f32>,
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
@@ -597,17 +632,17 @@ fn column_cards(
             );
         }
         return if rows.is_empty() {
-            out.child(empty_column(p))
+            out.child(empty_column(drag.is_some(), p))
         } else {
             out
         };
     }
     if rows.is_empty() {
-        return out.child(empty_column(p));
+        return out.child(empty_column(drag.is_some(), p));
     }
     let shown = tasks.board_shown[c.index()].max(first_page(c));
     for &i in rows.iter().take(shown) {
-        out = out.child(card(s, k, &tasks.items[i], p, layer));
+        out = out.child(card(s, k, &tasks.items[i], drag, p, layer));
     }
     if rows.len() > shown {
         let more = (rows.len() - shown).min(PAGE);
@@ -664,6 +699,7 @@ pub fn board(s: &State, k: &Kit, p: Palette, list_w: f32, side: f32, layer: &mut
             .items_start()
             .role("group")
             .label("Tasks board");
+        let over = s.tasks.board_drag.as_ref().map(|(_, c)| *c);
         for c in BoardColumn::ALL {
             out = out.child(
                 col()
@@ -672,11 +708,23 @@ pub fn board(s: &State, k: &Kit, p: Palette, list_w: f32, side: f32, layer: &mut
                     .label(c.label())
                     .w(width)
                     .gap(8.0)
-                    .padding(8.0)
+                    .padding(COLUMN_PAD)
                     .radius(12.0)
-                    .fill(p.chip.alpha(0.5))
+                    .fill(if over == Some(c) {
+                        p.sel
+                    } else {
+                        p.chip.alpha(0.5)
+                    })
+                    .border(
+                        1.0,
+                        if over == Some(c) {
+                            p.accent
+                        } else {
+                            p.chip.alpha(0.0)
+                        },
+                    )
                     .child(heading(&view, c, s, p))
-                    .child(column_cards(s, k, &view, c, p, layer)),
+                    .child(column_cards(s, k, &view, c, Some(width), p, layer)),
             );
         }
         return out;
@@ -707,7 +755,7 @@ pub fn board(s: &State, k: &Kit, p: Palette, list_w: f32, side: f32, layer: &mut
                 .key("tasks-board-tabs"),
         )
         .child(heading(&view, tab, s, p))
-        .child(column_cards(s, k, &view, tab, p, layer))
+        .child(column_cards(s, k, &view, tab, None, p, layer))
 }
 
 /// The polite line under the toolbar.
@@ -742,4 +790,228 @@ pub fn layout_toggle(s: &State, k: &Kit, p: Palette) -> El {
     })
     .build(&selected)
     .key("tasks-layout")
+}
+
+/// Which of the three filter menus is open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FilterMenu {
+    Person,
+    Area,
+    Meeting,
+}
+
+/// A choice in one of the menus: the value it sets, and what it is called.
+struct Choice<T> {
+    value: Option<T>,
+    name: String,
+}
+
+fn people(s: &State) -> Vec<Choice<core::PersonFilter>> {
+    let mut names: Vec<String> = s
+        .tasks
+        .items
+        .iter()
+        .filter_map(|t| t.owner.clone())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    let mut out: Vec<_> = names
+        .into_iter()
+        .map(|n| Choice {
+            name: n.clone(),
+            value: Some(core::PersonFilter::Owner(n)),
+        })
+        .collect();
+    if s.tasks.items.iter().any(|t| t.owner.is_none()) {
+        out.push(Choice {
+            name: "No owner".into(),
+            value: Some(core::PersonFilter::NoOwner),
+        });
+    }
+    out
+}
+
+fn areas(s: &State) -> Vec<Choice<String>> {
+    let mut ids: Vec<&String> = s
+        .tasks
+        .items
+        .iter()
+        .filter_map(|t| t.area_id.as_ref())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    let mut out: Vec<_> = ids
+        .into_iter()
+        .map(|id| Choice {
+            name: s
+                .areas
+                .catalog
+                .areas
+                .get(id)
+                .map_or_else(|| id.clone(), |a| a.name.clone()),
+            value: Some(id.clone()),
+        })
+        .collect();
+    out.sort_by_key(|c| c.name.to_lowercase());
+    out
+}
+
+/// The newest meetings that have tasks, then the hand-made ones.
+fn meetings(s: &State) -> Vec<Choice<String>> {
+    let mut seen: Vec<&TaskItem> = Vec::new();
+    for t in s.tasks.items.iter().filter(|t| !t.manual) {
+        if !seen.iter().any(|x| x.meeting_id == t.meeting_id) {
+            seen.push(t);
+        }
+    }
+    seen.sort_by_key(|t| t.meeting_rank);
+    let mut out: Vec<_> = seen
+        .into_iter()
+        .take(12)
+        .map(|t| Choice {
+            name: match t.meeting_date {
+                Some(d) => format!("{} ({})", t.meeting_title, d.format("%-d %b")),
+                None => t.meeting_title.clone(),
+            },
+            value: Some(t.meeting_id.clone()),
+        })
+        .collect();
+    if s.tasks.items.iter().any(|t| t.manual) {
+        out.push(Choice {
+            name: "Added by hand".into(),
+            value: Some(core::MANUAL.to_string()),
+        });
+    }
+    out
+}
+
+/// What one filter menu needs: its title, its "any" line, and how it sets the choice.
+struct Filter<T: 'static> {
+    which: FilterMenu,
+    title: &'static str,
+    any: &'static str,
+    set: fn(&mut State, Option<T>),
+}
+
+/// One filter menu: "Any", then a choice per value present in the tasks.
+fn filter_menu<T: Clone + PartialEq + 'static>(
+    s: &State,
+    k: &Kit,
+    spec: Filter<T>,
+    current: Option<&T>,
+    choices: Vec<Choice<T>>,
+    p: Palette,
+    layer: &mut Vec<El>,
+) -> El {
+    let Filter {
+        which,
+        title,
+        any,
+        set,
+    } = spec;
+    let key = format!("tasks-filter-{title}").to_lowercase();
+    let open = s.tasks.filter_menu == Some(which);
+    let chosen = current.and_then(|c| {
+        choices
+            .iter()
+            .find(|x| x.value.as_ref() == Some(c))
+            .map(|x| x.name.clone())
+    });
+    let name = match &chosen {
+        Some(n) => format!("{title}: {n}"),
+        None => title.to_string(),
+    };
+    let mut menu = Menu::new(format!("{key}-menu"))
+        .trigger(
+            super::menu_trigger(&name, &key, p).on_press(move |s: &mut State| {
+                let now = s.tasks.filter_menu != Some(which);
+                s.tasks.close_menus();
+                s.tasks.filter_menu = now.then_some(which);
+            }),
+        )
+        .open(open)
+        .placement(Placement::BottomStart)
+        .min_width(200.0);
+    if open {
+        menu = menu.on_close(|s: &mut State| s.tasks.filter_menu = None);
+        menu = menu.item(MenuItem::new(any).checked(current.is_none()).on_select(
+            move |s: &mut State| {
+                s.tasks.filter_menu = None;
+                set(s, None);
+            },
+        ));
+        for choice in choices {
+            let value = choice.value.clone();
+            menu = menu.item(
+                MenuItem::new(choice.name)
+                    .checked(value.as_ref() == current)
+                    .on_select(move |s: &mut State| {
+                        s.tasks.filter_menu = None;
+                        set(s, value.clone());
+                    }),
+            );
+        }
+    }
+    menu.build(k, layer)
+}
+
+/// Person, area and meeting, for the list and the board alike. These three are for this visit
+/// only, so the page never opens filtered by something forgotten.
+pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let t = &s.tasks;
+    let any = t.person.is_some() || t.area.is_some() || t.meeting.is_some();
+    row()
+        .key("tasks-filter-row")
+        .w_full()
+        .flex_wrap()
+        .gaps(6.0, 8.0)
+        .items_center()
+        .mb(10.0)
+        .child(filter_menu(
+            s,
+            k,
+            Filter {
+                which: FilterMenu::Person,
+                title: "Person",
+                any: "Anyone",
+                set: |s, v| s.tasks.person = v,
+            },
+            t.person.as_ref(),
+            people(s),
+            p,
+            layer,
+        ))
+        .child(filter_menu(
+            s,
+            k,
+            Filter {
+                which: FilterMenu::Area,
+                title: "Area",
+                any: "Any area",
+                set: |s, v| s.tasks.area = v,
+            },
+            t.area.as_ref(),
+            areas(s),
+            p,
+            layer,
+        ))
+        .child(filter_menu(
+            s,
+            k,
+            Filter {
+                which: FilterMenu::Meeting,
+                title: "Meeting",
+                any: "Any meeting",
+                set: |s, v| s.tasks.meeting = v,
+            },
+            t.meeting.as_ref(),
+            meetings(s),
+            p,
+            layer,
+        ))
+        .children(any.then(|| {
+            button("Clear", "tasks-filters-clear", false, p)
+                .label("Clear person, area and meeting")
+                .on_press(|s: &mut State| s.tasks.clear_scope())
+        }))
 }

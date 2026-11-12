@@ -22,6 +22,7 @@ use std::{
 
 #[path = "tasks_board.rs"]
 mod board;
+pub use board::FilterMenu;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
@@ -169,6 +170,13 @@ pub struct TasksState {
     /// The last frame laid the board out one column at a time, so the keyboard reaches only
     /// the column under the open tab.
     pub board_single: std::cell::Cell<bool>,
+    /// The card being dragged and the column it is over.
+    pub board_drag: Option<(RowId, core::BoardColumn)>,
+    /// Person, area and meeting filters. Kept for this session only.
+    pub person: Option<core::PersonFilter>,
+    pub area: Option<String>,
+    pub meeting: Option<String>,
+    pub filter_menu: Option<board::FilterMenu>,
 }
 
 impl TasksState {
@@ -261,6 +269,11 @@ impl TasksState {
             board_live: None,
             board_shown: [0; 4],
             board_single: std::cell::Cell::new(false),
+            board_drag: None,
+            person: None,
+            area: None,
+            meeting: None,
+            filter_menu: None,
         }
     }
 
@@ -287,6 +300,14 @@ impl TasksState {
         self.ui.owner_menu = false;
         self.ui.waiting_menu = false;
         self.board_menu = None;
+        self.filter_menu = None;
+    }
+
+    /// Drops the person, area and meeting filters.
+    pub fn clear_scope(&mut self) {
+        self.person = None;
+        self.area = None;
+        self.meeting = None;
     }
 
     /// The page as laid out now: the groups and the folded Done section.
@@ -364,6 +385,9 @@ impl TasksState {
             who: self.who,
             include_unassigned: self.include_unassigned,
             query: self.search.text.clone(),
+            person: self.person.clone(),
+            area: self.area.clone(),
+            meeting: self.meeting.clone(),
         }
     }
 
@@ -1577,6 +1601,7 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 s.tasks.include_unassigned = false;
                 s.tasks.done = DoneFilter::Open;
                 s.tasks.search = TextEdit::default();
+                s.tasks.clear_scope();
                 s.tasks.close_menus();
                 s.save_task_filters();
             }));
@@ -2316,6 +2341,7 @@ fn empty_note(s: &State, p: Palette) -> El {
                 s.tasks.include_unassigned = false;
                 s.tasks.done = DoneFilter::Open;
                 s.tasks.search = TextEdit::default();
+                s.tasks.clear_scope();
                 s.save_task_filters();
             }),
         );
@@ -3429,6 +3455,7 @@ fn list_column(
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
         .child(toolbar(s, k, p, list_w < 700.0, layer).mb(10.0))
+        .child(board::filter_row(s, k, p, layer))
         .children(if board_mode {
             board::live_line(s, p)
         } else {

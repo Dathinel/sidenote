@@ -880,6 +880,12 @@ pub enum Who {
     Everyone,
     Mine,
 }
+/// The person a person filter keeps: an owner by name, or tasks nobody owns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersonFilter {
+    Owner(String),
+    NoOwner,
+}
 #[derive(Clone, Debug, Default)]
 pub struct TaskFilter {
     pub done: DoneFilter,
@@ -887,6 +893,12 @@ pub struct TaskFilter {
     /// With `Who::Mine`: also show tasks nobody has been matched to.
     pub include_unassigned: bool,
     pub query: String,
+    /// Keep one person's tasks, or the ones nobody owns.
+    pub person: Option<PersonFilter>,
+    /// Keep the tasks filed under one area, by area id.
+    pub area: Option<String>,
+    /// Keep the tasks of one meeting, by id, or the hand-made ones with MANUAL.
+    pub meeting: Option<String>,
 }
 impl TaskFilter {
     fn passes_done(&self, t: &TaskItem) -> bool {
@@ -903,6 +915,20 @@ impl TaskFilter {
             Who::Mine => t.mine == Some(true) || (self.include_unassigned && t.mine.is_none()),
         };
         if !who {
+            return false;
+        }
+        let person = match &self.person {
+            None => true,
+            Some(PersonFilter::Owner(name)) => t.owner.as_deref() == Some(name.as_str()),
+            Some(PersonFilter::NoOwner) => t.owner.is_none(),
+        };
+        let area = self.area.is_none() || t.area_id == self.area;
+        let meeting = match self.meeting.as_deref() {
+            None => true,
+            Some(MANUAL) => t.manual,
+            Some(id) => !t.manual && t.meeting_id == id,
+        };
+        if !(person && area && meeting) {
             return false;
         }
         let query = self.query.trim().to_lowercase();
