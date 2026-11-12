@@ -225,7 +225,7 @@ pub fn protect(bytes: &[u8]) -> Result<Vec<u8>> {
     }
     #[cfg(target_os = "linux")]
     {
-        crate::linux_secret::protect(bytes)
+        crate::linux_secret::protect(bytes).context(Failure(Reason::LocalStore))
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -240,7 +240,7 @@ pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     }
     #[cfg(target_os = "linux")]
     {
-        crate::linux_secret::unprotect(bytes)
+        crate::linux_secret::unprotect(bytes).context(Failure(Reason::LocalStore))
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
