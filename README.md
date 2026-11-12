@@ -41,8 +41,8 @@ toolchain including `as.exe` and `dlltool.exe`. Put its bin folder on PATH or se
 `RUST_GNU_BIN`, then run from this checkout:
 
 ```powershell
-./build.ps1
-./build.ps1 -Release
+./tools/local_build.ps1 build --locked
+./tools/local_build.ps1 build --release --locked
 ```
 
 The executable is `sidenote.exe`, under `target/x86_64-pc-windows-gnu/debug/` or `release/`.
