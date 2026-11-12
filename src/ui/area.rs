@@ -466,6 +466,13 @@ impl State {
                 } else {
                     snapshot.task_items
                 };
+                self.tasks.items_changed();
+                // This snapshot is newer than every save made here. With nothing left to save it
+                // already shows the moves, so the cards stop being drawn over it.
+                if self.edit_queue.is_idle() && !self.tasks.board_pending.is_empty() {
+                    self.tasks.board_pending.clear();
+                    self.tasks.pending_rev += 1;
+                }
                 self.tasks.names = snapshot.task_names;
                 self.tasks.counts = snapshot.task_counts;
                 self.areas.meeting_projects = snapshot.meeting_projects;

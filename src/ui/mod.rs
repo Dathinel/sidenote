@@ -331,6 +331,7 @@ pub struct State {
     events_tx: Sender<Event>,
     events_rx: Receiver<Event>,
     edit_busy: bool,
+    edit_queue: edit_worker::SaveQueue<edit_worker::Job>,
     scan_tx: Option<refresh::Handle>,
     last_updated: Option<Instant>,
     footer_minute: u64,
@@ -509,6 +510,7 @@ impl State {
             events_tx,
             events_rx,
             edit_busy: false,
+            edit_queue: Default::default(),
             scan_tx: None,
             last_updated: None,
             footer_minute: 0,
@@ -1639,6 +1641,7 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= s.expire_toast();
     changed |= hex::settings_tick(s);
     changed |= relay::tick(s, tx);
+    changed |= tasks::board_live_tick(s, tx);
     if let Some(until) = s
         .hex
         .shell
@@ -3805,6 +3808,37 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("tasks-v2-empty", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Project, None);
+                s.tasks.items.clear();
+                s.tasks.all.clear();
+                s.tasks.counts = core::TaskCounts::default();
+            }),
+            ("tasks-v2-board", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+            }),
+            ("tasks-v2-board-drag", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                // A card from To do held over Waiting on, as a drag in progress shows it.
+                let first = s.tasks.board().column(core::BoardColumn::Todo)[0];
+                let item = &s.tasks.items[first];
+                s.tasks.board_drag = Some((
+                    (item.meeting_id.clone(), item.index),
+                    core::BoardColumn::Waiting,
+                ));
+            }),
+            ("tasks-v2-board-filter", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                s.tasks.person = Some(core::PersonFilter::Owner("Morgan Lee".into()));
+                s.tasks.filter_menu = Some(tasks::FilterMenu::Person);
+            }),
+            ("tasks-v2-board-empty", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
                 s.tasks.items.clear();
                 s.tasks.all.clear();
                 s.tasks.counts = core::TaskCounts::default();

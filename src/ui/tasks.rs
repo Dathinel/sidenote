@@ -20,6 +20,14 @@ use std::{
     path::PathBuf,
 };
 
+#[path = "tasks_board.rs"]
+mod board;
+pub use board::FilterMenu;
+
+/// What the cached board was built from: the list and the moves (by revision), the filters, and
+/// the diary selection.
+pub type BoardKey = (u64, u64, core::TaskFilter, Option<String>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Meetings,
@@ -150,6 +158,41 @@ pub struct TasksState {
     pub done_open: bool,
     pub diary_filter: Option<core::diary::TaskSelection>,
     pub diary_label: Option<String>,
+    /// List or board. Remembered for this PC in `local/ui.json`.
+    pub layout: core::TasksLayout,
+    /// The column a narrow board shows under its tabs.
+    pub board_tab: core::BoardColumn,
+    /// The card whose Move menu is open.
+    pub board_menu: Option<RowId>,
+    /// What each card was asked to become since the last idle save: the merge of every move
+    /// made on it, status and done tick together. The board draws a card over this, so a second
+    /// move made before the first finishes starts from the right place. It clears when a
+    /// snapshot lands with nothing left to save.
+    pub board_pending: std::collections::BTreeMap<RowId, core::MoveIntent>,
+    /// The card whose own controls last had the keyboard, for showing its Move button.
+    pub card_focus: Option<RowId>,
+    /// Counts changes to the task list, and to `board_pending`. The column grouping and the
+    /// filter options are worked out from these once per change, then reused by every frame.
+    pub items_rev: u64,
+    pub pending_rev: u64,
+    pub board_cache: std::cell::RefCell<Option<(BoardKey, std::rc::Rc<core::BoardView>)>>,
+    pub options_cache: std::cell::RefCell<Option<board::OptionsCache>>,
+    /// A card to scroll into view once it is drawn, and the frames left to try.
+    pub reveal: Option<(String, u8)>,
+    /// What the last move did, for the polite status line, and when it goes.
+    pub board_live: Option<(String, std::time::Instant)>,
+    /// Cards drawn per column before "Show more". Kept for this session only.
+    pub board_shown: [usize; 4],
+    /// The last frame laid the board out one column at a time, so the keyboard reaches only
+    /// the column under the open tab.
+    pub board_single: std::cell::Cell<bool>,
+    /// The card being dragged and the column it is over.
+    pub board_drag: Option<(RowId, core::BoardColumn)>,
+    /// Person, area and meeting filters. Kept for this session only.
+    pub person: Option<core::PersonFilter>,
+    pub area: Option<String>,
+    pub meeting: Option<String>,
+    pub filter_menu: Option<board::FilterMenu>,
 }
 
 impl TasksState {
@@ -235,6 +278,24 @@ impl TasksState {
             done_open: false,
             diary_filter: None,
             diary_label: None,
+            layout: prefs.tasks_layout,
+            board_tab: core::BoardColumn::Todo,
+            board_menu: None,
+            board_pending: Default::default(),
+            card_focus: None,
+            items_rev: 0,
+            pending_rev: 0,
+            board_cache: Default::default(),
+            options_cache: Default::default(),
+            reveal: None,
+            board_live: None,
+            board_shown: [0; 4],
+            board_single: std::cell::Cell::new(false),
+            board_drag: None,
+            person: None,
+            area: None,
+            meeting: None,
+            filter_menu: None,
         }
     }
 
@@ -260,6 +321,15 @@ impl TasksState {
         self.ui.project_menu = false;
         self.ui.owner_menu = false;
         self.ui.waiting_menu = false;
+        self.board_menu = None;
+        self.filter_menu = None;
+    }
+
+    /// Drops the person, area and meeting filters.
+    pub fn clear_scope(&mut self) {
+        self.person = None;
+        self.area = None;
+        self.meeting = None;
     }
 
     /// The page as laid out now: the groups and the folded Done section.
@@ -284,11 +354,66 @@ impl TasksState {
         view
     }
 
-    /// Every row the keyboard can reach, top to bottom.
+    /// The task list changed: everything worked out from it is built again on next use.
+    pub fn items_changed(&mut self) {
+        self.items_rev += 1;
+    }
+
+    /// The board as laid out now: four columns of the tasks that pass the filters, with every
+    /// card that has a move saving already in the column it is going to. Built once per change
+    /// of the list, the filters or the moves, then shared.
+    pub fn board(&self) -> std::rc::Rc<core::BoardView> {
+        let filter = self.filter();
+        let key: BoardKey = (
+            self.items_rev,
+            self.pending_rev,
+            filter,
+            self.diary_label.clone(),
+        );
+        if let Some((cached, view)) = &*self.board_cache.borrow()
+            && *cached == key
+        {
+            return view.clone();
+        }
+        let mut view = if self.board_pending.is_empty() {
+            core::board_columns(&self.items, &key.2)
+        } else {
+            core::board_columns_by(&self.items, &key.2, |t| {
+                match self.board_pending.get(&(t.meeting_id.clone(), t.index)) {
+                    Some(intent) => intent.column(t),
+                    None => core::BoardColumn::of(t),
+                }
+            })
+        };
+        if let Some(filter) = &self.diary_filter {
+            for column in &mut view.columns {
+                column.retain(|&i| filter.matches(&self.items[i]));
+            }
+        }
+        let view = std::rc::Rc::new(view);
+        *self.board_cache.borrow_mut() = Some((key, view.clone()));
+        view
+    }
+
+    /// Every row the keyboard can reach, top to bottom. On a narrow board that is the column
+    /// under the open tab.
     fn visible_rows(&self) -> Vec<RowId> {
-        self.arranged()
-            .rows(self.done_open, &self.collapsed)
-            .into_iter()
+        let rows: Vec<usize> = if self.layout == core::TasksLayout::Board {
+            let view = self.board();
+            if self.board_single.get() {
+                let only = self.board_tab;
+                if only == core::BoardColumn::Done && view.done_folded && !self.done_open {
+                    Vec::new()
+                } else {
+                    view.column(only).to_vec()
+                }
+            } else {
+                view.rows(self.done_open)
+            }
+        } else {
+            self.arranged().rows(self.done_open, &self.collapsed)
+        };
+        rows.into_iter()
             .map(|i| (self.items[i].meeting_id.clone(), self.items[i].index))
             .collect()
     }
@@ -312,6 +437,9 @@ impl TasksState {
             who: self.who,
             include_unassigned: self.include_unassigned,
             query: self.search.text.clone(),
+            person: self.person.clone(),
+            area: self.area.clone(),
+            meeting: self.meeting.clone(),
         }
     }
 
@@ -327,6 +455,11 @@ impl TasksState {
             || self.subtask_input.focused
             || self.waiting_input.focused
     }
+}
+
+/// The board's status line expires on its own, so the frame hook asks for a wake-up.
+pub fn board_live_tick(s: &mut State, tx: &mut Tx) -> bool {
+    board::live_tick(s, tx)
 }
 
 pub const SAVE_FAILED: &str =
@@ -479,7 +612,11 @@ impl State {
     /// Ticks any row: a meeting task through its meeting's tick file, a hand-made one in
     /// the overrides file.
     pub fn toggle_row(&mut self, id: &str, index: usize) {
-        if id == MANUAL || id.starts_with("manual/") {
+        // The tick is a set, worked out from what the row will be once earlier saves run, so
+        // pressing X twice quickly is on, then off, and both are saved.
+        if self.tasks.item(id, index).is_some() {
+            self.toggle_done(id, index);
+        } else if id == MANUAL || id.starts_with("manual/") {
             self.publish_edit(super::edit_worker::Job::ManualTick {
                 store: self.tasks.store.clone(),
                 id: id.strip_prefix("manual/").unwrap_or(id).into(),
@@ -1111,8 +1248,10 @@ impl State {
             return;
         }
         self.tasks.keyboard = true;
+        self.tasks.cursor = Some((id.clone(), index));
+        // A card past the first page is not drawn yet. Draw it, then scroll to it.
+        self.reveal_card(&id, index);
         tx.scroll_into_view(format!("trow-{id}-{index}"));
-        self.tasks.cursor = Some((id, index));
     }
 
     fn cursor_row(&self) -> Option<RowId> {
@@ -1123,6 +1262,10 @@ impl State {
 
 /// The Tasks view's own keys. Letters only count while no text box has the keyboard.
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
+    s.tasks.board_live = None;
+    if s.tasks.layout == core::TasksLayout::Board && board::on_key(s, e, tx) {
+        return true;
+    }
     let Key::Text(t) = &e.key else {
         return match e.key {
             Key::Down => {
@@ -1143,7 +1286,10 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
             Key::Escape => {
                 if s.tasks.panel.is_some() {
                     s.close_panel();
-                } else if s.tasks.filters_menu || s.tasks.status_menu {
+                } else if s.tasks.filters_menu
+                    || s.tasks.status_menu
+                    || s.tasks.board_menu.is_some()
+                {
                     s.tasks.close_menus();
                 } else if s.tasks.group_menu {
                     s.tasks.group_menu = false;
@@ -1369,7 +1515,7 @@ fn group_label(by: TaskGrouping) -> &'static str {
     }
 }
 
-fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+fn toolbar(s: &State, k: &Kit, p: Palette, split: bool, layer: &mut Vec<El>) -> El {
     let t = &s.tasks;
     let search = TextInput::new(&t.search)
         .leading_icon(&super::icons::SEARCH)
@@ -1389,8 +1535,18 @@ fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let controls = row()
         .items_center()
         .gap(8.0)
+        .child(board::layout_toggle(s, k, p))
         .child(status_filter(s, k, p, layer))
         .child(filters_menu(s, k, p, layer));
+    // Phone width: the search box gets its own line, so the three controls keep their size.
+    if split {
+        return col()
+            .key("task-toolbar")
+            .w_full()
+            .gap(8.0)
+            .child(search.w_full())
+            .child(controls);
+    }
     row()
         .key("task-toolbar")
         .w_full()
@@ -1503,6 +1659,7 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 s.tasks.include_unassigned = false;
                 s.tasks.done = DoneFilter::Open;
                 s.tasks.search = TextEdit::default();
+                s.tasks.clear_scope();
                 s.tasks.close_menus();
                 s.save_task_filters();
             }));
@@ -1738,20 +1895,11 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
             .gap(3.0)
             .child(title)
             .children(
-                s.relay_ui
-                    .conflicts
-                    .iter()
-                    .filter(|c| {
-                        Some(c.task_id.strip_prefix("$manual:").unwrap_or(&c.task_id))
-                            == id.strip_prefix("manual/")
-                    })
-                    .map(|c| c.choices.len())
-                    .max()
-                    .map(|count| {
-                        roles::SMALL
-                            .wrap(format!("{count} versions"), p.warn)
-                            .role("status")
-                    }),
+                core::task_conflict_versions(&s.relay_ui.conflicts, t).map(|count| {
+                    roles::SMALL
+                        .wrap(format!("{count} versions"), p.warn)
+                        .role("status")
+                }),
             )
             .children((!preview.is_empty()).then(|| {
                 roles::META
@@ -2242,6 +2390,7 @@ fn empty_note(s: &State, p: Palette) -> El {
                 s.tasks.include_unassigned = false;
                 s.tasks.done = DoneFilter::Open;
                 s.tasks.search = TextEdit::default();
+                s.tasks.clear_scope();
                 s.save_task_filters();
             }),
         );
@@ -2256,7 +2405,7 @@ fn empty_note(s: &State, p: Palette) -> El {
     out
 }
 
-fn key_hints(p: Palette) -> El {
+fn key_hints(board: bool, p: Palette) -> El {
     let hint = |keys: &[&str], what: &str| {
         let mut r = row().gap(4.0).items_center();
         for k in keys {
@@ -2270,6 +2419,9 @@ fn key_hints(p: Palette) -> El {
         .gaps(6.0, 16.0)
         .mt(24.0)
         .child(hint(&["J", "K"], "move"))
+        .children(board.then(|| hint(&["\u{2190}", "\u{2192}"], "column")))
+        .children(board.then(|| hint(&["Shift", "\u{2190}", "\u{2192}"], "move card")))
+        .children(board.then(|| hint(&["M"], "menu")))
         .child(hint(&["Enter"], "open"))
         .child(hint(&["X"], "done"))
         .child(hint(&["N"], "add"))
@@ -3230,8 +3382,12 @@ fn panel(s: &State, k: &Kit, p: Palette, overlay: bool, layer: &mut Vec<El>) -> 
 /// over it when there is not enough room for both.
 fn geometry(s: &State, narrow: bool) -> (f32, f32, bool) {
     let pane = s.app_w.get() - super::nav::width(s);
-    let overlay = narrow || pane < 780.0;
     let panel = (pane * 0.38).clamp(340.0, 400.0);
+    // Four columns need more room than a list, so the panel covers the board unless the window
+    // leaves them all of it beside the panel (about 1600 px).
+    let board_too_tight =
+        s.tasks.layout == core::TasksLayout::Board && pane - panel - 1.0 < board::WIDE_MIN;
+    let overlay = narrow || pane < 780.0 || board_too_tight;
     let list = if s.tasks.panel.is_some() && !overlay {
         pane - panel - 1.0
     } else {
@@ -3319,11 +3475,18 @@ fn list_column(
         project_w,
         compact: list_w < 700.0,
     };
-    let v = t.arranged();
+    let board_mode = t.layout == core::TasksLayout::Board;
+    let wide_board = board_mode && list_w >= board::WIDE_MIN;
+    t.board_single.set(board_mode && !wide_board);
+    let v = if board_mode {
+        TaskView::default()
+    } else {
+        t.arranged()
+    };
     let mut doc = col()
         .key("tasks-top")
         .w_full()
-        .max_w(920.0)
+        .max_w(if wide_board { list_w } else { 920.0 })
         .px(side)
         .pt(if narrow { 8.0 } else { 30.0 })
         .pb(56.0)
@@ -3340,7 +3503,13 @@ fn list_column(
         })
         .child(title_row(s, k, narrow, p, layer))
         .children((!t.items.is_empty()).then(|| redo_older_control(s, k, p, layer)))
-        .child(toolbar(s, k, p, layer).mb(10.0));
+        .child(toolbar(s, k, p, list_w < 700.0, layer).mb(10.0))
+        .child(board::filter_row(s, k, p, layer))
+        .children(if board_mode {
+            board::live_line(s, p)
+        } else {
+            None
+        });
     if let Some(name) = &t.diary_label {
         doc = doc.child(
             row()
@@ -3358,20 +3527,24 @@ fn list_column(
                 ),
         );
     }
-    if v.groups.is_empty() && v.done.is_empty() {
-        doc = doc.child(empty_note(s, p));
-    }
-    for (n, g) in v.groups.iter().enumerate() {
-        doc = doc.child(group_card(s, k, g, n, lay, p));
-    }
-    if !v.done.is_empty() {
-        doc = doc.child(done_section(s, &v, lay, p));
+    if board_mode {
+        doc = doc.child(board::board(s, k, p, list_w, side, layer));
+    } else {
+        if v.groups.is_empty() && v.done.is_empty() {
+            doc = doc.child(empty_note(s, p));
+        }
+        for (n, g) in v.groups.iter().enumerate() {
+            doc = doc.child(group_card(s, k, g, n, lay, p));
+        }
+        if !v.done.is_empty() {
+            doc = doc.child(done_section(s, &v, lay, p));
+        }
     }
     if !t.items.is_empty() || t.cutoff.is_some() {
         doc = doc.child(cleared_line(s, k, p, layer));
     }
     if !narrow && t.panel.is_none() {
-        doc = doc.child(key_hints(p));
+        doc = doc.child(key_hints(board_mode, p));
     }
     col().grow(1.0).min_w(0.0).min_h(0.0).child(scroll(
         col().w_full().items_center().child(doc),
@@ -3714,6 +3887,20 @@ impl State {
         prefs.tasks_mine = self.tasks.who == Who::Mine;
         prefs.tasks_include_unassigned = self.tasks.include_unassigned;
         prefs.tasks_done = self.tasks.done;
+        if prefs.save(&self.store.root).is_err() {
+            self.tasks.notice = Some(SAVE_FAILED.into());
+        }
+    }
+    /// The List / Board choice. It belongs to this PC, in `local/ui.json`, so it never syncs.
+    fn set_layout(&mut self, layout: core::TasksLayout) {
+        if self.tasks.layout == layout {
+            return;
+        }
+        self.tasks.layout = layout;
+        self.tasks.close_menus();
+        self.tasks.board_live = None;
+        let mut prefs = core::UiPrefs::load(&self.store.root);
+        prefs.tasks_layout = layout;
         if prefs.save(&self.store.root).is_err() {
             self.tasks.notice = Some(SAVE_FAILED.into());
         }

@@ -5,6 +5,16 @@ use super::store_io;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// How the Tasks page lays its tasks out. The list stays the default, so a missing key changes
+/// nothing for anyone who has not chosen the board.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TasksLayout {
+    #[default]
+    List,
+    Board,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
@@ -25,6 +35,8 @@ pub struct UiPrefs {
     pub tasks_mine: bool,
     pub tasks_include_unassigned: bool,
     pub tasks_done: super::DoneFilter,
+    /// List or board, remembered for this PC only.
+    pub tasks_layout: TasksLayout,
     pub task_titles_notice_seen: bool,
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
@@ -55,6 +67,7 @@ impl Default for UiPrefs {
             tasks_mine: false,
             tasks_include_unassigned: false,
             tasks_done: Default::default(),
+            tasks_layout: Default::default(),
             task_titles_notice_seen: false,
             sidebar_collapsed: None,
             settings_tabs: Default::default(),
@@ -217,6 +230,18 @@ mod tests {
         assert_eq!(restored, prefs);
         assert!(restored.show_full_titles);
         assert_eq!(restored.settings_tabs["Meetings"], 1);
+    }
+    #[test]
+    fn tasks_layout_defaults_to_list_and_round_trips_beside_old_keys() {
+        let mut prefs: UiPrefs =
+            serde_json::from_str(r#"{"show_full_titles":true,"tasks_mine":true}"#).unwrap();
+        assert_eq!(prefs.tasks_layout, TasksLayout::List);
+        prefs.tasks_layout = TasksLayout::Board;
+        let text = serde_json::to_string(&prefs).unwrap();
+        assert!(text.contains(r#""tasks_layout":"board""#));
+        let restored: UiPrefs = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.tasks_layout, TasksLayout::Board);
+        assert!(restored.show_full_titles && restored.tasks_mine);
     }
     #[test]
     fn settings_tabs_round_trip_without_changing_existing_preferences() {

@@ -113,6 +113,23 @@ impl TaskStore {
             Ok(())
         })
     }
+    /// Sets a hand-made task's done tick. A set, not a flip, so a retried or repeated board
+    /// move cannot undo itself.
+    pub fn set_manual_done_view(
+        &self,
+        id: &str,
+        done: bool,
+    ) -> io::Result<super::EditView<Overrides>> {
+        sync_state::update_merged(&self.root, "task-overrides.json", |o: &mut Overrides| {
+            let task = o
+                .manual
+                .iter_mut()
+                .find(|m| m.id == id)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Task removed"))?;
+            task.done = done;
+            Ok(())
+        })
+    }
     pub fn merge_task(
         &self,
         row: &str,

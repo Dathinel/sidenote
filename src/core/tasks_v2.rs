@@ -1382,4 +1382,426 @@ mod tests {
             assert!(f.tasks(&view.value)[0].due.is_none());
         }
     }
+    #[test]
+    fn status_grouping_sorts_in_review_before_done() {
+        // Listed backwards, so only the sort can put them right.
+        let f = Fixture::new(json!([
+            {"id":"d","title":"Book the slot","status":"done"},
+            {"id":"c","title":"Check the copy","status":"review"},
+            {"id":"b","title":"Send the pack","status":"waiting"},
+            {"id":"a","title":"Print the cards","status":"todo"}
+        ]));
+        let tasks = f.tasks(&Overrides::default());
+        let groups = core::group_tasks(
+            &tasks,
+            &core::TaskFilter {
+                done: core::DoneFilter::All,
+                ..Default::default()
+            },
+            TaskGrouping::Status,
+            chrono::NaiveDate::MIN,
+        );
+        assert_eq!(
+            groups.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(),
+            ["To do", "Waiting on", "In review", "Done"]
+        );
+    }
+    #[test]
+    fn board_columns_follow_status_and_the_done_tick_and_keep_empty_columns() {
+        use core::BoardColumn::{Done, Review, Todo, Waiting};
+        let f = Fixture::new(json!([
+            {"id":"a","title":"First","status":"todo"},
+            {"id":"b","title":"Second","status":"waiting"},
+            {"id":"c","title":"Third","status":"review"},
+            {"id":"d","title":"Fourth","status":"review","due":"2026-11-20"},
+            {"id":"e","title":"Fifth","status":"done"},
+            {"id":"f","title":"Sixth","status":"review"}
+        ]));
+        let mut tasks = f.tasks(&Overrides::default());
+        // A finished task keeps the status behind it, but its column is Done.
+        tasks[5].done = true;
+        assert_eq!(tasks[5].status, TaskStatus::Review);
+        let columns: Vec<_> = tasks.iter().map(core::BoardColumn::of).collect();
+        assert_eq!(columns, [Todo, Waiting, Review, Review, Done, Done]);
+        // Open: Done is counted but folded. Dated cards come before undated ones.
+        let open = core::board_columns(&tasks, &core::TaskFilter::default());
+        assert!(open.done_folded);
+        assert_eq!(
+            open.columns.iter().map(Vec::len).collect::<Vec<_>>(),
+            [1, 1, 2, 2]
+        );
+        assert_eq!(open.column(Review), [3, 2]);
+        // Keyboard rows skip a folded Done column until it is opened.
+        assert_eq!(open.rows(false), [0, 1, 3, 2]);
+        assert_eq!(open.rows(true).len(), 6);
+        // Done only: every column is still there, and the others are empty.
+        let done = core::board_columns(
+            &tasks,
+            &core::TaskFilter {
+                done: core::DoneFilter::Done,
+                ..Default::default()
+            },
+        );
+        assert!(!done.done_folded);
+        assert_eq!(
+            done.columns.iter().map(Vec::len).collect::<Vec<_>>(),
+            [0, 0, 0, 2]
+        );
+        // Search narrows every column the same way the list does.
+        let found = core::board_columns(
+            &tasks,
+            &core::TaskFilter {
+                query: "third".into(),
+                done: core::DoneFilter::All,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            found.columns.iter().map(Vec::len).collect::<Vec<_>>(),
+            [0, 0, 1, 0]
+        );
+    }
+    #[test]
+    fn a_status_move_changes_only_the_status_and_keeps_every_other_field() {
+        let f = Fixture::new(json!([{
+            "id":"a","title":"Send sample","description":"Use the green paper",
+            "owner":"Alex","due":"2026-11-20","status":"waiting",
+            "waiting_on":{"text":"Legal"},
+            "subtasks":[{"id":"s","title":"Read proof"}]
+        }]));
+        let store = f.store();
+        let task = f.tasks(&Overrides::default()).remove(0);
+        store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::Title("Send the sample pack".into()),
+            )
+            .unwrap();
+        store
+            .edit_v2(
+                &task,
+                &f.meeting.folder,
+                TaskV2Edit::SubtaskTick {
+                    key: subtask_tick_key("a", "s"),
+                    done: true,
+                },
+            )
+            .unwrap();
+        let before = f.tasks(&store.load_overrides().unwrap()).remove(0);
+        assert_eq!(before.waiting_label.as_deref(), Some("Legal"));
+        let plan = core::MoveIntent::to(core::BoardColumn::Review);
+        assert_eq!(plan.column(&before), core::BoardColumn::Review);
+        assert_eq!(plan.done, Some(false));
+        let view = store
+            .edit_v2(
+                &before,
+                &f.meeting.folder,
+                TaskV2Edit::Status(plan.status.unwrap(), None),
+            )
+            .unwrap();
+        let after = f.tasks(&view.value).remove(0);
+        assert_eq!(after.status, TaskStatus::Review);
+        assert_eq!(core::BoardColumn::of(&after), core::BoardColumn::Review);
+        // The status left Waiting, so nobody is waited on any more. Nothing else moved.
+        assert!(after.waiting_on.is_none() && after.waiting_label.is_none());
+        assert_eq!(after.title, "Send the sample pack");
+        assert_eq!(after.description, before.description);
+        assert_eq!(after.owner.as_deref(), Some("Alex"));
+        assert_eq!(after.due, before.due);
+        assert_eq!(after.progress(), "1/1");
+        assert_eq!(after.project, before.project);
+        assert!(!after.done);
+        // Moving to the column a card is already in saves nothing.
+        assert_eq!(plan.column(&after), core::BoardColumn::of(&after));
+    }
+    #[test]
+    fn leaving_done_is_the_tick_going_back_and_the_old_status_returns() {
+        use core::BoardColumn::{Done, Review, Todo};
+        let f = Fixture::new(json!([{"id":"a","title":"Read proof","status":"review"}]));
+        let ticks = core::StateStore::new(f.root.clone());
+        let task = f.tasks(&Overrides::default()).remove(0);
+        let build = |checked: &std::collections::BTreeSet<String>| {
+            core::build_tasks(
+                std::slice::from_ref(&f.meeting),
+                &HashMap::new(),
+                &core::Projects::default(),
+                &Overrides::default(),
+                &HashMap::from([(f.meeting.id.clone(), checked.clone())]),
+            )
+            .remove(0)
+        };
+        // Into Done: only the tick, so the status behind it is left alone.
+        let plan = core::MoveIntent::to(Done);
+        assert_eq!((plan.done, plan.status), (Some(true), None));
+        assert_eq!(plan.column(&task), Done);
+        let view = ticks
+            .set_task_tick_view(&f.meeting.id, &task.task, &task.stable_id, true)
+            .unwrap();
+        let finished = build(&view.value.checked);
+        assert!(finished.done);
+        assert_eq!(finished.status, TaskStatus::Review);
+        assert_eq!(core::BoardColumn::of(&finished), Done);
+        // Out of Done to the status it had: the untick alone is enough.
+        let back = core::MoveIntent::to(Review);
+        assert_eq!(back.column(&finished), Review);
+        // Out of Done to another column: the untick, then the status.
+        let other = core::MoveIntent::to(Todo);
+        assert_eq!(
+            (other.done, other.status),
+            (Some(false), Some(TaskStatus::Todo))
+        );
+        assert_eq!(other.column(&finished), Todo);
+        // Both steps are sets, so running one twice changes nothing.
+        for _ in 0..2 {
+            let view = ticks
+                .set_task_tick_view(&f.meeting.id, &task.task, &task.stable_id, false)
+                .unwrap();
+            let reopened = build(&view.value.checked);
+            assert!(!reopened.done);
+            assert_eq!(core::BoardColumn::of(&reopened), Review);
+        }
+    }
+    #[test]
+    fn moving_out_of_done_unticks_then_sets_the_status_and_keeps_other_fields() {
+        let f = Fixture::new(json!([{
+            "id":"a","title":"Read proof","status":"review","owner":"Alex","due":"2026-11-20"
+        }]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        let task = f.tasks(&Overrides::default()).remove(0);
+        let view = ticks
+            .set_task_tick_view(&f.meeting.id, &task.task, &task.stable_id, true)
+            .unwrap();
+        let checked = HashMap::from([(f.meeting.id.clone(), view.value.checked)]);
+        let build = |o: &Overrides, checked: &HashMap<_, _>| {
+            core::build_tasks(
+                std::slice::from_ref(&f.meeting),
+                &HashMap::new(),
+                &core::Projects::default(),
+                o,
+                checked,
+            )
+            .remove(0)
+        };
+        let done = build(&Overrides::default(), &checked);
+        assert!(done.done);
+        let plan = core::MoveIntent::to(core::BoardColumn::Todo);
+        assert_eq!(
+            (plan.done, plan.status),
+            (Some(false), Some(TaskStatus::Todo))
+        );
+        let (moved, error) = core::run_move(&store, &ticks, &done, &f.meeting.folder, plan);
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), moved.ticks.unwrap().value.checked)]);
+        let overrides = moved.overrides.unwrap().value;
+        let after = build(&overrides, &checked);
+        assert!(!after.done);
+        assert_eq!(core::BoardColumn::of(&after), core::BoardColumn::Todo);
+        assert_eq!(after.owner.as_deref(), Some("Alex"));
+        assert_eq!(after.due, done.due);
+        assert_eq!(after.title, done.title);
+        // Running the same move again changes nothing and does not fail.
+        let (_, again) = core::run_move(&store, &ticks, &done, &f.meeting.folder, plan);
+        assert!(again.is_none());
+        let reopened = build(&store.load_overrides().unwrap(), &checked);
+        assert_eq!(core::BoardColumn::of(&reopened), core::BoardColumn::Todo);
+    }
+    #[test]
+    fn a_hand_made_task_leaves_done_the_same_way() {
+        let f = Fixture::new(json!([]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        let (overrides, _) = store
+            .add_manual(core::ManualTask {
+                task: "Print the cards".into(),
+                owner: Some("Robin".into()),
+                done: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let task = f.tasks(&overrides).remove(0);
+        assert!(task.done);
+        let plan = core::MoveIntent::to(core::BoardColumn::Review);
+        let (moved, error) = core::run_move(&store, &ticks, &task, &f.root, plan);
+        assert!(error.is_none());
+        let after = f.tasks(&moved.overrides.unwrap().value).remove(0);
+        assert!(!after.done);
+        assert_eq!(after.status, TaskStatus::Review);
+        assert_eq!(after.owner.as_deref(), Some("Robin"));
+        // Done again is the tick alone, and a second run does not flip it back.
+        let plan = core::MoveIntent::to(core::BoardColumn::Done);
+        for _ in 0..2 {
+            let (moved, error) = core::run_move(&store, &ticks, &after, &f.root, plan);
+            assert!(error.is_none());
+            assert!(f.tasks(&moved.overrides.unwrap().value)[0].done);
+        }
+    }
+    #[test]
+    fn a_move_through_done_then_on_saves_the_final_column_and_keeps_the_old_status() {
+        use core::BoardColumn::{Done, Todo, Waiting};
+        let f = Fixture::new(json!([{"id":"a","title":"Read proof","status":"review"}]));
+        let (store, ticks) = (f.store(), core::StateStore::new(f.root.clone()));
+        // The card the page showed when both moves were made. Neither run sees a newer one.
+        let stale = f.tasks(&Overrides::default()).remove(0);
+        let build = |o: &Overrides, checked: &HashMap<_, _>| {
+            core::build_tasks(
+                std::slice::from_ref(&f.meeting),
+                &HashMap::new(),
+                &core::Projects::default(),
+                o,
+                checked,
+            )
+            .remove(0)
+        };
+        // Review -> Done alone leaves the status Review under the tick.
+        let (first, error) = core::run_move(
+            &store,
+            &ticks,
+            &stale,
+            &f.meeting.folder,
+            core::MoveIntent::to(Done),
+        );
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), first.ticks.unwrap().value.checked)]);
+        let at_done = build(&store.load_overrides().unwrap(), &checked);
+        assert_eq!((at_done.status, at_done.done), (TaskStatus::Review, true));
+        // Done -> Waiting on, run from the same stale card: the final column wins.
+        let (second, error) = core::run_move(
+            &store,
+            &ticks,
+            &stale,
+            &f.meeting.folder,
+            core::MoveIntent::to(Waiting),
+        );
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), second.ticks.unwrap().value.checked)]);
+        let after = build(&second.overrides.unwrap().value, &checked);
+        assert_eq!(core::BoardColumn::of(&after), Waiting);
+        // The two merged into one job save the same end state in one go.
+        let merged = core::MoveIntent::to(Done).then(core::MoveIntent::to(Todo));
+        let (moved, error) = core::run_move(&store, &ticks, &stale, &f.meeting.folder, merged);
+        assert!(error.is_none());
+        let checked = HashMap::from([(f.meeting.id.clone(), moved.ticks.unwrap().value.checked)]);
+        let after = build(&moved.overrides.unwrap().value, &checked);
+        assert_eq!(core::BoardColumn::of(&after), Todo);
+    }
+    #[test]
+    fn conflicts_are_matched_to_meeting_tasks_and_hand_made_ones() {
+        use core::relay_preview::{Choice, Conflict};
+        let f = Fixture::new(json!([
+            {"id":"a","title":"First"},
+            {"id":"b","title":"Second"}
+        ]));
+        let (overrides, _) = f
+            .store()
+            .add_manual(core::ManualTask {
+                task: "Print the cards".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let tasks = f.tasks(&overrides);
+        let version = |value: &str| Choice {
+            value: json!(value),
+            device: "laptop".into(),
+            at: "2026-11-12T08:00:00Z".into(),
+            source: String::new(),
+        };
+        let held = |task_id: &str, path: serde_json::Value, n: usize| Conflict {
+            domain: String::new(),
+            task_id: task_id.into(),
+            title: "t".into(),
+            field: path.to_string(),
+            choices: (0..n).map(|i| version(&i.to_string())).collect(),
+        };
+        let meeting = f.meeting.id.clone();
+        let first = tasks.iter().find(|t| t.stable_id == "a").unwrap();
+        let second = tasks.iter().find(|t| t.stable_id == "b").unwrap();
+        let by_hand = tasks.iter().find(|t| t.manual).unwrap();
+        let conflicts = vec![
+            held(
+                "task-overrides.json",
+                json!(["o:tasks", format!("o:{meeting}"), "o:id:a", "o:owner"]),
+                2,
+            ),
+            held(
+                &format!("{meeting}.json"),
+                json!(["o:checked", "o:task:b"]),
+                3,
+            ),
+            held(
+                &format!(
+                    "$manual:{}",
+                    by_hand.meeting_id.strip_prefix("manual/").unwrap()
+                ),
+                json!(["o:subtasks"]),
+                2,
+            ),
+        ];
+        assert_eq!(core::task_conflict_versions(&conflicts, first), Some(2));
+        assert_eq!(core::task_conflict_versions(&conflicts, second), Some(3));
+        assert_eq!(core::task_conflict_versions(&conflicts, by_hand), Some(2));
+        assert_eq!(core::task_conflict_versions(&[], first), None);
+    }
+    #[test]
+    fn person_area_and_meeting_filters_narrow_the_board_and_the_list() {
+        let f = Fixture::new(json!([
+            {"id":"a","title":"First","owner":"Alex"},
+            {"id":"b","title":"Second","owner":"Robin"},
+            {"id":"c","title":"Third"}
+        ]));
+        let mut tasks = f.tasks(&Overrides::default());
+        tasks[1].area_id = Some("area-one".into());
+        let count = |filter: core::TaskFilter| {
+            core::board_columns(&tasks, &filter)
+                .columns
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>()
+        };
+        assert_eq!(count(core::TaskFilter::default()), 3);
+        let by = |person| core::TaskFilter {
+            person: Some(person),
+            ..Default::default()
+        };
+        assert_eq!(count(by(core::PersonFilter::Owner("Alex".into()))), 1);
+        assert_eq!(count(by(core::PersonFilter::NoOwner)), 1);
+        assert_eq!(
+            count(core::TaskFilter {
+                area: Some("area-one".into()),
+                ..Default::default()
+            }),
+            1
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                meeting: Some(f.meeting.id.clone()),
+                ..Default::default()
+            }),
+            3
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                meeting: Some(core::MANUAL.into()),
+                ..Default::default()
+            }),
+            0
+        );
+        // The filters combine with each other and with search.
+        assert_eq!(
+            count(core::TaskFilter {
+                person: Some(core::PersonFilter::Owner("Robin".into())),
+                area: Some("area-one".into()),
+                query: "second".into(),
+                ..Default::default()
+            }),
+            1
+        );
+        assert_eq!(
+            count(core::TaskFilter {
+                person: Some(core::PersonFilter::Owner("Alex".into())),
+                area: Some("area-one".into()),
+                ..Default::default()
+            }),
+            0
+        );
+    }
 }
