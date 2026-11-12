@@ -1,0 +1,2 @@
+# Prompt texts are embedded with include_str! and compared byte for byte; keep LF on every platform.
+src/core/agent_instructions/*.txt text eol=lf
