@@ -776,6 +776,8 @@ mod tests {
         assert!(reply.bytes >= MAX_DOC * 8 / 10);
         Ok(())
     }
+    // Contained workers exist only on Windows (job objects); elsewhere Pool::new refuses.
+    #[cfg(windows)]
     #[tokio::test]
     async fn f4_workers_have_independent_memory_and_pool_slots_are_released() -> Result<()> {
         let path = std::env::current_exe()?
