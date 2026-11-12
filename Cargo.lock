@@ -3951,6 +3951,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",
+ "hex",
  "hound",
  "image",
  "jsonschema",
@@ -3975,6 +3976,7 @@ dependencies = [
  "velopack",
  "wgpu",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -3991,6 +3993,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hkdf",
+ "libc",
  "postcard",
  "rand 0.8.8",
  "rusqlite",

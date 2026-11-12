@@ -11,7 +11,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -549,7 +549,12 @@ pub(super) fn drain(
 ) -> io::Result<()> {
     let _worker = match store_io::lock(&jobs(root).join("worker.lock")) {
         Ok(lock) => lock,
-        Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
+        Err(e)
+            if (cfg!(windows) && matches!(e.raw_os_error(), Some(32 | 33)))
+                || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock) =>
+        {
+            return Ok(());
+        }
         Err(e) => return Err(e),
     };
     drain_locked(root, meetings, run, load)
@@ -721,7 +726,7 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
-    let child = Command::new(std::env::current_exe().at(Stage::NotesExePath)?)
+    let child = crate::platform::worker_command(std::env::current_exe().at(Stage::NotesExePath)?)?
         .arg("--notes-pending")
         .arg("--data-dir")
         .arg(core::state_dir())
@@ -741,7 +746,12 @@ pub fn run_pending() -> io::Result<()> {
     let meetings = core::meetings_dir();
     let _worker = match store_io::lock(&jobs(&root).join("worker.lock")) {
         Ok(lock) => lock,
-        Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
+        Err(e)
+            if (cfg!(windows) && matches!(e.raw_os_error(), Some(32 | 33)))
+                || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock) =>
+        {
+            return Ok(());
+        }
         Err(e) => return Err(e),
     };
     drain_locked(

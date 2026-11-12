@@ -29,16 +29,30 @@ pub struct Instance;
 pub fn single_instance() -> io::Result<Option<Instance>> {
     Err(super::unavailable())
 }
-// Subprocess execution stays unavailable until Unix containment is qualified.
-pub enum ProcessJob {}
+// Commands are configured before spawn by the Unix CommandExt adapter.
+pub struct ProcessJob(u32);
 impl ProcessJob {
-    pub fn attach(_child: &std::process::Child) -> io::Result<Self> {
-        Err(super::unavailable())
+    pub fn attach(child: &std::process::Child) -> io::Result<Self> {
+        let pid = child.id();
+        #[cfg(target_os = "linux")]
+        if !std::fs::read_link(format!("/proc/{pid}/exe"))
+            .is_ok_and(|p| p.file_name() == Some(std::ffi::OsStr::new("sidenote-linux-worker")))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                sidenote_sync::tree_worker::UNAVAILABLE,
+            ));
+        }
+        if unsafe { libc::getpgid(pid as i32) } != pid as i32 {
+            return Err(io::Error::other("WORKER_CONTAINMENT_REQUIRED"));
+        }
+        Ok(Self(pid))
     }
 }
 impl Drop for ProcessJob {
     fn drop(&mut self) {
-        match *self {}
+        #[cfg(target_os = "linux")]
+        sidenote_sync::containment::kill_group(self.0);
     }
 }
 pub fn set_window_icon(_hwnd: isize) {}
@@ -59,4 +73,35 @@ pub fn save_html_dialog(_name: &str) -> io::Result<Option<PathBuf>> {
 }
 pub fn copy_file(_path: &Path) -> io::Result<()> {
     Err(super::unavailable())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::platform::CommandExt;
+    #[test]
+    fn direct_process_limits_do_not_substitute_for_a_worker_scope() -> io::Result<()> {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .creation_flags(0)
+            .spawn()?;
+        let error = ProcessJob::attach(&child)
+            .err()
+            .expect("direct helpers must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let limits = fs::read_to_string(format!("/proc/{}/limits", child.id()))?;
+        let memory = limits
+            .lines()
+            .find(|l| l.starts_with("Max address space"))
+            .unwrap();
+        assert!(memory.contains("536870912"));
+        let cpu = limits
+            .lines()
+            .find(|l| l.starts_with("Max cpu time"))
+            .unwrap();
+        assert!(cpu.contains("120"));
+        sidenote_sync::containment::kill_group(child.id());
+        assert!(!child.wait()?.success());
+        Ok(())
+    }
 }

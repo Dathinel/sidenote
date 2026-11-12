@@ -647,7 +647,7 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
 pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
     scan_in_mode(root, true)
 }
-fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
+pub(super) fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
     match super::file_reads::dir_iter(root) {

@@ -833,13 +833,11 @@ mod tests {
         let root = fixture();
         let folder = root.join("meetings/100-1");
         let path = folder.join("system.wav");
-        let mut writer = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .open(&path)
-            .unwrap();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(windows)]
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        let mut writer = options.open(&path).unwrap();
         writer.write_all(&wav(&[0; 8])).unwrap();
         writer.flush().unwrap();
         let mut first = sample(&folder, &mut shared_read);

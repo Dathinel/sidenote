@@ -60,16 +60,9 @@ pub(crate) fn log(message: &str) {
 }
 /// Existing catch-up and queue drains, owned by the service instead of a window.
 pub(crate) fn service_tick() -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        catch_up()?;
-        crate::core::meeting_router::jobs::start_worker()?;
-        crate::core::notes::queue::start_worker()
-    }
-    #[cfg(not(windows))]
-    {
-        Err(crate::platform::unavailable())
-    }
+    catch_up()?;
+    crate::core::meeting_router::jobs::start_worker()?;
+    crate::core::notes::queue::start_worker()
 }
 fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {
@@ -669,6 +662,9 @@ mod pipeline_tests {
     }
     #[test]
     fn script_execution_failures_keep_only_stage_and_error_kind() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
         use std::os::windows::process::ExitStatusExt;
         for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::TimedOut] {
             let error =
@@ -732,6 +728,7 @@ mod pipeline_tests {
         root
     }
     #[test]
+    #[cfg(windows)]
     fn legacy_no_param_script_runs_without_arguments_or_changed_environment_and_logs_once() {
         let root = script_fixture();
         let script = root.join("notes.ps1");
@@ -772,6 +769,7 @@ mod pipeline_tests {
         assert!(log.contains(LEGACY_SCRIPT_NOTICE));
     }
     #[test]
+    #[cfg(windows)]
     fn param_script_receives_only_eligible_folders() {
         let root = script_fixture();
         let meetings = root.join("meetings");
@@ -811,6 +809,7 @@ mod pipeline_tests {
         assert_eq!(legacy_script_folders(&meetings, None).unwrap().len(), 2);
     }
     #[test]
+    #[cfg(windows)]
     fn param_script_keeps_mixed_separator_paths_by_meeting_id() {
         let root = script_fixture();
         let meetings = root.join("hex/meetings");
@@ -861,5 +860,15 @@ ConvertTo-Json -InputObject $kept | Set-Content -LiteralPath $env:REC_GUARD_OUTP
             continue_after_pipeline(result, |message| messages.push(message.to_owned()));
         }
         assert_eq!(messages, ["catch-up: CATCH_UP_ENQUEUE (Other)"]);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_script_tests {
+    #[test]
+    fn legacy_powershell_is_explicitly_unavailable() {
+        let result =
+            super::script_command(std::path::Path::new("/synthetic/notes.ps1"), &[], |_| {});
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
     }
 }

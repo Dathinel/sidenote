@@ -1,4 +1,4 @@
-//! One long-lived helper per peer; each helper has a private 512 MiB Windows Job budget.
+//! One long-lived helper per peer; each helper has a private 512 MiB containment budget.
 //! No peer-controlled Automerge decode/receive/generate runs on the caller's stack.
 use crate::preflight::{self, MAX_BULK, MAX_DOC};
 use crate::{
@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 #[cfg(windows)]
-use std::{path::Path, sync::Arc};
+use std::path::Path;
+use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -57,7 +58,6 @@ enum Reply {
 
 pub struct Pool {
     executable: PathBuf,
-    #[cfg(windows)]
     slots: Arc<tokio::sync::Semaphore>,
 }
 impl Pool {
@@ -87,18 +87,10 @@ impl Pool {
             executable.is_absolute() && executable.is_file(),
             Failure(Reason::WorkerUnavailable)
         );
-        #[cfg(windows)]
-        {
-            Ok(Self {
-                executable,
-                slots: Arc::new(tokio::sync::Semaphore::new(4)),
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = executable;
-            Err(Failure(Reason::WorkerUnavailable).into())
-        }
+        Ok(Self {
+            executable,
+            slots: Arc::new(tokio::sync::Semaphore::new(4)),
+        })
     }
     pub(crate) fn spawn(&self) -> Result<Worker> {
         #[cfg(windows)]
@@ -110,15 +102,50 @@ impl Pool {
                 .map_err(|_| Failure(Reason::WorkerUnavailable))?;
             platform::spawn(&self.executable, Arc::new(platform::Job::new()?), slot)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
         {
-            let _ = &self.executable;
+            let slot = self
+                .slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| Failure(Reason::WorkerUnavailable))?;
+            let mut command = std::process::Command::new(&self.executable);
+            command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            crate::containment::configure(&mut command);
+            let mut child = command
+                .spawn()
+                .map_err(|_| Failure(Reason::WorkerUnavailable))?;
+            use std::os::fd::OwnedFd;
+            let input: OwnedFd = child
+                .stdin
+                .take()
+                .ok_or(Failure(Reason::WorkerUnavailable))?
+                .into();
+            let output: OwnedFd = child
+                .stdout
+                .take()
+                .ok_or(Failure(Reason::WorkerUnavailable))?
+                .into();
+            Ok(Worker {
+                input: tokio::fs::File::from_std(std::fs::File::from(input)),
+                output: tokio::fs::File::from_std(std::fs::File::from(output)),
+                child,
+                _slot: slot,
+            })
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
             Err(Failure(Reason::WorkerUnavailable).into())
         }
     }
 }
 
 pub(crate) struct Worker {
+    #[cfg(target_os = "linux")]
+    child: std::process::Child,
     input: tokio::fs::File,
     output: tokio::fs::File,
     #[cfg(windows)]
@@ -174,6 +201,8 @@ impl Worker {
         }
     }
     fn terminate(&self) {
+        #[cfg(target_os = "linux")]
+        crate::containment::kill_group(self.child.id());
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;
@@ -189,6 +218,8 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.terminate();
+        #[cfg(target_os = "linux")]
+        let _ = self.child.wait();
     }
 }
 
@@ -334,12 +365,14 @@ pub fn suppress_crash_dialogs() {
     }
 }
 pub fn run_stdio() -> Result<()> {
-    if !cfg!(windows) {
+    if !cfg!(any(windows, target_os = "linux")) {
         anyhow::bail!("UNAVAILABLE_ON_PLATFORM");
     }
     suppress_crash_dialogs();
     #[cfg(windows)]
     platform::require_job()?;
+    #[cfg(target_os = "linux")]
+    crate::containment::verify()?;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut engine = Engine::default();
@@ -720,7 +753,11 @@ mod tests {
             .ok_or(Failure(Reason::WorkerUnavailable))?
             .parent()
             .ok_or(Failure(Reason::WorkerUnavailable))?
-            .join("examples/worker_fault.exe");
+            .join(if cfg!(windows) {
+                "examples/worker_fault.exe"
+            } else {
+                "examples/worker_fault"
+            });
         Pool::new(executable)?.spawn()
     }
     fn empty() -> Request {
@@ -857,15 +894,18 @@ mod tests {
         assert!(reply.bytes >= MAX_DOC * 8 / 10);
         Ok(())
     }
-    // Contained workers exist only on Windows (job objects); elsewhere Pool::new refuses.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test]
     async fn f4_workers_have_independent_memory_and_pool_slots_are_released() -> Result<()> {
         let path = std::env::current_exe()?
             .parent()
             .and_then(|p| p.parent())
             .ok_or(Failure(Reason::WorkerUnavailable))?
-            .join("examples/worker_fault.exe");
+            .join(if cfg!(windows) {
+                "examples/worker_fault.exe"
+            } else {
+                "examples/worker_fault"
+            });
         let pool = Pool::new(path)?;
         let mut first = pool.spawn()?;
         let mut second = pool.spawn()?;

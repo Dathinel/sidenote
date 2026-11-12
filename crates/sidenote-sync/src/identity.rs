@@ -223,7 +223,11 @@ pub fn protect(bytes: &[u8]) -> Result<Vec<u8>> {
     {
         Ok(dpapi(bytes, true)?.to_vec())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_secret::protect(bytes).context(Failure(Reason::LocalStore))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = bytes;
         anyhow::bail!("UNAVAILABLE_ON_PLATFORM")
@@ -234,12 +238,24 @@ pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     {
         dpapi(bytes, false)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_secret::unprotect(bytes).context(Failure(Reason::LocalStore))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = bytes;
         anyhow::bail!("UNAVAILABLE_ON_PLATFORM")
     }
 }
+
+#[cfg(target_os = "linux")]
+pub fn cancel_pending_initialization() {
+    crate::linux_secret::cancel();
+}
+
+#[cfg(target_os = "linux")]
+pub const SECRET_INIT_ERROR: &str = crate::linux_secret::UNAVAILABLE;
 
 #[cfg(test)]
 mod tests {

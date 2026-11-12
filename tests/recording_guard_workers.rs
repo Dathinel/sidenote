@@ -1,6 +1,7 @@
 //! Exercise the actual hidden worker entry points with synthetic pre-existing jobs.
 use serde_json::json;
-use std::{fs, os::windows::process::CommandExt, path::Path, process::Command};
+use sidenote::platform::CommandExt;
+use std::{fs, path::Path, process::Command};
 
 fn write(path: &Path, value: serde_json::Value) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -9,6 +9,8 @@ pub mod mcp;
 pub mod meeting_icon;
 pub mod platform;
 pub mod service;
+#[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
+pub mod sync_owner;
 pub mod updates;
 
 /// Prefer the Sidenote name while accepting existing launchers and render tools.

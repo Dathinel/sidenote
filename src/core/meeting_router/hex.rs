@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::{Duration, Instant},
 };
@@ -22,7 +22,7 @@ impl Default for HexSpeech {
 impl HexSpeech {
     fn run(&self, args: &[&str], wav: Option<&Path>) -> Result<String> {
         crate::platform::require_process_support()?;
-        let mut command = Command::new(&self.executable);
+        let mut command = crate::platform::worker_command(&self.executable)?;
         command
             .args(args)
             .creation_flags(0x08000000)

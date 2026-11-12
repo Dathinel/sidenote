@@ -333,6 +333,7 @@ pub fn apply_action(action: &CheckAction) -> io::Result<()> {
 // Git and tar are hidden and contained just like the model runner. Never echo stderr.
 fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     crate::platform::require_process_support()?;
+    crate::platform::contain_command(command)?;
     let mut child = command
         .creation_flags(0x08000000)
         .stdin(Stdio::null())
@@ -384,7 +385,12 @@ fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     out
 }
 pub(super) fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
-    command_output(Command::new("git.exe").args(["-C", repo]).args(args)).at(Stage::KbGit)
+    command_output(
+        Command::new(if cfg!(windows) { "git.exe" } else { "git" })
+            .args(["-C", repo])
+            .args(args),
+    )
+    .at(Stage::KbGit)
 }
 pub(super) fn safe_kb_path(path: &str) -> bool {
     !path.contains('\\')
@@ -455,7 +461,7 @@ fn refresh_kb(root: &Path) -> io::Result<(KbSnapshot, Vec<String>)> {
             let extraction = (|| -> io::Result<()> {
                 git(&kb.repo_path, &args)?;
                 command_output(
-                    Command::new("tar.exe")
+                    Command::new(if cfg!(windows) { "tar.exe" } else { "tar" })
                         .arg("-xf")
                         .arg(&archive)
                         .arg("-C")

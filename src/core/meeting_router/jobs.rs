@@ -48,7 +48,11 @@ fn pending_lock(root: &Path, id: &str) -> io::Result<fs::File> {
     loop {
         match store_io::lock(&queue(root).join(format!("{id}.lock"))) {
             Ok(lock) => return Ok(lock),
-            Err(e) if e.raw_os_error() == Some(32) && start.elapsed() < Duration::from_secs(10) => {
+            Err(e)
+                if ((cfg!(windows) && e.raw_os_error() == Some(32))
+                    || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock))
+                    && start.elapsed() < Duration::from_secs(10) =>
+            {
                 thread::sleep(Duration::from_millis(10))
             }
             Err(e) => return Err(e),
@@ -218,8 +222,13 @@ fn resume(child: &std::process::Child) -> io::Result<()> {
         result
     }
 }
-#[cfg(windows)]
 fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outcome {
+    if let Err(error) = crate::platform::contain_command(&mut command) {
+        return Outcome {
+            error: Some(error.to_string()),
+            ..Outcome::default()
+        };
+    }
     // CREATE_SUSPENDED closes the spawn/attach gap before any descendants can be created.
     command
         .creation_flags(0x08000004)
@@ -247,6 +256,7 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
             };
         }
     };
+    #[cfg(windows)]
     if resume(&child).is_err() {
         drop(job);
         let _ = child.kill();
@@ -413,7 +423,12 @@ pub fn run_pending() -> Result<()> {
     }
     let _lock = match store_io::lock(&root.join("local/meeting-router.lock")) {
         Ok(lock) => lock,
-        Err(e) if e.raw_os_error() == Some(32) => return Ok(()),
+        Err(e)
+            if ((cfg!(windows) && e.raw_os_error() == Some(32))
+                || (cfg!(unix) && e.kind() == io::ErrorKind::WouldBlock)) =>
+        {
+            return Ok(());
+        }
         Err(e) => return Err(e.into()),
     };
     fs::create_dir_all(queue(&root))?;
@@ -630,7 +645,7 @@ pub fn start_worker() -> io::Result<()> {
     {
         return Ok(());
     }
-    let child = Command::new(std::env::current_exe()?)
+    let child = crate::platform::worker_command(std::env::current_exe()?)?
         .arg("--route-pending")
         .arg("--automatic")
         .arg("--data-dir")
@@ -734,13 +749,5 @@ mod recording_guard_tests {
         let before = fs::read(&path).unwrap();
         enqueue_in(&root, &meetings, id).unwrap();
         assert_eq!(fs::read(path).unwrap(), before);
-    }
-}
-
-#[cfg(not(windows))]
-fn supervise(_command: Command, _seconds: f64, _active: Option<&Path>) -> Outcome {
-    Outcome {
-        error: Some(crate::platform::UNAVAILABLE.into()),
-        ..Outcome::default()
     }
 }

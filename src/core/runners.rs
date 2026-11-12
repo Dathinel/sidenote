@@ -243,6 +243,23 @@ pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(windows))]
-pub(super) fn executable(_runner: &Runner) -> Result<PathBuf, String> {
-    Err(crate::platform::UNAVAILABLE.into())
+pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let candidate = PathBuf::from(&runner.program);
+    let valid = |p: &Path| {
+        p.is_absolute()
+            && p.is_file()
+            && fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    };
+    if candidate.components().count() > 1 {
+        return if valid(&candidate) {
+            Ok(candidate)
+        } else {
+            Err("Configured executable unavailable".into())
+        };
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|p| p.join(&candidate))
+        .find(|p| valid(p))
+        .ok_or_else(|| "Configured executable unavailable on PATH".into())
 }

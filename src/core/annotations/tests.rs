@@ -1,7 +1,8 @@
 use super::*;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::{
     fs::File,
-    os::windows::fs::OpenOptionsExt,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -408,7 +409,9 @@ fn oversized_bundle_is_skipped_before_manifest_or_video_is_read() {
     let video = folder.join("recording.mp4");
     let mut f = File::create(&video).unwrap();
     // Sparse allocation makes this a metadata-only 2 GB test, not a 2 GB fixture.
+    #[cfg(windows)]
     use std::os::windows::io::AsRawHandle;
+    #[cfg(windows)]
     unsafe {
         let mut returned = 0;
         assert_ne!(
@@ -430,11 +433,7 @@ fn oversized_bundle_is_skipped_before_manifest_or_video_is_read() {
     f.rewind().unwrap();
     f.write_all(b"private media").unwrap();
     drop(f);
-    let _locked = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(video)
-        .unwrap();
+    let _locked = deny_media_read(&video);
     let error = read_capture(&folder).unwrap_err();
     assert!(error.to_string().contains("exceeds 2 GB"));
     let scan = scan(&temp.0);
@@ -451,16 +450,8 @@ fn scan_is_newest_first_and_does_not_open_audio_or_video() {
     fs::write(newest.join("audio.wav"), "must not read").unwrap();
     fs::write(newest.join("recording.mp4"), "must not read").unwrap();
     let before = fs::read(newest.join("scrawl.json")).unwrap();
-    let _audio = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(newest.join("audio.wav"))
-        .unwrap();
-    let _video = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0)
-        .open(newest.join("recording.mp4"))
-        .unwrap();
+    let _audio = deny_media_read(&newest.join("audio.wav"));
+    let _video = deny_media_read(&newest.join("recording.mp4"));
     let scan = scan(&temp.0);
     assert_eq!(scan.captures.len(), 2);
     assert_eq!(scan.captures[0].data.created_at_ms, 2);
@@ -556,4 +547,24 @@ fn prompts_request_plain_explanations_and_one_place_for_uncertainty() {
     );
     assert!(!super::generation::uses_frame_drafts(3));
     assert!(super::generation::uses_frame_drafts(4));
+}
+
+fn deny_media_read(path: &Path) -> Option<File> {
+    #[cfg(windows)]
+    {
+        Some(
+            fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(path)
+                .unwrap(),
+        )
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o0)).unwrap();
+        assert!(File::open(path).is_err(), "fixture must forbid media reads");
+        None
+    }
 }

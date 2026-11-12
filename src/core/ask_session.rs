@@ -110,7 +110,8 @@ pub fn discover(runner: Runner) {
     }
     thread::spawn(move || {
         let result = (|| {
-            let mut child = Command::new(runners::executable(&runner).ok()?)
+            let mut child = crate::platform::worker_command(runners::executable(&runner).ok()?)
+                .ok()?
                 .arg("models")
                 .creation_flags(0x08000000)
                 .stdin(Stdio::null())
@@ -501,6 +502,7 @@ impl Session {
         Ok(session)
     }
     fn spawn(mut command: Command, kind: &str) -> Result<Self, String> {
+        crate::platform::contain_command(&mut command).map_err(|error| error.to_string())?;
         let mut child = command
             .creation_flags(0x08000000)
             .stdin(Stdio::piped())

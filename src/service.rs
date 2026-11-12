@@ -106,10 +106,18 @@ pub fn configure(args: &[OsString]) -> Result<(), &'static str> {
             });
         }
     }
+    #[cfg(windows)]
     let configured = selected
         .map(crate::core::DeviceSettings::set_role)
         .transpose()
         .and_then(|_| load_role(&crate::core::state_dir()));
+    #[cfg(not(windows))]
+    let configured = {
+        if let Some(selected) = selected {
+            crate::core::DeviceSettings::set_role(selected).map_err(|_| "DEVICE_CONFIG_FAILED")?;
+        }
+        load_role(&crate::core::state_dir())
+    };
     let role = role_or_full(configured, || {
         crate::listener::log("DEVICE_ROLE_UNAVAILABLE; using full");
     });
@@ -217,7 +225,13 @@ fn supervise() {
     let mut listener = (role() == DeviceRole::Server).then(crate::listener::service_background);
     while !stopping() && !crate::updates::listener_stopping() {
         reap_children(false);
-        let (sync, relay) = sync_status(role(), &root, crate::core::reconcile_service);
+        let (sync, relay) = sync_status(role(), &root, || {
+            #[cfg(target_os = "linux")]
+            if role() != DeviceRole::Full {
+                return crate::sync_owner::snapshot().errors == 0;
+            }
+            crate::core::reconcile_service()
+        });
         let hex = if role() != DeviceRole::Hub
             && crate::core::meetings_dir()
                 .parent()
@@ -265,6 +279,14 @@ pub fn run() -> i32 {
         crate::listener::run();
     }
     HEADLESS.store(true, Ordering::Release);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::umask(0o077);
+        if libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 {
+            eprintln!("SERVICE_SUBREAPER_UNAVAILABLE");
+            return 2;
+        }
+    }
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -299,6 +321,43 @@ pub fn run() -> i32 {
                     return 2;
                 }
             };
+        #[cfg(target_os = "linux")]
+        {
+            tokio::task::spawn_blocking(|| eprintln!("service linger={}", linger_status()));
+            if role() != DeviceRole::Full {
+                let root = crate::core::state_dir();
+                let provision = tokio::task::spawn_blocking(move || {
+                    let _lock = crate::core::store_io::lock(&root.join("local/relay/identity.lock"))
+                        .map_err(|_| "STATE_STORAGE_UNAVAILABLE")?;
+                    sidenote_sync::client::Device::open(&root.join("local/relay/replica.sqlite"))
+                        .map_err(|error| {
+                            if error.to_string().starts_with("UNSAFE_STATE_ANCESTOR") {
+                                "UNSAFE_STATE_ANCESTOR: use private root/user-owned state ancestors"
+                            } else { sidenote_sync::identity::SECRET_INIT_ERROR }
+                        })?;
+                    Ok::<_, &'static str>(())
+                });
+                let result = tokio::select! {
+                    result = provision => result.unwrap_or(Err(sidenote_sync::identity::SECRET_INIT_ERROR)),
+                    _ = terminate.recv() => {
+                        sidenote_sync::identity::cancel_pending_initialization();
+                        Err("SECRET_INITIALIZATION_CANCELLED")
+                    },
+                    _ = tokio::signal::ctrl_c() => {
+                        sidenote_sync::identity::cancel_pending_initialization();
+                        Err("SECRET_INITIALIZATION_CANCELLED")
+                    }
+                };
+                if let Err(error) = result { eprintln!("{error}"); return 2; }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        let sync_owner = if role() == DeviceRole::Full { None } else {
+            match crate::sync_owner::Owner::start(&crate::core::state_dir(), _instance) {
+                Ok(owner) => Some(owner),
+                Err(_) => { eprintln!("SYNC_OWNER_UNAVAILABLE: check private state and control socket"); return 2; }
+            }
+        };
         #[cfg(windows)]
         let _update_instance = match crate::listener::acquire_lock() {
             Ok(instance) => instance,
@@ -327,6 +386,10 @@ pub fn run() -> i32 {
         };
         let lifetime = async {
             while !stopping() && !worker.is_finished() {
+                #[cfg(target_os = "linux")]
+                if sync_owner.as_ref().is_some_and(|owner| !owner.healthy()) { break; }
+                #[cfg(target_os = "linux")]
+                reap_orphans(false);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         };
@@ -342,8 +405,16 @@ pub fn run() -> i32 {
             _ = lifetime => {}
         }
         STOP.store(true, Ordering::Release);
+        #[cfg(target_os = "linux")]
+        let owner_failed = sync_owner.as_ref().is_some_and(|owner| !owner.healthy());
+        #[cfg(target_os = "linux")]
+        drop(sync_owner);
         crate::core::ask::cancel_all(Duration::from_secs(3));
         let result = if worker.join().is_ok() { 0 } else { 2 };
+        #[cfg(target_os = "linux")]
+        let result = if owner_failed { eprintln!("SYNC_OWNER_STOPPED"); 2 } else { result };
+        #[cfg(target_os = "linux")]
+        reap_orphans(true);
         crate::listener::log(if result == 0 {
             "exit reason=service-stop source=supervisor"
         } else {
@@ -352,6 +423,59 @@ pub fn run() -> i32 {
         eprintln!("service status=stopped role={}", role().name());
         result
     })
+}
+
+#[cfg(target_os = "linux")]
+fn linger_status() -> &'static str {
+    static VALUE: OnceLock<&'static str> = OnceLock::new();
+    VALUE.get_or_init(|| {
+        let output = sidenote_sync::tree_worker::bounded_output(
+            std::process::Command::new("/usr/bin/loginctl").args([
+                "show-user",
+                &unsafe { libc::geteuid() }.to_string(),
+                "-p",
+                "Linger",
+                "--value",
+            ]),
+            Duration::from_secs(2),
+        );
+        match output.ok().filter(|o| o.status.success()).map(|o| o.stdout) {
+            Some(bytes) if bytes == b"yes\n" => "enabled",
+            Some(bytes) if bytes == b"no\n" => "disabled",
+            _ => "unknown",
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn reap_orphans(stopping: bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let children =
+            std::fs::read_to_string(format!("/proc/self/task/{}/children", std::process::id()))
+                .unwrap_or_default();
+        let mut found = false;
+        for pid in children
+            .split_whitespace()
+            .filter_map(|p| p.parse::<i32>().ok())
+        {
+            // systemd-run is only launched by the separate worker frontend, never directly
+            // by this service. These adopted proxies have no live Child handle here.
+            let proxy = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .is_ok_and(|n| n.trim() == "systemd-run");
+            if stopping || proxy {
+                found = true;
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG);
+                }
+            }
+        }
+        if !stopping || !found || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[cfg(test)]

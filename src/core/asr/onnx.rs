@@ -287,5 +287,15 @@ impl SpeechEngine for IndicConformer {
 
 #[cfg(not(windows))]
 pub fn initialize(_library: &Path) -> Result<()> {
-    Err(crate::platform::unavailable().into())
+    Err("ONNX_RUNTIME_UNAVAILABLE: no qualified pinned Linux runtime; ASR and language detection unavailable".into())
+}
+
+#[cfg(all(test, not(windows)))]
+mod linux_tests {
+    #[test]
+    fn unqualified_runtime_is_explicitly_unavailable() {
+        let error =
+            super::initialize(std::path::Path::new("/missing/libonnxruntime.so")).unwrap_err();
+        assert!(error.to_string().contains("ONNX_RUNTIME_UNAVAILABLE"));
+    }
 }
