@@ -27,6 +27,7 @@ use workflow::*;
 
 #[derive(Default)]
 pub struct Annotations {
+    pub(super) response_time: u64,
     pub open: bool,
     notebooks: notebooks::Ui,
     captures: Vec<Capture>,
@@ -213,7 +214,9 @@ fn hex_hints(settings: &[sidenote::hex_engine::Setting]) -> (Option<String>, boo
 }
 impl State {
     pub fn open_annotations(&mut self) {
+        let timing = super::Operation::new(super::TimedAction::Annotations);
         self.go_home();
+        self.annotations.response_time = timing.defer();
         self.annotations.open = true;
         self.annotations.notebooks.selected = None;
         self.annotations.notebooks.shared = None;
@@ -224,6 +227,9 @@ impl State {
         self.load_annotation_options();
         self.refresh_annotations();
         self.nav_done();
+        if !self.annotations.loading {
+            super::response_time::ready(std::mem::take(&mut self.annotations.response_time));
+        }
     }
     pub fn refresh_annotations(&mut self) {
         if self.annotations.loading
@@ -320,6 +326,14 @@ impl State {
                 disabled,
                 can_record,
             } => {
+                let timing = std::mem::take(&mut self.annotations.response_time);
+                if !self.annotations.open {
+                    super::response_time::superseded(timing);
+                } else if !scan.errors.is_empty() {
+                    super::response_time::failed(timing);
+                } else {
+                    super::response_time::ready(timing);
+                }
                 self.annotations.captures = scan.captures;
                 self.annotations.errors = scan.errors;
                 self.annotations.shortcut = shortcut;

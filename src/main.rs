@@ -6,6 +6,8 @@ mod ui;
 #[cfg(all(windows, feature = "desktop"))]
 use sidenote::platform;
 fn main() {
+    #[cfg(all(windows, feature = "desktop"))]
+    let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--language-detect") {
         std::process::exit(sidenote::core::lid::run_cli(&args));
@@ -22,6 +24,10 @@ fn main() {
             })
             .on_restarted(|_| sidenote::updates::restarted())
             .run();
+    }
+    #[cfg(all(windows, feature = "desktop"))]
+    if args.iter().any(|arg| arg == "--response-times") {
+        sidenote::response_time::startup(process_started);
     }
     if args.iter().any(|a| a == "--listener-isolated")
         && let Some(pair) = args

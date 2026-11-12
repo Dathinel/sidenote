@@ -190,6 +190,11 @@ impl State {
 
     /// Shows or hides the transcript, when this meeting has one.
     pub fn toggle_transcript(&mut self) {
+        let timing = if self.transcript_open {
+            super::Operation::default()
+        } else {
+            super::Operation::new(super::TimedAction::Transcript)
+        };
         if self
             .current()
             .is_some_and(|m| !self.meeting_ui.tabs || !m.lines.is_empty())
@@ -199,16 +204,23 @@ impl State {
             } else {
                 self.transcript_open = !self.transcript_open;
             }
+            timing.ready();
         }
     }
 
     /// Picks Summary or Your notes. Where the transcript covers the page, this also closes it.
     pub fn set_meeting_tab(&mut self, tab: Tab) {
+        let timing = if self.meeting_tab != tab || self.transcript_covers() {
+            super::Operation::new(super::TimedAction::Tab)
+        } else {
+            super::Operation::default()
+        };
         self.meeting_tab = tab;
         if self.transcript_covers() {
             self.transcript_open = false;
         }
         self.acknowledge_floating_draft();
+        timing.ready();
     }
 
     /// The "Go to" box: lands on the line for a time such as 14:22 or 1:02:30.

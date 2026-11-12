@@ -238,12 +238,14 @@ fn meeting_detail(m: &core::Meeting) -> String {
 
 impl State {
     pub fn open_finder(&mut self) {
+        let timing = super::Operation::new(super::TimedAction::Finder);
         self.finder_query = TextEdit::new("");
         self.finder_query.focused = true;
         self.finder = Some(Finder {
             entries: entries(self, ""),
             cursor: 0,
         });
+        timing.ready();
     }
 
     pub fn close_finder(&mut self) {
@@ -260,11 +262,13 @@ impl State {
     }
 
     pub(super) fn finder_changed(&mut self) {
+        let timing = super::Operation::new(super::TimedAction::FinderQuery);
         let entries = entries(self, &self.finder_query.text);
         if let Some(f) = self.finder.as_mut() {
             f.entries = entries;
             f.cursor = 0;
         }
+        timing.ready();
     }
 
     fn finder_move(&mut self, delta: isize, tx: &mut Tx) {

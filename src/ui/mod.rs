@@ -35,6 +35,8 @@ mod project_merge;
 mod prompt_library;
 mod refresh;
 mod relay;
+mod response_time_fixture;
+mod response_times;
 mod roles;
 mod sync_scene;
 mod tasks;
@@ -49,6 +51,7 @@ use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use sidenote::core::{
     self, AskProgress, DayGroup, Meeting, Message, Runner, Saved, SearchHit, StateStore,
 };
+use sidenote::response_time::{self, Action as TimedAction, Operation};
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -155,6 +158,8 @@ pub enum Event {
 }
 
 pub struct AskRun {
+    response_time: u64,
+    response_time_ready: bool,
     /// False for a scene's stand-in run that has no worker behind it.
     pub live: bool,
     /// When the question went out, for the "Thinking, 12 s" line.
@@ -180,6 +185,8 @@ impl AskRun {
     fn stand_in(runner: &str, steps: &[&str], secs: u64) -> AskRun {
         let (_tx, rx) = mpsc::channel();
         AskRun {
+            response_time: 0,
+            response_time_ready: false,
             live: false,
             started: Instant::now()
                 .checked_sub(Duration::from_secs(secs))
@@ -217,6 +224,9 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    ask_frame_response_time: u64,
+    tasks_response_time: u64,
+    task_detail_response_time: Option<Operation>,
     pub relay_ui: relay::RelayUi,
     button_sheet: bool,
     pub annotations: annotations::Annotations,
@@ -427,6 +437,9 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
+            ask_frame_response_time: 0,
+            tasks_response_time: 0,
+            task_detail_response_time: None,
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
             annotations: annotations::Annotations::default(),
@@ -550,6 +563,7 @@ impl State {
             s.open_hex();
             s.hex.section = hex::Section::Dictation;
         }
+        response_time::startup_ready();
         s
     }
 
@@ -653,8 +667,10 @@ impl State {
     }
 
     pub fn on_search_changed(&mut self) {
+        let timing = Operation::new(TimedAction::Search);
         self.cursor = 0;
         self.refresh_list();
+        timing.ready();
     }
 
     pub fn focus_search(&mut self) {
@@ -689,6 +705,8 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        response_time::superseded(std::mem::take(&mut self.annotations.response_time));
+        response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         let company_open = self.companies.open;
         self.companies.open = false;
         if company_open {
@@ -718,6 +736,8 @@ impl State {
     }
 
     pub fn select(&mut self, id: &str, tx: &mut Tx) {
+        let timing = Operation::new(TimedAction::Meeting);
+        response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         self.companies.open = false;
         self.annotations.open = false;
         self.view = tasks::View::Meetings;
@@ -729,6 +749,7 @@ impl State {
         self.live_open = false;
         self.keyboard = false;
         if self.selected.as_deref() == Some(id) {
+            response_time::superseded(timing.defer());
             return;
         }
         self.selected = Some(id.to_string());
@@ -758,6 +779,9 @@ impl State {
             self.cursor = n;
         }
         tx.scroll_to_y("meeting-scroll", 0.0);
+        if self.notice.is_none() {
+            timing.ready();
+        }
     }
 
     fn acknowledge_floating_draft(&self) {
@@ -951,6 +975,7 @@ impl State {
     /// Stop on a running Ask: its CLI is killed and the question goes back in the box.
     pub fn stop_ask(&mut self) {
         if let Some(run) = self.asks.get(&self.ask_key()) {
+            response_time::superseded(run.response_time);
             run.cancel.stop();
         }
     }
@@ -1012,6 +1037,14 @@ impl State {
         if text.is_empty() || self.asks.contains_key(&id) {
             return;
         }
+        let timing = Operation::at(
+            if self.ask_settings.connection.settings.enabled {
+                TimedAction::AskConnected
+            } else {
+                TimedAction::Ask
+            },
+            submitted,
+        );
         let Some(runner) = self.ask_runner_name().map(str::to_owned) else {
             self.ask_errors
                 .insert(id, "Choose a runner before asking.".into());
@@ -1169,6 +1202,8 @@ impl State {
         self.asks.insert(
             id,
             AskRun {
+                response_time: timing.defer(),
+                response_time_ready: false,
                 live: true,
                 started: submitted,
                 cancel,
@@ -1194,7 +1229,9 @@ impl State {
         self.ask_settings.connection.metrics.remove(&id);
         self.ask_settings.connection.slow.remove(&id);
         core::ask_session::reset(&id);
-        self.asks.remove(&id);
+        if let Some(run) = self.asks.remove(&id) {
+            response_time::superseded(run.response_time);
+        }
         self.ask_errors.remove(&id);
         self.ask_settings.overrides.retain(|(key, _), _| key != &id);
         match self.store.clear_history(&id) {
@@ -1212,6 +1249,11 @@ impl State {
                 .try_recv()
                 .unwrap_or_else(|_| Err("The answer did not arrive.".into())),
         };
+        if !outcome.as_ref().is_ok_and(|text| !text.is_empty()) {
+            response_time::failed(run.response_time);
+        } else if !run.response_time_ready {
+            response_time::ready(run.response_time);
+        }
         let result = match outcome {
             Ok(text) => self.store.append_message(
                 id,
@@ -1248,8 +1290,12 @@ impl State {
                 result
             }
         };
+        if result.is_err() {
+            response_time::failed(run.response_time);
+        }
         match result {
             Ok(saved) if self.ask_key() == id => {
+                self.ask_frame_response_time = run.response_time;
                 self.saved = saved;
                 self.show_latest_question();
             }
@@ -1540,6 +1586,10 @@ impl State {
                     }
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => {
+                        if !text.is_empty() && !run.response_time_ready {
+                            response_time::ready(run.response_time);
+                            run.response_time_ready = true;
+                        }
                         if run.runner == core::provider::NAME && !text.is_empty() {
                             self.ask_settings.connection.slow.remove(&id);
                             let metrics = self
@@ -2005,6 +2055,39 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let on_hex = s.on_hex();
     let on_live = s.on_live();
     let home = !tasks_view && s.selected.is_none();
+    if response_time::enabled() {
+        let bit = |action: TimedAction| 1usize << action as usize;
+        let mut mask = bit(TimedAction::Launch)
+            | bit(TimedAction::Notes)
+            | bit(TimedAction::Ask)
+            | bit(TimedAction::AskConnected);
+        if tasks_view {
+            mask |= bit(TimedAction::Tasks) | bit(TimedAction::TaskFilter);
+            if s.tasks.panel.is_some() {
+                mask |= bit(TimedAction::TaskDetails);
+            }
+        } else if s.annotations.open {
+            mask |= bit(TimedAction::Annotations);
+        } else if on_hex {
+            mask |= bit(TimedAction::Settings);
+        } else if !on_live && !on_check && !on_memory && !s.companies.open {
+            if home {
+                mask |= bit(TimedAction::Search);
+            } else {
+                mask |= bit(TimedAction::Meeting);
+                if s.transcript_open {
+                    mask |= bit(TimedAction::Transcript);
+                }
+                if !s.transcript_open || !s.transcript_covers() {
+                    mask |= bit(TimedAction::Tab);
+                }
+            }
+        }
+        if s.finder.is_some() {
+            mask |= bit(TimedAction::Finder) | bit(TimedAction::FinderQuery);
+        }
+        response_time::view(mask);
+    }
     let content = if s.companies.open {
         companies::pane(s, &k, p, narrow, &mut layer)
     } else if tasks_view {
@@ -2542,6 +2625,7 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("response-time-large", response_time_fixture::scene),
             ("notebooks", |s| {
                 annotations::notebooks::scene(s, "notebooks")
             }),
@@ -4040,13 +4124,16 @@ pub fn spec() -> AppSpec<State> {
 
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
-    // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
+    // encoded (a display proxy). The file gets Unix microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
     let close_handle = app.handle();
     let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
     let refresh_handle = app.handle();
     let mut first_frame = false;
     app = app.on_frame_encoded(move |f| {
+        if f.outcome() == rune::FrameOutcome::Drawn {
+            sidenote::response_time::frame(f.at());
+        }
         if !first_frame && f.outcome() == rune::FrameOutcome::Drawn {
             first_frame = true;
             refresh::first_frame();

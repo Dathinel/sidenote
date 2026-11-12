@@ -62,7 +62,7 @@ pub fn window_shown() -> bool {
 
 pub enum Action {
     Start,
-    Stop,
+    Stop(u64),
     Set(String),
     Add,
     Remove,
@@ -345,6 +345,11 @@ impl State {
     }
 
     pub fn open_hex(&mut self) {
+        let timing = if !self.on_hex() {
+            super::Operation::new(super::TimedAction::Settings)
+        } else {
+            super::Operation::default()
+        };
         if !self.on_hex() {
             settings::remember_back(self);
             self.hex.shell.last_tabs =
@@ -354,6 +359,7 @@ impl State {
         self.hex_open = true;
         self.hex.data_dirty = true;
         self.hex.select_open = None;
+        timing.ready();
         self.hex_refresh_if_due();
         self.refresh_ai_notes();
     }
@@ -660,12 +666,17 @@ impl State {
 
     fn hex_done(&mut self, action: Action, r: Result<(), HexError>) {
         match action {
-            Action::Start | Action::Stop => {
+            Action::Start | Action::Stop(_) => {
                 self.hex.record_busy = false;
                 match r {
                     Ok(()) => {
                         self.hex.error = None;
-                        if matches!(action, Action::Stop) {
+                        if let Action::Stop(recording) = action
+                            && self
+                                .live
+                                .as_ref()
+                                .is_some_and(|live| live.recording_id == recording)
+                        {
                             // The notes follow; the next sample confirms Hex is idle.
                             self.live_stopped();
                         }
@@ -673,6 +684,11 @@ impl State {
                     }
                     Err(e) => {
                         self.hex.error = Some(plain(&e));
+                        if let Action::Stop(recording) = action
+                            && let Some(live) = &mut self.live
+                        {
+                            super::response_time::failed(live.take_notes_timing(recording));
+                        }
                         // A start that failed leaves nothing to show on the live page.
                         if matches!(action, Action::Start) {
                             self.live = None;
@@ -789,6 +805,7 @@ impl State {
     }
 
     pub fn hex_record_stop(&mut self) {
+        let pressed = Instant::now();
         // Notes typed on the live page reach the folder before the pipeline can start.
         self.live_flush();
         if !self.hex_recording() {
@@ -813,16 +830,27 @@ impl State {
         self.hex.record_busy = true;
         self.hex.error = None;
         let engine = self.hex.engine.clone();
+        let recording = self.live.as_mut().map_or(0, |live| {
+            live.notes_response_time =
+                super::Operation::at(super::TimedAction::Notes, pressed).defer();
+            live.recording_id
+        });
         let events = self.events_tx.clone();
         let wake = self.waker.clone();
         if !self.live_work(move || {
-            let _ = events.send(Event::Hex(Msg::Done(Action::Stop, engine.record_stop())));
+            let _ = events.send(Event::Hex(Msg::Done(
+                Action::Stop(recording),
+                engine.record_stop(),
+            )));
             if let Some(wake) = wake {
                 wake();
             }
         }) {
             self.hex.record_busy = false;
             self.hex.error = Some("Could not stop recording. Try Stop again or stop it in Hex.");
+            if let Some(live) = &mut self.live {
+                super::response_time::failed(live.take_notes_timing(recording));
+            }
         }
     }
 

@@ -216,6 +216,11 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         return None;
     }
     let hidden = s.thread_hidden && run.is_none();
+    if !hidden {
+        super::response_time::visible_operation(
+            run.map_or(s.ask_frame_response_time, |r| r.response_time),
+        );
+    }
     let mut actions = row().gap(2.0).items_center().child(
         quiet_button(if hidden { "Show" } else { "Hide" }, "ask-toggle", p)
             .on_press(|s: &mut State| s.thread_hidden = !s.thread_hidden),
