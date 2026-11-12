@@ -52,6 +52,7 @@ pub struct LiveSource {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Options {
+    pub connection: Option<super::provider::Settings>,
     pub thinking: Thinking,
     pub model: Option<String>,
     pub meeting: bool,
@@ -74,6 +75,9 @@ impl Options {
         chat: &str,
         progress: &impl Fn(super::AskProgress),
     ) -> Result<String, String> {
+        if let Some(settings) = &self.connection {
+            return super::provider::chat(settings.clone(), prompt, progress);
+        }
         let execute = |name: &str, options: &Self| {
             let runner = if options.meeting_agent {
                 super::list_runners()?
@@ -297,6 +301,28 @@ fn recent_meeting_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endpoint_failures_never_enter_the_cli_fallback() {
+        let options = Options {
+            connection: Some(super::super::provider::Settings {
+                enabled: true,
+                ..super::super::provider::Settings::openrouter()
+            }),
+            fallback: Some(Fallback {
+                runner: "must never execute".into(),
+                model: None,
+                thinking: Thinking::Low,
+            }),
+            ..Default::default()
+        };
+        let result = options.run(
+            "unused CLI",
+            "Synthetic content".into(),
+            "synthetic",
+            &|_| panic!("Unauthorized endpoint must emit no execution or fallback events"),
+        );
+        assert!(result.unwrap_err().contains("Opt Ask in"));
+    }
     #[test]
     fn current_live_prompt_includes_notes_and_transcript_without_other_meetings() {
         let root =

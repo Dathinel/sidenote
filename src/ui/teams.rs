@@ -148,7 +148,13 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                 .w_full(),
         )
         .child(roles::CONTROL.wrap("Members", p.soft));
-    let people = core::people::roster(&s.meetings, &s.tasks.teams, &s.tasks.all, &s.people.prefs);
+    let people = core::people::roster(
+        &s.meetings,
+        &s.tasks.teams,
+        &s.tasks.all,
+        &s.people.prefs,
+        &s.people.affiliations,
+    );
     let mut names = std::collections::BTreeMap::new();
     for name in s.tasks.teams.teams.iter().flat_map(|t| &t.members).chain(
         people

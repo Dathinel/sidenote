@@ -12,6 +12,7 @@ mod ask_settings;
 mod benchmark;
 mod cards;
 mod check;
+mod cloud_ask;
 mod companies;
 mod diary;
 mod edit_worker;
@@ -99,6 +100,7 @@ fn default_runner(
 }
 
 pub enum Event {
+    CloudModels(Result<Vec<String>, String>),
     RelayPair {
         generation: u64,
         update: sidenote::core::relay_preview::pairing::Update,
@@ -133,6 +135,7 @@ pub enum Event {
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     ListenerFinished(Result<(), String>),
+    ListenerProbed(Option<sidenote::updates::ListenerStatus>),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -331,6 +334,7 @@ pub struct State {
     events_tx: Sender<Event>,
     events_rx: Receiver<Event>,
     edit_busy: bool,
+    edit_queue: edit_worker::SaveQueue<edit_worker::Job>,
     scan_tx: Option<refresh::Handle>,
     last_updated: Option<Instant>,
     footer_minute: u64,
@@ -416,7 +420,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let companies = companies::CompanyUi::load(&store.root);
         let mut prefs = core::UiPrefs::load(&store.root);
-        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
+        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
@@ -509,6 +513,7 @@ impl State {
             events_tx,
             events_rx,
             edit_busy: false,
+            edit_queue: Default::default(),
             scan_tx: None,
             last_updated: None,
             footer_minute: 0,
@@ -934,7 +939,7 @@ impl State {
 
     /// True when at least one runner can start on this machine.
     pub fn has_agent(&self) -> bool {
-        !self.runner_found.is_empty()
+        self.ask_settings.connection.settings.enabled || !self.runner_found.is_empty()
     }
 
     /// Stop on a running Ask: its CLI is killed and the question goes back in the box.
@@ -956,6 +961,7 @@ impl State {
                 &self.tasks.teams,
                 &self.tasks.all,
                 &self.people.prefs,
+                &self.people.affiliations,
             );
             let mut context =
                 data.ask_context(&self.tasks.all, &self.tasks.pipeline, &self.tasks.projects);
@@ -994,6 +1000,7 @@ impl State {
     }
 
     pub fn send(&mut self, text: &str) {
+        let submitted = Instant::now();
         let text = text.trim();
         let id = self.ask_key();
         if text.is_empty() || self.asks.contains_key(&id) {
@@ -1031,7 +1038,25 @@ impl State {
             return;
         };
         let history = saved.messages[..=submitted_at].to_vec();
+        let connection = self
+            .ask_settings
+            .connection
+            .settings
+            .enabled
+            .then(|| self.ask_settings.connection.settings.clone());
+        if let Some(connection) = &connection {
+            self.ask_settings
+                .connection
+                .labels
+                .insert(id.clone(), connection.label());
+            self.ask_settings.connection.metrics.remove(&id);
+            self.ask_settings.connection.slow.remove(&id);
+        } else {
+            self.ask_settings.connection.labels.remove(&id);
+            self.ask_settings.connection.metrics.remove(&id);
+        }
         let options = core::ask_options::Options {
+            connection,
             thinking: self.ask_thinking(),
             model: self.ask_model(),
             meeting: self.ask_in_meeting(),
@@ -1139,7 +1164,7 @@ impl State {
             id,
             AskRun {
                 live: true,
-                started: Instant::now(),
+                started: submitted,
                 cancel,
                 _alive: alive,
                 submitted_message_id: Some(submitted_message_id),
@@ -1159,6 +1184,9 @@ impl State {
 
     pub fn clear_thread(&mut self) {
         let id = self.ask_key();
+        self.ask_settings.connection.labels.remove(&id);
+        self.ask_settings.connection.metrics.remove(&id);
+        self.ask_settings.connection.slow.remove(&id);
         core::ask_session::reset(&id);
         self.asks.remove(&id);
         self.ask_errors.remove(&id);
@@ -1226,6 +1254,16 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::CloudModels(result) => {
+                self.ask_settings.connection.catalogue_busy = false;
+                match result {
+                    Ok(models) => {
+                        self.ask_settings.connection.catalogue = models;
+                        self.ask_settings.connection.status = Some("OpenRouter model list loaded. Choose a model, save, and opt Ask in for that model.".into());
+                    }
+                    Err(error) => self.ask_settings.connection.status = Some(error),
+                }
+            }
             Event::RelayPair { generation, update } => self.relay_update(generation, update),
             Event::Settled { redo, result } => self.settle_finished(redo, result),
             Event::AiNotes {
@@ -1265,6 +1303,7 @@ impl State {
             Event::Update(status) => self.update_status(status),
             Event::UpdateFinished(result) => self.update_finished(result),
             Event::ListenerFinished(result) => self.listener_finished(result),
+            Event::ListenerProbed(status) => self.listener_probed(status),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::Annotations(msg) => self.apply_annotations(msg),
@@ -1303,6 +1342,7 @@ impl State {
                     shared,
                     projects,
                     companies,
+                    affiliations,
                     overrides,
                     cutoff,
                     saved,
@@ -1356,6 +1396,10 @@ impl State {
                             profile.relay.then_some(profile.your_name.clone());
                         self.ai_notes.name = TextEdit::new(profile.your_name);
                     }
+                }
+                if let Some(affiliations) = affiliations {
+                    content_changed |= self.people.affiliations != affiliations;
+                    self.people.affiliations = affiliations;
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -1442,6 +1486,22 @@ impl State {
                     return;
                 }
                 match event {
+                    AskProgress::Metrics(mut metrics) => {
+                        metrics.total_ms = run.started.elapsed().as_millis() as u64;
+                        if let Some(first) = self
+                            .ask_settings
+                            .connection
+                            .metrics
+                            .get(&id)
+                            .and_then(|m| m.first_token_ms)
+                        {
+                            metrics.first_token_ms = Some(first);
+                        }
+                        self.ask_settings.connection.metrics.insert(id, metrics);
+                    }
+                    AskProgress::Slow => {
+                        self.ask_settings.connection.slow.insert(id);
+                    }
                     AskProgress::StartingCodex => {
                         run.starting_codex = true;
                         run.turn_started = false;
@@ -1449,7 +1509,9 @@ impl State {
                     AskProgress::Started { .. } => {
                         run.starting_codex = false;
                         run.turn_started = true;
-                        run.started = Instant::now();
+                        if run.runner != core::provider::NAME {
+                            run.started = Instant::now();
+                        }
                         run.steps.clear();
                     }
                     AskProgress::Fallback { runner } => {
@@ -1472,6 +1534,19 @@ impl State {
                     }
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => {
+                        if run.runner == core::provider::NAME && !text.is_empty() {
+                            self.ask_settings.connection.slow.remove(&id);
+                            let metrics = self
+                                .ask_settings
+                                .connection
+                                .metrics
+                                .entry(id.clone())
+                                .or_default();
+                            metrics
+                                .first_token_ms
+                                .get_or_insert(run.started.elapsed().as_millis() as u64);
+                            metrics.total_ms = run.started.elapsed().as_millis() as u64;
+                        }
                         if !text.is_empty() {
                             run.starting_codex = false;
                             run.turn_started = true;
@@ -1633,6 +1708,8 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= s.expire_toast();
     changed |= hex::settings_tick(s);
     changed |= relay::tick(s, tx);
+    changed |= tasks::board_live_tick(s, tx);
+    s.listener_tick(tx);
     if let Some(until) = s
         .hex
         .shell
@@ -3110,6 +3187,8 @@ pub fn spec() -> AppSpec<State> {
                     });
                 }
             }),
+            ("settings-cloud-ask", |s| cloud_ask::scene(s, true)),
+            ("cloud-ask-answer", |s| cloud_ask::scene(s, false)),
             ("meeting-agent-settings", |s| {
                 hex::settings::scene(s, "settings-helpers");
             }),
@@ -3725,6 +3804,18 @@ pub fn spec() -> AppSpec<State> {
                 s.companies.open = false;
                 hex::settings::scene(s, "people-external");
             }),
+            ("people-suggestion", |s| {
+                hex::settings::scene(s, "people-external");
+                s.tasks.teams = core::Teams::default();
+                s.people.prefs.people_sides.clear();
+                s.people.affiliations = core::people::Affiliations::with_roster(
+                    &s.config,
+                    "| Person | Role |\n|---|---|\n| Jamie | Designer |",
+                );
+                if let Some(meeting) = s.meetings.first_mut() {
+                    meeting.summary.people.push("Jamie".into());
+                }
+            }),
             ("people-our-team", |s| {
                 tasks_v2_teams_scene(s);
                 hex::settings::scene(s, "people-our-team");
@@ -3787,6 +3878,37 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("tasks-v2-empty", |s| {
                 tasks_v2_scene(s, core::TaskGrouping::Project, None);
+                s.tasks.items.clear();
+                s.tasks.all.clear();
+                s.tasks.counts = core::TaskCounts::default();
+            }),
+            ("tasks-v2-board", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+            }),
+            ("tasks-v2-board-drag", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                // A card from To do held over Waiting on, as a drag in progress shows it.
+                let first = s.tasks.board().column(core::BoardColumn::Todo)[0];
+                let item = &s.tasks.items[first];
+                s.tasks.board_drag = Some((
+                    (item.meeting_id.clone(), item.index),
+                    core::BoardColumn::Waiting,
+                ));
+            }),
+            ("tasks-v2-board-filter", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
+                s.tasks.done = core::DoneFilter::All;
+                s.tasks.person = Some(core::PersonFilter::Owner("Morgan Lee".into()));
+                s.tasks.filter_menu = Some(tasks::FilterMenu::Person);
+            }),
+            ("tasks-v2-board-empty", |s| {
+                tasks_v2_scene(s, core::TaskGrouping::Status, None);
+                s.tasks.layout = core::TasksLayout::Board;
                 s.tasks.items.clear();
                 s.tasks.all.clear();
                 s.tasks.counts = core::TaskCounts::default();
@@ -3893,18 +4015,27 @@ pub fn run() {
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
     let close_handle = app.handle();
-    if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
-        let mut done = false;
-        app = app.on_frame_encoded(move |f| {
-            if !done && f.outcome() == rune::FrameOutcome::Drawn {
-                done = true;
+    let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
+    let refresh_handle = app.handle();
+    let mut first_frame = false;
+    app = app.on_frame_encoded(move |f| {
+        if !first_frame && f.outcome() == rune::FrameOutcome::Drawn {
+            first_frame = true;
+            refresh::first_frame();
+            refresh_handle.update(|s, _| {
+                if let Some(handle) = &s.scan_tx {
+                    handle.invalidate();
+                    handle.request(s.refresh_options());
+                }
+            });
+            if let Some(path) = &trace {
                 let micros = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_micros());
-                let _ = std::fs::write(&path, micros.to_string());
+                let _ = std::fs::write(path, micros.to_string());
             }
-        });
-    }
+        }
+    });
     // The OS places a new window at a cascade offset, which at 125% scaling on a 1080p screen
     // pushes the bottom (and the Ask bar) off screen. Fit the size to the work area and centre.
     app = app.on_window(move |win| {

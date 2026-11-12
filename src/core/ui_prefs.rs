@@ -5,6 +5,16 @@ use super::store_io;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// How the Tasks page lays its tasks out. The list stays the default, so a missing key changes
+/// nothing for anyone who has not chosen the board.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TasksLayout {
+    #[default]
+    List,
+    Board,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPrefs {
@@ -25,6 +35,8 @@ pub struct UiPrefs {
     pub tasks_mine: bool,
     pub tasks_include_unassigned: bool,
     pub tasks_done: super::DoneFilter,
+    /// List or board, remembered for this PC only.
+    pub tasks_layout: TasksLayout,
     pub task_titles_notice_seen: bool,
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
@@ -55,6 +67,7 @@ impl Default for UiPrefs {
             tasks_mine: false,
             tasks_include_unassigned: false,
             tasks_done: Default::default(),
+            tasks_layout: Default::default(),
             task_titles_notice_seen: false,
             sidebar_collapsed: None,
             settings_tabs: Default::default(),
@@ -87,6 +100,46 @@ impl UiPrefs {
         prefs
     }
 
+    /// Publish only this person's side delta, preserving other settings and side edits.
+    pub fn save_person_side(
+        &mut self,
+        root: &Path,
+        person: &str,
+        teams: &super::Teams,
+        side: Option<super::people::Side>,
+    ) -> std::io::Result<()> {
+        let _lock = store_io::lock(&root.join("local/ui.lock"))?;
+        let prior = Self::load(root);
+        let mut edited = prior.people_sides.clone();
+        let canonical = super::people::key(&teams.owner_name(person));
+        edited.retain(|name, _| super::people::key(&teams.owner_name(name)) != canonical);
+        if let Some(side) = side {
+            edited.insert(canonical, side);
+        }
+        if super::relay_preview::Settings::load(root)?.enabled {
+            super::relay_preview::shared::edit(
+                root,
+                "people.json",
+                &serde_json::json!({"sides":prior.people_sides}),
+                &serde_json::json!({"sides":edited}),
+            )?;
+        } else {
+            let mut latest: serde_json::Value = store_io::read(&path(root))?;
+            if latest.is_null() {
+                latest = serde_json::json!({});
+            }
+            super::config::merge_edits(
+                &mut latest,
+                &serde_json::json!({"people_sides":prior.people_sides}),
+                &serde_json::json!({"people_sides":edited}),
+            );
+            store_io::write(&path(root), &latest)?;
+        }
+        self.people_sides = edited;
+        self.relay_people_base = prior.relay_people_base.map(|_| self.people_sides.clone());
+        Ok(())
+    }
+
     pub fn save(&self, root: &Path) -> std::io::Result<()> {
         let mut local = self.clone();
         if super::relay_preview::Settings::load(root)?.enabled {
@@ -110,6 +163,34 @@ impl UiPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confirm_and_reset_merge_only_the_person_side() {
+        let root = tempfile::tempdir().unwrap();
+        let path = path(root.path());
+        store_io::write(&path, &serde_json::json!({"show_full_titles":true,"unknown_setting":42,"people_sides":{"guest person":"external"}})).unwrap();
+        let mut prefs = UiPrefs::load(root.path());
+        prefs
+            .save_person_side(
+                root.path(),
+                "Avery",
+                &super::super::Teams::default(),
+                Some(super::super::people::Side::OurTeam),
+            )
+            .unwrap();
+        assert_eq!(
+            UiPrefs::load(root.path()).people_sides["avery"],
+            super::super::people::Side::OurTeam
+        );
+        prefs
+            .save_person_side(root.path(), "Avery", &super::super::Teams::default(), None)
+            .unwrap();
+        let saved: serde_json::Value = store_io::read(&path).unwrap();
+        assert!(saved["people_sides"].get("avery").is_none());
+        assert_eq!(saved["people_sides"]["guest person"], "external");
+        assert_eq!(saved["unknown_setting"], 42);
+        assert_eq!(saved["show_full_titles"], true);
+    }
+
     #[test]
     fn memory_filters_round_trip_and_leave_old_settings_intact() {
         let mut prefs: UiPrefs =
@@ -149,6 +230,18 @@ mod tests {
         assert_eq!(restored, prefs);
         assert!(restored.show_full_titles);
         assert_eq!(restored.settings_tabs["Meetings"], 1);
+    }
+    #[test]
+    fn tasks_layout_defaults_to_list_and_round_trips_beside_old_keys() {
+        let mut prefs: UiPrefs =
+            serde_json::from_str(r#"{"show_full_titles":true,"tasks_mine":true}"#).unwrap();
+        assert_eq!(prefs.tasks_layout, TasksLayout::List);
+        prefs.tasks_layout = TasksLayout::Board;
+        let text = serde_json::to_string(&prefs).unwrap();
+        assert!(text.contains(r#""tasks_layout":"board""#));
+        let restored: UiPrefs = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.tasks_layout, TasksLayout::Board);
+        assert!(restored.show_full_titles && restored.tasks_mine);
     }
     #[test]
     fn settings_tabs_round_trip_without_changing_existing_preferences() {

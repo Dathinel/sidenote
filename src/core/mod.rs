@@ -17,6 +17,7 @@ pub mod growing_wav;
 pub(crate) mod meeting_evidence;
 pub mod meeting_router;
 pub mod meeting_watch;
+pub mod provider;
 pub mod recording_guard;
 pub mod relay_preview;
 pub use config::{Config, Feature, Features};
@@ -57,7 +58,7 @@ pub use runner_process::run_runner;
 pub use runners::{AskProgress, Runner, last_used_runner, list_runners};
 pub use search::*;
 pub use tasks::*;
-pub use ui_prefs::UiPrefs;
+pub use ui_prefs::{TasksLayout, UiPrefs};
 
 pub mod model_catalog;
 mod model_catalog_data;
@@ -68,7 +69,9 @@ pub fn validation_message(error: &std::io::Error) -> Option<&str> {
 
 pub mod companies;
 pub mod people;
+pub mod tasks_board;
 pub mod tasks_v2;
+pub use tasks_board::*;
 pub use tasks_v2::*;
 
 pub mod task_titles;

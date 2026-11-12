@@ -263,6 +263,11 @@ fn supervise() {
 }
 
 pub fn run() -> i32 {
+    crate::listener::log(&format!(
+        "start pid={} role={}",
+        std::process::id(),
+        role().name()
+    ));
     #[cfg(windows)]
     if role() == DeviceRole::Full {
         crate::listener::run();
@@ -283,6 +288,7 @@ pub fn run() -> i32 {
         Ok(runtime) => runtime,
         Err(_) => {
             eprintln!("SERVICE_RUNTIME_FAILED");
+            crate::listener::log("exit reason=service-runtime-error");
             return 2;
         }
     };
@@ -293,6 +299,7 @@ pub fn run() -> i32 {
                 Ok(signal) => signal,
                 Err(_) => {
                     eprintln!("SERVICE_SIGNAL_FAILED");
+                    crate::listener::log("exit reason=service-signal-error");
                     return 2;
                 }
             };
@@ -300,8 +307,11 @@ pub fn run() -> i32 {
             match crate::core::store_io::lock(&crate::core::state_dir().join("local/service.lock"))
             {
                 Ok(instance) => instance,
-                Err(_) => {
+                Err(error) => {
                     eprintln!("SERVICE_LOCK_FAILED");
+                    crate::listener::log(&format!(
+                        "exit reason=service-lock-error kind={:?}", error.kind()
+                    ));
                     return 2;
                 }
             };
@@ -336,11 +346,18 @@ pub fn run() -> i32 {
             }
         }
         #[cfg(windows)]
-        let _update_instance = match crate::updates::listener_lock() {
-            Ok(instance) if !crate::updates::listener_stopping() => instance,
-            Ok(_) => return 0,
-            Err(_) => { eprintln!("SERVICE_LOCK_FAILED"); return 2; }
+        let _update_instance = match crate::listener::acquire_lock() {
+            Ok(instance) => instance,
+            Err(error) => {
+                eprintln!("SERVICE_LOCK_FAILED");
+                crate::listener::log_lock_exit(&error);
+                return 2;
+            }
         };
+        if let Some(source) = crate::updates::listener_stop_source() {
+            crate::listener::log(&format!("exit reason=stop source=service-startup/{source}"));
+            return 0;
+        }
         #[cfg(windows)]
         crate::listener::watch_update_stop();
         let worker = match std::thread::Builder::new()
@@ -350,6 +367,7 @@ pub fn run() -> i32 {
             Ok(worker) => worker,
             Err(_) => {
                 eprintln!("SERVICE_START_FAILED");
+                crate::listener::log("exit reason=service-worker-spawn-error");
                 return 2;
             }
         };
@@ -376,6 +394,11 @@ pub fn run() -> i32 {
         let result = if worker.join().is_ok() { 0 } else { 2 };
         #[cfg(target_os = "linux")]
         reap_orphans(true);
+        crate::listener::log(if result == 0 {
+            "exit reason=service-stop source=supervisor"
+        } else {
+            "exit reason=service-worker-panic source=supervisor"
+        });
         eprintln!("service status=stopped role={}", role().name());
         result
     })

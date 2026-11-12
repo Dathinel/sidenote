@@ -1,11 +1,68 @@
-//! At most one editor publication; completion targets are immutable session identities.
+//! At most one editor publication runs at a time; completion targets are immutable session
+//! identities. A save that arrives while one runs waits its turn in `SaveQueue` and is never
+//! dropped.
 use super::{Event, State};
 use serde_json::Value;
 use sidenote::core::{
     self, TaskStore,
     memory::{MemoryRecord, MemoryStore},
 };
-use std::{io, path::PathBuf, sync::mpsc::Sender};
+use std::{collections::VecDeque, io, path::PathBuf, sync::mpsc::Sender};
+
+/// One save runs; the rest wait in the order they were made. Each job already carries what it
+/// needs and merges against the file when it runs, so running them one after another gives the
+/// same result as if each had waited for the one before.
+pub struct SaveQueue<J> {
+    busy: bool,
+    waiting: VecDeque<J>,
+}
+impl<J> Default for SaveQueue<J> {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            waiting: VecDeque::new(),
+        }
+    }
+}
+impl<J> SaveQueue<J> {
+    /// Hands back the job to start now, or keeps it for later and returns None.
+    pub fn submit(&mut self, job: J) -> Option<J> {
+        if self.busy {
+            self.waiting.push_back(job);
+            None
+        } else {
+            self.busy = true;
+            Some(job)
+        }
+    }
+    /// The running save ended. Hands back the next job, which becomes the running one, or
+    /// None when the queue is empty and the worker is idle again.
+    pub fn finish(&mut self) -> Option<J> {
+        let next = self.waiting.pop_front();
+        self.busy = next.is_some();
+        next
+    }
+    /// Like `submit`, but a job that waits may fold into the one waiting last. `merge` gets that
+    /// last job and the new one and returns true when it took the new one in. Only the last
+    /// waiting job is offered, so no save ever moves past another that came between.
+    pub fn submit_merging(&mut self, job: J, merge: impl FnOnce(&mut J, &J) -> bool) -> Option<J> {
+        if self.busy
+            && let Some(last) = self.waiting.back_mut()
+            && merge(last, &job)
+        {
+            return None;
+        }
+        self.submit(job)
+    }
+    /// True when nothing runs and nothing waits.
+    pub fn is_idle(&self) -> bool {
+        !self.busy
+    }
+    #[cfg(test)]
+    fn waiting(&self) -> usize {
+        self.waiting.len()
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveError {
     Busy,
@@ -81,6 +138,15 @@ pub enum Job {
         source: PathBuf,
         edit: core::TaskV2Edit,
     },
+    /// A board move. The steps run one after the other in this one save, so the page takes in
+    /// both at once.
+    Move {
+        store: TaskStore,
+        ticks: core::StateStore,
+        task: Box<core::TaskItem>,
+        source: PathBuf,
+        intent: core::MoveIntent,
+    },
     Grouping {
         store: TaskStore,
         by: core::TaskGrouping,
@@ -130,6 +196,7 @@ impl Job {
             | Self::Tick { .. }
             | Self::ManualTick { .. }
             | Self::V2 { .. }
+            | Self::Move { .. }
             | Self::Grouping { .. }
             | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
@@ -149,6 +216,11 @@ pub enum Completion {
     V2 {
         result: Result<Box<core::EditView<core::Overrides>>, SaveError>,
         added: Option<String>,
+    },
+    Move {
+        id: String,
+        moved: Box<core::Moved>,
+        error: Option<SaveError>,
     },
     Preferences {
         teams: Option<core::Teams>,
@@ -185,6 +257,7 @@ impl Completion {
             | Self::ManualTick(_)
             | Self::Preferences { .. }
             | Self::V2 { .. }
+            | Self::Move { .. }
             | Self::Redo(_) => Target::Tick,
             Self::Task {
                 row,
@@ -221,12 +294,61 @@ impl Drop for Guard {
         }
     }
 }
-impl State {
-    pub(super) fn publish_edit(&mut self, job: Job) {
-        if self.edit_busy {
-            return;
+impl Job {
+    /// Folds a move into a waiting move of the same card: one save for what the user chose last,
+    /// with the status from before still applying where the later move names none.
+    fn absorb_move(&mut self, next: &Job) -> bool {
+        let (
+            Self::Move {
+                task,
+                intent,
+                source,
+                ..
+            },
+            Self::Move {
+                task: newer,
+                intent: later,
+                source: newer_source,
+                ..
+            },
+        ) = (self, next)
+        else {
+            return false;
+        };
+        // Legacy cards without a stable id can share text with another card, so they never fold:
+        // each such move is saved on its own.
+        if task.stable_id.is_empty()
+            || task.meeting_id != newer.meeting_id
+            || task.stable_id != newer.stable_id
+            || task.manual != newer.manual
+            || task.task != newer.task
+        {
+            return false;
         }
-        self.edit_busy = true;
+        *intent = intent.then(*later);
+        *task = newer.clone();
+        if !newer_source.as_os_str().is_empty() {
+            source.clone_from(newer_source);
+        }
+        true
+    }
+}
+impl State {
+    /// A board move: queued behind whatever is saving, and folded into the move waiting just
+    /// before it when that one is for the same card.
+    pub(super) fn publish_move(&mut self, job: Job) {
+        if let Some(job) = self.edit_queue.submit_merging(job, Job::absorb_move) {
+            self.edit_busy = true;
+            self.start_edit(job);
+        }
+    }
+    pub(super) fn publish_edit(&mut self, job: Job) {
+        if let Some(job) = self.edit_queue.submit(job) {
+            self.edit_busy = true;
+            self.start_edit(job);
+        }
+    }
+    fn start_edit(&mut self, job: Job) {
         let mut guard = Guard {
             target: Some(job.target()),
             events: self.events_tx.clone(),
@@ -260,6 +382,20 @@ impl State {
                                 .map(Box::new)
                                 .map_err(|e| SaveError::from(&e)),
                             added,
+                        }
+                    }
+                    Job::Move {
+                        store,
+                        ticks,
+                        task,
+                        source,
+                        intent,
+                    } => {
+                        let (moved, error) = core::run_move(&store, &ticks, &task, &source, intent);
+                        Completion::Move {
+                            id: task.meeting_id.clone(),
+                            moved: Box::new(moved),
+                            error: error.map(|e| SaveError::from(&e)),
                         }
                     }
                     Job::Grouping { store, by } => Completion::Preferences {
@@ -353,6 +489,13 @@ impl State {
     }
     pub(super) fn edit_finished(&mut self, completion: Completion) {
         self.edit_busy = false;
+        self.apply_completion(completion);
+        if let Some(next) = self.edit_queue.finish() {
+            self.edit_busy = true;
+            self.start_edit(next);
+        }
+    }
+    fn apply_completion(&mut self, completion: Completion) {
         if !completion.target().matches(self) {
             self.request_refresh();
             return;
@@ -431,6 +574,35 @@ impl State {
                 }
                 Err(e) => self.tasks.notice = Some(e.message().into()),
             },
+            Completion::Move { id, moved, error } => {
+                // Both steps wrote, so only the newest view is current. The tick view is
+                // older than the status view by one write and is taken with it.
+                let newest = moved
+                    .overrides
+                    .as_ref()
+                    .map(|v| v.generation)
+                    .into_iter()
+                    .chain(moved.ticks.as_ref().map(|v| v.generation))
+                    .max();
+                if newest == Some(core::mutation_generation()) {
+                    let core::Moved { ticks, overrides } = *moved;
+                    if let Some(view) = ticks {
+                        self.tasks
+                            .checked
+                            .insert(id.clone(), view.value.checked.clone());
+                        if self.selected.as_deref() == Some(&id) {
+                            self.saved = view.value;
+                        }
+                    }
+                    if let Some(view) = overrides {
+                        self.tasks.overrides = view.value;
+                    }
+                }
+                if let Some(e) = error {
+                    self.tasks.notice = Some(e.message().into());
+                }
+                self.rebuild_tasks();
+            }
             Completion::ManualTick(result) => match result {
                 Ok(view) => {
                     if view.generation == core::mutation_generation() {
@@ -551,5 +723,120 @@ impl State {
             }
         }
         self.request_refresh();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveQueue;
+    use sidenote::core::{BoardColumn, MoveIntent};
+
+    /// The merge a board move gets, on a stand-in job of (card, intent).
+    fn fold(last: &mut (&'static str, MoveIntent), next: &(&'static str, MoveIntent)) -> bool {
+        if last.0 != next.0 {
+            return false;
+        }
+        last.1 = last.1.then(next.1);
+        true
+    }
+
+    #[test]
+    fn moves_queued_through_done_save_the_final_column_and_keep_the_old_status() {
+        use BoardColumn::{Done, Review, Todo, Waiting};
+        let mut q = SaveQueue::default();
+        // Something else is saving, so every move waits.
+        assert!(q.submit(("other", MoveIntent::default())).is_some());
+        // Review -> Done, then Done -> Waiting on, then Waiting on -> Done again, then To do.
+        for to in [Done, Waiting, Done, Todo] {
+            assert!(q.submit_merging(("a", MoveIntent::to(to)), fold).is_none());
+        }
+        // One job waits, and it holds the last choice.
+        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.finish(), Some(("a", MoveIntent::to(Todo))));
+        assert_eq!(q.finish(), None);
+        // A card moved to Done and nowhere else keeps the status under the tick.
+        assert!(q.submit(("other", MoveIntent::default())).is_some());
+        q.submit_merging(("b", MoveIntent::to(Review)), fold);
+        q.submit_merging(("b", MoveIntent::to(Done)), fold);
+        let (_, intent) = q.finish().unwrap();
+        assert_eq!(intent.done, Some(true));
+        assert_eq!(intent.status, MoveIntent::to(Review).status);
+    }
+
+    #[test]
+    fn rapid_x_presses_queue_one_job_that_ends_on_the_last_press() {
+        let mut q = SaveQueue::default();
+        // Something is saving; the card is open on disk.
+        assert!(q.submit(("other", MoveIntent::default())).is_some());
+        let mut will_be = false;
+        for press in 1..=5 {
+            will_be = !will_be;
+            // Each press sets the opposite of what the card will be after the earlier ones.
+            assert!(
+                q.submit_merging(("a", MoveIntent::tick(will_be)), fold)
+                    .is_none(),
+                "press {press}"
+            );
+        }
+        // One job holds the last press: five presses end done, and a sixth ends open.
+        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.finish(), Some(("a", MoveIntent::tick(true))));
+        assert_eq!(q.finish(), None);
+        assert!(q.submit(("other", MoveIntent::default())).is_some());
+        for on in [true, false] {
+            q.submit_merging(("a", MoveIntent::tick(on)), fold);
+        }
+        assert_eq!(q.finish(), Some(("a", MoveIntent::tick(false))));
+    }
+
+    #[test]
+    fn moves_of_different_cards_or_split_by_another_save_do_not_merge() {
+        use BoardColumn::{Done, Todo};
+        let mut q = SaveQueue::default();
+        assert!(q.submit(("x", MoveIntent::default())).is_some());
+        q.submit_merging(("a", MoveIntent::to(Done)), fold);
+        q.submit_merging(("b", MoveIntent::to(Done)), fold);
+        q.submit_merging(("a", MoveIntent::to(Todo)), fold);
+        // a, b, a stay in the order they were made.
+        assert_eq!(q.waiting(), 3);
+        assert_eq!(q.finish().map(|j| j.0), Some("a"));
+        assert_eq!(q.finish().map(|j| j.0), Some("b"));
+        assert_eq!(q.finish().map(|j| j.1), Some(MoveIntent::to(Todo)));
+        assert_eq!(q.finish(), None);
+        // An idle queue runs a move at once, never folds it.
+        assert!(q.is_idle());
+        assert!(
+            q.submit_merging(("a", MoveIntent::to(Done)), fold)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_second_save_waits_instead_of_being_dropped() {
+        let mut q = SaveQueue::default();
+        assert_eq!(q.submit("first"), Some("first"));
+        assert_eq!(q.submit("second"), None);
+        assert_eq!(q.submit("third"), None);
+        assert_eq!(q.waiting(), 2);
+        // Each finish hands over the next job in the order they were made.
+        assert_eq!(q.finish(), Some("second"));
+        assert_eq!(q.finish(), Some("third"));
+        assert_eq!(q.finish(), None);
+        assert_eq!(q.waiting(), 0);
+    }
+
+    #[test]
+    fn an_idle_queue_starts_the_next_save_at_once() {
+        let mut q = SaveQueue::default();
+        assert_eq!(q.submit(1), Some(1));
+        assert_eq!(q.finish(), None);
+        assert_eq!(q.submit(2), Some(2));
+        // A save made while the running one finishes still runs: the queue stays busy until
+        // it is empty.
+        assert_eq!(q.submit(3), None);
+        assert_eq!(q.finish(), Some(3));
+        assert_eq!(q.submit(4), None);
+        assert_eq!(q.finish(), Some(4));
+        assert_eq!(q.finish(), None);
     }
 }

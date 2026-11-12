@@ -384,7 +384,7 @@ fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     result?;
     out
 }
-fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
+pub(super) fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
     command_output(
         Command::new(if cfg!(windows) { "git.exe" } else { "git" })
             .args(["-C", repo])

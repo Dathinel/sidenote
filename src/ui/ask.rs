@@ -11,7 +11,7 @@ use super::{
     meeting::COLUMN,
     roles,
     theme::Palette,
-    widgets::{hairline, pressable, quiet_button, spaced_caps},
+    widgets::{ButtonDisabled, hairline, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
@@ -537,6 +537,9 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
 }
 
 fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
+    if s.ask_settings.connection.settings.enabled {
+        return None;
+    }
     let runner = s
         .runners
         .iter()
@@ -764,6 +767,57 @@ pub fn overlay_with(
                 .border(1.0, p.line),
         );
     }
+    if s.ask_settings.connection.settings.enabled
+        || s.ask_settings.connection.labels.contains_key(&id)
+    {
+        let label = s
+            .ask_settings
+            .connection
+            .labels
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| s.ask_settings.connection.settings.label());
+        let selected = s.ask_settings.connection.settings.label();
+        let label =
+            if !pending && (!s.ask_settings.connection.settings.enabled || label != selected) {
+                format!("Last attempt: {label}")
+            } else {
+                label
+            };
+        stack = stack.child(
+            roles::META
+                .wrap(label, p.soft)
+                .key("ask-endpoint-label")
+                .role("status")
+                .w_full(),
+        );
+        if !pending
+            && s.ask_settings.connection.settings.enabled
+            && s.ask_settings
+                .connection
+                .labels
+                .get(&id)
+                .is_some_and(|label| label != &selected)
+        {
+            stack = stack.child(
+                roles::META
+                    .wrap(format!("Next Ask: {selected}"), p.soft)
+                    .key("ask-next-endpoint-label")
+                    .w_full(),
+            );
+        }
+        if let Some(metrics) = s.ask_settings.connection.metrics.get(&id) {
+            stack = stack.child(
+                roles::META
+                    .wrap(metrics.label(), p.faint)
+                    .key("ask-endpoint-timing")
+                    .w_full(),
+            );
+        }
+        if let Some(recovery) = super::cloud_ask::recovery(s, p) {
+            stack = stack.child(recovery);
+        }
+    }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
         let pill = if super::ai_notes::setup_visible(s) && !s.ai_notes.ask_setup_open {
             raised(
@@ -830,13 +884,28 @@ pub fn overlay_with(
     let ready = !empty && !pending;
     // The pill lines up with the thread above it when there is one.
     let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
-    let model = match &s.runner_error {
-        Some(e) => roles::META
-            .medium()
-            .wrap(format!("Runners are not set up. {e}"), p.warn)
-            .px(8.0)
-            .max_w(260.0),
-        None => runner_choice(s, k, p, narrow, layer),
+    let model = if s.ask_settings.connection.settings.enabled {
+        quiet_button("Connection", "ask-endpoint-settings", p)
+            .button_disabled(pending)
+            .help(if pending {
+                "Available after this answer finishes"
+            } else {
+                "Open Ask connection settings"
+            })
+            .on_press(|s: &mut State| {
+                if !s.asks.contains_key(&s.ask_key()) {
+                    s.open_connection_settings();
+                }
+            })
+    } else {
+        match &s.runner_error {
+            Some(e) => roles::META
+                .medium()
+                .wrap(format!("Runners are not set up. {e}"), p.warn)
+                .px(8.0)
+                .max_w(260.0),
+            None => runner_choice(s, k, p, narrow, layer),
+        }
     };
     let beside_lead = lead.is_some() && !narrow;
     let mut pill = row()

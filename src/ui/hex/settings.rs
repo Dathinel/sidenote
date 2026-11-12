@@ -179,7 +179,7 @@ fn active(s: &State) -> (Page, usize) {
     )
 }
 
-fn navigate(s: &mut State, page: Page, tab: usize) {
+pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
         load_kb(s);
     }
@@ -1993,7 +1993,7 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
         .padding(16.0)
         .gap(12.0)
         .child(roles::SMALL.wrap(
-            "Daily check reads these sources from your repository. Settings stay on this device.",
+            "Daily check reads these sources from your repository. People supports Markdown rosters only; YAML, JSON and TXT are unsupported. Settings stay on this device.",
             p.soft,
         ));
     for (index, label) in [
@@ -2175,6 +2175,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .w_full()
             .children(ai_notes::setup_card(s, p))
             .child(super::super::ask_settings::section(s, k, p, layer))
+            .child(super::super::cloud_ask::section(s, k, p, layer))
             .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
             .child(super::super::annotations::agents_section(s, k, p, layer)),

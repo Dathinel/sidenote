@@ -7,6 +7,8 @@ pub struct Updates {
     pub status: Status,
     listener: updates::ListenerStatus,
     listener_busy: bool,
+    listener_probe_busy: bool,
+    listener_probed: Option<std::time::Instant>,
     service: Option<std::sync::mpsc::Sender<updates::CheckRequest>>,
     dismissed: bool,
     notes_open: bool,
@@ -19,6 +21,8 @@ impl Default for Updates {
             status: updates::load(),
             listener: updates::listener_status(),
             listener_busy: false,
+            listener_probe_busy: false,
+            listener_probed: None,
             service: None,
             dismissed: false,
             notes_open: false,
@@ -31,8 +35,57 @@ impl Updates {
     fn feed_status(&mut self, status: Status) {
         self.status = status;
     }
+    fn listener_probed(&mut self, status: Option<updates::ListenerStatus>) {
+        self.listener_probe_busy = false;
+        if !self.listener_busy
+            && !self.applying
+            && let Some(status) = status
+        {
+            self.listener = status;
+        }
+    }
 }
 impl State {
+    pub fn listener_tick(&mut self, tx: &mut rune::Tx) {
+        if !updates::installed() || self.updates.scene || rune::tooling::headless_run().is_some() {
+            return;
+        }
+        let interval = std::time::Duration::from_secs(5);
+        let elapsed = self
+            .updates
+            .listener_probed
+            .map(|at| at.elapsed())
+            .unwrap_or(interval);
+        tx.wake_after(if elapsed < interval {
+            interval - elapsed
+        } else {
+            interval
+        });
+        if elapsed < interval
+            || self.updates.listener_busy
+            || self.updates.listener_probe_busy
+            || self.updates.applying
+            || matches!(
+                self.updates.status.phase,
+                Phase::Preparing | Phase::StoppingListener
+            )
+        {
+            return;
+        }
+        self.updates.listener_probe_busy = true;
+        self.updates.listener_probed = Some(std::time::Instant::now());
+        let events = self.events_tx.clone();
+        let wake = self.waker.clone();
+        std::thread::spawn(move || {
+            let _ = events.send(Event::ListenerProbed(updates::probe_listener()));
+            if let Some(wake) = wake {
+                wake();
+            }
+        });
+    }
+    pub fn listener_probed(&mut self, status: Option<updates::ListenerStatus>) {
+        self.updates.listener_probed(status);
+    }
     pub fn updates_start(&mut self) {
         if !updates::installed() {
             return;
@@ -497,7 +550,7 @@ pub fn settings_scene(s: &mut State) {
 }
 
 pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
-    s.updates.listener.error.as_ref()?;
+    let error = s.updates.listener.error.as_ref()?;
     let mut retry = super::area::button(
         if s.updates.listener_busy {
             "Trying again\u{2026}"
@@ -514,10 +567,15 @@ pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
         retry = retry.on_press(|s: &mut State| s.retry_listener());
     }
     Some(
-        super::widgets::banner("Recording is unavailable", "Sidenote cannot record meetings right now. Press Try again. If that does not work, restart Sidenote. If it still fails, reinstall Sidenote. Your existing meetings are safe.", super::widgets::BannerKind::Problem, p)
-            .key("listener-error")
-            .mb(16.0)
-            .child(retry.self_start()),
+        super::widgets::banner(
+            "Recording is unavailable",
+            error.clone(),
+            super::widgets::BannerKind::Problem,
+            p,
+        )
+        .key("listener-error")
+        .mb(16.0)
+        .child(retry.self_start()),
     )
 }
 pub fn listener_error_scene(s: &mut State) {
@@ -537,6 +595,50 @@ pub fn listener_ready(s: &State) -> bool {
 #[cfg(test)]
 mod listener_tests {
     use super::*;
+    #[test]
+    fn background_recovery_clears_the_banner_and_later_death_restores_it() {
+        let mut updates = Updates {
+            listener: updates::ListenerStatus {
+                ready: false,
+                error: Some("The meeting listener did not start.".into()),
+            },
+            listener_probe_busy: true,
+            ..Default::default()
+        };
+        updates.listener_probed(Some(updates::ListenerStatus {
+            ready: true,
+            error: None,
+        }));
+        assert!(updates.listener.ready);
+        assert!(updates.listener.error.is_none());
+        assert!(!updates.listener_probe_busy);
+        updates.listener_probed(Some(updates::ListenerStatus {
+            ready: false,
+            error: Some("The meeting listener is not running. Try again.".into()),
+        }));
+        assert!(!updates.listener.ready);
+        assert!(updates.listener.error.is_some());
+    }
+    #[test]
+    fn stale_probe_results_do_not_override_retry_or_apply() {
+        for applying in [false, true] {
+            let mut updates = Updates {
+                listener_busy: !applying,
+                applying,
+                listener: updates::ListenerStatus {
+                    ready: false,
+                    error: Some("retry in progress".into()),
+                },
+                ..Default::default()
+            };
+            updates.listener_probed(Some(updates::ListenerStatus {
+                ready: true,
+                error: None,
+            }));
+            assert!(!updates.listener.ready);
+            assert_eq!(updates.listener.error.as_deref(), Some("retry in progress"));
+        }
+    }
     #[test]
     fn feed_checks_never_clear_a_listener_failure() {
         let mut updates = Updates {

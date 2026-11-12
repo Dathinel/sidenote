@@ -382,8 +382,9 @@ pub fn query<'a>(
     teams: &Teams,
     tasks: &'a [TaskItem],
     prefs: &UiPrefs,
+    affiliations: &people::Affiliations,
 ) -> CompanyData<'a> {
-    let roster = people::roster(meetings, teams, tasks, prefs);
+    let roster = people::roster(meetings, teams, tasks, prefs, affiliations);
     let people: Vec<_> = roster
         .iter()
         .filter(|p| companies.company_for(&p.name).is_some_and(|c| c.id == id))

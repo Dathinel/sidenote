@@ -286,7 +286,15 @@ fn tab_queries_use_confirmed_links_and_aliases_without_exposing_old_only_people(
         &Default::default(),
     );
     let companies = Companies::load(&f.0).unwrap();
-    let data = query(&north.id, &companies, &meetings, &teams, &tasks, &prefs);
+    let data = query(
+        &north.id,
+        &companies,
+        &meetings,
+        &teams,
+        &tasks,
+        &prefs,
+        &people::Affiliations::default(),
+    );
     assert_eq!(data.people.len(), 1);
     assert_eq!(data.people[0].name, "Aster Vale");
     assert_eq!(data.meetings.len(), 1);
@@ -298,7 +306,15 @@ fn tab_queries_use_confirmed_links_and_aliases_without_exposing_old_only_people(
     let context = data.ask_context(&tasks, &Default::default(), &Default::default());
     assert_eq!(context.included, 1);
     assert!(!context.text.contains("100-1"));
-    let empty = query("missing", &companies, &meetings, &teams, &tasks, &prefs);
+    let empty = query(
+        "missing",
+        &companies,
+        &meetings,
+        &teams,
+        &tasks,
+        &prefs,
+        &people::Affiliations::default(),
+    );
     assert_eq!(
         empty
             .ask_context(&tasks, &Default::default(), &Default::default())

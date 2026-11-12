@@ -279,14 +279,9 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
         .map(|n| s.tasks.teams.owner_name(n))
         .filter(|name| {
             s.people
-                .prefs
-                .people_sides
-                .get(&core::people::key(name))
-                .copied()
+                .affiliations
+                .side(name, &s.tasks.teams, &s.people.prefs)
                 == Some(Side::OurTeam)
-                || (s.people.prefs.people_sides.get(&core::people::key(name))
-                    != Some(&Side::External)
-                    && (s.tasks.teams.resolve(Some(name), None) != "No team" || name == "You"))
         })
         .collect();
     col()
