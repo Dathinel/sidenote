@@ -1,0 +1,15 @@
+Sidenote 0.0.1-dev.22
+
+The meeting recorder now restarts on its own. Its scheduled task checks every few minutes and starts the recorder again if it stopped, even when the Sidenote window is closed. A second copy exits quietly instead of filling the log.
+
+If the recorder was off for more than two minutes, Sidenote shows a line saying when it was off, which you can dismiss. No meeting content is stored for this, only times.
+
+A busy laptop no longer shows a false "Recording is unavailable" warning. When the recorder is holding its lock, Sidenote treats it as running and rechecks in the background; the warning appears only when the check really fails.
+
+The release checks now record whether the recorder was running before and after, and fail if it stopped during them.
+
+The prompt library has a new layout: see which prompts you edited, compare an edit with the original, sort the list, and redo tasks from a prompt. A save that would overwrite a newer change is refused instead of lost.
+
+Labs has a new experimental language detection stage, off by default. When on, it labels the language of each part of a meeting in a side file. It does not change transcription yet.
+
+Linux server work continues: owner control, pairing, sync transport and peer proof for a server-only device. Windows behaviour is unchanged.
