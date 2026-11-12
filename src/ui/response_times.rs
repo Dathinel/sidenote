@@ -44,7 +44,8 @@ pub fn section(p: Palette) -> El {
         .child(roles::SMALL.wrap(
             "Encoded-frame proxy: first drawn feedback / first drawn ready state. This does not measure physical display latency. Percentiles use the last 256 successful samples per action; counts cover this recording session.", p.soft));
     if let Some((summary, drops)) = response_time::snapshot() {
-        body = body.child(roles::META.wrap(format!("Recording on · dropped records: {drops}. Refresh to read the latest worker snapshot."), p.soft));
+        let unmatched: u64 = summary.iter().map(|sample| sample.unmatched).sum();
+        body = body.child(roles::META.wrap(format!("Recording on · dropped records: {drops} · unmatched: {unmatched}. Refresh to read the latest worker snapshot."), p.soft));
         let mut any = false;
         for (name, sample) in response_time::ACTIONS.iter().zip(summary) {
             if sample.count + sample.failed + sample.superseded == 0 {

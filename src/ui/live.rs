@@ -651,6 +651,10 @@ impl State {
             .find(|m| live.matches_meeting(m) && !live.known.contains(&m.id) && m.has_summary())
             .map(|m| (m.id.clone(), m.folder.clone()));
         if let Some((id, folder)) = found {
+            let timing_matched = live.folder.as_ref() == Some(&folder);
+            if !timing_matched && let Some(live) = &mut self.live {
+                super::response_time::unmatched(std::mem::take(&mut live.notes_response_time));
+            }
             let was_open = self.on_live();
             if let Some(live) = &mut self.live {
                 live.folder = Some(folder.clone());
@@ -671,7 +675,9 @@ impl State {
             self.live = None;
             self.live_open = false;
             // Opening a meeting needs the UI's scroll handle, so `poll` finishes the job.
-            super::response_time::ready(timing);
+            if timing_matched {
+                super::response_time::ready(timing);
+            }
             if was_open {
                 self.live_ready = Some(id);
             }

@@ -57,6 +57,7 @@ pub struct Summary {
     pub complete_p95_ms: f64,
     pub failed: u64,
     pub superseded: u64,
+    pub unmatched: u64,
 }
 
 struct Slot {
@@ -192,6 +193,9 @@ pub fn failed(id: u64) {
 }
 pub fn superseded(id: u64) {
     mark(id, ACTIONS.len() + 3);
+}
+pub fn unmatched(id: u64) {
+    mark(id, ACTIONS.len() + 4);
 }
 
 pub fn startup(started: Instant) {
@@ -345,6 +349,8 @@ fn record(samples: &mut [Samples; ACTIONS.len()], id: u64, tag: usize, at: u64) 
         } else {
             if tag == ACTIONS.len() + 1 {
                 s.summary.failed += 1;
+            } else if tag == ACTIONS.len() + 4 {
+                s.summary.unmatched += 1;
             } else {
                 s.summary.superseded += 1;
             }
@@ -382,6 +388,19 @@ fn consume(q: Arc<Queue>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmatched_stop_cannot_complete_on_a_later_frame() {
+        let mut s = std::array::from_fn(|_| Samples::default());
+        record(&mut s, 1, Action::Notes as usize, 0);
+        record(&mut s, 1, ACTIONS.len() + 4, 100);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 1000);
+        let result = &s[Action::Notes as usize].summary;
+        assert_eq!(
+            (result.count, result.unmatched, result.superseded),
+            (0, 1, 0)
+        );
+    }
 
     #[test]
     fn async_completion_requires_a_later_frame_and_matches_generation() {
