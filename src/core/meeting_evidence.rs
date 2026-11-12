@@ -83,7 +83,7 @@ struct Active {
 pub(crate) struct Collector {
     root: PathBuf,
     active: Option<Active>,
-    worker: bool,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 impl Collector {
     pub(crate) fn new(state: &Path) -> Self {
@@ -102,16 +102,15 @@ impl Collector {
         Self {
             root,
             active,
-            worker: false,
+            worker: None,
         }
     }
     pub(crate) fn tick(&mut self, status: &Value, enabled: bool) -> io::Result<()> {
         if !enabled {
             return Ok(());
         }
-        if !self.worker {
-            start_worker(self.root.clone());
-            self.worker = true;
+        if self.worker.is_none() {
+            self.worker = Some(start_worker(self.root.clone()));
         }
         let recording = matches!(
             status["meeting_state"].as_str(),
@@ -353,9 +352,10 @@ fn pending(root: &Path) -> io::Result<Vec<(PathBuf, Job)>> {
     all.sort_by_key(|(_, j)| j.queued_ms);
     Ok(all)
 }
-fn start_worker(root: PathBuf) {
+fn start_worker(root: PathBuf) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         // Caller priority does not control Hex inference priority. The Lab measures that contention.
+        #[cfg(windows)]
         unsafe {
             windows_sys::Win32::System::Threading::SetThreadPriority(
                 windows_sys::Win32::System::Threading::GetCurrentThread(),
@@ -378,7 +378,7 @@ fn start_worker(root: PathBuf) {
             }
             std::thread::sleep(Duration::from_secs(3));
         }
-    });
+    })
 }
 fn drain(
     root: &Path,
@@ -528,8 +528,10 @@ fn post_audio(model: &str, language: &str, audio: &[u8]) -> io::Result<Value> {
         port: u16,
         token: String,
     }
-    let path =
-        PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/local-api.json");
+    let path = super::meetings_dir()
+        .parent()
+        .ok_or(io::ErrorKind::NotFound)?
+        .join("local-api.json");
     let discovery: Discovery = serde_json::from_slice(&fs::read(path)?)?;
     if discovery.port == 0
         || discovery.token.is_empty()
@@ -585,6 +587,16 @@ fn summary(meeting: &Path) -> io::Result<()> {
         &meeting.join("summary.json"),
         &json!({"finished_ms":chrono::Utc::now().timestamp_millis(),"window_count":timings.len(),"audio_seconds_including_overlap":total,"model_seconds":models,"windows":timings,"collection":serde_json::from_slice::<Value>(&fs::read(meeting.join("collection.json"))?)?,"lag_samples":"lag.ndjson"}),
     )
+}
+
+impl Drop for Collector {
+    fn drop(&mut self) {
+        if crate::service::stopping()
+            && let Some(worker) = self.worker.take()
+        {
+            let _ = worker.join();
+        }
+    }
 }
 
 #[cfg(test)]

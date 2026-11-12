@@ -5,11 +5,11 @@ use super::{
 };
 use crate::core::failure::{AtStage, Stage};
 use crate::core::{self, agent_instructions::Agent, file_reads, store_io};
+use crate::platform::CommandExt;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, Write},
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -721,7 +721,7 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
-    let mut child = Command::new(std::env::current_exe().at(Stage::NotesExePath)?)
+    let child = Command::new(std::env::current_exe().at(Stage::NotesExePath)?)
         .arg("--notes-pending")
         .arg("--data-dir")
         .arg(core::state_dir())
@@ -733,10 +733,7 @@ pub fn start_worker() -> io::Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .at(Stage::NotesWorkerSpawn)?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    crate::service::own_child(child)
 }
 pub fn run_pending() -> io::Result<()> {
     core::settle::Store::default().recover()?;

@@ -89,10 +89,13 @@ pub(super) fn data() -> Option<PathBuf> {
         .or_else(|| env_path("SIDENOTE_STATE_DIR"))
 }
 pub(super) fn meetings() -> Option<PathBuf> {
-    PATHS
+    let meetings = PATHS
         .get()
         .and_then(|p| p.meetings.clone())
-        .or_else(|| env_path("SIDENOTE_HEX_DIR"))
+        .or_else(|| env_path("SIDENOTE_HEX_DIR"));
+    #[cfg(not(windows))]
+    let meetings = meetings.or_else(|| data().map(|p| p.join("hex/meetings")));
+    meetings
 }
 pub(super) fn peers() -> Option<PathBuf> {
     PATHS
@@ -104,7 +107,7 @@ pub(super) fn peers() -> Option<PathBuf> {
 }
 
 pub(super) fn appdata_dir(name: &str, legacy: &str) -> PathBuf {
-    let root = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default());
+    let root = crate::platform::data_home();
     prefer_legacy_path(root.join(name), root.join(legacy))
 }
 

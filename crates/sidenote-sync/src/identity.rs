@@ -226,7 +226,7 @@ pub fn protect(bytes: &[u8]) -> Result<Vec<u8>> {
     #[cfg(not(windows))]
     {
         let _ = bytes;
-        anyhow::bail!("Windows DPAPI required; no plaintext fallback")
+        anyhow::bail!("UNAVAILABLE_ON_PLATFORM")
     }
 }
 pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
@@ -237,7 +237,7 @@ pub fn unprotect(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     #[cfg(not(windows))]
     {
         let _ = bytes;
-        anyhow::bail!("Windows DPAPI required; no plaintext fallback")
+        anyhow::bail!("UNAVAILABLE_ON_PLATFORM")
     }
 }
 

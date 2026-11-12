@@ -1,4 +1,5 @@
 //! Hex stays a separate, unmodified process. No method starts or restarts it.
+use crate::platform::CommandExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -6,11 +7,10 @@ use std::{
     fmt, fs,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpStream},
-    os::windows::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{Arc, Mutex, mpsc},
-    thread::{self, JoinHandle},
+    sync::{Arc, Mutex},
+    thread,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -18,6 +18,7 @@ const PROTOCOL: u64 = 4;
 const LIMIT: usize = 1024 * 1024;
 const STATUS_TIMEOUT: Duration = Duration::from_millis(750);
 const CALL_TIMEOUT: Duration = Duration::from_secs(12);
+#[cfg(windows)]
 const POLL: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,8 +104,9 @@ fn safe_label(value: &Value) -> Option<&str> {
 }
 
 fn hex_dir() -> Result<PathBuf> {
-    std::env::var_os("APPDATA")
-        .map(|p| PathBuf::from(p).join("hex"))
+    crate::core::meetings_dir()
+        .parent()
+        .map(PathBuf::from)
         .ok_or(HexError::HexNotRunning)
 }
 fn remaining(deadline: Instant) -> Result<Duration> {
@@ -712,6 +714,9 @@ impl HexEngine {
         Ok(caps)
     }
     fn call(&self, feature: Feature, request: Value, expected: &str) -> Result<Value> {
+        if feature == Feature::WindowShow && !crate::service::ui_allowed() {
+            return Err(failed(crate::platform::UNAVAILABLE));
+        }
         if self.capabilities()?.get(&feature) != Some(&Support::Supported) {
             return Err(HexError::Unsupported);
         }
@@ -839,6 +844,7 @@ fn lab_settings(key: &str) -> Result<Vec<Setting>> {
     let value = serde_json::from_str(&text).map_err(|_| failed("invalid Labs settings JSON"))?;
     decode(value, "settings")
 }
+#[cfg(windows)]
 fn newest_cli() -> Result<PathBuf> {
     fs::read_dir(hex_dir()?.join("versions"))
         .map_err(io_error)?
@@ -855,6 +861,7 @@ fn newest_cli() -> Result<PathBuf> {
         .ok_or(HexError::HexNotRunning)
 }
 fn hidden_help(path: &PathBuf, args: &[&str], deadline: Instant) -> Result<String> {
+    crate::platform::require_process_support().map_err(|_| failed(crate::platform::UNAVAILABLE))?;
     remaining(deadline)?;
     if hex_dir()?.join("gpu-draw.pending").exists() {
         return Err(failed("Hex maintenance pending; CLI not launched"));
@@ -917,135 +924,143 @@ fn hidden_help(path: &PathBuf, args: &[&str], deadline: Instant) -> Result<Strin
     String::from_utf8(b).map_err(|_| failed("invalid help encoding"))
 }
 
-use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0},
-    System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects},
-};
-struct Event(HANDLE);
-// Windows event handles support waiting/signaling from any thread; this object owns the handle.
-unsafe impl Send for Event {}
-unsafe impl Sync for Event {}
-impl Event {
-    fn new(name: Option<&str>) -> Result<Self> {
-        let name: Option<Vec<u16>> = name.map(|s| s.encode_utf16().chain(Some(0)).collect());
-        let handle = unsafe {
-            CreateEventW(
-                std::ptr::null(),
-                0,
-                0,
-                name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
-            )
-        };
-        if handle.is_null() {
-            Err(failed("event handle unavailable"))
-        } else {
-            Ok(Self(handle))
+#[cfg(windows)]
+mod watcher {
+    use super::*;
+    use std::{sync::mpsc, thread::JoinHandle};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0},
+        System::Threading::{CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects},
+    };
+    struct Event(HANDLE);
+    // Windows event handles support waiting/signaling from any thread; this object owns the handle.
+    unsafe impl Send for Event {}
+    unsafe impl Sync for Event {}
+    impl Event {
+        fn new(name: Option<&str>) -> Result<Self> {
+            let name: Option<Vec<u16>> = name.map(|s| s.encode_utf16().chain(Some(0)).collect());
+            let handle = unsafe {
+                CreateEventW(
+                    std::ptr::null(),
+                    0,
+                    0,
+                    name.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                )
+            };
+            if handle.is_null() {
+                Err(failed("event handle unavailable"))
+            } else {
+                Ok(Self(handle))
+            }
+        }
+        fn raw(&self) -> HANDLE {
+            self.0
+        }
+        fn signal(&self) {
+            unsafe {
+                SetEvent(self.0);
+            }
         }
     }
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
-    fn signal(&self) {
-        unsafe {
-            SetEvent(self.0);
+    impl Drop for Event {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
         }
     }
-}
-impl Drop for Event {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.0);
+    const EVENT_NAME: &str = "Local\\HexMeetingsEngineChanged";
+    /// Called by the existing SSE listener. No second /meetings/events subscription is opened.
+    pub(crate) fn meeting_event() {
+        if let Ok(event) = Event::new(Some(EVENT_NAME)) {
+            event.signal();
         }
     }
-}
-const EVENT_NAME: &str = "Local\\HexMeetingsEngineChanged";
-/// Called by the existing SSE listener. No second /meetings/events subscription is opened.
-pub(crate) fn meeting_event() {
-    if let Ok(event) = Event::new(Some(EVENT_NAME)) {
-        event.signal();
+    enum WatchCommand {
+        Visible(bool),
+        Stop,
     }
-}
-enum WatchCommand {
-    Visible(bool),
-    Stop,
-}
-pub struct StatusWatcher {
-    pub updates: mpsc::Receiver<Result<EngineState>>,
-    commands: mpsc::Sender<WatchCommand>,
-    wake: Arc<Event>,
-    thread: Option<JoinHandle<()>>,
-}
-impl StatusWatcher {
-    fn start(engine: HexEngine) -> Result<Self> {
-        let wake = Arc::new(Event::new(None)?);
-        let shared = Event::new(Some(EVENT_NAME))?;
-        let (commands, input) = mpsc::channel();
-        let (output, updates) = mpsc::sync_channel(1);
-        let worker_wake = wake.clone();
-        let thread = thread::Builder::new()
-            .name("hex-status".into())
-            .spawn(move || {
-                let mut visible = false;
-                loop {
-                    let handles = [worker_wake.raw(), shared.raw()];
-                    let result = unsafe {
-                        WaitForMultipleObjects(
-                            if visible { 2 } else { 1 },
-                            handles.as_ptr(),
-                            0,
-                            if visible {
-                                POLL.as_millis() as u32
-                            } else {
-                                INFINITE
-                            },
-                        )
-                    };
-                    if result == WAIT_FAILED {
-                        let _ = output.try_send(Err(failed("status watcher wait failed")));
-                        return;
-                    }
-                    let mut refresh = result != WAIT_OBJECT_0;
-                    for command in input.try_iter() {
-                        match command {
-                            WatchCommand::Stop => return,
-                            WatchCommand::Visible(v) => {
-                                refresh |= v && !visible;
-                                visible = v;
+    pub struct StatusWatcher {
+        pub updates: mpsc::Receiver<Result<EngineState>>,
+        commands: mpsc::Sender<WatchCommand>,
+        wake: Arc<Event>,
+        thread: Option<JoinHandle<()>>,
+    }
+    impl StatusWatcher {
+        pub(super) fn start(engine: HexEngine) -> Result<Self> {
+            let wake = Arc::new(Event::new(None)?);
+            let shared = Event::new(Some(EVENT_NAME))?;
+            let (commands, input) = mpsc::channel();
+            let (output, updates) = mpsc::sync_channel(1);
+            let worker_wake = wake.clone();
+            let thread = thread::Builder::new()
+                .name("hex-status".into())
+                .spawn(move || {
+                    let mut visible = false;
+                    loop {
+                        let handles = [worker_wake.raw(), shared.raw()];
+                        let result = unsafe {
+                            WaitForMultipleObjects(
+                                if visible { 2 } else { 1 },
+                                handles.as_ptr(),
+                                0,
+                                if visible {
+                                    POLL.as_millis() as u32
+                                } else {
+                                    INFINITE
+                                },
+                            )
+                        };
+                        if result == WAIT_FAILED {
+                            let _ = output.try_send(Err(failed("status watcher wait failed")));
+                            return;
+                        }
+                        let mut refresh = result != WAIT_OBJECT_0;
+                        for command in input.try_iter() {
+                            match command {
+                                WatchCommand::Stop => return,
+                                WatchCommand::Visible(v) => {
+                                    refresh |= v && !visible;
+                                    visible = v;
+                                }
                             }
                         }
+                        if visible
+                            && refresh
+                            && let Err(mpsc::TrySendError::Disconnected(_)) =
+                                output.try_send(engine.status())
+                        {
+                            return;
+                        }
                     }
-                    if visible
-                        && refresh
-                        && let Err(mpsc::TrySendError::Disconnected(_)) =
-                            output.try_send(engine.status())
-                    {
-                        return;
-                    }
-                }
+                })
+                .map_err(|_| failed("cannot start status watcher"))?;
+            Ok(Self {
+                updates,
+                commands,
+                wake,
+                thread: Some(thread),
             })
-            .map_err(|_| failed("cannot start status watcher"))?;
-        Ok(Self {
-            updates,
-            commands,
-            wake,
-            thread: Some(thread),
-        })
+        }
+        pub fn set_visible(&self, visible: bool) {
+            let _ = self.commands.send(WatchCommand::Visible(visible));
+            self.wake.signal();
+        }
     }
-    pub fn set_visible(&self, visible: bool) {
-        let _ = self.commands.send(WatchCommand::Visible(visible));
-        self.wake.signal();
-    }
-}
-impl Drop for StatusWatcher {
-    fn drop(&mut self) {
-        let _ = self.commands.send(WatchCommand::Stop);
-        self.wake.signal();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+    impl Drop for StatusWatcher {
+        fn drop(&mut self) {
+            let _ = self.commands.send(WatchCommand::Stop);
+            self.wake.signal();
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
         }
     }
 }
-
+#[cfg(windows)]
+pub use watcher::StatusWatcher;
+#[cfg(windows)]
+pub(crate) use watcher::meeting_event;
 /// Read-only diagnostics. Counts and state only; never serializes a complete control response.
 pub fn run_status() -> i32 {
     let engine = HexEngine::new();
@@ -1109,4 +1124,23 @@ pub fn run_status() -> i32 {
             1
         }
     }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn meeting_event() {}
+#[cfg(not(windows))]
+pub struct StatusWatcher {
+    pub updates: std::sync::mpsc::Receiver<Result<EngineState>>,
+}
+#[cfg(not(windows))]
+impl StatusWatcher {
+    pub fn set_visible(&self, _visible: bool) {}
+    fn start(_engine: HexEngine) -> Result<Self> {
+        Err(failed(crate::platform::UNAVAILABLE))
+    }
+}
+
+#[cfg(not(windows))]
+fn newest_cli() -> Result<PathBuf> {
+    Err(failed(crate::platform::UNAVAILABLE))
 }

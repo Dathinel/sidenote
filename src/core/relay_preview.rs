@@ -289,6 +289,7 @@ pub struct Preview {
 
 impl Preview {
     fn open(root: &Path, settings: Settings) -> io::Result<Self> {
+        crate::platform::require_process_support()?;
         let mut settings = settings;
         if settings.backup.is_empty() {
             migration::enable(root, &mut settings)?;
@@ -750,6 +751,7 @@ mod tests {
                 name: "Synthetic PC".into(),
                 id: "c".repeat(32),
                 daily_check: false,
+                role: Default::default(),
             },
         )?;
         let task = ManualTask {

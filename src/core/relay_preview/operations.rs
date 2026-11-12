@@ -236,6 +236,7 @@ mod tests {
                 name: "Synthetic health PC".into(),
                 id: "e".repeat(32),
                 daily_check: false,
+                role: Default::default(),
             },
         )
         .unwrap();

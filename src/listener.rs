@@ -1,15 +1,17 @@
 use crate::core::failure::{AtStage, Stage};
+#[cfg(windows)]
+use crate::platform::CommandExt;
 use serde::Deserialize;
 use std::{
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpStream},
-    os::windows::process::CommandExt,
     path::PathBuf,
     process::Command,
     time::Duration,
 };
 
+#[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
 pub mod status;
 mod timings;
@@ -49,7 +51,24 @@ impl Problem {
     }
 }
 pub(crate) fn log(message: &str) {
+    if cfg!(not(windows)) && crate::service::active() {
+        log_at(&crate::core::log_path(), "worker status=changed");
+        return;
+    }
     log_at(&crate::core::log_path(), message);
+}
+/// Existing catch-up and queue drains, owned by the service instead of a window.
+pub(crate) fn service_tick() -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        catch_up()?;
+        crate::core::meeting_router::jobs::start_worker()?;
+        crate::core::notes::queue::start_worker()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(crate::platform::unavailable())
+    }
 }
 fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {
@@ -212,6 +231,7 @@ fn catch_up_routing(
     }
     Ok(())
 }
+#[cfg(windows)]
 const LEGACY_SCRIPT_NOTICE: &str =
     "notes script does not accept MeetingFolders; short-recording filter not applied to the script";
 fn legacy_script_folders(
@@ -240,6 +260,7 @@ fn script_markers(folders: &[PathBuf], succeeded: bool) {
         }
     }
 }
+#[cfg(windows)]
 fn script_command(
     script: &std::path::Path,
     folders: &[PathBuf],
@@ -325,15 +346,20 @@ impl Read for Body {
     }
 }
 fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
-    let path =
-        PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/local-api.json");
+    let path = crate::core::meetings_dir()
+        .parent()
+        .ok_or(Problem::Value)?
+        .join("local-api.json");
     let config: Discovery = serde_json::from_slice(&fs::read(path)?).map_err(|_| Problem::Value)?;
     // Reject header injection without ever including the credential in an error.
     if config.token.contains(['\r', '\n']) {
         return Err(Problem::Value);
     }
     let addr: SocketAddr = ([127, 0, 0, 1], config.port).into();
-    let mut socket = TcpStream::connect_timeout(&addr, Duration::from_secs(60))?;
+    let mut socket = TcpStream::connect_timeout(
+        &addr,
+        Duration::from_secs(if crate::service::active() { 2 } else { 60 }),
+    )?;
     let (watch, stopped) = std::sync::mpsc::channel::<()>();
     let _watch = watch;
     if let Ok(control) = socket.try_clone() {
@@ -426,11 +452,22 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
     Ok(())
 }
 
+// Exit independently of catch-up and worker joins, within the updater's 8 s wait.
+pub(crate) fn watch_update_stop() {
+    std::thread::spawn(|| {
+        while !crate::updates::listener_stopping() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        std::process::exit(0);
+    });
+}
+
 pub fn run() -> ! {
     let _instance = match crate::updates::listener_lock() {
         Ok(lock) if !crate::updates::listener_stopping() => lock,
         _ => std::process::exit(0),
     };
+    watch_update_stop();
     let isolated = std::env::args().any(|a| a == "--listener-isolated")
         && std::env::args().any(|a| a == "--data-dir");
     // TODO: gate this call with ui_allowed() when feat/linux-server lands.
@@ -450,12 +487,6 @@ pub fn run() -> ! {
             Stage::CatchUpRouting.error(error)
         ));
     }
-    std::thread::spawn(|| {
-        while !crate::updates::listener_stopping() {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        std::process::exit(0);
-    });
     std::thread::spawn(|| {
         loop {
             let _ = crate::core::meeting_router::jobs::start_worker();
@@ -498,6 +529,47 @@ pub fn run() -> ! {
             last = problem;
         }
         std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
+#[cfg(not(windows))]
+fn script_command(
+    _script: &std::path::Path,
+    _folders: &[PathBuf],
+    _report: impl FnOnce(&str),
+) -> io::Result<(Command, bool)> {
+    Err(crate::platform::unavailable())
+}
+
+pub(crate) struct Background {
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+impl Drop for Background {
+    fn drop(&mut self) {
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+pub(crate) fn service_background() -> Background {
+    let status = status::start();
+    let (finished, watcher) = crate::core::meeting_watch::start_managed(log);
+    let events = std::thread::spawn(move || {
+        let mut last = String::new();
+        while !crate::service::stopping() {
+            let problem = match listen(&finished) {
+                Ok(()) => "stream ended".into(),
+                Err(error) => error.message(),
+            };
+            if problem != last {
+                log(&format!("{problem}; retrying every 30 s"));
+                last = problem;
+            }
+            crate::service::pause(Duration::from_secs(30));
+        }
+    });
+    Background {
+        handles: vec![events, watcher, status],
     }
 }
 

@@ -182,7 +182,8 @@ pub fn route(request: Request<'_>) -> Result<Transcript> {
         config.model_state_dir = super::state_dir();
     }
     if config.runtime_dll.as_os_str().is_empty() {
-        config.runtime_dll = std::env::current_exe()?.with_file_name("onnxruntime.dll");
+        config.runtime_dll =
+            std::env::current_exe()?.with_file_name(crate::platform::asr_library_name());
     }
     config.validate()?;
     fs::create_dir_all(work)?;
@@ -587,7 +588,8 @@ pub fn configuration_key(config: &RoutingConfig) -> Result<String> {
         config.model_state_dir = super::state_dir();
     }
     if config.runtime_dll.as_os_str().is_empty() {
-        config.runtime_dll = std::env::current_exe()?.with_file_name("onnxruntime.dll");
+        config.runtime_dll =
+            std::env::current_exe()?.with_file_name(crate::platform::asr_library_name());
     }
     let mut resources = Vec::new();
     if config.enabled()

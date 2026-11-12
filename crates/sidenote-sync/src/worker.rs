@@ -1,23 +1,22 @@
 //! One long-lived helper per peer; each helper has a private 512 MiB Windows Job budget.
 //! No peer-controlled Automerge decode/receive/generate runs on the caller's stack.
+use crate::preflight::{self, MAX_BULK, MAX_DOC};
 use crate::{
-    preflight::{self, MAX_BULK, MAX_DOC},
     status::{Failure, Reason},
     store::Snapshot,
 };
 use anyhow::{Result, ensure};
+use automerge::ChangeHash;
 use automerge::{
-    ActorId, Automerge, ChangeHash, ReadDoc,
+    ActorId, Automerge, ReadDoc,
     sync::{self, SyncDoc},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Write};
+#[cfg(windows)]
+use std::{path::Path, sync::Arc};
+use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
@@ -58,13 +57,18 @@ enum Reply {
 
 pub struct Pool {
     executable: PathBuf,
+    #[cfg(windows)]
     slots: Arc<tokio::sync::Semaphore>,
 }
 impl Pool {
     pub fn adjacent() -> Result<Self> {
         let path = std::env::current_exe().map_err(|_| Failure(Reason::WorkerUnavailable))?;
         let folder = path.parent().ok_or(Failure(Reason::WorkerUnavailable))?;
-        let name = "sidenote-sync-worker.exe";
+        let name = if cfg!(windows) {
+            "sidenote-sync-worker.exe"
+        } else {
+            "sidenote-sync-worker"
+        };
         let candidate = if folder
             .file_name()
             .is_some_and(|n| n == "deps" || n == "examples")
@@ -313,11 +317,12 @@ pub fn suppress_crash_dialogs() {
     }
 }
 pub fn run_stdio() -> Result<()> {
+    if !cfg!(windows) {
+        anyhow::bail!("UNAVAILABLE_ON_PLATFORM");
+    }
     suppress_crash_dialogs();
     #[cfg(windows)]
     platform::require_job()?;
-    #[cfg(not(windows))]
-    return Err(Failure(Reason::WorkerUnavailable).into());
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut engine = Engine::default();

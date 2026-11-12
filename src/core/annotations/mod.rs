@@ -8,7 +8,6 @@ use super::file_reads;
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
-    os::windows::fs::MetadataExt,
     path::{Component, Path, PathBuf},
 };
 
@@ -205,7 +204,18 @@ pub fn captures_dir() -> Option<PathBuf> {
     crate::env_var("SIDENOTE_CAPTURES_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("scrawl/captures"))
+            #[cfg(windows)]
+            {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(|root| PathBuf::from(root).join("scrawl/captures"))
+            }
+            #[cfg(not(windows))]
+            {
+                Some(super::paths::data().map_or_else(
+                    || crate::platform::data_home().join("scrawl/captures"),
+                    |root| root.join("captures"),
+                ))
+            }
         })
 }
 fn invalid(message: &str) -> io::Error {
@@ -229,7 +239,7 @@ fn bundle_size(folder: &Path) -> io::Result<u64> {
                 return Err(invalid("Bundle has too many files"));
             }
             let meta = fs::symlink_metadata(entry.path())?;
-            if meta.file_attributes() & 0x400 != 0 {
+            if crate::platform::linked(&meta) {
                 return Err(invalid("Bundle contains a linked file or folder"));
             }
             if meta.is_dir() {

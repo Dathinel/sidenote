@@ -32,7 +32,7 @@ try {
         $uncovered = @($noticesResult.uncovered | ForEach-Object { "$($_.name) $($_.version): $($_.license) ($($_.reason))" })
         throw "Dependency notices are incomplete: $($uncovered -join '; '). Coverage: $stage/DEPENDENCY_NOTICE_COVERAGE.json"
     }
-    & cargo build --release --workspace --locked --bins
+    & cargo +stable-x86_64-pc-windows-gnu build --release --workspace --locked --bins --target x86_64-pc-windows-gnu
     if ($LASTEXITCODE) { throw 'Release build failed.' }
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force

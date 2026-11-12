@@ -377,6 +377,7 @@ impl ApprovedCapture {
         }
         Ok(())
     }
+    #[cfg(windows)]
     pub fn pin_images(&self, images: &[PathBuf]) -> io::Result<Vec<fs::File>> {
         use std::io::Read;
         use std::os::windows::fs::OpenOptionsExt;
@@ -437,4 +438,11 @@ pub fn publish_latest(root: &Path, a: &ApprovedCapture) -> io::Result<()> {
         &parent.join("latest.json"),
         &serde_json::to_vec(&serde_json::json!({"approved_folder":leaf}))?,
     )
+}
+
+#[cfg(not(windows))]
+impl ApprovedCapture {
+    pub fn pin_images(&self, _images: &[PathBuf]) -> io::Result<Vec<fs::File>> {
+        Err(crate::platform::unavailable())
+    }
 }

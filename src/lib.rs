@@ -1,11 +1,13 @@
 pub mod core;
 pub mod hex_engine;
+#[cfg(windows)]
 pub mod hex_install;
 pub mod hex_labs;
 pub mod listener;
 pub mod mcp;
 pub mod meeting_icon;
 pub mod platform;
+pub mod service;
 pub mod updates;
 
 /// Prefer the Sidenote name while accepting existing launchers and render tools.

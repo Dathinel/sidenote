@@ -1,9 +1,9 @@
 //! Durable per-meeting requests. The lock serializes drains, never enqueues.
 use super::*;
+use crate::platform::CommandExt;
 use std::{
     collections::HashSet,
     io,
-    os::windows::process::CommandExt,
     process::{Command, Stdio},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -177,6 +177,7 @@ fn path_arg(flag: &str) -> Option<PathBuf> {
         .find(|a| a[0] == flag)
         .map(|a| PathBuf::from(&a[1]))
 }
+#[cfg(windows)]
 fn resume(child: &std::process::Child) -> io::Result<()> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
@@ -217,6 +218,7 @@ fn resume(child: &std::process::Child) -> io::Result<()> {
         result
     }
 }
+#[cfg(windows)]
 fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outcome {
     // CREATE_SUSPENDED closes the spawn/attach gap before any descendants can be created.
     command
@@ -628,7 +630,7 @@ pub fn start_worker() -> io::Result<()> {
     {
         return Ok(());
     }
-    let mut child = Command::new(std::env::current_exe()?)
+    let child = Command::new(std::env::current_exe()?)
         .arg("--route-pending")
         .arg("--automatic")
         .arg("--data-dir")
@@ -640,10 +642,7 @@ pub fn start_worker() -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    crate::service::own_child(child)
 }
 fn prepared_chunks(folder: &Path, track: &str, sample_count: usize) -> Option<Vec<Chunk>> {
     let value: serde_json::Value =
@@ -735,5 +734,13 @@ mod recording_guard_tests {
         let before = fs::read(&path).unwrap();
         enqueue_in(&root, &meetings, id).unwrap();
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+}
+
+#[cfg(not(windows))]
+fn supervise(_command: Command, _seconds: f64, _active: Option<&Path>) -> Outcome {
+    Outcome {
+        error: Some(crate::platform::UNAVAILABLE.into()),
+        ..Outcome::default()
     }
 }

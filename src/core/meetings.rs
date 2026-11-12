@@ -18,7 +18,7 @@ pub fn meetings_dir() -> PathBuf {
     if let Some(dir) = super::paths::meetings() {
         return dir;
     }
-    PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default()).join("hex/meetings")
+    crate::platform::data_home().join("hex/meetings")
 }
 /// Where reports, ticks and task edits live. `SIDENOTE_STATE_DIR` moves it, so renders and
 /// checks that apply actions never touch the real files.
@@ -26,13 +26,18 @@ pub fn state_dir() -> PathBuf {
     if let Some(dir) = super::paths::data() {
         return dir;
     }
-    let root = PathBuf::from(std::env::var_os("APPDATA").unwrap_or_default());
-    let current = root.join("sidenote");
-    // An empty new folder would change which corpus an existing install opens.
-    if current.exists() {
-        current
-    } else {
-        root.join("hex-meetings")
+    #[cfg(not(windows))]
+    return crate::platform::data_home().join("sidenote");
+    #[cfg(windows)]
+    {
+        let root = crate::platform::data_home();
+        let current = root.join("sidenote");
+        // An empty new folder would change which corpus an existing install opens.
+        if current.exists() {
+            current
+        } else {
+            root.join("hex-meetings")
+        }
     }
 }
 
@@ -43,8 +48,7 @@ pub fn log_path() -> PathBuf {
     if super::paths::data().is_some() {
         return current;
     }
-    let old = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-        .join("hex-meeting-watch.log");
+    let old = crate::platform::local_home().join("hex-meeting-watch.log");
     super::paths::prefer_legacy_path(current, old)
 }
 

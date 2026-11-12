@@ -10,6 +10,7 @@ pub struct DeviceSettings {
     /// Random installation identity, independent of the editable display name.
     pub id: String,
     pub daily_check: bool,
+    pub role: crate::service::DeviceRole,
 }
 
 impl Default for DeviceSettings {
@@ -18,13 +19,29 @@ impl Default for DeviceSettings {
             id: String::new(),
             name: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this-device".into()),
             daily_check: true,
+            role: Default::default(),
         }
     }
 }
 
 impl DeviceSettings {
+    pub fn set_role(role: crate::service::DeviceRole) -> io::Result<()> {
+        let root = state_dir();
+        let path = root.join("device.json");
+        let _lock = store_io::lock(&path.with_extension("lock"))?;
+        let mut settings: Self = store_io::read(&path)?;
+        if settings.id.is_empty() {
+            settings.id = random_id()?;
+        }
+        if !valid_id(&settings.id) {
+            return Err(store_io::invalid("Invalid local device id"));
+        }
+        settings.role = role;
+        store_io::write(&path, &settings)
+    }
+
     /// No identity creation or lock-file writes for agent read requests.
-    pub(super) fn read_in(root: &Path) -> io::Result<Self> {
+    pub(crate) fn read_in(root: &Path) -> io::Result<Self> {
         let settings: Self = store_io::read(&root.join("device.json"))?;
         if !settings.id.is_empty() && !valid_id(&settings.id) {
             return Err(store_io::invalid("Invalid local device id"));
@@ -60,6 +77,7 @@ pub(super) fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
+#[cfg(windows)]
 pub(super) fn random_id() -> io::Result<String> {
     use windows_sys::Win32::Security::Cryptography::{
         BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
@@ -76,5 +94,13 @@ pub(super) fn random_id() -> io::Result<String> {
     {
         return Err(io::Error::other("Could not create a random state identity"));
     }
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(not(windows))]
+pub(super) fn random_id() -> io::Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }

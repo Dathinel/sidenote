@@ -1,18 +1,24 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
+#[cfg(windows)]
 mod hex_probe;
+#[cfg(all(windows, feature = "desktop"))]
 mod ui;
-use sidenote::{listener, platform};
+#[cfg(all(windows, feature = "desktop"))]
+use sidenote::platform;
 fn main() {
-    velopack::VelopackApp::build()
-        .set_auto_apply_on_startup(false)
-        .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
-        .on_first_run(|_| sidenote::updates::listener_installed())
-        .on_after_update_fast_callback(|_| {
-            sidenote::updates::after_update();
-            sidenote::updates::listener_installed();
-        })
-        .on_restarted(|_| sidenote::updates::restarted())
-        .run();
+    #[cfg(windows)]
+    {
+        velopack::VelopackApp::build()
+            .set_auto_apply_on_startup(false)
+            .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
+            .on_first_run(|_| sidenote::updates::listener_installed())
+            .on_after_update_fast_callback(|_| {
+                sidenote::updates::after_update();
+                sidenote::updates::listener_installed();
+            })
+            .on_restarted(|_| sidenote::updates::restarted())
+            .run();
+    }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--listener-isolated")
         && let Some(pair) = args
@@ -30,6 +36,13 @@ fn main() {
     if let Err(error) = sidenote::core::configure_paths(&args) {
         eprintln!("{error}");
         std::process::exit(2);
+    }
+    if let Err(code) = sidenote::service::configure(&args) {
+        eprintln!("{code}");
+        std::process::exit(2);
+    }
+    if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
+        std::process::exit(sidenote::service::run());
     }
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
@@ -173,15 +186,27 @@ fn main() {
     if std::env::args().any(|a| a == "--hex-engine-status") {
         std::process::exit(sidenote::hex_engine::run_status());
     }
+    #[cfg(windows)]
     if std::env::args().any(|a| a == "--probe-hex") {
         std::process::exit(hex_probe::run());
     }
     if std::env::args().any(|a| a == "--daily-check") {
         std::process::exit(sidenote::core::daily_check::run_cli());
     }
-    // The listener owns continuous status detection and the opt-in evidence worker.
-    if std::env::args().any(|a| a == "--listen") {
-        listener::run()
+    #[cfg(all(windows, feature = "desktop"))]
+    desktop();
+    #[cfg(not(all(windows, feature = "desktop")))]
+    {
+        eprintln!("UNAVAILABLE_ON_PLATFORM");
+        std::process::exit(2);
+    }
+}
+
+#[cfg(all(windows, feature = "desktop"))]
+fn desktop() {
+    if sidenote::service::role() != sidenote::service::DeviceRole::Full {
+        eprintln!("UNAVAILABLE_ON_PLATFORM");
+        return;
     }
     let headless = std::env::args().any(|a| {
         matches!(

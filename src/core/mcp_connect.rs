@@ -33,15 +33,12 @@ impl Client {
         }
     }
     pub fn config_path(self) -> PathBuf {
-        let home = std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = crate::platform::home();
         match self {
             Self::ClaudeCode => home.join(".claude.json"),
-            Self::ClaudeDesktop => std::env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join("Claude/claude_desktop_config.json"),
+            Self::ClaudeDesktop => {
+                crate::platform::data_home().join("Claude/claude_desktop_config.json")
+            }
             Self::Codex => std::env::var_os("CODEX_HOME")
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
@@ -68,6 +65,7 @@ impl Client {
         }
     }
 }
+#[cfg(windows)]
 fn claude() -> Result<PathBuf, String> {
     let runner = super::Runner {
         name: "Claude Code".into(),
@@ -83,7 +81,7 @@ fn claude() -> Result<PathBuf, String> {
     }).map_err(|_| "Claude Code was not found. Install its native Windows CLI, reopen Sidenote, or use the copyable command.".into())
 }
 fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output, String> {
-    use std::os::windows::process::CommandExt;
+    use crate::platform::CommandExt;
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -243,4 +241,9 @@ mod registration_tests {
             assert_eq!(step, if add_ok { 3 } else { 2 });
         }
     }
+}
+
+#[cfg(not(windows))]
+fn claude() -> Result<PathBuf, String> {
+    Err(crate::platform::UNAVAILABLE.into())
 }
