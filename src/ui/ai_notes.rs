@@ -5,6 +5,7 @@ use rune_kit::{Kit, Switch, TextInput};
 use sidenote::core::{
     agent_instructions::{self as instructions, Agent},
     notes::{self, Helper, NotesSettings, Request},
+    prompt_library as library,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -44,12 +45,41 @@ fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
     Some("Meeting summaries are off. Choose Claude Code in Meeting summary settings, then try again.".into())
 }
 
+/// What a save or reset was asked to do when it found another window's newer copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retry {
+    Save,
+    Reset,
+}
+/// Another window changed this prompt after this editor started from its copy. Nothing was
+/// written. You keep your text, take the other copy, or compare the two first.
+pub struct Conflict {
+    /// What is stored now: the other window's copy, or `None` when it is back at the default.
+    pub theirs: Option<instructions::Entry>,
+    pub retry: Retry,
+    /// Showing the two copies side by side, as a diff from theirs to yours.
+    pub both: bool,
+    pub compare: Option<super::prompt_library::DiffCache>,
+}
+impl Conflict {
+    pub(super) fn new(theirs: Option<instructions::Entry>, retry: Retry) -> Self {
+        Self {
+            theirs,
+            retry,
+            both: false,
+            compare: None,
+        }
+    }
+}
 pub struct Editor {
     pub text: TextEdit,
     pub saved: String,
     pub edited_at: Option<String>,
-    pub fixed_open: bool,
     pub reset_confirm: bool,
+    /// The saved text this editor started from, or `None` for the default. A save is checked
+    /// against it, so a window with an old copy cannot overwrite a newer one.
+    pub base: Option<String>,
+    pub conflict: Option<Conflict>,
 }
 impl Editor {
     fn new(agent: Agent) -> Self {
@@ -58,23 +88,42 @@ impl Editor {
             text: TextEdit::new(&text),
             saved: text,
             edited_at: None,
-            fixed_open: false,
             reset_confirm: false,
+            base: None,
+            conflict: None,
         }
     }
+    /// The store was read again. A clean editor takes the new copy. An editor with unsaved text
+    /// keeps its text and its starting point, and flags a conflict when the store moved on.
     fn loaded(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool) {
+        self.apply(agent, entry, reset, false);
+    }
+    /// This window's own save or reset finished, so what is stored is the new starting point.
+    fn stored(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool) {
+        self.apply(agent, entry, reset, true);
+    }
+    fn apply(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool, own: bool) {
         let text = entry
             .as_ref()
             .map(|e| e.text.clone())
             .unwrap_or_else(|| instructions::default_base(agent).into());
-        if reset || !self.dirty() {
+        let disk = entry.as_ref().map(|e| e.text.clone());
+        let fresh = reset || !self.dirty();
+        if fresh {
             self.text = TextEdit::new(&text);
+        }
+        if fresh || own {
+            self.base = disk;
+            self.conflict = None;
+        } else if self.base != disk {
+            let retry = self.conflict.as_ref().map_or(Retry::Save, |c| c.retry);
+            self.conflict = Some(Conflict::new(entry.clone(), retry));
         }
         self.saved = text;
         self.edited_at = entry.map(|e| e.edited_at);
         self.reset_confirm = false;
     }
-    fn dirty(&self) -> bool {
+    pub(super) fn dirty(&self) -> bool {
         self.text.text != self.saved
     }
 }
@@ -83,7 +132,9 @@ pub struct AiNotes {
     pub found: Vec<(Helper, bool)>,
     pub models: [TextEdit; 3],
     pub name: TextEdit,
-    pub editors: [Editor; 2],
+    /// One editor per prompt with editable instructions, in `Agent::ALL` order.
+    pub editors: [Editor; Agent::ALL.len()],
+    pub library: super::prompt_library::Library,
     pub pending: Option<&'static str>,
     pub editor_target: Option<usize>,
     pub testing: Option<usize>,
@@ -108,7 +159,8 @@ impl Default for AiNotes {
             found: Vec::new(),
             models: HELPERS.map(|h| TextEdit::new(h.default_model())),
             name: TextEdit::default(),
-            editors: [Editor::new(Agent::Notes), Editor::new(Agent::Tasks)],
+            editors: Agent::ALL.map(Editor::new),
+            library: Default::default(),
             pending: None,
             editor_target: None,
             testing: None,
@@ -153,6 +205,8 @@ pub enum Completion {
     Loaded(Box<Snapshot>),
     Settings(Box<sidenote::core::Config>),
     Instructions(usize, Option<instructions::Entry>, bool),
+    /// A save or reset found another window's newer copy and wrote nothing.
+    Conflict(usize, Option<instructions::Entry>, Retry),
     Tested(usize, Result<std::time::Duration, String>),
     Requested(String),
 }
@@ -162,17 +216,14 @@ enum Work {
         baseline: Box<NotesSettings>,
         edited: NotesSettings,
     },
-    Save(usize, String),
-    Reset(usize),
+    /// The prompt, your text, and the saved text this editor started from.
+    Save(usize, String, Option<String>),
+    Reset(usize, Option<String>),
     Test(usize, String),
     Request(String, Request),
 }
 fn agent(index: usize) -> Agent {
-    if index == 0 {
-        Agent::Notes
-    } else {
-        Agent::Tasks
-    }
+    Agent::ALL[index]
 }
 fn run(root: &Path, work: Work) -> Result<Completion, String> {
     match work {
@@ -188,20 +239,29 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                     "Settings were written but could not be read back. Reload to check.".into()
                 })
         }
-        Work::Save(index, text) => {
-            instructions::save(root, agent(index), &text).map_err(|_| SAVE_ERROR.to_string())?;
+        Work::Save(index, text, baseline) => {
+            let entry = library::for_agent(agent(index));
+            let saved = library::save(root, entry, &text, baseline.as_deref())
+                .map_err(|_| SAVE_ERROR.to_string())?;
+            if let library::Saved::Conflict(theirs) = saved {
+                return Ok(Completion::Conflict(index, theirs, Retry::Save));
+            }
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were written but could not be read back. Reload to check.".to_string()
             })?;
+            // Text equal to the default removes your copy, so the editor shows the default.
             Ok(Completion::Instructions(
                 index,
                 store.get(agent(index)).cloned(),
-                false,
+                saved == library::Saved::Default,
             ))
         }
-        Work::Reset(index) => {
-            instructions::reset(root, agent(index))
+        Work::Reset(index, baseline) => {
+            let reset = library::reset(root, library::for_agent(agent(index)), baseline.as_deref())
                 .map_err(|_| "Sidenote could not reset your instructions. Your text is still here. Press Reset to default again.".to_string())?;
+            if let library::Saved::Conflict(theirs) = reset {
+                return Ok(Completion::Conflict(index, theirs, Retry::Reset));
+            }
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were reset but could not be read back. Reload to check.".to_string()
             })?;
@@ -242,7 +302,7 @@ impl State {
         }
         self.ai_notes.pending = Some(label);
         self.ai_notes.editor_target = match &work {
-            Work::Save(i, _) | Work::Reset(i) => Some(*i),
+            Work::Save(i, ..) | Work::Reset(i, _) => Some(*i),
             _ => None,
         };
         self.ai_notes.testing = match &work {
@@ -349,10 +409,11 @@ impl State {
                 s.name = TextEdit::new(&snapshot.settings.your_name);
                 s.settings = Some(snapshot.settings);
                 s.found = snapshot.found;
-                for index in 0..2 {
+                for index in 0..Agent::ALL.len() {
                     self.notes_editor_loaded(
                         index,
                         snapshot.store.get(agent(index)).cloned(),
+                        false,
                         false,
                     );
                 }
@@ -366,10 +427,16 @@ impl State {
                 self.ai_notes.notice = Some("Meeting summary settings saved.".into());
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
-                self.notes_editor_loaded(index, entry, reset);
+                self.notes_editor_loaded(index, entry, reset, true);
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Instructions saved.".into());
+            }
+            Ok(Completion::Conflict(index, theirs, retry)) => {
+                // Your text stays in the editor and nothing was written.
+                self.ai_notes.editors[index].conflict = Some(Conflict::new(theirs, retry));
+                self.ai_notes.editors[index].reset_confirm = false;
+                super::prompt_library::refresh(self, index);
             }
             Ok(Completion::Tested(index, result)) => {
                 let text = match result {
@@ -398,18 +465,57 @@ impl State {
         index: usize,
         entry: Option<instructions::Entry>,
         reset: bool,
+        own: bool,
     ) {
         if index == 0 {
             self.meeting_ui.custom = entry.is_some();
         }
-        self.ai_notes.editors[index].loaded(agent(index), entry, reset);
+        let editor = &mut self.ai_notes.editors[index];
+        if own {
+            editor.stored(agent(index), entry, reset);
+        } else {
+            editor.loaded(agent(index), entry, reset);
+        }
+        super::prompt_library::refresh(self, index);
     }
-    fn notes_save_editor(&mut self, index: usize) {
-        let text = self.ai_notes.editors[index].text.text.clone();
-        if !valid_instructions(&text) {
+    pub(super) fn notes_reset_editor(&mut self, index: usize) {
+        let baseline = self.ai_notes.editors[index].base.clone();
+        self.notes_work(Work::Reset(index, baseline), "Resetting instructions...");
+    }
+    pub(super) fn notes_save_editor(&mut self, index: usize) {
+        let editor = &self.ai_notes.editors[index];
+        let (text, baseline) = (editor.text.text.clone(), editor.base.clone());
+        if editor.conflict.is_some() || !valid_instructions(&text) {
             return;
         }
-        self.notes_work(Work::Save(index, text), "Saving instructions...");
+        self.notes_work(Work::Save(index, text, baseline), "Saving instructions...");
+    }
+    /// Conflict choice "keep mine": run the same save or reset again, now measured against the
+    /// other window's copy. If that copy changes once more, it is a new conflict.
+    pub(super) fn notes_keep_mine(&mut self, index: usize) {
+        if self.ai_notes.pending.is_some() {
+            return;
+        }
+        let Some(conflict) = self.ai_notes.editors[index].conflict.take() else {
+            return;
+        };
+        let editor = &mut self.ai_notes.editors[index];
+        editor.base = conflict.theirs.as_ref().map(|e| e.text.clone());
+        match conflict.retry {
+            Retry::Save => self.notes_save_editor(index),
+            Retry::Reset => self.notes_reset_editor(index),
+        }
+        if self.ai_notes.pending.is_none() {
+            // The worker did not start: keep the choice on screen.
+            self.ai_notes.editors[index].conflict = Some(conflict);
+        }
+    }
+    /// Conflict choice "use theirs": your unsaved text is replaced by the stored copy.
+    pub(super) fn notes_use_theirs(&mut self, index: usize) {
+        let Some(conflict) = self.ai_notes.editors[index].conflict.take() else {
+            return;
+        };
+        self.notes_editor_loaded(index, conflict.theirs, true, true);
     }
     pub fn choose_notes_helper(&mut self, index: usize) {
         let Some(mut settings) = self.ai_notes.settings.clone() else {
@@ -470,7 +576,7 @@ pub fn valid_instructions(text: &str) -> bool {
 fn field(edit: &TextEdit, label: &str) -> TextInput {
     TextInput::new(edit).label(label).placeholder(label)
 }
-fn count_text(count: usize) -> String {
+pub(super) fn count_text(count: usize) -> String {
     if count < 1000 {
         count.to_string()
     } else {
@@ -480,7 +586,7 @@ fn count_text(count: usize) -> String {
 fn card(p: Palette) -> El {
     super::hex::settings::panel(p).padding(15.0).gap(10.0)
 }
-fn edit_time(time: Option<&str>) -> String {
+pub(super) fn edit_time(time: Option<&str>) -> String {
     time.and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
         .map(|t| {
             t.with_timezone(&chrono::Local)
@@ -489,142 +595,6 @@ fn edit_time(time: Option<&str>) -> String {
         })
         .unwrap_or_else(|| "Default".into())
 }
-fn editor(s: &State, index: usize, p: Palette) -> El {
-    let e = &s.ai_notes.editors[index];
-    let a = agent(index);
-    let count = e.text.text.chars().count();
-    let valid = valid_instructions(&e.text.text);
-    let editable = s.ai_notes.pending.is_none() && s.ai_notes.settings.is_some();
-    let mut c = card(p)
-        .key(format!("instructions-{index}"))
-        .child(roles::TITLE.wrap(
-            if index == 0 {
-                "Meeting summary"
-            } else {
-                "Sorting tasks into projects"
-            },
-            p.ink,
-        ))
-        .child(roles::META.wrap(edit_time(e.edited_at.as_deref()), p.soft))
-        .child(roles::META.wrap(
-            "Scroll inside the box to read the full instructions.",
-            p.soft,
-        ));
-    let input = rune::text_input(&e.text, roles::SMALL.style())
-        .key(format!("instructions-input-{index}"))
-        .min_h(12.0 * roles::SMALL.lh)
-        .color(p.ink)
-        .wrap_anywhere()
-        .caret(p.ink, p.hit)
-        .label(if index == 0 {
-            "Meeting summary instructions"
-        } else {
-            "Tasks instructions"
-        })
-        .on_edit(move |s: &mut State| &mut s.ai_notes.editors[index].text)
-        .on_submit(move |s: &mut State, _| s.ai_notes.editors[index].text.insert("\n"))
-        .w_full()
-        .min_w(0.0)
-        .px(12.0)
-        .py(12.0)
-        .fill(p.bg)
-        .border(1.0, if valid { p.line } else { p.warn })
-        .radius(6.0);
-    c = c.child(rune::auto_grow(input, 12, 24));
-    let count_message = if count > instructions::MAX_CHARS {
-        let over = count - instructions::MAX_CHARS;
-        format!(
-            "{over} character{} over the limit. Remove at least {over} to save.",
-            if over == 1 { "" } else { "s" }
-        )
-    } else if !valid {
-        "This text contains a character that cannot be saved. Remove it and try again.".into()
-    } else {
-        format!(
-            "{} / 16,000 characters{}",
-            count_text(count),
-            if e.dirty() { ". Unsaved changes" } else { "" }
-        )
-    };
-    c = c.child(roles::META.wrap(count_message, if valid { p.soft } else { p.warn }));
-    let mut actions = row().w_full().flex_wrap().gaps(8.0, 8.0);
-    let save = button(
-        "Save instructions",
-        &format!("instructions-save-{index}"),
-        p,
-    );
-    actions = actions.child(if editable && valid && e.dirty() {
-        save.on_press(move |s: &mut State| s.notes_save_editor(index))
-    } else {
-        save.color(p.soft).focusable(false)
-    });
-    if index == 0 {
-        c = c.child(roles::SMALL.wrap("Summaries are written in English.", p.soft));
-    }
-    let reset = button(
-        "Reset to default",
-        &format!("instructions-reset-{index}"),
-        p,
-    );
-    actions = actions.child(if editable {
-        reset.on_press(move |s: &mut State| s.ai_notes.editors[index].reset_confirm = true)
-    } else {
-        reset.dim(0.5)
-    });
-    actions = actions.child(
-        button(
-            if e.fixed_open {
-                "Hide safety rules and format"
-            } else {
-                "Show safety rules and format"
-            },
-            &format!("instructions-fixed-{index}"),
-            p,
-        )
-        .on_press(move |s: &mut State| {
-            let e = &mut s.ai_notes.editors[index];
-            e.fixed_open = !e.fixed_open;
-        }),
-    );
-    c = c.child(actions);
-    if s.ai_notes.editor_target == Some(index) {
-        c = c
-            .children(
-                s.ai_notes
-                    .pending
-                    .map(|text| roles::SMALL.wrap(text, p.soft).role("status")),
-            )
-            .children(s.ai_notes.error.as_ref().map(|text| {
-                super::widgets::banner(
-                    "Instructions were not saved",
-                    text,
-                    super::widgets::BannerKind::Problem,
-                    p,
-                )
-            }))
-            .children(
-                s.ai_notes
-                    .notice
-                    .as_ref()
-                    .map(|text| roles::SMALL.wrap(text, p.ok).role("status")),
-            );
-    }
-    if e.reset_confirm {
-        c = c.child(roles::SMALL.wrap("Replace your instructions with the default? Your saved copy and unsaved changes will be removed.", p.warn))
-            .child(row().flex_wrap().gaps(8.0, 8.0)
-                .child(button("Reset instructions", &format!("instructions-confirm-{index}"), p).color(p.warn).on_press(move |s: &mut State| s.notes_work(Work::Reset(index), "Resetting instructions...")))
-                .child(button("Keep my instructions", &format!("instructions-cancel-{index}"), p).fill(p.sel).on_press(move |s: &mut State| s.ai_notes.editors[index].reset_confirm = false)));
-    }
-    if e.fixed_open {
-        c = c
-            .child(roles::GROUP.wrap("Fixed safety rules (read only)", p.ink))
-            .child(roles::SMALL.wrap(instructions::core_head(a), p.soft))
-            .child(roles::GROUP.wrap("Your instructions go here", p.accent))
-            .child(roles::GROUP.wrap("Fixed output format (read only)", p.ink))
-            .child(roles::SMALL.wrap(instructions::core_tail(a), p.soft));
-    }
-    c
-}
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Part {
     Identity,
@@ -632,7 +602,6 @@ pub enum Part {
     Helpers,
     Advanced,
     Scripts,
-    Prompts,
     Privacy,
 }
 pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
@@ -656,7 +625,6 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     Part::Advanced => "Agent diagnostics",
                     Part::Summaries => "Meeting summary",
                     Part::Scripts => "Summary engine",
-                    Part::Prompts => "Meeting summary instructions",
                 },
                 p.soft,
             )
@@ -1146,19 +1114,6 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             );
         c = c.child(super::hex::settings::panel(p).child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your agent.",control,true,p)));
     }
-    if part == Part::Prompts {
-        c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)
-        .child(roles::SECTION.wrap("Meeting summary instructions", p.ink))
-        .child(roles::SMALL.wrap("Change the base instructions for your agent. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
-        .child(editor(s, 0, p)).child(editor(s, 1, p)))
-        .child(roles::SMALL.wrap(if s.tasks.teams.teams.is_empty() { "No teams yet. Tasks will not be given a team." } else { "Tasks use the team of the person who owns them." }, p.soft))
-        .children(s.config.features.tasks.then(|| button("Set up teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
-            s.hex.section = super::hex::Section::Teams;
-            s.hex.filter = TextEdit::default();
-            s.nav_done();
-            super::scene_scroll(s, "hex-top");
-        })));
-    }
     c
 }
 pub fn setup_visible(s: &State) -> bool {
@@ -1341,12 +1296,37 @@ mod tests {
             based_on: 1,
             edited_at: "2026-11-10T04:00:00Z".into(),
         };
-        editor.loaded(Agent::Tasks, Some(entry.clone()), false);
+        editor.stored(Agent::Tasks, Some(entry.clone()), false);
         assert!(!editor.dirty());
+        assert_eq!(editor.base.as_deref(), Some("First draft"));
         editor.text = TextEdit::new("Newer draft typed while saving");
-        editor.loaded(Agent::Tasks, Some(entry), false);
+        editor.stored(Agent::Tasks, Some(entry), false);
         assert_eq!(editor.text.text, "Newer draft typed while saving");
         assert!(editor.dirty());
+        // Our own save never reads as another window's change.
+        assert!(editor.conflict.is_none());
+    }
+    #[test]
+    fn a_refresh_that_finds_a_newer_copy_under_unsaved_text_flags_a_conflict() {
+        let mut editor = Editor::new(Agent::Ask);
+        editor.text = TextEdit::new("My unsaved wording");
+        let theirs = instructions::Entry {
+            text: "Their saved wording".into(),
+            based_on: 1,
+            edited_at: "2026-11-10T04:00:00Z".into(),
+        };
+        editor.loaded(Agent::Ask, Some(theirs.clone()), false);
+        let conflict = editor.conflict.as_ref().expect("a conflict");
+        assert_eq!(conflict.theirs.as_ref(), Some(&theirs));
+        assert_eq!(conflict.retry, Retry::Save);
+        // Your text and your starting point are untouched, so Save stays measured against it.
+        assert_eq!(editor.text.text, "My unsaved wording");
+        assert_eq!(editor.base, None);
+        // A clean editor just takes the new copy, with no conflict.
+        let mut clean = Editor::new(Agent::Ask);
+        clean.loaded(Agent::Ask, Some(theirs), false);
+        assert!(clean.conflict.is_none());
+        assert_eq!(clean.base.as_deref(), Some("Their saved wording"));
     }
     #[test]
     fn instruction_worker_saves_and_resets_each_agent_without_a_helper() {
@@ -1359,24 +1339,55 @@ mod tests {
         let worker_root = root.clone();
         thread::spawn(move || {
             assert_ne!(ui_thread, thread::current().id());
-            for index in 0..2 {
+            for index in 0..Agent::ALL.len() {
                 let result = run(
                     &worker_root,
-                    Work::Save(index, format!("Custom agent {index}")),
+                    Work::Save(index, format!("Custom agent {index}"), None),
                 )
                 .unwrap();
                 assert!(
                     matches!(result, Completion::Instructions(i, Some(_), false) if i == index)
                 );
             }
-            assert!(instructions::load(&worker_root).unwrap().notes.is_some());
-            assert!(instructions::load(&worker_root).unwrap().tasks.is_some());
+            let store = instructions::load(&worker_root).unwrap();
+            for agent in Agent::ALL {
+                assert!(store.get(agent).is_some());
+            }
             assert!(matches!(
-                run(&worker_root, Work::Reset(0)).unwrap(),
+                run(&worker_root, Work::Reset(0, Some("Custom agent 0".into()))).unwrap(),
                 Completion::Instructions(0, None, true)
             ));
-            assert!(instructions::load(&worker_root).unwrap().tasks.is_some());
-            assert!(run(&worker_root, Work::Save(1, "x".repeat(16_001))).is_err());
+            let store = instructions::load(&worker_root).unwrap();
+            assert!(store.notes.is_none() && store.tasks.is_some() && store.ask.is_some());
+            // Saving the default text is a reset: your copy goes and the editor shows the default.
+            let default = instructions::default_base(Agent::Tasks).to_owned();
+            assert!(matches!(
+                run(
+                    &worker_root,
+                    Work::Save(1, default, Some("Custom agent 1".into()))
+                )
+                .unwrap(),
+                Completion::Instructions(1, None, true)
+            ));
+            assert!(run(&worker_root, Work::Save(1, "x".repeat(16_001), None)).is_err());
+            // A window that still starts from the old copy gets a conflict and writes nothing.
+            let stale = run(
+                &worker_root,
+                Work::Save(2, "Stale window text".into(), Some("Older copy".into())),
+            )
+            .unwrap();
+            assert!(matches!(
+                stale,
+                Completion::Conflict(2, Some(ref theirs), Retry::Save)
+                    if theirs.text == "Custom agent 2"
+            ));
+            let stale_reset = run(&worker_root, Work::Reset(2, Some("Older copy".into()))).unwrap();
+            assert!(matches!(
+                stale_reset,
+                Completion::Conflict(2, Some(_), Retry::Reset)
+            ));
+            let store = instructions::load(&worker_root).unwrap();
+            assert_eq!(store.get(Agent::Title).unwrap().text, "Custom agent 2");
         })
         .join()
         .unwrap();

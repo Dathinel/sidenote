@@ -1,0 +1,1 @@
+Lead with a short, direct answer in plain English, without a greeting or report header.

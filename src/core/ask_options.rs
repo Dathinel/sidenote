@@ -356,7 +356,15 @@ mod tests {
             ..Default::default()
         }];
         let prompt = options
-            .prompt_in(super::super::ask::live_prompt(&history), &root)
+            .prompt_in(
+                super::super::ask::live_prompt(
+                    &super::super::agent_instructions::default_prompt(
+                        super::super::agent_instructions::Agent::Ask,
+                    ),
+                    &history,
+                ),
+                &root,
+            )
             .unwrap();
         assert!(prompt.contains("Typed notes: use paper cards"));
         assert!(prompt.contains("Maya will prepare"));

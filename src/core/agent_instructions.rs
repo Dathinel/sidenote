@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::Path};
 
 pub const PROMPT_VERSION: u32 = 1;
-pub const QUICK_TITLE: &str = include_str!("agent_instructions/quick_title.txt");
 pub const MAX_CHARS: usize = 16_000;
 const STORE: &str = "agent-instructions.json";
 
@@ -12,9 +11,21 @@ const STORE: &str = "agent-instructions.json";
 pub enum Agent {
     Notes,
     Tasks,
+    Title,
+    Ask,
+    AskAll,
+}
+impl Agent {
+    pub const ALL: [Agent; 5] = [
+        Agent::Notes,
+        Agent::Tasks,
+        Agent::Title,
+        Agent::Ask,
+        Agent::AskAll,
+    ];
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub text: String,
     pub based_on: u32,
@@ -28,6 +39,12 @@ pub struct Store {
     pub notes: Option<Entry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks: Option<Entry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<Entry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<Entry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_all: Option<Entry>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -36,16 +53,22 @@ impl Store {
         match agent {
             Agent::Notes => self.notes.as_ref(),
             Agent::Tasks => self.tasks.as_ref(),
+            Agent::Title => self.title.as_ref(),
+            Agent::Ask => self.ask.as_ref(),
+            Agent::AskAll => self.ask_all.as_ref(),
         }
     }
     fn slot(&mut self, agent: Agent) -> &mut Option<Entry> {
         match agent {
             Agent::Notes => &mut self.notes,
             Agent::Tasks => &mut self.tasks,
+            Agent::Title => &mut self.title,
+            Agent::Ask => &mut self.ask,
+            Agent::AskAll => &mut self.ask_all,
         }
     }
     fn validate(&self) -> io::Result<()> {
-        for agent in [Agent::Notes, Agent::Tasks] {
+        for agent in Agent::ALL {
             if let Some(entry) = self.get(agent) {
                 validate_text(&entry.text)?;
                 if entry.based_on == 0
@@ -81,18 +104,66 @@ pub fn core_head(a: Agent) -> &'static str {
     match a {
         Agent::Notes => include_str!("agent_instructions/notes_core_head.txt"),
         Agent::Tasks => include_str!("agent_instructions/tasks_core_head.txt"),
+        Agent::Title => include_str!("agent_instructions/title_core_head.txt"),
+        Agent::Ask => include_str!("agent_instructions/ask_core_head.txt"),
+        Agent::AskAll => include_str!("agent_instructions/ask_all_core_head.txt"),
     }
 }
 pub fn core_tail(a: Agent) -> &'static str {
     match a {
         Agent::Notes => include_str!("agent_instructions/notes_core_tail.txt"),
         Agent::Tasks => include_str!("agent_instructions/tasks_core_tail.txt"),
+        Agent::Title => include_str!("agent_instructions/title_core_tail.txt"),
+        Agent::Ask => include_str!("agent_instructions/ask_core_tail.txt"),
+        Agent::AskAll => include_str!("agent_instructions/ask_all_core_tail.txt"),
     }
 }
 pub fn default_base(a: Agent) -> &'static str {
     match a {
         Agent::Notes => include_str!("agent_instructions/notes_base.txt"),
         Agent::Tasks => include_str!("agent_instructions/tasks_base.txt"),
+        Agent::Title => include_str!("agent_instructions/title_base.txt"),
+        Agent::Ask => include_str!("agent_instructions/ask_base.txt"),
+        Agent::AskAll => include_str!("agent_instructions/ask_all_base.txt"),
+    }
+}
+/// The prompt text without the meeting material: fixed head, your base, fixed tail. Notes and
+/// Tasks add their material after this, with the same layout the helper ladder uses.
+pub fn compose(a: Agent, base: &str) -> String {
+    compose_with_tail(a, base, core_tail(a))
+}
+/// Like `compose`, with another closing block. Redo tasks reads the Tasks head and base but asks
+/// for a different reply, so it passes its own tail.
+pub fn compose_with_tail(a: Agent, base: &str, tail: &str) -> String {
+    let head = core_head(a);
+    match a {
+        Agent::Notes | Agent::Tasks => format!("{head}\n{base}\n{tail}\n"),
+        Agent::Title => format!("{}\n\n{}\n{}\n", head.trim(), base.trim(), tail.trim()),
+        // Ask rules are one paragraph: Ask adds its live-meeting lines after the first blank line.
+        Agent::Ask | Agent::AskAll => [head.trim(), &one_paragraph(base), tail.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+fn one_paragraph(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// The prompt text with the shipped default base.
+pub fn default_prompt(a: Agent) -> String {
+    compose(a, default_base(a))
+}
+/// The prompt text with your saved base, or the default base when you have none or the store
+/// cannot be read. Used by Ask and meeting titles, which must never fail because of a bad file.
+pub fn effective(root: &Path, a: Agent) -> String {
+    match base(root, a) {
+        Ok((text, _)) => compose(a, &text),
+        Err(_) => default_prompt(a),
     }
 }
 pub fn load(root: &Path) -> io::Result<Store> {
@@ -131,6 +202,50 @@ pub fn reset(root: &Path, a: Agent) -> io::Result<()> {
         *store.slot(a) = None;
     })?;
     Ok(())
+}
+
+/// The result of a save or reset that checks what is on disk first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Write {
+    Done,
+    /// Another window changed this prompt since the editor loaded it. Nothing was written. Holds
+    /// what is on disk now: the saved copy, or `None` when the prompt is at its default.
+    Conflict(Option<Entry>),
+}
+/// Replaces one prompt's slot only when it still holds what the editor started from. The check and
+/// the write share one hold on the store lock, so a stale window can never overwrite a newer edit.
+/// `baseline` is the saved text the editor loaded, or `None` when it loaded the default.
+fn write(root: &Path, a: Agent, next: Option<Entry>, baseline: Option<&str>) -> io::Result<Write> {
+    let mut conflict = None;
+    sync_state::update::<Store>(root, STORE, |store| {
+        let slot = store.slot(a);
+        if slot.as_ref().map(|e| e.text.as_str()) == baseline {
+            *slot = next;
+        } else {
+            conflict = Some(slot.clone());
+        }
+    })?;
+    Ok(match conflict {
+        Some(theirs) => Write::Conflict(theirs),
+        None => Write::Done,
+    })
+}
+pub fn save_checked(
+    root: &Path,
+    a: Agent,
+    text: &str,
+    baseline: Option<&str>,
+) -> io::Result<Write> {
+    validate_text(text)?;
+    let entry = Entry {
+        text: text.into(),
+        based_on: PROMPT_VERSION,
+        edited_at: chrono::Utc::now().to_rfc3339(),
+    };
+    write(root, a, Some(entry), baseline)
+}
+pub fn reset_checked(root: &Path, a: Agent, baseline: Option<&str>) -> io::Result<Write> {
+    write(root, a, None, baseline)
 }
 
 #[cfg(test)]

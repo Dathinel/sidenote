@@ -2158,7 +2158,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(knowledge_base(s, k, p)),
-        (Page::Prompts, _) => ai_notes::section(s, k, p, ai_notes::Part::Prompts),
+        (Page::Prompts, _) => super::super::prompt_library::view(s, p),
         (Page::People, _) => col()
             .w_full()
             .child(super::super::people::section(s, k, p, tab, layer))
@@ -2433,7 +2433,16 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     .pb(4.0),
             ),
         )
-        .child(
+        .child(if page == Page::Prompts {
+            // The prompt library is a list and an editor that fill the window. They scroll on
+            // their own, so the page around them does not.
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .items_center()
+                .child(doc.grow(1.0).min_h(0.0).pb(16.0))
+        } else {
             scroll(col().w_full().items_center().child(doc), "hex-scroll").on_scroll_offset({
                 let offset = s.hex.shell.jump_offset.clone();
                 let max = s.hex.shell.jump_max.clone();
@@ -2441,8 +2450,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     offset.set(pos.offset[1]);
                     max.set(pos.max[1]);
                 }
-            }),
-        )
+            })
+        })
 }
 pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape && s.hex.shell.lab_confirm.take().is_some() {
@@ -2452,6 +2461,9 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     if e.key == Key::Escape && s.hex.shell.navigation_open {
         s.hex.shell.navigation_open = false;
         tx.blur();
+        return true;
+    }
+    if active(s).0 == Page::Prompts && super::super::prompt_library::on_key(s, e, tx) {
         return true;
     }
     if e.key == Key::Escape {
@@ -2526,7 +2538,13 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
-        "settings-prompts" => (Page::Prompts, 0),
+        "settings-prompts"
+        | "settings-prompts-edited"
+        | "settings-prompts-diff"
+        | "settings-prompts-sort"
+        | "settings-prompts-redo"
+        | "settings-prompts-conflict"
+        | "settings-prompts-readonly" => (Page::Prompts, 0),
         "settings-people" => (Page::People, 0),
         "people-our-team" | "people-team-editor" | "people-search" => (Page::People, 0),
         "people-external" => (Page::People, 1),
@@ -2553,6 +2571,9 @@ pub fn scene(s: &mut State, name: &str) {
         super::super::updates::settings_fixture(s);
     }
     navigate(s, page, tab);
+    if page == Page::Prompts {
+        super::super::prompt_library::scene(s, name);
+    }
     match name {
         "settings-hex-meetings-off" | "settings-hex-meetings-enable" => {
             let supported = name == "settings-hex-meetings-enable";

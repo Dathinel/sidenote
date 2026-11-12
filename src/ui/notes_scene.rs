@@ -119,8 +119,11 @@ pub fn settings(s: &mut State, mode: &str) {
                 TextEdit::new("a".repeat(agent_instructions::MAX_CHARS + 1));
         }
         "reset" => s.ai_notes.editors[0].reset_confirm = true,
-        "fixed-notes" => s.ai_notes.editors[0].fixed_open = true,
-        "fixed-tasks" => s.ai_notes.editors[1].fixed_open = true,
+        "fixed-notes" | "fixed-tasks" => {
+            let index = usize::from(mode == "fixed-tasks");
+            super::prompt_library::select(s, index);
+            s.ai_notes.library.open = [true; 4];
+        }
         "save-error" => {
             s.ai_notes.editor_target = Some(0);
             s.ai_notes.error = Some(super::ai_notes::SAVE_ERROR.into());
@@ -137,7 +140,7 @@ pub fn settings(s: &mut State, mode: &str) {
         mode,
         "instructions" | "edited" | "limit" | "reset" | "fixed-notes" | "save-error"
     ) {
-        super::scene_scroll(s, "instructions-0");
+        super::scene_scroll(s, "agent-instructions");
     }
     if matches!(mode, "tasks" | "fixed-tasks") {
         super::scene_scroll(s, "instructions-1");
