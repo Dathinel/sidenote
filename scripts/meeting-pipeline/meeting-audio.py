@@ -143,6 +143,153 @@ def observe(args):
                           fallback_count=report['fallback_count'])), flush=True)
 
 
+def english_coverages(path, chunks):
+    """Require a nonempty English reading over the entire speech interval on this track."""
+    if not path:
+        return set()
+    intervals = {c['Id']: [] for c in chunks}
+    for line in Path(path).read_text(encoding='utf-8-sig').splitlines():
+        row = json.loads(line)
+        track = {'microphone': 'microphone.wav', 'system': 'system.wav'}.get(row.get('source'))
+        if isinstance(row.get('text'), str) and row['text'].strip():
+            a, b = float(row['start_ms']) / 1000, float(row['end_ms']) / 1000
+            if math.isfinite(a) and math.isfinite(b) and b > a:
+                best, overlap = None, 0
+                # Match the wrapper's single best-overlap assignment, including ties.
+                for chunk in chunks:
+                    if chunk['Track'] != track:
+                        continue
+                    size = min(max(b, a + .2), chunk['End'] + .5) - max(a, chunk['Start'] - .5)
+                    if size > overlap:
+                        best, overlap = chunk['Id'], size
+                if best is not None:
+                    intervals[best].append((a, b))
+    covered = set()
+    for chunk in chunks:
+        cursor = chunk['Start']
+        for a, b in sorted(intervals[chunk['Id']]):
+            if a > cursor:
+                break
+            cursor = max(cursor, b)
+        if cursor >= chunk['End']:
+            covered.add(chunk['Id'])
+    return covered
+
+
+def english_coverage(path, chunk):
+    return chunk['Id'] in english_coverages(path, [chunk])
+
+
+def choose_route(sidecar, covered):
+    """Return all models whenever the available evidence cannot justify a narrower set."""
+    all_models = ['te', 'hi']
+    observed = {lang for w in sidecar['chunks'] for lang in w.get('observed_languages', [])}
+    observed.update(w['language'] for w in sidecar['chunks'] if w.get('language'))
+    if len(observed) > 1:
+        return all_models, 'mixed_evidence'
+    languages = sidecar['meeting_languages']
+    mode = sidecar['language_mode']
+    if mode == 'off':
+        return all_models, 'language_mode_off'
+    if mode.startswith('forced:'):
+        route = mode[7:]
+        selected = ['en', 'hi'] if route == 'mixed' else route.split('+')
+        if (not selected or any(s not in languages or s not in ('en', 'hi', 'te') for s in selected)
+                or any(w.get('status') != 'forced' or w.get('forced_route') != route
+                       for w in sidecar['chunks'])):
+            return all_models, 'invalid_forced_route'
+        reason = 'forced'
+    else:
+        if mode != 'auto' or sidecar.get('thresholds_calibrated') is not True:
+            return all_models, 'uncalibrated'
+        settings = sidecar.get('settings', {})
+        threshold = settings.get('confidence_threshold', 0)
+        margin = settings.get('margin_threshold', 0)
+        if not (.9 <= threshold <= 1 and .2 <= margin <= 1):
+            return all_models, 'invalid_thresholds'
+        selected = set()
+        for window in sidecar['chunks']:
+            top = window.get('top_two', [])
+            confidence = window.get('confidence')
+            observed = window.get('observed_languages', [])
+            if (window.get('status') != 'guess' or window.get('outside_meeting_languages') is not False
+                    or not isinstance(confidence, (int, float)) or not threshold <= confidence <= 1
+                    or len(top) != min(2, len(languages)) or not observed
+                    or top[0].get('language') != window.get('language')
+                    or top[0].get('confidence') != confidence
+                    or not all(isinstance(s.get('confidence'), (int, float))
+                               and 0 <= s['confidence'] <= 1 for s in top)
+                    or confidence - (top[1]['confidence'] if len(top) > 1 else 0) < margin
+                    or window.get('unrestricted_language') not in languages):
+                return all_models, 'unchecked_or_uncertain'
+            selected.update([window['language'], *observed])
+        reason = 'checked'
+    if not selected or any(s not in languages or s not in ('en', 'hi', 'te') for s in selected):
+        return all_models, 'out_of_set'
+    if 'en' in selected and not covered:
+        return all_models, 'english_coverage_missing'
+    return [s for s in all_models if s in selected], reason
+
+
+def config_key(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
+def plan_routes(args):
+    config = routing_config(args.routing_config)
+    if config is None:
+        return
+    temp = Path(args.temp)
+    chunks = read_json(temp / 'chunks.json')
+    passes = {lang: dict(model=model, version='unreported') for model, lang, _ in asr_passes()}
+    plan = dict(schema='routing-plan.v1', config_key=config_key(config), chunks=[], models=passes,
+                detector=LID_MODEL, fallback_count=0)
+    try:
+        report = read_json(temp / 'routing-observe.json')
+        if report.get('reason') != 'observed' or report.get('config') != config:
+            raise ValueError('Missing current observation')
+        by_id = {r['identity']['chunk']['Id']: r for r in report['rows']}
+        if len(by_id) != len(chunks) or len(report['rows']) != len(chunks):
+            raise ValueError('Incomplete observation')
+    except (OSError, ValueError, KeyError, TypeError):
+        by_id = {}
+    try:
+        coverage = english_coverages(getattr(args, 'english_reading', None), chunks)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        coverage = set()
+    for chunk in chunks:
+        models, reason, identity = ['te', 'hi'], 'missing_or_mismatched', None
+        try:
+            row = by_id[chunk['Id']]
+            identity = row['identity']
+            request, current = lid_request([chunk], row['sidecar']['meeting_languages'])
+            if identity != current[0]:
+                raise ValueError('Stale PCM or chunk mapping')
+            sidecar = row['sidecar']
+            if (sidecar.get('schema') != 'language-detect.v1' or sidecar.get('model_sha256') != LID_MODEL
+                    or sidecar.get('source_wav') != request['jobs'][0]['wav']
+                    or sidecar.get('meeting_languages') != config.get('pipeline', {}).get('meeting_languages', ['en', 'hi', 'te'])
+                    or sidecar.get('language_mode') != config.get('pipeline', {}).get('language_mode', 'auto')):
+                raise ValueError('Mismatched sidecar header')
+            expected = request['jobs'][0]['chunks']
+            if len(sidecar['chunks']) != len(expected):
+                raise ValueError('Incomplete windows')
+            for actual, window, digest in zip(sidecar['chunks'], expected, identity['hashes']):
+                if (any(actual.get(k) != v for k, v in window.items() if k != 'id')
+                        or actual.get('chunk') != window['id']
+                        or (actual.get('pcm_f32le_sha256') != digest and sidecar['language_mode'][:7] != 'forced:')):
+                    raise ValueError('Mismatched window evidence')
+            models, reason = choose_route(sidecar, chunk['Id'] in coverage)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, wave.Error):
+            pass
+        fallback = reason not in ('checked', 'forced')
+        plan['fallback_count'] += int(fallback)
+        plan['chunks'].append(dict(id=chunk['Id'], identity=identity, models=models, reason=reason,
+                                   fallback=fallback, route='+'.join(models) if models else 'en'))
+    save(temp / 'routing-plan.json', plan)
+    print(json.dumps(dict(stage='routing-plan', chunks=len(chunks), fallback_count=plan['fallback_count'])), flush=True)
+
+
 def asr_passes():
     return [(os.environ['HEX_TE_ASR_MODEL'], 'te', 'Telugu'),
             ('nemotron_3_5_asr', 'hi', 'Hindi')]
@@ -332,12 +479,13 @@ def transcribe(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['prepare','observe','transcribe'])
+    parser.add_argument('command',choices=['prepare','observe','plan','transcribe'])
     parser.add_argument('--temp',required=True)
     parser.add_argument('--meeting')
     parser.add_argument('--models')
     parser.add_argument('--ffmpeg',default='')
     parser.add_argument('--routing-config')
     parser.add_argument('--lid-exe')
+    parser.add_argument('--english-reading')
     args=parser.parse_args()
-    {'prepare': prepare, 'observe': observe, 'transcribe': transcribe}[args.command](args)
+    {'prepare': prepare, 'observe': observe, 'plan': plan_routes, 'transcribe': transcribe}[args.command](args)

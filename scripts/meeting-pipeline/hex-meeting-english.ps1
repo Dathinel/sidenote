@@ -78,6 +78,10 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     if ($RoutingConfig) {
         $lidExe = if ($LanguageDetectExe) { $LanguageDetectExe } else { $hex }
         Invoke-Native $uv.Source ($uvArgs + @('observe','--temp',$temp,'--routing-config',$RoutingConfig,'--lid-exe',$lidExe)) 360 'prepare'
+        $routeArgs = @('--routing-config',$RoutingConfig)
+        $readingFile = @((Join-Path $dir.FullName 'hex-original\transcript.ndjson'), (Join-Path $dir.FullName 'transcript.ndjson')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if ($readingFile) { $routeArgs += @('--english-reading',$readingFile) }
+        Invoke-Native $uv.Source ($uvArgs + @('plan','--temp',$temp) + $routeArgs) 360 'prepare'
     }
     $audioInfo = [IO.File]::ReadAllText((Join-Path $temp 'audio-analysis.json'), $utf8) | ConvertFrom-Json
     $prepareSeconds = $step.Elapsed.TotalSeconds
