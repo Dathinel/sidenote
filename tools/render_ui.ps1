@@ -83,6 +83,10 @@ $shots = @(
     @('tasks-v2-legacy', 'tasks-v2-legacy', '1320x1300', $null, @()),
     @('tasks-v2-legacy-560', 'tasks-v2-legacy', '560x1400', $null, @()),
     @('tasks-v2-empty', 'tasks-v2-empty', '1320x1300', $null, @()),
+    # The board layout: four columns wide, one column under tabs at phone width, and no tasks.
+    @('tasks-board', 'tasks-v2-board', '1320x1000', $null, @()),
+    @('tasks-board-390', 'tasks-v2-board', '390x1500', $null, @()),
+    @('tasks-board-empty', 'tasks-v2-board-empty', '1320x800', $null, @()),
     @('tasks-v2-empty-560', 'tasks-v2-empty', '560x1400', $null, @()),
     @('tasks-v2-teams', 'tasks-v2-teams', '1320x1300', $null, @()),
     @('tasks-v2-teams-560', 'tasks-v2-teams', '560x1400', $null, @()),

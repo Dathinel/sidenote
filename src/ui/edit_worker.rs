@@ -1,11 +1,52 @@
-//! At most one editor publication; completion targets are immutable session identities.
+//! At most one editor publication runs at a time; completion targets are immutable session
+//! identities. A save that arrives while one runs waits its turn in `SaveQueue` and is never
+//! dropped.
 use super::{Event, State};
 use serde_json::Value;
 use sidenote::core::{
     self, TaskStore,
     memory::{MemoryRecord, MemoryStore},
 };
-use std::{io, path::PathBuf, sync::mpsc::Sender};
+use std::{collections::VecDeque, io, path::PathBuf, sync::mpsc::Sender};
+
+/// One save runs; the rest wait in the order they were made. Each job already carries what it
+/// needs and merges against the file when it runs, so running them one after another gives the
+/// same result as if each had waited for the one before.
+pub struct SaveQueue<J> {
+    busy: bool,
+    waiting: VecDeque<J>,
+}
+impl<J> Default for SaveQueue<J> {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            waiting: VecDeque::new(),
+        }
+    }
+}
+impl<J> SaveQueue<J> {
+    /// Hands back the job to start now, or keeps it for later and returns None.
+    pub fn submit(&mut self, job: J) -> Option<J> {
+        if self.busy {
+            self.waiting.push_back(job);
+            None
+        } else {
+            self.busy = true;
+            Some(job)
+        }
+    }
+    /// The running save ended. Hands back the next job, which becomes the running one, or
+    /// None when the queue is empty and the worker is idle again.
+    pub fn finish(&mut self) -> Option<J> {
+        let next = self.waiting.pop_front();
+        self.busy = next.is_some();
+        next
+    }
+    #[cfg(test)]
+    fn waiting(&self) -> usize {
+        self.waiting.len()
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveError {
     Busy,
@@ -223,10 +264,12 @@ impl Drop for Guard {
 }
 impl State {
     pub(super) fn publish_edit(&mut self, job: Job) {
-        if self.edit_busy {
-            return;
+        if let Some(job) = self.edit_queue.submit(job) {
+            self.edit_busy = true;
+            self.start_edit(job);
         }
-        self.edit_busy = true;
+    }
+    fn start_edit(&mut self, job: Job) {
         let mut guard = Guard {
             target: Some(job.target()),
             events: self.events_tx.clone(),
@@ -353,6 +396,17 @@ impl State {
     }
     pub(super) fn edit_finished(&mut self, completion: Completion) {
         self.edit_busy = false;
+        self.apply_completion(completion);
+        match self.edit_queue.finish() {
+            Some(next) => {
+                self.edit_busy = true;
+                self.start_edit(next);
+            }
+            // Nothing waits, so the page now shows what every move did.
+            None => self.tasks.board_pending.clear(),
+        }
+    }
+    fn apply_completion(&mut self, completion: Completion) {
         if !completion.target().matches(self) {
             self.request_refresh();
             return;
@@ -551,5 +605,39 @@ impl State {
             }
         }
         self.request_refresh();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveQueue;
+
+    #[test]
+    fn a_second_save_waits_instead_of_being_dropped() {
+        let mut q = SaveQueue::default();
+        assert_eq!(q.submit("first"), Some("first"));
+        assert_eq!(q.submit("second"), None);
+        assert_eq!(q.submit("third"), None);
+        assert_eq!(q.waiting(), 2);
+        // Each finish hands over the next job in the order they were made.
+        assert_eq!(q.finish(), Some("second"));
+        assert_eq!(q.finish(), Some("third"));
+        assert_eq!(q.finish(), None);
+        assert_eq!(q.waiting(), 0);
+    }
+
+    #[test]
+    fn an_idle_queue_starts_the_next_save_at_once() {
+        let mut q = SaveQueue::default();
+        assert_eq!(q.submit(1), Some(1));
+        assert_eq!(q.finish(), None);
+        assert_eq!(q.submit(2), Some(2));
+        // A save made while the running one finishes still runs: the queue stays busy until
+        // it is empty.
+        assert_eq!(q.submit(3), None);
+        assert_eq!(q.finish(), Some(3));
+        assert_eq!(q.submit(4), None);
+        assert_eq!(q.finish(), Some(4));
+        assert_eq!(q.finish(), None);
     }
 }

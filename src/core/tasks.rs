@@ -897,7 +897,7 @@ impl TaskFilter {
         }
     }
     /// Mine / Everyone and the search words; the Open / Done choice is applied separately.
-    fn passes_rest(&self, t: &TaskItem) -> bool {
+    pub(super) fn passes_rest(&self, t: &TaskItem) -> bool {
         let who = match self.who {
             Who::Everyone => true,
             Who::Mine => t.mine == Some(true) || (self.include_unassigned && t.mine.is_none()),
@@ -1114,7 +1114,7 @@ pub fn group_tasks(
         TaskGrouping::Status => groups.sort_by_key(|g| match g.label.as_str() {
             "To do" => 0,
             "Waiting on" => 1,
-            "Review" => 2,
+            "In review" => 2,
             _ => 3,
         }),
         TaskGrouping::Project => {
@@ -1214,7 +1214,7 @@ impl TaskView {
 }
 
 /// Mine first, then nobody's, then someone else's.
-fn mine_rank(t: &TaskItem) -> u8 {
+pub(super) fn mine_rank(t: &TaskItem) -> u8 {
     match t.mine {
         Some(true) => 0,
         None => 1,
