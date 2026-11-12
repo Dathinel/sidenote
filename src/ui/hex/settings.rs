@@ -1943,11 +1943,17 @@ fn save_kb(s: &mut State) {
             s.hex.shell.kb_error = None;
             s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
         }
-        Err(_) => {
-            s.hex.shell.kb_error =
-                Some("Could not save knowledge base. Reload Settings and try again.".into())
+        Err(error) => {
+            s.hex.shell.kb_error = Some(kb_save_error(&error));
         }
     }
+}
+fn kb_save_error(error: &std::io::Error) -> String {
+    error
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<sidenote::core::config::KnowledgeBaseSaveError>())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "Could not save knowledge base. Reload Settings and try again.".into())
 }
 fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
     let kb = edited_kb(s);
@@ -2466,6 +2472,12 @@ pub fn scene(s: &mut State, name: &str) {
         }
         load_kb(s);
         navigate(s, Page::Meetings, 2);
+        if name == "settings-kb-merge-error" {
+            s.hex.shell.kb_error = Some(
+                "Could not save knowledge base after merging other saved changes. Enter the repository folder. Reload Settings and try again."
+                    .into(),
+            );
+        }
         return;
     }
     super::super::notes_scene::settings(s, "scripts");
@@ -2589,6 +2601,25 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn merged_kb_validation_reason_reaches_the_inline_error_without_raw_io_details() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        std::fs::write(&path, r#"{"version":1,"features":{},"notes":{}}"#).unwrap();
+        let mut draft = sidenote::core::Config::load_in(root.path()).unwrap();
+        draft.knowledge_base.company_name = "Synthetic company".into();
+        let error = draft.save(root.path()).unwrap_err();
+        let message = kb_save_error(&error);
+        assert!(message.contains("merging other saved changes"));
+        assert!(message.contains("Enter the repository folder."));
+        assert!(message.contains("Reload Settings"));
+        assert!(!message.contains("Synthetic company"));
+        assert_eq!(
+            kb_save_error(&std::io::Error::other("Synthetic private path")),
+            "Could not save knowledge base. Reload Settings and try again."
+        );
+    }
+
     #[test]
     fn kb_edit_preserves_untouched_values_and_meaningful_path_whitespace() {
         let mut base = sidenote::core::config::KnowledgeBase::default();

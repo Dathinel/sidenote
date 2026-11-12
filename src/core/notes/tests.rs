@@ -75,6 +75,10 @@ fn settings_fixture() -> NotesSettings {
         ..NotesSettings::default()
     }
 }
+fn save_fixture_settings(root: &Path, edited: &NotesSettings) -> std::io::Result<()> {
+    let config: crate::core::Config = store_io::read(&root.join("config.json"))?;
+    crate::core::Config::save_notes(root, &config.notes.unwrap_or_default(), edited)
+}
 fn meeting(root: &Path, text: &str) -> PathBuf {
     let folder = root.join("meetings").join(ID);
     fs::create_dir_all(&folder).unwrap();
@@ -742,13 +746,13 @@ fn settings_save_sets_consent_time_and_preserves_other_config_fields() {
     .unwrap();
     let mut s = settings_fixture();
     let before = chrono::Utc::now().timestamp_millis();
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     let saved = crate::core::Config::load_in(&root.0)
         .unwrap()
         .notes
         .unwrap();
     assert!(saved.enabled_at_ms.unwrap() >= before);
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     assert_eq!(
         crate::core::Config::load_in(&root.0)
             .unwrap()
@@ -761,7 +765,7 @@ fn settings_save_sets_consent_time_and_preserves_other_config_fields() {
         serde_json::from_slice(&fs::read(root.0.join("config.json")).unwrap()).unwrap();
     assert_eq!(raw["untouched"], "value");
     s.engine = "off".into();
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     assert!(
         crate::core::Config::load_in(&root.0)
             .unwrap()
@@ -811,18 +815,18 @@ fn quick_title_failure_never_blocks_notes() {
 fn disabling_or_switching_helper_revokes_the_next_call() {
     let root = Temp::new();
     let mut s = settings_fixture();
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     assert!(helper::authorized(&root.0, Helper::Claude).unwrap());
     assert!(!helper::authorized(&root.0, Helper::Codex).unwrap());
     s.engine = "off".into();
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     assert!(!helper::authorized(&root.0, Helper::Claude).unwrap());
 }
 
 #[test]
 fn config_lock_clash_is_retryable_and_never_revokes_consent() {
     let root = Temp::new();
-    crate::core::Config::save_notes(&root.0, &settings_fixture()).unwrap();
+    save_fixture_settings(&root.0, &settings_fixture()).unwrap();
     let lock = store_io::lock(&root.0.join("local/config.lock")).unwrap();
     let error = helper::authorized(&root.0, Helper::Claude).unwrap_err();
     assert_eq!(error, Failure::Backend { exit: None });
@@ -869,7 +873,7 @@ fn invalid_instructions_do_not_stop_notes_or_settings_loading() {
     let root = Temp::new();
     meeting(&root.0, PRIVATE);
     let s = settings_fixture();
-    crate::core::Config::save_notes(&root.0, &s).unwrap();
+    save_fixture_settings(&root.0, &s).unwrap();
     fs::write(root.0.join("agent-instructions.json"), b"invalid JSON").unwrap();
     assert!(crate::core::Config::load_in(&root.0).is_ok());
     assert!(
@@ -1186,7 +1190,7 @@ fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting()
         .unwrap();
         enqueue(&root.0, &s, None);
         s.helper = Some(Helper::Claude);
-        crate::core::Config::save_notes(&root.0, &s).unwrap();
+        save_fixture_settings(&root.0, &s).unwrap();
         let saved = crate::core::Config::load_in(&root.0)
             .unwrap()
             .notes
@@ -1201,7 +1205,7 @@ fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting()
         for auto in [false, true] {
             s.auto = auto;
             s.your_name = "Changed name".into();
-            crate::core::Config::save_notes(&root.0, &s).unwrap();
+            save_fixture_settings(&root.0, &s).unwrap();
             assert_eq!(
                 crate::core::Config::load_in(&root.0)
                     .unwrap()

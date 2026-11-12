@@ -2706,6 +2706,9 @@ pub fn spec() -> AppSpec<State> {
             ("settings-kb-invalid", |s| {
                 hex::settings::scene(s, "settings-kb-invalid")
             }),
+            ("settings-kb-merge-error", |s| {
+                hex::settings::scene(s, "settings-kb-merge-error")
+            }),
             ("settings-general", |s| {
                 hex::settings::scene(s, "settings-general")
             }),

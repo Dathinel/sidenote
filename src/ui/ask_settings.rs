@@ -689,7 +689,7 @@ mod tests {
         let mut state = State::new();
         let root = state.store.root.clone();
         let settings = core::notes::NotesSettings::default();
-        core::notes::save_settings(&settings).unwrap();
+        core::notes::save_settings(&core::notes::settings().unwrap(), &settings).unwrap();
         let summary_before = serde_json::to_value(&settings).unwrap();
         assert_eq!(state.ask_thinking(), Thinking::Medium);
         state.set_ask_thinking(Thinking::High);

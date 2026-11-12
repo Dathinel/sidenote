@@ -161,6 +161,21 @@ impl KnowledgeBase {
     }
 }
 
+#[derive(Debug)]
+pub struct KnowledgeBaseSaveError(&'static str);
+
+impl std::fmt::Display for KnowledgeBaseSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Could not save knowledge base after merging other saved changes. {} Reload Settings and try again.",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for KnowledgeBaseSaveError {}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub version: u32,
@@ -243,8 +258,16 @@ impl Config {
             .baseline
             .as_ref()
             .ok_or_else(|| store_io::invalid("Reload settings before saving"))?;
-        merge_edits(&mut latest, baseline, &serde_json::to_value(&*self)?);
-        let _: Self = serde_json::from_value(latest.clone())?;
+        let edited = serde_json::to_value(&*self)?;
+        merge_edits(&mut latest, baseline, &edited);
+        let merged: Self = serde_json::from_value(latest.clone())?;
+        if baseline.get("knowledge_base") != edited.get("knowledge_base")
+            && !merged.knowledge_base.is_empty()
+        {
+            merged.knowledge_base.validate().map_err(|reason| {
+                io::Error::new(io::ErrorKind::InvalidData, KnowledgeBaseSaveError(reason))
+            })?;
+        }
         if super::relay_preview::Settings::load(root)?.enabled
             && let Some(notes) = latest
                 .get_mut("notes")
@@ -264,6 +287,22 @@ impl Config {
         store_io::write(&path, &latest)?;
         *self = saved;
         Ok(())
+    }
+
+    /// Reconcile a delayed notes readback without replacing newer settings or their baseline.
+    pub fn refresh_notes_from(&mut self, saved: &Self) {
+        self.notes = saved.notes.clone();
+        if let Some(baseline) = self
+            .baseline
+            .as_mut()
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            if let Some(notes) = saved.baseline.as_ref().and_then(|b| b.get("notes")) {
+                baseline.insert("notes".into(), notes.clone());
+            } else {
+                baseline.remove("notes");
+            }
+        }
     }
 
     fn overlay_profile(&mut self, root: &Path) -> io::Result<()> {
@@ -355,7 +394,11 @@ impl Config {
         })
     }
 
-    pub(crate) fn save_notes(root: &Path, notes: &super::notes::NotesSettings) -> io::Result<()> {
+    pub(crate) fn save_notes(
+        root: &Path,
+        baseline: &super::notes::NotesSettings,
+        edited: &super::notes::NotesSettings,
+    ) -> io::Result<()> {
         // Re-read under the lock so another settings card's changes survive this save.
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
         let path = root.join("config.json");
@@ -369,7 +412,13 @@ impl Config {
         if config.version != 1 {
             return Err(store_io::invalid("Unsupported config.json version"));
         }
-        let mut notes = notes.clone();
+        let mut value = serde_json::to_value(config.notes.clone().unwrap_or_default())?;
+        merge_edits(
+            &mut value,
+            &serde_json::to_value(baseline)?,
+            &serde_json::to_value(edited)?,
+        );
+        let mut notes: super::notes::NotesSettings = serde_json::from_value(value)?;
         let was_on = config.notes.as_ref().is_some_and(|s| {
             s.engine == "app" && s.effective_helper().is_some() && s.enabled_at_ms.is_some()
         });
@@ -388,12 +437,15 @@ impl Config {
                 .as_ref()
                 .map(|n| n.your_name.clone())
                 .unwrap_or_default();
-            let baseline = notes.relay_name_base.as_ref().unwrap_or(&original);
+            let name_base = baseline
+                .relay_name_base
+                .as_ref()
+                .unwrap_or(&baseline.your_name);
             super::relay_preview::shared::edit(
                 root,
                 "profile.json",
-                &serde_json::json!({"your_name":baseline}),
-                &serde_json::json!({"your_name":notes.your_name}),
+                &serde_json::json!({"your_name":name_base}),
+                &serde_json::json!({"your_name":edited.your_name}),
             )?;
             notes.your_name = original;
         }
@@ -439,6 +491,188 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn valid_kb() -> KnowledgeBase {
+        KnowledgeBase {
+            repo_path: "E:/synthetic/kb".into(),
+            revision: "origin/main".into(),
+            source_roots: vec!["docs".into()],
+            company_name: "Synthetic company".into(),
+            ..KnowledgeBase::default()
+        }
+    }
+
+    #[test]
+    fn delayed_notes_readback_preserves_newer_settings_and_their_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let initial = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Config::default()
+        };
+        store_io::write(&root.path().join("config.json"), &initial).unwrap();
+        let mut current = Config::load_in(root.path()).unwrap();
+        let baseline = current.notes.as_ref().unwrap().clone();
+        let mut edited = baseline.clone();
+        edited.your_name = "Synthetic owner".into();
+        Config::save_notes(root.path(), &baseline, &edited).unwrap();
+        let delayed = Config::load_in(root.path()).unwrap();
+
+        current.features.tasks = true;
+        current.labs.measure_recording_files = true;
+        current.pipeline.language_mode = "forced:hi".into();
+        current.knowledge_base = valid_kb();
+        current.save(root.path()).unwrap();
+        let mut expected = serde_json::to_value(&current).unwrap();
+        expected["notes"] = serde_json::to_value(&delayed.notes).unwrap();
+        current.refresh_notes_from(&delayed);
+        assert_eq!(serde_json::to_value(&current).unwrap(), expected);
+        assert_eq!(current.baseline.as_ref().unwrap(), &expected);
+
+        let baseline = current.notes.as_ref().unwrap().clone();
+        let mut edited = baseline.clone();
+        edited.model = "synthetic-readback-model".into();
+        Config::save_notes(root.path(), &baseline, &edited).unwrap();
+        current.refresh_notes_from(&Config::load_in(root.path()).unwrap());
+        assert_eq!(
+            current.baseline.as_ref().unwrap(),
+            &serde_json::to_value(&current).unwrap()
+        );
+
+        let mut other = Config::load_in(root.path()).unwrap();
+        other.notes.as_mut().unwrap().model = "synthetic-new-model".into();
+        other.pipeline.language_mode = "forced:en".into();
+        other.save(root.path()).unwrap();
+        current.features.memory = true;
+        current.save(root.path()).unwrap();
+        assert!(current.features.tasks);
+        assert_eq!(current.pipeline.language_mode, "forced:en");
+        assert_eq!(current.notes.as_ref().unwrap().model, "synthetic-new-model");
+        assert_eq!(current.notes.as_ref().unwrap().your_name, "Synthetic owner");
+    }
+
+    #[test]
+    fn kb_save_rejects_invalid_merged_results_without_writing_or_refreshing_draft() {
+        for change in ["clear", "remove", "invalid revision"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("config.json");
+            let initial = Config {
+                knowledge_base: valid_kb(),
+                notes: Some(super::super::notes::NotesSettings::default()),
+                ..Config::default()
+            };
+            store_io::write(&path, &initial).unwrap();
+            let mut stale = Config::load_in(root.path()).unwrap();
+            let baseline = stale.baseline.clone();
+            stale.knowledge_base.company_name = "Synthetic edited company".into();
+            assert!(stale.knowledge_base.validate().is_ok());
+            if change == "clear" {
+                let mut other = Config::load_in(root.path()).unwrap();
+                other.knowledge_base = KnowledgeBase::default();
+                other.save(root.path()).unwrap();
+            } else {
+                let mut latest = serde_json::to_value(&initial).unwrap();
+                if change == "remove" {
+                    latest.as_object_mut().unwrap().remove("knowledge_base");
+                } else {
+                    latest["knowledge_base"]["revision"] = json!("main");
+                }
+                store_io::write(&path, &latest).unwrap();
+            }
+            let before = std::fs::read(&path).unwrap();
+            let error = stale.save(root.path()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(error.get_ref().unwrap().is::<KnowledgeBaseSaveError>());
+            assert!(error.to_string().contains("Reload Settings"));
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(stale.baseline, baseline);
+            assert_eq!(
+                stale.knowledge_base.company_name,
+                "Synthetic edited company"
+            );
+            stale.knowledge_base = valid_kb();
+            stale.features.tasks = true;
+            stale.save(root.path()).unwrap();
+            assert!(stale.features.tasks);
+            let before: serde_json::Value = serde_json::from_slice(&before).unwrap();
+            let after: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(after.get("knowledge_base"), before.get("knowledge_base"));
+        }
+    }
+
+    #[test]
+    fn kb_save_keeps_valid_concurrent_fields_and_allows_clearing() {
+        let root = tempfile::tempdir().unwrap();
+        let initial = Config {
+            knowledge_base: valid_kb(),
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Config::default()
+        };
+        store_io::write(&root.path().join("config.json"), &initial).unwrap();
+        let mut first = Config::load_in(root.path()).unwrap();
+        let mut second = first.clone();
+        second.knowledge_base.repo_path = "E:/synthetic/other-kb".into();
+        second.save(root.path()).unwrap();
+        first.knowledge_base.company_name = "Synthetic new company".into();
+        first.save(root.path()).unwrap();
+        assert_eq!(first.knowledge_base.repo_path, "E:/synthetic/other-kb");
+        assert!(first.knowledge_base.validate().is_ok());
+        first.knowledge_base = KnowledgeBase::default();
+        first.save(root.path()).unwrap();
+        assert!(
+            Config::load_in(root.path())
+                .unwrap()
+                .knowledge_base
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn notes_saves_merge_fields_and_preserve_latest_consent() {
+        use super::super::notes::{Helper, NotesSettings};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let initial = Config {
+            notes: Some(NotesSettings {
+                helper: Some(Helper::Claude),
+                enabled_at_ms: Some(123),
+                model: "synthetic-original".into(),
+                ..NotesSettings::default()
+            }),
+            ..Config::default()
+        };
+        store_io::write(&path, &initial).unwrap();
+        let baseline = Config::load_in(root.path()).unwrap().notes.unwrap();
+        let mut model_edit = baseline.clone();
+        model_edit.model = "synthetic-new".into();
+        Config::save_notes(root.path(), &baseline, &model_edit).unwrap();
+        let mut name_edit = baseline.clone();
+        name_edit.your_name = "Synthetic owner".into();
+        Config::save_notes(root.path(), &baseline, &name_edit).unwrap();
+        let saved = Config::load_in(root.path()).unwrap().notes.unwrap();
+        assert_eq!(saved.model, "synthetic-new");
+        assert_eq!(saved.your_name, "Synthetic owner");
+        assert_eq!(saved.enabled_at_ms, Some(123));
+
+        let mut off = saved.clone();
+        off.engine = "off".into();
+        Config::save_notes(root.path(), &saved, &off).unwrap();
+        let mut auto_edit = saved.clone();
+        auto_edit.auto = false;
+        Config::save_notes(root.path(), &saved, &auto_edit).unwrap();
+        let saved = Config::load_in(root.path()).unwrap().notes.unwrap();
+        assert_eq!(saved.engine, "off");
+        assert_eq!(saved.enabled_at_ms, None);
+        assert!(!saved.auto);
+        assert_eq!(saved.model, "synthetic-new");
+        assert_eq!(saved.your_name, "Synthetic owner");
+        let mut on = saved.clone();
+        on.engine = "app".into();
+        Config::save_notes(root.path(), &saved, &on).unwrap();
+        let saved = Config::load_in(root.path()).unwrap().notes.unwrap();
+        assert!(saved.enabled_at_ms.unwrap() > 123);
+        assert_eq!(saved.model, "synthetic-new");
+    }
+
     #[test]
     fn stale_save_preserves_unedited_kb_and_other_fields() {
         let root = tempfile::tempdir().unwrap();
@@ -472,7 +706,12 @@ mod tests {
         assert_eq!(saved.knowledge_base.glossary, "Synthetic term");
         assert!(saved.knowledge_base.company_name.is_empty());
         assert!(Config::default().save(root.path()).is_err());
-        Config::save_notes(root.path(), &super::super::notes::NotesSettings::default()).unwrap();
+        Config::save_notes(
+            root.path(),
+            saved.notes.as_ref().unwrap(),
+            &super::super::notes::NotesSettings::default(),
+        )
+        .unwrap();
         assert_eq!(
             Config::load_in(root.path())
                 .unwrap()
@@ -496,7 +735,7 @@ mod tests {
         let mut second = Config::load_in(root.path()).unwrap();
         second.pipeline.language_mode = "forced:hi".into();
         second.save(root.path()).unwrap();
-        first.knowledge_base.company_name = "Example company".into();
+        first.knowledge_base = valid_kb();
         first.save(root.path()).unwrap();
         assert_eq!(first.pipeline.language_mode, "forced:hi");
         first.features.tasks = true;
