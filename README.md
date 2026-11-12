@@ -41,8 +41,8 @@ toolchain including `as.exe` and `dlltool.exe`. Put its bin folder on PATH or se
 `RUST_GNU_BIN`, then run from this checkout:
 
 ```powershell
-./build.ps1
-./build.ps1 -Release
+./tools/local_build.ps1 build --locked
+./tools/local_build.ps1 build --release --locked
 ```
 
 The executable is `sidenote.exe`, under `target/x86_64-pc-windows-gnu/debug/` or `release/`.
@@ -85,3 +85,15 @@ reading AppData or calling a model. Render output stays under ignored `artifacts
 Sidenote is licensed under [AGPL-3.0-or-later](LICENSE).
 [Third-party notices and dependency licences](THIRD_PARTY.md) cover Hex, Rune,
 bundled fonts and the locked Cargo dependency inventory.
+
+### Local cargo and release work
+
+Run every local cargo command through `tools/local_build.ps1`; it limits concurrent
+builds and waits for recent meeting activity. For example:
+
+```powershell
+./tools/local_build.ps1 build --locked
+```
+
+Use `./tools/local_build.ps1 -Pack` with the parameters in `tools/release_pack.ps1`
+for release packing. The meeting activity check is a log-based heuristic.
