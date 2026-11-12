@@ -1,7 +1,9 @@
 //! Experimental, advisory-only language stage for explicitly prepared PCM chunks.
+mod anuvani;
 mod contract;
 #[cfg(test)]
 mod tests;
+mod worker;
 
 pub use contract::{ChunkResult, Job, Request, Sidecar};
 use serde::{Deserialize, Serialize};
@@ -139,3 +141,5 @@ pub fn decide(
     guess.outside_meeting_languages = outside;
     Ok(guess)
 }
+
+pub use worker::{Worker, pcm_sha256, spawn as spawn_worker};
