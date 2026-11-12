@@ -476,16 +476,38 @@ $sid = $identity.User.Value
 $t = Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $env:SIDENOTE_TASK_NAME
 if (!$t -and $env:SIDENOTE_TASK_REGISTER -eq 'yes') {
     $action = New-ScheduledTaskAction -Execute $env:SIDENOTE_TASK_EXE -Argument $env:SIDENOTE_TASK_ARGS
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $sid
+    $retry = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
     $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+    Register-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME -Action $action -Trigger @($logon, $retry) -Principal $principal -Settings $settings | Out-Null
 }
-$t = Get-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME
-$a = @($t.Actions)
-$owner = $t.Principal.UserId
-if ($owner -ne $sid) { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value }
-if ($a.Count -ne 1 -or $a[0].Execute -ne $env:SIDENOTE_TASK_EXE -or $a[0].Arguments -ne $env:SIDENOTE_TASK_ARGS -or $owner -ne $sid -or $t.Principal.LogonType -ne 'Interactive' -or $t.Principal.RunLevel -ne 'Limited' -or !$t.Settings.Enabled) { throw 'Listener task does not target this user and install' }
+function Read-ListenerTask {
+    $t = Get-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME
+    $a = @($t.Actions)
+    $owner = $t.Principal.UserId
+    if ($owner -ne $sid) { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value }
+    if ($a.Count -ne 1 -or $a[0].Execute -ne $env:SIDENOTE_TASK_EXE -or $a[0].Arguments -ne $env:SIDENOTE_TASK_ARGS -or $owner -ne $sid -or $t.Principal.LogonType -ne 'Interactive' -or $t.Principal.RunLevel -ne 'Limited' -or !$t.Settings.Enabled) { throw 'Listener task does not target this user and install' }
+    return $t
+}
+function Test-RestartSchedule($t) {
+    $logon = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled -and $_.UserId -eq $sid })
+    $retry = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and $_.Enabled -and $_.Repetition.Interval -eq 'PT5M' -and !$_.Repetition.Duration -and !$_.Repetition.StopAtDurationEnd })
+    return ($logon.Count -eq 1 -and $retry.Count -eq 1 -and @($t.Triggers).Count -eq 2 -and [string]$t.Settings.MultipleInstances -in @('IgnoreNew', '2') -and $t.Settings.ExecutionTimeLimit -eq 'PT0S')
+}
+$t = Read-ListenerTask
+if (!(Test-RestartSchedule $t)) {
+    if ($env:SIDENOTE_TASK_REGISTER -ne 'yes') { throw 'Listener task needs its restart schedule repaired' }
+    # Identity and action were checked above; never replace an unrelated task or stop a running one.
+    $logon = New-ScheduledTaskTrigger -AtLogOn -User $sid
+    $retry = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+    $settings = $t.Settings
+    $settings.MultipleInstances = 2 # TASK_INSTANCES_IGNORE_NEW; CIM may expose the raw UInt32.
+    $settings.ExecutionTimeLimit = 'PT0S'
+    Set-ScheduledTask -TaskPath '\' -TaskName $env:SIDENOTE_TASK_NAME -Trigger @($logon, $retry) -Settings $settings | Out-Null
+    $t = Read-ListenerTask
+    if (!(Test-RestartSchedule $t)) { throw 'Listener task restart schedule was not saved' }
+}
 if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
 "#;
 fn listener_task(run: bool, register: bool) -> Result<(), String> {
@@ -1071,25 +1093,48 @@ mod tests {
 function Get-ScheduledTask {
     $action = [PSCustomObject]@{ Execute = $env:SIDENOTE_TASK_EXE; Arguments = $env:SIDENOTE_TASK_ARGS }
     $principal = [PSCustomObject]@{ UserId = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; LogonType = 'Interactive'; RunLevel = 'Limited' }
-    $settings = [PSCustomObject]@{ Enabled = $true }
+    $settings = [PSCustomObject]@{ Enabled = $true; MultipleInstances = 'IgnoreNew'; ExecutionTimeLimit = 'PT0S' }
+    $triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $principal.UserId)
+    if ($script:migrated -or $env:SIDENOTE_TEST_MISMATCH -notin @('legacy', 'unsaved', 'validate-only')) { $triggers += New-ScheduledTaskTrigger }
     switch ($env:SIDENOTE_TEST_MISMATCH) {
         'exe' { $action.Execute = 'other.exe' }
         'args' { $action.Arguments = '--other' }
         'privilege' { $principal.RunLevel = 'Highest' }
         'disabled' { $settings.Enabled = $false }
     }
-    [PSCustomObject]@{ TaskName = $env:SIDENOTE_TASK_NAME; Actions = @($action); Principal = $principal; Settings = $settings }
+    [PSCustomObject]@{ TaskName = $env:SIDENOTE_TASK_NAME; Actions = @($action); Principal = $principal; Settings = $settings; Triggers = $triggers }
+}
+function New-ScheduledTaskTrigger {
+    param([switch]$AtLogOn, [string]$User, [switch]$Once, $At, $RepetitionInterval)
+    $kind = if ($AtLogOn) { 'MSFT_TaskLogonTrigger' } else { 'MSFT_TaskTimeTrigger' }
+    [PSCustomObject]@{ CimClass = [PSCustomObject]@{ CimClassName = $kind }; Enabled = $true; UserId = $User; Repetition = [PSCustomObject]@{ Interval = 'PT5M'; Duration = ''; StopAtDurationEnd = $false } }
 }
 function Register-ScheduledTask { throw 'Registration is forbidden in this test' }
+function Set-ScheduledTask {
+    param($TaskPath, $TaskName, $Trigger, $Settings)
+    if ($env:SIDENOTE_TEST_MISMATCH -notin @('legacy', 'unsaved')) { throw 'Unexpected migration' }
+    if (@($Trigger).Count -ne 2 -or $Settings.MultipleInstances -ne 2) { throw 'Invalid migration' }
+    $script:migrated = $env:SIDENOTE_TEST_MISMATCH -ne 'unsaved'
+}
 function Start-ScheduledTask { $script:started = $true }
 $script:started = $false
+$script:migrated = $false
 try {
 "#;
         let suffix = r#"
 } catch { if ($script:started) { exit 2 }; exit 1 }
 if ($script:started) { exit 0 }; exit 3
 "#;
-        for mismatch in ["none", "exe", "args", "privilege", "disabled"] {
+        for mismatch in [
+            "none",
+            "exe",
+            "args",
+            "privilege",
+            "disabled",
+            "legacy",
+            "unsaved",
+            "validate-only",
+        ] {
             let status = Command::new("powershell.exe")
                 .args([
                     "-NoProfile",
@@ -1101,14 +1146,25 @@ if ($script:started) { exit 0 }; exit 3
                 .env("SIDENOTE_TASK_EXE", "sidenote-test.exe")
                 .env("SIDENOTE_TASK_ARGS", "--listen")
                 .env("SIDENOTE_TASK_RUN", "yes")
-                .env("SIDENOTE_TASK_REGISTER", "no")
+                .env(
+                    "SIDENOTE_TASK_REGISTER",
+                    if matches!(mismatch, "legacy" | "unsaved") {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                )
                 .env("SIDENOTE_TEST_MISMATCH", mismatch)
                 .creation_flags(0x08000000)
                 .status()
                 .unwrap();
             assert_eq!(
                 status.code(),
-                Some(if mismatch == "none" { 0 } else { 1 }),
+                Some(if matches!(mismatch, "none" | "legacy") {
+                    0
+                } else {
+                    1
+                }),
                 "{mismatch}"
             );
         }

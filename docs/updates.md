@@ -90,6 +90,13 @@ daily-check commands do not acquire updater locks.
 
 Create a per-user scheduled task named `Sidenote meeting listener` whose sole
 action is the stable installed `current/sidenote.exe` with `--listen`.
+Registration adds a user-logon trigger and an indefinite five-minute repeating
+trigger, with `MultipleInstances IgnoreNew` and no execution time limit. The
+repeating trigger can recover a stopped listener while the window is closed.
+Startup registration migrates an existing task only after checking its action,
+user and privilege level, then re-reads and validates the saved definition.
+Expected duplicate starts quietly exit after the listener's three-second lock
+retry. Other lock errors remain logged.
 `SIDENOTE_LISTENER_TASK` can select another task beginning with `Sidenote `.
 Apply refuses a task with another action or executable. It never edits a task.
 The listener watches a stop request, closes its event stream and exits before

@@ -486,9 +486,8 @@ fn retry_lock<T>(
     unreachable!()
 }
 pub(crate) fn log_lock_exit(error: &io::Error) {
-    if cfg!(windows) && error.raw_os_error() == Some(32) {
-        log("exit reason=lock-contention retries-exhausted");
-    } else {
+    // The repeating task can race a manual start; an existing listener is expected.
+    if !(cfg!(windows) && error.raw_os_error() == Some(32)) {
         log(&format!("exit reason=lock-error kind={:?}", error.kind()));
     }
 }
