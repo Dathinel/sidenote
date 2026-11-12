@@ -1889,26 +1889,41 @@ fn load_kb(s: &mut State) {
     s.hex.shell.kb_base = Some(config);
 }
 fn edited_kb(s: &State) -> sidenote::core::config::KnowledgeBase {
-    let mut kb = s
-        .hex
-        .shell
-        .kb_base
-        .as_ref()
-        .unwrap_or(&s.config)
-        .knowledge_base
-        .clone();
-    let fields = &s.hex.shell.kb_fields;
-    kb.repo_path = fields[0].text.trim().into();
-    kb.revision = fields[1].text.trim().into();
-    kb.source_roots = fields[2]
-        .text
-        .lines()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .collect();
-    kb.company_name = fields[3].text.trim().into();
-    kb.people_roster_source = fields[4].text.trim().into();
+    kb_edits(
+        &s.hex
+            .shell
+            .kb_base
+            .as_ref()
+            .unwrap_or(&s.config)
+            .knowledge_base,
+        &s.hex.shell.kb_fields,
+    )
+}
+fn kb_edits(
+    base: &sidenote::core::config::KnowledgeBase,
+    fields: &[TextEdit; 5],
+) -> sidenote::core::config::KnowledgeBase {
+    let mut kb = base.clone();
+    if fields[0].text != base.repo_path {
+        kb.repo_path = fields[0].text.clone();
+    }
+    if fields[1].text != base.revision {
+        kb.revision = fields[1].text.clone();
+    }
+    if fields[2].text != base.source_roots.join("\n") {
+        kb.source_roots = fields[2]
+            .text
+            .split('\n')
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    if fields[3].text != base.company_name {
+        kb.company_name = fields[3].text.clone();
+    }
+    if fields[4].text != base.people_roster_source {
+        kb.people_roster_source = fields[4].text.clone();
+    }
     kb
 }
 fn save_kb(s: &mut State) {
@@ -1921,11 +1936,8 @@ fn save_kb(s: &mut State) {
     }
     let mut config = s.hex.shell.kb_base.as_ref().unwrap_or(&s.config).clone();
     config.knowledge_base = kb;
-    match config
-        .save(&s.store.root)
-        .and_then(|()| sidenote::core::Config::load_in(&s.store.root))
-    {
-        Ok(config) => {
+    match config.save(&s.store.root) {
+        Ok(()) => {
             s.config = config;
             load_kb(s);
             s.hex.shell.kb_error = None;
@@ -2577,6 +2589,39 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kb_edit_preserves_untouched_values_and_meaningful_path_whitespace() {
+        let mut base = sidenote::core::config::KnowledgeBase::default();
+        base.repo_path = " E:/example/kb ".into();
+        base.revision = "origin/main".into();
+        base.source_roots = vec![" handbook".into(), "docs ".into()];
+        base.company_name = " Example company ".into();
+        base.people_roster_source = " people/roster.md".into();
+        let mut fields = [
+            TextEdit::new(&base.repo_path),
+            TextEdit::new(&base.revision),
+            TextEdit::new(base.source_roots.join("\n")),
+            TextEdit::new(&base.company_name),
+            TextEdit::new(&base.people_roster_source),
+        ];
+        assert_eq!(
+            serde_json::to_value(kb_edits(&base, &fields)).unwrap(),
+            serde_json::to_value(&base).unwrap()
+        );
+        fields[3] = TextEdit::new("Example revision");
+        let edited = kb_edits(&base, &fields);
+        assert_eq!(edited.repo_path, base.repo_path);
+        assert_eq!(edited.revision, base.revision);
+        assert_eq!(edited.source_roots, base.source_roots);
+        assert_eq!(edited.people_roster_source, base.people_roster_source);
+        assert_eq!(edited.company_name, "Example revision");
+        fields[2] = TextEdit::new(" handbook\ndocs \n another folder ");
+        assert_eq!(
+            kb_edits(&base, &fields).source_roots,
+            [" handbook", "docs ", " another folder "]
+        );
+    }
+
     #[test]
     fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
         assert!(jump_groups(Page::Meetings, 0).is_empty());

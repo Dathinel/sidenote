@@ -139,30 +139,38 @@ fn pipeline_in(
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let child = command.spawn();
+    let child = command.spawn().at(Stage::CatchUpScriptCommand);
     std::thread::spawn(move || {
         let _script_lock = script_lock;
         let _activity = activity;
-        let succeeded = child
-            .and_then(|mut child| {
-                if let Some(stdout) = child.stdout.take() {
-                    timings::capture(stdout, &folders, |message| log(&message));
-                }
-                child.wait()
-            })
-            .is_ok_and(|status| status.success());
+        let result = script_result(child.and_then(|mut child| {
+            if let Some(stdout) = child.stdout.take() {
+                timings::capture(stdout, &folders, |message| log(&message));
+            }
+            child.wait().at(Stage::CatchUpScriptCommand)
+        }));
+        let succeeded = result.is_ok();
         for folder in &folders {
             if let Some(id) = folder.file_name().and_then(|n| n.to_str()) {
                 let _ = crate::core::notes::draft::read(&crate::core::state_dir(), folder, id);
             }
         }
         script_markers(&folders, succeeded);
-        if !succeeded {
-            log("Notes pipeline failed; the recording and personal notes are saved");
+        if let Err(error) = result {
+            log(&format!("catch-up: {error}"));
         }
     });
     Ok(())
 }
+fn script_result(result: io::Result<std::process::ExitStatus>) -> io::Result<()> {
+    let status = result.at(Stage::CatchUpScriptCommand)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Stage::CatchUpScriptCommand.error(io::Error::other("Script exited unsuccessfully")))
+    }
+}
+
 fn script_folders(
     state: &std::path::Path,
     meetings: &std::path::Path,
@@ -494,6 +502,22 @@ pub fn run() -> ! {
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+    #[test]
+    fn script_execution_failures_keep_only_stage_and_error_kind() {
+        use std::os::windows::process::ExitStatusExt;
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::TimedOut] {
+            let error =
+                script_result(Err(io::Error::new(kind, "synthetic private detail"))).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("CATCH_UP_SCRIPT_COMMAND ({kind:?})")
+            );
+        }
+        let error = script_result(Ok(std::process::ExitStatus::from_raw(1))).unwrap_err();
+        assert_eq!(error.to_string(), "CATCH_UP_SCRIPT_COMMAND (Other)");
+        assert!(script_result(Ok(std::process::ExitStatus::from_raw(0))).is_ok());
+    }
+
     #[test]
     fn event_catch_up_and_script_folders_share_the_gate() {
         let root = std::env::temp_dir().join(format!(

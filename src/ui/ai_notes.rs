@@ -151,7 +151,7 @@ impl Snapshot {
 }
 pub enum Completion {
     Loaded(Box<Snapshot>),
-    Settings(NotesSettings),
+    Settings(Box<sidenote::core::Config>),
     Instructions(usize, Option<instructions::Entry>, bool),
     Tested(usize, Result<std::time::Duration, String>),
     Requested(String),
@@ -179,9 +179,11 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                 "Could not save Meeting summary settings. Your previous choice was kept."
                     .to_string()
             })?;
-            notes::settings().map(Completion::Settings).map_err(|_| {
-                "Settings were written but could not be read back. Reload to check.".into()
-            })
+            sidenote::core::Config::load_in(root)
+                .map(|config| Completion::Settings(Box::new(config)))
+                .map_err(|_| {
+                    "Settings were written but could not be read back. Reload to check.".into()
+                })
         }
         Work::Save(index, text) => {
             instructions::save(root, agent(index), &text).map_err(|_| SAVE_ERROR.to_string())?;
@@ -341,9 +343,9 @@ impl State {
                     );
                 }
             }
-            Ok(Completion::Settings(settings)) => {
-                self.config.notes = Some(settings.clone());
-                self.ai_notes.settings = Some(settings);
+            Ok(Completion::Settings(config)) => {
+                self.ai_notes.settings = config.notes.clone();
+                self.config = *config;
                 self.ai_notes.fallback = None;
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));

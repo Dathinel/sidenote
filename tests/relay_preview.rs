@@ -367,9 +367,10 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
                 }],
             })
             .unwrap();
-        let mut config = serde_json::to_value(sidenote::core::Config::default()).unwrap();
-        config["notes"] = json!({"your_name":"Synthetic owner","model":model});
-        let config: sidenote::core::Config = serde_json::from_value(config).unwrap();
+        let mut config = sidenote::core::Config::load_in(root).unwrap();
+        let notes = config.notes.get_or_insert_with(Default::default);
+        notes.your_name = "Synthetic owner".into();
+        notes.model = model.into();
         config.save(root).unwrap();
         let mut prefs = sidenote::core::UiPrefs {
             sidebar_collapsed: Some(sidebar),

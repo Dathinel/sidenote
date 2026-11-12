@@ -230,7 +230,7 @@ impl Config {
         }
     }
 
-    pub fn save(&self, root: &Path) -> io::Result<()> {
+    pub fn save(&mut self, root: &Path) -> io::Result<()> {
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
         let path = root.join("config.json");
         let bytes = std::fs::read(&path)?;
@@ -243,7 +243,7 @@ impl Config {
             .baseline
             .as_ref()
             .ok_or_else(|| store_io::invalid("Reload settings before saving"))?;
-        merge_edits(&mut latest, baseline, &serde_json::to_value(self)?);
+        merge_edits(&mut latest, baseline, &serde_json::to_value(&*self)?);
         let _: Self = serde_json::from_value(latest.clone())?;
         if super::relay_preview::Settings::load(root)?.enabled
             && let Some(notes) = latest
@@ -258,7 +258,12 @@ impl Config {
                     .into(),
             );
         }
-        store_io::write(&path, &latest)
+        let mut saved: Self = serde_json::from_value(latest.clone())?;
+        saved.overlay_profile(root)?;
+        saved.baseline = Some(serde_json::to_value(&saved)?);
+        store_io::write(&path, &latest)?;
+        *self = saved;
+        Ok(())
     }
 
     fn overlay_profile(&mut self, root: &Path) -> io::Result<()> {
@@ -406,11 +411,11 @@ fn merge_edits(
     if baseline == edited {
         return;
     }
-    if let (Some(latest), Some(before), Some(after)) = (
-        latest.as_object_mut(),
-        baseline.as_object(),
-        edited.as_object(),
-    ) {
+    if let (Some(before), Some(after)) = (baseline.as_object(), edited.as_object()) {
+        if !latest.is_object() {
+            *latest = serde_json::json!({});
+        }
+        let latest = latest.as_object_mut().unwrap();
         for (key, value) in after {
             if before.get(key) == Some(value) {
                 continue;
@@ -475,6 +480,74 @@ mod tests {
                 .repo_path,
             "E:/example/kb"
         );
+    }
+
+    #[test]
+    fn successful_saves_refresh_values_and_baseline_before_unrelated_edits() {
+        let root = tempfile::tempdir().unwrap();
+        store_io::write(&root.path().join("config.json"), &Config::default()).unwrap();
+        let mut first = Config::load_in(root.path()).unwrap();
+        first.pipeline.language_mode = "forced:en".into();
+        first.save(root.path()).unwrap();
+        assert_eq!(
+            first.baseline.as_ref().unwrap(),
+            &serde_json::to_value(&first).unwrap()
+        );
+        let mut second = Config::load_in(root.path()).unwrap();
+        second.pipeline.language_mode = "forced:hi".into();
+        second.save(root.path()).unwrap();
+        first.knowledge_base.company_name = "Example company".into();
+        first.save(root.path()).unwrap();
+        assert_eq!(first.pipeline.language_mode, "forced:hi");
+        first.features.tasks = true;
+        first.labs.measure_recording_files = true;
+        first.save(root.path()).unwrap();
+        let mut second = Config::load_in(root.path()).unwrap();
+        second.features.tasks = false;
+        second.labs.measure_recording_files = false;
+        second.save(root.path()).unwrap();
+        first.knowledge_base.company_name.clear();
+        first.save(root.path()).unwrap();
+        let saved = Config::load_in(root.path()).unwrap();
+        assert_eq!(saved.pipeline.language_mode, "forced:hi");
+        assert!(!saved.features.tasks);
+        assert!(!saved.labs.measure_recording_files);
+        assert_eq!(
+            first.baseline.as_ref().unwrap(),
+            &serde_json::to_value(&first).unwrap()
+        );
+    }
+
+    #[test]
+    fn failed_save_keeps_the_unsaved_edit_and_its_original_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        store_io::write(&path, &Config::default()).unwrap();
+        let mut config = Config::load_in(root.path()).unwrap();
+        let baseline = config.baseline.clone();
+        config.features.tasks = true;
+        std::fs::write(&path, b"invalid synthetic JSON").unwrap();
+        assert!(config.save(root.path()).is_err());
+        assert!(config.features.tasks);
+        assert_eq!(config.baseline, baseline);
+    }
+
+    #[test]
+    fn missing_or_retyped_parent_receives_only_edited_leaves() {
+        let before = json!({"knowledge_base": {"repo_path": "E:/example/kb", "revision": "origin/main", "company_name": "Example company"}});
+        let mut edited = before.clone();
+        edited["knowledge_base"]["company_name"] = json!("Example revision");
+        for mut latest in [
+            json!({}),
+            json!({"knowledge_base": null}),
+            json!({"knowledge_base": "removed"}),
+        ] {
+            merge_edits(&mut latest, &before, &edited);
+            assert_eq!(
+                latest,
+                json!({"knowledge_base": {"company_name": "Example revision"}})
+            );
+        }
     }
 
     #[test]
