@@ -629,7 +629,6 @@ mod pipeline_tests {
                 .is_empty()
         );
     }
-    #[cfg(windows)]
     fn script_fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "rec-guard-script-{}-{}",

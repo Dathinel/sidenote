@@ -65,3 +65,31 @@ pub fn save_html_dialog(_name: &str) -> io::Result<Option<PathBuf>> {
 pub fn copy_file(_path: &Path) -> io::Result<()> {
     Err(super::unavailable())
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::platform::CommandExt;
+    #[test]
+    fn notes_process_adapter_sets_limits_and_kills_its_group() -> io::Result<()> {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .creation_flags(0)
+            .spawn()?;
+        let job = ProcessJob::attach(&child)?;
+        let limits = fs::read_to_string(format!("/proc/{}/limits", child.id()))?;
+        let memory = limits
+            .lines()
+            .find(|l| l.starts_with("Max address space"))
+            .unwrap();
+        assert!(memory.contains("536870912"));
+        let cpu = limits
+            .lines()
+            .find(|l| l.starts_with("Max cpu time"))
+            .unwrap();
+        assert!(cpu.contains("120"));
+        drop(job);
+        assert!(!child.wait()?.success());
+        Ok(())
+    }
+}
