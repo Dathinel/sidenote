@@ -1,0 +1,1098 @@
+﻿{
+    "units":  "MB = 1,000,000 bytes",
+    "exe":  "E:\\Personal-Projects\\hex-meetings\\.worktrees\\floating-icon-r2\\artifacts\\floating-icon-r2-dev20\\sidenote.exe",
+    "sha256":  "C1BB3074C370EF9FF943E4ED619100D3C19F7C29223E394FBA3FF5DF609A6CB8",
+    "foreground_checks":  1289,
+    "show_teardown_cycles":  50,
+    "pid":  12560,
+    "idle":  [
+                 {
+                     "working_set_mb":  12.517,
+                     "private_bytes_mb":  2.531,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  170,
+                     "windows":  [
+
+                                 ]
+                 },
+                 {
+                     "working_set_mb":  12.517,
+                     "private_bytes_mb":  2.531,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  170,
+                     "windows":  [
+
+                                 ]
+                 },
+                 {
+                     "working_set_mb":  12.517,
+                     "private_bytes_mb":  2.531,
+                     "gdi":  0,
+                     "user":  1,
+                     "handles":  170,
+                     "windows":  [
+
+                                 ]
+                 }
+             ],
+    "icon_affinity":  17,
+    "icon_bounds":  {
+                        "left":  1780,
+                        "top":  613,
+                        "right":  1910,
+                        "bottom":  668,
+                        "width":  130,
+                        "height":  55
+                    },
+    "bead_region":  {
+                        "left":  false,
+                        "cap":  true,
+                        "empty_resolves_to_icon":  false
+                    },
+    "shown":  [
+                  {
+                      "working_set_mb":  13.799,
+                      "private_bytes_mb":  2.683,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  178,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon-1",
+                                      "IME"
+                                  ]
+                  },
+                  {
+                      "working_set_mb":  13.799,
+                      "private_bytes_mb":  2.683,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  178,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon-1",
+                                      "IME"
+                                  ]
+                  },
+                  {
+                      "working_set_mb":  13.799,
+                      "private_bytes_mb":  2.683,
+                      "gdi":  2,
+                      "user":  4,
+                      "handles":  178,
+                      "windows":  [
+                                      "SidenoteListenerMeetingIcon-1",
+                                      "IME"
+                                  ]
+                  }
+              ],
+    "idle_cpu":  {
+                     "wall_ms":  11222.1223,
+                     "cpu_ms":  78.125,
+                     "percent_one_core":  0.6959063364318453
+                 },
+    "drift":  {
+                  "range_px":  0,
+                  "sizes":  [
+                                "130x55"
+                            ],
+                  "samples":  1000,
+                  "cycles":  20,
+                  "right_edges":  [
+                                      1910
+                                  ]
+              },
+    "card_affinity":  17,
+    "scroll":  {
+                   "method":  "private actions sharing the keyboard/wheel handlers; no input messages",
+                   "positions":  [
+                                     1795,
+                                     1770,
+                                     0,
+                                     25,
+                                     273,
+                                     25,
+                                     100,
+                                     25,
+                                     1795,
+                                     0
+                                 ],
+                   "max":  1795
+               },
+    "live_refresh":  {
+                         "render_changed":  true,
+                         "minimum_gap_ms":  1037
+                     },
+    "close_reentrancy":  {
+                             "hidden_content_cleared":  true,
+                             "system_close_hides":  true,
+                             "destroy_reopen":  true,
+                             "title_close_does_not_ack":  true
+                         },
+    "teardown_1":  [
+                       {
+                           "working_set_mb":  16.179,
+                           "private_bytes_mb":  4.055,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       },
+                       {
+                           "working_set_mb":  16.179,
+                           "private_bytes_mb":  4.055,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       },
+                       {
+                           "working_set_mb":  16.179,
+                           "private_bytes_mb":  4.055,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_2":  [
+                       {
+                           "working_set_mb":  15.639,
+                           "private_bytes_mb":  3.494,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_3":  [
+                       {
+                           "working_set_mb":  15.725,
+                           "private_bytes_mb":  3.183,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_4":  [
+                       {
+                           "working_set_mb":  15.794,
+                           "private_bytes_mb":  3.322,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_5":  [
+                       {
+                           "working_set_mb":  15.798,
+                           "private_bytes_mb":  3.322,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_6":  [
+                       {
+                           "working_set_mb":  15.819,
+                           "private_bytes_mb":  3.494,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_7":  [
+                       {
+                           "working_set_mb":  15.811,
+                           "private_bytes_mb":  3.486,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_8":  [
+                       {
+                           "working_set_mb":  15.827,
+                           "private_bytes_mb":  3.494,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_9":  [
+                       {
+                           "working_set_mb":  15.839,
+                           "private_bytes_mb":  3.494,
+                           "gdi":  4,
+                           "user":  2,
+                           "handles":  183,
+                           "windows":  [
+
+                                       ]
+                       }
+                   ],
+    "teardown_10":  [
+                        {
+                            "working_set_mb":  15.843,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.843,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.843,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_11":  [
+                        {
+                            "working_set_mb":  15.835,
+                            "private_bytes_mb":  3.338,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_12":  [
+                        {
+                            "working_set_mb":  15.852,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_13":  [
+                        {
+                            "working_set_mb":  16.445,
+                            "private_bytes_mb":  3.908,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_14":  [
+                        {
+                            "working_set_mb":  15.884,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_15":  [
+                        {
+                            "working_set_mb":  15.892,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_16":  [
+                        {
+                            "working_set_mb":  15.905,
+                            "private_bytes_mb":  4.055,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_17":  [
+                        {
+                            "working_set_mb":  15.778,
+                            "private_bytes_mb":  3.31,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_18":  [
+                        {
+                            "working_set_mb":  15.843,
+                            "private_bytes_mb":  3.215,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_19":  [
+                        {
+                            "working_set_mb":  15.901,
+                            "private_bytes_mb":  3.351,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_20":  [
+                        {
+                            "working_set_mb":  15.913,
+                            "private_bytes_mb":  3.351,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_21":  [
+                        {
+                            "working_set_mb":  15.917,
+                            "private_bytes_mb":  3.351,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  182,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_22":  [
+                        {
+                            "working_set_mb":  15.925,
+                            "private_bytes_mb":  3.351,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_23":  [
+                        {
+                            "working_set_mb":  15.929,
+                            "private_bytes_mb":  3.351,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_24":  [
+                        {
+                            "working_set_mb":  16.49,
+                            "private_bytes_mb":  3.912,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_25":  [
+                        {
+                            "working_set_mb":  15.892,
+                            "private_bytes_mb":  3.576,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.892,
+                            "private_bytes_mb":  3.576,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.892,
+                            "private_bytes_mb":  3.576,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_26":  [
+                        {
+                            "working_set_mb":  15.905,
+                            "private_bytes_mb":  3.375,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_27":  [
+                        {
+                            "working_set_mb":  15.917,
+                            "private_bytes_mb":  3.375,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_28":  [
+                        {
+                            "working_set_mb":  15.921,
+                            "private_bytes_mb":  3.375,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_29":  [
+                        {
+                            "working_set_mb":  15.921,
+                            "private_bytes_mb":  3.346,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_30":  [
+                        {
+                            "working_set_mb":  15.929,
+                            "private_bytes_mb":  3.363,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_31":  [
+                        {
+                            "working_set_mb":  15.79,
+                            "private_bytes_mb":  3.178,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_32":  [
+                        {
+                            "working_set_mb":  15.938,
+                            "private_bytes_mb":  3.375,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_33":  [
+                        {
+                            "working_set_mb":  15.938,
+                            "private_bytes_mb":  3.375,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_34":  [
+                        {
+                            "working_set_mb":  15.852,
+                            "private_bytes_mb":  3.244,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_35":  [
+                        {
+                            "working_set_mb":  16.503,
+                            "private_bytes_mb":  3.903,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_36":  [
+                        {
+                            "working_set_mb":  15.933,
+                            "private_bytes_mb":  3.338,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_37":  [
+                        {
+                            "working_set_mb":  15.86,
+                            "private_bytes_mb":  3.215,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_38":  [
+                        {
+                            "working_set_mb":  15.933,
+                            "private_bytes_mb":  3.26,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_39":  [
+                        {
+                            "working_set_mb":  15.938,
+                            "private_bytes_mb":  3.26,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_40":  [
+                        {
+                            "working_set_mb":  16.503,
+                            "private_bytes_mb":  3.826,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_41":  [
+                        {
+                            "working_set_mb":  15.933,
+                            "private_bytes_mb":  3.26,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_42":  [
+                        {
+                            "working_set_mb":  15.974,
+                            "private_bytes_mb":  3.289,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_43":  [
+                        {
+                            "working_set_mb":  15.991,
+                            "private_bytes_mb":  3.305,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_44":  [
+                        {
+                            "working_set_mb":  15.991,
+                            "private_bytes_mb":  3.305,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_45":  [
+                        {
+                            "working_set_mb":  15.991,
+                            "private_bytes_mb":  3.305,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_46":  [
+                        {
+                            "working_set_mb":  15.978,
+                            "private_bytes_mb":  3.293,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_47":  [
+                        {
+                            "working_set_mb":  15.991,
+                            "private_bytes_mb":  3.289,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_48":  [
+                        {
+                            "working_set_mb":  15.995,
+                            "private_bytes_mb":  3.301,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_49":  [
+                        {
+                            "working_set_mb":  15.999,
+                            "private_bytes_mb":  3.305,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "teardown_50":  [
+                        {
+                            "working_set_mb":  15.999,
+                            "private_bytes_mb":  3.6,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.999,
+                            "private_bytes_mb":  3.6,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        },
+                        {
+                            "working_set_mb":  15.999,
+                            "private_bytes_mb":  3.6,
+                            "gdi":  4,
+                            "user":  2,
+                            "handles":  183,
+                            "windows":  [
+
+                                        ]
+                        }
+                    ],
+    "repeated":  {
+                     "working_set_delta_mb":  -0.17999999999999794,
+                     "working_set_mb":  [
+                                            16.179,
+                                            15.639,
+                                            15.725,
+                                            15.794,
+                                            15.798,
+                                            15.819,
+                                            15.811,
+                                            15.827,
+                                            15.839,
+                                            15.843,
+                                            15.835,
+                                            15.852,
+                                            16.445,
+                                            15.884,
+                                            15.892,
+                                            15.905,
+                                            15.778,
+                                            15.843,
+                                            15.901,
+                                            15.913,
+                                            15.917,
+                                            15.925,
+                                            15.929,
+                                            16.49,
+                                            15.892,
+                                            15.905,
+                                            15.917,
+                                            15.921,
+                                            15.921,
+                                            15.929,
+                                            15.79,
+                                            15.938,
+                                            15.938,
+                                            15.852,
+                                            16.503,
+                                            15.933,
+                                            15.86,
+                                            15.933,
+                                            15.938,
+                                            16.503,
+                                            15.933,
+                                            15.974,
+                                            15.991,
+                                            15.991,
+                                            15.991,
+                                            15.978,
+                                            15.991,
+                                            15.995,
+                                            15.999,
+                                            15.999
+                                        ],
+                     "gdi":  [
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4,
+                                 4
+                             ],
+                     "gdi_stable":  true,
+                     "private_delta_mb":  -0.45499999999999963,
+                     "user":  [
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2,
+                                  2
+                              ],
+                     "private_bytes_mb":  [
+                                              4.055,
+                                              3.494,
+                                              3.183,
+                                              3.322,
+                                              3.322,
+                                              3.494,
+                                              3.486,
+                                              3.494,
+                                              3.494,
+                                              3.346,
+                                              3.338,
+                                              3.346,
+                                              3.908,
+                                              3.346,
+                                              3.346,
+                                              4.055,
+                                              3.31,
+                                              3.215,
+                                              3.351,
+                                              3.351,
+                                              3.351,
+                                              3.351,
+                                              3.351,
+                                              3.912,
+                                              3.576,
+                                              3.375,
+                                              3.375,
+                                              3.375,
+                                              3.346,
+                                              3.363,
+                                              3.178,
+                                              3.375,
+                                              3.375,
+                                              3.244,
+                                              3.903,
+                                              3.338,
+                                              3.215,
+                                              3.26,
+                                              3.26,
+                                              3.826,
+                                              3.26,
+                                              3.289,
+                                              3.305,
+                                              3.305,
+                                              3.305,
+                                              3.293,
+                                              3.289,
+                                              3.301,
+                                              3.305,
+                                              3.6
+                                          ]
+                 },
+    "skipped":  {
+                    "shown":  true,
+                    "visible_seconds":  2.9650182
+                },
+    "no_draft":  {
+                     "expired":  true,
+                     "bound_seconds":  600,
+                     "clock":  "isolated replay clock; production uses persisted UTC stop time"
+                 },
+    "callback_panics":  {
+                            "listener_alive":  true,
+                            "icon_contained":  true,
+                            "card_contained":  true
+                        },
+    "teardown_timeout":  {
+                             "next_icon_ms":  189.1072,
+                             "retiring_cloaked":  true,
+                             "visible_icons":  1,
+                             "bound_ms":  2000
+                         },
+    "after_resilience":  [
+                             {
+                                 "working_set_mb":  17.388,
+                                 "private_bytes_mb":  4.1,
+                                 "gdi":  4,
+                                 "user":  2,
+                                 "handles":  183,
+                                 "windows":  [
+
+                                             ]
+                             },
+                             {
+                                 "working_set_mb":  17.388,
+                                 "private_bytes_mb":  4.1,
+                                 "gdi":  4,
+                                 "user":  2,
+                                 "handles":  183,
+                                 "windows":  [
+
+                                             ]
+                             },
+                             {
+                                 "working_set_mb":  17.388,
+                                 "private_bytes_mb":  4.1,
+                                 "gdi":  4,
+                                 "user":  2,
+                                 "handles":  183,
+                                 "windows":  [
+
+                                             ]
+                             }
+                         ],
+    "stuck_worker_cap":  {
+                             "disable_code_count":  1,
+                             "third_detached":  true,
+                             "monitor_continues":  true,
+                             "all_stalled_windows_cloaked":  true,
+                             "retained_after_timeout":  [
+                                                            1,
+                                                            2,
+                                                            2
+                                                        ],
+                             "visible_icons":  0,
+                             "disabled_survives_reaping":  true,
+                             "limit":  2,
+                             "listener_alive":  true
+                         },
+    "pending_after":  {
+
+                      },
+    "completed_utc":  "2026-11-12T05:06:36.2934542Z",
+    "cold_resources_returned":  false,
+    "functional_probes_passed":  true
+}

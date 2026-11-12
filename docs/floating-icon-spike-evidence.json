@@ -1,0 +1,398 @@
+{
+  "baseCommit": "f30e3a84156ba4c4e9361fbaa6621a2f5e1572f7",
+  "runeRevision": "a138b97e654b8299b2a4cb518b8476b2b528c2c4",
+  "liveScalePercent": 125,
+  "physicalInputFirstPass": [
+    {
+      "shape": "bead",
+      "pid": 32012,
+      "initial": {
+        "x": 1850,
+        "y": 410,
+        "width": 60,
+        "height": 60,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "idleMemory": {
+        "workingSetBytes": 123351040,
+        "privateBytes": 173326336
+      },
+      "noActivate": true,
+      "afterDown": {
+        "x": 1850,
+        "y": 506,
+        "width": 60,
+        "height": 60,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "afterDrag": {
+        "x": 1850,
+        "y": 410,
+        "width": 60,
+        "height": 60,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "panel": {
+        "x": 1390,
+        "y": 410,
+        "width": 450,
+        "height": 325,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 262424,
+        "affinity": 17,
+        "borderless": true
+      },
+      "afterKey": {
+        "x": 1850,
+        "y": 430,
+        "width": 60,
+        "height": 60,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "savedFraction": "0.42",
+      "survivedClose": true,
+      "afterCloseWorkingSetBytes": 137506816
+    },
+    {
+      "shape": "pill",
+      "pid": 36408,
+      "initial": {
+        "x": 1740,
+        "y": 435,
+        "width": 170,
+        "height": 48,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "idleMemory": {
+        "workingSetBytes": 125054976,
+        "privateBytes": 171618304
+      },
+      "noActivate": true,
+      "afterDown": {
+        "x": 1740,
+        "y": 531,
+        "width": 170,
+        "height": 48,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "afterDrag": {
+        "x": 1740,
+        "y": 435,
+        "width": 170,
+        "height": 48,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "panel": {
+        "x": 1280,
+        "y": 435,
+        "width": 450,
+        "height": 325,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 262424,
+        "affinity": 17,
+        "borderless": true
+      },
+      "afterKey": {
+        "x": 1740,
+        "y": 455,
+        "width": 170,
+        "height": 48,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "savedFraction": "0.43975306",
+      "survivedClose": true,
+      "afterCloseWorkingSetBytes": 134303744
+    },
+    {
+      "shape": "restart",
+      "pid": 29976,
+      "initial": {
+        "x": 1850,
+        "y": 450,
+        "width": 60,
+        "height": 60,
+        "dpi": 120,
+        "style": 382402560,
+        "exStyle": 137101720,
+        "affinity": 17,
+        "borderless": true
+      },
+      "idleMemory": {
+        "workingSetBytes": 124047360,
+        "privateBytes": 170520576
+      },
+      "noActivate": true,
+      "afterDown": null,
+      "afterDrag": null,
+      "panel": null,
+      "afterKey": null,
+      "savedFraction": null,
+      "survivedClose": null,
+      "afterCloseWorkingSetBytes": null
+    }
+  ],
+  "finalWindowMessageRuns": [
+    {
+      "shape": "bead",
+      "workingSetBytes": 127315968,
+      "dpi": 120,
+      "width": 60,
+      "height": 60,
+      "initialY": 410,
+      "dropY": 506,
+      "panelDropY": 506,
+      "panelHiddenDuringDrag": true,
+      "panelReopened": true,
+      "iconAffinity": 17,
+      "panelAffinity": 17,
+      "savedFraction": "0.496",
+      "restartPositionVerified": true,
+      "eventMethod": "WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP targeted only to owned HWND"
+    },
+    {
+      "shape": "pill",
+      "workingSetBytes": 128262144,
+      "dpi": 120,
+      "width": 170,
+      "height": 48,
+      "initialY": 512,
+      "dropY": 608,
+      "panelDropY": 608,
+      "panelHiddenDuringDrag": true,
+      "panelReopened": true,
+      "iconAffinity": 17,
+      "panelAffinity": 17,
+      "savedFraction": "0.5908148",
+      "restartPositionVerified": true,
+      "eventMethod": "WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP targeted only to owned HWND"
+    },
+    {
+      "shape": "hybrid",
+      "workingSetBytes": 126631936,
+      "dpi": 120,
+      "width": 55,
+      "height": 55,
+      "initialY": 604,
+      "dropY": 700,
+      "panelDropY": 700,
+      "panelHiddenDuringDrag": true,
+      "panelReopened": true,
+      "iconAffinity": 17,
+      "panelAffinity": 17,
+      "savedFraction": "0.68633723",
+      "restartPositionVerified": true,
+      "eventMethod": "WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP targeted only to owned HWND"
+    },
+    {
+      "shape": "restart",
+      "workingSetBytes": 126984192,
+      "dpi": 120,
+      "width": 60,
+      "height": 60,
+      "initialY": 696,
+      "dropY": 792,
+      "panelDropY": 755,
+      "panelHiddenDuringDrag": true,
+      "panelReopened": true,
+      "iconAffinity": 17,
+      "panelAffinity": 17,
+      "savedFraction": "0.78233725",
+      "restartPositionVerified": true,
+      "eventMethod": "WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP targeted only to owned HWND"
+    }
+  ],
+  "rawResize": {
+    "mode": "resize",
+    "dpi": 120,
+    "sampleCount": 821,
+    "physicalWidths": [
+      55,
+      66,
+      68,
+      76,
+      80,
+      87,
+      93,
+      98,
+      105,
+      109,
+      118,
+      119,
+      130
+    ],
+    "rightEdges": [
+      1897,
+      1898,
+      1910,
+      1921,
+      1931
+    ],
+    "hiddenSamples": 0,
+    "idleElapsedMs": 5594.106900000001,
+    "idleCpuMs": 62.5,
+    "idlePercentOfOneCore": 1.1172471516409526,
+    "resizeElapsedMs": 20107.914900000003,
+    "resizeCpuMs": 2968.75,
+    "resizePercentOfOneCore": 14.764086752724419,
+    "logicalProcessors": 8,
+    "affinity": 17
+  },
+  "anchoredResize": {
+    "mode": "resize-anchored",
+    "dpi": 120,
+    "sampleCount": 924,
+    "physicalWidths": [
+      55,
+      66,
+      68,
+      76,
+      80,
+      87,
+      93,
+      98,
+      105,
+      109,
+      118,
+      119,
+      130
+    ],
+    "rightEdges": [
+      1910
+    ],
+    "hiddenSamples": 0,
+    "idleElapsedMs": 6549.649200000001,
+    "idleCpuMs": 46.875,
+    "idlePercentOfOneCore": 0.7156871852006974,
+    "resizeElapsedMs": 20043.917800000003,
+    "resizeCpuMs": 984.375,
+    "resizePercentOfOneCore": 4.911090784856441,
+    "logicalProcessors": 8,
+    "affinity": 17
+  },
+  "visualResize": {
+    "mode": "visual-anchored",
+    "dpi": 120,
+    "sampleCount": 867,
+    "physicalWidths": [
+      55,
+      66,
+      68,
+      76,
+      80,
+      87,
+      93,
+      98,
+      105,
+      109,
+      118,
+      119,
+      130
+    ],
+    "rightEdges": [
+      1910
+    ],
+    "hiddenSamples": 0,
+    "idleElapsedMs": 6201.6050000000005,
+    "idleCpuMs": 15.625,
+    "idlePercentOfOneCore": 0.25195090625733174,
+    "resizeElapsedMs": 20081.169700000002,
+    "resizeCpuMs": 1156.25,
+    "resizePercentOfOneCore": 5.757881723393831,
+    "logicalProcessors": 8,
+    "affinity": 0
+  },
+  "visualContinuity": {
+    "frames": 1740,
+    "frameRate": "60/1",
+    "rightCapBaselineRGB": [
+      97.0,
+      108.0,
+      121.0
+    ],
+    "maxChannelDeviation": 31.0,
+    "framesWithRightCapChange": 15,
+    "firstBadFrames": [
+      427,
+      542,
+      544,
+      546,
+      671,
+      788,
+      792,
+      903,
+      905,
+      1027,
+      1147,
+      1149,
+      1391,
+      1393,
+      1504
+    ],
+    "scope": "Paint continuity in a fixed 4x4 right-cap region; not a whole-window flicker guarantee"
+  },
+  "tray": {
+    "nativeMenuLabel": "Show meeting panel",
+    "menuHandlerInvoked": true,
+    "panelOpened": true,
+    "panelAffinity": 17,
+    "quitMenuExited": true,
+    "trayRemoved": true
+  },
+  "monitor": {
+    "Size": 40,
+    "Monitor": {
+      "Left": 0,
+      "Top": 0,
+      "Right": 1920,
+      "Bottom": 1080
+    },
+    "Work": {
+      "Left": 0,
+      "Top": 0,
+      "Right": 1920,
+      "Bottom": 1080
+    },
+    "Flags": 1
+  },
+  "gates": [
+    "cargo fmt --check: pass",
+    "cargo clippy --all-targets -- -D warnings: pass",
+    "cargo test --locked --bin meeting-icon-spike: 1 pass",
+    "cargo build --locked: pass"
+  ],
+  "finalPhysicalReplayBlocker": "The guard hit PickerHost instead of the probe and refused input; final card lifecycle used targeted own-window messages."
+}

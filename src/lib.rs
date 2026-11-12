@@ -4,6 +4,7 @@ pub mod hex_install;
 pub mod hex_labs;
 pub mod listener;
 pub mod mcp;
+pub mod meeting_icon;
 pub mod platform;
 pub mod updates;
 

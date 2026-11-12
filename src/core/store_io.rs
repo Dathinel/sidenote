@@ -20,7 +20,7 @@ pub(crate) fn message(error: &io::Error) -> Option<&str> {
         .map(|m| m.0.as_str())
 }
 
-pub(super) fn read<T: DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
+pub(crate) fn read<T: DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
     match read_bounded(path, super::file_reads::SUMMARY_MAX) {
         Ok(bytes) => serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
             .map_err(io::Error::from),
