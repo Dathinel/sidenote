@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 pub const OPENCODE_THINKING: &str = "OpenCode has no separate effort flag. Choose a thinking variant with provider/model#variant in Models and agents.";
 
 pub struct AskSettings {
+    pub connection: super::cloud_ask::Connection,
     pub meeting: Thinking,
     pub meeting_agent: String,
     pub meeting_model: Option<String>,
@@ -48,6 +49,7 @@ impl AskSettings {
             chrono::Local::now().timestamp_millis(),
         );
         Self {
+            connection: super::cloud_ask::Connection::new(),
             meeting: if prefs.ask_meeting_thinking == Thinking::High {
                 Thinking::Medium
             } else {
@@ -96,6 +98,9 @@ impl State {
         self.hex_recording() || self.ask_settings.recording
     }
     pub fn ask_runner_name(&self) -> Option<&str> {
+        if self.ask_settings.connection.settings.enabled {
+            return Some(core::provider::NAME);
+        }
         if self.ask_live_meeting() {
             Some(
                 self.ask_settings
@@ -142,6 +147,9 @@ impl State {
     }
 
     pub fn warm_ask(&mut self) {
+        if self.ask_settings.connection.settings.enabled {
+            return;
+        }
         if self.waker.is_none() {
             return;
         }
@@ -182,7 +190,8 @@ impl State {
     pub fn discover_ask_models(&mut self) {
         self.ask_settings.warm_signature.clear();
         self.warm_ask();
-        if self.waker.is_some()
+        if !self.ask_settings.connection.settings.enabled
+            && self.waker.is_some()
             && let Some(runner) = self
                 .runners
                 .iter()

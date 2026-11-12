@@ -5,10 +5,10 @@ import argparse,json,os,subprocess,sys,shutil
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'artifacts/settings-build'
 STATE=ROOT/'target/settings-build-render'
-EXE=ROOT/'target/x86_64-pc-windows-gnu/debug/sidenote.exe'
+EXE=Path(os.environ.get('CARGO_TARGET_DIR',str(ROOT/'target')))/'x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
 from prepare_people_fixture import prepare
-PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('prompt-library','settings-prompts',1800),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',1800),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
+PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('prompt-library','settings-prompts',1800),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
@@ -50,7 +50,7 @@ def render(job):
 
 def tap(key,t=.3):return dict(type='tap',key=key,t=t)
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true');args=parser.parse_args()
  OUT.mkdir(parents=True,exist_ok=True)
  jobs=[]
  setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed'),('hex-meetings-off','settings-hex-meetings-off'),('hex-meetings-enable','settings-hex-meetings-enable')]
@@ -66,6 +66,8 @@ def main():
  # Existing legacy search proof keeps its original 800px viewport and exact interaction.
  events=json.loads((ROOT/'tools/ui-scripts/settings-search.json').read_text())['events'][:-1]
  jobs.append(('search','settings-search',1280,'light',800,events))
+ if args.cloud_ask:
+  jobs=[('cloud-ask','settings-cloud-ask',1280,'dark',1400,None),('cloud-ask-label','cloud-ask-answer',1280,'dark',900,None)]
  if args.search_keys:
   mapping=json.loads((ROOT/'tools/ui-fixtures/settings-search-map.json').read_text(encoding='utf-8'))
   jobs=[('legacy-search-'+str(i).zfill(2),'settings-search',1280,'light',900,[tap('hex-filter',.2),dict(type='type',text=item['key'],t=.4),dict(type='key',name='Enter',t=1.)]) for i,item in enumerate(mapping)]
@@ -75,7 +77,15 @@ def main():
  for name in ('updates','hex-dictation','meetings-recording'):
   source=OUT/f'settings-{name}-1280-dark.png'
   if source.exists():shutil.copyfile(source,OUT/f'{name}-1280-dark.png')
- (OUT/('search-render-manifest.json' if args.search_keys else 'render-manifest.json')).write_text(json.dumps(paths,indent=2)+'\n',encoding='utf-8')
+ (OUT/('cloud-ask-render-manifest.json' if args.cloud_ask else 'search-render-manifest.json' if args.search_keys else 'render-manifest.json')).write_text(json.dumps(paths,indent=2)+'\n',encoding='utf-8')
+ if args.cloud_ask:
+  for name,required in [('cloud-ask',('ask-connection-url','ask-connection-model','ask-connection-key','ask-connection-consent')),('cloud-ask-label',('ask-endpoint-label','ask-endpoint-timing'))]:
+   source=(OUT/f'settings-{name}-1280-dark.json').read_text(encoding='utf-8-sig')
+   assert 'synthetic-render-only-key' not in source,'Secure key appeared in render tree'
+   elements=json.loads(source)['elements']
+   keys={e.get('key') for e in elements}
+   assert set(required)<=keys,(name,set(required)-keys)
+  print('PASS: Ask connection controls, endpoint/model label, timing and key redaction in isolated dark renders',flush=True)
  if args.search_keys:
   for i,item in enumerate(mapping):
    tree=json.loads((OUT/f'settings-legacy-search-{i:02}-1280-light.json').read_text(encoding='utf-8-sig'))
