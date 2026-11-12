@@ -13,6 +13,7 @@ use std::{
 
 #[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
+pub mod heartbeat;
 pub mod status;
 mod timings;
 #[derive(Deserialize)]
@@ -454,12 +455,15 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
 
 // Exit independently of catch-up and worker joins, within the updater's 8 s wait.
 pub(crate) fn watch_update_stop() {
-    std::thread::spawn(|| {
+    let mut recorder = heartbeat::Recorder::start();
+    std::thread::spawn(move || {
         loop {
             if let Some(source) = crate::updates::listener_stop_source() {
+                recorder.stop();
                 log(&format!("exit reason=stop source=watcher/{source}"));
                 std::process::exit(0);
             }
+            recorder.tick();
             std::thread::sleep(Duration::from_millis(250));
         }
     });

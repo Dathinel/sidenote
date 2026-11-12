@@ -97,6 +97,13 @@ Startup registration migrates an existing task only after checking its action,
 user and privilege level, then re-reads and validates the saved definition.
 Expected duplicate starts quietly exit after the listener's three-second lock
 retry. Other lock errors remain logged.
+The listener writes start, last-heartbeat and controlled-stop timestamps to
+`<state-root>/local/recorder-heartbeat.json`, refreshing every 30 seconds. On
+restart, a gap over two minutes is logged and shown in the window as a
+dismissible "Recorder was off from X to Y" line in local time. After an abrupt
+exit the start of the gap is the last observed heartbeat, not an exact crash
+time. Dismissal is stored separately in `local/recorder-gap-dismissed.json`.
+These files contain timestamps only, with no meeting content.
 `SIDENOTE_LISTENER_TASK` can select another task beginning with `Sidenote `.
 Apply refuses a task with another action or executable. It never edits a task.
 The listener watches a stop request, closes its event stream and exits before
