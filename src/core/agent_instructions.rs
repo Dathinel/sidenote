@@ -25,7 +25,7 @@ impl Agent {
     ];
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub text: String,
     pub based_on: u32,
@@ -130,7 +130,12 @@ pub fn default_base(a: Agent) -> &'static str {
 /// The prompt text without the meeting material: fixed head, your base, fixed tail. Notes and
 /// Tasks add their material after this, with the same layout the helper ladder uses.
 pub fn compose(a: Agent, base: &str) -> String {
-    let (head, tail) = (core_head(a), core_tail(a));
+    compose_with_tail(a, base, core_tail(a))
+}
+/// Like `compose`, with another closing block. Redo tasks reads the Tasks head and base but asks
+/// for a different reply, so it passes its own tail.
+pub fn compose_with_tail(a: Agent, base: &str, tail: &str) -> String {
+    let head = core_head(a);
     match a {
         Agent::Notes | Agent::Tasks => format!("{head}\n{base}\n{tail}\n"),
         Agent::Title => format!("{}\n\n{}\n{}\n", head.trim(), base.trim(), tail.trim()),
@@ -197,6 +202,50 @@ pub fn reset(root: &Path, a: Agent) -> io::Result<()> {
         *store.slot(a) = None;
     })?;
     Ok(())
+}
+
+/// The result of a save or reset that checks what is on disk first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Write {
+    Done,
+    /// Another window changed this prompt since the editor loaded it. Nothing was written. Holds
+    /// what is on disk now: the saved copy, or `None` when the prompt is at its default.
+    Conflict(Option<Entry>),
+}
+/// Replaces one prompt's slot only when it still holds what the editor started from. The check and
+/// the write share one hold on the store lock, so a stale window can never overwrite a newer edit.
+/// `baseline` is the saved text the editor loaded, or `None` when it loaded the default.
+fn write(root: &Path, a: Agent, next: Option<Entry>, baseline: Option<&str>) -> io::Result<Write> {
+    let mut conflict = None;
+    sync_state::update::<Store>(root, STORE, |store| {
+        let slot = store.slot(a);
+        if slot.as_ref().map(|e| e.text.as_str()) == baseline {
+            *slot = next;
+        } else {
+            conflict = Some(slot.clone());
+        }
+    })?;
+    Ok(match conflict {
+        Some(theirs) => Write::Conflict(theirs),
+        None => Write::Done,
+    })
+}
+pub fn save_checked(
+    root: &Path,
+    a: Agent,
+    text: &str,
+    baseline: Option<&str>,
+) -> io::Result<Write> {
+    validate_text(text)?;
+    let entry = Entry {
+        text: text.into(),
+        based_on: PROMPT_VERSION,
+        edited_at: chrono::Utc::now().to_rfc3339(),
+    };
+    write(root, a, Some(entry), baseline)
+}
+pub fn reset_checked(root: &Path, a: Agent, baseline: Option<&str>) -> io::Result<Write> {
+    write(root, a, None, baseline)
 }
 
 #[cfg(test)]

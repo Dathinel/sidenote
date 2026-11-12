@@ -1635,6 +1635,7 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= s.live_tick();
     changed |= s.expire_toast();
     changed |= hex::settings_tick(s);
+    changed |= prompt_library::tick(s, tx);
     changed |= relay::tick(s, tx);
     if let Some(until) = s
         .hex
@@ -2767,6 +2768,12 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-prompts-sort", |s| {
                 hex::settings::scene(s, "settings-prompts-sort")
+            }),
+            ("settings-prompts-redo", |s| {
+                hex::settings::scene(s, "settings-prompts-redo")
+            }),
+            ("settings-prompts-conflict", |s| {
+                hex::settings::scene(s, "settings-prompts-conflict")
             }),
             ("settings-prompts-readonly", |s| {
                 hex::settings::scene(s, "settings-prompts-readonly")

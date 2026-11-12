@@ -2541,6 +2541,8 @@ pub fn scene(s: &mut State, name: &str) {
         | "settings-prompts-edited"
         | "settings-prompts-diff"
         | "settings-prompts-sort"
+        | "settings-prompts-redo"
+        | "settings-prompts-conflict"
         | "settings-prompts-readonly" => (Page::Prompts, 0),
         "settings-people" => (Page::People, 0),
         "people-our-team" | "people-team-editor" | "people-search" => (Page::People, 0),

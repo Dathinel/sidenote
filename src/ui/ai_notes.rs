@@ -45,11 +45,41 @@ fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
     Some("Meeting summaries are off. Choose Claude Code in Meeting summary settings, then try again.".into())
 }
 
+/// What a save or reset was asked to do when it found another window's newer copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retry {
+    Save,
+    Reset,
+}
+/// Another window changed this prompt after this editor started from its copy. Nothing was
+/// written. You keep your text, take the other copy, or compare the two first.
+pub struct Conflict {
+    /// What is stored now: the other window's copy, or `None` when it is back at the default.
+    pub theirs: Option<instructions::Entry>,
+    pub retry: Retry,
+    /// Showing the two copies side by side, as a diff from theirs to yours.
+    pub both: bool,
+    pub compare: Option<super::prompt_library::DiffCache>,
+}
+impl Conflict {
+    pub(super) fn new(theirs: Option<instructions::Entry>, retry: Retry) -> Self {
+        Self {
+            theirs,
+            retry,
+            both: false,
+            compare: None,
+        }
+    }
+}
 pub struct Editor {
     pub text: TextEdit,
     pub saved: String,
     pub edited_at: Option<String>,
     pub reset_confirm: bool,
+    /// The saved text this editor started from, or `None` for the default. A save is checked
+    /// against it, so a window with an old copy cannot overwrite a newer one.
+    pub base: Option<String>,
+    pub conflict: Option<Conflict>,
 }
 impl Editor {
     fn new(agent: Agent) -> Self {
@@ -59,15 +89,35 @@ impl Editor {
             saved: text,
             edited_at: None,
             reset_confirm: false,
+            base: None,
+            conflict: None,
         }
     }
+    /// The store was read again. A clean editor takes the new copy. An editor with unsaved text
+    /// keeps its text and its starting point, and flags a conflict when the store moved on.
     fn loaded(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool) {
+        self.apply(agent, entry, reset, false);
+    }
+    /// This window's own save or reset finished, so what is stored is the new starting point.
+    fn stored(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool) {
+        self.apply(agent, entry, reset, true);
+    }
+    fn apply(&mut self, agent: Agent, entry: Option<instructions::Entry>, reset: bool, own: bool) {
         let text = entry
             .as_ref()
             .map(|e| e.text.clone())
             .unwrap_or_else(|| instructions::default_base(agent).into());
-        if reset || !self.dirty() {
+        let disk = entry.as_ref().map(|e| e.text.clone());
+        let fresh = reset || !self.dirty();
+        if fresh {
             self.text = TextEdit::new(&text);
+        }
+        if fresh || own {
+            self.base = disk;
+            self.conflict = None;
+        } else if self.base != disk {
+            let retry = self.conflict.as_ref().map_or(Retry::Save, |c| c.retry);
+            self.conflict = Some(Conflict::new(entry.clone(), retry));
         }
         self.saved = text;
         self.edited_at = entry.map(|e| e.edited_at);
@@ -155,6 +205,8 @@ pub enum Completion {
     Loaded(Box<Snapshot>),
     Settings(Box<sidenote::core::Config>),
     Instructions(usize, Option<instructions::Entry>, bool),
+    /// A save or reset found another window's newer copy and wrote nothing.
+    Conflict(usize, Option<instructions::Entry>, Retry),
     Tested(usize, Result<std::time::Duration, String>),
     Requested(String),
 }
@@ -164,8 +216,9 @@ enum Work {
         baseline: Box<NotesSettings>,
         edited: NotesSettings,
     },
-    Save(usize, String),
-    Reset(usize),
+    /// The prompt, your text, and the saved text this editor started from.
+    Save(usize, String, Option<String>),
+    Reset(usize, Option<String>),
     Test(usize, String),
     Request(String, Request),
 }
@@ -186,9 +239,13 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                     "Settings were written but could not be read back. Reload to check.".into()
                 })
         }
-        Work::Save(index, text) => {
+        Work::Save(index, text, baseline) => {
             let entry = library::for_agent(agent(index));
-            let saved = library::save(root, entry, &text).map_err(|_| SAVE_ERROR.to_string())?;
+            let saved = library::save(root, entry, &text, baseline.as_deref())
+                .map_err(|_| SAVE_ERROR.to_string())?;
+            if let library::Saved::Conflict(theirs) = saved {
+                return Ok(Completion::Conflict(index, theirs, Retry::Save));
+            }
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were written but could not be read back. Reload to check.".to_string()
             })?;
@@ -199,9 +256,12 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                 saved == library::Saved::Default,
             ))
         }
-        Work::Reset(index) => {
-            library::reset(root, library::for_agent(agent(index)))
+        Work::Reset(index, baseline) => {
+            let reset = library::reset(root, library::for_agent(agent(index)), baseline.as_deref())
                 .map_err(|_| "Sidenote could not reset your instructions. Your text is still here. Press Reset to default again.".to_string())?;
+            if let library::Saved::Conflict(theirs) = reset {
+                return Ok(Completion::Conflict(index, theirs, Retry::Reset));
+            }
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were reset but could not be read back. Reload to check.".to_string()
             })?;
@@ -242,7 +302,7 @@ impl State {
         }
         self.ai_notes.pending = Some(label);
         self.ai_notes.editor_target = match &work {
-            Work::Save(i, _) | Work::Reset(i) => Some(*i),
+            Work::Save(i, ..) | Work::Reset(i, _) => Some(*i),
             _ => None,
         };
         self.ai_notes.testing = match &work {
@@ -354,6 +414,7 @@ impl State {
                         index,
                         snapshot.store.get(agent(index)).cloned(),
                         false,
+                        false,
                     );
                 }
             }
@@ -366,10 +427,16 @@ impl State {
                 self.ai_notes.notice = Some("Meeting summary settings saved.".into());
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
-                self.notes_editor_loaded(index, entry, reset);
+                self.notes_editor_loaded(index, entry, reset, true);
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Instructions saved.".into());
+            }
+            Ok(Completion::Conflict(index, theirs, retry)) => {
+                // Your text stays in the editor and nothing was written.
+                self.ai_notes.editors[index].conflict = Some(Conflict::new(theirs, retry));
+                self.ai_notes.editors[index].reset_confirm = false;
+                super::prompt_library::refresh(self, index);
             }
             Ok(Completion::Tested(index, result)) => {
                 let text = match result {
@@ -398,21 +465,57 @@ impl State {
         index: usize,
         entry: Option<instructions::Entry>,
         reset: bool,
+        own: bool,
     ) {
         if index == 0 {
             self.meeting_ui.custom = entry.is_some();
         }
-        self.ai_notes.editors[index].loaded(agent(index), entry, reset);
+        let editor = &mut self.ai_notes.editors[index];
+        if own {
+            editor.stored(agent(index), entry, reset);
+        } else {
+            editor.loaded(agent(index), entry, reset);
+        }
+        super::prompt_library::refresh(self, index);
     }
     pub(super) fn notes_reset_editor(&mut self, index: usize) {
-        self.notes_work(Work::Reset(index), "Resetting instructions...");
+        let baseline = self.ai_notes.editors[index].base.clone();
+        self.notes_work(Work::Reset(index, baseline), "Resetting instructions...");
     }
     pub(super) fn notes_save_editor(&mut self, index: usize) {
-        let text = self.ai_notes.editors[index].text.text.clone();
-        if !valid_instructions(&text) {
+        let editor = &self.ai_notes.editors[index];
+        let (text, baseline) = (editor.text.text.clone(), editor.base.clone());
+        if editor.conflict.is_some() || !valid_instructions(&text) {
             return;
         }
-        self.notes_work(Work::Save(index, text), "Saving instructions...");
+        self.notes_work(Work::Save(index, text, baseline), "Saving instructions...");
+    }
+    /// Conflict choice "keep mine": run the same save or reset again, now measured against the
+    /// other window's copy. If that copy changes once more, it is a new conflict.
+    pub(super) fn notes_keep_mine(&mut self, index: usize) {
+        if self.ai_notes.pending.is_some() {
+            return;
+        }
+        let Some(conflict) = self.ai_notes.editors[index].conflict.take() else {
+            return;
+        };
+        let editor = &mut self.ai_notes.editors[index];
+        editor.base = conflict.theirs.as_ref().map(|e| e.text.clone());
+        match conflict.retry {
+            Retry::Save => self.notes_save_editor(index),
+            Retry::Reset => self.notes_reset_editor(index),
+        }
+        if self.ai_notes.pending.is_none() {
+            // The worker did not start: keep the choice on screen.
+            self.ai_notes.editors[index].conflict = Some(conflict);
+        }
+    }
+    /// Conflict choice "use theirs": your unsaved text is replaced by the stored copy.
+    pub(super) fn notes_use_theirs(&mut self, index: usize) {
+        let Some(conflict) = self.ai_notes.editors[index].conflict.take() else {
+            return;
+        };
+        self.notes_editor_loaded(index, conflict.theirs, true, true);
     }
     pub fn choose_notes_helper(&mut self, index: usize) {
         let Some(mut settings) = self.ai_notes.settings.clone() else {
@@ -1193,12 +1296,37 @@ mod tests {
             based_on: 1,
             edited_at: "2026-11-10T04:00:00Z".into(),
         };
-        editor.loaded(Agent::Tasks, Some(entry.clone()), false);
+        editor.stored(Agent::Tasks, Some(entry.clone()), false);
         assert!(!editor.dirty());
+        assert_eq!(editor.base.as_deref(), Some("First draft"));
         editor.text = TextEdit::new("Newer draft typed while saving");
-        editor.loaded(Agent::Tasks, Some(entry), false);
+        editor.stored(Agent::Tasks, Some(entry), false);
         assert_eq!(editor.text.text, "Newer draft typed while saving");
         assert!(editor.dirty());
+        // Our own save never reads as another window's change.
+        assert!(editor.conflict.is_none());
+    }
+    #[test]
+    fn a_refresh_that_finds_a_newer_copy_under_unsaved_text_flags_a_conflict() {
+        let mut editor = Editor::new(Agent::Ask);
+        editor.text = TextEdit::new("My unsaved wording");
+        let theirs = instructions::Entry {
+            text: "Their saved wording".into(),
+            based_on: 1,
+            edited_at: "2026-11-10T04:00:00Z".into(),
+        };
+        editor.loaded(Agent::Ask, Some(theirs.clone()), false);
+        let conflict = editor.conflict.as_ref().expect("a conflict");
+        assert_eq!(conflict.theirs.as_ref(), Some(&theirs));
+        assert_eq!(conflict.retry, Retry::Save);
+        // Your text and your starting point are untouched, so Save stays measured against it.
+        assert_eq!(editor.text.text, "My unsaved wording");
+        assert_eq!(editor.base, None);
+        // A clean editor just takes the new copy, with no conflict.
+        let mut clean = Editor::new(Agent::Ask);
+        clean.loaded(Agent::Ask, Some(theirs), false);
+        assert!(clean.conflict.is_none());
+        assert_eq!(clean.base.as_deref(), Some("Their saved wording"));
     }
     #[test]
     fn instruction_worker_saves_and_resets_each_agent_without_a_helper() {
@@ -1214,7 +1342,7 @@ mod tests {
             for index in 0..Agent::ALL.len() {
                 let result = run(
                     &worker_root,
-                    Work::Save(index, format!("Custom agent {index}")),
+                    Work::Save(index, format!("Custom agent {index}"), None),
                 )
                 .unwrap();
                 assert!(
@@ -1226,7 +1354,7 @@ mod tests {
                 assert!(store.get(agent).is_some());
             }
             assert!(matches!(
-                run(&worker_root, Work::Reset(0)).unwrap(),
+                run(&worker_root, Work::Reset(0, Some("Custom agent 0".into()))).unwrap(),
                 Completion::Instructions(0, None, true)
             ));
             let store = instructions::load(&worker_root).unwrap();
@@ -1234,10 +1362,32 @@ mod tests {
             // Saving the default text is a reset: your copy goes and the editor shows the default.
             let default = instructions::default_base(Agent::Tasks).to_owned();
             assert!(matches!(
-                run(&worker_root, Work::Save(1, default)).unwrap(),
+                run(
+                    &worker_root,
+                    Work::Save(1, default, Some("Custom agent 1".into()))
+                )
+                .unwrap(),
                 Completion::Instructions(1, None, true)
             ));
-            assert!(run(&worker_root, Work::Save(1, "x".repeat(16_001))).is_err());
+            assert!(run(&worker_root, Work::Save(1, "x".repeat(16_001), None)).is_err());
+            // A window that still starts from the old copy gets a conflict and writes nothing.
+            let stale = run(
+                &worker_root,
+                Work::Save(2, "Stale window text".into(), Some("Older copy".into())),
+            )
+            .unwrap();
+            assert!(matches!(
+                stale,
+                Completion::Conflict(2, Some(ref theirs), Retry::Save)
+                    if theirs.text == "Custom agent 2"
+            ));
+            let stale_reset = run(&worker_root, Work::Reset(2, Some("Older copy".into()))).unwrap();
+            assert!(matches!(
+                stale_reset,
+                Completion::Conflict(2, Some(_), Retry::Reset)
+            ));
+            let store = instructions::load(&worker_root).unwrap();
+            assert_eq!(store.get(Agent::Title).unwrap().text, "Custom agent 2");
         })
         .join()
         .unwrap();
