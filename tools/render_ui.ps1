@@ -410,6 +410,10 @@ if ($Dev3) {
         $shots += ,@("tasks-v2-rebuild-blocked-$width", 'tasks-v2-rebuild-confirm', "${width}x1400", 'dev3-rebuild-blocked.json', @('--at', 'mark:end'))
     }
 }
+foreach ($scene in @('settings-kb-empty', 'settings-kb-valid', 'settings-kb-invalid')) {
+    $shots += ,@($scene, $scene, '1320x1200', $null, @())
+    $shots += ,@("$scene-390", $scene, '390x1400', $null, @())
+}
 $settingsScenes = @(
     'settings-general',
     'settings-recording',

@@ -1,3 +1,4 @@
+use crate::core::failure::{AtStage, Stage};
 use serde::Deserialize;
 use std::{
     fs::{self, OpenOptions},
@@ -75,12 +76,13 @@ fn pipeline_in(
     meeting_id: Option<&str>,
 ) -> io::Result<()> {
     if let Some(id) = meeting_id
-        && crate::core::recording_guard::eligibility(state, meetings, id)?
+        && crate::core::recording_guard::eligibility(state, meetings, id)
+            .at(Stage::CatchUpEligibility)?
             != crate::core::recording_guard::Eligibility::Eligible
     {
         return Ok(());
     }
-    let activity = crate::updates::activity()?;
+    let activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
     {
@@ -90,11 +92,11 @@ fn pipeline_in(
             log("routing remains queued for the next drain");
         }
     }
-    let settings = crate::core::notes::settings()?;
+    let settings = crate::core::notes::settings().at(Stage::CatchUpSettings)?;
     let script = match settings.engine() {
         crate::core::notes::Engine::App => {
             if let Some(id) = meeting_id {
-                crate::core::notes::queue::enqueue(id)?;
+                crate::core::notes::queue::enqueue(id).at(Stage::CatchUpEnqueue)?;
                 crate::core::notes::queue::start_worker()?;
             } else {
                 crate::core::notes::queue::catch_up()?;
@@ -118,20 +120,21 @@ fn pipeline_in(
         log(crate::core::live::NOTES_UNAVAILABLE);
         return Ok(());
     }
-    let mut folders = script_folders(state, meetings, meeting_id)?;
+    let mut folders = script_folders(state, meetings, meeting_id).at(Stage::CatchUpMeetings)?;
     let script_lock = match crate::core::store_io::lock(
         &crate::core::state_dir().join("local/notes-script.lock"),
     ) {
         Ok(lock) => lock,
         Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
-        Err(e) => return Err(e),
+        Err(e) => return Err(Stage::CatchUpScriptLock.error(e)),
     };
-    let (mut command, filtered) = script_command(&script, &folders, log)?;
+    let (mut command, filtered) =
+        script_command(&script, &folders, log).at(Stage::CatchUpScriptCommand)?;
     if filtered && folders.is_empty() {
         return Ok(());
     }
     if !filtered {
-        folders = legacy_script_folders(meetings, meeting_id)?;
+        folders = legacy_script_folders(meetings, meeting_id).at(Stage::CatchUpMeetings)?;
     }
     command
         .stdout(std::process::Stdio::piped())
@@ -186,16 +189,17 @@ fn catch_up_routing(
     meetings: &std::path::Path,
     mut enqueue: impl FnMut(&str) -> io::Result<()>,
 ) -> io::Result<()> {
-    for entry in fs::read_dir(meetings)? {
-        let entry = entry?;
+    for entry in fs::read_dir(meetings).at(Stage::CatchUpMeetings)? {
+        let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if !id.is_empty()
             && id.bytes().any(|b| b.is_ascii_digit())
             && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-            && crate::core::recording_guard::eligibility(state, meetings, &id)?
+            && crate::core::recording_guard::eligibility(state, meetings, &id)
+                .at(Stage::CatchUpEligibility)?
                 == crate::core::recording_guard::Eligibility::Eligible
         {
-            enqueue(&id)?;
+            enqueue(&id).at(Stage::CatchUpRouting)?;
         }
     }
     Ok(())
@@ -254,20 +258,21 @@ fn script_command(
     Ok((command, filtered))
 }
 fn catch_up() -> io::Result<()> {
-    let _activity = crate::updates::activity()?;
+    let _activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if crate::core::meeting_router::jobs::configured() {
         catch_up_routing(
             &crate::core::state_dir(),
             &crate::core::meetings_dir(),
             |id| crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other),
-        )?;
-        crate::core::meeting_router::jobs::start_worker()?;
+        )
+        .at(Stage::CatchUpRouting)?;
+        crate::core::meeting_router::jobs::start_worker().at(Stage::CatchUpRouting)?;
     }
     pipeline(None)
 }
 fn continue_after_pipeline(result: io::Result<()>, report: impl FnOnce(&str)) {
-    if result.is_err() {
-        report("could not queue notes; listening continues");
+    if let Err(error) = result {
+        report(&format!("catch-up: {}", Stage::CatchUpEnqueue.error(error)));
     }
 }
 // A streaming HTTP body, with no TLS or proxy needed for the loopback API.
@@ -429,8 +434,11 @@ pub fn run() -> ! {
     status::start();
     // The watcher scans completed meetings even when the event API is unavailable.
     let finished = crate::core::meeting_watch::start(log);
-    if catch_up().is_err() {
-        log("startup catch-up could not start; retrying on the next connection");
+    if let Err(error) = catch_up() {
+        log(&format!(
+            "startup catch-up: {}",
+            Stage::CatchUpRouting.error(error)
+        ));
     }
     std::thread::spawn(|| {
         while !crate::updates::listener_stopping() {
@@ -441,8 +449,11 @@ pub fn run() -> ! {
     std::thread::spawn(|| {
         loop {
             let _ = crate::core::meeting_router::jobs::start_worker();
-            if crate::core::notes::queue::start_worker().is_err() {
-                log("notes worker could not start; retrying on the next drain");
+            if let Err(error) = crate::core::notes::queue::start_worker() {
+                log(&format!(
+                    "notes worker: {}",
+                    Stage::NotesWorkerSpawn.error(error)
+                ));
             }
             if crate::core::meeting_router::jobs::configured() {
                 let _ = catch_up_routing(
@@ -457,8 +468,11 @@ pub fn run() -> ! {
                     },
                 );
             }
-            if pipeline(None).is_err() {
-                log("catch-up remains pending for the next drain");
+            if let Err(error) = pipeline(None) {
+                log(&format!(
+                    "catch-up: {}",
+                    Stage::CatchUpMeetings.error(error)
+                ));
             }
             std::thread::sleep(Duration::from_secs(30));
         }
@@ -657,6 +671,6 @@ ConvertTo-Json -InputObject $kept | Set-Content -LiteralPath $env:REC_GUARD_OUTP
         for result in [Err(io::Error::other("private failure")), Ok(())] {
             continue_after_pipeline(result, |message| messages.push(message.to_owned()));
         }
-        assert_eq!(messages, ["could not queue notes; listening continues"]);
+        assert_eq!(messages, ["catch-up: CATCH_UP_ENQUEUE (Other)"]);
     }
 }

@@ -101,6 +101,66 @@ pub struct KnowledgeBase {
     extra: BTreeMap<String, serde_json::Value>,
 }
 
+impl KnowledgeBase {
+    pub fn is_empty(&self) -> bool {
+        self.repo_path.is_empty()
+            && self.revision.is_empty()
+            && self.source_roots.is_empty()
+            && self.company_name.is_empty()
+            && self.people_roster_source.is_empty()
+    }
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.repo_path.trim().is_empty() {
+            return Err("Enter the repository folder.");
+        }
+        if self.repo_path.chars().any(char::is_control) {
+            return Err("Repository folder cannot contain control characters.");
+        }
+        if self.revision.trim().is_empty() {
+            return Err("Enter a revision starting with origin/.");
+        }
+        if !self.revision.starts_with("origin/")
+            || self.revision.len() == 7
+            || self
+                .revision
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err("Revision must start with origin/ and contain no whitespace.");
+        }
+        if self.source_roots.is_empty() {
+            return Err("Enter at least one source folder, one per line.");
+        }
+        if self
+            .source_roots
+            .iter()
+            .any(|p| p.is_empty() || !super::daily_check::safe_kb_path(&format!("{p}/source.md")))
+        {
+            return Err(
+                "Source folders must be relative, use /, and exclude parent paths and .env files.",
+            );
+        }
+        if !self.people_roster_source.is_empty()
+            && !super::daily_check::safe_kb_path(&self.people_roster_source)
+        {
+            return Err(
+                "Roster must be a relative .md, .yaml, .yml, .json or .txt file, without parent paths or .env files.",
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn config_stage(&self) -> super::failure::Stage {
+        if self.repo_path.trim().is_empty()
+            || self.revision.trim().is_empty()
+            || self.source_roots.is_empty()
+        {
+            super::failure::Stage::KbConfigEmpty
+        } else {
+            super::failure::Stage::KbConfigInvalid
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub version: u32,
@@ -115,6 +175,8 @@ pub struct Config {
     pub notes: Option<super::notes::NotesSettings>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
+    #[serde(skip)]
+    baseline: Option<serde_json::Value>,
 }
 
 impl Default for Config {
@@ -126,6 +188,7 @@ impl Default for Config {
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
             notes: None,
+            baseline: None,
             extra: BTreeMap::new(),
         }
     }
@@ -153,12 +216,14 @@ impl Config {
                     store_io::write(&path, &config)?;
                 }
                 config.overlay_profile(root)?;
+                config.baseline = Some(serde_json::to_value(&config)?);
                 Ok(config)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let mut config = Self::migrate(root)?;
                 store_io::write(&path, &config)?;
                 config.overlay_profile(root)?;
+                config.baseline = Some(serde_json::to_value(&config)?);
                 Ok(config)
             }
             Err(e) => Err(e),
@@ -167,17 +232,35 @@ impl Config {
 
     pub fn save(&self, root: &Path) -> io::Result<()> {
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
-        let mut local = self.clone();
-        if super::relay_preview::Settings::load(root)?.enabled
-            && let Some(notes) = &mut local.notes
-        {
-            notes.your_name = super::relay_preview::shared::local_profile(root)?["your_name"]
-                .as_str()
-                .unwrap_or("")
-                .into();
+        let path = root.join("config.json");
+        let bytes = std::fs::read(&path)?;
+        let mut latest: serde_json::Value =
+            serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
+        if latest["version"] != 1 {
+            return Err(store_io::invalid("Unsupported config.json version"));
         }
-        store_io::write(&root.join("config.json"), &local)
+        let baseline = self
+            .baseline
+            .as_ref()
+            .ok_or_else(|| store_io::invalid("Reload settings before saving"))?;
+        merge_edits(&mut latest, baseline, &serde_json::to_value(self)?);
+        let _: Self = serde_json::from_value(latest.clone())?;
+        if super::relay_preview::Settings::load(root)?.enabled
+            && let Some(notes) = latest
+                .get_mut("notes")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            notes.insert(
+                "your_name".into(),
+                super::relay_preview::shared::local_profile(root)?["your_name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .into(),
+            );
+        }
+        store_io::write(&path, &latest)
     }
+
     fn overlay_profile(&mut self, root: &Path) -> io::Result<()> {
         if let Some(notes) = &mut self.notes
             && let Some(preview) = super::relay_preview::get(root)?
@@ -311,5 +394,126 @@ impl Config {
         }
         config.notes = Some(notes);
         store_io::write(&path, &config)
+    }
+}
+
+// Apply only explicit edits; a stale card must not restore values in other cards.
+fn merge_edits(
+    latest: &mut serde_json::Value,
+    baseline: &serde_json::Value,
+    edited: &serde_json::Value,
+) {
+    if baseline == edited {
+        return;
+    }
+    if let (Some(latest), Some(before), Some(after)) = (
+        latest.as_object_mut(),
+        baseline.as_object(),
+        edited.as_object(),
+    ) {
+        for (key, value) in after {
+            if before.get(key) == Some(value) {
+                continue;
+            }
+            merge_edits(
+                latest.entry(key.clone()).or_insert(serde_json::Value::Null),
+                before.get(key).unwrap_or(&serde_json::Value::Null),
+                value,
+            );
+        }
+        for key in before.keys().filter(|key| !after.contains_key(*key)) {
+            latest.remove(key);
+        }
+    } else {
+        *latest = edited.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stale_save_preserves_unedited_kb_and_other_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        store_io::write(&path, &Config::default()).unwrap();
+        let mut stale = Config::load_in(root.path()).unwrap();
+        let mut current = Config::load_in(root.path()).unwrap();
+        current.knowledge_base.repo_path = "E:/example/kb".into();
+        current.knowledge_base.revision = "origin/main".into();
+        current.knowledge_base.source_roots = vec!["docs".into()];
+        current.knowledge_base.company_name = "Example company".into();
+        current.knowledge_base.people_roster_source = "people/roster.md".into();
+        current.save(root.path()).unwrap();
+        stale.features.daily_check = true;
+        stale.save(root.path()).unwrap();
+        let saved = Config::load_in(root.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&saved.knowledge_base).unwrap(),
+            serde_json::to_value(&current.knowledge_base).unwrap()
+        );
+        assert!(saved.features.daily_check);
+        let mut kb_card = saved.clone();
+        let mut other = saved.clone();
+        other.features.tasks = true;
+        other.knowledge_base.glossary = "Synthetic term".into();
+        other.save(root.path()).unwrap();
+        kb_card.knowledge_base.company_name.clear();
+        kb_card.save(root.path()).unwrap();
+        let saved = Config::load_in(root.path()).unwrap();
+        assert!(saved.features.tasks);
+        assert_eq!(saved.knowledge_base.glossary, "Synthetic term");
+        assert!(saved.knowledge_base.company_name.is_empty());
+        assert!(Config::default().save(root.path()).is_err());
+        Config::save_notes(root.path(), &super::super::notes::NotesSettings::default()).unwrap();
+        assert_eq!(
+            Config::load_in(root.path())
+                .unwrap()
+                .knowledge_base
+                .repo_path,
+            "E:/example/kb"
+        );
+    }
+
+    #[test]
+    fn merge_keeps_unknown_fields_and_changes_only_edited_leaves() {
+        let before = json!({"knowledge_base": {"repo_path": "", "revision": ""}, "features": {"tasks": false}});
+        let edited = json!({"knowledge_base": {"repo_path": "", "revision": ""}, "features": {"tasks": true}});
+        let mut latest = json!({"knowledge_base": {"repo_path": "E:/example/kb", "revision": "origin/main", "future": true}, "features": {"tasks": false}, "future": 1});
+        merge_edits(&mut latest, &before, &edited);
+        assert_eq!(latest["knowledge_base"]["repo_path"], "E:/example/kb");
+        assert_eq!(latest["knowledge_base"]["future"], true);
+        assert_eq!(latest["future"], 1);
+        assert_eq!(latest["features"]["tasks"], true);
+        let mut missing = json!({"features": {"tasks": false}});
+        merge_edits(&mut missing, &before, &edited);
+        assert!(missing.get("knowledge_base").is_none());
+    }
+
+    #[test]
+    fn knowledge_base_rejects_unsafe_paths_and_unscoped_revision() {
+        let mut kb = KnowledgeBase {
+            repo_path: "E:/example/kb".into(),
+            revision: "origin/main".into(),
+            source_roots: vec!["docs".into()],
+            ..KnowledgeBase::default()
+        };
+        assert!(kb.validate().is_ok());
+        for path in ["../private", "E:/private", "docs\\private", ".env", ""] {
+            kb.source_roots = vec![path.into()];
+            assert!(kb.validate().is_err());
+        }
+        kb.source_roots = vec!["docs".into()];
+        for path in ["../roster.md", "roster.exe", ".env.json"] {
+            kb.people_roster_source = path.into();
+            assert!(kb.validate().is_err());
+        }
+        kb.people_roster_source.clear();
+        for revision in ["main", "origin/", "origin/main bad"] {
+            kb.revision = revision.into();
+            assert!(kb.validate().is_err());
+        }
     }
 }

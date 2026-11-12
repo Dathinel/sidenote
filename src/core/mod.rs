@@ -12,6 +12,7 @@ pub mod asr;
 pub mod check_state;
 pub mod config;
 pub mod export;
+pub(crate) mod failure;
 pub mod growing_wav;
 pub(crate) mod meeting_evidence;
 pub mod meeting_router;

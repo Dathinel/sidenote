@@ -3,6 +3,7 @@ use super::{
     helper::{self, Failure, Run},
     prompt, schema, transcript,
 };
+use crate::core::failure::{AtStage, Stage};
 use crate::core::{self, agent_instructions::Agent, file_reads, store_io};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -668,33 +669,36 @@ pub fn enqueue(id: &str) -> io::Result<()> {
     )
 }
 pub fn catch_up() -> io::Result<()> {
-    let settings = super::settings()?;
+    let settings = super::settings().at(Stage::NotesSettingsRead)?;
     if settings.engine() != Engine::App {
         return Ok(());
     }
-    for entry in fs::read_dir(core::meetings_dir())? {
-        let entry = entry?;
+    let mut failure = None;
+    for entry in fs::read_dir(core::meetings_dir()).at(Stage::CatchUpMeetings)? {
+        let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if valid_id(&id)
-            && core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), &id)?
+            && core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), &id)
+                .at(Stage::CatchUpEligibility)?
                 == core::recording_guard::Eligibility::Eligible
             && complete(&entry.path())
-            && enqueue_in(
+            && let Err(error) = enqueue_in(
                 &core::state_dir(),
                 &core::meetings_dir(),
                 &id,
                 None,
                 &settings,
             )
-            .is_err()
+            .at(Stage::CatchUpEnqueue)
         {
-            let _ = log(&core::state_dir(), &id, "could not enqueue notes");
+            failure.get_or_insert(error);
         }
     }
-    start_worker()
+    start_worker()?;
+    failure.map_or(Ok(()), Err)
 }
 pub fn start_worker() -> io::Result<()> {
-    if super::settings()?.engine() != Engine::App {
+    if super::settings().at(Stage::NotesSettingsRead)?.engine() != Engine::App {
         return Ok(());
     }
     let root = core::state_dir();
@@ -717,7 +721,7 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
-    let mut child = Command::new(std::env::current_exe()?)
+    let mut child = Command::new(std::env::current_exe().at(Stage::NotesExePath)?)
         .arg("--notes-pending")
         .arg("--data-dir")
         .arg(core::state_dir())
@@ -727,7 +731,8 @@ pub fn start_worker() -> io::Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()?;
+        .spawn()
+        .at(Stage::NotesWorkerSpawn)?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });

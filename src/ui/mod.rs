@@ -2697,6 +2697,15 @@ pub fn spec() -> AppSpec<State> {
                 updates::scene(s, sidenote::updates::Phase::Error)
             }),
             ("button-sheet", |s| s.button_sheet = true),
+            ("settings-kb-empty", |s| {
+                hex::settings::scene(s, "settings-kb-empty")
+            }),
+            ("settings-kb-valid", |s| {
+                hex::settings::scene(s, "settings-kb-valid")
+            }),
+            ("settings-kb-invalid", |s| {
+                hex::settings::scene(s, "settings-kb-invalid")
+            }),
             ("settings-general", |s| {
                 hex::settings::scene(s, "settings-general")
             }),

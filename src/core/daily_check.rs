@@ -1,4 +1,5 @@
 //! Headless daily alignment reports. Memory changes remain proposals until owner approval.
+use super::failure::{AtStage, Stage};
 use super::{Meeting, Runner, StateStore, TaskStore, meetings_dir, state_dir};
 use super::{
     check_state::{TriageStatus, TriageStore},
@@ -382,7 +383,7 @@ fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     out
 }
 fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
-    command_output(Command::new("git.exe").args(["-C", repo]).args(args))
+    command_output(Command::new("git.exe").args(["-C", repo]).args(args)).at(Stage::KbGit)
 }
 pub(super) fn safe_kb_path(path: &str) -> bool {
     !path.contains('\\')
@@ -400,23 +401,11 @@ pub(super) fn safe_kb_path(path: &str) -> bool {
         )
 }
 fn refresh_kb(root: &Path) -> io::Result<(KbSnapshot, Vec<String>)> {
-    let kb = super::config::Config::load()?.knowledge_base;
-    if kb.repo_path.trim().is_empty() || kb.revision.trim().is_empty() || kb.source_roots.is_empty()
-    {
-        return Err(invalid(
-            "Configure knowledge_base repo_path, revision and source_roots before daily check",
-        ));
-    }
-    if !kb.revision.starts_with("origin/")
-        || kb.revision.chars().any(char::is_whitespace)
-        || kb
-            .source_roots
-            .iter()
-            .any(|p| !safe_kb_path(&format!("{p}/source.md")))
-        || (!kb.people_roster_source.is_empty() && !safe_kb_path(&kb.people_roster_source))
-    {
-        return Err(invalid("Invalid knowledge_base revision or source paths"));
-    }
+    let kb = super::config::Config::load()
+        .at(Stage::CheckInput)?
+        .knowledge_base;
+    kb.validate()
+        .map_err(|reason| kb.config_stage().error(invalid(reason)))?;
     // Changing source selection must never reuse a broader previous snapshot.
     let scope = super::store_io::fingerprint(
         [&kb.repo_path, &kb.revision, &kb.people_roster_source]
@@ -424,7 +413,7 @@ fn refresh_kb(root: &Path) -> io::Result<(KbSnapshot, Vec<String>)> {
             .chain(kb.source_roots.iter()),
     );
     let base = root.join("kb-snapshot").join(scope);
-    fs::create_dir_all(&base)?;
+    fs::create_dir_all(&base).at(Stage::KbSnapshot)?;
     let refresh = || -> io::Result<KbSnapshot> {
         git(&kb.repo_path, &["fetch", "-q", "origin"])?;
         let revision = String::from_utf8(git(&kb.repo_path, &["rev-parse", &kb.revision])?)
@@ -493,15 +482,19 @@ fn refresh_kb(root: &Path) -> io::Result<(KbSnapshot, Vec<String>)> {
         json_write(&base.join("current.json"), &snapshot)?;
         Ok(snapshot)
     };
-    match refresh() {
+    match refresh().at(Stage::KbSnapshot) {
         Ok(snapshot) => Ok((snapshot, Vec::new())),
-        Err(_) => {
-            let mut snapshot: KbSnapshot =
-                serde_json::from_slice(&fs::read(base.join("current.json")).map_err(|_| {
-                    invalid("KB refresh failed and no previous snapshot is available")
-                })?)?;
+        Err(refresh_error) => {
+            let bytes = match fs::read(base.join("current.json")) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(refresh_error),
+                Err(error) => return Err(Stage::KbSnapshot.error(error)),
+            };
+            let mut snapshot: KbSnapshot = serde_json::from_slice(&bytes)
+                .map_err(io::Error::from)
+                .at(Stage::KbSnapshot)?;
             if !snapshot.path.is_dir() || !snapshot.path.starts_with(&base) {
-                return Err(invalid("Previous KB snapshot unavailable"));
+                return Err(Stage::KbSnapshot.error(invalid("Previous KB snapshot unavailable")));
             }
             snapshot.stale = true;
             Ok((snapshot, vec!["KB refresh failed; using the last saved snapshot. Its capture date is not current verification.".into()]))
@@ -883,11 +876,20 @@ pub fn run_daily_check(
     dry_run: bool,
     force: bool,
 ) -> Result<Option<DailyCheck>, String> {
-    execute(runner_name, dry_run, force).map_err(|e| e.to_string())
+    execute(runner_name, dry_run, force)
+        .at(Stage::CheckStorage)
+        .map_err(|e| e.to_string())
 }
 fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<DailyCheck>> {
-    let _update_activity = crate::updates::activity()?;
-    if !super::Config::load()?.features.daily_check || !super::DeviceSettings::load()?.daily_check {
+    let _update_activity = crate::updates::activity().at(Stage::CheckLock)?;
+    if !super::Config::load()
+        .at(Stage::CheckInput)?
+        .features
+        .daily_check
+        || !super::DeviceSettings::load()
+            .at(Stage::CheckInput)?
+            .daily_check
+    {
         return Ok(None);
     }
     let started = Instant::now();
@@ -909,7 +911,7 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
         .write(true)
         .share_mode(0)
         .open(lock_path)
-        .map_err(|_| invalid("Another daily check is running or its lock cannot be opened"))?;
+        .at(Stage::CheckLock)?;
     // Another run may have saved today's report before we acquired the lock.
     if !force && list_checks()?.contains(&today) {
         return Ok(None);
@@ -919,9 +921,9 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     // Keep scan diagnostics in the report. Never silently treat unreadable meetings as no work.
     warnings.extend(scan_warnings);
     if meetings.is_empty() {
-        return Err(invalid("No summarised meetings could be read"));
+        return Err(Stage::CheckInput.error(invalid("No summarised meetings could be read")));
     }
-    let (memory_file, mut memory) = MemoryStore::default().snapshot()?;
+    let (memory_file, mut memory) = MemoryStore::default().snapshot().at(Stage::CheckInput)?;
     let comments: Vec<_> = memory_file
         .proposals
         .iter()
@@ -937,13 +939,15 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     let memory_records = memory_file.records;
     let memory_dir = root.join("local/memory");
     fs::create_dir_all(&memory_dir)?;
-    let (prompt, sent) = report_prompt(today, &kb, &warnings, &meetings, &memory, &memory_records)?;
+    let (prompt, sent) = report_prompt(today, &kb, &warnings, &meetings, &memory, &memory_records)
+        .at(Stage::CheckInput)?;
     let (prompt_bytes, task_count) = (prompt.len(), sent.tasks);
     log_line(&format!(
         "prompt meetings in={} (older, summary only={}) out={}; tasks={task_count}",
         sent.meetings_in, sent.summaries_only, sent.meetings_out
     ));
-    let runner = daily_runner(runner_name, &kb.path, &memory_dir).map_err(|e| invalid(&e))?;
+    let runner = daily_runner(runner_name, &kb.path, &memory_dir)
+        .map_err(|e| Stage::CheckRunner.error(invalid(&e)))?;
     if dry_run {
         println!(
             "{}",
@@ -966,19 +970,19 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
         Duration::from_secs(900),
         |_| {},
     )
-    .map_err(|e| invalid(&e))?;
+    .map_err(|e| Stage::CheckRunner.error(invalid(&e)))?;
     let mut value: Value = serde_json::from_str(&answer)
-        .map_err(|_| invalid("Runner returned invalid report JSON"))?;
+        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid report JSON")))?;
     if value.get("schema_version").and_then(Value::as_u64) != Some(2) {
-        return Err(invalid("Runner must return schema_version 2"));
+        return Err(Stage::CheckOutput.error(invalid("Runner must return schema_version 2")));
     }
     value
         .as_object_mut()
-        .ok_or_else(|| invalid("Expected report object"))?
+        .ok_or_else(|| Stage::CheckOutput.error(invalid("Expected report object")))?
         .remove("schema_version");
-    let mut content: CheckContent =
-        serde_json::from_value(value).map_err(|_| invalid("Runner returned invalid v2 report"))?;
-    validate_content(&mut content, &meetings, &kb, &memory_records)?;
+    let mut content: CheckContent = serde_json::from_value(value)
+        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid v2 report")))?;
+    validate_content(&mut content, &meetings, &kb, &memory_records).at(Stage::CheckOutput)?;
     // The day summary is a nicety: a malformed one is dropped, never the whole report.
     let day_summary = content
         .day_summary
@@ -1002,7 +1006,8 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
         &history,
         &kb,
         warnings.is_empty() && !kb.stale,
-    )?;
+    )
+    .at(Stage::CheckOutput)?;
     content.coverage = Coverage {
         meeting_count: sent.meetings_in,
         task_count,
@@ -1062,7 +1067,9 @@ pub fn run_cli() -> i32 {
             return 0;
         }
         Err(error) => {
-            eprintln!("Could not read feature settings: {error}");
+            let error = Stage::CheckInput.error(error);
+            log_line(&format!("failed: {error}"));
+            eprintln!("Daily check failed: {error}");
             return 1;
         }
         _ => {}
@@ -1092,15 +1099,8 @@ pub fn run_cli() -> i32 {
     match run_daily_check(&runner, dry, force) {
         Ok(_) => 0,
         Err(error) => {
-            // Do not log arbitrary model output, git stderr, meeting contents or credentials.
-            let category =
-                if error.contains("runner") || error.contains("CLI") || error.contains("model") {
-                    "runner failed"
-                } else {
-                    "input, snapshot, validation or storage failed"
-                };
-            log_line(&format!("failed: {category}"));
-            eprintln!("Daily check failed: {category}");
+            log_line(&format!("failed: {error}"));
+            eprintln!("Daily check failed: {error}");
             1
         }
     }

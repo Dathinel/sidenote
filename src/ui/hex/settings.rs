@@ -30,6 +30,9 @@ pub struct Settings {
     pub relay: sidenote::core::relay_preview::Settings,
     pub relay_address: TextEdit,
     pub relay_error: Option<String>,
+    kb_fields: [TextEdit; 5],
+    kb_base: Option<sidenote::core::Config>,
+    kb_error: Option<String>,
 }
 
 struct ReturnTo {
@@ -177,6 +180,9 @@ fn active(s: &State) -> (Page, usize) {
 }
 
 fn navigate(s: &mut State, page: Page, tab: usize) {
+    if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
+        load_kb(s);
+    }
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
     s.hex.shell.jump_active = 0;
@@ -222,6 +228,10 @@ fn back(s: &mut State) {
 
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
+    if s.on_hex() && s.hex.section == Section::Features && s.hex.shell.kb_base.is_none() {
+        load_kb(s);
+        changed = true;
+    }
     if rune::tooling::headless_run().is_none()
         && let Some(version) = s.hex.state().map(|state| state.version.clone())
         && s.hex.shell.labs_version.as_ref() != Some(&version)
@@ -652,6 +662,14 @@ fn app_index() -> Vec<Destination> {
             "memory",
             Page::Meetings,
             1,
+            false,
+        ),
+        entry(
+            "knowledge-base",
+            "Knowledge base",
+            "daily check repository revision source folders company roster",
+            Page::Meetings,
+            2,
             false,
         ),
         entry(
@@ -1858,6 +1876,128 @@ fn hex_summaries(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     }
     out
 }
+fn load_kb(s: &mut State) {
+    let config = s.config.clone();
+    let kb = &config.knowledge_base;
+    s.hex.shell.kb_fields = [
+        TextEdit::new(&kb.repo_path),
+        TextEdit::new(&kb.revision),
+        TextEdit::new(kb.source_roots.join("\n")),
+        TextEdit::new(&kb.company_name),
+        TextEdit::new(&kb.people_roster_source),
+    ];
+    s.hex.shell.kb_base = Some(config);
+}
+fn edited_kb(s: &State) -> sidenote::core::config::KnowledgeBase {
+    let mut kb = s
+        .hex
+        .shell
+        .kb_base
+        .as_ref()
+        .unwrap_or(&s.config)
+        .knowledge_base
+        .clone();
+    let fields = &s.hex.shell.kb_fields;
+    kb.repo_path = fields[0].text.trim().into();
+    kb.revision = fields[1].text.trim().into();
+    kb.source_roots = fields[2]
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect();
+    kb.company_name = fields[3].text.trim().into();
+    kb.people_roster_source = fields[4].text.trim().into();
+    kb
+}
+fn save_kb(s: &mut State) {
+    let kb = edited_kb(s);
+    if !kb.is_empty()
+        && let Err(reason) = kb.validate()
+    {
+        s.hex.shell.kb_error = Some(reason.into());
+        return;
+    }
+    let mut config = s.hex.shell.kb_base.as_ref().unwrap_or(&s.config).clone();
+    config.knowledge_base = kb;
+    match config
+        .save(&s.store.root)
+        .and_then(|()| sidenote::core::Config::load_in(&s.store.root))
+    {
+        Ok(config) => {
+            s.config = config;
+            load_kb(s);
+            s.hex.shell.kb_error = None;
+            s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+        }
+        Err(_) => {
+            s.hex.shell.kb_error =
+                Some("Could not save knowledge base. Reload Settings and try again.".into())
+        }
+    }
+}
+fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
+    let kb = edited_kb(s);
+    let mut body = col()
+        .w_full()
+        .padding(16.0)
+        .gap(12.0)
+        .child(roles::SMALL.wrap(
+            "Daily check reads these sources from your repository. Settings stay on this device.",
+            p.soft,
+        ));
+    for (index, label) in [
+        "Repository folder",
+        "Revision",
+        "Source folders (one per line)",
+        "Company name",
+        "People roster file",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let control = if index == 2 {
+            rune_kit::TextArea::new(&s.hex.shell.kb_fields[index])
+                .label(label)
+                .auto_grow(2, 5)
+                .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
+                .build(k)
+        } else {
+            TextInput::new(&s.hex.shell.kb_fields[index])
+                .label(label)
+                .placeholder(if index == 1 { "origin/main" } else { "" })
+                .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
+                .build(k)
+        };
+        body = body.child(
+            col()
+                .w_full()
+                .gap(5.0)
+                .child(roles::CONTROL.wrap(label, p.ink))
+                .child(control.key(format!("kb-field-{index}")).w_full().min_w(0.0)),
+        );
+    }
+    let reason = if kb.is_empty() {
+        "Not configured. Add a repository, revision and source folders to use daily check."
+    } else {
+        kb.validate()
+            .err()
+            .unwrap_or("Ready to save. Source paths are relative to the repository.")
+    };
+    body = body.child(roles::SMALL.wrap(reason, p.soft).key("kb-validation"));
+    if let Some(error) = &s.hex.shell.kb_error {
+        body = body.child(roles::SMALL.wrap(error, p.soft));
+    }
+    body = body.child(
+        crate::ui::widgets::action("Save knowledge base", p)
+            .key("kb-save")
+            .button_disabled(!kb.is_empty() && kb.validate().is_err())
+            .on_press(save_kb),
+    );
+    card("Knowledge base", body, p).key("knowledge-base")
+}
+
 fn privacy(s: &State, k: &Kit, p: Palette) -> El {
     ai_notes::section(s, k, p, ai_notes::Part::Privacy)
 }
@@ -1954,18 +2094,21 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
-        (Page::Meetings, _) => card(
-            "Daily check",
-            feature(
-                s,
-                k,
-                AppFeature::DailyCheck,
+        (Page::Meetings, _) => col()
+            .w_full()
+            .child(card(
                 "Daily check",
-                "Sidenote checks your meeting knowledge for gaps and conflicts each day.",
+                feature(
+                    s,
+                    k,
+                    AppFeature::DailyCheck,
+                    "Daily check",
+                    "Sidenote checks your meeting knowledge for gaps and conflicts each day.",
+                    p,
+                ),
                 p,
-            ),
-            p,
-        ),
+            ))
+            .child(knowledge_base(s, k, p)),
         (Page::Prompts, _) => ai_notes::section(s, k, p, ai_notes::Part::Prompts),
         (Page::People, _) => col()
             .w_full()
@@ -2293,6 +2436,26 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 /// Synthetic scenes run only with the render harness's isolated state.
 pub fn scene(s: &mut State, name: &str) {
     assert!(super::super::isolated());
+    if name.starts_with("settings-kb-") {
+        super::super::notes_scene::prepare(s);
+        s.hex_open = true;
+        s.config.knowledge_base = sidenote::core::config::KnowledgeBase::default();
+        if name != "settings-kb-empty" {
+            s.config.knowledge_base.repo_path = "E:/example/kb".into();
+            s.config.knowledge_base.revision = if name == "settings-kb-invalid" {
+                "main"
+            } else {
+                "origin/main"
+            }
+            .into();
+            s.config.knowledge_base.source_roots = vec!["docs".into(), "handbook".into()];
+            s.config.knowledge_base.company_name = "Example company".into();
+            s.config.knowledge_base.people_roster_source = "people/roster.md".into();
+        }
+        load_kb(s);
+        navigate(s, Page::Meetings, 2);
+        return;
+    }
     super::super::notes_scene::settings(s, "scripts");
     super::super::models::scene(s, "empty");
     super::super::scene_agents(s, super::super::ALL_AGENTS);
