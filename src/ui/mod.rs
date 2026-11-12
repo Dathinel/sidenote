@@ -416,7 +416,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let companies = companies::CompanyUi::load(&store.root);
         let mut prefs = core::UiPrefs::load(&store.root);
-        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
+        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
@@ -956,6 +956,7 @@ impl State {
                 &self.tasks.teams,
                 &self.tasks.all,
                 &self.people.prefs,
+                &self.people.affiliations,
             );
             let mut context =
                 data.ask_context(&self.tasks.all, &self.tasks.pipeline, &self.tasks.projects);
@@ -1303,6 +1304,7 @@ impl State {
                     shared,
                     projects,
                     companies,
+                    affiliations,
                     overrides,
                     cutoff,
                     saved,
@@ -1356,6 +1358,10 @@ impl State {
                             profile.relay.then_some(profile.your_name.clone());
                         self.ai_notes.name = TextEdit::new(profile.your_name);
                     }
+                }
+                if let Some(affiliations) = affiliations {
+                    content_changed |= self.people.affiliations != affiliations;
+                    self.people.affiliations = affiliations;
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -3725,6 +3731,18 @@ pub fn spec() -> AppSpec<State> {
                 s.companies.open = false;
                 hex::settings::scene(s, "people-external");
             }),
+            ("people-suggestion", |s| {
+                hex::settings::scene(s, "people-external");
+                s.tasks.teams = core::Teams::default();
+                s.people.prefs.people_sides.clear();
+                s.people.affiliations = core::people::Affiliations::with_roster(
+                    &s.config,
+                    "| Person | Role |\n|---|---|\n| Jamie | Designer |",
+                );
+                if let Some(meeting) = s.meetings.first_mut() {
+                    meeting.summary.people.push("Jamie".into());
+                }
+            }),
             ("people-our-team", |s| {
                 tasks_v2_teams_scene(s);
                 hex::settings::scene(s, "people-our-team");
@@ -3893,18 +3911,27 @@ pub fn run() {
     // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
     let close_handle = app.handle();
-    if let Some(path) = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME") {
-        let mut done = false;
-        app = app.on_frame_encoded(move |f| {
-            if !done && f.outcome() == rune::FrameOutcome::Drawn {
-                done = true;
+    let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
+    let refresh_handle = app.handle();
+    let mut first_frame = false;
+    app = app.on_frame_encoded(move |f| {
+        if !first_frame && f.outcome() == rune::FrameOutcome::Drawn {
+            first_frame = true;
+            refresh::first_frame();
+            refresh_handle.update(|s, _| {
+                if let Some(handle) = &s.scan_tx {
+                    handle.invalidate();
+                    handle.request(s.refresh_options());
+                }
+            });
+            if let Some(path) = &trace {
                 let micros = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_micros());
-                let _ = std::fs::write(&path, micros.to_string());
+                let _ = std::fs::write(path, micros.to_string());
             }
-        });
-    }
+        }
+    });
     // The OS places a new window at a cascade offset, which at 125% scaling on a 1080p screen
     // pushes the bottom (and the Ask bar) off screen. Fit the size to the work area and centre.
     app = app.on_window(move |win| {

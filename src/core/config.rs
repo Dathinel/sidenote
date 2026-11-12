@@ -455,7 +455,7 @@ impl Config {
 }
 
 // Apply only explicit edits; a stale card must not restore values in other cards.
-fn merge_edits(
+pub(super) fn merge_edits(
     latest: &mut serde_json::Value,
     baseline: &serde_json::Value,
     edited: &serde_json::Value,
