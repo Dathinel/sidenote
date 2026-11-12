@@ -49,7 +49,7 @@ def main():
     assert not bad_key.exists() and not bad_key.is_symlink()
     fd = os.open(bad_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as stream:
-        stream.write(os.urandom(32))
+        stream.write(b"x" * 32)  # Public invalid fixture; never an encryption key.
     os.chmod(bad_key, 0o644)
     for mode in ("world-readable", "symlink", "missing-store"):
         rejected_env = env.copy()
