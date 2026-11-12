@@ -1,4 +1,5 @@
 //! Standalone Rune/Win32 feasibility probe. Never initializes Sidenote or Hex services.
+//! Developer-only: run with `cargo run --example meeting-icon-spike`.
 #![windows_subsystem = "windows"]
 use rune::{
     Align, App, AppSpec, Color, Cx, DisplayTarget, El, Key, KeyEvent, OverlayHandle, OverlayInput,
@@ -174,6 +175,25 @@ impl Shared {
 }
 // Rune requests size and position separately; bind the right edge to each native change.
 unsafe extern "system" fn anchor(
+    hwnd: HWND,
+    message: u32,
+    w: usize,
+    l: isize,
+    id: usize,
+    data: usize,
+) -> isize {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        anchor_message(hwnd, message, w, l, id, data)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            let _ =
+                std::io::Write::write_all(&mut std::io::stderr().lock(), b"FI_SPIKE_CALLBACK\n");
+            0
+        }
+    }
+}
+unsafe fn anchor_message(
     hwnd: HWND,
     message: u32,
     w: usize,

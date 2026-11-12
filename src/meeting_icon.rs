@@ -15,12 +15,26 @@ struct Snapshot {
     recording: bool,
     speaking: bool,
     elapsed: u64,
+    seen: bool,
+    now_ms: Option<i64>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Pending {
     elapsed: u64,
+    #[serde(default)]
+    stopped_at_ms: Option<i64>,
+    #[serde(default)]
+    skipped_at_ms: Option<i64>,
+    #[serde(skip)]
+    stopped_since: Option<Instant>,
+    #[serde(skip)]
+    skipped_since: Option<Instant>,
 }
+
+// Ten minutes allows queued notes/retries without pinning GUI resources when notes never arrive.
+const NO_DRAFT_BOUND_MS: i64 = 10 * 60 * 1000;
+const SKIPPED_NOTICE_MS: i64 = 3000;
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -127,6 +141,7 @@ fn run(isolated: bool, replay: bool) {
     let mut last_words = 0;
     let mut speech_until = Instant::now();
     let mut next_status = Instant::now();
+    let mut transcript_revision = 0u64;
     while !crate::updates::listener_stopping() {
         if replay && core::state_dir().join("local/floating-icon-exit").is_file() {
             // Only the explicitly isolated replay process accepts this bounded shutdown.
@@ -164,61 +179,112 @@ fn run(isolated: bool, replay: bool) {
                             .and_then(|r| r.elapsed_seconds)
                             .unwrap_or(0),
                         speaking: false,
+                        ..Snapshot::default()
                     })
                 })
             };
             if let Some(mut update) = update {
                 update.id = update.id.filter(|id| valid_id(id));
                 update.recording &= update.id.is_some();
-                if current.recording
-                    && (!update.recording || update.id != current.id)
-                    && store_io::write(&pending_path(), &pending).is_err()
-                {
-                    crate::listener::log("could not save stopped floating meeting");
-                }
                 if update.id != current.id {
                     stamp = None;
                     last_words = 0;
                     speech_until = Instant::now();
+                    transcript_revision = transcript_revision.wrapping_add(1);
                 }
                 current = update;
+            }
+            let now = if replay {
+                current
+                    .now_ms
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+            } else {
+                chrono::Utc::now().timestamp_millis()
+            };
+            let mut dirty = false;
+            if replay
+                && current.seen
+                && let Some(id) = &current.id
+                && let Some(raw) = summary(id)
+            {
+                draft_seen(id, &raw);
             }
             if current.recording
                 && let Some(id) = &current.id
             {
                 let fresh = !pending.contains_key(id);
+                dirty |= fresh || pending.get(id).is_some_and(|p| p.stopped_at_ms.is_some());
                 pending.insert(
                     id.clone(),
                     Pending {
                         elapsed: current.elapsed,
+                        stopped_at_ms: None,
+                        skipped_at_ms: None,
+                        stopped_since: None,
+                        skipped_since: None,
                     },
                 );
-                if fresh && store_io::write(&pending_path(), &pending).is_err() {
-                    crate::listener::log("could not save pending floating meeting");
-                }
-                if !replay
-                    && let Ok(core::live::Read::Lines(lines, new_stamp)) =
-                        core::live::read_rolling(&core::meetings_dir().join(id), stamp)
+                if let Ok(core::live::Read::Lines(lines, new_stamp)) =
+                    core::live::read_rolling(&core::meetings_dir().join(id), stamp)
                 {
                     let had_baseline = stamp.is_some();
                     stamp = Some(new_stamp);
+                    transcript_revision = transcript_revision.wrapping_add(1);
                     let words = lines
                         .iter()
                         .map(|l| l.text.split_whitespace().count())
                         .sum();
                     // Initial history is not evidence of speech happening now.
-                    if had_baseline && words > last_words {
+                    if !replay && had_baseline && words > last_words {
                         speech_until = Instant::now() + Duration::from_secs(2);
                     }
                     last_words = words;
                 }
             }
             let before = pending.len();
-            pending.retain(|id, _| {
-                current.recording && current.id.as_ref() == Some(id)
-                    || summary(id).is_none_or(|raw| !was_seen(id, &raw))
+            pending.retain(|id, p| {
+                if current.recording && current.id.as_ref() == Some(id) {
+                    return true;
+                }
+                if p.stopped_at_ms.is_none_or(|t| t > now) {
+                    p.stopped_at_ms = Some(now);
+                    dirty = true;
+                }
+                let stopped_since = *p.stopped_since.get_or_insert_with(Instant::now);
+                let short = core::recording_guard::eligibility(
+                    &core::state_dir(),
+                    &core::meetings_dir(),
+                    id,
+                )
+                .is_ok_and(|e| e == core::recording_guard::Eligibility::Short);
+                if short {
+                    if p.skipped_at_ms.is_none_or(|t| t > now) {
+                        p.skipped_at_ms = Some(now);
+                        dirty = true;
+                    }
+                    let skipped_since = *p.skipped_since.get_or_insert_with(Instant::now);
+                    return now.saturating_sub(p.skipped_at_ms.unwrap_or(now)) < SKIPPED_NOTICE_MS
+                        && skipped_since.elapsed()
+                            < Duration::from_millis(SKIPPED_NOTICE_MS as u64);
+                }
+                if p.skipped_at_ms.take().is_some() {
+                    dirty = true;
+                }
+                p.skipped_since = None;
+                if let Some(raw) = summary(id) {
+                    return !was_seen(id, &raw);
+                }
+                if now.saturating_sub(p.stopped_at_ms.unwrap_or(now)) >= NO_DRAFT_BOUND_MS
+                    || stopped_since.elapsed() >= Duration::from_millis(NO_DRAFT_BOUND_MS as u64)
+                {
+                    crate::listener::log("FI_DRAFT_WAIT_EXPIRED");
+                    return false;
+                }
+                true
             });
-            if pending.len() != before && store_io::write(&pending_path(), &pending).is_err() {
+            if (dirty || pending.len() != before)
+                && store_io::write(&pending_path(), &pending).is_err()
+            {
                 crate::listener::log("could not save floating meeting acknowledgement");
             }
             let item = current
@@ -232,21 +298,26 @@ fn run(isolated: bool, replay: bool) {
                         .map_err(|_| crate::listener::log("floating icon window unavailable"))
                         .ok();
                 }
-                if let Some(host) = &mut host {
+                if let Some(window) = &host {
                     let recording = current.recording && current.id.as_ref() == Some(id);
                     let raw = summary(id);
-                    host.update(
-                        id,
+                    if !window.update(native::Frame {
+                        id: id.clone(),
                         recording,
-                        recording && (current.speaking || Instant::now() < speech_until),
-                        pending[id].elapsed,
+                        pill: recording && (current.speaking || Instant::now() < speech_until),
+                        elapsed: pending[id].elapsed,
                         raw,
-                    );
+                        transcript_revision,
+                        skipped: pending[id].skipped_at_ms.is_some(),
+                    }) {
+                        host = None;
+                    }
                 }
             } else {
                 host = None;
             }
         }
+        native::maintenance();
         std::thread::sleep(Duration::from_millis(if replay { 100 } else { 250 }));
     }
 }
