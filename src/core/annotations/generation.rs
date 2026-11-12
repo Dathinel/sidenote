@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -321,7 +321,8 @@ fn invoke(
             );
         }
     }
-    let mut child = Command::new(executable(options)?)
+    let mut child = crate::platform::worker_command(executable(options)?)
+        .map_err(|error| error.to_string())?
         .args(args)
         .current_dir(folder)
         .creation_flags(0x08000000)

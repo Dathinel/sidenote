@@ -34,9 +34,20 @@ def qualify(binary, root, role, restart=False, stop_signal=signal.SIGTERM):
     process = subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL,
                                stderr=subprocess.PIPE, text=True)
     try:
-        if not select.select([process.stderr], [], [], 15)[0]:
-            raise RuntimeError("No startup status within 15 seconds")
-        status = process.stderr.readline().strip()
+        deadline = time.monotonic() + 15
+        startup = b""
+        status = ""
+        while time.monotonic() < deadline and not status:
+            if not select.select([process.stderr], [], [], max(0, deadline - time.monotonic()))[0]:
+                break
+            chunk = os.read(process.stderr.fileno(), 8192)
+            if not chunk:
+                break
+            startup += chunk
+            status = next((line for line in startup.decode().splitlines()
+                           if "status=running" in line), "")
+        if not status:
+            raise RuntimeError("No startup status within 15 seconds: " + startup.decode())
         if "status=running" not in status or f"role={role}" not in status or "ui=false" not in status:
             raise RuntimeError(f"Unexpected startup: {status}")
         if role == "hub" and "processing=disabled" not in status:

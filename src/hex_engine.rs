@@ -8,7 +8,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpStream},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime},
@@ -866,7 +866,7 @@ fn hidden_help(path: &PathBuf, args: &[&str], deadline: Instant) -> Result<Strin
     if hex_dir()?.join("gpu-draw.pending").exists() {
         return Err(failed("Hex maintenance pending; CLI not launched"));
     }
-    let mut child = Command::new(path)
+    let mut child = crate::platform::worker_command(path).map_err(io_error)?
         .args(args)
         .creation_flags(0x08000000)
         .stdin(Stdio::null())
