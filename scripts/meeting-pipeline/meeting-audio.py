@@ -16,6 +16,11 @@ import soundfile as sf
 RATE = 16000
 
 
+def asr_passes():
+    return [(os.environ['HEX_TE_ASR_MODEL'], 'te', 'Telugu'),
+            ('nemotron_3_5_asr', 'hi', 'Hindi')]
+
+
 def save(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -119,12 +124,13 @@ def system_diarization(audio, models):
 
 def prepare(args):
     models=Path(args.models); meeting=Path(args.meeting); temp=Path(args.temp)
-    chunks=[]; raw=[]; timings={}; started=time.perf_counter()
+    chunks=[]; raw=[]; timings={}; started=time.perf_counter(); duration_seconds=0.0
     for filename in ('system.wav','microphone.wav'):
         path=meeting/filename
         if not path.is_file(): continue
         tick=time.perf_counter()
         audio=load_audio(path,temp,args.ffmpeg)
+        duration_seconds=max(duration_seconds,len(audio)/RATE)
         timings[filename+'_normalize_seconds']=time.perf_counter()-tick
         tick=time.perf_counter()
         turns=system_diarization(audio,models) if filename=='system.wav' else microphone_vad(audio,models)
@@ -150,7 +156,8 @@ def prepare(args):
     timings['prepare_seconds']=time.perf_counter()-started
     save(temp/'chunks.json',chunks)
     save(temp/'audio-analysis.json',dict(timings=timings,turns=raw,segment_count=len(chunks),
-                                       remote_speakers=len({r['speaker'] for r in raw if r['track']=='system.wav'})))
+                                       remote_speakers=len({r['speaker'] for r in raw if r['track']=='system.wav'}),
+                                       duration_seconds=duration_seconds,asr_passes=len(asr_passes())))
     print(json.dumps(dict(timings=timings,segments=len(chunks))),flush=True)
 
 
@@ -181,7 +188,7 @@ def transcribe(args):
     # No proxy, even on machines with a global HTTP proxy configured.
     client=urllib.request.build_opener(urllib.request.ProxyHandler({}))
     metrics={}; all_started=time.perf_counter()
-    for model,lang,field in [(os.environ['HEX_TE_ASR_MODEL'],'te','Telugu'),('nemotron_3_5_asr','hi','Hindi')]:
+    for model,lang,field in asr_passes():
         started=time.perf_counter(); segments=[]
         for index,chunk in enumerate(chunks):
             tick=time.perf_counter()

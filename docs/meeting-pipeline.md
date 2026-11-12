@@ -97,3 +97,30 @@ power-loss/filesystem durability, bootstrap, rollback and concurrent-job behavio
 remain unverified and require an authorized host. The reverse path is the saved
 previous selection, atomically republished through the app updater. Private
 configuration and model/CLI provisioning remain external.
+
+## Transcription deadline
+
+Only transcription uses the adaptive deadline. Preparation keeps its separate
+1,800-second limit, and LLM calls keep their existing limits. The runner still
+rejects deadlines outside 1..3,600 seconds.
+
+The default is `min(3600, max(1800, ceil(300 + L * P * R * H)))` seconds:
+`L` is the maximum normalized track duration in seconds, reported during existing
+audio preparation without an extra read. Both tracks share the meeting timeline.
+`P` is the pass count from the helper's actual transcription plan (currently two:
+Telugu and Hindi), `R = 0.20` is ASR seconds per audio second per pass, and `H = 1.5`
+supplies headroom. The 300 seconds allow for startup/reconnect overhead. A 64-minute
+meeting with two passes receives 2,604 s. Missing/invalid duration or pass metadata
+fails safely rather than silently using a mismatched helper's budget.
+
+The measured two-pass time was 620.7 + 902.4 = 1,523.1 s, about 0.1983 s per audio
+second per pass. This is one observation, not an upper-bound guarantee. Assumptions:
+comparable speech density, segment count, hardware and quiet-laptop load. Silence
+can overestimate work; overlapping tracks and many short segments can increase it.
+The 3,600-second cap can still time out long or contended runs. Language routing
+and checkpoint/resume remain separate P2 work.
+
+`-TranscriptionTimeoutSeconds` (or `HEX_TRANSCRIPTION_TIMEOUT_SECONDS`) overrides
+only transcription; 0 selects the formula, otherwise 1..3,600 is accepted.
+`-AsrSecondsPerAudioSecondPerPass` and `-AsrDeadlineHeadroom` tune the formula.
+No meeting data or model was used to validate these settings in this lane.

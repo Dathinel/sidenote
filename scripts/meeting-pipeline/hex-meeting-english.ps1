@@ -5,6 +5,9 @@ param(
     [ValidateScript({ $_ -in @('auto', 'other', $env:HEX_MEETING_PROJECT) })][string]$Project = 'auto',
     [string]$NotesModel = 'claude-sonnet-5-5',
     [int]$LlmTimeoutSeconds = 240,
+    [ValidateRange(0,3600)][int]$TranscriptionTimeoutSeconds = $(if ($env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS) { [int]$env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS } else { 0 }),
+    [ValidateRange(0.01,10.0)][double]$AsrSecondsPerAudioSecondPerPass = 0.20,
+    [ValidateRange(1.0,10.0)][double]$AsrDeadlineHeadroom = 1.5,
     # Rebuild only the summary from the existing english-transcript.md (no audio, no translation).
     [switch]$NotesOnly
 )
@@ -16,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $total = [Diagnostics.Stopwatch]::StartNew()
 $utf8 = New-Object System.Text.UTF8Encoding $false
+if ($TranscriptionTimeoutSeconds -lt 0 -or $TranscriptionTimeoutSeconds -gt 3600) { throw 'Transcription deadline must be 0 to 3600 seconds' }
 if (-not $MeetingDir) {
     $root = Join-Path $env:APPDATA 'hex\meetings'
     $latest = Get-ChildItem -LiteralPath $root -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -39,8 +43,8 @@ if (-not $tracks) { throw "No system.wav or microphone.wav found in $($dir.FullN
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('hex-meeting-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 $errFile = Join-Path $temp 'stderr.txt'
-function Invoke-Native([string]$exe, [string[]]$arguments, [string]$outputFile) {
-    Invoke-HexCli -CliArgs (@($exe) + $arguments) -OutputFile $outputFile -TimeoutSeconds 1800
+function Invoke-Native([string]$exe, [string[]]$arguments, [string]$outputFile, [int]$timeoutSeconds = 1800) {
+    Invoke-HexCli -CliArgs (@($exe) + $arguments) -OutputFile $outputFile -TimeoutSeconds $timeoutSeconds
 }
 function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     $inputFile = Join-Path $temp "$tag-input.txt"
@@ -64,7 +68,17 @@ try {
     $prepareSeconds = $step.Elapsed.TotalSeconds
     Write-Host ('Audio preparation: {0:N1}s; {1} speech segments; {2} remote speakers' -f $prepareSeconds,$audioInfo.segment_count,$audioInfo.remote_speakers)
     $step.Restart()
-    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) (Join-Path $temp 'asr-log.txt')
+    $meetingSeconds = [double]$audioInfo.duration_seconds
+    $asrPasses = [int]$audioInfo.asr_passes
+    if ($null -eq $audioInfo.duration_seconds -or [double]::IsNaN($meetingSeconds) -or
+        [double]::IsInfinity($meetingSeconds) -or $meetingSeconds -lt 0 -or $asrPasses -lt 1 -or $asrPasses -gt 16) {
+        throw 'Invalid audio deadline metadata'
+    }
+    $asrDeadline = if ($TranscriptionTimeoutSeconds) { $TranscriptionTimeoutSeconds } else {
+        [int][Math]::Min(3600, [Math]::Max(1800, [Math]::Ceiling(300 + $meetingSeconds * $asrPasses * $AsrSecondsPerAudioSecondPerPass * $AsrDeadlineHeadroom)))
+    }
+    Write-Host "Transcription deadline: $asrDeadline seconds; ASR passes: $asrPasses"
+    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) (Join-Path $temp 'asr-log.txt') $asrDeadline
     $asrInfo = [IO.File]::ReadAllText((Join-Path $temp 'asr-timings.json'), $utf8) | ConvertFrom-Json
     foreach ($lang in 'te','hi') { Write-Host ('{0} transcription: {1:N1}s' -f $lang,$asrInfo.$lang.seconds) }
     $chunks = [IO.File]::ReadAllText((Join-Path $temp 'chunks.json'), $utf8) | ConvertFrom-Json
