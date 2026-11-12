@@ -156,6 +156,7 @@ fn run(isolated: bool, replay: bool) {
         }
         if replay && core::state_dir().join("local/floating-icon-exit").is_file() {
             // Only the explicitly isolated replay process accepts this bounded shutdown.
+            crate::listener::log("exit reason=stop source=floating-icon-replay");
             std::process::exit(0);
         }
         if Instant::now() >= next_status {

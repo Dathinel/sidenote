@@ -558,6 +558,8 @@ static LISTENER: std::sync::Mutex<ListenerStatus> = std::sync::Mutex::new(Listen
     ready: false,
     error: None,
 });
+// Preparation, recovery probes and apply must not compete for the listener lock.
+static LISTENER_CHECK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub fn listener_status() -> ListenerStatus {
     if !installed() {
         return ListenerStatus {
@@ -598,15 +600,18 @@ fn write_stop(pid: u32) -> io::Result<()> {
     crate::platform::replace_file(&temp, &local("update-listener.stop"))
 }
 pub fn listener_stopping() -> bool {
+    listener_stop_source().is_some()
+}
+pub(crate) fn listener_stop_source() -> Option<&'static str> {
     if crate::service::stopping() {
-        return true;
+        return Some("service-stop");
     }
     if !installed() {
-        return false;
+        return None;
     }
     let path = local("update-listener.stop");
     let Ok(bytes) = fs::read(&path) else {
-        return false;
+        return None;
     };
     let current = serde_json::from_slice::<StopMarker>(&bytes)
         .ok()
@@ -620,7 +625,7 @@ pub fn listener_stopping() -> bool {
             let _ = fs::remove_file(path);
         }
     }
-    current
+    current.then_some("update-stop-marker")
 }
 #[derive(Debug)]
 pub enum WindowLockError {
@@ -652,12 +657,61 @@ pub fn listener_lock() -> io::Result<Option<File>> {
     exclusive("update-listener.lock").map(Some)
 }
 pub fn ensure_listener() -> Result<(), String> {
+    let _check = LISTENER_CHECK.lock().unwrap_or_else(|e| e.into_inner());
     let result = prepare_listener();
     LISTENER
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .complete(&result);
     result
+}
+/// Called only by the window's background worker; never starts or stops a task.
+pub fn probe_listener() -> Option<ListenerStatus> {
+    if !installed() {
+        return None;
+    }
+    let _check = LISTENER_CHECK.try_lock().ok()?;
+    if listener_stopping() {
+        return None;
+    }
+    // Preserve task validation failures even if another process holds the lock.
+    let result = listener_task(false, false).and_then(|()| listener_probe(listener_lock));
+    if listener_stopping() {
+        return None;
+    }
+    let mut status = LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+    status.complete(&result);
+    Some(status.clone())
+}
+fn listener_probe(mut probe: impl FnMut() -> io::Result<Option<File>>) -> Result<(), String> {
+    match probe() {
+        Ok(lock) => {
+            drop(lock);
+            Err("The meeting listener is not running. Try again.".into())
+        }
+        Err(error) if error.raw_os_error() == Some(32) => Ok(()),
+        Err(_) => Err("Could not check whether the listener is running.".into()),
+    }
+}
+fn wait_for_listener(
+    deadline: Instant,
+    mut probe: impl FnMut() -> io::Result<Option<File>>,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), String> {
+    loop {
+        match probe() {
+            Err(error) if error.raw_os_error() == Some(32) => return Ok(()),
+            Err(_) => return Err("Could not check whether the listener is running.".into()),
+            Ok(lock) => drop(lock),
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "The meeting listener did not start. Try again, or reinstall it if this continues."
+                    .into(),
+            );
+        }
+        wait(Duration::from_millis(100));
+    }
 }
 fn prepare_listener() -> Result<(), String> {
     if !installed() {
@@ -672,15 +726,11 @@ fn prepare_listener() -> Result<(), String> {
         Ok(lock) => {
             drop(lock);
             task_command(true)?;
-            let deadline = Instant::now() + Duration::from_secs(8);
-            loop {
-                match listener_lock() {
-                    Err(error) if error.raw_os_error() == Some(32) => break,
-                    Err(_) => return Err("Could not check whether the listener is running.".into()),
-                    Ok(_) if Instant::now() >= deadline => return Err("The meeting listener did not start. Try again, or reinstall it if this continues.".into()),
-                    Ok(_) => std::thread::sleep(Duration::from_millis(100)),
-                }
-            }
+            wait_for_listener(
+                Instant::now() + Duration::from_secs(8),
+                listener_lock,
+                std::thread::sleep,
+            )?;
         }
         Err(error) if error.raw_os_error() == Some(32) => {}
         Err(_) => return Err("Could not check whether the listener is running.".into()),
@@ -735,6 +785,7 @@ pub fn apply(
     mut restart_args: Vec<String>,
     mut publish: impl FnMut(Phase),
 ) -> Result<(), String> {
+    let _check = LISTENER_CHECK.lock().unwrap_or_else(|e| e.into_inner());
     if !installed() {
         return Ok(());
     }
@@ -860,6 +911,51 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
 mod window_lock_tests {
     use super::*;
 
+    fn open_lock(path: &std::path::Path) -> io::Result<Option<File>> {
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
+            .map(Some)
+    }
+    #[test]
+    fn window_probe_releases_its_handle_before_waiting() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("listener.lock");
+        let held = std::cell::RefCell::new(None);
+        let mut waits = 0;
+        wait_for_listener(
+            Instant::now() + Duration::from_secs(30),
+            || open_lock(&path),
+            |_| {
+                *held.borrow_mut() = open_lock(&path).unwrap();
+                waits += 1;
+            },
+        )
+        .unwrap();
+        assert_eq!(waits, 1);
+    }
+    #[test]
+    fn readiness_recovers_when_the_listener_holds_the_lock_and_detects_death() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("listener.lock");
+        let mut status = ListenerStatus::default();
+        status.complete(&listener_probe(|| open_lock(&path)));
+        assert!(!status.ready);
+        assert!(status.error.is_some());
+        // A free-lock probe must also leave no handle behind.
+        let listener = open_lock(&path).unwrap();
+        status.complete(&listener_probe(|| open_lock(&path)));
+        assert!(status.ready);
+        assert!(status.error.is_none());
+        drop(listener);
+        status.complete(&listener_probe(|| open_lock(&path)));
+        assert!(!status.ready);
+        assert!(status.error.is_some());
+    }
     #[test]
     fn only_a_sharing_violation_means_an_existing_window() {
         assert!(matches!(

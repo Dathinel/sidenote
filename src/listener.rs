@@ -455,18 +455,55 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
 // Exit independently of catch-up and worker joins, within the updater's 8 s wait.
 pub(crate) fn watch_update_stop() {
     std::thread::spawn(|| {
-        while !crate::updates::listener_stopping() {
+        loop {
+            if let Some(source) = crate::updates::listener_stop_source() {
+                log(&format!("exit reason=stop source=watcher/{source}"));
+                std::process::exit(0);
+            }
             std::thread::sleep(Duration::from_millis(250));
         }
-        std::process::exit(0);
     });
 }
 
+pub(crate) fn acquire_lock() -> io::Result<Option<fs::File>> {
+    retry_lock(crate::updates::listener_lock, std::thread::sleep, 30)
+}
+fn retry_lock<T>(
+    mut acquire: impl FnMut() -> io::Result<T>,
+    mut wait: impl FnMut(Duration),
+    retries: usize,
+) -> io::Result<T> {
+    for attempt in 0..=retries {
+        match acquire() {
+            Err(error)
+                if cfg!(windows) && error.raw_os_error() == Some(32) && attempt < retries =>
+            {
+                wait(Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
+    unreachable!()
+}
+pub(crate) fn log_lock_exit(error: &io::Error) {
+    if cfg!(windows) && error.raw_os_error() == Some(32) {
+        log("exit reason=lock-contention retries-exhausted");
+    } else {
+        log(&format!("exit reason=lock-error kind={:?}", error.kind()));
+    }
+}
 pub fn run() -> ! {
-    let _instance = match crate::updates::listener_lock() {
-        Ok(lock) if !crate::updates::listener_stopping() => lock,
-        _ => std::process::exit(0),
+    let _instance = match acquire_lock() {
+        Ok(lock) => lock,
+        Err(error) => {
+            log_lock_exit(&error);
+            std::process::exit(0);
+        }
     };
+    if let Some(source) = crate::updates::listener_stop_source() {
+        log(&format!("exit reason=stop source=startup/{source}"));
+        std::process::exit(0);
+    }
     watch_update_stop();
     let isolated = std::env::args().any(|a| a == "--listener-isolated")
         && std::env::args().any(|a| a == "--data-dir");
@@ -475,10 +512,13 @@ pub fn run() -> ! {
         crate::meeting_icon::start(isolated);
     }
     if isolated && !std::env::args().any(|a| a == "--floating-icon-replay") {
-        while !crate::updates::listener_stopping() {
+        loop {
+            if let Some(source) = crate::updates::listener_stop_source() {
+                log(&format!("exit reason=stop source=isolated/{source}"));
+                std::process::exit(0);
+            }
             std::thread::sleep(Duration::from_millis(250));
         }
-        std::process::exit(0);
     }
     status::start();
     // The watcher scans completed meetings even when the event API is unavailable.
@@ -578,6 +618,52 @@ pub(crate) fn service_background() -> Background {
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn listener_retries_contention_and_acquires_after_the_probe_releases() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("listener.lock");
+        let open = || {
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&path)
+        };
+        let mut probe = Some(open().unwrap());
+        let mut waits = 0;
+        let listener = retry_lock(
+            open,
+            |_| {
+                waits += 1;
+                drop(probe.take());
+            },
+            30,
+        )
+        .unwrap();
+        assert_eq!(waits, 1);
+        assert_eq!(open().unwrap_err().raw_os_error(), Some(32));
+        drop(listener);
+        assert!(open().is_ok());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn lock_retry_is_bounded_and_does_not_retry_other_errors() {
+        for code in [32, 5, 112] {
+            let mut waits = 0;
+            let error = retry_lock::<()>(
+                || Err(io::Error::from_raw_os_error(code)),
+                |_| waits += 1,
+                30,
+            )
+            .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(code));
+            assert_eq!(waits, if code == 32 { 30 } else { 0 });
+        }
+    }
     #[test]
     fn script_execution_failures_keep_only_stage_and_error_kind() {
         use std::os::windows::process::ExitStatusExt;

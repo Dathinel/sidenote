@@ -135,6 +135,7 @@ pub enum Event {
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     ListenerFinished(Result<(), String>),
+    ListenerProbed(Option<sidenote::updates::ListenerStatus>),
     MigrationPrepared(Result<(), String>),
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
@@ -1302,6 +1303,7 @@ impl State {
             Event::Update(status) => self.update_status(status),
             Event::UpdateFinished(result) => self.update_finished(result),
             Event::ListenerFinished(result) => self.listener_finished(result),
+            Event::ListenerProbed(status) => self.listener_probed(status),
             Event::Hex(msg) => self.hex_apply(msg),
             Event::Models(msg) => self.models.apply(msg),
             Event::Annotations(msg) => self.apply_annotations(msg),
@@ -1707,6 +1709,7 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
     changed |= hex::settings_tick(s);
     changed |= relay::tick(s, tx);
     changed |= tasks::board_live_tick(s, tx);
+    s.listener_tick(tx);
     if let Some(until) = s
         .hex
         .shell
