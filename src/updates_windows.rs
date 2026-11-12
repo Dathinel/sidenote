@@ -674,8 +674,17 @@ pub fn probe_listener() -> Option<ListenerStatus> {
     if listener_stopping() {
         return None;
     }
-    // Preserve task validation failures even if another process holds the lock.
-    let result = listener_task(false, false).and_then(|()| listener_probe(listener_lock));
+    // The lock probe is cheap and runs every tick. The task check starts PowerShell, so it runs
+    // only when a held lock would clear an earlier error, which keeps task validation failures.
+    let recovering = LISTENER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .error
+        .is_some();
+    let result = match listener_probe(listener_lock) {
+        Ok(()) if recovering => listener_task(false, false),
+        other => other,
+    };
     if listener_stopping() {
         return None;
     }
