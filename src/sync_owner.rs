@@ -9,10 +9,15 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+mod commands;
 mod inventory;
+mod pages;
+use commands::Pair;
+const MAX_REQUEST: usize = 64 * 1024;
+const MAX_REPLY: usize = 1024 * 1024;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Ingested {
@@ -45,9 +50,13 @@ pub fn snapshot() -> Snapshot {
         .map(|s| s.clone())
         .unwrap_or_default()
 }
+fn invalid() -> io::Error {
+    io::Error::other("SYNC_CONTROL_INVALID_REQUEST")
+}
 
 struct Controller {
     root: PathBuf,
+    pair: Option<Pair>,
     state: Snapshot,
 }
 impl Controller {
@@ -55,12 +64,14 @@ impl Controller {
         let state = store_io::read(&root.join("local/sync/index.json"))?;
         let mut result = Self {
             root: root.into(),
+            pair: None,
             state,
         };
         result.tick()?;
         Ok(result)
     }
     fn tick(&mut self) -> io::Result<()> {
+        self.poll_pair();
         let settings = relay::Settings::load(&self.root)?;
         let mut errors = usize::from(!core::reconcile_service());
         let (meetings, warnings) = inventory::observe(&self.state.meetings);
@@ -110,6 +121,7 @@ impl Controller {
 }
 impl Drop for Controller {
     fn drop(&mut self) {
+        self.pair.take();
         let _ = relay::disconnect(&self.root);
     }
 }
@@ -117,6 +129,7 @@ impl Drop for Controller {
 pub struct Owner {
     stop: Arc<AtomicBool>,
     threads: Vec<thread::JoinHandle<()>>,
+    controller: Arc<Mutex<Controller>>,
     _lock: std::fs::File,
 }
 impl Owner {
@@ -127,6 +140,7 @@ impl Owner {
             _lock: lock,
             stop: stop.clone(),
             threads: Vec::new(),
+            controller: controller.clone(),
         };
         owner
             .threads
@@ -153,6 +167,12 @@ impl Owner {
                     })?,
             );
         Ok(owner)
+    }
+    pub fn request(&self, bytes: &[u8]) -> io::Result<Vec<u8>> {
+        if bytes.len() > MAX_REQUEST {
+            return Err(invalid());
+        }
+        commands::respond(&self.controller, bytes)
     }
     pub fn healthy(&self) -> bool {
         self.threads.iter().all(|t| !t.is_finished())

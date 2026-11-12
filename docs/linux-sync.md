@@ -28,3 +28,16 @@ A failed, missing or unreadable source has `pending=true` and keeps its last-goo
 revision across restart. Pending changes do not advance the content generation.
 Recovery to the same content is not a second ingestion. This index has no meeting
 deletion protocol: absence never silently deletes prior successful state.
+
+## Source inventory and bounded reads
+
+`status` is a compact summary. `inventory`, `list`, `conflicts` and `choices` return
+`{revision, items, next}` pages (at most 32 items and 16 KiB of item data).
+Pass `next` back as `cursor`. `SYNC_CONTROL_CURSOR_STALE` means restart that read;
+`SYNC_CONTROL_ITEM_TOO_LARGE` is a structured error for an unrepresentable item.
+The one-MiB reply cap is unchanged and no longer closes a healthy connection.
+Status and inventory read the last published snapshot while ingestion is busy.
+Conflict pages contain small revision-guarded selectors. Pass a selector as
+`conflict` to `choices` to page its alternatives, or to `resolve-choice` with a
+zero-based `choice` index to resolve it. This avoids echoing a large conflict in a
+request. Even conflicts with many alternatives remain inspectable/resolvable.
