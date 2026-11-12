@@ -106,10 +106,18 @@ pub fn configure(args: &[OsString]) -> Result<(), &'static str> {
             });
         }
     }
-    if let Some(selected) = selected {
-        crate::core::DeviceSettings::set_role(selected).map_err(|_| "DEVICE_CONFIG_FAILED")?;
-    }
-    let configured = load_role(&crate::core::state_dir());
+    #[cfg(windows)]
+    let configured = selected
+        .map(crate::core::DeviceSettings::set_role)
+        .transpose()
+        .and_then(|_| load_role(&crate::core::state_dir()));
+    #[cfg(not(windows))]
+    let configured = {
+        if let Some(selected) = selected {
+            crate::core::DeviceSettings::set_role(selected).map_err(|_| "DEVICE_CONFIG_FAILED")?;
+        }
+        load_role(&crate::core::state_dir())
+    };
     let role = role_or_full(configured, || {
         crate::listener::log("DEVICE_ROLE_UNAVAILABLE; using full");
     });
