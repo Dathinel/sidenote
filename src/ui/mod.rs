@@ -12,6 +12,7 @@ mod ask_settings;
 mod benchmark;
 mod cards;
 mod check;
+mod cloud_ask;
 mod companies;
 mod diary;
 mod edit_worker;
@@ -99,6 +100,7 @@ fn default_runner(
 }
 
 pub enum Event {
+    CloudModels(Result<Vec<String>, String>),
     RelayPair {
         generation: u64,
         update: sidenote::core::relay_preview::pairing::Update,
@@ -934,7 +936,7 @@ impl State {
 
     /// True when at least one runner can start on this machine.
     pub fn has_agent(&self) -> bool {
-        !self.runner_found.is_empty()
+        self.ask_settings.connection.settings.enabled || !self.runner_found.is_empty()
     }
 
     /// Stop on a running Ask: its CLI is killed and the question goes back in the box.
@@ -994,6 +996,7 @@ impl State {
     }
 
     pub fn send(&mut self, text: &str) {
+        let submitted = Instant::now();
         let text = text.trim();
         let id = self.ask_key();
         if text.is_empty() || self.asks.contains_key(&id) {
@@ -1031,7 +1034,25 @@ impl State {
             return;
         };
         let history = saved.messages[..=submitted_at].to_vec();
+        let connection = self
+            .ask_settings
+            .connection
+            .settings
+            .enabled
+            .then(|| self.ask_settings.connection.settings.clone());
+        if let Some(connection) = &connection {
+            self.ask_settings
+                .connection
+                .labels
+                .insert(id.clone(), connection.label());
+            self.ask_settings.connection.metrics.remove(&id);
+            self.ask_settings.connection.slow.remove(&id);
+        } else {
+            self.ask_settings.connection.labels.remove(&id);
+            self.ask_settings.connection.metrics.remove(&id);
+        }
         let options = core::ask_options::Options {
+            connection,
             thinking: self.ask_thinking(),
             model: self.ask_model(),
             meeting: self.ask_in_meeting(),
@@ -1139,7 +1160,7 @@ impl State {
             id,
             AskRun {
                 live: true,
-                started: Instant::now(),
+                started: submitted,
                 cancel,
                 _alive: alive,
                 submitted_message_id: Some(submitted_message_id),
@@ -1159,6 +1180,9 @@ impl State {
 
     pub fn clear_thread(&mut self) {
         let id = self.ask_key();
+        self.ask_settings.connection.labels.remove(&id);
+        self.ask_settings.connection.metrics.remove(&id);
+        self.ask_settings.connection.slow.remove(&id);
         core::ask_session::reset(&id);
         self.asks.remove(&id);
         self.ask_errors.remove(&id);
@@ -1226,6 +1250,16 @@ impl State {
 
     fn apply_event(&mut self, event: Event) {
         match event {
+            Event::CloudModels(result) => {
+                self.ask_settings.connection.catalogue_busy = false;
+                match result {
+                    Ok(models) => {
+                        self.ask_settings.connection.catalogue = models;
+                        self.ask_settings.connection.status = Some("OpenRouter model list loaded. Choose a model, save, and opt Ask in for that model.".into());
+                    }
+                    Err(error) => self.ask_settings.connection.status = Some(error),
+                }
+            }
             Event::RelayPair { generation, update } => self.relay_update(generation, update),
             Event::Settled { redo, result } => self.settle_finished(redo, result),
             Event::AiNotes {
@@ -1442,6 +1476,22 @@ impl State {
                     return;
                 }
                 match event {
+                    AskProgress::Metrics(mut metrics) => {
+                        metrics.total_ms = run.started.elapsed().as_millis() as u64;
+                        if let Some(first) = self
+                            .ask_settings
+                            .connection
+                            .metrics
+                            .get(&id)
+                            .and_then(|m| m.first_token_ms)
+                        {
+                            metrics.first_token_ms = Some(first);
+                        }
+                        self.ask_settings.connection.metrics.insert(id, metrics);
+                    }
+                    AskProgress::Slow => {
+                        self.ask_settings.connection.slow.insert(id);
+                    }
                     AskProgress::StartingCodex => {
                         run.starting_codex = true;
                         run.turn_started = false;
@@ -1449,7 +1499,9 @@ impl State {
                     AskProgress::Started { .. } => {
                         run.starting_codex = false;
                         run.turn_started = true;
-                        run.started = Instant::now();
+                        if run.runner != core::provider::NAME {
+                            run.started = Instant::now();
+                        }
                         run.steps.clear();
                     }
                     AskProgress::Fallback { runner } => {
@@ -1472,6 +1524,18 @@ impl State {
                     }
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => {
+                        if run.runner == core::provider::NAME && !text.is_empty() {
+                            let metrics = self
+                                .ask_settings
+                                .connection
+                                .metrics
+                                .entry(id.clone())
+                                .or_default();
+                            metrics
+                                .first_token_ms
+                                .get_or_insert(run.started.elapsed().as_millis() as u64);
+                            metrics.total_ms = run.started.elapsed().as_millis() as u64;
+                        }
                         if !text.is_empty() {
                             run.starting_codex = false;
                             run.turn_started = true;
@@ -3110,6 +3174,8 @@ pub fn spec() -> AppSpec<State> {
                     });
                 }
             }),
+            ("settings-cloud-ask", |s| cloud_ask::scene(s, true)),
+            ("cloud-ask-answer", |s| cloud_ask::scene(s, false)),
             ("meeting-agent-settings", |s| {
                 hex::settings::scene(s, "settings-helpers");
             }),

@@ -17,6 +17,7 @@ pub mod growing_wav;
 pub(crate) mod meeting_evidence;
 pub mod meeting_router;
 pub mod meeting_watch;
+pub mod provider;
 pub mod recording_guard;
 pub mod relay_preview;
 pub use config::{Config, Feature, Features};
