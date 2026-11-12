@@ -554,6 +554,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         &s.tasks.teams,
         &s.tasks.all,
         &s.people.prefs,
+        &s.people.affiliations,
     );
     doc = doc
         .child(

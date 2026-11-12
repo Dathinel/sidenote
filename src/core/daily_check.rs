@@ -383,7 +383,7 @@ fn command_output(command: &mut Command) -> io::Result<Vec<u8>> {
     result?;
     out
 }
-fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
+pub(super) fn git(repo: &str, args: &[&str]) -> io::Result<Vec<u8>> {
     command_output(Command::new("git.exe").args(["-C", repo]).args(args)).at(Stage::KbGit)
 }
 pub(super) fn safe_kb_path(path: &str) -> bool {

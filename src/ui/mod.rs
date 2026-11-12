@@ -416,7 +416,7 @@ impl State {
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
         let companies = companies::CompanyUi::load(&store.root);
         let mut prefs = core::UiPrefs::load(&store.root);
-        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs);
+        let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
@@ -956,6 +956,7 @@ impl State {
                 &self.tasks.teams,
                 &self.tasks.all,
                 &self.people.prefs,
+                &self.people.affiliations,
             );
             let mut context =
                 data.ask_context(&self.tasks.all, &self.tasks.pipeline, &self.tasks.projects);
@@ -1303,6 +1304,7 @@ impl State {
                     shared,
                     projects,
                     companies,
+                    affiliations,
                     overrides,
                     cutoff,
                     saved,
@@ -1356,6 +1358,10 @@ impl State {
                             profile.relay.then_some(profile.your_name.clone());
                         self.ai_notes.name = TextEdit::new(profile.your_name);
                     }
+                }
+                if let Some(affiliations) = affiliations {
+                    content_changed |= self.people.affiliations != affiliations;
+                    self.people.affiliations = affiliations;
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;

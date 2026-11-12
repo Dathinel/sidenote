@@ -38,6 +38,7 @@ pub(super) struct Data {
     pub shared: Option<bool>,
     pub projects: Option<core::Projects>,
     pub companies: Option<core::companies::Companies>,
+    pub affiliations: Option<core::people::Affiliations>,
     pub overrides: Option<core::Overrides>,
     pub cutoff: Option<Option<chrono::NaiveDate>>,
     pub saved: HashMap<String, Saved>,
@@ -86,6 +87,8 @@ impl Data {
         let pipeline = core::load_pipeline(&meetings);
         let store = core::TaskStore::default();
         let saved_store = core::StateStore::default();
+        let affiliations =
+            loaded(core::Config::load()).map(|config| core::people::Affiliations::load(&config));
         let companies = loaded(core::companies::Companies::load(&core::state_dir()));
         let company_threads: Vec<_> = companies
             .iter()
@@ -141,6 +144,7 @@ impl Data {
             shared,
             projects,
             companies,
+            affiliations,
             overrides,
             cutoff,
             saved,
@@ -355,6 +359,7 @@ fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Da
                     shared: None,
                     projects: None,
                     companies: None,
+                    affiliations: None,
                     overrides: None,
                     cutoff: None,
                     saved: HashMap::new(),

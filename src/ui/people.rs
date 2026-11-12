@@ -16,6 +16,7 @@ pub struct TeamEditor {
     pub member_search: TextEdit,
 }
 pub struct PeopleUi {
+    pub affiliations: core::people::Affiliations,
     pub tab: usize,
     pub search: TextEdit,
     pub prefs: core::UiPrefs,
@@ -23,7 +24,12 @@ pub struct PeopleUi {
     pub notice: Option<String>,
 }
 impl PeopleUi {
-    pub fn load(root: &Path, meetings: &[core::Meeting], prefs: &mut core::UiPrefs) -> Self {
+    pub fn load(
+        root: &Path,
+        meetings: &[core::Meeting],
+        prefs: &mut core::UiPrefs,
+        config: &core::Config,
+    ) -> Self {
         let notice = if core::people::initialize(prefs, meetings) && prefs.save(root).is_err() {
             prefs.people_existing_meetings = None;
             Some("Could not remember the existing meetings. People will stay hidden until this can be saved.".into())
@@ -31,6 +37,7 @@ impl PeopleUi {
             None
         };
         Self {
+            affiliations: core::people::Affiliations::load(config),
             tab: prefs
                 .settings_tabs
                 .get("People")
@@ -206,6 +213,22 @@ pub fn person_row(
             .max_lines(2)
             .help(&person.name),
     );
+    if person.is_self {
+        name = name.child(roles::META.line("You", p.soft));
+    }
+    let company_name = company.map(|c| c.name.as_str()).or_else(|| {
+        (!s.companies
+            .data
+            .catalog
+            .people
+            .get(&id)
+            .is_some_and(|link| link.company_id.is_none()))
+        .then_some(person.company.as_deref())
+        .flatten()
+    });
+    if let Some(company_name) = company_name {
+        name = name.child(roles::META.line(company_name, p.soft));
+    }
     if !person.aliases.is_empty() {
         name = name.child(roles::META.line(format!("also {}", person.aliases.join(", ")), p.soft));
     }
@@ -232,7 +255,7 @@ pub fn person_row(
         let name = person.name.clone();
         Some(
             super::widgets::button(
-                company.map_or("No company", |c| c.name.as_str()),
+                company_name.unwrap_or("No company"),
                 &format!("person-company-cell-{id}"),
                 super::widgets::ButtonRole::Ghost,
                 p,
@@ -301,7 +324,13 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
     }
     let compact = s.app_w.get() - nav::width(s) < 900.0;
     let query = s.people.search.text.to_lowercase();
-    let people = core::people::roster(&s.meetings, &s.tasks.teams, &s.tasks.all, &s.people.prefs);
+    let people = core::people::roster(
+        &s.meetings,
+        &s.tasks.teams,
+        &s.tasks.all,
+        &s.people.prefs,
+        &s.people.affiliations,
+    );
     let filtered: Vec<_> = people
         .iter()
         .filter(|person| {
@@ -309,10 +338,11 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
             on_team == (tab == 0)
                 && (query.is_empty()
                     || format!(
-                        "{} {} {} {}",
+                        "{} {} {} {} {}",
                         person.name,
                         person.aliases.join(" "),
                         person.team,
+                        person.company.as_deref().unwrap_or(""),
                         s.companies
                             .data
                             .company_for(&person.name)
@@ -360,7 +390,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
                 .fill(p.card)
                 .w_full(),
         );
-    if let Some(message) = &s.people.notice {
+    if let Some(message) = s
+        .people
+        .notice
+        .as_ref()
+        .or(s.people.affiliations.notice.as_ref())
+    {
         out = out.child(roles::SMALL.wrap(message, p.warn).role("alert"));
     }
     let mut section_heading = row().w_full().items_center().gap(12.0).mt(6.0).child(
