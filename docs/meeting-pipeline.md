@@ -124,3 +124,33 @@ and checkpoint/resume remain separate P2 work.
 only transcription; 0 selects the formula, otherwise 1..3,600 is accepted.
 `-AsrSecondsPerAudioSecondPerPass` and `-AsrDeadlineHeadroom` tune the formula.
 No meeting data or model was used to validate these settings in this lane.
+
+## Failure diagnostics
+
+The runner sends a separate bounded JSON failure record to the shared PowerShell
+wrapper. Each boundary validates and reconstructs these fields: stage from
+`pipeline`, `prepare`, `transcribe`, `translate`, `notes`, `render`, `publish`,
+`tasks`, `compare`, `title`; category from `timeout`, `exit`, `missing`; integer
+deadline seconds (1..3,600 for a subprocess); and nonnegative elapsed seconds
+measured with a monotonic clock. Failures before a specific stage is assigned use deadline 0.
+Missing executables/files detected in the wrapper or runner use `missing`; a
+subprocess reporting its own failure remains `exit`. These labels do not infer
+whether a child program's internal error was a timeout or missing resource.
+
+The shared CLI wrapper discards runner stdout/stderr, validates a failure sidecar
+against its expected stage/deadline, and falls back to locally measured fixed
+metadata if that sidecar is absent or invalid. The English wrapper preserves only
+the canonical allowlisted record, otherwise using its current stage metadata.
+Unexpected watcher setup/read failures are also canonicalized. The watcher appends `try <timestamp>: pipeline-failure ...` to `pipeline-failed.txt`
+and the same canonical diagnostic to its log. Existing retry counting/backoff is
+retained. Advisory task/comparison calls that fail their wrapper log the record without
+failing notes.
+
+The watcher accepts only canonical diagnostics and fixed numeric timing labels
+from helper streams. Other helper output is discarded. Subprocess stdout/stderr
+stay in memory; required functional results (model responses, KB reads) go only
+to their requested data files. Status-only native calls discard their output.
+No raw subprocess output, request, transcript, model text or exception message is
+copied to the diagnostic marker/log. The runner's temporary request, functional
+outputs and failure sidecar are removed by their existing wrapper cleanup paths.
+No payload or diagnostic-propagation runtime check was executed on this laptop.

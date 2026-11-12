@@ -35,8 +35,8 @@ if ($env:HEX_MEETING_PROJECT -and $Project -eq $env:HEX_MEETING_PROJECT) {
     New-Item -ItemType Directory -Path $rosterWork | Out-Null
     try {
         $rosterFile = Join-Path $rosterWork 'people.md'
-        Invoke-HexCli -CliArgs @('git','-C',$RepoDir,'fetch','-q','origin') -OutputFile $rosterFile -TimeoutSeconds 60
-        Invoke-HexCli -CliArgs @('git','-C',$RepoDir,'show','origin/master:docs/reference/people-and-roles.md') -OutputFile $rosterFile -TimeoutSeconds 30
+        Invoke-HexCli -CliArgs @('git','-C',$RepoDir,'fetch','-q','origin') -OutputFile $rosterFile -TimeoutSeconds 60 -Stage notes
+        Invoke-HexCli -CliArgs @('git','-C',$RepoDir,'show','origin/master:docs/reference/people-and-roles.md') -OutputFile $rosterFile -TimeoutSeconds 30 -Stage notes
         $roster = [IO.File]::ReadAllText($rosterFile, $utf8)
     } finally { Remove-Item -LiteralPath $rosterWork -Recurse -Force }
     if ($roster) { $people = "## People and roles`n$roster`n`n" }
@@ -51,7 +51,7 @@ $promptFile = Join-Path $work 'meeting.md'
 [IO.File]::WriteAllText($promptFile, $full, $utf8)
 try {
     $responseFile = Join-Path $work 'answer.json'
-    Invoke-HexCli -Kind claude -InputFile $promptFile -OutputFile $responseFile -Model $Model -TimeoutSeconds $TimeoutSeconds
+    Invoke-HexCli -Kind claude -InputFile $promptFile -OutputFile $responseFile -Model $Model -TimeoutSeconds $TimeoutSeconds -Stage notes
     $out = [IO.File]::ReadAllText($responseFile, $utf8)
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force

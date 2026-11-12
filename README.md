@@ -26,9 +26,11 @@ waits for recording and background jobs to finish. A manually copied executable
 does not update. `SIDENOTE_UPDATE_FEED` overrides GitHub with a local development
 folder; clear it for public updates. See [release and update details](docs/updates.md).
 
-The notes pipeline still needs separately installed helpers. On a PC without
-them, recording works but Sidenote says "Meeting notes are not set up on this PC".
-Meeting notes move into the app in 0.0.2.
+Existing notes-pipeline installations receive versioned scripts through Sidenote
+app updates, with previous copies backed up. Fresh setup still requires the local
+Hex/model/CLI dependencies and device-local configuration. On a PC without the
+external watcher, recording works but notes remain unavailable. See the
+[pipeline setup and update contract](docs/meeting-pipeline.md).
 
 If you used the private 0.0.6 build, back up `%APPDATA%/hex-meetings`, uninstall
 0.0.6, then install 0.0.1. Clear `SIDENOTE_UPDATE_FEED` or point it at a fresh,
@@ -61,9 +63,10 @@ See [private configuration](docs/configuration.md) for optional KB context.
 Features are opt-in in Settings. Existing feature choices migrate on first use.
 Runner definitions live in device-local `runners.json`; bundled definitions are examples.
 
-The notes pipeline currently requires separately installed local helpers. This
-repository does not distribute those private installation scripts. See the
-[architecture](docs/architecture/README.md) for planned integration work.
+Notes-pipeline sources live in `scripts/meeting-pipeline`; app updates manage an
+existing installation. Private context and credentials stay outside the repository.
+See the [pipeline contract](docs/meeting-pipeline.md) and
+[architecture](docs/architecture/README.md) for the remaining integration work.
 
 ## Privacy and security
 

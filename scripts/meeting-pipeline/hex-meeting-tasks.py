@@ -98,8 +98,12 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--force"]
     force = "--force" in sys.argv
     folders = [p.parent for p in MEETINGS.glob("*/english-summary.json")] if args == ["--all"] else args
+    failed = False
     for f in folders:
         try:
             print(f"{Path(f).name}: {classify(f, force)}")
         except Exception as error:
+            failed = True
             print(f"{Path(f).name}: failed ({type(error).__name__}; detail bytes={len(str(error).encode())})")
+    if failed:
+        sys.exit(1)

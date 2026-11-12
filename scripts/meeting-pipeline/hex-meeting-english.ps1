@@ -17,6 +17,10 @@ $glossaryFile = Join-Path $env:USERPROFILE '.config\hex\meeting-glossary.txt'
 
 $ErrorActionPreference = 'Stop'
 $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$pipelineStage = 'pipeline'; $pipelineDeadline = 0
+$pipelineStep = [Diagnostics.Stopwatch]::StartNew()
+$temp = $null
+try {
 $total = [Diagnostics.Stopwatch]::StartNew()
 $utf8 = New-Object System.Text.UTF8Encoding $false
 if ($TranscriptionTimeoutSeconds -lt 0 -or $TranscriptionTimeoutSeconds -gt 3600) { throw 'Transcription deadline must be 0 to 3600 seconds' }
@@ -34,27 +38,31 @@ if (-not $dir.PSIsContainer) { throw "MeetingDir is not a folder: $MeetingDir" }
 try { & (Join-Path $PSScriptRoot 'hex-meeting-quick-title.ps1') -MeetingDir $dir.FullName } catch { Write-Host "quick-title failed; detail bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))" }
 $version = (Get-Content -LiteralPath (Join-Path $env:APPDATA 'hex\current-version') -Raw).Trim()
 $hex = Join-Path $env:APPDATA "hex\versions\$version\hex.exe"
-if (-not (Test-Path -LiteralPath $hex -PathType Leaf)) { throw "Hex executable not found: $hex" }
+if (-not (Test-Path -LiteralPath $hex -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Hex executable missing') }
 $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue | Select-Object -First 1
 $uv = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $uv) { throw 'Install uv to prepare speech segments.' }
+if (-not $uv) { throw [IO.FileNotFoundException]::new('Required executable missing') }
 $tracks = @(@{File='system.wav'; Speaker='Them'}, @{File='microphone.wav'; Speaker='You'}) | Where-Object { Test-Path -LiteralPath (Join-Path $dir.FullName $_.File) -PathType Leaf }
 if (-not $tracks) { throw "No system.wav or microphone.wav found in $($dir.FullName)" }
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('hex-meeting-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
-$errFile = Join-Path $temp 'stderr.txt'
-function Invoke-Native([string]$exe, [string[]]$arguments, [string]$outputFile, [int]$timeoutSeconds = 1800) {
-    Invoke-HexCli -CliArgs (@($exe) + $arguments) -OutputFile $outputFile -TimeoutSeconds $timeoutSeconds
+function Set-PipelineStage([string]$Stage, [int]$Deadline) {
+    $script:pipelineStage = $Stage; $script:pipelineDeadline = $Deadline
+    $script:pipelineStep.Restart()
+}
+function Invoke-Native([string]$exe, [string[]]$arguments, [int]$timeoutSeconds = 1800, [string]$Stage = 'prepare') {
+    Set-PipelineStage $Stage $timeoutSeconds
+    Invoke-HexCli -CliArgs (@($exe) + $arguments) -TimeoutSeconds $timeoutSeconds -Stage $Stage
 }
 function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
+    Set-PipelineStage 'translate' $LlmTimeoutSeconds
     $inputFile = Join-Path $temp "$tag-input.txt"
     $outputFile = Join-Path $temp "$tag-output.txt"
     [IO.File]::WriteAllText($inputFile, "# Instructions`n`n$instruction`n`n# Input`n`n$contents", $utf8)
-    Invoke-HexCli -Kind translate -InputFile $inputFile -OutputFile $outputFile -Model $Model -TimeoutSeconds $LlmTimeoutSeconds
+    Invoke-HexCli -Kind translate -InputFile $inputFile -OutputFile $outputFile -Model $Model -TimeoutSeconds $LlmTimeoutSeconds -Stage translate
     return [IO.File]::ReadAllText($outputFile, $utf8).Trim()
 }
 
-try {
     $step = [Diagnostics.Stopwatch]::StartNew()
     if (-not $NotesOnly) {
     $audioHelper = Join-Path $promptDir 'meeting-audio.py'
@@ -63,7 +71,7 @@ try {
     $uvArgs = @('run','--quiet','--with','sherpa-onnx==2.0.1','--with','soundfile','--with','scipy','python',$audioHelper)
     $prepareArgs = @('prepare','--meeting',$dir.FullName,'--temp',$temp,'--models',$extraModels)
     if ($ffmpeg) { $prepareArgs += @('--ffmpeg',$ffmpeg.Source) }
-    Invoke-Native $uv.Source ($uvArgs + $prepareArgs) (Join-Path $temp 'prepare-log.txt')
+    Invoke-Native $uv.Source ($uvArgs + $prepareArgs)
     $audioInfo = [IO.File]::ReadAllText((Join-Path $temp 'audio-analysis.json'), $utf8) | ConvertFrom-Json
     $prepareSeconds = $step.Elapsed.TotalSeconds
     Write-Host ('Audio preparation: {0:N1}s; {1} speech segments; {2} remote speakers' -f $prepareSeconds,$audioInfo.segment_count,$audioInfo.remote_speakers)
@@ -78,7 +86,7 @@ try {
         [int][Math]::Min(3600, [Math]::Max(1800, [Math]::Ceiling(300 + $meetingSeconds * $asrPasses * $AsrSecondsPerAudioSecondPerPass * $AsrDeadlineHeadroom)))
     }
     Write-Host "Transcription deadline: $asrDeadline seconds; ASR passes: $asrPasses"
-    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) (Join-Path $temp 'asr-log.txt') $asrDeadline
+    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) $asrDeadline 'transcribe'
     $asrInfo = [IO.File]::ReadAllText((Join-Path $temp 'asr-timings.json'), $utf8) | ConvertFrom-Json
     foreach ($lang in 'te','hi') { Write-Host ('{0} transcription: {1:N1}s' -f $lang,$asrInfo.$lang.seconds) }
     $chunks = [IO.File]::ReadAllText((Join-Path $temp 'chunks.json'), $utf8) | ConvertFrom-Json
@@ -179,6 +187,7 @@ try {
     $notesIn = Join-Path $temp 'notes-input.txt'
     $notesOut = Join-Path $temp 'notes-output.json'
     [IO.File]::WriteAllText($notesIn, "# Instructions`n`n$notesRule`n`n# Input`n`n## Context`n$context`n`n$workingTitleSection## My notes`n$myNotes`n`n## Transcript`n$transcript", $utf8)
+    Set-PipelineStage 'notes' 600
     & (Join-Path $promptDir 'hex-meeting-notes.ps1') -InputFile $notesIn -OutFile $notesOut -Project $Project -Model $NotesModel
     $notes = [IO.File]::ReadAllText($notesOut, $utf8).Trim()
     Write-Host ('Translation and notes: {0:N1}s' -f $step.Elapsed.TotalSeconds)
@@ -217,25 +226,29 @@ try {
     # The summary is JSON; hex-meeting-render.py writes english-summary.md and the meeting page from it
     # (the publish step runs it for Hex meetings).
     if (-not $isHex) {
-        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-render.py'),$dir.FullName) -OutputFile (Join-Path $temp 'render-status.txt') -TimeoutSeconds 120
+        Set-PipelineStage 'render' 120
+        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-render.py'),$dir.FullName) -TimeoutSeconds 120 -Stage render
         Copy-Item -LiteralPath (Join-Path $dir.FullName 'english-summary.md') -Destination (Join-Path $copyDir "$stamp English Summary$suffix.md")
     }
     if ($isHex) {
-        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-publish.py'),$dir.FullName) -OutputFile (Join-Path $temp 'publish-status.txt') -TimeoutSeconds 120
+        Set-PipelineStage 'publish' 120
+        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-publish.py'),$dir.FullName) -TimeoutSeconds 120 -Stage publish
     }
     # Projects for the to-dos (tasks.json), read by the Meetings app's Tasks view. A failure here
     # only leaves the tasks unsorted, so it does not fail the meeting.
     try {
-        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-tasks.py'),'--force',$dir.FullName) -OutputFile (Join-Path $temp 'tasks-status.txt') -TimeoutSeconds 360
-    } catch { Write-Host "Task classification failed; diagnostic bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))" }
+        Set-PipelineStage 'tasks' 360
+        Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-tasks.py'),'--force',$dir.FullName) -TimeoutSeconds 360 -Stage tasks
+    } catch { Write-Host (Get-PipelineFailure $_ $pipelineStage $pipelineDeadline $pipelineStep.Elapsed.TotalSeconds) }
     # Compare with Granola's notes for the same call, 5 minutes later so late Granola edits are included
     # (owner, 2026-11-07). Wait in the foreground; it never fails the meeting.
     if ($isHex) {
+        Set-PipelineStage 'compare' 1800
         & (Join-Path $promptDir 'hex-meeting-compare-delayed.ps1') -MeetingDir $dir.FullName
     }
     Write-Host ('Total: {0:N1}s' -f $total.Elapsed.TotalSeconds)
 } catch {
-    throw "Meeting pipeline failed; diagnostic bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))"
+    throw (Get-PipelineFailure $_ $pipelineStage $pipelineDeadline $pipelineStep.Elapsed.TotalSeconds)
 } finally {
-    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
+    if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
 }

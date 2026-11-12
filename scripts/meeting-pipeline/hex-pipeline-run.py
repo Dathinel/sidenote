@@ -7,8 +7,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+STAGES = {"pipeline", "prepare", "transcribe", "translate", "notes", "render", "publish", "tasks", "compare", "title"}
+STAGE, DEADLINE, STARTED = "pipeline", 240, time.monotonic()
+
+
+class SafeParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError("Invalid pipeline arguments")
+
+
+class PipelineFailure(Exception):
+    def __init__(self, category):
+        self.category = category
+
+
+def failure(error):
+    category = error.category if isinstance(error, PipelineFailure) else (
+        "missing" if isinstance(error, FileNotFoundError) else "exit")
+    return {"stage": STAGE, "category": category, "deadline_seconds": DEADLINE,
+            "elapsed_seconds": round(max(0, time.monotonic() - STARTED), 3)}
 
 
 def execute(args, cwd, timeout, input_text=None, env=None):
@@ -18,21 +38,25 @@ def execute(args, cwd, timeout, input_text=None, env=None):
     try:
         output, error = process.communicate(input_text, timeout=timeout)
     except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            try:
-                subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
-                               capture_output=True, timeout=15, creationflags=FLAGS)
-            except (OSError, subprocess.TimeoutExpired):
-                process.kill()
-        else:
-            process.kill()
         try:
-            output, error = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            output, error = "", ""
-        raise RuntimeError(f"CLI timeout after {timeout}s; captured bytes={len((output + error).encode('utf-8'))}") from None
+            if os.name == "nt":
+                try:
+                    stopped = subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                                             capture_output=True, timeout=15, creationflags=FLAGS)
+                    if stopped.returncode and process.poll() is None:
+                        process.kill()
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+            else:
+                process.kill()
+            try:
+                output, error = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                output, error = "", ""
+        finally:
+            raise PipelineFailure("timeout") from None
     if process.returncode:
-        raise RuntimeError(f"CLI exit {process.returncode}; captured bytes={len((output + error).encode('utf-8'))}")
+        raise PipelineFailure("exit")
     return output
 
 
@@ -58,7 +82,7 @@ def translate(text, model, timeout):
         cmd = shutil.which("opencode2.cmd")
         exe = Path(cmd).parent / "node_modules/@opencode/cli/bin/opencode.exe" if cmd else None
         if not exe or not exe.is_file():
-            raise RuntimeError("OpenCode executable unavailable; refusing an unrestricted fallback")
+            raise PipelineFailure("missing")
         output = execute([str(exe), "run", "--standalone", "--agent", agent,
                           "--model", model, "--format", "json"], work, timeout, text, env)
         parts = []
@@ -77,13 +101,32 @@ def translate(text, model, timeout):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    global STAGE, DEADLINE, STARTED
+    parser = SafeParser()
     parser.add_argument("--request", required=True, type=Path)
+    parser.add_argument("--diagnostic", required=True, type=Path)
     args = parser.parse_args()
-    request = json.loads(args.request.read_text(encoding="utf-8-sig"))
+    STARTED = time.monotonic()
+    # The request path is supplied by our wrapper; no payload or exception is printed.
+    try:
+        run_request(args.request)
+    except Exception as error:
+        args.diagnostic.write_text(json.dumps(failure(error)), encoding="utf-8")
+        return 1
+    return 0
+
+
+def run_request(path):
+    global STAGE, DEADLINE
+    request = json.loads(path.read_text(encoding="utf-8-sig"))
+    stage = request.get("stage", "pipeline")
+    if stage not in STAGES:
+        raise ValueError("Invalid stage")
+    STAGE = stage
     timeout = int(request.get("timeout", 240))
     if not 1 <= timeout <= 3600:
         raise ValueError("CLI deadline must be 1 to 3600 seconds")
+    DEADLINE = timeout
     text = Path(request["input_file"]).read_text(encoding="utf-8-sig") if request.get("input_file") else None
     kind = request["kind"]
     if kind == "translate":
@@ -94,14 +137,13 @@ def main():
         output = execute(request["args"], request.get("cwd") or None, timeout, text)
     else:
         raise ValueError("Unknown pipeline request")
-    Path(request["output_file"]).write_text(output, encoding="utf-8")
+    if kind != "native" or request.get("output_file"):
+        Path(request["output_file"]).write_text(output, encoding="utf-8")
 
 
 if __name__ == "__main__":
     try:
-        main()
-    except Exception as error:
-        # RuntimeError messages above contain only fixed reasons and counts.
-        message = str(error) if type(error) is RuntimeError else f"invalid pipeline response ({type(error).__name__}); detail bytes={len(str(error).encode('utf-8'))}"
-        print(message, file=sys.stderr)
+        sys.exit(main())
+    except Exception:
+        # Even malformed arguments or a failed sidecar write must not print content.
         sys.exit(1)
