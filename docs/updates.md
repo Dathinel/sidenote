@@ -115,6 +115,11 @@ actual Velopack Update.exe child. Listeners delete and ignore markers whose PID
 is gone, whose timestamp is over ten minutes old, or whose contents are invalid.
 Every window start checks the listener lock and starts the configured task when
 no listener holds it. This also recovers after an asynchronous update failure.
+If PowerShell task validation reaches its ten-second deadline while the listener
+lock is held, the window keeps recording available and retries validation on its
+background worker after 30 seconds. A definite task validation failure remains
+visible until a successful validation; a later timeout cannot clear it. A free
+listener lock still reports that the listener is absent.
 Missing or mismatched task definitions produce a plain error, never a guessed
 replacement task.
 

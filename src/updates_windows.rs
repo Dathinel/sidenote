@@ -467,7 +467,70 @@ fn task() -> Result<String, String> {
     Ok(name)
 }
 fn task_command(run: bool) -> Result<(), String> {
-    listener_task(run, false)
+    match checked_listener_task(run, false) {
+        Ok(()) => Ok(()),
+        Err(ListenerTaskError::TimedOut) if run => {
+            task_validation_result(listener_probe(listener_lock))
+        }
+        Err(error) => Err(error.message()),
+    }
+}
+#[derive(Debug)]
+enum ListenerTaskError {
+    TimedOut,
+    Failed(String),
+}
+impl ListenerTaskError {
+    fn message(self) -> String {
+        match self {
+            Self::TimedOut => "The meeting listener setup did not finish. Try again.".into(),
+            Self::Failed(message) => message,
+        }
+    }
+}
+#[derive(Default)]
+struct TaskValidation {
+    retry_after: Option<Instant>,
+    failure: Option<String>,
+}
+impl TaskValidation {
+    fn complete(&mut self, result: &Result<(), ListenerTaskError>, now: Instant) {
+        match result {
+            Ok(()) => {
+                self.retry_after = None;
+                self.failure = None;
+            }
+            Err(error) => {
+                self.retry_after = Some(now + Duration::from_secs(30));
+                // A timeout cannot disprove a definite failure from an earlier check.
+                if let ListenerTaskError::Failed(message) = error {
+                    self.failure = Some(message.clone());
+                }
+            }
+        }
+    }
+    fn resolve(&self, running: Result<(), String>) -> Result<(), String> {
+        running?;
+        self.failure.clone().map_or(Ok(()), Err)
+    }
+}
+static TASK_VALIDATION: std::sync::Mutex<TaskValidation> = std::sync::Mutex::new(TaskValidation {
+    retry_after: None,
+    failure: None,
+});
+fn checked_listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
+    let result = listener_task(run, register);
+    TASK_VALIDATION
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .complete(&result, Instant::now());
+    result
+}
+fn task_validation_result(running: Result<(), String>) -> Result<(), String> {
+    TASK_VALIDATION
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .resolve(running)
 }
 const LISTENER_TASK_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -510,17 +573,21 @@ if (!(Test-RestartSchedule $t)) {
 }
 if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
 "#;
-fn listener_task(run: bool, register: bool) -> Result<(), String> {
-    let name = task()?;
-    let exe = std::env::current_exe().map_err(|_| "Could not locate Sidenote.")?;
+fn listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
+    let name = task().map_err(ListenerTaskError::Failed)?;
+    let exe = std::env::current_exe()
+        .map_err(|_| ListenerTaskError::Failed("Could not locate Sidenote.".into()))?;
     let expected_args = if name.starts_with("Sidenote updates proof ") {
-        let data = crate::env_var("SIDENOTE_DATA_DIR")
-            .ok_or("Proof task needs an isolated data folder.")?;
+        let data = crate::env_var("SIDENOTE_DATA_DIR").ok_or_else(|| {
+            ListenerTaskError::Failed("Proof task needs an isolated data folder.".into())
+        })?;
         format!(
             "--listen --listener-isolated --data-dir \"{}\" --listener-localappdata \"{}\"",
             data.to_string_lossy(),
             std::env::var_os("LOCALAPPDATA")
-                .ok_or("Proof task needs isolated LocalAppData.")?
+                .ok_or_else(|| ListenerTaskError::Failed(
+                    "Proof task needs isolated LocalAppData.".into()
+                ))?
                 .to_string_lossy()
         )
     } else {
@@ -546,23 +613,27 @@ fn listener_task(run: bool, register: bool) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|_| "Could not check the listener task.")?;
+        .map_err(|_| ListenerTaskError::Failed("Could not check the listener task.".into()))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            _ => {
+            result => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("The meeting listener setup did not finish. Try again.".into());
+                return Err(if result.is_ok() {
+                    ListenerTaskError::TimedOut
+                } else {
+                    ListenerTaskError::Failed("Could not check the listener task.".into())
+                });
             }
         }
     };
     if status.success() {
         Ok(())
     } else {
-        Err("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into())
+        Err(ListenerTaskError::Failed("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into()))
     }
 }
 #[derive(Clone, Debug, Default)]
@@ -595,14 +666,13 @@ pub fn listener_ready() -> bool {
     listener_status().ready
 }
 pub fn listener_installed() {
-    if installed() {
-        let result = listener_task(false, true);
-        if let Err(error) = result {
-            LISTENER
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .complete(&Err(error));
-        }
+    if installed()
+        && let Err(ListenerTaskError::Failed(error)) = checked_listener_task(false, true)
+    {
+        LISTENER
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .complete(&Err(error));
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -687,7 +757,7 @@ pub fn ensure_listener() -> Result<(), String> {
         .complete(&result);
     result
 }
-/// Called only by the window's background worker; never starts or stops a task.
+/// The window's worker probes the lock and retries incomplete task validation.
 pub fn probe_listener() -> Option<ListenerStatus> {
     if !installed() {
         return None;
@@ -696,17 +766,26 @@ pub fn probe_listener() -> Option<ListenerStatus> {
     if listener_stopping() {
         return None;
     }
-    // The lock probe is cheap and runs every tick. The task check starts PowerShell, so it runs
-    // only when a held lock would clear an earlier error, which keeps task validation failures.
+    let running = listener_probe(listener_lock);
     let recovering = LISTENER
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .error
         .is_some();
-    let result = match listener_probe(listener_lock) {
-        Ok(()) if recovering => listener_task(false, false),
-        other => other,
-    };
+    let retry_due = TASK_VALIDATION
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retry_after
+        .map_or(recovering && running.is_ok(), |at| Instant::now() >= at);
+    if retry_due {
+        // A deadline may have interrupted registration; revalidate and finish that migration.
+        let _ = checked_listener_task(false, true);
+    }
+    let result = task_validation_result(if retry_due {
+        listener_probe(listener_lock)
+    } else {
+        running
+    });
     if listener_stopping() {
         return None;
     }
@@ -752,7 +831,13 @@ fn prepare_listener() -> Result<(), String> {
         return Err("Sidenote is updating its meeting listener. Wait for the update to finish, then reopen Sidenote.".into());
     }
     LISTENER.lock().unwrap_or_else(|e| e.into_inner()).ready = false;
-    listener_task(false, true)?;
+    match checked_listener_task(false, true) {
+        Ok(()) => {}
+        Err(ListenerTaskError::TimedOut) => {
+            return task_validation_result(listener_probe(listener_lock));
+        }
+        Err(error) => return Err(error.message()),
+    }
     match listener_lock() {
         Ok(lock) => {
             drop(lock);
@@ -1168,6 +1253,27 @@ if ($script:started) { exit 0 }; exit 3
                 "{mismatch}"
             );
         }
+    }
+
+    #[test]
+    fn task_timeout_uses_the_lock_and_retries_without_hiding_definite_failure() {
+        let now = Instant::now();
+        let mut validation = TaskValidation::default();
+        validation.complete(&Err(ListenerTaskError::TimedOut), now);
+        assert_eq!(validation.retry_after, Some(now + Duration::from_secs(30)));
+        assert!(validation.resolve(Ok(())).is_ok());
+        assert!(validation.resolve(Err("listener absent".into())).is_err());
+        validation.complete(
+            &Err(ListenerTaskError::Failed("mismatched task".into())),
+            now,
+        );
+        assert_eq!(validation.resolve(Ok(())).unwrap_err(), "mismatched task");
+        validation.complete(&Err(ListenerTaskError::TimedOut), now);
+        assert_eq!(validation.resolve(Ok(())).unwrap_err(), "mismatched task");
+        validation.complete(&Ok(()), now);
+        assert!(validation.resolve(Ok(())).is_ok());
+        assert!(validation.retry_after.is_none());
+        assert!(validation.resolve(Err("listener absent".into())).is_err());
     }
 
     #[test]
