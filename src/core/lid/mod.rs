@@ -143,3 +143,6 @@ pub fn decide(
 }
 
 pub use worker::{Worker, pcm_sha256, spawn as spawn_worker};
+
+mod stage;
+pub use stage::start;
