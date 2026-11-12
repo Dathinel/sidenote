@@ -123,3 +123,73 @@ fn mixed_window_preserves_observed_labels_without_claiming_a_classifier() {
     assert_eq!(guess.status, "uncertain");
     assert_eq!(guess.top_two.len(), 2);
 }
+
+#[test]
+fn standalone_sidecars_preserve_audio_and_cover_bypass_silence_and_missing_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("public-synthetic.wav");
+    crate::core::asr::write_wav(&wav, &vec![0.1; 3 * 16000]).unwrap();
+    let before = std::fs::read(&wav).unwrap();
+    let request = Request {
+        meeting_languages: pair(),
+        jobs: vec![Job {
+            id: "one".into(),
+            wav: wav.clone(),
+            chunks: vec![chunk("c", 0.0, 3.0)],
+        }],
+    };
+    let run = |request: Request, enabled: bool, mode: &str| {
+        stage::start(
+            request,
+            Settings::default(),
+            enabled,
+            mode.into(),
+            dir.path().into(),
+        )
+        .unwrap()
+        .join()
+        .unwrap()
+    };
+    for (enabled, mode, status) in [
+        (false, "auto", "disabled"),
+        (true, "off", "off"),
+        (true, "forced:hi", "forced"),
+        (true, "auto", "detection_failed_unchecked"),
+    ] {
+        run(request.clone(), enabled, mode).unwrap();
+        let sidecar: Sidecar = serde_json::from_slice(
+            &std::fs::read(dir.path().join("one/language-detect.v1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sidecar.chunks[0].guess.status, status);
+        assert_eq!(sidecar.chunks[0].guess.confidence, None);
+        assert!(!sidecar.thresholds_calibrated);
+        let row = &sidecar.chunks[0];
+        assert_eq!((row.start, row.end), (0.0, 3.0));
+        assert_eq!(row.guess.chunk, "c");
+        assert_eq!(row.track, "mic");
+        assert_eq!(row.speaker.as_deref(), Some("a"));
+        assert_eq!(row.turn.as_deref(), Some("one"));
+        assert_eq!(row.pcm_f32le_sha256.is_some(), enabled && mode == "auto");
+    }
+    assert_eq!(std::fs::read(&wav).unwrap(), before);
+    assert!(run(request.clone(), true, "forced:te").is_err());
+    crate::core::asr::write_wav(&wav, &vec![0.0; 3 * 16000]).unwrap();
+    run(request, true, "auto").unwrap();
+    let sidecar: Sidecar = serde_json::from_slice(
+        &std::fs::read(dir.path().join("one/language-detect.v1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sidecar.chunks[0].guess.status, "silence_unchecked");
+}
+
+#[test]
+fn labs_settings_preserve_existing_asr_configuration_identity() {
+    let mut config = crate::core::Config::default();
+    let serialize = |c: &crate::core::Config| serde_json::to_string(&c.pipeline).unwrap();
+    let expected = r#"{"schema":1,"profile":"compat","language_mode":"auto","model_state_dir":"","runtime_dll":""}"#;
+    assert_eq!(serialize(&config), expected);
+    config.labs.language_detection = true;
+    config.labs.language_detection_settings.confidence_threshold = 0.75;
+    assert_eq!(serialize(&config), expected);
+}

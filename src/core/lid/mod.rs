@@ -146,3 +146,6 @@ pub use worker::{Worker, pcm_sha256, spawn as spawn_worker};
 
 mod stage;
 pub use stage::start;
+
+mod cli;
+pub use cli::run_cli;

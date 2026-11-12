@@ -6,6 +6,10 @@ mod ui;
 #[cfg(all(windows, feature = "desktop"))]
 use sidenote::platform;
 fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.iter().any(|a| a == "--language-detect") {
+        std::process::exit(sidenote::core::lid::run_cli(&args));
+    }
     #[cfg(windows)]
     {
         velopack::VelopackApp::build()
@@ -19,7 +23,6 @@ fn main() {
             .on_restarted(|_| sidenote::updates::restarted())
             .run();
     }
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--listener-isolated")
         && let Some(pair) = args
             .windows(2)

@@ -72,7 +72,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         s,
         "meeting-language-mode",
         "Language handling",
-        "Experimental English and Hindi routing; forced modes use the selected language for every part.",
+        "Experimental English and Hindi routing; forced modes use the selected language for every part. The Labs language stage also records these choices as advisory labels without changing transcription.",
         control,
         false,
         p,
