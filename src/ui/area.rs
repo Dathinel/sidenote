@@ -293,6 +293,8 @@ impl State {
             });
         if result.is_err() {
             self.areas.refresh_pending = false;
+            self.task_detail_response_time = None;
+            super::response_time::failed(std::mem::take(&mut self.tasks_response_time));
             self.areas.error =
                 Some("Could not start the Areas worker. Reload to try again.".into());
         }
@@ -494,7 +496,13 @@ impl State {
                 self.rebuild_nav();
                 self.refresh_list();
                 if let Some((id, index)) = self.areas.open_task_after_refresh.take() {
-                    self.open_task(&id, index);
+                    let timing = self.task_detail_response_time.take().unwrap_or_default();
+                    self.open_task_timed(&id, index, timing);
+                }
+                if self.view == super::tasks::View::Tasks {
+                    super::response_time::ready(std::mem::take(&mut self.tasks_response_time));
+                } else {
+                    super::response_time::superseded(std::mem::take(&mut self.tasks_response_time));
                 }
             }
             Ok(Completion::Preview(data)) => {
@@ -549,6 +557,10 @@ impl State {
                     Some("Reload memory to see current area and project assignments.".into());
             }
             Err(error) => {
+                if refresh {
+                    self.task_detail_response_time = None;
+                    super::response_time::failed(std::mem::take(&mut self.tasks_response_time));
+                }
                 self.areas.preview = None;
                 self.areas.error = Some(error);
             }

@@ -34,6 +34,7 @@ mod project;
 mod project_merge;
 mod refresh;
 mod relay;
+mod response_time_fixture;
 mod roles;
 mod sync_scene;
 mod tasks;
@@ -48,6 +49,7 @@ use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use sidenote::core::{
     self, AskProgress, DayGroup, Meeting, Message, Runner, Saved, SearchHit, StateStore,
 };
+use sidenote::response_time::{self, Action as TimedAction, Operation};
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -213,6 +215,8 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    tasks_response_time: u64,
+    task_detail_response_time: Option<Operation>,
     pub relay_ui: relay::RelayUi,
     button_sheet: bool,
     pub annotations: annotations::Annotations,
@@ -422,6 +426,8 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
+            tasks_response_time: 0,
+            task_detail_response_time: None,
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
             annotations: annotations::Annotations::default(),
@@ -544,6 +550,7 @@ impl State {
             s.open_hex();
             s.hex.section = hex::Section::Dictation;
         }
+        response_time::startup_ready();
         s
     }
 
@@ -647,8 +654,10 @@ impl State {
     }
 
     pub fn on_search_changed(&mut self) {
+        let timing = Operation::new(TimedAction::Search);
         self.cursor = 0;
         self.refresh_list();
+        timing.ready();
     }
 
     pub fn focus_search(&mut self) {
@@ -683,6 +692,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         let company_open = self.companies.open;
         self.companies.open = false;
         if company_open {
@@ -712,6 +722,8 @@ impl State {
     }
 
     pub fn select(&mut self, id: &str, tx: &mut Tx) {
+        let timing = Operation::new(TimedAction::Meeting);
+        response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         self.companies.open = false;
         self.annotations.open = false;
         self.view = tasks::View::Meetings;
@@ -723,6 +735,7 @@ impl State {
         self.live_open = false;
         self.keyboard = false;
         if self.selected.as_deref() == Some(id) {
+            timing.ready();
             return;
         }
         self.selected = Some(id.to_string());
@@ -752,6 +765,7 @@ impl State {
             self.cursor = n;
         }
         tx.scroll_to_y("meeting-scroll", 0.0);
+        timing.ready();
     }
 
     fn acknowledge_floating_draft(&self) {
@@ -1995,6 +2009,36 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let on_hex = s.on_hex();
     let on_live = s.on_live();
     let home = !tasks_view && s.selected.is_none();
+    if response_time::enabled() {
+        let bit = |action: TimedAction| 1usize << action as usize;
+        let mut mask = bit(TimedAction::Launch) | bit(TimedAction::Notes) | bit(TimedAction::Ask);
+        if tasks_view {
+            mask |= bit(TimedAction::Tasks) | bit(TimedAction::TaskFilter);
+            if s.tasks.panel.is_some() {
+                mask |= bit(TimedAction::TaskDetails);
+            }
+        } else if s.annotations.open {
+            mask |= bit(TimedAction::Annotations);
+        } else if on_hex {
+            mask |= bit(TimedAction::Settings);
+        } else if !on_live && !on_check && !on_memory && !s.companies.open {
+            if home {
+                mask |= bit(TimedAction::Search);
+            } else {
+                mask |= bit(TimedAction::Meeting);
+                if s.transcript_open {
+                    mask |= bit(TimedAction::Transcript);
+                }
+                if !s.transcript_open || !s.transcript_covers() {
+                    mask |= bit(TimedAction::Tab);
+                }
+            }
+        }
+        if s.finder.is_some() {
+            mask |= bit(TimedAction::Finder) | bit(TimedAction::FinderQuery);
+        }
+        response_time::view(mask);
+    }
     let content = if s.companies.open {
         companies::pane(s, &k, p, narrow, &mut layer)
     } else if tasks_view {
@@ -2532,6 +2576,7 @@ pub fn spec() -> AppSpec<State> {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: &[
+            ("response-time-large", response_time_fixture::scene),
             ("notebooks", |s| {
                 annotations::notebooks::scene(s, "notebooks")
             }),
@@ -4012,7 +4057,7 @@ pub fn spec() -> AppSpec<State> {
 
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
-    // presented. The file gets the Unix time in microseconds. Nothing is written otherwise.
+    // encoded (a display proxy). The file gets Unix microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
     let close_handle = app.handle();
     let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");

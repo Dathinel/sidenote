@@ -345,6 +345,7 @@ impl State {
     }
 
     pub fn open_hex(&mut self) {
+        let timing = super::Operation::new(super::TimedAction::Settings);
         if !self.on_hex() {
             settings::remember_back(self);
             self.hex.shell.last_tabs =
@@ -354,6 +355,7 @@ impl State {
         self.hex_open = true;
         self.hex.data_dirty = true;
         self.hex.select_open = None;
+        timing.ready();
         self.hex_refresh_if_due();
         self.refresh_ai_notes();
     }

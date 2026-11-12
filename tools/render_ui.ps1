@@ -25,6 +25,8 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 # name, scene, size, script (or $null), extra args
 $shots = @(
+    @('response-time-large', 'response-time-large', '1320x800', $null, @()),
+    @('response-time-search', 'response-time-large', '1320x800', 'response-time-search.json', @('--at','mark:end')),
     @('relay-preview', 'relay-preview', '1280x800', $null, @()),
     @('relay-timeout', 'relay-timeout', '1280x800', $null, @()),
     @('relay-unconfirmed', 'relay-unconfirmed', '1280x800', $null, @()),

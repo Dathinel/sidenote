@@ -180,6 +180,7 @@ fn active(s: &State) -> (Page, usize) {
 }
 
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
+    let timing = crate::ui::Operation::new(crate::ui::TimedAction::Settings);
     if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
         load_kb(s);
     }
@@ -204,6 +205,7 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
         let _ = prefs.save(&s.store.root);
     }
     super::super::scene_scroll(s, "hex-top");
+    timing.ready();
 }
 
 fn back(s: &mut State) {

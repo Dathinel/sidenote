@@ -96,6 +96,8 @@ impl Drop for Producer {
 thread_local! {
     static RECORDER: RefCell<Option<Producer>> = const { RefCell::new(None) };
     static NEXT: Cell<u64> = const { Cell::new(0) };
+    static LAUNCH: Cell<u64> = const { Cell::new(0) };
+    static VISIBLE: Cell<usize> = const { Cell::new(usize::MAX >> 8) };
 }
 
 pub fn enabled() -> bool {
@@ -152,6 +154,10 @@ fn emit(p: &Producer, id: u64, tag: usize, at: Instant) {
 }
 
 pub fn begin(action: Action) -> u64 {
+    begin_at(action, None)
+}
+
+fn begin_at(action: Action, at: Option<Instant>) -> u64 {
     RECORDER.with_borrow_mut(|r| {
         let Some(p) = r else {
             return 0;
@@ -160,7 +166,7 @@ pub fn begin(action: Action) -> u64 {
             n.set(n.get() + 1);
             n.get()
         });
-        emit(p, id, action as usize, Instant::now());
+        emit(p, id, action as usize, at.unwrap_or_else(Instant::now));
         id
     })
 }
@@ -181,12 +187,56 @@ pub fn ready(id: u64) {
 pub fn failed(id: u64) {
     mark(id, ACTIONS.len() + 1);
 }
+pub fn superseded(id: u64) {
+    mark(id, ACTIONS.len() + 3);
+}
+
+pub fn startup(started: Instant) {
+    set_enabled(true);
+    RECORDER.with_borrow_mut(|r| {
+        if let Some(p) = r {
+            p.origin = started;
+        }
+    });
+    LAUNCH.set(begin_at(Action::Launch, Some(started)));
+}
+
+pub fn startup_ready() {
+    ready(LAUNCH.replace(0));
+}
+
+/// Early returns count as failures; asynchronous work takes ownership of the ID.
+#[derive(Default)]
+pub struct Operation(u64);
+impl Operation {
+    pub fn new(action: Action) -> Self {
+        Self(begin(action))
+    }
+    pub fn ready(self) {
+        ready(self.defer());
+    }
+    pub fn defer(mut self) -> u64 {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for Operation {
+    fn drop(&mut self) {
+        failed(self.0);
+    }
+}
 pub fn frame(at: Instant) {
     RECORDER.with_borrow(|r| {
         if let Some(p) = r {
-            emit(p, u64::MAX, ACTIONS.len() + 2, at);
+            emit(p, u64::MAX, frame_tag(VISIBLE.get()), at);
         }
     });
+}
+
+pub fn view(mask: usize) {
+    VISIBLE.set(mask);
+}
+fn frame_tag(mask: usize) -> usize {
+    (mask << 8) | (ACTIONS.len() + 2)
 }
 
 /// Snapshot only when Diagnostics is drawn. Never wait for the worker's lock.
@@ -247,6 +297,13 @@ impl Samples {
 
 fn record(samples: &mut [Samples; ACTIONS.len()], id: u64, tag: usize, at: u64) {
     if tag < ACTIONS.len() {
+        if tag == Action::Meeting as usize {
+            for index in [Action::Tab as usize, Action::Transcript as usize] {
+                if samples[index].pending.take().is_some() {
+                    samples[index].summary.superseded += 1;
+                }
+            }
+        }
         let s = &mut samples[tag];
         if s.pending.is_some() {
             s.summary.superseded += 1;
@@ -257,9 +314,14 @@ fn record(samples: &mut [Samples; ACTIONS.len()], id: u64, tag: usize, at: u64) 
             first: None,
             ready: false,
         });
-    } else if tag == ACTIONS.len() + 2 {
-        for s in samples {
-            s.finish_frame(at);
+    } else if tag & 255 == ACTIONS.len() + 2 {
+        let mask = tag >> 8;
+        for (index, s) in samples.iter_mut().enumerate() {
+            if mask & (1 << index) != 0 {
+                s.finish_frame(at);
+            } else if s.pending.take().is_some() {
+                s.summary.superseded += 1;
+            }
         }
     } else if let Some(s) = samples
         .iter_mut()
@@ -270,7 +332,11 @@ fn record(samples: &mut [Samples; ACTIONS.len()], id: u64, tag: usize, at: u64) 
                 p.ready = true;
             }
         } else {
-            s.summary.failed += 1;
+            if tag == ACTIONS.len() + 1 {
+                s.summary.failed += 1;
+            } else {
+                s.summary.superseded += 1;
+            }
             s.pending = None;
         }
     }
@@ -310,13 +376,13 @@ mod tests {
     fn async_completion_requires_a_later_frame_and_matches_generation() {
         let mut s = std::array::from_fn(|_| Samples::default());
         record(&mut s, 1, Action::Search as usize, 1000);
-        record(&mut s, 0, ACTIONS.len() + 2, 2000);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 2000);
         record(&mut s, 2, Action::Search as usize, 3000);
         record(&mut s, 1, ACTIONS.len(), 4000);
-        record(&mut s, 0, ACTIONS.len() + 2, 5000);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 5000);
         assert_eq!(s[Action::Search as usize].summary.count, 0);
         record(&mut s, 2, ACTIONS.len(), 6000);
-        record(&mut s, 0, ACTIONS.len() + 2, 7000);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 7000);
         let result = &s[Action::Search as usize].summary;
         assert_eq!((result.count, result.superseded), (1, 1));
         assert_eq!((result.first_p50_ms, result.complete_p95_ms), (2.0, 4.0));
@@ -327,14 +393,39 @@ mod tests {
         let mut s = std::array::from_fn(|_| Samples::default());
         record(&mut s, 1, 0, 0);
         record(&mut s, 1, ACTIONS.len() + 1, 1);
-        record(&mut s, 0, ACTIONS.len() + 2, 2);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 2);
         assert_eq!((s[0].summary.failed, s[0].summary.count), (1, 0));
         for id in 2..300 {
             record(&mut s, id, 0, 0);
             record(&mut s, id, ACTIONS.len(), 1);
-            record(&mut s, 0, ACTIONS.len() + 2, id * 1000);
+            record(&mut s, 0, frame_tag(usize::MAX >> 8), id * 1000);
         }
         assert_eq!(s[0].values.len(), WINDOW);
         assert_eq!(s[0].summary.count, 298);
+    }
+
+    #[test]
+    fn hidden_navigation_does_not_complete_on_an_unrelated_frame() {
+        let mut s = std::array::from_fn(|_| Samples::default());
+        record(&mut s, 1, Action::Meeting as usize, 0);
+        record(&mut s, 1, ACTIONS.len(), 100);
+        record(&mut s, 0, frame_tag(1 << Action::Settings as usize), 1000);
+        let meeting = &s[Action::Meeting as usize].summary;
+        assert_eq!((meeting.count, meeting.superseded), (0, 1));
+    }
+
+    #[test]
+    fn summary_frame_supersedes_displaced_transcript() {
+        let mut s = std::array::from_fn(|_| Samples::default());
+        record(&mut s, 1, Action::Transcript as usize, 0);
+        record(&mut s, 1, ACTIONS.len(), 100);
+        record(&mut s, 2, Action::Tab as usize, 200);
+        record(&mut s, 2, ACTIONS.len(), 300);
+        let summary = (1 << Action::Meeting as usize) | (1 << Action::Tab as usize);
+        record(&mut s, 0, frame_tag(summary), 1000);
+        record(&mut s, 0, frame_tag(usize::MAX >> 8), 2000);
+        let transcript = &s[Action::Transcript as usize].summary;
+        assert_eq!((transcript.count, transcript.superseded), (0, 1));
+        assert_eq!(s[Action::Tab as usize].summary.count, 1);
     }
 }

@@ -557,6 +557,8 @@ impl State {
         if view == View::Tasks && !self.config.features.tasks {
             return;
         }
+        let timing =
+            (view == View::Tasks).then(|| super::Operation::new(super::TimedAction::Tasks));
         if self.companies.open {
             self.go_home();
         }
@@ -564,6 +566,7 @@ impl State {
         self.view = view;
         self.tasks.close_menus();
         if view == View::Tasks {
+            self.tasks_response_time = timing.unwrap_or_default().defer();
             self.rebuild_tasks();
         } else {
             self.close_panel();
@@ -874,6 +877,19 @@ impl State {
 
     /// Opens a task in the panel and selects its row.
     pub fn open_task(&mut self, id: &str, index: usize) -> bool {
+        self.open_task_timed(
+            id,
+            index,
+            super::Operation::new(super::TimedAction::TaskDetails),
+        )
+    }
+
+    pub(super) fn open_task_timed(
+        &mut self,
+        id: &str,
+        index: usize,
+        timing: super::Operation,
+    ) -> bool {
         if self.keep_task_draft() {
             return false;
         }
@@ -883,6 +899,7 @@ impl State {
         let Some(title) = self.tasks.item(id, index).map(|t| t.task.clone()) else {
             if self.areas.refresh_pending {
                 self.areas.open_task_after_refresh = Some((id.into(), index));
+                self.task_detail_response_time = Some(timing);
             }
             return false;
         };
@@ -944,6 +961,7 @@ impl State {
             description: TextEdit::new(&description),
             ..PanelInputs::default()
         };
+        timing.ready();
         true
     }
 
@@ -1694,6 +1712,7 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 MenuItem::new(group_label(by))
                     .checked(s.tasks.grouping == by)
                     .on_select(move |s: &mut State| {
+                        let timing = super::Operation::new(super::TimedAction::TaskFilter);
                         s.tasks.filters_menu = false;
                         s.tasks.grouping = by;
                         s.tasks.grouping_loaded = true;
@@ -1701,6 +1720,7 @@ fn filters_menu(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                             store: s.tasks.store.clone(),
                             by,
                         });
+                        timing.ready();
                     }),
             );
         }
@@ -3883,13 +3903,16 @@ pub(super) fn shown_title<'a>(s: &'a State, t: &'a TaskItem) -> &'a str {
 
 impl State {
     fn save_task_filters(&mut self) {
+        let timing = super::Operation::new(super::TimedAction::TaskFilter);
         let mut prefs = core::UiPrefs::load(&self.store.root);
         prefs.tasks_mine = self.tasks.who == Who::Mine;
         prefs.tasks_include_unassigned = self.tasks.include_unassigned;
         prefs.tasks_done = self.tasks.done;
         if prefs.save(&self.store.root).is_err() {
             self.tasks.notice = Some(SAVE_FAILED.into());
+            return;
         }
+        timing.ready();
     }
     /// The List / Board choice. It belongs to this PC, in `local/ui.json`, so it never syncs.
     fn set_layout(&mut self, layout: core::TasksLayout) {
