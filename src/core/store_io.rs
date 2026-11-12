@@ -205,7 +205,7 @@ pub(super) fn reject_reparse(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-pub(super) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     reject_reparse(path)?;
     let read = || super::file_reads::read(path, cap).map(|bytes| bytes.to_vec());
     if super::file_reads::refreshing() {

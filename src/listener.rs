@@ -51,7 +51,7 @@ impl Problem {
     }
 }
 pub(crate) fn log(message: &str) {
-    if crate::service::active() {
+    if cfg!(not(windows)) && crate::service::active() {
         log_at(&crate::core::log_path(), "worker status=changed");
         return;
     }
@@ -452,11 +452,22 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
     Ok(())
 }
 
+// Exit independently of catch-up and worker joins, within the updater's 8 s wait.
+pub(crate) fn watch_update_stop() {
+    std::thread::spawn(|| {
+        while !crate::updates::listener_stopping() {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        std::process::exit(0);
+    });
+}
+
 pub fn run() -> ! {
     let _instance = match crate::updates::listener_lock() {
         Ok(lock) if !crate::updates::listener_stopping() => lock,
         _ => std::process::exit(0),
     };
+    watch_update_stop();
     let isolated = std::env::args().any(|a| a == "--listener-isolated")
         && std::env::args().any(|a| a == "--data-dir");
     if isolated {
@@ -474,12 +485,6 @@ pub fn run() -> ! {
             Stage::CatchUpRouting.error(error)
         ));
     }
-    std::thread::spawn(|| {
-        while !crate::updates::listener_stopping() {
-            std::thread::sleep(Duration::from_millis(250));
-        }
-        std::process::exit(0);
-    });
     std::thread::spawn(|| {
         loop {
             let _ = crate::core::meeting_router::jobs::start_worker();
@@ -548,8 +553,16 @@ pub(crate) fn service_background() -> Background {
     let status = status::start();
     let (finished, watcher) = crate::core::meeting_watch::start_managed(log);
     let events = std::thread::spawn(move || {
+        let mut last = String::new();
         while !crate::service::stopping() {
-            let _ = listen(&finished);
+            let problem = match listen(&finished) {
+                Ok(()) => "stream ended".into(),
+                Err(error) => error.message(),
+            };
+            if problem != last {
+                log(&format!("{problem}; retrying every 30 s"));
+                last = problem;
+            }
             crate::service::pause(Duration::from_secs(30));
         }
     });

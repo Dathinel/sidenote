@@ -6,6 +6,19 @@ mod ui;
 #[cfg(all(windows, feature = "desktop"))]
 use sidenote::platform;
 fn main() {
+    #[cfg(windows)]
+    {
+        velopack::VelopackApp::build()
+            .set_auto_apply_on_startup(false)
+            .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
+            .on_first_run(|_| sidenote::updates::listener_installed())
+            .on_after_update_fast_callback(|_| {
+                sidenote::updates::after_update();
+                sidenote::updates::listener_installed();
+            })
+            .on_restarted(|_| sidenote::updates::restarted())
+            .run();
+    }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--listener-isolated")
         && let Some(pair) = args
@@ -33,19 +46,6 @@ fn main() {
     }
     if args.iter().any(|a| a == "--mcp") {
         std::process::exit(sidenote::mcp::run());
-    }
-    #[cfg(all(windows, feature = "desktop"))]
-    if sidenote::service::role() == sidenote::service::DeviceRole::Full {
-        velopack::VelopackApp::build()
-            .set_auto_apply_on_startup(false)
-            .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
-            .on_first_run(|_| sidenote::updates::listener_installed())
-            .on_after_update_fast_callback(|_| {
-                sidenote::updates::after_update();
-                sidenote::updates::listener_installed();
-            })
-            .on_restarted(|_| sidenote::updates::restarted())
-            .run();
     }
     if let Some(variant) = args.windows(2).find(|a| a[0] == "--notebook-benchmark") {
         let Some(output) = args
@@ -208,10 +208,6 @@ fn desktop() {
         eprintln!("UNAVAILABLE_ON_PLATFORM");
         return;
     }
-    // The listener owns continuous status detection and the opt-in evidence worker.
-    if std::env::args().any(|a| a == "--listen") {
-        sidenote::listener::run()
-    }
     let headless = std::env::args().any(|a| {
         matches!(
             a.as_str(),
@@ -226,9 +222,6 @@ fn desktop() {
         )
     });
     let offscreen_bench = sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_some();
-    if !headless && !offscreen_bench && !sidenote::service::ui_allowed() {
-        return;
-    }
     let _instance = if headless || offscreen_bench {
         None
     } else {

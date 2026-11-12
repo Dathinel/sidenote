@@ -10,6 +10,10 @@ version = "0.0.1-dev.19"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
+[[example]]
+name = "gpu_inventory"
+required-features = ["desktop"]
+
 [dependencies]
 image = { version = "=0.25.10", default-features = false, features = ["png"] }
 base64 = "0.22"

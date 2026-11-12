@@ -180,6 +180,11 @@ pub(super) fn start() -> std::thread::JoinHandle<()> {
         let _ = evidence_worker.join();
     })
 }
+#[cfg(not(all(windows, feature = "desktop")))]
+fn visible() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,9 +224,4 @@ mod tests {
         }
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
     }
-}
-
-#[cfg(not(all(windows, feature = "desktop")))]
-fn visible() -> bool {
-    false
 }

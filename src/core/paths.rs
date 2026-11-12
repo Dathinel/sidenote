@@ -89,11 +89,13 @@ pub(super) fn data() -> Option<PathBuf> {
         .or_else(|| env_path("SIDENOTE_STATE_DIR"))
 }
 pub(super) fn meetings() -> Option<PathBuf> {
-    PATHS
+    let meetings = PATHS
         .get()
         .and_then(|p| p.meetings.clone())
-        .or_else(|| env_path("SIDENOTE_HEX_DIR"))
-        .or_else(|| data().map(|p| p.join("hex/meetings")))
+        .or_else(|| env_path("SIDENOTE_HEX_DIR"));
+    #[cfg(not(windows))]
+    let meetings = meetings.or_else(|| data().map(|p| p.join("hex/meetings")));
+    meetings
 }
 pub(super) fn peers() -> Option<PathBuf> {
     PATHS

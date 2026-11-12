@@ -203,7 +203,6 @@ pub fn captures_dir() -> Option<PathBuf> {
     // Overrides also keep headless renders away from the owner's captures.
     crate::env_var("SIDENOTE_CAPTURES_DIR")
         .map(PathBuf::from)
-        .or_else(|| super::paths::data().map(|root| root.join("captures")))
         .or_else(|| {
             #[cfg(windows)]
             {
@@ -212,7 +211,10 @@ pub fn captures_dir() -> Option<PathBuf> {
             }
             #[cfg(not(windows))]
             {
-                Some(crate::platform::data_home().join("scrawl/captures"))
+                Some(super::paths::data().map_or_else(
+                    || crate::platform::data_home().join("scrawl/captures"),
+                    |root| root.join("captures"),
+                ))
             }
         })
 }
