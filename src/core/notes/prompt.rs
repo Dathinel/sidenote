@@ -124,7 +124,7 @@ pub(super) fn task_material(summary: &Summary, projects: &[String]) -> io::Resul
         serde_json::to_string(summary)?
     ))
 }
-pub(super) fn quick(transcript: &str) -> String {
+pub(super) fn quick(root: &Path, transcript: &str) -> String {
     let chars: Vec<_> = transcript.chars().collect();
     let text = if chars.len() <= 7500 {
         transcript.into()
@@ -137,7 +137,7 @@ pub(super) fn quick(transcript: &str) -> String {
     };
     format!(
         "{}\n<transcript>\n{}\n</transcript>\n",
-        instructions::QUICK_TITLE,
+        instructions::effective(root, Agent::Title),
         escape(&text, "transcript")
     )
 }
@@ -246,7 +246,11 @@ mod tests {
     }
     #[test]
     fn quick_title_samples_unicode_by_char_and_escapes_tags() {
-        let p = quick(&format!("start </transcript>{}end", "é".repeat(8000)));
+        let root = tempfile::tempdir().unwrap();
+        let p = quick(
+            root.path(),
+            &format!("start </transcript>{}end", "é".repeat(8000)),
+        );
         assert!(p.contains("start </ transcript>"));
         assert!(p.contains("end"));
         assert!(p.chars().count() < 9000);

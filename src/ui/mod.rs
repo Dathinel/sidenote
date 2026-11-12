@@ -31,6 +31,7 @@ mod notes_status;
 mod people;
 mod project;
 mod project_merge;
+mod prompt_library;
 mod refresh;
 mod relay;
 mod roles;
@@ -318,6 +319,7 @@ pub struct State {
     pub viewport_h: Cell<f32>,
     /// The window's width, as last laid out; the Tasks page sizes its panel from it.
     pub app_w: Cell<f32>,
+    pub app_h: Cell<f32>,
     /// Height of the whole meeting pane; the Ask thread takes a share of it.
     pub pane_h: Cell<f32>,
     /// Height of the floating Ask bar, so the column can scroll its last line above it.
@@ -500,6 +502,7 @@ impl State {
             narrow: Cell::new(false),
             viewport_h: Cell::new(600.0),
             app_w: Cell::new(DEFAULT_SIZE.0),
+            app_h: Cell::new(DEFAULT_SIZE.1),
             pane_h: Cell::new(800.0),
             live_document_h: Cell::new(340.0),
             live_thread_h: Cell::new(140.0),
@@ -1874,6 +1877,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     s.narrow.set(narrow);
     if let Some(w) = cx.layout_with("app", |r| r[2].round() as i32) {
         s.app_w.set(w as f32);
+        if let Some(h) = cx.layout_with("app", |r| r[3].round() as i32) {
+            s.app_h.set(h as f32);
+        }
         // A window opened this narrow starts with the sidebar folded, whatever was remembered.
         if !s.sidebar_sized.replace(true) && (w as f32) <= nav::COLLAPSE_AT {
             s.sidebar_open.set(false);
@@ -2752,6 +2758,18 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-prompts", |s| {
                 hex::settings::scene(s, "settings-prompts")
+            }),
+            ("settings-prompts-edited", |s| {
+                hex::settings::scene(s, "settings-prompts-edited")
+            }),
+            ("settings-prompts-diff", |s| {
+                hex::settings::scene(s, "settings-prompts-diff")
+            }),
+            ("settings-prompts-sort", |s| {
+                hex::settings::scene(s, "settings-prompts-sort")
+            }),
+            ("settings-prompts-readonly", |s| {
+                hex::settings::scene(s, "settings-prompts-readonly")
             }),
             ("settings-people", |s| {
                 hex::settings::scene(s, "settings-people")

@@ -401,7 +401,7 @@ fn process(
                 .run(
                     helper,
                     title_model,
-                    prompt::quick(&transcript),
+                    prompt::quick(root, &transcript),
                     helper::TITLE_TIMEOUT,
                 )
                 .ok()

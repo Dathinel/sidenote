@@ -5,6 +5,7 @@ use rune_kit::{Kit, Switch, TextInput};
 use sidenote::core::{
     agent_instructions::{self as instructions, Agent},
     notes::{self, Helper, NotesSettings, Request},
+    prompt_library as library,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -48,7 +49,6 @@ pub struct Editor {
     pub text: TextEdit,
     pub saved: String,
     pub edited_at: Option<String>,
-    pub fixed_open: bool,
     pub reset_confirm: bool,
 }
 impl Editor {
@@ -58,7 +58,6 @@ impl Editor {
             text: TextEdit::new(&text),
             saved: text,
             edited_at: None,
-            fixed_open: false,
             reset_confirm: false,
         }
     }
@@ -74,7 +73,7 @@ impl Editor {
         self.edited_at = entry.map(|e| e.edited_at);
         self.reset_confirm = false;
     }
-    fn dirty(&self) -> bool {
+    pub(super) fn dirty(&self) -> bool {
         self.text.text != self.saved
     }
 }
@@ -83,7 +82,9 @@ pub struct AiNotes {
     pub found: Vec<(Helper, bool)>,
     pub models: [TextEdit; 3],
     pub name: TextEdit,
-    pub editors: [Editor; 2],
+    /// One editor per prompt with editable instructions, in `Agent::ALL` order.
+    pub editors: [Editor; Agent::ALL.len()],
+    pub library: super::prompt_library::Library,
     pub pending: Option<&'static str>,
     pub editor_target: Option<usize>,
     pub testing: Option<usize>,
@@ -108,7 +109,8 @@ impl Default for AiNotes {
             found: Vec::new(),
             models: HELPERS.map(|h| TextEdit::new(h.default_model())),
             name: TextEdit::default(),
-            editors: [Editor::new(Agent::Notes), Editor::new(Agent::Tasks)],
+            editors: Agent::ALL.map(Editor::new),
+            library: Default::default(),
             pending: None,
             editor_target: None,
             testing: None,
@@ -168,11 +170,7 @@ enum Work {
     Request(String, Request),
 }
 fn agent(index: usize) -> Agent {
-    if index == 0 {
-        Agent::Notes
-    } else {
-        Agent::Tasks
-    }
+    Agent::ALL[index]
 }
 fn run(root: &Path, work: Work) -> Result<Completion, String> {
     match work {
@@ -189,18 +187,20 @@ fn run(root: &Path, work: Work) -> Result<Completion, String> {
                 })
         }
         Work::Save(index, text) => {
-            instructions::save(root, agent(index), &text).map_err(|_| SAVE_ERROR.to_string())?;
+            let entry = library::for_agent(agent(index));
+            let saved = library::save(root, entry, &text).map_err(|_| SAVE_ERROR.to_string())?;
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were written but could not be read back. Reload to check.".to_string()
             })?;
+            // Text equal to the default removes your copy, so the editor shows the default.
             Ok(Completion::Instructions(
                 index,
                 store.get(agent(index)).cloned(),
-                false,
+                saved == library::Saved::Default,
             ))
         }
         Work::Reset(index) => {
-            instructions::reset(root, agent(index))
+            library::reset(root, library::for_agent(agent(index)))
                 .map_err(|_| "Sidenote could not reset your instructions. Your text is still here. Press Reset to default again.".to_string())?;
             let store = instructions::load(root).map_err(|_| {
                 "Instructions were reset but could not be read back. Reload to check.".to_string()
@@ -349,7 +349,7 @@ impl State {
                 s.name = TextEdit::new(&snapshot.settings.your_name);
                 s.settings = Some(snapshot.settings);
                 s.found = snapshot.found;
-                for index in 0..2 {
+                for index in 0..Agent::ALL.len() {
                     self.notes_editor_loaded(
                         index,
                         snapshot.store.get(agent(index)).cloned(),
@@ -404,7 +404,10 @@ impl State {
         }
         self.ai_notes.editors[index].loaded(agent(index), entry, reset);
     }
-    fn notes_save_editor(&mut self, index: usize) {
+    pub(super) fn notes_reset_editor(&mut self, index: usize) {
+        self.notes_work(Work::Reset(index), "Resetting instructions...");
+    }
+    pub(super) fn notes_save_editor(&mut self, index: usize) {
         let text = self.ai_notes.editors[index].text.text.clone();
         if !valid_instructions(&text) {
             return;
@@ -470,7 +473,7 @@ pub fn valid_instructions(text: &str) -> bool {
 fn field(edit: &TextEdit, label: &str) -> TextInput {
     TextInput::new(edit).label(label).placeholder(label)
 }
-fn count_text(count: usize) -> String {
+pub(super) fn count_text(count: usize) -> String {
     if count < 1000 {
         count.to_string()
     } else {
@@ -480,7 +483,7 @@ fn count_text(count: usize) -> String {
 fn card(p: Palette) -> El {
     super::hex::settings::panel(p).padding(15.0).gap(10.0)
 }
-fn edit_time(time: Option<&str>) -> String {
+pub(super) fn edit_time(time: Option<&str>) -> String {
     time.and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
         .map(|t| {
             t.with_timezone(&chrono::Local)
@@ -489,142 +492,6 @@ fn edit_time(time: Option<&str>) -> String {
         })
         .unwrap_or_else(|| "Default".into())
 }
-fn editor(s: &State, index: usize, p: Palette) -> El {
-    let e = &s.ai_notes.editors[index];
-    let a = agent(index);
-    let count = e.text.text.chars().count();
-    let valid = valid_instructions(&e.text.text);
-    let editable = s.ai_notes.pending.is_none() && s.ai_notes.settings.is_some();
-    let mut c = card(p)
-        .key(format!("instructions-{index}"))
-        .child(roles::TITLE.wrap(
-            if index == 0 {
-                "Meeting summary"
-            } else {
-                "Sorting tasks into projects"
-            },
-            p.ink,
-        ))
-        .child(roles::META.wrap(edit_time(e.edited_at.as_deref()), p.soft))
-        .child(roles::META.wrap(
-            "Scroll inside the box to read the full instructions.",
-            p.soft,
-        ));
-    let input = rune::text_input(&e.text, roles::SMALL.style())
-        .key(format!("instructions-input-{index}"))
-        .min_h(12.0 * roles::SMALL.lh)
-        .color(p.ink)
-        .wrap_anywhere()
-        .caret(p.ink, p.hit)
-        .label(if index == 0 {
-            "Meeting summary instructions"
-        } else {
-            "Tasks instructions"
-        })
-        .on_edit(move |s: &mut State| &mut s.ai_notes.editors[index].text)
-        .on_submit(move |s: &mut State, _| s.ai_notes.editors[index].text.insert("\n"))
-        .w_full()
-        .min_w(0.0)
-        .px(12.0)
-        .py(12.0)
-        .fill(p.bg)
-        .border(1.0, if valid { p.line } else { p.warn })
-        .radius(6.0);
-    c = c.child(rune::auto_grow(input, 12, 24));
-    let count_message = if count > instructions::MAX_CHARS {
-        let over = count - instructions::MAX_CHARS;
-        format!(
-            "{over} character{} over the limit. Remove at least {over} to save.",
-            if over == 1 { "" } else { "s" }
-        )
-    } else if !valid {
-        "This text contains a character that cannot be saved. Remove it and try again.".into()
-    } else {
-        format!(
-            "{} / 16,000 characters{}",
-            count_text(count),
-            if e.dirty() { ". Unsaved changes" } else { "" }
-        )
-    };
-    c = c.child(roles::META.wrap(count_message, if valid { p.soft } else { p.warn }));
-    let mut actions = row().w_full().flex_wrap().gaps(8.0, 8.0);
-    let save = button(
-        "Save instructions",
-        &format!("instructions-save-{index}"),
-        p,
-    );
-    actions = actions.child(if editable && valid && e.dirty() {
-        save.on_press(move |s: &mut State| s.notes_save_editor(index))
-    } else {
-        save.color(p.soft).focusable(false)
-    });
-    if index == 0 {
-        c = c.child(roles::SMALL.wrap("Summaries are written in English.", p.soft));
-    }
-    let reset = button(
-        "Reset to default",
-        &format!("instructions-reset-{index}"),
-        p,
-    );
-    actions = actions.child(if editable {
-        reset.on_press(move |s: &mut State| s.ai_notes.editors[index].reset_confirm = true)
-    } else {
-        reset.dim(0.5)
-    });
-    actions = actions.child(
-        button(
-            if e.fixed_open {
-                "Hide safety rules and format"
-            } else {
-                "Show safety rules and format"
-            },
-            &format!("instructions-fixed-{index}"),
-            p,
-        )
-        .on_press(move |s: &mut State| {
-            let e = &mut s.ai_notes.editors[index];
-            e.fixed_open = !e.fixed_open;
-        }),
-    );
-    c = c.child(actions);
-    if s.ai_notes.editor_target == Some(index) {
-        c = c
-            .children(
-                s.ai_notes
-                    .pending
-                    .map(|text| roles::SMALL.wrap(text, p.soft).role("status")),
-            )
-            .children(s.ai_notes.error.as_ref().map(|text| {
-                super::widgets::banner(
-                    "Instructions were not saved",
-                    text,
-                    super::widgets::BannerKind::Problem,
-                    p,
-                )
-            }))
-            .children(
-                s.ai_notes
-                    .notice
-                    .as_ref()
-                    .map(|text| roles::SMALL.wrap(text, p.ok).role("status")),
-            );
-    }
-    if e.reset_confirm {
-        c = c.child(roles::SMALL.wrap("Replace your instructions with the default? Your saved copy and unsaved changes will be removed.", p.warn))
-            .child(row().flex_wrap().gaps(8.0, 8.0)
-                .child(button("Reset instructions", &format!("instructions-confirm-{index}"), p).color(p.warn).on_press(move |s: &mut State| s.notes_work(Work::Reset(index), "Resetting instructions...")))
-                .child(button("Keep my instructions", &format!("instructions-cancel-{index}"), p).fill(p.sel).on_press(move |s: &mut State| s.ai_notes.editors[index].reset_confirm = false)));
-    }
-    if e.fixed_open {
-        c = c
-            .child(roles::GROUP.wrap("Fixed safety rules (read only)", p.ink))
-            .child(roles::SMALL.wrap(instructions::core_head(a), p.soft))
-            .child(roles::GROUP.wrap("Your instructions go here", p.accent))
-            .child(roles::GROUP.wrap("Fixed output format (read only)", p.ink))
-            .child(roles::SMALL.wrap(instructions::core_tail(a), p.soft));
-    }
-    c
-}
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Part {
     Identity,
@@ -632,7 +499,6 @@ pub enum Part {
     Helpers,
     Advanced,
     Scripts,
-    Prompts,
     Privacy,
 }
 pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
@@ -656,7 +522,6 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                     Part::Advanced => "Agent diagnostics",
                     Part::Summaries => "Meeting summary",
                     Part::Scripts => "Summary engine",
-                    Part::Prompts => "Meeting summary instructions",
                 },
                 p.soft,
             )
@@ -1146,19 +1011,6 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             );
         c = c.child(super::hex::settings::panel(p).child(super::hex::settings::setting_row(s,"notes-identity","Your name","Used to mark tasks that are yours and included when a meeting is sent to your agent.",control,true,p)));
     }
-    if part == Part::Prompts {
-        c = c.child(col().key("agent-instructions").fill(super::hex::settings::highlight(s,"agent-instructions",p)).w_full().gap(16.0)
-        .child(roles::SECTION.wrap("Meeting summary instructions", p.ink))
-        .child(roles::SMALL.wrap("Change the base instructions for your agent. Safety rules and the output format stay fixed. Instructions sync to your other devices.", p.soft))
-        .child(editor(s, 0, p)).child(editor(s, 1, p)))
-        .child(roles::SMALL.wrap(if s.tasks.teams.teams.is_empty() { "No teams yet. Tasks will not be given a team." } else { "Tasks use the team of the person who owns them." }, p.soft))
-        .children(s.config.features.tasks.then(|| button("Set up teams", "notes-teams", p).self_start().on_press(|s: &mut State| {
-            s.hex.section = super::hex::Section::Teams;
-            s.hex.filter = TextEdit::default();
-            s.nav_done();
-            super::scene_scroll(s, "hex-top");
-        })));
-    }
     c
 }
 pub fn setup_visible(s: &State) -> bool {
@@ -1359,7 +1211,7 @@ mod tests {
         let worker_root = root.clone();
         thread::spawn(move || {
             assert_ne!(ui_thread, thread::current().id());
-            for index in 0..2 {
+            for index in 0..Agent::ALL.len() {
                 let result = run(
                     &worker_root,
                     Work::Save(index, format!("Custom agent {index}")),
@@ -1369,13 +1221,22 @@ mod tests {
                     matches!(result, Completion::Instructions(i, Some(_), false) if i == index)
                 );
             }
-            assert!(instructions::load(&worker_root).unwrap().notes.is_some());
-            assert!(instructions::load(&worker_root).unwrap().tasks.is_some());
+            let store = instructions::load(&worker_root).unwrap();
+            for agent in Agent::ALL {
+                assert!(store.get(agent).is_some());
+            }
             assert!(matches!(
                 run(&worker_root, Work::Reset(0)).unwrap(),
                 Completion::Instructions(0, None, true)
             ));
-            assert!(instructions::load(&worker_root).unwrap().tasks.is_some());
+            let store = instructions::load(&worker_root).unwrap();
+            assert!(store.notes.is_none() && store.tasks.is_some() && store.ask.is_some());
+            // Saving the default text is a reset: your copy goes and the editor shows the default.
+            let default = instructions::default_base(Agent::Tasks).to_owned();
+            assert!(matches!(
+                run(&worker_root, Work::Save(1, default)).unwrap(),
+                Completion::Instructions(1, None, true)
+            ));
             assert!(run(&worker_root, Work::Save(1, "x".repeat(16_001))).is_err());
         })
         .join()

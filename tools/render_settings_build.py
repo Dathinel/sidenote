@@ -8,7 +8,7 @@ STATE=ROOT/'target/settings-build-render'
 EXE=ROOT/'target/x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
 from prepare_people_fixture import prepare
-PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('prompt-library','settings-prompts',1800),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',1800),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
+PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('prompt-library','settings-prompts',900),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',1800),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
