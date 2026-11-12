@@ -21,6 +21,8 @@ const RETIRE: u32 = WM_APP + 49;
 const JOIN_BOUND: Duration = Duration::from_secs(2);
 static GENERATION: AtomicUsize = AtomicUsize::new(1);
 static RETIRING: Mutex<Vec<Retiring>> = Mutex::new(Vec::new());
+const MAX_RETIRING: usize = 2;
+static DISABLED: AtomicBool = AtomicBool::new(false);
 thread_local! { static CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 #[derive(Clone, Default)]
@@ -146,6 +148,17 @@ pub(super) fn maintenance() {
     reap();
 }
 
+pub(super) fn disabled() -> bool {
+    DISABLED.load(Ordering::Acquire)
+}
+
+pub(super) fn diagnostics() -> (usize, bool) {
+    (
+        RETIRING.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        disabled(),
+    )
+}
+
 pub(super) fn callback_boundary(
     code: &'static str,
     hwnd: HWND,
@@ -186,6 +199,9 @@ pub(super) struct Host {
 }
 impl Host {
     pub(super) fn new(replay: bool) -> io::Result<Self> {
+        if disabled() {
+            return Err(io::Error::other("Icon disabled"));
+        }
         if !reap() {
             return Err(io::Error::other("Retiring icon cannot be hidden"));
         }
@@ -257,13 +273,18 @@ impl Drop for Host {
                 }
             } else {
                 crate::listener::log("FI_TEARDOWN_TIMEOUT");
-                RETIRING
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(Retiring {
+                reap();
+                let mut retiring = RETIRING.lock().unwrap_or_else(|e| e.into_inner());
+                if retiring.len() < MAX_RETIRING {
+                    retiring.push(Retiring {
                         control: self.control.clone(),
                         worker,
                     });
+                } else if !DISABLED.swap(true, Ordering::AcqRel) {
+                    // The third timed-out thread stays cloaked and detaches. Never kill a Rust
+                    // thread or spawn another overlay after this process-wide circuit opens.
+                    crate::listener::log("ICON_DISABLED_STUCK_WORKERS");
+                }
             }
         }
     }

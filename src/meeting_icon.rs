@@ -142,7 +142,18 @@ fn run(isolated: bool, replay: bool) {
     let mut speech_until = Instant::now();
     let mut next_status = Instant::now();
     let mut transcript_revision = 0u64;
+    let mut last_diagnostics = None;
     while !crate::updates::listener_stopping() {
+        if replay {
+            let status = native::diagnostics();
+            if last_diagnostics != Some(status) {
+                let _ = store_io::write(
+                    &core::state_dir().join("local/floating-icon-workers.json"),
+                    &status,
+                );
+                last_diagnostics = Some(status);
+            }
+        }
         if replay && core::state_dir().join("local/floating-icon-exit").is_file() {
             // Only the explicitly isolated replay process accepts this bounded shutdown.
             std::process::exit(0);
@@ -293,7 +304,7 @@ fn run(isolated: bool, replay: bool) {
                 .filter(|id| current.recording && pending.contains_key(*id))
                 .or_else(|| pending.last_key_value().map(|(id, _)| id));
             if let Some(id) = item {
-                if host.is_none() {
+                if host.is_none() && !native::disabled() {
                     host = native::Host::new(replay)
                         .map_err(|_| crate::listener::log("floating icon window unavailable"))
                         .ok();

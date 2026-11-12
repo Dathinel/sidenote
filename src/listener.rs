@@ -433,6 +433,7 @@ pub fn run() -> ! {
     };
     let isolated = std::env::args().any(|a| a == "--listener-isolated")
         && std::env::args().any(|a| a == "--data-dir");
+    // TODO: gate this call with ui_allowed() when feat/linux-server lands.
     crate::meeting_icon::start(isolated);
     if isolated && !std::env::args().any(|a| a == "--floating-icon-replay") {
         while !crate::updates::listener_stopping() {

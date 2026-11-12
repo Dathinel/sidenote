@@ -871,7 +871,15 @@ unsafe fn icon_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
                         core::state_dir().join("local/floating-icon-stall-started"),
                         b"started",
                     );
-                    std::thread::sleep(Duration::from_secs(5));
+                    let deadline =
+                        Instant::now() + Duration::from_secs(if w == 1 { 20 } else { 5 });
+                    while Instant::now() < deadline
+                        && !core::state_dir()
+                            .join("local/floating-icon-release-stalls")
+                            .is_file()
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
                     return 0;
                 }
                 m if m == WM_APP + 46 && v.replay => panic!("synthetic callback failure"),

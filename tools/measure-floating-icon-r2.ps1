@@ -46,7 +46,7 @@ public static class FloatingReview {
  public static long Message(IntPtr h,uint owned,uint msg){return Message(h,owned,msg,0,0);}
  public static long Message(IntPtr h,uint owned,uint msg,long w){return Message(h,owned,msg,w,0);}
  public static long Message(IntPtr h,uint owned,uint msg,long w,long l){Own(h,owned);IntPtr result;if(SendMessageTimeoutW(h,msg,(IntPtr)w,(IntPtr)l,2,2000,out result)==IntPtr.Zero)throw new Exception("Owned message timeout");return result.ToInt64();}
- public static void Post(IntPtr h,uint owned,uint msg){Own(h,owned);if(!PostMessageW(h,msg,IntPtr.Zero,IntPtr.Zero))throw new Exception("Owned post failed");}
+ public static void Post(IntPtr h,uint owned,uint msg,long w=0){Own(h,owned);if(!PostMessageW(h,msg,(IntPtr)w,IntPtr.Zero))throw new Exception("Owned post failed");}
  public static string Text(IntPtr h,uint owned){Own(h,owned);var text=new StringBuilder(8192);IntPtr result;if(ReadText(h,13,(IntPtr)text.Capacity,text,2,2000,out result)==IntPtr.Zero)throw new Exception("Owned text read timeout");return text.ToString();}
 }
 '@
@@ -99,6 +99,10 @@ function Region($h) {
  }finally{[void][FloatingReview]::DeleteObject($r)}
 }
 function Affinity($h){[uint32]$a=0;if(![FloatingReview]::GetWindowDisplayAffinity($h,[ref]$a)-or$a-ne17){throw 'Capture exclusion changed'};17}
+function Observation {
+ Foreground;$child.Refresh()
+ [ordered]@{working_set_mb=[Math]::Round($child.WorkingSet64/1000000,3);private_bytes_mb=[Math]::Round($child.PrivateMemorySize64/1000000,3);gdi=[FloatingReview]::GetGuiResources($child.Handle,0);user=[FloatingReview]::GetGuiResources($child.Handle,1);handles=$child.HandleCount;windows=@([FloatingReview]::Windows($child.Id)|ForEach-Object{[FloatingReview]::Class($_)})}
+}
 function Sample([string]$Name) {
  $all=@();1..3|ForEach-Object{
   Start-Sleep -Seconds 3;Foreground;$child.Refresh()
@@ -124,7 +128,7 @@ $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$Exe;$info.WorkingDir
 $info.Arguments="--listen --listener-isolated --floating-icon-replay --data-dir `"$state`" --meetings-dir `"$meetings`" --peers-dir `"$run/peers`" --listener-localappdata `"$run/localappdata`""
 $info.EnvironmentVariables['APPDATA']=Join-Path $run 'appdata';$info.EnvironmentVariables['LOCALAPPDATA']=Join-Path $run 'localappdata'
 $child=[Diagnostics.Process]::new();$child.StartInfo=$info
-$result=[ordered]@{units='MB = 1,000,000 bytes';exe=$Exe;sha256=(Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash;foreground_checks=0;show_teardown_cycles=5}
+$result=[ordered]@{units='MB = 1,000,000 bytes';exe=$Exe;sha256=(Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash;foreground_checks=0;show_teardown_cycles=50}
 $foregroundChecks=0
 try {
  if(!$child.Start()){throw 'Launch failed'};$result.pid=$child.Id
@@ -176,15 +180,16 @@ try {
  $result.close_reentrancy.title_close_does_not_ack=$true
  Finish-Meeting $id;Sample 'teardown_1'
 
- 2..5|ForEach-Object{
+ 2..50|ForEach-Object{
   $cycle=$_;$id="1794440000000-$cycle";Rolling $id 1;Snapshot $id $true
   Wait-For {$null-ne(Window 'Icon')} 'repeat icon';$card=Open-Card (Window 'Icon');Privacy $card;Foreground
-  Finish-Meeting $id;Sample "teardown_$cycle"
+  Finish-Meeting $id
+  if($cycle-in@(10,25,50)){Sample "teardown_$cycle"}else{Start-Sleep -Milliseconds 500;$result["teardown_$cycle"]=@((Observation))}
  }
- $after=@(1..5|ForEach-Object{$result["teardown_$_"][-1]})
+ $after=@(1..50|ForEach-Object{$result["teardown_$_"][-1]})
  $result.repeated=@{gdi=@($after|ForEach-Object{$_.gdi});user=@($after|ForEach-Object{$_.user});working_set_mb=@($after|ForEach-Object{$_.working_set_mb});private_bytes_mb=@($after|ForEach-Object{$_.private_bytes_mb});gdi_stable=(@($after|ForEach-Object{$_.gdi}|Sort-Object -Unique).Count-eq1);working_set_delta_mb=$after[-1].working_set_mb-$after[0].working_set_mb;private_delta_mb=$after[-1].private_bytes_mb-$after[0].private_bytes_mb}
 
- $id='1794440000000-20';Snapshot $id $true;Wait-For {$null-ne(Window 'Icon')} 'short-recording icon';$shortIcon=Window 'Icon'
+ $id='1794440000000-1001';Snapshot $id $true;Wait-For {$null-ne(Window 'Icon')} 'short-recording icon';$shortIcon=Window 'Icon'
  $dir=Join-Path $meetings $id;New-Item -ItemType Directory -Force -Path $dir|Out-Null
  [IO.File]::WriteAllText((Join-Path $dir 'manifest.json'),'{"status":"complete","duration_ms":10000}',$utf8)
  [IO.File]::WriteAllText((Join-Path $dir 'transcript.ndjson'),'{"text":"Short synthetic meeting"}',$utf8)
@@ -192,7 +197,7 @@ try {
  $skipWatch=[Diagnostics.Stopwatch]::StartNew();Wait-For {@(Windows 'Icon').Count-eq0} 'Skipped ends' 6
  if($skipWatch.Elapsed.TotalSeconds-lt2){throw 'Skipped notice too short'}
  $result.skipped=@{shown=$true;visible_seconds=$skipWatch.Elapsed.TotalSeconds}
- $id='1794440000000-21';$now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();Snapshot $id $true $false $false $now
+ $id='1794440000000-1002';$now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();Snapshot $id $true $false $false $now
  Wait-For {$null-ne(Window 'Icon')} 'no-draft icon';Snapshot $id $false $false $false ($now+1000)
  Wait-For { $p=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-meetings.json')|ConvertFrom-Json; $p.$id.stopped_at_ms -eq ($now+1000) } 'persisted stop deadline'
  Snapshot $id $false $false $false ($now+600999);Start-Sleep -Milliseconds 300
@@ -200,7 +205,7 @@ try {
  Snapshot $id $false $false $false ($now+601000);Wait-For {@(Windows 'Icon').Count-eq0} 'no-draft bound'
  $result.no_draft=@{bound_seconds=600;expired=$true;clock='isolated replay clock; production uses persisted UTC stop time'}
 
- $id='1794440000000-30';Snapshot $id $true;Wait-For {$null-ne(Window 'Icon')} 'panic icon';$old=Window 'Icon'
+ $id='1794440000000-2001';Snapshot $id $true;Wait-For {$null-ne(Window 'Icon')} 'panic icon';$old=Window 'Icon'
  [void][FloatingReview]::Message($old,$child.Id,0x802e);Wait-For {(Log-Contains 'FI_ICON_CALLBACK') -and ($null-ne(Window 'Icon')) -and ((Window 'Icon')-ne$old)} 'icon callback containment'
  $card=Open-Card (Window 'Icon');[void][FloatingReview]::Message($card,$child.Id,0x802e)
  Wait-For {(Log-Contains 'FI_CARD_CALLBACK') -and ($null-ne(Window 'Icon'))} 'card callback containment'
@@ -210,15 +215,37 @@ try {
  Draft $id;Snapshot $id $false $false $true
  Wait-For {Log-Contains 'FI_TEARDOWN_TIMEOUT'} 'bounded teardown timeout' 4
  if(![FloatingReview]::Cloaked($old)){throw 'Retiring icon not cloaked'}
- $next='1794440000000-31';$restart=[Diagnostics.Stopwatch]::StartNew();Snapshot $next $true
+ $next='1794440000000-2002';$restart=[Diagnostics.Stopwatch]::StartNew();Snapshot $next $true
  Wait-For {($null-ne(Window 'Icon')) -and ((Window 'Icon')-ne$old)} 'next icon after timeout' 3
  $result.teardown_timeout=@{bound_ms=2000;next_icon_ms=$restart.Elapsed.TotalMilliseconds;retiring_cloaked=[FloatingReview]::Cloaked($old);visible_icons=@(Windows 'Icon' $true).Count}
  Foreground;Wait-For {![FloatingReview]::IsWindow($old)} 'retired GUI exits' 7
  Finish-Meeting $next;Sample 'after_resilience'
+ $stalled=@();$retained=@()
+ 1..3|ForEach-Object{
+  $id="1794440000000-300$_";Snapshot $id $true;Wait-For {$null-ne(Window 'Icon')} 'cap probe icon';$old=Window 'Icon';$stalled+=$old
+  $marker=Join-Path $local 'floating-icon-stall-started';if(Test-Path -LiteralPath $marker){Remove-Item -LiteralPath $marker}
+  [FloatingReview]::Post($old,$child.Id,0x802d,1);Wait-For {Test-Path -LiteralPath $marker} 'long owned GUI stall'
+  Draft $id;Snapshot $id $false $false $true
+  $expected=[Math]::Min($_,2);$disabled=($_-eq3)
+  Wait-For {$s=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-icon-workers.json')|ConvertFrom-Json;$s[0]-eq$expected-and$s[1]-eq$disabled} 'bounded retained workers' 5
+  $retained+=$expected;Foreground
+  if(@($stalled|Where-Object{![FloatingReview]::Cloaked($_)}).Count-ne0){throw 'Stuck window not cloaked'}
+ }
+ if(!(Log-Contains 'ICON_DISABLED_STUCK_WORKERS')){throw 'Missing circuit-breaker code'}
+ [IO.File]::WriteAllText((Join-Path $local 'floating-icon-release-stalls'),'release',$utf8)
+ Wait-For {@($stalled|Where-Object{[FloatingReview]::IsWindow($_)}).Count-eq0} 'all released workers exit' 5
+ Wait-For {$s=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-icon-workers.json')|ConvertFrom-Json;$s[0]-eq0-and$s[1]} 'disabled flag survives reaping'
+ $id='1794440000000-3004';Snapshot $id $true;Start-Sleep -Seconds 2;Foreground
+ if(@(Windows 'Icon').Count-ne0){throw 'Disabled overlay restarted'}
+ Wait-For {$p=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-meetings.json')|ConvertFrom-Json;$null-ne$p.$id} 'monitor continues after disable'
+ $log=[IO.File]::ReadAllText((Join-Path $state 'sidenote.log'));$codeCount=([regex]::Matches($log,'ICON_DISABLED_STUCK_WORKERS')).Count
+ if($codeCount-ne1){throw 'Circuit-breaker code repeated'}
+ Draft $id;Snapshot $id $false $false $true;Wait-For {$p=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-meetings.json')|ConvertFrom-Json;$null-eq$p.$id} 'monitor acknowledges after disable'
+ $result.stuck_worker_cap=@{retained_after_timeout=$retained;limit=2;third_detached=$true;all_stalled_windows_cloaked=$true;disabled_survives_reaping=$true;disable_code_count=$codeCount;listener_alive=(!$child.HasExited);monitor_continues=$true;visible_icons=@(Windows 'Icon' $true).Count}
  foreach($code in @('FI_CLOAK_FAILED','FI_FONT_RELEASE','FI_BITMAP_RELEASE','FI_DC_RELEASE','FI_DESTROY_FAILED','FI_WORKER_PANIC')){if(Log-Contains $code){throw "Native failure: $code"}}
  $result.pending_after=Get-Content -Raw -LiteralPath (Join-Path $local 'floating-meetings.json')|ConvertFrom-Json
  $result.foreground_checks=$foregroundChecks;$result.completed_utc=[DateTime]::UtcNow.ToString('o')
- $result.cold_resources_returned=($result.teardown_5[-1].gdi-eq$result.idle[-1].gdi-and$result.teardown_5[-1].user-eq$result.idle[-1].user)
+ $result.cold_resources_returned=($result.teardown_50[-1].gdi-eq$result.idle[-1].gdi-and$result.teardown_50[-1].user-eq$result.idle[-1].user)
  $result.functional_probes_passed=$true
  $result|ConvertTo-Json -Depth 14|Set-Content -LiteralPath (Join-Path $run 'measurements.json') -Encoding UTF8
  Write-Output "Evidence: $run/measurements.json"
