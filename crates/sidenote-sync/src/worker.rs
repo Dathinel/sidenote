@@ -143,6 +143,16 @@ impl Worker {
         };
         let load_bytes = request.snapshot.chunks.iter().map(Vec::len).sum::<usize>();
         let deadline = load_timeout(load_bytes);
+        #[cfg(windows)]
+        let exchange = async {
+            tokio::select! {
+                biased;
+                _ = platform::wait_for_failure(&self.process) => {
+                    Err(Failure(Reason::WorkerCrashed).into())
+                }
+                reply = exchange => reply,
+            }
+        };
         match tokio::time::timeout(deadline, exchange).await {
             Ok(Ok(Reply::Accepted(reply))) => Ok(reply),
             Ok(Ok(Reply::Rejected(reason))) => Err(Failure(reason).into()),
@@ -151,8 +161,15 @@ impl Worker {
                 Err(Failure(Reason::WorkerCrashed).into())
             }
             Err(_) => {
+                let reason = Reason::WorkerTimedOut;
+                #[cfg(windows)]
+                let reason = if platform::failed(&self.process) {
+                    Reason::WorkerCrashed
+                } else {
+                    reason
+                };
                 self.terminate();
-                Err(Failure(Reason::WorkerTimedOut).into())
+                Err(Failure(reason).into())
             }
         }
     }
@@ -369,15 +386,79 @@ mod platform {
         fs::File,
         os::windows::{
             ffi::OsStrExt,
-            io::{AsRawHandle, FromRawHandle, OwnedHandle},
+            io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
         },
         ptr,
     };
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation},
+        Foundation::{
+            CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+            WAIT_OBJECT_0,
+        },
         Security::SECURITY_ATTRIBUTES,
         System::{JobObjects::*, Pipes::CreatePipe, Threading::*},
     };
+    struct ExitWait<'a> {
+        wait: HANDLE,
+        signal: Box<tokio::sync::Notify>,
+        _process: BorrowedHandle<'a>,
+    }
+    // The callback only uses Notify; Drop unregisters it before freeing the context.
+    unsafe impl Send for ExitWait<'_> {}
+    unsafe impl Sync for ExitWait<'_> {}
+    impl<'a> ExitWait<'a> {
+        fn new(process: &'a OwnedHandle) -> Result<Self> {
+            let mut wait = Self {
+                wait: ptr::null_mut(),
+                signal: Box::new(tokio::sync::Notify::new()),
+                _process: process.as_handle(),
+            };
+            ensure!(
+                unsafe {
+                    RegisterWaitForSingleObject(
+                        &mut wait.wait,
+                        process.as_raw_handle(),
+                        Some(process_exited),
+                        (&*wait.signal as *const tokio::sync::Notify).cast(),
+                        INFINITE,
+                        WT_EXECUTEINWAITTHREAD | WT_EXECUTEONLYONCE,
+                    )
+                } != 0,
+                std::io::Error::last_os_error()
+            );
+            Ok(wait)
+        }
+    }
+    impl Drop for ExitWait<'_> {
+        fn drop(&mut self) {
+            if !self.wait.is_null() {
+                // Synchronously finish any callback before releasing its borrowed context.
+                let result = unsafe { UnregisterWaitEx(self.wait, INVALID_HANDLE_VALUE) };
+                assert_ne!(result, 0, "failed to unregister worker process wait");
+            }
+        }
+    }
+    unsafe extern "system" fn process_exited(context: *mut std::ffi::c_void, _timed_out: bool) {
+        let signal = unsafe { &*context.cast::<tokio::sync::Notify>() };
+        signal.notify_one();
+    }
+    pub fn failed(process: &OwnedHandle) -> bool {
+        let mut code = 0;
+        unsafe {
+            WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_OBJECT_0
+                && GetExitCodeProcess(process.as_raw_handle(), &mut code) != 0
+                && code != 0
+        }
+    }
+    pub async fn wait_for_failure(process: &OwnedHandle) -> Result<()> {
+        let wait = ExitWait::new(process)?;
+        wait.signal.notified().await;
+        if !failed(process) {
+            // A rejected request may exit successfully with its reply still in the pipe.
+            std::future::pending::<()>().await;
+        }
+        Ok(())
+    }
     pub struct Job(OwnedHandle);
     const UI_LIMITS: u32 = JOB_OBJECT_UILIMIT_DESKTOP
         | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
@@ -429,7 +510,7 @@ mod platform {
             Ok(job)
         }
     }
-    fn pipe() -> Result<(OwnedHandle, OwnedHandle)> {
+    pub(super) fn pipe() -> Result<(OwnedHandle, OwnedHandle)> {
         let security = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: ptr::null_mut(),
@@ -853,6 +934,41 @@ mod tests {
                 "caller survived"
             );
         }
+        Ok(())
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn c1_worker_exit_is_detected_while_pipes_stay_open() -> Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Threading::TerminateProcess;
+
+        let mut worker = fixture()?;
+        worker.input.write_all(&[1]).await?;
+        worker.input.flush().await?;
+        let process = worker.process.try_clone()?;
+        let (input, writer) = platform::pipe()?;
+        let (reader, output) = platform::pipe()?;
+        let mut input = tokio::fs::File::from_std(std::fs::File::from(input));
+        worker.input = tokio::fs::File::from_std(std::fs::File::from(writer));
+        worker.output = tokio::fs::File::from_std(std::fs::File::from(reader));
+
+        // Keep both pipe peers alive after the real worker exits.
+        let terminate = async {
+            let len = input.read_u32().await?;
+            input.read_exact(&mut vec![0; len as usize]).await?;
+            ensure!(unsafe { TerminateProcess(process.as_raw_handle(), 1) } != 0);
+            Ok::<_, anyhow::Error>(())
+        };
+        let request = empty();
+        let (result, terminated) = tokio::join!(worker.request(&request), terminate);
+        drop(output);
+        terminated?;
+        assert_eq!(
+            result
+                .err()
+                .and_then(|e| e.downcast_ref::<Failure>().map(|f| f.0)),
+            Some(Reason::WorkerCrashed)
+        );
         Ok(())
     }
     fn leb(out: &mut Vec<u8>, mut n: usize) {
