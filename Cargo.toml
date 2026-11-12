@@ -58,6 +58,12 @@ velopack = "=0.0.1298"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["transport-streamable-http-server"] }
+
 [features]
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
 # Qualification build with a higher relay capability floor; no app version change.
