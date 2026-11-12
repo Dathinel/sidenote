@@ -16,6 +16,7 @@ mod commands;
 mod inventory;
 #[cfg(target_os = "linux")]
 mod local;
+mod mcp;
 mod pages;
 use commands::Pair;
 const MAX_REQUEST: usize = 64 * 1024;
@@ -213,6 +214,17 @@ pub fn cli() -> i32 {
     } else {
         0
     }
+}
+/// A one-shot helper never opens the service's relay replica.
+#[cfg(target_os = "linux")]
+pub(crate) fn local_request(value: &serde_json::Value) -> io::Result<serde_json::Value> {
+    let bytes = serde_json::to_vec(value)?;
+    let reply = local::request(&core::state_dir(), &bytes)?;
+    let envelope: serde_json::Value = serde_json::from_slice(&reply)?;
+    if envelope["ok"] != true {
+        return Err(io::Error::other("OWNER_REQUEST_REJECTED"));
+    }
+    Ok(envelope["value"].clone())
 }
 fn stream_commands(mut request: impl FnMut(&[u8]) -> io::Result<Vec<u8>>) -> io::Result<()> {
     let mut input = io::stdin().lock();

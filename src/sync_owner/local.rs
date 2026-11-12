@@ -92,16 +92,24 @@ impl Endpoint {
         Ok(Self { listener, path })
     }
     pub fn serve(self, controller: Arc<Mutex<Controller>>, stop: Arc<AtomicBool>) {
+        let slots = Arc::new(tokio::sync::Semaphore::new(16));
         while !stop.load(Ordering::Acquire) {
             match self.listener.accept() {
                 Ok((mut stream, _)) => {
-                    let _ = (|| -> io::Result<()> {
-                        authenticate(&stream)?;
-                        let bytes = read_frame(&mut stream, MAX_REQUEST)?;
-                        let reply =
-                            zeroize::Zeroizing::new(commands::respond(&controller, &bytes)?);
-                        write_frame(&mut stream, &reply, MAX_REPLY)
-                    })();
+                    let Ok(slot) = slots.clone().try_acquire_owned() else {
+                        continue;
+                    };
+                    let controller = controller.clone();
+                    thread::spawn(move || {
+                        let _slot = slot;
+                        let _ = (|| -> io::Result<()> {
+                            authenticate(&stream)?;
+                            let bytes = read_frame(&mut stream, MAX_REQUEST)?;
+                            let reply =
+                                zeroize::Zeroizing::new(commands::respond(&controller, &bytes)?);
+                            write_frame(&mut stream, &reply, MAX_REPLY)
+                        })();
+                    });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(25))
@@ -128,6 +136,33 @@ pub(super) fn request(root: &Path, bytes: &[u8]) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blocked_connection_does_not_serialize_status() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let endpoint = Endpoint::bind(root.path())?;
+        let controller = Arc::new(Mutex::new(Controller {
+            root: root.path().into(),
+            pair: None,
+            state: Default::default(),
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let held = controller.lock().unwrap();
+        let mut blocked = UnixStream::connect(&endpoint.path)?;
+        authenticate(&blocked)?;
+        write_frame(&mut blocked, br#"{"op":"pair-state"}"#, MAX_REQUEST)?;
+        let done = stop.clone();
+        let control = controller.clone();
+        let server = thread::spawn(move || endpoint.serve(control, done));
+        let response = request(root.path(), br#"{"op":"status"}"#);
+        drop(held);
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&response?)?["ok"],
+            true
+        );
+        Ok(())
+    }
     #[test]
     fn oversized_frames_are_rejected_before_payload_allocation() -> io::Result<()> {
         let (mut send, mut receive) = UnixStream::pair()?;

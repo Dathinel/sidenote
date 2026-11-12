@@ -5,6 +5,10 @@ use std::sync::mpsc;
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 enum Request {
+    Mcp {
+        method: String,
+        params: Value,
+    },
     Status {},
     Configure {
         enabled: bool,
@@ -144,6 +148,7 @@ impl Controller {
         let request: Request = serde_json::from_slice(bytes).map_err(|_| invalid())?;
         self.poll_pair();
         match request {
+            Request::Mcp { .. } => Err(invalid()),
             Request::Status {} => Ok(pages::status(&self.state)),
             Request::Inventory { cursor } => pages::page(&self.state.meetings, cursor),
             Request::Configure { enabled, address } => {
@@ -305,9 +310,28 @@ fn envelope(result: io::Result<Value>) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 pub(super) fn respond(control: &Mutex<Controller>, bytes: &[u8]) -> io::Result<Vec<u8>> {
+    respond_with(control, bytes, mcp_request)
+}
+fn mcp_request(_root: &Path, request: Request) -> io::Result<Value> {
+    let Request::Mcp { method, params } = request else {
+        return Err(invalid());
+    };
+    super::mcp::dispatch(&method, params)
+}
+fn respond_with(
+    control: &Mutex<Controller>,
+    bytes: &[u8],
+    execute: impl FnOnce(&Path, Request) -> io::Result<Value>,
+) -> io::Result<Vec<u8>> {
     match serde_json::from_slice::<Request>(bytes) {
         Ok(Request::Status {}) => envelope(Ok(pages::status(&snapshot()))),
         Ok(Request::Inventory { cursor }) => envelope(pages::page(&snapshot().meetings, cursor)),
+        Ok(request @ Request::Mcp { .. }) => {
+            static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+            let _slot = SLOTS.try_acquire().map_err(|_| invalid())?;
+            let root = control.lock().map_err(|_| invalid())?.root.clone();
+            envelope(execute(&root, request))
+        }
         _ => control.lock().map_err(|_| invalid())?.reply(bytes),
     }
 }
@@ -327,6 +351,44 @@ fn meeting_id(id: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slow_mcp_releases_controller_for_pairing_and_status() {
+        let root = tempfile::tempdir().unwrap();
+        let control = Arc::new(Mutex::new(Controller {
+            root: root.path().into(),
+            pair: None,
+            state: Default::default(),
+        }));
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let worker_control = control.clone();
+        let worker = thread::spawn(move || {
+            respond_with(
+                &worker_control,
+                br#"{"op":"mcp","method":"tools","params":{}}"#,
+                |_, _| {
+                    entered.send(()).unwrap();
+                    wait.recv().unwrap();
+                    Ok(Value::Null)
+                },
+            )
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let available = control.try_lock().is_ok();
+        let pairing = available.then(|| respond(&control, br#"{"op":"pair-state"}"#).unwrap());
+        let status = respond(&control, br#"{"op":"status"}"#).unwrap();
+        release.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        assert!(available, "MCP backend retained the controller mutex");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&pairing.unwrap()).unwrap()["value"]["phase"],
+            "idle"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&status).unwrap()["ok"],
+            true
+        );
+    }
     #[test]
     fn unknown_fields_and_operations_are_rejected() {
         for bytes in [

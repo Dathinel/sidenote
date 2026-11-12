@@ -139,6 +139,46 @@ pub fn tools() -> Vec<Tool> {
 
 #[derive(Clone)]
 struct Meetings;
+fn owner_backend() -> bool {
+    cfg!(target_os = "linux") && crate::service::role() != crate::service::DeviceRole::Full
+}
+fn owner_request(method: &str, params: Value) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::sync_owner::local_request(&json!({"op":"mcp","method":method,"params":params}))
+            .map_err(|_| "MCP_OWNER_UNAVAILABLE".into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (method, params);
+        Err("MCP_OWNER_UNAVAILABLE".into())
+    }
+}
+fn catalog() -> Result<Vec<Tool>, String> {
+    if owner_backend() {
+        serde_json::from_value(owner_request("tools", json!({}))?)
+            .map_err(|_| "MCP_OWNER_UNAVAILABLE".into())
+    } else {
+        Ok(tools())
+    }
+}
+fn call(name: &str, arguments: Value) -> Result<Value, String> {
+    if owner_backend() {
+        owner_request("call", json!({"name":name,"arguments":arguments}))
+    } else {
+        agent_tools::call(name, arguments)
+    }
+}
+fn resource(uri: &str) -> Result<String, String> {
+    if owner_backend() {
+        owner_request("resource", json!({"uri":uri}))?
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "MCP_OWNER_UNAVAILABLE".into())
+    } else {
+        agent_tools::meeting_resource(uri)
+    }
+}
 impl ServerHandler for Meetings {
     fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
@@ -154,7 +194,11 @@ impl ServerHandler for Meetings {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        let tools = tokio::task::spawn_blocking(catalog)
+            .await
+            .map_err(|_| ErrorData::internal_error("MCP_OWNER_UNAVAILABLE", None))?
+            .map_err(|_| ErrorData::internal_error("MCP_OWNER_UNAVAILABLE", None))?;
+        Ok(ListToolsResult::with_all_items(tools))
     }
     async fn call_tool(
         &self,
@@ -162,8 +206,7 @@ impl ServerHandler for Meetings {
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let result =
-            tokio::task::spawn_blocking(move || agent_tools::call(&request.name, arguments)).await;
+        let result = tokio::task::spawn_blocking(move || call(&request.name, arguments)).await;
         let result = match result {
             Ok(Ok(value)) => {
                 let summary = if let Some(items) = value["data"]["items"].as_array() {
@@ -215,7 +258,7 @@ impl ServerHandler for Meetings {
     ) -> Result<ReadResourceResponse, ErrorData> {
         let uri = request.uri;
         let lookup = uri.clone();
-        let text = tokio::task::spawn_blocking(move || agent_tools::meeting_resource(&lookup))
+        let text = tokio::task::spawn_blocking(move || resource(&lookup))
             .await
             .map_err(|_| ErrorData::internal_error("Local resource reader failed; retry", None))?
             .map_err(|message| ErrorData::resource_not_found(message, None))?;
