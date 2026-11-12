@@ -68,8 +68,10 @@ pub fn bounded_output(command: &mut Command, limit: Duration) -> io::Result<std:
     crate::containment::configure(command);
     let mut child = command.spawn()?;
     let mut stdout = child.stdout.take().ok_or_else(unavailable)?;
-    unsafe {
-        libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
+    if unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+        crate::containment::kill_group(child.id());
+        let _ = child.wait();
+        return Err(unavailable());
     }
     let deadline = Instant::now() + limit;
     let mut bytes = Vec::new();
@@ -84,7 +86,15 @@ pub fn bounded_output(command: &mut Command, limit: Duration) -> io::Result<std:
                 return Err(unavailable());
             }
         }
-        if let Some(status) = child.try_wait()? {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(_) => {
+                crate::containment::kill_group(child.id());
+                let _ = child.wait();
+                return Err(unavailable());
+            }
+        };
+        if let Some(status) = status {
             crate::containment::kill_group(child.id());
             return Ok(std::process::Output {
                 status,
@@ -169,7 +179,10 @@ fn launch(args: &[OsString]) -> io::Result<i32> {
         .unwrap_or("sidenote");
     let slice = format!("{stem}-w{nonce}.slice");
     let unit = format!("sidenote-worker-{nonce}.service");
-    slice_limits(&slice)?;
+    if let Err(error) = slice_limits(&slice) {
+        let _ = control(&[OsStr::new("stop"), OsStr::new(&slice)]);
+        return Err(error);
+    }
     let front = std::process::id();
     let parent = unsafe { libc::getppid() } as u32;
     let mut run = Command::new("/usr/bin/systemd-run");
@@ -197,25 +210,11 @@ fn launch(args: &[OsString]) -> io::Result<i32> {
         "--property=LimitAS=536870912",
         "--property=LimitCPU=120",
         "--property=LimitCORE=0",
+        "--property=UMask=0077",
+        "--property=OOMPolicy=stop",
     ])
     .arg("--working-directory")
     .arg(std::env::current_dir()?);
-    for (name, _) in std::env::vars_os() {
-        if ![
-            "INVOCATION_ID",
-            "SYSTEMD_EXEC_PID",
-            "NOTIFY_SOCKET",
-            "LISTEN_PID",
-            "LISTEN_FDS",
-            "JOURNAL_STREAM",
-        ]
-        .iter()
-        .any(|excluded| name == *excluded)
-        {
-            // Omitted values are copied from this client's environment, never argv/logs.
-            run.arg("--setenv").arg(name);
-        }
-    }
     run.arg("--")
         .arg(std::env::current_exe()?)
         .arg("--guard")
@@ -278,6 +277,32 @@ fn guard(args: &[OsString]) -> io::Result<i32> {
     }
     let mut command = Command::new(&args[5]);
     command.args(&args[6..]);
+    // Do not serialize API-key environment values into argv or transient unit files.
+    // Read the live launcher's private environment and pass it only to the real child.
+    use std::os::unix::ffi::OsStringExt;
+    let front_pid: u32 = args[2]
+        .to_string_lossy()
+        .parse()
+        .map_err(|_| unavailable())?;
+    let environment = zeroize::Zeroizing::new(fs::read(format!("/proc/{front_pid}/environ"))?);
+    command.env_clear();
+    for entry in environment.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let Some(equal) = entry.iter().position(|b| *b == b'=') else {
+            return Err(unavailable());
+        };
+        let name = OsString::from_vec(entry[..equal].to_vec());
+        let mut value = OsString::from_vec(entry[equal + 1..].to_vec());
+        if name == "CREDENTIALS_DIRECTORY" {
+            let directory = Path::new(&value);
+            if !directory.is_absolute() {
+                return Err(unavailable());
+            }
+            value = Path::new(&format!("/proc/{front_pid}/root"))
+                .join(directory.strip_prefix("/").map_err(|_| unavailable())?)
+                .into_os_string();
+        }
+        command.env(name, value);
+    }
     crate::containment::configure(&mut command);
     let mut child = command.spawn()?;
     let deadline = Instant::now() + Duration::from_secs(WALL_SECONDS);

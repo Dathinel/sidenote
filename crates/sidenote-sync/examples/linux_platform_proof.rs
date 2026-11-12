@@ -30,6 +30,28 @@ fn main() -> anyhow::Result<()> {
             sidenote_sync::containment::kill_group(child.id());
             child.wait()?;
         }
+        Some("tree") => {
+            let mut command = sidenote_sync::tree_worker::command(std::ffi::OsStr::new(&args[2]))?;
+            command.args(&args[3..]);
+            sidenote_sync::containment::configure(&mut command);
+            let mut child = command.spawn()?;
+            println!("launcher_pid={}", child.id());
+            std::io::stdout().flush()?;
+            std::process::exit(child.wait()?.code().unwrap_or(2));
+        }
+        Some("probe") => {
+            let started = std::time::Instant::now();
+            let result = sidenote_sync::tree_worker::bounded_output(
+                Command::new(&args[2]).args(&args[3..]),
+                std::time::Duration::from_secs(2),
+            );
+            assert!(result.is_err());
+            assert!(started.elapsed().as_secs_f64() < 3.0);
+            println!(
+                "probe timed out and reaped in {} ms",
+                started.elapsed().as_millis()
+            );
+        }
         Some("verify") => sidenote_sync::containment::verify()?,
         _ => anyhow::bail!("expected identity, parent or verify"),
     }
