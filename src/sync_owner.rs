@@ -1,10 +1,8 @@
 //! One long-lived replica owner, with content-free health and continuous ingestion.
 use crate::core::{self, relay_preview as relay, store_io};
 use serde::{Deserialize, Serialize};
-#[cfg(target_os = "linux")]
-use std::io::{BufRead, Read, Write};
 use std::{
-    io,
+    io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
@@ -204,34 +202,37 @@ impl Drop for Owner {
 }
 
 /// Local control uses stdin, never command-line invitation or task arguments.
-#[cfg(target_os = "linux")]
 pub fn cli() -> i32 {
-    let result = (|| -> io::Result<()> {
-        let mut input = io::stdin().lock();
-        let mut output = io::stdout().lock();
-        loop {
-            let mut line = zeroize::Zeroizing::new(Vec::new());
-            let read = input
-                .by_ref()
-                .take((MAX_REQUEST + 1) as u64)
-                .read_until(b'\n', &mut line)?;
-            if read == 0 {
-                return Ok(());
-            }
-            if line.len() > MAX_REQUEST {
-                return Err(invalid());
-            }
-            let response = zeroize::Zeroizing::new(local::request(&core::state_dir(), &line)?);
-            output.write_all(&response)?;
-            output.write_all(b"\n")?;
-            output.flush()?;
-        }
-    })();
+    #[cfg(target_os = "linux")]
+    let result = stream_commands(|bytes| local::request(&core::state_dir(), bytes));
+    #[cfg(not(target_os = "linux"))]
+    let result: io::Result<()> = Err(io::Error::other("SYNC_CONTROL_UNAVAILABLE_ON_PLATFORM"));
     if result.is_err() {
         eprintln!("SYNC_CONTROL_UNAVAILABLE: start the owner and use its private socket");
         2
     } else {
         0
+    }
+}
+fn stream_commands(mut request: impl FnMut(&[u8]) -> io::Result<Vec<u8>>) -> io::Result<()> {
+    let mut input = io::stdin().lock();
+    let mut output = io::stdout().lock();
+    loop {
+        let mut line = zeroize::Zeroizing::new(Vec::new());
+        let read = input
+            .by_ref()
+            .take((MAX_REQUEST + 1) as u64)
+            .read_until(b'\n', &mut line)?;
+        if read == 0 {
+            return Ok(());
+        }
+        if line.len() > MAX_REQUEST {
+            return Err(invalid());
+        }
+        let response = zeroize::Zeroizing::new(request(&line)?);
+        output.write_all(&response)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
     }
 }
 fn meeting_revision(meeting: &core::Meeting) -> String {
@@ -247,4 +248,18 @@ fn meeting_revision(meeting: &core::Meeting) -> String {
         hash.update(text.as_bytes());
     }
     hash.finalize().to_hex().to_string()
+}
+
+/// Isolated Full-role peer for the cross-platform driver, not an alternative sync stack.
+#[cfg(any(debug_assertions, feature = "relay-qualification"))]
+pub fn proof_peer() -> io::Result<()> {
+    let root = core::state_dir();
+    if !core::is_proof_path(&root, "sidenote-sync-step3")
+        || crate::service::role() != crate::service::DeviceRole::Full
+    {
+        return Err(invalid());
+    }
+    let _lock = store_io::lock(&root.join("local/service.lock"))?;
+    let owner = Owner::start(&root, _lock)?;
+    stream_commands(|bytes| owner.request(bytes))
 }

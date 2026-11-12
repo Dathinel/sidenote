@@ -29,6 +29,36 @@ revision across restart. Pending changes do not advance the content generation.
 Recovery to the same content is not a second ingestion. This index has no meeting
 deletion protocol: absence never silently deletes prior successful state.
 
+## Owner commands
+
+The control pipe is private and can carry document text or pairing material.
+Do not tee it into logs. `status` contains counts, a public identity fingerprint
+and connection state; it contains no invitation, group locator or document body.
+Pairing material appears only in the explicit `pair-state` response. Pass join
+codes through stdin, never flags, environment variables or shell history.
+
+| Request | Behavior |
+| --- | --- |
+| `{"op":"status"}` | Ingestion generation, source revision, meeting/source/pending/conflict counts, error/task/peer counts, relay state |
+| `{"op":"configure","enabled":true,"address":"wss://relay.example.test"}` | Enable relay with the existing backup/migration procedure; address is an origin |
+| `{"op":"host"}` / `{"op":"join","code":"<private invitation>"}` | Begin existing PAKE pairing; poll `pair-state` |
+| `{"op":"pair-state"}` | Private invitation or SAS/attempt while pending; terminal pairing phase |
+| `{"op":"confirm","attempt":1,"phrase":"<matching local SAS>","accept":true}` | Explicit approval; wrong phrase/stale attempt is rejected; false declines |
+| `{"op":"cancel"}` | Cancel pending pairing and erase its retained material |
+| `{"op":"list"}` / `{"op":"add","task":{"id":"stable-id","task":"..."}}` | Read/add manual tasks |
+| `{"op":"edit","id":"stable-id","fields":{"owner":"..."}}` / `{"op":"delete","id":"stable-id"}` | Edit/delete with the existing conflict-preserving versions |
+| `{"op":"conflicts"}` | Current conflicting alternatives |
+| `{"op":"resolve","conflict":{},"chosen":{}}` | Supply a current conflict and one of its returned choices; stale choices are checked by the existing resolver |
+| `{"op":"offline"}` / `{"op":"online"}` | Stop/restart the session; local edits remain durable |
+| `{"op":"check","meeting":"100-2","task":"...","checked":true}` / `{"op":"checks","meeting":"100-2"}` | Existing checked-state API, through the active transport's ownership rules |
+
+Both devices must compare the displayed SAS and explicitly approve. An invitation
+alone does not approve a device. Treat `unconfirmed` as uncertain delivery and
+check the other device before recovery. This command does not automatically accept
+pairing or pick conflict winners. A transport outage uses the existing reconnect
+backoff. Restart uses the same encrypted identity and replica. A stopped owner
+releases its session and workers; systemd retains responsibility for restart.
+
 ## Source inventory and bounded reads
 
 `status` is a compact summary. `inventory`, `list`, `conflicts` and `choices` return
@@ -57,3 +87,19 @@ is `local/sync/control.sock`, mode 0600 in a 0700 directory. Both ends check the
 connecting UID. Frames are bounded to 64 KiB in and 1 MiB out, with two-second
 socket deadlines. A timed-out mutation can have committed: inspect its result
 before retrying, and supply a stable task ID when adding a task.
+
+
+## Qualification and remaining proof
+
+`tools/prove_linux_step3.py <linux-binary> --role server` and `--role hub` use a
+loopback routing fixture and a Full-role peer built as `examples/sync_peer`. The
+peer calls the same owner/pairing/store APIs. Its path is confined to the named
+OS temporary proof directory; it has no Velopack, UI or installed-listener startup.
+The fixture requires Node's `ws` package. It verifies transport authentication and
+forwards opaque frames; it does not qualify the Cloudflare relay's policy, limits
+or persistence. Tests use two provisioned synthetic credential directories.
+
+For an isolated fixture dependency, use `npm install --ignore-scripts --no-audit
+--no-fund --package-lock=false --prefix /private/proof/node ws@8.18.3` and set
+`NODE_PATH=/private/proof/node/node_modules` for the proof process. This dependency
+belongs to the qualification runner, not the server executable.
