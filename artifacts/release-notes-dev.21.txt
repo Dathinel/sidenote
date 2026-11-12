@@ -9,3 +9,7 @@ Ask can use an OpenAI-compatible endpoint, cloud or local, after you choose and 
 Connection settings cannot interrupt an answer through the composer's Connection button. Settings uses cached key status, streamed text updates are batched for the UI, healthy long answers can keep streaming, and the slow notice clears when text arrives. Streams also finish correctly when the server closes immediately after its final marker.
 
 Failure codes in the log now include the operating system error number when available, making device and file problems easier to identify.
+
+Recording no longer becomes unavailable when the window opens while the meeting listener is starting. The window now rechecks the listener every few seconds, clears the warning on its own when the listener is back, shows the specific reason when it is not, and the listener logs why it stops.
+
+A crashed sync worker is now reported as a crash straight away instead of as a timeout.
