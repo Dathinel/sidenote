@@ -6,6 +6,10 @@ use std::sync::mpsc;
 #[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 enum Request {
     Status {},
+    Configure {
+        enabled: bool,
+        address: String,
+    },
     Host {},
     Join {
         code: String,
@@ -22,6 +26,24 @@ enum Request {
     },
     List {
         cursor: Option<pages::Cursor>,
+    },
+    Check {
+        meeting: String,
+        task: String,
+        checked: bool,
+    },
+    Checks {
+        meeting: String,
+    },
+    Add {
+        task: core::ManualTask,
+    },
+    Edit {
+        id: String,
+        fields: serde_json::Map<String, Value>,
+    },
+    Delete {
+        id: String,
     },
     Conflicts {
         cursor: Option<pages::Cursor>,
@@ -124,6 +146,21 @@ impl Controller {
         match request {
             Request::Status {} => Ok(pages::status(&self.state)),
             Request::Inventory { cursor } => pages::page(&self.state.meetings, cursor),
+            Request::Configure { enabled, address } => {
+                let old = relay::get(&self.root)?;
+                if let Some(old) = &old {
+                    old.online(false)?;
+                }
+                let mut settings = relay::Settings::load(&self.root)?;
+                settings.enabled = enabled;
+                settings.address = address;
+                settings.save(&self.root)?;
+                if enabled {
+                    self.preview()?.online(true)?;
+                }
+                self.tick()?;
+                Ok(json!({"enabled":enabled}))
+            }
             Request::Host {} => self.begin(None),
             Request::Join { code } => self.begin(Some(SecretCode::new(code))),
             Request::PairState {} => {
@@ -153,6 +190,67 @@ impl Controller {
                 Ok(Value::Null)
             }
             Request::List { cursor } => pages::page(&self.preview()?.tasks()?, cursor),
+            Request::Check {
+                meeting,
+                task,
+                checked,
+            } => {
+                meeting_id(&meeting)?;
+                core::StateStore::new(self.root.clone()).set_tick_view(&meeting, &task, checked)?;
+                Ok(Value::Null)
+            }
+            Request::Checks { meeting } => {
+                meeting_id(&meeting)?;
+                Ok(serde_json::to_value(
+                    core::StateStore::new(self.root.clone()).load(&meeting)?,
+                )?)
+            }
+            Request::Add { mut task } => {
+                let preview = self.preview()?;
+                let before = preview.tasks()?;
+                if task.id.is_empty() {
+                    task.id = hex::encode(sidenote_sync::identity::random32());
+                }
+                if before.iter().any(|t| t.id == task.id) {
+                    return Err(invalid());
+                }
+                let id = task.id.clone();
+                let mut after = before.clone();
+                after.push(task);
+                preview.edit(&before, &after)?;
+                Ok(json!(id))
+            }
+            Request::Edit { id, fields } => {
+                if fields.keys().any(|f| {
+                    !matches!(
+                        f.as_str(),
+                        "task" | "owner" | "due" | "project" | "priority" | "status"
+                    )
+                }) {
+                    return Err(invalid());
+                }
+                let preview = self.preview()?;
+                let before = preview.tasks()?;
+                let mut after = before.clone();
+                let task = after.iter_mut().find(|t| t.id == id).ok_or_else(invalid)?;
+                let mut value = serde_json::to_value(&*task)?;
+                for (name, field) in fields {
+                    value[name] = field;
+                }
+                *task = serde_json::from_value(value).map_err(|_| invalid())?;
+                preview.edit(&before, &after)?;
+                Ok(Value::Null)
+            }
+            Request::Delete { id } => {
+                let preview = self.preview()?;
+                let before = preview.tasks()?;
+                let after: Vec<_> = before.iter().filter(|t| t.id != id).cloned().collect();
+                if before.len() == after.len() {
+                    return Err(invalid());
+                }
+                preview.edit(&before, &after)?;
+                Ok(Value::Null)
+            }
             Request::Conflicts { cursor } => {
                 let rows = self
                     .preview()?
@@ -212,6 +310,18 @@ pub(super) fn respond(control: &Mutex<Controller>, bytes: &[u8]) -> io::Result<V
         Ok(Request::Inventory { cursor }) => envelope(pages::page(&snapshot().meetings, cursor)),
         _ => control.lock().map_err(|_| invalid())?.reply(bytes),
     }
+}
+
+fn meeting_id(id: &str) -> io::Result<()> {
+    let (a, b) = id.split_once('-').ok_or_else(invalid)?;
+    if a.is_empty()
+        || b.is_empty()
+        || id.len() > 64
+        || !a.bytes().chain(b.bytes()).all(|b| b.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

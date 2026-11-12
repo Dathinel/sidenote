@@ -41,3 +41,19 @@ Conflict pages contain small revision-guarded selectors. Pass a selector as
 `conflict` to `choices` to page its alternatives, or to `resolve-choice` with a
 zero-based `choice` index to resolve it. This avoids echoing a large conflict in a
 request. Even conflicts with many alternatives remain inspectable/resolvable.
+
+
+## Private local transport
+
+Use the owner's local control connection for headless edits and pairing:
+
+```sh
+sidenote --sync-control --data-dir /absolute/private/sidenote
+```
+
+Input and output are newline-delimited JSON, one response per request. Commands
+run in the owner; this client does not initialize a key or open SQLite. The socket
+is `local/sync/control.sock`, mode 0600 in a 0700 directory. Both ends check the
+connecting UID. Frames are bounded to 64 KiB in and 1 MiB out, with two-second
+socket deadlines. A timed-out mutation can have committed: inspect its result
+before retrying, and supply a stable task ID when adding a task.

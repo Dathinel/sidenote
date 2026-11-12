@@ -1,6 +1,8 @@
 //! One long-lived replica owner, with content-free health and continuous ingestion.
 use crate::core::{self, relay_preview as relay, store_io};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::io::{BufRead, Read, Write};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -14,6 +16,8 @@ use std::{
 
 mod commands;
 mod inventory;
+#[cfg(target_os = "linux")]
+mod local;
 mod pages;
 use commands::Pair;
 const MAX_REQUEST: usize = 64 * 1024;
@@ -136,12 +140,24 @@ impl Owner {
     pub fn start(root: &Path, lock: std::fs::File) -> io::Result<Self> {
         let controller = Arc::new(Mutex::new(Controller::new(root)?));
         let stop = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "linux")]
+        let endpoint = local::Endpoint::bind(root)?;
         let mut owner = Self {
             _lock: lock,
             stop: stop.clone(),
             threads: Vec::new(),
             controller: controller.clone(),
         };
+        #[cfg(target_os = "linux")]
+        {
+            let control = controller.clone();
+            let stopped = stop.clone();
+            owner.threads.push(
+                thread::Builder::new()
+                    .name("sync-control".into())
+                    .spawn(move || endpoint.serve(control, stopped))?,
+            );
+        }
         owner
             .threads
             .push(
@@ -187,6 +203,37 @@ impl Drop for Owner {
     }
 }
 
+/// Local control uses stdin, never command-line invitation or task arguments.
+#[cfg(target_os = "linux")]
+pub fn cli() -> i32 {
+    let result = (|| -> io::Result<()> {
+        let mut input = io::stdin().lock();
+        let mut output = io::stdout().lock();
+        loop {
+            let mut line = zeroize::Zeroizing::new(Vec::new());
+            let read = input
+                .by_ref()
+                .take((MAX_REQUEST + 1) as u64)
+                .read_until(b'\n', &mut line)?;
+            if read == 0 {
+                return Ok(());
+            }
+            if line.len() > MAX_REQUEST {
+                return Err(invalid());
+            }
+            let response = zeroize::Zeroizing::new(local::request(&core::state_dir(), &line)?);
+            output.write_all(&response)?;
+            output.write_all(b"\n")?;
+            output.flush()?;
+        }
+    })();
+    if result.is_err() {
+        eprintln!("SYNC_CONTROL_UNAVAILABLE: start the owner and use its private socket");
+        2
+    } else {
+        0
+    }
+}
 fn meeting_revision(meeting: &core::Meeting) -> String {
     let mut hash = blake3::Hasher::new();
     for text in [

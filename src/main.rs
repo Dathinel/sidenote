@@ -41,6 +41,15 @@ fn main() {
         eprintln!("{code}");
         std::process::exit(2);
     }
+    if args.iter().any(|a| a == "--sync-control") {
+        #[cfg(target_os = "linux")]
+        std::process::exit(sidenote::sync_owner::cli());
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("SYNC_CONTROL_UNAVAILABLE_ON_PLATFORM");
+            std::process::exit(2);
+        }
+    }
     if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
         std::process::exit(sidenote::service::run());
     }

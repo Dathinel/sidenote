@@ -19,3 +19,15 @@ pub mod transport;
 pub mod tree_worker;
 mod wire;
 pub mod worker;
+/// Reuse the Linux StrictModes boundary for the owner's private local endpoint.
+#[cfg(target_os = "linux")]
+pub fn validate_private_directory(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let path = secure_store::ancestors(path)?;
+    let meta = std::fs::symlink_metadata(path)?;
+    anyhow::ensure!(
+        meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0,
+        "STATE_DIRECTORY_NOT_PRIVATE"
+    );
+    Ok(())
+}

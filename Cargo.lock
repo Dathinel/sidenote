@@ -3976,6 +3976,7 @@ dependencies = [
  "velopack",
  "wgpu",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]
