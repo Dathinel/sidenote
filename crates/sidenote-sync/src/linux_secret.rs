@@ -146,7 +146,7 @@ unsafe fn keyring(create: bool) -> Result<Zeroizing<[u8; 32]>> {
     let library = Library(unsafe {
         libc::dlopen(
             c"libsecret-1.so.0".as_ptr(),
-            libc::RTLD_NOW | libc::RTLD_LOCAL,
+            libc::RTLD_NOW | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
         )
     });
     ensure!(

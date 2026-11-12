@@ -19,6 +19,10 @@ required-features = ["desktop"]
 name = "meeting-icon-spike"
 required-features = ["desktop"]
 
+[[example]]
+name = "areas_proof"
+required-features = ["desktop"]
+
 [dependencies]
 image = { version = "=0.25.10", default-features = false, features = ["png"] }
 base64 = "0.22"

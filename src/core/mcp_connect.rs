@@ -186,6 +186,9 @@ mod tests {
 #[cfg(test)]
 mod registration_tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
     fn output(ok: bool, stderr: &str) -> std::process::Output {
         std::process::Output {
