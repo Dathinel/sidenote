@@ -199,6 +199,11 @@ reports.
 - **Accept:** table tests map device lists to Light, Standard and GPU, and map catalog entries to "Fits GPU", "Runs on CPU, slower" or "Too large".
 
 **M5. Language detection stage** (3 days)
+
+Standalone code is available behind a default-off experimental Labs switch; see the
+[prepared-audio sidecar stage](spikes/language-detect-stage.md). It does not route
+transcription. H3/H7 integration and runtime accuracy, cost and memory qualification remain pending.
+
 - **Owner audio:** for the mixed-language accuracy check.
 - **Deps:** H3, H7. **Files:** `src/core/jobs/stages/language_detect.rs`, `src/core/lid/{mod,anuvani}.rs`.
 - **Accept:**
