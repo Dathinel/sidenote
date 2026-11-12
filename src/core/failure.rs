@@ -58,6 +58,7 @@ impl Stage {
             Failure {
                 stage: self,
                 kind: error.kind(),
+                os: error.raw_os_error(),
             },
         )
     }
@@ -66,10 +67,16 @@ impl Stage {
 struct Failure {
     stage: Stage,
     kind: io::ErrorKind,
+    /// The OS error number, kept so an `Uncategorized` kind (for example a
+    /// Windows sharing or lock violation) can still be told apart in the log.
+    os: Option<i32>,
 }
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({:?})", self.stage.code(), self.kind)
+        match self.os {
+            Some(code) => write!(f, "{} ({:?}, os {code})", self.stage.code(), self.kind),
+            None => write!(f, "{} ({:?})", self.stage.code(), self.kind),
+        }
     }
 }
 impl std::error::Error for Failure {}
@@ -94,5 +101,12 @@ mod tests {
         ));
         let error = Stage::CheckStorage.error(error);
         assert_eq!(error.to_string(), "KB_GIT (PermissionDenied)");
+    }
+    #[test]
+    fn stage_keeps_the_os_error_number() {
+        let error = Stage::NotesSettingsRead.error(io::Error::from_raw_os_error(32));
+        let text = error.to_string();
+        assert!(text.starts_with("NOTES_SETTINGS_READ ("), "{text}");
+        assert!(text.ends_with(", os 32)"), "{text}");
     }
 }
