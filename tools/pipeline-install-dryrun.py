@@ -21,6 +21,11 @@ SETTINGS = ('HEX_MEETING_PROJECT', 'HEX_MEETING_PROJECT_PATTERN',
 FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0)
 
 
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -79,25 +84,25 @@ def dryrun(profile):
     before = snapshot(root)
     missing = environment(profile, configured=False)
     result = powershell(['-File', str(install)], missing, payload)
-    assert result.returncode != 0, 'missing settings accepted'
-    assert snapshot(root) == before, 'missing settings changed legacy bytes'
+    require(result.returncode != 0, 'missing settings accepted')
+    require(snapshot(root) == before, 'missing settings changed legacy bytes')
     result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], missing)
-    assert result.returncode == 0 and 'legacy-watcher-started' in result.stdout
+    require(result.returncode == 0 and 'legacy-watcher-started' in result.stdout, 'legacy watcher failed')
     print('PASS missing settings: all 14 legacy files unchanged and legacy watcher runs')
     result = powershell(['-File', str(install)], env, payload)
-    assert result.returncode == 0, 'first install failed'
+    require(result.returncode == 0, 'first install failed')
     pointer = root / '.pipeline-current.json'
     selected = json.loads(pointer.read_text())
     generation = root / '.pipeline-generations' / selected['current']['generation']
     seal = generation / '.generation.json'
-    assert digest(seal.read_bytes()) == selected['current']['manifest_sha256']
+    require(digest(seal.read_bytes()) == selected['current']['manifest_sha256'], 'invalid generation seal')
     manifest = json.loads(seal.read_text())
-    assert len(manifest['files']) == len(NAMES) == 14
+    require(len(manifest['files']) == len(NAMES) == 14, 'expected 14 generation files')
     for name in NAMES:
-        assert digest((generation / name).read_bytes()) == manifest['files'][name]
-    assert len(list((root / '.pipeline-backups').rglob('*.*'))) >= 14
+        require(digest((generation / name).read_bytes()) == manifest['files'][name], 'generation hash mismatch')
+    require(len(list((root / '.pipeline-backups').rglob('*.*'))) >= 14, 'legacy backup incomplete')
     result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], env)
-    assert result.returncode == 0 and 'stub-watcher-started' in result.stdout
+    require(result.returncode == 0 and 'stub-watcher-started' in result.stdout, 'stub watcher failed')
     print('PASS first install: 14 sealed files, pointer, backup, real entry launches stub watcher')
     interrupt_install(profile, env, root, payload, 'stub-watcher-started')
 
@@ -125,21 +130,21 @@ def interrupt_install(profile, env, root, payload, expected=None):
         deadline = time.monotonic() + 30
         while not signal.exists() and child.poll() is None and time.monotonic() < deadline:
             time.sleep(.05)
-        assert signal.exists(), 'did not reach sealed/pre-pointer breakpoint'
+        require(signal.exists(), 'did not reach sealed/pre-pointer breakpoint')
         seals = list((root / '.pipeline-generations').glob('generation-*/.generation.json'))
-        assert len(seals) == 2, 'interrupted generation was not sealed'
+        require(len(seals) == 2, 'interrupted generation was not sealed')
         child.kill()
         child.wait(timeout=10)
     finally:
         if child.poll() is None:
             child.kill()
             child.wait(timeout=10)
-    assert pointer.read_bytes() == old, 'kill changed selection'
+    require(pointer.read_bytes() == old, 'kill changed selection')
     result = powershell(['-File', str(root / 'hex-meeting-watch.ps1'),
                          '-MeetingFolders', 'pipeline-proof-no-meeting'], env)
-    assert result.returncode == 0
+    require(result.returncode == 0, 'old watcher failed after interruption')
     if expected:
-        assert expected in result.stdout
+        require(expected in result.stdout, 'old watcher output missing after interruption')
     print('PASS killed install: new generation sealed; pointer unchanged; old watcher still runs')
 
 def main():

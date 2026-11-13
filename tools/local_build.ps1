@@ -33,14 +33,36 @@ function QuoteArg([string]$Value) {
     # Windows command-line quoting: preserve backslashes before quotes and at the end.
     return '"' + ([regex]::Replace($Value, '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
 }
+function Resolve-TargetDirectory {
+    if ($Pack) { return [IO.Path]::GetFullPath((Join-Path (Get-Location) 'target')) }
+    $explicit = $null
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        $arg = [string]$Arguments[$i]
+        if ($arg -ceq '--') { break }
+        if ($arg -ceq '--config' -or $arg.StartsWith('--config=', [StringComparison]::Ordinal)) {
+            throw 'Cargo --config overrides cannot be checked; use --target-dir or CARGO_TARGET_DIR instead.'
+        }
+        if ($arg -ceq '--target-dir') {
+            $i++
+            if ($i -ge $Arguments.Count -or -not $Arguments[$i] -or $Arguments[$i] -like '-*') { throw 'Supply a path after --target-dir.' }
+            $explicit = [string]$Arguments[$i]
+        } elseif ($arg.StartsWith('--target-dir=', [StringComparison]::Ordinal)) {
+            $explicit = $arg.Substring('--target-dir='.Length)
+            if (-not $explicit) { throw 'Supply a path after --target-dir=.' }
+        }
+    }
+    $target = if ($explicit) { $explicit } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR }
+              elseif ($env:CARGO_BUILD_TARGET_DIR) { $env:CARGO_BUILD_TARGET_DIR } else { Join-Path (Get-Location) 'target' }
+    if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Get-Location) $target }
+    return [IO.Path]::GetFullPath($target)
+}
 function Assert-TargetSpace {
-    $target = if (-not $Pack -and $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path (Get-Location) 'target' }
-    $target = [IO.Path]::GetFullPath($target)
-    $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($target))
+    $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($targetDirectory))
     if ($drive.AvailableFreeSpace -lt 40GB) { throw 'At least 40 GB free is required on the target drive.' }
 }
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
+    $targetDirectory = Resolve-TargetDirectory
     Assert-TargetSpace
     New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
@@ -73,7 +95,14 @@ try {
                 $info = New-Object Diagnostics.ProcessStartInfo
                 $info.FileName = $exe
                 $info.Arguments = (@($runArgs | ForEach-Object { QuoteArg $_ }) -join ' ')
+                $info.WorkingDirectory = (Get-Location).Path
                 $info.UseShellExecute = $false
+                if (-not $Pack) {
+                    # Pin config-file defaults and intermediate output to the checked directory.
+                    $info.EnvironmentVariables['CARGO_TARGET_DIR'] = $targetDirectory
+                    $info.EnvironmentVariables['CARGO_BUILD_TARGET_DIR'] = $targetDirectory
+                    $info.EnvironmentVariables['CARGO_BUILD_BUILD_DIR'] = $targetDirectory
+                }
                 $child = [Diagnostics.Process]::Start($info)
                 [IO.File]::WriteAllText((Join-Path $slot 'child'), (Identity $child))
             }
