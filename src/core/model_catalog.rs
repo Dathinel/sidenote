@@ -28,6 +28,7 @@ pub enum Role {
     Asr,
     LanguageId,
     Diarization,
+    VoiceActivity,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SizeTier {
@@ -425,6 +426,9 @@ fn verify(path: &Path, f: &ModelFile, cancel: &AtomicBool) -> io::Result<bool> {
     Ok(actual == f.sha256)
 }
 fn allowed(url: &url::Url) -> bool {
+    if model("silero-vad").is_ok_and(|m| m.files[0].url == url.as_str()) {
+        return true;
+    }
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()

@@ -8,6 +8,7 @@ mod hex;
 pub(crate) mod inputs;
 pub mod jobs;
 pub mod pieces;
+pub mod vad;
 use super::{
     asr::{self, LanguageScores, Result},
     store_io,
