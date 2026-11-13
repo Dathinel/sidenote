@@ -133,9 +133,14 @@ def dryrun(profile):
     print('PASS partial settings: each of 8 missing User settings blocks publication')
     with user_settings(missing, dict.fromkeys(SETTINGS, 'synthetic-user-setting')) as isolated:
         result = powershell(['-File', str(install)], isolated, payload)
+        require(result.returncode == 0, 'User-only settings install failed')
+        require(not result.stdout and not result.stderr, 'installer printed private output')
+        installed = snapshot(root)
+        result = powershell(['-File', str(install)], isolated, payload)
+        require(snapshot(root) == installed, 'identical retry changed installed files')
     require(result.returncode == 0, 'User-only settings install failed')
     require(not result.stdout and not result.stderr, 'installer printed private output')
-    print('PASS User-only settings: stale process environment installs via isolated HKCU')
+    print('PASS User-only settings: isolated HKCU install and identical retry succeed unchanged')
     pointer = root / '.pipeline-current.json'
     selected = json.loads(pointer.read_text())
     generation = root / '.pipeline-generations' / selected['current']['generation']

@@ -309,12 +309,15 @@ pub fn load() -> Status {
 }
 fn read_status(directory: &Path) -> Status {
     pipeline_status(
-        fs::read(directory.join("updates.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default(),
+        read_saved_status(directory),
         &directory.join("pipeline-install.pending"),
     )
+}
+fn read_saved_status(directory: &Path) -> Status {
+    fs::read(directory.join("updates.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
 }
 fn pipeline_status(mut status: Status, marker: &Path) -> Status {
     if marker.exists() {
@@ -330,12 +333,18 @@ fn save(status: &Status) -> io::Result<()> {
         return Ok(());
     }
     let status = pipeline_status(status.clone(), &local("pipeline-install.pending"));
+    save_status(&status)
+}
+fn save_status(status: &Status) -> io::Result<()> {
+    if !installed() {
+        return Ok(());
+    }
     let path = local("updates.json");
     fs::create_dir_all(path.parent().unwrap())?;
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&temp, serde_json::to_vec_pretty(&status)?)?;
+    fs::write(&temp, serde_json::to_vec_pretty(status)?)?;
     crate::platform::replace_file(&temp, &path)?;
-    write_report(&status).map(|_| ())
+    write_report(status).map(|_| ())
 }
 pub fn feed() -> Option<PathBuf> {
     crate::env_var("SIDENOTE_UPDATE_FEED").map(PathBuf::from)
@@ -920,22 +929,28 @@ fn finish_window_start(
 const PIPELINE_INSTALL_ERROR: &str = "The update could not install the meeting scripts. Check private pipeline settings, close processing jobs and reopen Sidenote to retry; the previous generation and original script backups are retained.";
 
 fn complete_pipeline_install() -> Result<(), String> {
-    if !install_pending_pipeline(&local("pipeline-install.pending"), install_pipeline_scripts)? {
-        return Ok(());
-    }
-    let mut status = load();
-    if status.error.as_deref() == Some(PIPELINE_INSTALL_ERROR) {
-        if status.phase == Phase::Error {
-            status.phase = Phase::Idle;
-        }
-        status.error = None;
-        save(&status).map_err(|_| PIPELINE_INSTALL_ERROR)?;
-    }
-    Ok(())
+    install_pending_pipeline(
+        &local("pipeline-install.pending"),
+        install_pipeline_scripts,
+        || {
+            let mut status = read_saved_status(&directory());
+            if status.error.as_deref() == Some(PIPELINE_INSTALL_ERROR) {
+                if status.phase == Phase::Error {
+                    status.phase = Phase::Idle;
+                }
+                status.error = None;
+                // Persist success before retiring the marker that makes cleanup retryable.
+                save_status(&status).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+            }
+            Ok(())
+        },
+    )
+    .map(|_| ())
 }
 fn install_pending_pipeline(
     marker: &Path,
     install: impl FnOnce() -> Result<(), String>,
+    clear_status: impl FnOnce() -> Result<(), String>,
 ) -> Result<bool, String> {
     if !marker.exists() {
         return Ok(false);
@@ -944,6 +959,7 @@ fn install_pending_pipeline(
         return Err(PIPELINE_INSTALL_ERROR.into());
     }
     install()?;
+    clear_status()?;
     fs::remove_file(marker).map_err(|_| PIPELINE_INSTALL_ERROR)?;
     Ok(true)
 }
@@ -1300,7 +1316,14 @@ mod tests {
         let marker = root.path().join("pipeline-install.pending");
         let status_path = root.path().join("updates.json");
         fs::write(&marker, VERSION).unwrap();
-        assert!(install_pending_pipeline(&marker, || Err(PIPELINE_INSTALL_ERROR.into())).is_err());
+        assert!(
+            install_pending_pipeline(
+                &marker,
+                || Err(PIPELINE_INSTALL_ERROR.into()),
+                || panic!("failed install cleared status")
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&marker).unwrap(), VERSION.as_bytes());
         for phase in [
             Phase::Checking,
@@ -1337,18 +1360,76 @@ mod tests {
         }
         // A failed install, including a marker from an older version, remains pending.
         fs::write(&marker, "older version").unwrap();
-        assert!(install_pending_pipeline(&marker, || panic!("wrong version installed")).is_err());
+        assert!(
+            install_pending_pipeline(
+                &marker,
+                || panic!("wrong version installed"),
+                || panic!("wrong version cleared status")
+            )
+            .is_err()
+        );
         let reset = pipeline_status(Status::default(), &marker);
         assert_eq!(reset.phase, Phase::Error);
         assert_eq!(reset.error.as_deref(), Some(PIPELINE_INSTALL_ERROR));
         // Only successful completion removes the marker, enabling the normal reset.
         fs::write(&marker, VERSION).unwrap();
-        assert!(install_pending_pipeline(&marker, || Ok(())).unwrap());
+        assert!(install_pending_pipeline(&marker, || Ok(()), || Ok(())).unwrap());
         assert!(!marker.exists());
         let cleared = after_update_status(read_status(root.path()), &marker);
         assert_eq!(cleared.phase, Phase::Idle);
         assert!(cleared.error.is_none());
         assert_eq!(cleared.checked.as_deref(), Some("synthetic check"));
+    }
+
+    #[test]
+    fn pipeline_retry_survives_failure_between_status_save_and_marker_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("pipeline-install.pending");
+        let path = root.path().join("updates.json");
+        fs::write(&marker, VERSION).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_vec(&Status {
+                phase: Phase::Error,
+                error: Some(PIPELINE_INSTALL_ERROR.into()),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let installs = std::cell::Cell::new(0);
+        let run = |interrupt| {
+            install_pending_pipeline(
+                &marker,
+                || {
+                    installs.set(installs.get() + 1);
+                    Ok(())
+                },
+                || {
+                    fs::write(&path, serde_json::to_vec(&Status::default()).unwrap()).unwrap();
+                    if interrupt {
+                        Err("injected failure after status save".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        };
+        assert_eq!(run(true).unwrap_err(), "injected failure after status save");
+        assert!(
+            marker.exists(),
+            "retry marker was removed before cleanup finished"
+        );
+        let saved = read_saved_status(root.path());
+        assert!(saved.error.is_none());
+        assert_eq!(
+            read_status(root.path()).error.as_deref(),
+            Some(PIPELINE_INSTALL_ERROR)
+        );
+        assert!(run(false).unwrap());
+        assert_eq!(installs.get(), 2);
+        assert!(!marker.exists());
+        assert!(read_status(root.path()).error.is_none());
     }
 
     #[test]
