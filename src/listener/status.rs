@@ -164,10 +164,12 @@ pub(super) fn start() -> std::thread::JoinHandle<()> {
                 if let Some(signal) = transitions.update(&status) {
                     publish(signal);
                 }
-                let enabled = crate::core::config::Config::load_in(&state)
-                    .is_ok_and(|c| c.labs.process_meeting_windows);
+                let config =
+                    crate::core::store_io::defer_busy(crate::core::config::Config::load_in(&state));
                 // File conversion cannot delay status evidence or start/stop signals.
-                let _ = measurement.try_send((status, enabled));
+                if let Ok(Some(config)) = config {
+                    let _ = measurement.try_send((status, config.labs.process_meeting_windows));
+                }
             }
             for _ in 0..12 {
                 if crate::updates::listener_stopping() {

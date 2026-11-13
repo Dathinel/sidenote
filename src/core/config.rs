@@ -21,6 +21,20 @@ pub(super) fn read(root: &Path) -> io::Result<Vec<u8>> {
     })
 }
 
+fn lock(root: &Path) -> io::Result<std::fs::File> {
+    operation(
+        store_io::lock(&root.join("local/config.lock")).map_err(|error| {
+            if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) {
+                io::Error::new(io::ErrorKind::WouldBlock, error)
+            } else {
+                error
+            }
+        }),
+        "lock",
+        "config.lock",
+    )
+}
+
 #[derive(Clone, Copy)]
 pub enum Feature {
     Tasks,
@@ -233,15 +247,43 @@ impl Config {
     }
 
     pub fn load_in(root: &Path) -> io::Result<Self> {
-        let _lock = operation(
-            store_io::lock(&root.join("local/config.lock")),
-            "lock",
-            "config.lock",
+        let mut config = Self::read_config(root)?;
+        if config.as_ref().is_none_or(|c| c.notes.is_none()) {
+            let _lock = lock(root)?;
+            // Another writer may have published or migrated while we waited.
+            config = Self::read_config(root)?;
+            if config.as_ref().is_none_or(|c| c.notes.is_none()) {
+                let mut migrated = match config {
+                    Some(config) => config,
+                    None => operation(Self::migrate(root), "migration_read", "legacy_settings")?,
+                };
+                if migrated.notes.is_none() {
+                    migrated.notes = Some(super::notes::migrated_settings(
+                        &super::live::notes_pipeline(),
+                    ));
+                }
+                operation(
+                    store_io::write(&root.join("config.json"), &migrated),
+                    "migration_write",
+                    "config.json",
+                )?;
+                config = Some(migrated);
+            }
+        }
+        let mut config = config.expect("config published under the writer lock");
+        operation(
+            config.overlay_profile(root),
+            "overlay_read",
+            "relay_profile",
         )?;
-        let path = root.join("config.json");
+        config.baseline = Some(serde_json::to_value(&config)?);
+        Ok(config)
+    }
+
+    fn read_config(root: &Path) -> io::Result<Option<Self>> {
         match read(root) {
             Ok(bytes) => {
-                let mut config: Self = operation(
+                let config: Self = operation(
                     serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
                         .map_err(io::Error::from),
                     "decode",
@@ -250,46 +292,15 @@ impl Config {
                 if config.version != 1 {
                     return Err(store_io::invalid("Unsupported config.json version"));
                 }
-                if config.notes.is_none() {
-                    config.notes = Some(super::notes::migrated_settings(
-                        &super::live::notes_pipeline(),
-                    ));
-                    operation(
-                        store_io::write(&path, &config),
-                        "migration_write",
-                        "config.json",
-                    )?;
-                }
-                operation(
-                    config.overlay_profile(root),
-                    "overlay_read",
-                    "relay_profile",
-                )?;
-                config.baseline = Some(serde_json::to_value(&config)?);
-                Ok(config)
+                Ok(Some(config))
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let mut config =
-                    operation(Self::migrate(root), "migration_read", "legacy_settings")?;
-                operation(
-                    store_io::write(&path, &config),
-                    "migration_write",
-                    "config.json",
-                )?;
-                operation(
-                    config.overlay_profile(root),
-                    "overlay_read",
-                    "relay_profile",
-                )?;
-                config.baseline = Some(serde_json::to_value(&config)?);
-                Ok(config)
-            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
     }
 
     pub fn save(&mut self, root: &Path) -> io::Result<()> {
-        let _lock = store_io::lock(&root.join("local/config.lock"))?;
+        let _lock = lock(root)?;
         let path = root.join("config.json");
         let bytes = read(root)?;
         let mut latest: serde_json::Value =
@@ -443,7 +454,7 @@ impl Config {
         edited: &super::notes::NotesSettings,
     ) -> io::Result<()> {
         // Re-read under the lock so another settings card's changes survive this save.
-        let _lock = store_io::lock(&root.join("local/config.lock"))?;
+        let _lock = lock(root)?;
         let path = root.join("config.json");
         let mut config: Self = match read(root) {
             Ok(bytes) => {
@@ -582,7 +593,7 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn config_read_and_lock_contention_remain_bounded_and_keep_os_code() {
+    fn config_read_contention_is_bounded_and_config_lock_returns_busy() {
         use std::os::windows::fs::OpenOptionsExt;
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("config.json");
@@ -598,9 +609,111 @@ mod tests {
         assert!(start.elapsed() >= std::time::Duration::from_millis(200));
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
         drop(held);
+        store_io::write(&path, &Config::default()).unwrap();
         let _lock = store_io::lock(&root.path().join("local/config.lock")).unwrap();
         let error = Config::load_in(root.path()).err().unwrap();
-        assert_eq!(error.raw_os_error(), Some(32));
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn published_config_reads_ignore_writer_lock_but_saves_are_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let initial = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Config::default()
+        };
+        store_io::write(&root.path().join("config.json"), &initial).unwrap();
+        let _held = store_io::lock(&root.path().join("local/config.lock")).unwrap();
+        let mut loaded = Config::load_in(root.path()).unwrap();
+        loaded.features.tasks = true;
+        assert_eq!(
+            loaded.save(root.path()).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            Config::save_notes(
+                root.path(),
+                initial.notes.as_ref().unwrap(),
+                loaded.notes.as_ref().unwrap()
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(!Config::load_in(root.path()).unwrap().features.tasks);
+    }
+
+    #[test]
+    fn concurrent_config_readers_observe_complete_published_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        let initial = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Config::default()
+        };
+        store_io::write(&path.join("config.json"), &initial).unwrap();
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for _ in 0..3 {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..100 {
+                        let config = Config::load_in(path).unwrap();
+                        let notes = config.notes.unwrap();
+                        assert_eq!(notes.model, notes.your_name);
+                    }
+                });
+            }
+            barrier.wait();
+            let mut config = Config::load_in(path).unwrap();
+            for version in 0..40 {
+                let notes = config.notes.as_mut().unwrap();
+                notes.model = format!("synthetic-{version}");
+                notes.your_name = notes.model.clone();
+                config.save(path).unwrap();
+            }
+        });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn migration_rechecks_under_lock_and_preserves_winning_publication() {
+        for missing in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path();
+            if !missing {
+                store_io::write(&path.join("config.json"), &Config::default()).unwrap();
+            }
+            let held = store_io::lock(&path.join("local/config.lock")).unwrap();
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(move || Config::load_in(path).unwrap());
+                std::thread::sleep(std::time::Duration::from_millis(75));
+                let winner = Config {
+                    notes: Some(super::super::notes::NotesSettings::default()),
+                    features: Features {
+                        tasks: true,
+                        ..Features::default()
+                    },
+                    ..Config::default()
+                };
+                store_io::write(&path.join("config.json"), &winner).unwrap();
+                let bytes = std::fs::read(path.join("config.json")).unwrap();
+                drop(held);
+                assert!(reader.join().unwrap().features.tasks);
+                assert_eq!(std::fs::read(path.join("config.json")).unwrap(), bytes);
+            });
+            if !missing {
+                store_io::write(&path.join("config.json"), &Config::default()).unwrap();
+            } else {
+                std::fs::remove_file(path.join("config.json")).unwrap();
+            }
+            Config::load_in(path).unwrap();
+            let bytes = std::fs::read(path.join("config.json")).unwrap();
+            let _held = store_io::lock(&path.join("local/config.lock")).unwrap();
+            assert!(Config::load_in(path).unwrap().notes.is_some());
+            assert_eq!(std::fs::read(path.join("config.json")).unwrap(), bytes);
+        }
     }
 
     fn valid_kb() -> KnowledgeBase {

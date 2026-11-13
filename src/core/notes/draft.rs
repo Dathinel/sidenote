@@ -87,7 +87,13 @@ impl Run for DraftCli {
         timeout: Duration,
     ) -> Result<String, Failure> {
         let settings = core::Config::load_in(&self.root)
-            .map_err(|_| Failure::Consent)?
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    Failure::Busy
+                } else {
+                    Failure::Consent
+                }
+            })?
             .notes;
         if !settings.is_some_and(|s| {
             matches!(s.engine(), Engine::Scripts(_)) && s.effective_helper() == Some(helper)

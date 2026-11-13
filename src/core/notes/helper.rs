@@ -94,6 +94,7 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
+    Busy,
     Consent,
     Missing,
     TimedOut,
@@ -123,7 +124,13 @@ pub(super) fn authorized(root: &std::path::Path, helper: Helper) -> Result<bool,
         return Ok(false);
     }
     Ok(crate::core::Config::load_in(root)
-        .map_err(|_| Failure::Backend { exit: None })?
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                Failure::Busy
+            } else {
+                Failure::Backend { exit: None }
+            }
+        })?
         .notes
         .is_some_and(|s| {
             s.engine() == super::Engine::App

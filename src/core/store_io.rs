@@ -22,6 +22,15 @@ pub(crate) fn message(error: &io::Error) -> Option<&str> {
         .map(|m| m.0.as_str())
 }
 
+/// Contended settings are deferred without replacing the last known state.
+pub(crate) fn defer_busy<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn read<T: DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
     match read_bounded(path, super::file_reads::SUMMARY_MAX) {
         Ok(bytes) => serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
@@ -339,6 +348,20 @@ mod unix_tests {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    #[test]
+    fn busy_defers_but_other_settings_errors_propagate() {
+        assert_eq!(defer_busy(Ok(true)).unwrap(), Some(true));
+        assert_eq!(
+            defer_busy::<bool>(Err(io::ErrorKind::WouldBlock.into())).unwrap(),
+            None
+        );
+        assert_eq!(
+            defer_busy::<bool>(Err(io::ErrorKind::InvalidData.into()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
     #[test]
     fn sharing_retry_attempts_are_bounded_and_other_errors_fail_immediately() {
         for code in [32, 33, 5, 2] {

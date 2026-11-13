@@ -315,6 +315,74 @@ fn enqueue(root: &Path, settings: &NotesSettings, mode: Option<Request>) {
 fn drain(root: &Path, settings: &NotesSettings, fake: &mut Fake) {
     queue::drain(root, &root.join("meetings"), fake, || Ok(settings.clone())).unwrap();
 }
+
+#[test]
+fn busy_settings_and_authorization_defer_without_changing_the_job() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    let path = root.0.join("local/notes-jobs").join(format!("{ID}.json"));
+    let before = fs::read(&path).unwrap();
+    let mut fake = Fake::new(vec![]);
+    queue::drain(&root.0, &root.0.join("meetings"), &mut fake, || {
+        Err(std::io::ErrorKind::WouldBlock.into())
+    })
+    .unwrap();
+    assert!(fake.calls.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let mut fake = Fake::new(vec![Err(Failure::Busy)]);
+    drain(&root.0, &settings, &mut fake);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &settings, &mut fake);
+    assert!(matches!(
+        queue::read(&root.0, ID).unwrap().unwrap().state,
+        JobState::Done {
+            tasks_failed: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn busy_task_authorization_retries_sorting_without_failing_the_job() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Err(Failure::Busy)]);
+    drain(&root.0, &settings, &mut fake);
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert!(matches!(job.state, JobState::Queued));
+    assert_eq!(job.attempts, 0);
+    assert_eq!(job.request, None);
+    assert!(job.sorting_pending);
+    let mut fake = Fake::new(vec![Ok(sorted())]);
+    drain(&root.0, &settings, &mut fake);
+    assert!(matches!(
+        state(&root.0),
+        JobState::Done {
+            tasks_failed: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn busy_sorting_retry_still_requires_auto_consent() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let mut settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Err(Failure::Busy)]);
+    drain(&root.0, &settings, &mut fake);
+    settings.auto = false;
+    let mut fake = Fake::new(vec![]);
+    drain(&root.0, &settings, &mut fake);
+    assert!(fake.calls.is_empty());
+    assert!(matches!(state(&root.0), JobState::NeedsClick));
+}
 fn state(root: &Path) -> JobState {
     queue::read(root, ID).unwrap().unwrap().state
 }
@@ -828,9 +896,14 @@ fn config_lock_clash_is_retryable_and_never_revokes_consent() {
     let root = Temp::new();
     save_fixture_settings(&root.0, &settings_fixture()).unwrap();
     let lock = store_io::lock(&root.0.join("local/config.lock")).unwrap();
-    let error = helper::authorized(&root.0, Helper::Claude).unwrap_err();
-    assert_eq!(error, Failure::Backend { exit: None });
+    assert!(helper::authorized(&root.0, Helper::Claude).unwrap());
+    store_io::write(&root.0.join("config.json"), &crate::core::Config::default()).unwrap();
+    assert_eq!(
+        helper::authorized(&root.0, Helper::Claude).unwrap_err(),
+        Failure::Busy
+    );
     drop(lock);
+    save_fixture_settings(&root.0, &settings_fixture()).unwrap();
     assert!(helper::authorized(&root.0, Helper::Claude).unwrap());
 }
 

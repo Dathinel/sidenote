@@ -26,6 +26,8 @@ pub(super) struct Job {
     pub updated_at: i64,
     pub message: String,
     pub request: Option<Request>,
+    #[serde(default)]
+    pub sorting_pending: bool,
 }
 impl Job {
     fn new(request: Option<Request>) -> Self {
@@ -39,6 +41,7 @@ impl Job {
             updated_at: now(),
             message: "queued".into(),
             request,
+            sorting_pending: false,
         }
     }
     fn ready(&self, time: i64) -> bool {
@@ -162,6 +165,7 @@ pub(super) fn enqueue_in(
 
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
+        Failure::Busy => return Err(io::ErrorKind::WouldBlock.into()),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
         Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
@@ -246,7 +250,8 @@ fn process(
             "meeting is not complete",
         );
     }
-    let sort_only = matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
+    let sort_only =
+        job.sorting_pending || matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
     if folder.join("english-summary.json").exists() && !sort_only {
         return write(
             root,
@@ -510,6 +515,7 @@ fn process(
         schema::sorting(raw, &summary, &projects, &settings.your_name)
     });
     let tasks_failed = match answer {
+        Err(Failure::Busy) => return Err(io::ErrorKind::WouldBlock.into()),
         Ok(answer) => {
             if answer.fallback {
                 let _ = log(root, id, "tasks used default fallback");
@@ -566,7 +572,9 @@ fn drain_locked(
     load: impl Fn() -> io::Result<NotesSettings>,
 ) -> io::Result<()> {
     loop {
-        let settings = load()?;
+        let Some(settings) = store_io::defer_busy(load())? else {
+            return Ok(());
+        };
         if settings.engine() != Engine::App {
             return Ok(());
         }
@@ -647,7 +655,18 @@ fn drain_locked(
         if !job.ready(now()) {
             continue;
         }
-        if process(root, meetings, &id, &mut job, &settings, run).is_err() {
+        let mut before = job.clone();
+        let result = process(root, meetings, &id, &mut job, &settings, run);
+        if matches!(&result, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+            if meetings.join(&id).join("english-summary.json").is_file()
+                && before.request != Some(Request::RedoTasks)
+            {
+                before.sorting_pending = true;
+            }
+            store_io::write(&job_path(root, &id), &before)?;
+            return Ok(());
+        }
+        if result.is_err() {
             // Filesystem and parse errors are intentionally reduced to a fixed message.
             write(
                 root,
@@ -664,7 +683,9 @@ fn drain_locked(
 }
 
 pub fn enqueue(id: &str) -> io::Result<()> {
-    let settings = super::settings()?;
+    let Some(settings) = store_io::defer_busy(super::settings())? else {
+        return Ok(());
+    };
     enqueue_in(
         &core::state_dir(),
         &core::meetings_dir(),
@@ -674,7 +695,10 @@ pub fn enqueue(id: &str) -> io::Result<()> {
     )
 }
 pub fn catch_up() -> io::Result<()> {
-    let settings = super::settings().at(Stage::NotesSettingsRead)?;
+    let Some(settings) = store_io::defer_busy(super::settings()).at(Stage::NotesSettingsRead)?
+    else {
+        return Ok(());
+    };
     if settings.engine() != Engine::App {
         return Ok(());
     }
@@ -703,7 +727,11 @@ pub fn catch_up() -> io::Result<()> {
     failure.map_or(Ok(()), Err)
 }
 pub fn start_worker() -> io::Result<()> {
-    if super::settings().at(Stage::NotesSettingsRead)?.engine() != Engine::App {
+    let Some(settings) = store_io::defer_busy(super::settings()).at(Stage::NotesSettingsRead)?
+    else {
+        return Ok(());
+    };
+    if settings.engine() != Engine::App {
         return Ok(());
     }
     let root = core::state_dir();
@@ -853,6 +881,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         |raw| schema::sorting(raw, &answer.value, projects, &settings.your_name),
     );
     let tasks_failed = match sorted {
+        Err(Failure::Busy) => return Err(io::ErrorKind::WouldBlock.into()),
         Ok(sorted) => {
             core::settle::Store::new(root.to_owned(), folder.parent().unwrap().to_owned())
                 .publish_projects(

@@ -510,20 +510,21 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
         let state = super::state_dir();
         let meetings = super::meetings_dir();
         loop {
-            let labs = super::config::Config::load_in(&state).ok().map(|c| c.labs);
-            if let Some(labs) = labs {
+            let labs = super::store_io::defer_busy(super::config::Config::load_in(&state));
+            if let Ok(Some(config)) = &labs {
+                let labs = &config.labs;
                 let status = (labs.stop_forgotten_recordings || labs.measure_recording_files)
                     .then(|| engine.status().ok())
                     .flatten();
                 watch.tick(
-                    &labs,
+                    labs,
                     status.as_ref(),
                     (&state, &meetings),
                     start.elapsed(),
                     |id| engine.stop_forgotten(id).is_ok(),
                     log,
                 );
-            } else {
+            } else if labs.is_err() {
                 watch.timer.baseline = None;
             }
             let deadline = Instant::now() + Duration::from_secs(30);

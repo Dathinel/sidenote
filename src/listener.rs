@@ -107,7 +107,11 @@ fn pipeline_in(
             log("routing remains queued for the next drain");
         }
     }
-    let settings = crate::core::notes::settings().at(Stage::CatchUpSettings)?;
+    let Some(settings) = crate::core::store_io::defer_busy(crate::core::notes::settings())
+        .at(Stage::CatchUpSettings)?
+    else {
+        return Ok(());
+    };
     let script = match settings.engine() {
         crate::core::notes::Engine::App => {
             if let Some(id) = meeting_id {
