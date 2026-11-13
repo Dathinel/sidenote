@@ -48,7 +48,7 @@
   "src/core/meeting_router/hex.rs": "153398c4d644a0062464b4fab2f8d44c6f57c60027b52649e39cc8369ff12e4a",
   "src/core/meeting_router/inputs.rs": "4b8e4181694b0125da0039039438412c19f137dc2dd7c1e9d8688819c125a303",
   "src/core/meeting_router/jobs.rs": "e489f7ba053350b79d5a49a4fc8c1fb40b9d089b0bee24fc5ee74bd2539dcd02",
-  "src/core/meeting_watch.rs": "dd005f5284b8a6277f15c67ff4de807d94de2ecebfe06159f77fed1062c5bd7d",
+  "src/core/meeting_watch.rs": "6220804b92ec7c44e4685d6fdd6c0ecfdc38e51d080b854e6c323e0e324888a3",
   "src/core/meetings.rs": "d6373afa7f338257418501b38facc5c61f87d3512baa987548e6ea297ee3cb71",
   "src/core/memory.rs": "9d694740235875a00bab1c53df0f699acd1eaba9c2037ff9a2a799fd6a115a5c",
   "src/core/memory_migration.rs": "4440677e7ebbc84d6ee21343e72f5b1ffd0cc6aeceda692f2e3f4b2e5153e3f5",

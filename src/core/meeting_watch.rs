@@ -552,11 +552,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     fn fixture() -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "meeting-watch-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        ));
+        let root = tempfile::tempdir().unwrap().keep();
         fs::create_dir_all(root.join("meetings/100-1")).unwrap();
         root
     }
