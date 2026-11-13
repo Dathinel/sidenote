@@ -679,23 +679,19 @@ fn validate_content(
     meetings: &[Meeting],
     kb: &KbSnapshot,
     records: &[MemoryRecord],
-) -> io::Result<()> {
+) -> Result<(), &'static str> {
     if content.brief.len() != 3
         || content
             .brief
             .iter()
             .any(|s| s.trim().is_empty() || s.lines().count() != 1)
     {
-        return Err(invalid(
-            "Runner must return exactly three nonempty brief lines",
-        ));
+        return Err("CHECK_OUTPUT_BRIEF");
     }
     // These legacy fields are never accepted from the v2 producer or stored in a v2 report.
     if !content.memory_update.is_empty() || !content.summary.is_empty() || !content.story.is_empty()
     {
-        return Err(invalid(
-            "V2 reports use brief, story_alignment and memory_proposals",
-        ));
+        return Err("CHECK_OUTPUT_LEGACY_FIELDS");
     }
     for finding in &mut content.findings {
         finding.subject_keys.clear();
@@ -710,9 +706,7 @@ fn validate_content(
             || finding.subject_refs.is_empty()
             || finding.material_state.trim().is_empty()
         {
-            return Err(invalid(
-                "Finding needs text, subjects, material state and valid sources",
-            ));
+            return Err("CHECK_OUTPUT_FINDING");
         }
         for subject in &finding.subject_refs {
             let valid = if let Some(task) = subject.strip_prefix("task:") {
@@ -737,7 +731,7 @@ fn validate_content(
                 false
             };
             if !valid {
-                return Err(invalid("Invalid finding subject reference"));
+                return Err("CHECK_OUTPUT_SUBJECT");
             }
             let key = if let Some(task) = subject.strip_prefix("task:") {
                 let (id, index) = task.rsplit_once(':').unwrap();
@@ -775,14 +769,12 @@ fn validate_content(
                 .iter()
                 .all(|s| s.starts_with("[[") && source_exists(s, meetings, &kb.path))
         {
-            return Err(invalid("Invalid story alignment claim or source"));
+            return Err("CHECK_OUTPUT_ALIGNMENT");
         }
         if !matches!(alignment.status, check_v2::AlignmentStatus::Unknown)
             && (alignment.kb_claim.sources.is_empty() || alignment.meeting_claim.sources.is_empty())
         {
-            return Err(invalid(
-                "Known alignment needs both KB and meeting evidence",
-            ));
+            return Err("CHECK_OUTPUT_ALIGNMENT_EVIDENCE");
         }
     }
     for resolution in &content.resolutions {
@@ -793,19 +785,19 @@ fn validate_content(
                 .iter()
                 .all(|s| source_exists(s, meetings, &kb.path))
         {
-            return Err(invalid("Resolution requires positive cited evidence"));
+            return Err("CHECK_OUTPUT_RESOLUTION");
         }
     }
     for proposal in &mut content.memory_proposals {
         for source in &mut proposal.sources {
             if !source_exists(source.reference(), meetings, &kb.path) {
-                return Err(invalid("Memory proposal cites an unknown source"));
+                return Err("CHECK_OUTPUT_MEMORY_SOURCE");
             }
             if let MemorySource::Kb { revision, .. } = source {
                 *revision = Some(kb.revision.clone());
             }
         }
-        memory::validate_proposal(proposal)?;
+        memory::validate_proposal(proposal).map_err(|_| "CHECK_OUTPUT_MEMORY_PROPOSAL")?;
         proposal.target_updated_at = proposal
             .target_id
             .as_ref()
@@ -814,7 +806,7 @@ fn validate_content(
                     .iter()
                     .find(|r| &r.id == id && r.status == RecordStatus::Active)
                     .map(|r| r.updated_at.clone())
-                    .ok_or_else(|| invalid("Proposal targets an inactive or unknown record"))
+                    .ok_or("CHECK_OUTPUT_MEMORY_TARGET")
             })
             .transpose()?;
         proposal.id = memory::proposal_id(proposal);
@@ -877,6 +869,86 @@ fn log_line(message: &str) {
             Local::now().format("%Y-%m-%dT%H:%M:%S")
         );
     }
+}
+fn parse_report(
+    answer: &str,
+    meetings: &[Meeting],
+    kb: &KbSnapshot,
+    records: &[MemoryRecord],
+) -> Result<CheckContent, &'static str> {
+    let mut value: Value = serde_json::from_str(answer).map_err(|_| "CHECK_OUTPUT_JSON")?;
+    let object = value.as_object_mut().ok_or("CHECK_OUTPUT_OBJECT")?;
+    if object.get("schema_version").and_then(Value::as_u64) != Some(2) {
+        return Err("CHECK_OUTPUT_SCHEMA_VERSION");
+    }
+    object.remove("schema_version");
+    let mut content = serde_json::from_value(value).map_err(|_| "CHECK_OUTPUT_SHAPE")?;
+    validate_content(&mut content, meetings, kb, records)?;
+    Ok(content)
+}
+fn normalize_day_summary(content: &mut CheckContent, today: NaiveDate) {
+    // The day summary is a nicety: a malformed one is dropped, never the whole report.
+    let day_summary = content
+        .day_summary
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    content.day_summary = if day_summary.chars().count() <= 1200 {
+        day_summary
+    } else {
+        String::new()
+    };
+    content.day_summary_date = (!content.day_summary.is_empty()).then(|| today - Days::days(1));
+}
+#[derive(Debug)]
+enum ReportFailure {
+    InvalidOutput(&'static str),
+    Preparation(io::Error),
+}
+impl From<&'static str> for ReportFailure {
+    fn from(code: &'static str) -> Self {
+        Self::InvalidOutput(code)
+    }
+}
+impl From<check_v2::PreparationError> for ReportFailure {
+    fn from(error: check_v2::PreparationError) -> Self {
+        match error {
+            check_v2::PreparationError::InvalidContent => {
+                Self::InvalidOutput("CHECK_OUTPUT_PREPARATION")
+            }
+            check_v2::PreparationError::Io(error) => Self::Preparation(error),
+        }
+    }
+}
+fn report_with_retry(
+    prompt: &str,
+    mut run: impl FnMut(&str) -> io::Result<String>,
+    mut validate: impl FnMut(&str) -> Result<CheckContent, ReportFailure>,
+    mut report: impl FnMut(&str),
+) -> io::Result<CheckContent> {
+    let mut request = prompt.to_owned();
+    for attempt in 1..=2 {
+        let answer = run(&request)?;
+        match validate(&answer) {
+            Ok(content) => return Ok(content),
+            Err(ReportFailure::Preparation(error)) => {
+                let error = Stage::CheckPreparation.error(error);
+                report(&format!("preparation failed: {error}"));
+                return Err(error);
+            }
+            Err(ReportFailure::InvalidOutput(code)) => {
+                report(&format!(
+                    "output failed code={code} attempt={attempt} retry={}",
+                    attempt == 1
+                ));
+                if attempt == 2 {
+                    return Err(Stage::CheckOutput.error(invalid(code)));
+                }
+                request.push_str("\nReturn only a JSON object with numeric schema_version 2. Follow the report schema exactly, including three nonempty brief lines and valid sources and subject references. Do not include Markdown fences or surrounding prose.");
+            }
+        }
+    }
+    unreachable!()
 }
 pub fn run_daily_check(
     runner_name: &str,
@@ -962,51 +1034,37 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
         ));
         return Ok(None);
     }
-    let answer = super::runner_process::run_runner_with_timeout(
-        &runner,
-        prompt,
-        &memory_dir,
-        Duration::from_secs(900),
-        |_| {},
-    )
-    .map_err(|e| Stage::CheckRunner.error(invalid(&e)))?;
-    let mut value: Value = serde_json::from_str(&answer)
-        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid report JSON")))?;
-    if value.get("schema_version").and_then(Value::as_u64) != Some(2) {
-        return Err(Stage::CheckOutput.error(invalid("Runner must return schema_version 2")));
-    }
-    value
-        .as_object_mut()
-        .ok_or_else(|| Stage::CheckOutput.error(invalid("Expected report object")))?
-        .remove("schema_version");
-    let mut content: CheckContent = serde_json::from_value(value)
-        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid v2 report")))?;
-    validate_content(&mut content, &meetings, &kb, &memory_records).at(Stage::CheckOutput)?;
-    // The day summary is a nicety: a malformed one is dropped, never the whole report.
-    let day_summary = content
-        .day_summary
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    content.day_summary = if day_summary.chars().count() <= 1200 {
-        day_summary
-    } else {
-        String::new()
-    };
-    content.day_summary_date = (!content.day_summary.is_empty()).then(|| today - Days::days(1));
     let history = list_checks()?
         .into_iter()
         .filter(|d| *d < today)
         .map(load_check)
         .collect::<io::Result<Vec<_>>>()?;
-    check_v2::prepare_content(
-        &mut content,
-        today,
-        &history,
-        &kb,
-        warnings.is_empty() && !kb.stale,
-    )
-    .at(Stage::CheckOutput)?;
+    let mut content = report_with_retry(
+        &prompt,
+        |prompt| {
+            super::runner_process::run_runner_with_timeout(
+                &runner,
+                prompt.to_owned(),
+                &memory_dir,
+                Duration::from_secs(900),
+                |_| {},
+            )
+            .map_err(|e| Stage::CheckRunner.error(invalid(&e)))
+        },
+        |answer| {
+            let mut content = parse_report(answer, &meetings, &kb, &memory_records)?;
+            normalize_day_summary(&mut content, today);
+            check_v2::prepare_content(
+                &mut content,
+                today,
+                &history,
+                &kb,
+                warnings.is_empty() && !kb.stale,
+            )?;
+            Ok(content)
+        },
+        log_line,
+    )?;
     content.coverage = Coverage {
         meeting_count: sent.meetings_in,
         task_count,
