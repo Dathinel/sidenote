@@ -29,13 +29,32 @@ pub struct Instance;
 pub fn single_instance() -> io::Result<Option<Instance>> {
     Err(super::unavailable())
 }
+#[cfg(target_os = "linux")]
+fn worker_executable(pid: u32) -> io::Result<PathBuf> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) as i32 };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    // Child::id uses our PID namespace; fdinfo's Pid uses the namespace of this /proc.
+    // Pin the task while resolving its executable, without remounting proc or dropping checks.
+    let info = fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))?;
+    let visible = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:"))
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| io::Error::other("WORKER_PID_UNAVAILABLE"))?;
+    fs::read_link(format!("/proc/{visible}/exe"))
+}
 // Commands are configured before spawn by the Unix CommandExt adapter.
 pub struct ProcessJob(u32);
 impl ProcessJob {
     pub fn attach(child: &std::process::Child) -> io::Result<Self> {
         let pid = child.id();
         #[cfg(target_os = "linux")]
-        if !std::fs::read_link(format!("/proc/{pid}/exe"))
+        if !worker_executable(pid)
             .is_ok_and(|p| p.file_name() == Some(std::ffi::OsStr::new("sidenote-linux-worker")))
         {
             return Err(io::Error::new(

@@ -94,10 +94,14 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
+    #[cfg(target_os = "linux")]
+    NetworkUnavailable,
     Consent,
     Missing,
     TimedOut,
-    Backend { exit: Option<i32> },
+    Backend {
+        exit: Option<i32>,
+    },
     BadOutput,
 }
 
@@ -172,6 +176,10 @@ impl Run for Cli {
     ) -> Result<String, Failure> {
         if !helper.offered() {
             return Err(Failure::Consent);
+        }
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            return Err(Failure::NetworkUnavailable);
         }
         if let Some(root) = &self.root
             && !authorized(root, helper)?

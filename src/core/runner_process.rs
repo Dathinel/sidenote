@@ -292,6 +292,10 @@ pub(super) fn run_runner_with_timeout(
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
     runners::validate(runner)?;
+    #[cfg(target_os = "linux")]
+    if cfg!(target_os = "linux") {
+        return Err(runners::NETWORK_UNAVAILABLE.into());
+    }
     let _update_activity = crate::updates::activity()
         .map_err(|_| "An update is being installed. Try again after restart.")?;
     let harness = runners::kind(runner)?;
@@ -465,6 +469,42 @@ pub(super) fn run_runner_with_timeout(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_agent_runners_fail_before_executable_lookup_or_launch() {
+        let root = tempfile::tempdir().unwrap();
+        for (name, args) in [
+            ("claude", vec!["-p"]),
+            ("codex", vec!["exec", "--sandbox", "read-only"]),
+            ("opencode", vec!["run"]),
+            ("opencode2", vec!["run"]),
+        ] {
+            let runner = Runner {
+                name: name.into(),
+                program: root.path().join(name).to_string_lossy().into_owned(),
+                args: args.into_iter().map(str::to_owned).collect(),
+                stdin: true,
+                tools: true,
+                model: None,
+            };
+            assert_eq!(
+                run_runner_with_timeout(
+                    &runner,
+                    "synthetic".into(),
+                    root.path(),
+                    Duration::from_secs(1),
+                    |_| {}
+                )
+                .unwrap_err(),
+                runners::NETWORK_UNAVAILABLE
+            );
+        }
+        assert_eq!(
+            super::super::notes::test_helper(super::super::notes::Helper::Claude, "synthetic")
+                .unwrap_err(),
+            runners::NETWORK_UNAVAILABLE
+        );
+    }
     use super::*;
     #[test]
     fn partial_answers_arrive_before_results_without_duplicating_text_or_leaking_tools() {

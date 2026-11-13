@@ -481,6 +481,10 @@ impl Drop for Session {
 impl Session {
     fn start(key: &Key, cancel: &AtomicBool) -> Result<Self, String> {
         runners::validate(&key.runner)?;
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            return Err(runners::NETWORK_UNAVAILABLE.into());
+        }
         let kind = runners::kind(&key.runner)?;
         let mut command = Command::new(runners::executable(&key.runner)?);
         let root = super::state_dir();
@@ -801,6 +805,22 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_persistent_sessions_refuse_agents_before_executable_lookup() {
+        let configured: Vec<Runner> =
+            serde_json::from_str(include_str!("../../default-runners.json")).unwrap();
+        for runner in configured {
+            let key = Key {
+                runner,
+                chat: "synthetic".into(),
+            };
+            assert_eq!(
+                Session::start(&key, &AtomicBool::new(false)).err().unwrap(),
+                runners::NETWORK_UNAVAILABLE
+            );
+        }
+    }
     #[test]
     fn queued_warmup_reports_starting_for_codex_and_releases_on_drop() {
         let runners: Vec<Runner> =

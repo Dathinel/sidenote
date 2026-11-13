@@ -169,6 +169,8 @@ pub(super) fn enqueue_in(
 
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
+        #[cfg(target_os = "linux")]
+        Failure::NetworkUnavailable => (JobState::NoHelper, core::runners::NETWORK_UNAVAILABLE),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
         Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
