@@ -1162,3 +1162,242 @@ pub fn run_cli() -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod reliability_tests {
+    use super::*;
+
+    fn valid() -> Value {
+        json!({"schema_version":2,"findings":[],"brief":["Synthetic one","Synthetic two","Synthetic three"]})
+    }
+    fn finding() -> Value {
+        json!({"kind":"other","severity":"low","title":"Synthetic title",
+            "explanation":"Synthetic explanation","evidence":["evidence.md"],
+            "subject_refs":["project:Demo|synthetic"],"material_state":"synthetic"})
+    }
+    fn validate(answer: &str, kb: &KbSnapshot) -> Result<CheckContent, ReportFailure> {
+        let mut content = parse_report(answer, &[], kb, &[])?;
+        let today = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        normalize_day_summary(&mut content, today);
+        check_v2::prepare_content(&mut content, today, &[], kb, true)?;
+        Ok(content)
+    }
+    #[test]
+    fn fake_runner_retries_each_invalid_shape_once_with_content_free_codes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("evidence.md"), "Synthetic evidence").unwrap();
+        let kb = KbSnapshot {
+            revision: "a".repeat(40),
+            captured_at: String::new(),
+            path: root.path().into(),
+            stale: false,
+        };
+        let mut cases = vec![
+            ("synthetic private malformed {".into(), "CHECK_OUTPUT_JSON"),
+            (format!("```json\n{}\n```", valid()), "CHECK_OUTPUT_JSON"),
+            ("[]".into(), "CHECK_OUTPUT_OBJECT"),
+        ];
+        let mut bad_subject = finding();
+        bad_subject["subject_refs"] = json!(["task:missing:99"]);
+        let mut bad_source = finding();
+        bad_source["evidence"] = json!(["../synthetic-private.md"]);
+        let mut bad_enum = finding();
+        bad_enum["severity"] = json!("synthetic private enum");
+        let alignment = json!({"project":"Demo","status":"aligned","kb_claim":{"text":"Synthetic KB","sources":[]},
+            "meeting_claim":{"text":"Synthetic meeting","sources":[]},"question":"Synthetic question"});
+        let mut bad_alignment = alignment.clone();
+        bad_alignment["kb_claim"]["sources"] = json!(["missing.md"]);
+        let proposal = json!({"op":"confirm","target_id":"missing","text":"Synthetic text","rationale":"Synthetic rationale",
+            "sources":[{"type":"kb","path":"evidence.md"}]});
+        let mut bad_proposal_source = proposal.clone();
+        bad_proposal_source["sources"][0]["path"] = json!("missing.md");
+        for (patch, code) in [
+            (json!({"schema_version":1}), "CHECK_OUTPUT_SCHEMA_VERSION"),
+            (json!({"schema_version":"2"}), "CHECK_OUTPUT_SCHEMA_VERSION"),
+            (
+                json!({"schema_version":null}),
+                "CHECK_OUTPUT_SCHEMA_VERSION",
+            ),
+            (
+                json!({"synthetic_private_unknown":"private"}),
+                "CHECK_OUTPUT_SHAPE",
+            ),
+            (json!({"findings":{}}), "CHECK_OUTPUT_SHAPE"),
+            (json!({"findings":[bad_enum]}), "CHECK_OUTPUT_SHAPE"),
+            (json!({"brief":["only one"]}), "CHECK_OUTPUT_BRIEF"),
+            (json!({"brief":["one","two"," "]}), "CHECK_OUTPUT_BRIEF"),
+            (
+                json!({"brief":["one","two","three\nfour"]}),
+                "CHECK_OUTPUT_BRIEF",
+            ),
+            (
+                json!({"story":"synthetic private legacy"}),
+                "CHECK_OUTPUT_LEGACY_FIELDS",
+            ),
+            (json!({"findings":[bad_source]}), "CHECK_OUTPUT_FINDING"),
+            (json!({"findings":[bad_subject]}), "CHECK_OUTPUT_SUBJECT"),
+            (
+                json!({"story_alignment":[bad_alignment]}),
+                "CHECK_OUTPUT_ALIGNMENT",
+            ),
+            (
+                json!({"story_alignment":[alignment]}),
+                "CHECK_OUTPUT_ALIGNMENT_EVIDENCE",
+            ),
+            (
+                json!({"resolutions":[{"finding_id":"missing","explanation":"synthetic private","evidence":[]}]}),
+                "CHECK_OUTPUT_RESOLUTION",
+            ),
+            (
+                json!({"memory_proposals":[bad_proposal_source]}),
+                "CHECK_OUTPUT_MEMORY_SOURCE",
+            ),
+            (
+                json!({"memory_proposals":[{"op":"add","text":"synthetic private","rationale":"reason","sources":[]}]}),
+                "CHECK_OUTPUT_MEMORY_PROPOSAL",
+            ),
+            (
+                json!({"memory_proposals":[proposal]}),
+                "CHECK_OUTPUT_MEMORY_TARGET",
+            ),
+            (
+                json!({"findings":[finding(),finding()]}),
+                "CHECK_OUTPUT_PREPARATION",
+            ),
+        ] {
+            let mut value = valid();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            cases.push((value.to_string(), code));
+        }
+        cases.push((
+            r#"{"schema_version":2,"brief":["a","b","c"]}"#.into(),
+            "CHECK_OUTPUT_SHAPE",
+        ));
+        for (bad, code) in cases {
+            // Exercise recovery and exhaustion for every shape, without a real model or meetings.
+            for recover in [true, false] {
+                let mut calls = 0;
+                let mut logs = Vec::new();
+                let result = report_with_retry(
+                    "synthetic prompt",
+                    |prompt| {
+                        calls += 1;
+                        assert_eq!(prompt.contains("Return only a JSON object"), calls == 2);
+                        Ok(if calls == 1 || !recover {
+                            bad.clone()
+                        } else {
+                            valid().to_string()
+                        })
+                    },
+                    |answer| validate(answer, &kb),
+                    |line| logs.push(line.to_owned()),
+                );
+                assert_eq!(calls, 2);
+                assert_eq!(result.is_ok(), recover, "{code}");
+                assert_eq!(
+                    logs[0],
+                    format!("output failed code={code} attempt=1 retry=true")
+                );
+                if recover {
+                    assert_eq!(logs.len(), 1);
+                } else {
+                    assert_eq!(
+                        logs,
+                        [
+                            format!("output failed code={code} attempt=1 retry=true"),
+                            format!("output failed code={code} attempt=2 retry=false")
+                        ]
+                    );
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "CHECK_OUTPUT (InvalidData)"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn valid_output_and_runner_errors_do_not_retry() {
+        for runner_error in [false, true] {
+            let mut calls = 0;
+            let result = report_with_retry(
+                "synthetic prompt",
+                |_| {
+                    calls += 1;
+                    if runner_error {
+                        Err(Stage::CheckRunner.error(io::Error::from_raw_os_error(5)))
+                    } else {
+                        Ok(String::new())
+                    }
+                },
+                |_| Ok(CheckContent::default()),
+                |_| panic!("not an output failure"),
+            );
+            assert_eq!(calls, 1);
+            assert_eq!(result.is_err(), runner_error);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preparation_file_io_fails_without_retry_and_preserves_content_free_os_diagnostic() {
+        use std::os::windows::fs::OpenOptionsExt;
+        for code in [2, 32] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("evidence.md");
+            fs::write(&path, "Synthetic private evidence").unwrap();
+            let kb = KbSnapshot {
+                revision: "a".repeat(40),
+                captured_at: String::new(),
+                path: root.path().into(),
+                stale: false,
+            };
+            let mut answer = valid();
+            answer["findings"] = json!([finding()]);
+            let mut calls = 0;
+            let mut logs = Vec::new();
+            let error = report_with_retry(
+                "synthetic prompt",
+                |_| {
+                    calls += 1;
+                    Ok(answer.to_string())
+                },
+                |answer| {
+                    let mut content = parse_report(answer, &[], &kb, &[])?;
+                    // Fail the real evidence read only after source validation has accepted the file.
+                    let _held = if code == 32 {
+                        Some(
+                            fs::OpenOptions::new()
+                                .read(true)
+                                .share_mode(0)
+                                .open(&path)
+                                .unwrap(),
+                        )
+                    } else {
+                        fs::remove_file(&path).unwrap();
+                        None
+                    };
+                    check_v2::prepare_content(
+                        &mut content,
+                        NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+                        &[],
+                        &kb,
+                        true,
+                    )?;
+                    Ok(content)
+                },
+                |line| logs.push(line.to_owned()),
+            )
+            .unwrap_err();
+            let expected = Stage::CheckPreparation.error(io::Error::from_raw_os_error(code));
+            assert_eq!(calls, 1);
+            assert_eq!(error.kind(), expected.kind());
+            assert_eq!(error.to_string(), expected.to_string());
+            assert_eq!(logs, [format!("preparation failed: {expected}")]);
+            assert!(error.to_string().contains(&format!("os {code}")));
+        }
+    }
+}
