@@ -61,6 +61,10 @@ fn main() {
     if args.iter().any(|a| a == "--ops") {
         std::process::exit(sidenote::operations::cli(&args));
     }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--cpu-models") {
+        std::process::exit(sidenote::server_models::cli(&args));
+    }
     if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
         std::process::exit(sidenote::service::run());
     }

@@ -10,6 +10,8 @@ pub mod meeting_icon;
 #[cfg(target_os = "linux")]
 pub mod operations;
 pub mod platform;
+#[cfg(target_os = "linux")]
+pub mod server_models;
 pub mod service;
 #[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
 pub mod sync_owner;
