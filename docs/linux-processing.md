@@ -121,3 +121,14 @@ Do not run both units against one state directory.
 
 Cold system-manager start and forced restart can be qualified in a box. A physical
 reboot/power-loss claim requires actually controlling and observing that reboot.
+
+## Annotation capability gate
+
+Immutable image pinning is unavailable on Linux: the current runner accepts paths,
+while Unix advisory locks cannot enforce the Windows share-mode guarantee against
+replacement or writes. `immutable_image_pinning_supported()` is false there. Six tests
+whose success requires that guarantee retain their assertions but are explicitly
+ignored on non-Windows targets with that reason. The Linux capability regression
+still executes and asserts Unsupported before sending. Parsing, redaction, approval,
+ordering, schema and other portable annotation tests continue to run. Production
+pinning continues to fail closed; this gate does not enable Linux image sending.
