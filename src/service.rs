@@ -1,5 +1,7 @@
 //! Device-local roles and a window-independent service lifetime.
 #[cfg(target_os = "linux")]
+mod schedule;
+#[cfg(target_os = "linux")]
 pub(crate) mod workers;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -254,6 +256,10 @@ fn supervise() {
         } else {
             "unavailable"
         };
+        #[cfg(target_os = "linux")]
+        if schedule::tick().is_err() {
+            eprintln!("SERVICE_SCHEDULE_UNAVAILABLE");
+        }
         eprintln!(
             "service status=running role={} sync={} relay={} processing={} hex={} mcp=stdio ui={}",
             role().name(),
