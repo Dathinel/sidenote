@@ -70,7 +70,7 @@ pub(crate) fn has_result(id: &str) -> bool {
     valid_id(id) && destination(&super::super::state_dir(), id).is_file()
 }
 pub fn configured() -> bool {
-    fs::read(super::super::state_dir().join("config.json"))
+    super::super::config::read(&super::super::state_dir())
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .is_some_and(|v| v["pipeline"]["profile"] == "experimental")

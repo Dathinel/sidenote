@@ -335,3 +335,21 @@ mod unix_tests {
         assert_eq!(super::message(&error), Some("INVALID_STATE_PATH"));
     }
 }
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    #[test]
+    fn sharing_retry_attempts_are_bounded_and_other_errors_fail_immediately() {
+        for code in [32, 33, 5, 2] {
+            let mut attempts = 0;
+            let error = retry_sharing_violation::<()>(|| {
+                attempts += 1;
+                Err(io::Error::from_raw_os_error(code))
+            })
+            .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(code));
+            assert_eq!(attempts, if matches!(code, 32 | 33) { 5 } else { 1 });
+        }
+    }
+}

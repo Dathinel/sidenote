@@ -3,6 +3,24 @@ use super::{StateStore, TaskStore, memory::MemoryStore, state_dir, store_io};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::Path};
 
+fn operation<T>(result: io::Result<T>, operation: &str, path_kind: &str) -> io::Result<T> {
+    result.inspect_err(|error| crate::listener::log(&diagnostic(operation, path_kind, error)))
+}
+fn diagnostic(operation: &str, path_kind: &str, error: &io::Error) -> String {
+    format!(
+        "config operation={operation} path_kind={path_kind} kind={:?} os={:?}",
+        error.kind(),
+        error.raw_os_error()
+    )
+}
+pub(super) fn read(root: &Path) -> io::Result<Vec<u8>> {
+    let path = root.join("config.json");
+    store_io::retry_sharing_violation(|| match std::fs::read(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(error),
+        result => operation(result, "read", "config.json"),
+    })
+}
+
 #[derive(Clone, Copy)]
 pub enum Feature {
     Tasks,
@@ -215,12 +233,20 @@ impl Config {
     }
 
     pub fn load_in(root: &Path) -> io::Result<Self> {
-        let _lock = store_io::lock(&root.join("local/config.lock"))?;
+        let _lock = operation(
+            store_io::lock(&root.join("local/config.lock")),
+            "lock",
+            "config.lock",
+        )?;
         let path = root.join("config.json");
-        match std::fs::read(&path) {
+        match read(root) {
             Ok(bytes) => {
-                let mut config: Self =
-                    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
+                let mut config: Self = operation(
+                    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+                        .map_err(io::Error::from),
+                    "decode",
+                    "config.json",
+                )?;
                 if config.version != 1 {
                     return Err(store_io::invalid("Unsupported config.json version"));
                 }
@@ -228,16 +254,33 @@ impl Config {
                     config.notes = Some(super::notes::migrated_settings(
                         &super::live::notes_pipeline(),
                     ));
-                    store_io::write(&path, &config)?;
+                    operation(
+                        store_io::write(&path, &config),
+                        "migration_write",
+                        "config.json",
+                    )?;
                 }
-                config.overlay_profile(root)?;
+                operation(
+                    config.overlay_profile(root),
+                    "overlay_read",
+                    "relay_profile",
+                )?;
                 config.baseline = Some(serde_json::to_value(&config)?);
                 Ok(config)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let mut config = Self::migrate(root)?;
-                store_io::write(&path, &config)?;
-                config.overlay_profile(root)?;
+                let mut config =
+                    operation(Self::migrate(root), "migration_read", "legacy_settings")?;
+                operation(
+                    store_io::write(&path, &config),
+                    "migration_write",
+                    "config.json",
+                )?;
+                operation(
+                    config.overlay_profile(root),
+                    "overlay_read",
+                    "relay_profile",
+                )?;
                 config.baseline = Some(serde_json::to_value(&config)?);
                 Ok(config)
             }
@@ -248,7 +291,7 @@ impl Config {
     pub fn save(&mut self, root: &Path) -> io::Result<()> {
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
         let path = root.join("config.json");
-        let bytes = std::fs::read(&path)?;
+        let bytes = read(root)?;
         let mut latest: serde_json::Value =
             serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
         if latest["version"] != 1 {
@@ -402,7 +445,7 @@ impl Config {
         // Re-read under the lock so another settings card's changes survive this save.
         let _lock = store_io::lock(&root.join("local/config.lock"))?;
         let path = root.join("config.json");
-        let mut config: Self = match std::fs::read(&path) {
+        let mut config: Self = match read(root) {
             Ok(bytes) => {
                 serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?
             }
@@ -490,6 +533,75 @@ pub(super) fn merge_edits(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn diagnostics_keep_only_operation_path_kind_and_os_code() {
+        let error = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "C:/synthetic-private/config.json private text",
+        );
+        assert_eq!(
+            diagnostic("read", "config.json", &error),
+            "config operation=read path_kind=config.json kind=PermissionDenied os=None"
+        );
+        for (op, kind) in [
+            ("lock", "config.lock"),
+            ("migration_write", "config.json"),
+            ("overlay_read", "relay_profile"),
+        ] {
+            let error = io::Error::from_raw_os_error(32);
+            let line = diagnostic(op, kind, &error);
+            assert!(line.contains(&format!("operation={op} path_kind={kind}")));
+            assert!(line.ends_with("os=Some(32)"));
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn config_read_recovers_after_nonsharing_handle_is_released() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let config = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Config::default()
+        };
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap_err().raw_os_error(), Some(32));
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(75));
+                drop(held);
+            });
+            assert!(Config::load_in(root.path()).is_ok());
+        });
+    }
+    #[cfg(windows)]
+    #[test]
+    fn config_read_and_lock_contention_remain_bounded_and_keep_os_code() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        let start = std::time::Instant::now();
+        let error = Config::load_in(root.path()).err().unwrap();
+        assert_eq!(error.raw_os_error(), Some(32));
+        assert!(start.elapsed() >= std::time::Duration::from_millis(200));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        drop(held);
+        let _lock = store_io::lock(&root.path().join("local/config.lock")).unwrap();
+        let error = Config::load_in(root.path()).err().unwrap();
+        assert_eq!(error.raw_os_error(), Some(32));
+    }
 
     fn valid_kb() -> KnowledgeBase {
         KnowledgeBase {
