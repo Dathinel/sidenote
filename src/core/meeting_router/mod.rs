@@ -5,6 +5,7 @@ mod cache;
 mod cli;
 mod config;
 mod hex;
+mod inputs;
 pub mod jobs;
 use super::{
     asr::{self, LanguageScores, Result},

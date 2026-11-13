@@ -23,6 +23,8 @@ struct Job {
     languages: Vec<String>,
     input_revision: String,
     windows: serde_json::Value,
+    #[serde(skip)]
+    input: Option<super::inputs::Snapshot>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Outcome {
@@ -112,18 +114,13 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
 }
 fn snapshot(root: &Path, id: &str) -> Result<Job> {
     let folder = super::super::meetings_dir().join(id);
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(folder.join("manifest.json"))?)?;
+    let input = super::inputs::Snapshot::capture(&folder)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&input.manifest)?;
     if manifest["status"] != "complete" {
         return Err("Meeting is not complete".into());
     }
-    let source = if folder.join("hex-original/transcript.ndjson").is_file() {
-        folder.join("hex-original/transcript.ndjson")
-    } else {
-        folder.join("transcript.ndjson")
-    };
     let mut baseline = Vec::new();
-    for (i, line) in fs::read_to_string(source)?.lines().enumerate() {
+    for (i, line) in std::str::from_utf8(&input.transcript)?.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -149,14 +146,13 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         });
     }
     let config = load_config(root)?;
-    let windows = fs::read(folder.join("audio-evidence.json"))
-        .ok()
-        .map(|b| serde_json::from_slice(&b))
-        .transpose()?
-        .unwrap_or(serde_json::Value::Null);
-    // Include missing tracks too, so adding/replacing an input always invalidates reuse.
-    let paths = vec![folder.join("system.wav"), folder.join("microphone.wav")];
-    let revision = input_revision(&config, &paths, &baseline, &windows)?;
+    let windows = input.windows.clone();
+    let revision = cache::key(
+        &[],
+        &configuration_key(&config)?,
+        &input.revision()?,
+        "pinned-input-v1",
+    );
     Ok(Job {
         id: id.into(),
         folder,
@@ -165,6 +161,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         config,
         input_revision: revision,
         windows,
+        input: Some(input),
     })
 }
 
@@ -315,6 +312,18 @@ impl Drop for Cleanup {
     }
 }
 fn cleanup_work(work: &Path) {
+    if let Some(folder) = fs::read(work.join("request.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["folder"].as_str().map(PathBuf::from))
+        && folder.parent() == Some(work)
+        && folder
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("inputs-"))
+        && fs::symlink_metadata(&folder).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+    {
+        fs::remove_dir_all(folder).ok();
+    }
     // Only generated WAVs in this validated meeting's work directory, never source audio.
     if let Ok(entries) = fs::read_dir(work) {
         for entry in entries.flatten() {
@@ -378,7 +387,7 @@ pub fn run_one() -> Result<()> {
     let mut chunks = Vec::new();
     for (track, path) in &paths {
         let count = hound::WavReader::open(path)?.duration() as usize;
-        let mut windows = prepared_chunks(&job.folder, track, count).unwrap_or_else(|| {
+        let mut windows = prepared_chunks(&job.windows, track, count).unwrap_or_else(|| {
             detected
                 .iter()
                 .filter(|c| &c.track == track)
@@ -509,6 +518,12 @@ pub fn run_pending() -> Result<()> {
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
             cleanup_work(&work);
+            let staged = job
+                .input
+                .as_mut()
+                .ok_or("Missing pinned inputs")?
+                .stage(&work)?;
+            job.folder = staged.path().to_owned();
             let request = work.join("request.json");
             store_io::write(&request, &job)?;
             let _ = fs::remove_file(work.join("result.json"));
@@ -659,9 +674,11 @@ pub fn start_worker() -> io::Result<()> {
         .spawn()?;
     crate::service::own_child(child)
 }
-fn prepared_chunks(folder: &Path, track: &str, sample_count: usize) -> Option<Vec<Chunk>> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(folder.join("audio-evidence.json")).ok()?).ok()?;
+fn prepared_chunks(
+    value: &serde_json::Value,
+    track: &str,
+    sample_count: usize,
+) -> Option<Vec<Chunk>> {
     let mut spans: Vec<_> = value["segments"]
         .as_array()?
         .iter()
