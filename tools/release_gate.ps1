@@ -6,8 +6,8 @@ Run from the root of a release worktree:
 
 It refuses to run from anywhere else, always builds into this worktree's own
 target folder, installs relay dependencies first, then runs the fixed check
-list once. It writes artifacts\release-gate-<commit>.md with a pass table and
-exits 1 if any check fails.
+list once. It writes artifacts\release-gate-<commit>.md with a pass table,
+links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fails.
 #>
 param(
     [string]$GnuBin = 'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin'
@@ -34,12 +34,31 @@ $env:CARGO_TARGET_DIR = Join-Path $root 'target'
 $commit = (git rev-parse --short HEAD)
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $started = Get-Date
+$artifacts = Join-Path $root 'artifacts'
+$logDirectory = Join-Path $artifacts "release-gate-$commit"
+New-Item -ItemType Directory -Force $logDirectory | Out-Null
 
 $rows = New-Object System.Collections.Generic.List[object]
 function Gate([string]$Name, [scriptblock]$Run) {
     $t0 = Get-Date
-    & $Run
-    $code = $LASTEXITCODE
+    $log = Join-Path $logDirectory "$Name.log"
+    # Capture OS handles too: local_build's cargo child bypasses PowerShell streams.
+    $command = '$ErrorActionPreference = "Continue"; & { ' + $Run.ToString() + ' }; exit $LASTEXITCODE'
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $process = Start-Process -FilePath (Get-Command powershell.exe).Source `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', $encoded) `
+        -WorkingDirectory (Get-Location).Path -WindowStyle Hidden `
+        -RedirectStandardOutput "$log.stdout" -RedirectStandardError "$log.stderr" -Wait -PassThru
+    $code = $process.ExitCode
+    $output = [IO.File]::Create($log)
+    try {
+        foreach ($path in @("$log.stdout", "$log.stderr")) {
+            $inputStream = [IO.File]::OpenRead($path)
+            try { $inputStream.CopyTo($output) } finally { $inputStream.Dispose() }
+        }
+    } finally { $output.Dispose() }
+    Remove-Item -LiteralPath "$log.stdout", "$log.stderr"
+    Get-Content -LiteralPath $log
     $secs = [int]((Get-Date) - $t0).TotalSeconds
     $rows.Add([pscustomobject]@{ Check = $Name; Exit = $code; Seconds = $secs; Detail = '' })
     Write-Output "=== $Name exit=$code (${secs}s)"
@@ -68,6 +87,7 @@ function RecorderSnapshot([string]$Name) {
     }
     $code = if ($state -eq 'unknown') { 1 } else { 0 }
     $detail = if ($pids.Count) { "$state (PID $($pids -join ', '))" } else { $state }
+    $detail | Set-Content -LiteralPath (Join-Path $logDirectory "$Name.log")
     $rows.Add([pscustomobject]@{ Check = $Name; Exit = $code; Seconds = [int]((Get-Date) - $t0).TotalSeconds; Detail = $detail })
     return [pscustomobject]@{ State = $state }
 }
@@ -88,9 +108,11 @@ Gate 'test' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locke
 Gate 'test-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -j 1 --quiet --features asr-runtime }
 (Get-Item (Join-Path $root 'src\main.rs')).LastWriteTime = Get-Date
 Gate 'build-locked' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu build --locked -j 1 }
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-gnu\debug\sidenote.exe'
-if (-not (Test-Path $exe)) { $exe = Join-Path $env:CARGO_TARGET_DIR 'debug\sidenote.exe' }
-Gate 'mcp-smoke' { python tools/mcp-smoke.py $exe }
+Gate 'mcp-smoke' {
+    $exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-gnu\debug\sidenote.exe'
+    if (-not (Test-Path $exe)) { $exe = Join-Path $env:CARGO_TARGET_DIR 'debug\sidenote.exe' }
+    python tools/mcp-smoke.py $exe
+}
 Gate 'settings-render' { python tools/render_settings_build.py }
 Gate 'settings-reachability' { python tools/settings-reachability.py artifacts/settings-build }
 Push-Location (Join-Path $root 'relay')
@@ -100,22 +122,21 @@ Pop-Location
 $listenerEnd = RecorderSnapshot 'listener-end'
 Write-Output "=== listener-end $($listenerEnd.State)"
 $recorderLost = $listenerStart.State -eq 'running' -and $listenerEnd.State -ne 'running'
+"start=$($listenerStart.State); end=$($listenerEnd.State)" | Set-Content -LiteralPath (Join-Path $logDirectory 'listener-presence.log')
 $rows.Add([pscustomobject]@{ Check = 'listener-presence'; Exit = [int]$recorderLost; Seconds = 0; Detail = "start=$($listenerStart.State); end=$($listenerEnd.State)" })
 if ($recorderLost) {
     Write-Output "RECORDER CHECK FAILED: installed listener was running at start; end state is $($listenerEnd.State)."
 }
 $failed = @($rows | Where-Object { $_.Exit -ne 0 })
-$artifacts = Join-Path $root 'artifacts'
-New-Item -ItemType Directory -Force $artifacts | Out-Null
 $lines = @(
     "# Release gate: Sidenote $version ($commit)",
     '',
     "Started $($started.ToString('yyyy-MM-dd HH:mm:ss zzz')), finished $((Get-Date).ToString('HH:mm:ss')) local time.",
     '',
-    '| Check | Exit | Seconds | Detail |',
-    '|---|---|---|---|'
+    '| Check | Exit | Seconds | Detail | Log |',
+    '|---|---|---|---|---|'
 )
-foreach ($row in $rows) { $lines += "| $($row.Check) | $($row.Exit) | $($row.Seconds) | $($row.Detail) |" }
+foreach ($row in $rows) { $lines += "| $($row.Check) | $($row.Exit) | $($row.Seconds) | $($row.Detail) | [log](release-gate-$commit/$($row.Check).log) |" }
 $lines += ''
 $lines += $(if ($failed.Count) { "FAILED: $($failed.Check -join ', ')" } else { 'PASSED: all checks' })
 $report = Join-Path $artifacts "release-gate-$commit.md"
