@@ -119,19 +119,98 @@ fn rename_path(path: &Path) -> io::Result<PathBuf> {
     // Canonical parents give Win32 verbatim paths without requiring the destination to exist.
     Ok(path.parent().unwrap().canonicalize()?.join(name))
 }
+fn replace_open_file(
+    from: &Path,
+    to: &Path,
+    published: &mut Option<std::fs::File>,
+) -> io::Result<()> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Foundation::GENERIC_WRITE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_WRITE_THROUGH, FILE_RENAME_INFO,
+        FileRenameInfoEx, SetFileInformationByHandle,
+    };
+    if let Some(source) = published {
+        return source.sync_all();
+    }
+    let source = std::fs::OpenOptions::new()
+        .access_mode(DELETE | GENERIC_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH)
+        .open(from)?;
+    let name: Vec<u16> = to.as_os_str().encode_wide().collect();
+    let bytes = std::mem::size_of::<FILE_RENAME_INFO>() + name.len() * 2;
+    // The variable-length Win32 structure needs pointer-aligned storage.
+    let mut buffer = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        // REPLACE_IF_EXISTS | POSIX_SEMANTICS keeps open readers on the old snapshot.
+        (*info).Anonymous.Flags = 3;
+        (*info).FileNameLength = (name.len() * 2)
+            .try_into()
+            .map_err(|_| io::Error::other("Rename path too long"))?;
+        let target = buffer
+            .as_mut_ptr()
+            .cast::<u8>()
+            .add(std::mem::offset_of!(FILE_RENAME_INFO, FileName))
+            .cast::<u16>();
+        std::ptr::copy_nonoverlapping(name.as_ptr(), target, name.len());
+        if SetFileInformationByHandle(
+            source.as_raw_handle(),
+            FileRenameInfoEx,
+            info.cast(),
+            bytes
+                .try_into()
+                .map_err(|_| io::Error::other("Rename path too long"))?,
+        ) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    // WRITE_THROUGH flushes rename metadata; sync_all (FlushFileBuffers) completes before success.
+    published.insert(source).sync_all()
+}
 fn move_file(from: &Path, to: &Path, flags: u32) -> io::Result<()> {
     let from = rename_path(from)?;
     let to = rename_path(to)?;
+    let mut published = None;
+    move_file_using(
+        &from,
+        &to,
+        flags,
+        || {
+            if unsafe {
+                MoveFileExW(
+                    wide(from.as_os_str()).as_ptr(),
+                    wide(to.as_os_str()).as_ptr(),
+                    flags,
+                )
+            } == 0
+            {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        },
+        || replace_open_file(&from, &to, &mut published),
+    )
+}
+fn move_file_using(
+    from: &Path,
+    to: &Path,
+    flags: u32,
+    mut move_once: impl FnMut() -> io::Result<()>,
+    mut replace_once: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    let mut fallback = false;
     crate::core::store_io::retry_sharing_violation(|| {
-        if unsafe {
-            MoveFileExW(
-                wide(from.as_os_str()).as_ptr(),
-                wide(to.as_os_str()).as_ptr(),
-                flags,
-            )
-        } == 0
-        {
-            let error = io::Error::last_os_error();
+        if fallback {
+            return replace_once();
+        }
+        if let Err(error) = move_once() {
+            if error.raw_os_error() == Some(5) && flags & MOVEFILE_REPLACE_EXISTING != 0 {
+                fallback = true;
+                return replace_once();
+            }
             // MoveFileEx can report access denied for a locked destination. Confirm sharing before retrying.
             if error.raw_os_error() == Some(5) {
                 for path in [&to, &from] {
@@ -333,6 +412,70 @@ pub fn reveal_file(file: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::Read;
+
+    #[test]
+    fn fallback_errors_surface_and_sharing_retries_remain_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        for code in [50, 32, 33] {
+            let (mut moves, mut replacements) = (0, 0);
+            let error = move_file_using(
+                &root.path().join("source.tmp"),
+                &root.path().join("target.json"),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                || {
+                    moves += 1;
+                    Err(io::Error::from_raw_os_error(5))
+                },
+                || {
+                    replacements += 1;
+                    Err(io::Error::from_raw_os_error(code))
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(code));
+            assert_eq!(moves, 1);
+            assert_eq!(replacements, if code == 50 { 1 } else { 5 });
+        }
+    }
+
+    #[test]
+    fn fallback_sharing_retries_can_recover() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut moves, mut replacements) = (0, 0);
+        move_file_using(
+            &root.path().join("source.tmp"),
+            &root.path().join("target.json"),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            || {
+                moves += 1;
+                Err(io::Error::from_raw_os_error(5))
+            },
+            || {
+                replacements += 1;
+                match replacements {
+                    1 => Err(io::Error::from_raw_os_error(32)),
+                    2 => Err(io::Error::from_raw_os_error(33)),
+                    _ => Ok(()),
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!((moves, replacements), (1, 3));
+    }
+
+    #[test]
+    fn fallback_flush_retry_uses_the_published_handle() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("source.tmp");
+        let to = root.path().join("target.json");
+        fs::write(&from, b"synthetic publication").unwrap();
+        let mut published = None;
+        replace_open_file(&from, &to, &mut published).unwrap();
+        assert!(!from.exists());
+        replace_open_file(&from, &to, &mut published).unwrap();
+        assert_eq!(fs::read(to).unwrap(), b"synthetic publication");
+    }
 
     #[test]
     fn long_paths_keep_publication_and_replacement_semantics() {
@@ -354,8 +497,12 @@ mod tests {
             assert!(publish_file(&from, &to).is_err());
             assert_eq!(fs::read(&to)?, b"first");
             assert_eq!(fs::read(&from)?, b"second");
+            let mut reader = fs::File::open(&to)?;
             replace_file(&from, &to)?;
             assert_eq!(fs::read(&to)?, b"second");
+            let mut previous = Vec::new();
+            reader.read_to_end(&mut previous)?;
+            assert_eq!(previous, b"first");
             assert!(!from.exists());
             Ok(())
         })();
