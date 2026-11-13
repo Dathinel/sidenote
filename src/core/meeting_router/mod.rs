@@ -14,7 +14,7 @@ use super::{
 pub use audio::Audio;
 pub use baseline::{english_fallback, reconcile};
 pub use cli::run_cli;
-pub use config::RoutingConfig;
+pub use config::{LanguageRoutes, ProviderRoute, RoutingConfig};
 pub use hex::HexSpeech;
 use serde::{Deserialize, Serialize};
 use std::{

@@ -481,6 +481,11 @@ fn request(
 }
 
 /// Device-local language choices, separate from the pipeline configuration lane.
+pub fn load_language_routes(root: &Path) -> io::Result<super::meeting_router::LanguageRoutes> {
+    super::meeting_router::LanguageRoutes::from_legacy(load_meeting_languages(root)?)
+        .map_err(|error| store_io::invalid(&error.to_string()))
+}
+
 pub fn load_meeting_languages(root: &Path) -> io::Result<Vec<String>> {
     let _lock = store_io::lock(&root.join("local/meeting-languages.lock"))?;
     let path = root.join("meeting-languages.json");
