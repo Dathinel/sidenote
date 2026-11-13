@@ -124,14 +124,21 @@ try {
     $count = 0
     $undated = 0
     $kinds = [Collections.Generic.HashSet[string]]::new()
+    # Continuations inherit the preceding entry's time; leading undated text is old.
+    $stamp = [datetimeoffset]::MinValue
     # Streaming scan of this diagnostic log only; no meeting files are opened.
     foreach ($line in [IO.File]::ReadLines($log)) {
+        $dated = $false
+        $parsed = [datetimeoffset]::MinValue
+        if ($line -match '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)(?=\s|$)' -and
+            [datetimeoffset]::TryParse($Matches[1], [ref]$parsed)) {
+            $stamp = $parsed
+            $dated = $true
+        }
         if ($line -notmatch '(?i)\b(error|failed|failure|exception|timeout|timed out)\b') { continue }
-        $stamp = [datetimeoffset]::MinValue
-        if ($line -notmatch '^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)(?=\s|$)' -or
-            -not [datetimeoffset]::TryParse($Matches[1], [ref]$stamp)) { $undated++; continue }
         if ($stamp.UtcDateTime -lt $installTime) { continue }
         $count++
+        if (-not $dated) { $undated++ }
         # Only fixed categories can leave this process, never raw log tokens.
         $kind = 'error'
         if ($line -match '\bpipeline-failure\b') {
@@ -143,7 +150,7 @@ try {
         [void]$kinds.Add($kind)
     }
     $names = if ($kinds.Count) { ($kinds | Sort-Object) -join ', ' } else { 'none' }
-    Add-Check 'Errors since install' ($count -eq 0 -and $undated -eq 0) "count=$count; kinds=$names; undated-error-lines=$undated"
+    Add-Check 'Errors since install' ($count -eq 0) "count=$count; kinds=$names; undated-error-lines=$undated"
 } catch { Add-Check 'Errors since install' $false 'count=unknown; kinds=unavailable' }
 
 $rows | Format-Table -AutoSize | Out-String -Width 320 | Write-Output
