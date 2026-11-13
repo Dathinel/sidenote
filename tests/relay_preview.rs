@@ -1,4 +1,5 @@
 //! Real headless app processes, isolated stores, real local Worker and encrypted sessions.
+mod common;
 use serde_json::{Value, json};
 use sidenote::core::{ManualTask, TaskStore, relay_preview};
 
@@ -56,6 +57,9 @@ impl App {
             .arg(root.join("meetings"))
             .arg("--peers-dir")
             .arg(root.join("peers"))
+            .env("APPDATA", root.join("appdata"))
+            .env("LOCALAPPDATA", root.join("localappdata"))
+            .env("USERPROFILE", root.join("home"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -318,6 +322,7 @@ fn find<'a>(tasks: &'a Value, id: &Value) -> Option<&'a Value> {
 
 #[test]
 fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
+    common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();
@@ -802,6 +807,7 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
 
 #[test]
 fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
+    common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();
@@ -974,6 +980,7 @@ fn pair_apps(owner: &mut App, guest: &mut App, owner_root: &Path) {
 }
 #[test]
 fn migration_recovers_after_process_kill_at_durable_boundaries() {
+    common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();
@@ -1038,6 +1045,7 @@ fn migration_recovers_after_process_kill_at_durable_boundaries() {
 }
 #[test]
 fn three_peers_refuse_unavailable_removal_without_claiming_revocation() {
+    common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();
@@ -1096,6 +1104,7 @@ fn sync_control(address: &str, root: &Path, action: &str) -> Value {
 }
 #[test]
 fn killed_sender_recovers_after_relay_observed_an_interrupted_exchange() {
+    common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
     let fixture = tempfile::tempdir_in(parent).unwrap();

@@ -1,3 +1,4 @@
+mod common;
 use sidenote::core::{
     Manifest,
     live::parse_rolling,
@@ -5,6 +6,10 @@ use sidenote::core::{
 };
 use std::{fs, path::PathBuf};
 struct Temp(PathBuf);
+#[test]
+fn default_paths_are_isolated_from_owner_appdata() {
+    common::isolate();
+}
 impl Drop for Temp {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -12,6 +17,7 @@ impl Drop for Temp {
 }
 #[test]
 fn chapters_and_future_manifest_fields_preserve_existing_metadata() {
+    common::isolate();
     let manifest: Manifest =
         serde_json::from_str(include_str!("fixtures/hex-labs/manifest.json")).unwrap();
     assert_eq!(manifest.status.as_deref(), Some("complete"));
@@ -23,6 +29,7 @@ fn chapters_and_future_manifest_fields_preserve_existing_metadata() {
 }
 #[test]
 fn partial_rolling_line_preserves_all_complete_lines() {
+    common::isolate();
     let lines = parse_rolling(include_str!("fixtures/hex-labs/rolling.ndjson"));
     assert_eq!(lines.len(), 2);
     assert!(lines[0].you);
@@ -31,6 +38,7 @@ fn partial_rolling_line_preserves_all_complete_lines() {
 }
 #[test]
 fn missing_and_expired_tracks_return_a_clear_error_and_keep_transcript() {
+    common::isolate();
     let folder = std::env::temp_dir().join(format!(
         "hex-labs-contract-{}-{}",
         std::process::id(),

@@ -82,28 +82,49 @@ pub(super) fn read_only() -> bool {
     super::file_reads::refreshing() || PATHS.get().is_some_and(|p| p.read_only)
 }
 pub(super) fn data() -> Option<PathBuf> {
-    PATHS
-        .get()
-        .and_then(|p| p.data.clone())
-        .or_else(|| env_path("SIDENOTE_DATA_DIR"))
-        .or_else(|| env_path("SIDENOTE_STATE_DIR"))
+    #[cfg(test)]
+    {
+        Some(crate::test_home().join("state"))
+    }
+    #[cfg(not(test))]
+    {
+        PATHS
+            .get()
+            .and_then(|p| p.data.clone())
+            .or_else(|| env_path("SIDENOTE_DATA_DIR"))
+            .or_else(|| env_path("SIDENOTE_STATE_DIR"))
+    }
 }
 pub(super) fn meetings() -> Option<PathBuf> {
-    let meetings = PATHS
-        .get()
-        .and_then(|p| p.meetings.clone())
-        .or_else(|| env_path("SIDENOTE_HEX_DIR"));
-    #[cfg(not(windows))]
-    let meetings = meetings.or_else(|| data().map(|p| p.join("hex/meetings")));
-    meetings
+    #[cfg(test)]
+    {
+        Some(crate::test_home().join("meetings"))
+    }
+    #[cfg(not(test))]
+    {
+        let meetings = PATHS
+            .get()
+            .and_then(|p| p.meetings.clone())
+            .or_else(|| env_path("SIDENOTE_HEX_DIR"));
+        #[cfg(not(windows))]
+        let meetings = meetings.or_else(|| data().map(|p| p.join("hex/meetings")));
+        meetings
+    }
 }
 pub(super) fn peers() -> Option<PathBuf> {
-    PATHS
-        .get()
-        .and_then(|p| p.peers.clone())
-        .or_else(|| env_path("SIDENOTE_PEERS_DIR"))
-        // An isolated data directory must never accidentally read the owner's peer meetings.
-        .or_else(|| data().map(|p| p.join("peers")))
+    #[cfg(test)]
+    {
+        Some(crate::test_home().join("peers"))
+    }
+    #[cfg(not(test))]
+    {
+        PATHS
+            .get()
+            .and_then(|p| p.peers.clone())
+            .or_else(|| env_path("SIDENOTE_PEERS_DIR"))
+            // An isolated data directory must never accidentally read the owner's peer meetings.
+            .or_else(|| data().map(|p| p.join("peers")))
+    }
 }
 
 pub(super) fn appdata_dir(name: &str, legacy: &str) -> PathBuf {

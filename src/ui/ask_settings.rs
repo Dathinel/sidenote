@@ -687,6 +687,7 @@ mod tests {
                 .env("SIDENOTE_ASK_PREFS_CHILD", "1")
                 .env("APPDATA", root.join("appdata"))
                 .env("LOCALAPPDATA", root.join("localappdata"))
+                .env("USERPROFILE", root.join("home"))
                 .env("SIDENOTE_DATA_DIR", root.join("state"))
                 .env("SIDENOTE_STATE_DIR", root.join("state"))
                 .env("SIDENOTE_HEX_DIR", root.join("meetings"))
