@@ -1041,6 +1041,15 @@ fn oldest_meeting_runs_first_and_running_jobs_recover_after_a_crash() {
     assert!(fake.calls[0].0.contains("Title: Older meeting"));
     assert!(fake.calls[2].0.contains("Title: Delivery planning"));
     assert!(matches!(state(&root.0), JobState::Done { .. }));
+    let calls = fake.calls.len();
+    let summary = fs::read(folder.join("english-summary.json")).unwrap();
+    enqueue(&root.0, &s, None);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(fake.calls.len(), calls);
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        summary
+    );
 }
 #[test]
 fn external_summary_published_during_a_call_is_preserved() {

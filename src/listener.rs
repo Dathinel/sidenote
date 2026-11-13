@@ -68,9 +68,45 @@ pub(crate) fn log(message: &str) {
 }
 /// Existing catch-up and queue drains, owned by the service instead of a window.
 pub(crate) fn service_tick() -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    if crate::service::role() == crate::service::DeviceRole::Server {
+        return native_service_tick();
+    }
     catch_up()?;
     crate::core::meeting_router::jobs::start_worker()?;
     crate::core::notes::queue::start_worker()
+}
+/// Linux consumes complete folders synchronized into the configured meetings root.
+/// Peer inventories remain read-only; their files are never edited in place.
+#[cfg(target_os = "linux")]
+fn native_service_tick() -> io::Result<()> {
+    let root = crate::core::state_dir();
+    let meetings = crate::core::meetings_dir();
+    fs::create_dir_all(&meetings)?;
+    let mut failure = None;
+    if crate::core::meeting_router::jobs::configured() {
+        if let Err(error) = catch_up_routing(&root, &meetings, |id| {
+            crate::core::meeting_router::jobs::enqueue_automatic(id).map_err(io::Error::other)
+        }) {
+            failure = Some(error);
+        }
+        if let Err(error) = crate::core::meeting_router::jobs::start_worker() {
+            failure.get_or_insert(error);
+        }
+    }
+    // A routing error must not starve notes for other meetings.
+    match crate::core::notes::settings()?.engine() {
+        crate::core::notes::Engine::App => {
+            if let Err(error) = crate::core::notes::queue::catch_up() {
+                failure.get_or_insert(error);
+            }
+        }
+        crate::core::notes::Engine::Scripts(_) => {
+            failure.get_or_insert_with(crate::platform::unavailable);
+        }
+        crate::core::notes::Engine::Off => {}
+    }
+    failure.map_or(Ok(()), Err)
 }
 fn log_at(path: &std::path::Path, message: &str) {
     if let Some(parent) = path.parent() {

@@ -570,6 +570,9 @@ fn drain_locked(
     load: impl Fn() -> io::Result<NotesSettings>,
 ) -> io::Result<()> {
     loop {
+        if crate::service::stopping() {
+            return Ok(());
+        }
         let settings = load()?;
         if settings.engine() != Engine::App {
             return Ok(());
@@ -729,6 +732,12 @@ pub fn start_worker() -> io::Result<()> {
         })
     }) {
         return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if crate::service::active() {
+        return crate::service::workers::start("notes", || {
+            let _ = run_pending();
+        });
     }
     let child = crate::platform::worker_command(std::env::current_exe().at(Stage::NotesExePath)?)?
         .arg("--notes-pending")

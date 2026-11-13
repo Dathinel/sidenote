@@ -1,4 +1,6 @@
 //! Device-local roles and a window-independent service lifetime.
+#[cfg(target_os = "linux")]
+pub(crate) mod workers;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
@@ -222,6 +224,9 @@ fn sync_status(
 
 fn supervise() {
     let root = crate::core::state_dir();
+    #[cfg(target_os = "linux")]
+    let mut listener = None;
+    #[cfg(not(target_os = "linux"))]
     let mut listener = (role() == DeviceRole::Server).then(crate::listener::service_background);
     while !stopping() && !crate::updates::listener_stopping() {
         reap_children(false);
@@ -265,6 +270,9 @@ fn supervise() {
         pause(Duration::from_secs(30));
     }
     STOP.store(true, Ordering::Release);
+    #[cfg(target_os = "linux")]
+    workers::stop();
+    #[cfg(not(target_os = "linux"))]
     if role() != DeviceRole::Full {
         let _ = crate::core::relay_preview::disconnect(&root);
     }
@@ -411,10 +419,10 @@ pub fn run() -> i32 {
         STOP.store(true, Ordering::Release);
         #[cfg(target_os = "linux")]
         let owner_failed = sync_owner.as_ref().is_some_and(|owner| !owner.healthy());
-        #[cfg(target_os = "linux")]
-        drop(sync_owner);
         crate::core::ask::cancel_all(Duration::from_secs(3));
         let result = if worker.join().is_ok() { 0 } else { 2 };
+        #[cfg(target_os = "linux")]
+        drop(sync_owner);
         #[cfg(target_os = "linux")]
         let result = if owner_failed { eprintln!("SYNC_OWNER_STOPPED"); 2 } else { result };
         #[cfg(target_os = "linux")]

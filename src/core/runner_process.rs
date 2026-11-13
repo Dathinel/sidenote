@@ -402,7 +402,7 @@ pub(super) fn run_runner_with_timeout(
             Some("The runner exceeded its output limit.")
         } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
-        } else if super::ask::cancel_requested() {
+        } else if crate::service::stopping() || super::ask::cancel_requested() {
             Some(super::ask::STOPPED)
         } else if started.elapsed() >= timeout {
             Some("The runner exceeded its time limit.")

@@ -116,6 +116,39 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     )?;
     Ok(())
 }
+/// Automatic discovery must not create a new generation for unchanged input.
+/// Only successful output completes a revision; failed attempts remain retryable.
+#[cfg(target_os = "linux")]
+pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
+    let root = super::super::state_dir();
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
+    }
+    if let Ok(job) = snapshot(&root, id)
+        && automatic_revision(&root, id).as_deref() == Some(job.input_revision.as_str())
+    {
+        return Ok(());
+    }
+    enqueue(id)
+}
+#[cfg(target_os = "linux")]
+fn automatic_revision(root: &Path, id: &str) -> Option<String> {
+    fs::read(queue(root).join(format!("{id}.completed")))
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+}
+fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
+    // Persist before acknowledging: a crash between these writes safely reuses output.
+    if cfg!(target_os = "linux") {
+        store_io::atomic_write(
+            &queue(root).join(format!("{id}.completed")),
+            revision.as_bytes(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn load_config(root: &Path) -> Result<RoutingConfig> {
     let mut config = super::super::Config::load_in(root)?.pipeline;
     config.meeting_languages = super::super::model_catalog::load_meeting_languages(root)?;
@@ -295,7 +328,7 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
                     ..Outcome::default()
                 };
             }
-            Ok(None) if start.elapsed().as_secs_f64() < seconds => {
+            Ok(None) if !crate::service::stopping() && start.elapsed().as_secs_f64() < seconds => {
                 thread::sleep(Duration::from_millis(50))
             }
             value => {
@@ -429,7 +462,7 @@ pub fn run_pending() -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
-    let automatic = args.iter().any(|arg| arg == "--automatic");
+    let automatic = crate::service::active() || args.iter().any(|arg| arg == "--automatic");
     if let Some(id) = args
         .windows(2)
         .find(|a| a[0] == "--meeting-id")
@@ -453,6 +486,9 @@ pub fn run_pending() -> Result<()> {
     fs::create_dir_all(queue(&root))?;
     let mut attempted = HashSet::new();
     loop {
+        if crate::service::stopping() {
+            return Ok(());
+        }
         let mut found = false;
         for entry in fs::read_dir(queue(&root))? {
             let entry = entry?;
@@ -468,7 +504,7 @@ pub fn run_pending() -> Result<()> {
             if !attempted.insert((pending.id.clone(), pending.generation)) {
                 continue;
             }
-            if automatic && completed_attempt(&root, &pending) {
+            if automatic && !retry_ready(&root, &pending) {
                 continue;
             }
             found = true;
@@ -492,7 +528,11 @@ pub fn run_pending() -> Result<()> {
                     "forced:hi" | "forced:mixed"
                 )
             {
-                if destination.exists() {
+                if destination.exists()
+                    && !crate::service::stopping()
+                    && snapshot(&root, &job.id)
+                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                {
                     let mut english = english_fallback(
                         &job.baseline,
                         &job.config,
@@ -505,6 +545,13 @@ pub fn run_pending() -> Result<()> {
                     english.warnings.clear();
                     write_transcript(&destination, &english)?;
                 }
+                if crate::service::stopping()
+                    || !snapshot(&root, &job.id)
+                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                {
+                    continue;
+                }
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
@@ -514,6 +561,7 @@ pub fn run_pending() -> Result<()> {
                 && old.input_checksum == job.input_revision
                 && !old.degraded()
             {
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
@@ -556,13 +604,15 @@ pub fn run_pending() -> Result<()> {
             {
                 outcome.error = Some(error);
             }
+            let mut stable = !crate::service::stopping();
             match snapshot(&root, &job.id) {
                 Ok(latest) if latest.input_revision != job.input_revision => {
-                    job = latest;
+                    stable = false;
                     outcome.success = false;
                     outcome.error = Some("input changed during routing".into());
                 }
                 Err(_) => {
+                    stable = false;
                     outcome.success = false;
                     outcome.error = Some("input unavailable after routing".into());
                 }
@@ -599,13 +649,14 @@ pub fn run_pending() -> Result<()> {
                     ),
                 )
             });
-            write_transcript(&destination, &result)?;
+            let successful = stable && outcome.success && !result.degraded();
+            let published_fallback = publish_attempt(&destination, &result, successful, stable)?;
             let normalization = fs::read(work.join("normalization-outcome.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
             store_io::write(
                 &work.join("attempt.json"),
-                &serde_json::json!({"generation":pending.generation,"child":outcome,"published_fallback":result.degraded(),"segments":result.segments.len(),"normalization":normalization}),
+                &serde_json::json!({"generation":pending.generation,"child":outcome,"published_fallback":published_fallback,"retry_after_ms":chrono::Utc::now().timestamp_millis()+30_000,"segments":result.segments.len(),"normalization":normalization}),
             )?;
             cleanup_work(&work);
             if outcome
@@ -613,9 +664,10 @@ pub fn run_pending() -> Result<()> {
                 .as_deref()
                 .is_some_and(|e| e.contains("FATAL:"))
             {
-                return Err("FATAL: Hex selection check failed; English fallback published".into());
+                return Err("FATAL: Hex selection check failed; pending retained".into());
             }
-            if !result.degraded() {
+            if successful {
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
             }
         }
@@ -626,15 +678,37 @@ pub fn run_pending() -> Result<()> {
     Ok(())
 }
 
-fn completed_attempt(root: &Path, pending: &Pending) -> bool {
+fn publish_attempt(
+    destination: &Path,
+    result: &Transcript,
+    successful: bool,
+    stable: bool,
+) -> Result<bool> {
+    if successful {
+        write_transcript(destination, result)?;
+    } else if stable && !crate::service::stopping() {
+        match store_io::publish(destination, &serde_json::to_vec_pretty(result)?) {
+            Ok(()) => return Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(false)
+}
+fn retry_ready(root: &Path, pending: &Pending) -> bool {
     let receipt = root
         .join("local/router-work")
         .join(&pending.id)
         .join("attempt.json");
-    fs::read(receipt)
+    !fs::read(receipt)
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .is_some_and(|v| v["generation"].as_u64().map(u128::from) == Some(pending.generation))
+        .is_some_and(|v| {
+            v["generation"].as_u64().map(u128::from) == Some(pending.generation)
+                && v["retry_after_ms"]
+                    .as_i64()
+                    .is_some_and(|t| t > chrono::Utc::now().timestamp_millis())
+        })
 }
 pub fn start_worker() -> io::Result<()> {
     if !configured()
@@ -650,11 +724,17 @@ pub fn start_worker() -> io::Result<()> {
                     return true;
                 };
                 snapshot(&super::super::state_dir(), &pending.id).is_ok()
-                    && !completed_attempt(&super::super::state_dir(), &pending)
+                    && retry_ready(&super::super::state_dir(), &pending)
             })
         })
     {
         return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if crate::service::active() {
+        return crate::service::workers::start("routing", || {
+            let _ = run_pending();
+        });
     }
     let child = crate::platform::worker_command(std::env::current_exe()?)?
         .arg("--route-pending")
@@ -732,6 +812,32 @@ fn prepared_chunks(
 #[cfg(test)]
 mod recording_guard_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn automatic_completion_survives_crash_before_queue_acknowledgement() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "1700000000000-1";
+        let pending = queue(root.path()).join(format!("{id}.json"));
+        store_io::atomic_write(&pending, b"pending generation").unwrap();
+        let bytes = fs::read(&pending).unwrap();
+        assert!(automatic_revision(root.path(), id).is_none());
+        complete_automatic(root.path(), id, "input-a").unwrap();
+        assert_eq!(
+            automatic_revision(root.path(), id).as_deref(),
+            Some("input-a")
+        );
+        assert_eq!(fs::read(&pending).unwrap(), bytes);
+        // A newer enqueue must survive an older worker's acknowledgement.
+        store_io::atomic_write(&pending, b"new generation").unwrap();
+        acknowledge(root.path(), id, &pending, &bytes).unwrap();
+        assert_eq!(fs::read(&pending).unwrap(), b"new generation");
+        acknowledge(root.path(), id, &pending, b"new generation").unwrap();
+        assert!(!pending.exists());
+        assert_eq!(
+            automatic_revision(root.path(), id).as_deref(),
+            Some("input-a")
+        );
+    }
     #[test]
     fn routing_enqueue_skips_short_and_unknown_and_deduplicates_kept() {
         let root = std::env::temp_dir().join(format!(
@@ -763,5 +869,46 @@ mod recording_guard_tests {
         let before = fs::read(&path).unwrap();
         enqueue_in(&root, &meetings, id).unwrap();
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    #[test]
+    fn failure_timeout_instability_preserve_success_and_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let dest = destination(root.path(), "123-4");
+        let config = RoutingConfig::default();
+        let mut good = english_fallback(&[], &config, "distinct-good".into(), "seed");
+        good.warnings.clear();
+        write_transcript(&dest, &good).unwrap();
+        let original = fs::read(&dest).unwrap();
+        let fallback = english_fallback(&[], &config, "new-input".into(), "forced failure");
+        for stable in [true, false] {
+            assert!(!publish_attempt(&dest, &fallback, false, stable).unwrap());
+            assert_eq!(fs::read(&dest).unwrap(), original);
+        }
+        let pending = Pending {
+            id: "123-4".into(),
+            generation: 1,
+        };
+        let receipt = root.path().join("local/router-work/123-4/attempt.json");
+        store_io::write(&receipt, &serde_json::json!({"generation":1,"retry_after_ms":chrono::Utc::now().timestamp_millis()+30000})).unwrap();
+        assert!(!retry_ready(root.path(), &pending));
+        store_io::write(
+            &receipt,
+            &serde_json::json!({"generation":1,"retry_after_ms":0}),
+        )
+        .unwrap();
+        assert!(retry_ready(root.path(), &pending));
+        assert!(!queue(root.path()).join("123-4.completed").exists());
+        fs::remove_file(&dest).unwrap();
+        assert!(!publish_attempt(&dest, &fallback, false, false).unwrap());
+        assert!(!dest.exists());
+        assert!(publish_attempt(&dest, &fallback, false, true).unwrap());
+        assert!(!publish_attempt(&dest, &fallback, false, true).unwrap());
+        assert!(publish_attempt(&dest, &good, true, true).is_ok());
+        assert_eq!(fs::read(&dest).unwrap(), original);
     }
 }
