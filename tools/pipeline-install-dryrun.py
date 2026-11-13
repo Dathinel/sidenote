@@ -8,6 +8,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import uuid
+import winreg
+from contextlib import contextmanager
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / 'scripts/meeting-pipeline'
@@ -19,6 +22,31 @@ SETTINGS = ('HEX_MEETING_PROJECT', 'HEX_MEETING_PROJECT_PATTERN',
             'HEX_MEETING_OWNER_NAME', 'HEX_MEETING_COMPANY_NAME',
             'HEX_MEETING_PRODUCT_NAME', 'HEX_TE_ASR_MODEL')
 FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0)
+REGISTRY_PRELUDE = r'''
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices;
+public class PipelineTestRegistry {
+    [DllImport("advapi32.dll")] public static extern int RegOverridePredefKey(IntPtr key, IntPtr replacement);
+}'
+$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($env:SIDENOTE_TEST_HKCU)
+if (-not $key -or [PipelineTestRegistry]::RegOverridePredefKey([IntPtr](-2147483647), $key.Handle.DangerousGetHandle()) -ne 0) {
+    throw 'Test registry isolation failed'
+}
+'''
+
+
+@contextmanager
+def user_settings(env, settings):
+    # Redirect HKCU only in the child: never inspect or alter the owner's Environment key.
+    hive = r'Software\SidenotePipelineTest-' + uuid.uuid4().hex
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, hive + r'\Environment') as key:
+        for name, value in settings.items():
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    try:
+        yield dict(env, SIDENOTE_TEST_HKCU=hive)
+    finally:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, hive + r'\Environment')
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, hive)
 
 
 def require(condition, message):
@@ -37,6 +65,7 @@ def environment(profile, configured=True):
     env.update(USERPROFILE=str(profile / 'home'), HOME=str(profile / 'home'),
                APPDATA=str(profile / 'appdata'), LOCALAPPDATA=str(profile / 'localappdata'),
                TEMP=str(profile / 'temp'), TMP=str(profile / 'temp'))
+    env['SIDENOTE_DATA_DIR'] = str(profile / 'data')
     for key in ('USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP'):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
     if configured:
@@ -57,8 +86,11 @@ def bundle(stub=True):
 
 
 def powershell(args, env, payload=None):
+    require(args[0] == '-File', 'expected script invocation')
+    command = '& ' + ' '.join("'" + arg.replace("'", "''") + "'" for arg in args[1:])
     return subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive',
-                           '-ExecutionPolicy', 'Bypass'] + args, env=env,
+                           '-ExecutionPolicy', 'Bypass', '-Command',
+                           REGISTRY_PRELUDE + command + '; exit $LASTEXITCODE'], env=env,
                           input=json.dumps(payload) if payload else None,
                           text=True, capture_output=True, timeout=60, creationflags=FLAGS)
 
@@ -83,14 +115,32 @@ def dryrun(profile):
     payload = bundle()
     before = snapshot(root)
     missing = environment(profile, configured=False)
-    result = powershell(['-File', str(install)], missing, payload)
+    with user_settings(missing, {}) as isolated:
+        result = powershell(['-File', str(install)], isolated, payload)
     require(result.returncode != 0, 'missing settings accepted')
     require(snapshot(root) == before, 'missing settings changed legacy bytes')
-    result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], missing)
+    with user_settings(missing, {}) as isolated:
+        result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], isolated)
     require(result.returncode == 0 and 'legacy-watcher-started' in result.stdout, 'legacy watcher failed')
     print('PASS missing settings: all 14 legacy files unchanged and legacy watcher runs')
-    result = powershell(['-File', str(install)], env, payload)
-    require(result.returncode == 0, 'first install failed')
+    for absent in SETTINGS:
+        partial = dict.fromkeys(SETTINGS, 'synthetic-user-setting')
+        del partial[absent]
+        with user_settings(missing, partial) as isolated:
+            result = powershell(['-File', str(install)], isolated, payload)
+        require(result.returncode != 0, 'partial user settings accepted')
+        require(snapshot(root) == before, 'partial settings changed legacy bytes')
+    print('PASS partial settings: each of 8 missing User settings blocks publication')
+    with user_settings(missing, dict.fromkeys(SETTINGS, 'synthetic-user-setting')) as isolated:
+        result = powershell(['-File', str(install)], isolated, payload)
+        require(result.returncode == 0, 'User-only settings install failed')
+        require(not result.stdout and not result.stderr, 'installer printed private output')
+        installed = snapshot(root)
+        result = powershell(['-File', str(install)], isolated, payload)
+        require(snapshot(root) == installed, 'identical retry changed installed files')
+    require(result.returncode == 0, 'User-only settings install failed')
+    require(not result.stdout and not result.stderr, 'installer printed private output')
+    print('PASS User-only settings: isolated HKCU install and identical retry succeed unchanged')
     pointer = root / '.pipeline-current.json'
     selected = json.loads(pointer.read_text())
     generation = root / '.pipeline-generations' / selected['current']['generation']
@@ -101,10 +151,12 @@ def dryrun(profile):
     for name in NAMES:
         require(digest((generation / name).read_bytes()) == manifest['files'][name], 'generation hash mismatch')
     require(len(list((root / '.pipeline-backups').rglob('*.*'))) >= 14, 'legacy backup incomplete')
-    result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], env)
+    with user_settings(env, {}) as isolated:
+        result = powershell(['-File', str(root / 'hex-meeting-watch.ps1')], isolated)
     require(result.returncode == 0 and 'stub-watcher-started' in result.stdout, 'stub watcher failed')
     print('PASS first install: 14 sealed files, pointer, backup, real entry launches stub watcher')
-    interrupt_install(profile, env, root, payload, 'stub-watcher-started')
+    with user_settings(env, {}) as isolated:
+        interrupt_install(profile, isolated, root, payload, 'stub-watcher-started')
 
 
 def interrupt_install(profile, env, root, payload, expected=None):
@@ -116,7 +168,7 @@ def interrupt_install(profile, env, root, payload, expected=None):
     line = next(i for i, s in enumerate(install.read_text().splitlines(), 1)
                 if s.strip() == 'Publish-Pointer $next $current')
     quote = lambda p: "'" + str(p).replace("'", "''") + "'"
-    command = (f'Set-PSBreakpoint -Script {quote(install)} -Line {line} -Action '
+    command = (REGISTRY_PRELUDE + f'Set-PSBreakpoint -Script {quote(install)} -Line {line} -Action '
                '{ [IO.File]::WriteAllText(' + quote(signal) + ", 'sealed'); Start-Sleep -Seconds 60 } | Out-Null; "
                f'& {quote(install)}')
     payload['version'] = 'synthetic-interrupted'

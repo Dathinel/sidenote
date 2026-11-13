@@ -64,7 +64,9 @@ try {
     if (-not [IO.File]::Exists($pointerPath) -and -not [IO.File]::Exists($entryPath)) { exit 0 }
     foreach ($setting in @('HEX_MEETING_PROJECT','HEX_MEETING_PROJECT_PATTERN','HEX_MEETING_PROJECT_CONTEXT_PATTERN',
         'HEX_MEETING_KB_REPO','HEX_MEETING_OWNER_NAME','HEX_MEETING_COMPANY_NAME','HEX_MEETING_PRODUCT_NAME','HEX_TE_ASR_MODEL')) {
-        if (-not [Environment]::GetEnvironmentVariable($setting)) { throw 'Private settings missing' }
+        $value = [Environment]::GetEnvironmentVariable($setting)
+        if (-not $value) { $value = [Environment]::GetEnvironmentVariable($setting, 'User') }
+        if (-not $value) { throw 'Private settings missing' }
     }
     $names = @('hex-meeting-compare-delayed.ps1','hex-meeting-compare-granola.py','hex-meeting-english.ps1',
         'hex-meeting-notes.ps1','hex-meeting-publish.py','hex-meeting-quick-title.ps1','hex-meeting-render.py',
