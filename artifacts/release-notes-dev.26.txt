@@ -1,0 +1,7 @@
+Sidenote 0.0.1-dev.26
+
+The meeting scripts now install after an app update. In dev.25 the update could not see your saved pipeline settings, so the scripts install stopped with "Private settings missing". Sidenote now reads those settings from your Windows user settings as well, and keeps retrying the scripts install each time it starts until it succeeds. The error clears only after the scripts are actually installed. Setting values are never shown or logged.
+
+This release also carries the groundwork for the Linux version: meeting files are opened in a way that cannot be redirected, background helpers run contained, and sync is switched off on Linux for now. There is no Linux download yet.
+
+Needs on your laptop: nothing
