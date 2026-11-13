@@ -99,7 +99,7 @@
   "src/service.rs": "0bb017767c4b9dc4a26b01306bfad2fae4d70a1bc99d843f1f3607179dac9ff2",
   "src/sync_owner/commands.rs": "69cd3eb085d9b3c76581f3a9335df46fe4b71279c44aaa72f03eab0c3209ca8d",
   "src/sync_owner/local.rs": "c231eda3c3f1a213381c3a1a0ca25486fe16146d20773bd22578e6955afec91c",
-  "src/sync_owner/mcp.rs": "b754e3fdccbdd3dc4ba20c943c8a56c1f33e5e70941964e6653978a005fe4f07",
+  "src/sync_owner/mcp.rs": "0f59d5b4431ac3b617b0621351e09005116e2d09492693abc47da3fbf614e724",
   "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
   "src/ui/ai_notes.rs": "02f8c930a44764a34bfc50f0d33d97f080eb8f3fe77183f23135988dc01873ac",
   "src/ui/annotations/notebooks.rs": "05a4b68e8f09a2288e282b4d385207b8b517c5bac0ddbb262092dfea3e5567a7",

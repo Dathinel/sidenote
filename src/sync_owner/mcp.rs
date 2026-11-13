@@ -75,29 +75,21 @@ mod tests {
         use crate::core::memory::*;
         use std::{fs, process::Command};
         const CHILD: &str = "SIDENOTE_TEST_OWNER_MEMORY";
-        let Ok(root) = std::env::var(CHILD) else {
-            let root = tempfile::tempdir().unwrap();
+        if std::env::var_os(CHILD).is_none() {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "sync_owner::mcp::tests::owner_memory_reads_do_not_publish_or_repair_exports_but_local_proposals_persist", "--nocapture"])
-                .env(CHILD, root.path())
+                .env(CHILD, "1")
                 .output().unwrap();
             assert!(
                 output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             );
             return;
-        };
-        let root = std::path::PathBuf::from(root);
-        crate::core::configure_paths(&[
-            "--data-dir".into(),
-            root.clone().into_os_string(),
-            "--meetings-dir".into(),
-            root.join("meetings").into_os_string(),
-            "--peers-dir".into(),
-            root.join("peers").into_os_string(),
-        ])
-        .unwrap();
+        }
+        let root = crate::core::state_dir();
+        fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("config.json"),
             r#"{"version":1,"features":{"memory":true}}"#,
