@@ -1,0 +1,41 @@
+[Unit]
+Description=Sidenote unattended server for uid %i
+Wants=network-online.target
+After=network-online.target user@%i.service
+Requires=user@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=%i
+ExecStartPre=/usr/bin/test %i -ne 0
+ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/sidenote-%i/state /var/lib/sidenote-%i/meetings /var/lib/sidenote-%i/peers
+StateDirectory=sidenote-%i
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/sidenote-%i
+Environment=HOME=/var/lib/sidenote-%i
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/%i
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%i/bus
+Environment=SIDENOTE_DATA_DIR=/var/lib/sidenote-%i/state
+Environment=SIDENOTE_HEX_DIR=/var/lib/sidenote-%i/meetings
+Environment=SIDENOTE_PEERS_DIR=/var/lib/sidenote-%i/peers
+LoadCredentialEncrypted=sidenote-key:/etc/credstore.encrypted/sidenote-%i
+# Only this trusted launcher contacts the user manager; worker and helpers inherit no bus.
+ExecStart=/usr/bin/systemd-run --user --unit=sidenote-server-worker --service-type=exec --wait --pipe --collect --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=15 --property=MemoryMax=512M --property=CPUQuota=100%% --property=TasksMax=32 --property=NoNewPrivileges=yes --property=PrivateUsers=yes --property=ProtectSystem=strict --property=ProtectHome=tmpfs --property=RootDirectory=/var/lib/sidenote-%i --property=MountAPIVFS=yes "--property=BindReadOnlyPaths=/usr /lib /lib64 /etc/ssl /etc/resolv.conf /etc/hosts /etc/nsswitch.conf /etc/passwd /etc/group" "--property=ReadWritePaths=+/state +/meetings +/peers" --property=PrivateTmp=yes --property=PrivateDevices=yes "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6" --property=LockPersonality=yes --property=RestrictRealtime=yes --property=RestrictSUIDSGID=yes --property=ProtectKernelTunables=yes --property=ProtectKernelModules=yes --property=ProtectControlGroups=yes --property=SystemCallFilter=~@mount --property=LimitCORE=0 --property=LoadCredential=sidenote-key:%d/sidenote-key --setenv=HOME=/state --setenv=PATH=/usr/local/bin:/usr/bin:/bin "--property=UnsetEnvironment=DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR" --property=OOMPolicy=stop --property=MemorySwapMax=0 --working-directory=/state /usr/local/libexec/sidenote/sidenote --server --device-role server --data-dir /state --meetings-dir /meetings --peers-dir /peers
+ExecStop=/usr/bin/systemctl --user stop sidenote-server-worker.service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+LimitCORE=0
+MemoryMax=1G
+CPUQuota=100%
+TasksMax=64
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

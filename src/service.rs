@@ -287,6 +287,11 @@ fn supervise() {
 }
 
 pub fn run() -> i32 {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("SERVICE_ROOT_REFUSED");
+        return 2;
+    }
     crate::listener::log(&format!(
         "start pid={} role={}",
         std::process::id(),
