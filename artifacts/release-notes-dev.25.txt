@@ -1,0 +1,7 @@
+Sidenote 0.0.1-dev.25
+
+Meeting notes no longer fail with a settings error when Sidenote's background recorder checks its settings at the same moment as the notes job. Reading your settings no longer locks the file, so the recorder's regular checks can't block each other; saving settings still takes turns. If the settings are briefly busy, the notes job waits for the next check instead of failing.
+
+Saving settings while another part of Sidenote is reading them now works reliably on Windows, and a save is written to disk before Sidenote reports it as done.
+
+Needs on your laptop: nothing
