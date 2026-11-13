@@ -1,19 +1,324 @@
 """CPU diarization/VAD, bounded speech cuts, and sequential warm Hex API passes."""
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
+import struct
 from pathlib import Path
 import subprocess
 import time
 import urllib.error
 import urllib.request
+import wave
 
 import numpy as np
 import soundfile as sf
 
 RATE = 16000
+LID_MODEL = 'd787948f922bd699e1cbcbeeeb16bf830514ec138bbbb89b516dccbc7283bbe5'
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+
+
+def routing_config(path):
+    if not path:
+        return None
+    try:
+        config = read_json(path)
+        if config.get('labs', {}).get('language_detection') is True:
+            return dict(labs={k: v for k, v in config['labs'].items()
+                              if k in ('language_detection', 'language_detection_settings')},
+                        pipeline={k: v for k, v in config.get('pipeline', {}).items()
+                                  if k in ('language_mode', 'meeting_languages')})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def pcm_identity(path):
+    with wave.open(str(path), 'rb') as wav:
+        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, RATE, 'NONE'):
+            raise ValueError('Routing requires mono PCM16 at 16 kHz')
+        count = wav.getnframes()
+        pcm = wav.readframes(count)
+    if len(pcm) != count * 2 or count < 1600:
+        raise ValueError('Truncated or short routing WAV')
+    return pcm
+
+
+def pcm_hash(pcm):
+    # Match M5 pcm_sha256: signed PCM16 / 32768, encoded as little-endian f32.
+    digest = hashlib.sha256()
+    for (sample,) in struct.iter_unpack('<h', pcm):
+        digest.update(struct.pack('<f', sample / 32768.0))
+    return digest.hexdigest()
+
+
+def chunk_identity(chunk):
+    return {key: chunk[key] for key in
+            ('Id', 'Start', 'End', 'AudioStart', 'AudioEnd', 'Speaker', 'Track', 'Path')}
+
+
+def lid_request(chunks, languages):
+    jobs = []
+    identities = []
+    if len({c['Id'] for c in chunks}) != len(chunks):
+        raise ValueError('Duplicate chunk IDs')
+    for index, chunk in enumerate(chunks):
+        pcm = pcm_identity(chunk['Path'])
+        frames = len(pcm) // 2
+        # Equal slices cover padding too and avoid a tiny tail above the M5 limit.
+        count = math.ceil(frames / (24 * RATE))
+        windows = []
+        hashes = []
+        for part in range(count):
+            a, b = frames * part // count, frames * (part + 1) // count
+            windows.append(dict(id=f'{chunk["Id"]}-{part}', start=a / RATE,
+                                end=b / RATE, audio_start=a / RATE,
+                                track=chunk['Track'], speaker=chunk['Speaker'], turn=chunk['Id']))
+            hashes.append(pcm_hash(pcm[a*2:b*2]))
+        job = dict(id=f'chunk-{index}', wav=str(Path(chunk['Path']).resolve()), chunks=windows)
+        jobs.append(job)
+        identities.append(dict(chunk=chunk_identity(chunk), pcm=pcm_hash(pcm), hashes=hashes))
+    return dict(meeting_languages=languages, jobs=jobs), identities
+
+
+def checked_sidecars(request, identities, output, mode):
+    rows = []
+    for job, identity in zip(request['jobs'], identities):
+        sidecar = read_json(output / job['id'] / 'language-detect.v1.json')
+        if (sidecar.get('schema') != 'language-detect.v1' or sidecar.get('job') != job['id']
+                or sidecar.get('source_wav') != job['wav']
+                or sidecar.get('meeting_languages') != request['meeting_languages']
+                or sidecar.get('model_sha256') != LID_MODEL or sidecar.get('language_mode') != mode
+                or len(sidecar.get('chunks', [])) != len(job['chunks'])):
+            raise ValueError('Mismatched language sidecar')
+        for expected, actual, digest in zip(job['chunks'], sidecar['chunks'], identity['hashes']):
+            for key in ('start', 'end', 'track', 'speaker', 'turn', 'audio_start'):
+                if actual.get(key) != expected[key]:
+                    raise ValueError('Mismatched language window')
+            if actual.get('chunk') != expected['id']:
+                raise ValueError('Mismatched language chunk')
+            # Forced bypass has no detector PCM hash; adapter identity still binds the WAV.
+            if actual.get('pcm_f32le_sha256') != digest and actual.get('status') != 'forced':
+                raise ValueError('Mismatched language PCM')
+        rows.append(dict(identity=identity, sidecar=sidecar))
+    return rows
+
+
+def observe(args):
+    config = routing_config(args.routing_config)
+    if config is None:
+        return
+    temp = Path(args.temp)
+    # A fresh directory prevents a failed invocation from accepting older sidecars.
+    output = temp / ('lid-' + str(time.time_ns()))
+    output.mkdir()
+    report = dict(schema='routing-observe.v1', rows=[], fallback_count=0, reason='detection_failed')
+    try:
+        chunks = read_json(temp / 'chunks.json')
+        languages = config.get('pipeline', {}).get('meeting_languages', ['en', 'hi', 'te'])
+        request, identities = lid_request(chunks, languages)
+        request_path = output / 'request.json'
+        snapshot = output / 'config.json'
+        save(request_path, request)
+        save(snapshot, config)
+        mode = config.get('pipeline', {}).get('language_mode', 'auto')
+        subprocess.run([args.lid_exe, '--language-detect', str(request_path),
+                        '--lid-config', str(snapshot), '--lid-output', str(output)],
+                       check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        report['rows'] = checked_sidecars(request, identities, output, mode)
+        report['reason'] = 'observed'
+        report['config'] = config
+        report['fallback_count'] = sum(any(w['status'] not in ('guess', 'forced')
+                                         for w in r['sidecar']['chunks']) for r in report['rows'])
+    except (OSError, ValueError, KeyError, TypeError, wave.Error, subprocess.SubprocessError):
+        report['fallback_count'] = len(read_json(temp / 'chunks.json'))
+    save(temp / 'routing-observe.json', report)
+    print(json.dumps(dict(stage='routing-observe', reason=report['reason'],
+                          fallback_count=report['fallback_count'])), flush=True)
+
+
+def english_coverages(path, chunks):
+    """Require a nonempty English reading over the entire speech interval on this track."""
+    if not path:
+        return set()
+    intervals = {c['Id']: [] for c in chunks}
+    for line in Path(path).read_text(encoding='utf-8-sig').splitlines():
+        row = json.loads(line)
+        track = {'microphone': 'microphone.wav', 'system': 'system.wav'}.get(row.get('source'))
+        if isinstance(row.get('text'), str) and row['text'].strip():
+            a, b = float(row['start_ms']) / 1000, float(row['end_ms']) / 1000
+            if math.isfinite(a) and math.isfinite(b) and b > a:
+                best, overlap = None, 0
+                # Match the wrapper's single best-overlap assignment, including ties.
+                for chunk in chunks:
+                    if chunk['Track'] != track:
+                        continue
+                    size = min(max(b, a + .2), chunk['End'] + .5) - max(a, chunk['Start'] - .5)
+                    if size > overlap:
+                        best, overlap = chunk['Id'], size
+                if best is not None:
+                    intervals[best].append((a, b))
+    covered = set()
+    for chunk in chunks:
+        cursor = chunk['Start']
+        for a, b in sorted(intervals[chunk['Id']]):
+            if a > cursor:
+                break
+            cursor = max(cursor, b)
+        if cursor >= chunk['End']:
+            covered.add(chunk['Id'])
+    return covered
+
+
+def english_coverage(path, chunk):
+    return chunk['Id'] in english_coverages(path, [chunk])
+
+
+def choose_route(sidecar, covered):
+    """Return all models whenever the available evidence cannot justify a narrower set."""
+    all_models = ['te', 'hi']
+    observed = {lang for w in sidecar['chunks'] for lang in w.get('observed_languages', [])}
+    observed.update(w['language'] for w in sidecar['chunks'] if w.get('language'))
+    if len(observed) > 1:
+        return all_models, 'mixed_evidence'
+    languages = sidecar['meeting_languages']
+    mode = sidecar['language_mode']
+    if mode == 'off':
+        return all_models, 'language_mode_off'
+    if mode.startswith('forced:'):
+        route = mode[7:]
+        selected = ['en', 'hi'] if route == 'mixed' else route.split('+')
+        if (not selected or any(s not in languages or s not in ('en', 'hi', 'te') for s in selected)
+                or any(w.get('status') != 'forced' or w.get('forced_route') != route
+                       for w in sidecar['chunks'])):
+            return all_models, 'invalid_forced_route'
+        reason = 'forced'
+    else:
+        if mode != 'auto' or sidecar.get('thresholds_calibrated') is not True:
+            return all_models, 'uncalibrated'
+        settings = sidecar.get('settings', {})
+        threshold = settings.get('confidence_threshold', 0)
+        margin = settings.get('margin_threshold', 0)
+        if not (.9 <= threshold <= 1 and .2 <= margin <= 1):
+            return all_models, 'invalid_thresholds'
+        selected = set()
+        for window in sidecar['chunks']:
+            top = window.get('top_two', [])
+            confidence = window.get('confidence')
+            observed = window.get('observed_languages', [])
+            if (window.get('status') != 'guess' or window.get('outside_meeting_languages') is not False
+                    or not isinstance(confidence, (int, float)) or not threshold <= confidence <= 1
+                    or len(top) != min(2, len(languages)) or not observed
+                    or top[0].get('language') != window.get('language')
+                    or top[0].get('confidence') != confidence
+                    or not all(isinstance(s.get('confidence'), (int, float))
+                               and 0 <= s['confidence'] <= 1 for s in top)
+                    or confidence - (top[1]['confidence'] if len(top) > 1 else 0) < margin
+                    or window.get('unrestricted_language') not in languages):
+                return all_models, 'unchecked_or_uncertain'
+            selected.update([window['language'], *observed])
+        reason = 'checked'
+    if not selected or any(s not in languages or s not in ('en', 'hi', 'te') for s in selected):
+        return all_models, 'out_of_set'
+    if 'en' in selected and not covered:
+        return all_models, 'english_coverage_missing'
+    return [s for s in all_models if s in selected], reason
+
+
+def config_key(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
+def build_plan(args, config):
+    temp = Path(args.temp)
+    chunks = read_json(temp / 'chunks.json')
+    passes = {lang: dict(model=model, version='unreported') for model, lang, _ in asr_passes()}
+    plan = dict(schema='routing-plan.v1', config_key=config_key(config), chunks=[], models=passes,
+                detector=LID_MODEL, fallback_count=0)
+    try:
+        report = read_json(temp / 'routing-observe.json')
+        if report.get('reason') != 'observed' or report.get('config') != config:
+            raise ValueError('Missing current observation')
+        by_id = {r['identity']['chunk']['Id']: r for r in report['rows']}
+        if len(by_id) != len(chunks) or len(report['rows']) != len(chunks):
+            raise ValueError('Incomplete observation')
+    except (OSError, ValueError, KeyError, TypeError):
+        by_id = {}
+    try:
+        coverage = english_coverages(getattr(args, 'english_reading', None), chunks)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        coverage = set()
+    for chunk in chunks:
+        models, reason, identity = ['te', 'hi'], 'missing_or_mismatched', None
+        try:
+            row = by_id[chunk['Id']]
+            identity = row['identity']
+            request, current = lid_request([chunk], row['sidecar']['meeting_languages'])
+            if identity != current[0]:
+                raise ValueError('Stale PCM or chunk mapping')
+            sidecar = row['sidecar']
+            if (sidecar.get('schema') != 'language-detect.v1' or sidecar.get('model_sha256') != LID_MODEL
+                    or sidecar.get('source_wav') != request['jobs'][0]['wav']
+                    or sidecar.get('meeting_languages') != config.get('pipeline', {}).get('meeting_languages', ['en', 'hi', 'te'])
+                    or sidecar.get('language_mode') != config.get('pipeline', {}).get('language_mode', 'auto')):
+                raise ValueError('Mismatched sidecar header')
+            expected = request['jobs'][0]['chunks']
+            if len(sidecar['chunks']) != len(expected):
+                raise ValueError('Incomplete windows')
+            for actual, window, digest in zip(sidecar['chunks'], expected, identity['hashes']):
+                if (any(actual.get(k) != v for k, v in window.items() if k != 'id')
+                        or actual.get('chunk') != window['id']
+                        or (actual.get('pcm_f32le_sha256') != digest and sidecar['language_mode'][:7] != 'forced:')):
+                    raise ValueError('Mismatched window evidence')
+            models, reason = choose_route(sidecar, chunk['Id'] in coverage)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, wave.Error):
+            pass
+        fallback = reason not in ('checked', 'forced')
+        plan['fallback_count'] += int(fallback)
+        plan['chunks'].append(dict(id=chunk['Id'], identity=identity, models=models, reason=reason,
+                                   fallback=fallback, route='+'.join(models) if models else 'en'))
+    return plan
+
+
+def plan_routes(args):
+    config = routing_config(args.routing_config)
+    if config is None:
+        return
+    plan = build_plan(args, config)
+    save(Path(args.temp) / 'routing-plan.json', plan)
+    print(json.dumps(dict(stage='routing-plan', chunks=len(plan['chunks']), fallback_count=plan['fallback_count'])), flush=True)
+
+
+def execution_routes(args, chunks):
+    config = routing_config(getattr(args, 'routing_config', None))
+    if config is None:
+        return None
+    models = {lang: dict(model=model, version='unreported') for model, lang, _ in asr_passes()}
+    routes = [dict(id=c['Id'], models=['te', 'hi'], route='te+hi', reason='invalid_plan',
+                   fallback=True) for c in chunks]
+    try:
+        saved = read_json(Path(args.temp) / 'routing-plan.json')
+        current = build_plan(args, config)
+        # Recompute against current PCM, config, model IDs and English coverage.
+        if saved != current:
+            raise ValueError('Incomplete or mismatched plan')
+        routes = current['chunks']
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, wave.Error):
+        pass
+    for row in routes:
+        row['planned_route'] = row['route']
+        if getattr(args, 'routing_mode', 'shadow') != 'execute':
+            row.update(models=['te', 'hi'], route='te+hi', reason='shadow:' + row['reason'])
+        row['model_versions'] = models
+        row['detector_version'] = LID_MODEL
+        row.pop('identity', None)
+    return routes
 
 
 def asr_passes():
@@ -185,12 +490,27 @@ def post_audio(client, model, lang, audio):
 
 def transcribe(args):
     temp=Path(args.temp); chunks=json.loads((temp/'chunks.json').read_text(encoding='utf-8'))
+    routes = execution_routes(args, chunks)
+    rerun = set(getattr(args, 'rerun_chunk', None) or [])
+    if rerun - {c['Id'] for c in chunks}:
+        raise ValueError('Unknown rerun chunk')
+    all_models = getattr(args, 'all_models', False)
+    if routes is not None and (all_models or rerun):
+        for row in routes:
+            if all_models or row['id'] in rerun:
+                row.update(models=['te', 'hi'], route='te+hi', reason='all_model_rerun', fallback=False)
+    by_id = {r['id']: r for r in routes} if routes is not None else None
     # No proxy, even on machines with a global HTTP proxy configured.
     client=urllib.request.build_opener(urllib.request.ProxyHandler({}))
     metrics={}; all_started=time.perf_counter()
     for model,lang,field in asr_passes():
         started=time.perf_counter(); segments=[]
         for index,chunk in enumerate(chunks):
+            if rerun and chunk['Id'] not in rerun:
+                continue
+            if by_id is not None and lang not in by_id[chunk['Id']]['models']:
+                chunk[field] = ''
+                continue
             tick=time.perf_counter()
             data=post_audio(client,model,lang,Path(chunk['Path']).read_bytes())
             if not isinstance(data.get('transcript'),str): raise RuntimeError('Hex API response missing transcript')
@@ -198,17 +518,48 @@ def transcribe(args):
             elapsed=time.perf_counter()-tick; segments.append(elapsed)
             print(f'{lang} {index+1}/{len(chunks)} {chunk["Id"]}: {elapsed:.3f}s',flush=True)
         metrics[lang]={'seconds':time.perf_counter()-started,'segment_seconds':segments}
+    if by_id is not None:
+        empty = {c['Id'] for c in chunks if (not rerun or c['Id'] in rerun)
+                 and by_id[c['Id']]['models'] and len(by_id[c['Id']]['models']) < 2
+                 and not (c['Telugu'].strip() or c['Hindi'].strip())}
+        # A selected recognizer returning no speech must retry the omitted recognizer.
+        for model, lang, field in asr_passes():
+            for chunk in chunks:
+                row = by_id[chunk['Id']]
+                if chunk['Id'] not in empty or lang in row['models']:
+                    continue
+                tick = time.perf_counter()
+                data = post_audio(client, model, lang, Path(chunk['Path']).read_bytes())
+                if not isinstance(data.get('transcript'), str):
+                    raise RuntimeError('Hex API response missing transcript')
+                chunk[field] = data['transcript'].strip()
+                elapsed = time.perf_counter() - tick
+                metrics[lang]['seconds'] += elapsed
+                metrics[lang]['segment_seconds'].append(elapsed)
+        for identity in empty:
+            by_id[identity].update(models=['te', 'hi'], route='te+hi', reason='empty_selected_reading', fallback=True)
     metrics['asr_seconds']=time.perf_counter()-all_started
+    if routes is not None:
+        metrics['routing'] = dict(chunks=routes, fallback_count=sum(r['fallback'] for r in routes),
+                                  mode=getattr(args, 'routing_mode', 'shadow'))
+        save(temp/'routing-execution.json', metrics['routing'])
+        print(json.dumps(dict(stage='routing-execute', fallback_count=metrics['routing']['fallback_count'])), flush=True)
     save(temp/'chunks.json',chunks)
     save(temp/'asr-timings.json',metrics)
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['prepare','transcribe'])
+    parser.add_argument('command',choices=['prepare','observe','plan','transcribe'])
     parser.add_argument('--temp',required=True)
     parser.add_argument('--meeting')
     parser.add_argument('--models')
     parser.add_argument('--ffmpeg',default='')
+    parser.add_argument('--routing-config')
+    parser.add_argument('--lid-exe')
+    parser.add_argument('--english-reading')
+    parser.add_argument('--routing-mode',choices=['shadow','execute'],default='shadow')
+    parser.add_argument('--all-models',action='store_true')
+    parser.add_argument('--rerun-chunk',action='append')
     args=parser.parse_args()
-    prepare(args) if args.command=='prepare' else transcribe(args)
+    {'prepare': prepare, 'observe': observe, 'plan': plan_routes, 'transcribe': transcribe}[args.command](args)

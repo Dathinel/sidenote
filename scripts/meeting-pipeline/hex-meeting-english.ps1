@@ -8,6 +8,11 @@ param(
     [ValidateRange(0,3600)][int]$TranscriptionTimeoutSeconds = $(if ($env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS) { [int]$env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS } else { 0 }),
     [ValidateRange(0.01,10.0)][double]$AsrSecondsPerAudioSecondPerPass = 0.20,
     [ValidateRange(1.0,10.0)][double]$AsrDeadlineHeadroom = 1.5,
+    # Explicit snapshot only; never discover installed settings for this experiment.
+    [string]$RoutingConfig,
+    [string]$LanguageDetectExe,
+    [ValidateSet('shadow','execute')][string]$RoutingMode = 'shadow',
+    [switch]$AllModels,
     # Rebuild only the summary from the existing english-transcript.md (no audio, no translation).
     [switch]$NotesOnly
 )
@@ -72,6 +77,14 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     $prepareArgs = @('prepare','--meeting',$dir.FullName,'--temp',$temp,'--models',$extraModels)
     if ($ffmpeg) { $prepareArgs += @('--ffmpeg',$ffmpeg.Source) }
     Invoke-Native $uv.Source ($uvArgs + $prepareArgs)
+    if ($RoutingConfig) {
+        $lidExe = if ($LanguageDetectExe) { $LanguageDetectExe } else { $hex }
+        Invoke-Native $uv.Source ($uvArgs + @('observe','--temp',$temp,'--routing-config',$RoutingConfig,'--lid-exe',$lidExe)) 360 'prepare'
+        $routeArgs = @('--routing-config',$RoutingConfig)
+        $readingFile = @((Join-Path $dir.FullName 'hex-original\transcript.ndjson'), (Join-Path $dir.FullName 'transcript.ndjson')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if ($readingFile) { $routeArgs += @('--english-reading',$readingFile) }
+        Invoke-Native $uv.Source ($uvArgs + @('plan','--temp',$temp) + $routeArgs) 360 'prepare'
+    }
     $audioInfo = [IO.File]::ReadAllText((Join-Path $temp 'audio-analysis.json'), $utf8) | ConvertFrom-Json
     $prepareSeconds = $step.Elapsed.TotalSeconds
     Write-Host ('Audio preparation: {0:N1}s; {1} speech segments; {2} remote speakers' -f $prepareSeconds,$audioInfo.segment_count,$audioInfo.remote_speakers)
@@ -86,7 +99,10 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         [int][Math]::Min(3600, [Math]::Max(1800, [Math]::Ceiling(300 + $meetingSeconds * $asrPasses * $AsrSecondsPerAudioSecondPerPass * $AsrDeadlineHeadroom)))
     }
     Write-Host "Transcription deadline: $asrDeadline seconds; ASR passes: $asrPasses"
-    Invoke-Native $uv.Source ($uvArgs + @('transcribe','--temp',$temp)) $asrDeadline 'transcribe'
+    $transcribeArgs = @('transcribe','--temp',$temp)
+    if ($RoutingConfig) { $transcribeArgs += $routeArgs + @('--routing-mode',$RoutingMode) }
+    if ($AllModels) { $transcribeArgs += '--all-models' }
+    Invoke-Native $uv.Source ($uvArgs + $transcribeArgs) $asrDeadline 'transcribe'
     $asrInfo = [IO.File]::ReadAllText((Join-Path $temp 'asr-timings.json'), $utf8) | ConvertFrom-Json
     foreach ($lang in 'te','hi') { Write-Host ('{0} transcription: {1:N1}s' -f $lang,$asrInfo.$lang.seconds) }
     $chunks = [IO.File]::ReadAllText((Join-Path $temp 'chunks.json'), $utf8) | ConvertFrom-Json
@@ -97,6 +113,20 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         analysis=$audioInfo
         transcription=$asrInfo
         segments=@($chunks | Select-Object Id,Start,End,AudioStart,AudioEnd,Speaker,Track,Telugu,Hindi)
+    }
+    $lidEvidenceFile = Join-Path $temp 'routing-observe.json'
+    if (Test-Path -LiteralPath $lidEvidenceFile) {
+        $lidEvidence = [IO.File]::ReadAllText($lidEvidenceFile, $utf8) | ConvertFrom-Json
+        $lidEvidence.PSObject.Properties.Remove('config')
+        foreach ($row in $lidEvidence.rows) {
+            $row.identity.chunk.PSObject.Properties.Remove('Path')
+            $row.sidecar.PSObject.Properties.Remove('source_wav')
+            if ($row.sidecar.settings) {
+                $row.sidecar.settings.PSObject.Properties.Remove('model')
+                $row.sidecar.settings.PSObject.Properties.Remove('runtime_dll')
+            }
+        }
+        $evidence['languageDetection'] = $lidEvidence
     }
     $evidencePath = Join-Path $dir.FullName 'audio-evidence.json'
     if (Test-Path -LiteralPath $evidencePath) { Copy-Item -LiteralPath $evidencePath -Destination "$evidencePath.$([DateTime]::Now.ToString('yyyyMMddHHmmssfff')).bak" }
