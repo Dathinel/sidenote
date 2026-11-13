@@ -7,6 +7,11 @@ use std::path::Path;
 pub const MODEL_ID: &str = "silero-vad";
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unavailable;
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    InvalidSampleRate(u32),
+    Unavailable,
+}
 pub type Span = (u64, u64);
 /// Persist with the piece receipt; create a fresh checkpoint for independent runs.
 #[derive(Default, Serialize, Deserialize)]
@@ -42,13 +47,17 @@ impl Checkpoint {
         &mut self,
         identity: (&str, &str),
         start: u64,
+        sample_rate: u32,
         mut audio: &[f32],
         last: bool,
         mut infer: impl FnMut(&mut Self, &[f32]) -> Result<f32, Unavailable>,
-    ) -> Result<Vec<Span>, Unavailable> {
+    ) -> Result<Vec<Span>, Error> {
+        if sample_rate != 16000 {
+            return Err(Error::InvalidSampleRate(sample_rate));
+        }
         if self.identity != (identity.0.into(), identity.1.into()) {
             if start != 0 {
-                return Err(Unavailable);
+                return Err(Error::Unavailable);
             }
             *self = Self {
                 identity: (identity.0.into(), identity.1.into()),
@@ -67,9 +76,11 @@ impl Checkpoint {
             })
             || audio.iter().any(|v| !v.is_finite())
         {
-            return Err(Unavailable);
+            return Err(Error::Unavailable);
         }
-        let end = start.checked_add(audio.len() as u64).ok_or(Unavailable)?;
+        let end = start
+            .checked_add(audio.len() as u64)
+            .ok_or(Error::Unavailable)?;
         let mut spans = Vec::new();
         while !audio.is_empty() || (last && !self.frame.is_empty()) {
             let n = (512 - self.frame.len()).min(audio.len());
@@ -82,9 +93,9 @@ impl Checkpoint {
             let at = self.consumed - self.frame.len() as u64;
             let mut frame = std::mem::take(&mut self.frame);
             frame.resize(512, 0.0);
-            let probability = infer(self, &frame)?;
+            let probability = infer(self, &frame).map_err(|_| Error::Unavailable)?;
             if !probability.is_finite() || !(0.0..=1.0).contains(&probability) {
-                return Err(Unavailable);
+                return Err(Error::Unavailable);
             }
             self.boundary(probability, at, &mut spans);
         }
@@ -144,10 +155,11 @@ impl Silero {
         state: &mut Checkpoint,
         identity: (&str, &str),
         start: u64,
+        sample_rate: u32,
         audio: &[f32],
         last: bool,
-    ) -> Result<Vec<Span>, Unavailable> {
-        state.push(identity, start, audio, last, |state, frame| {
+    ) -> Result<Vec<Span>, Error> {
+        state.push(identity, start, sample_rate, audio, last, |state, frame| {
             #[cfg(all(windows, feature = "asr-runtime"))]
             {
                 use ort::value::Tensor;
@@ -192,7 +204,9 @@ mod tests {
         let mut audio = vec![0.0; 512 * 30 + 71];
         audio[1024..6144].fill(0.8);
         let run = |state: &mut Checkpoint, start, audio: &[f32], last| {
-            state.push(("job", "mic"), start, audio, last, |_, frame| Ok(frame[0]))
+            state.push(("job", "mic"), start, 16000, audio, last, |_, frame| {
+                Ok(frame[0])
+            })
         };
         let whole = run(&mut Checkpoint::default(), 0, &audio, true).unwrap();
         assert_eq!(whole, vec![(1024, 6144)]);
@@ -204,6 +218,22 @@ mod tests {
             spans.extend(run(&mut restored, seam as u64, &audio[seam..], true).unwrap());
             assert_eq!(spans, whole);
         }
+    }
+    #[test]
+    fn sample_rate_rejected_before_inference() {
+        let mut state = Checkpoint::default();
+        let mut audio = vec![0.0; 512 * 30 + 71];
+        audio[1024..6144].fill(0.8);
+        for rate in [8000, 48000] {
+            let before = serde_json::to_vec(&state).unwrap();
+            let result = state.push(("job", "mic"), 0, rate, &audio, true, |_, _| {
+                panic!("invalid sample rate reached inference")
+            });
+            assert_eq!(result, Err(Error::InvalidSampleRate(rate)));
+            assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        }
+        let spans = state.push(("job", "mic"), 0, 16000, &audio, true, |_, f| Ok(f[0]));
+        assert_eq!(spans.unwrap(), vec![(1024, 6144)]);
     }
     #[test]
     fn absent_model_unavailable() {
@@ -237,23 +267,32 @@ mod tests {
             let audio = asr::read_wav(&root.join(format!("s45/audio/mixed/{id}.wav"))).unwrap();
             let mut vad = Silero::load(&store, &dll).unwrap();
             let whole = vad
-                .push(&mut Checkpoint::default(), ("job", id), 0, &audio, true)
+                .push(
+                    &mut Checkpoint::default(),
+                    ("job", id),
+                    0,
+                    16000,
+                    &audio,
+                    true,
+                )
                 .unwrap();
             assert_eq!(whole, expected, "{id}");
             let seam = 80_123;
             let mut state = Checkpoint::default();
             let mut resumed = vad
-                .push(&mut state, ("job", id), 0, &audio[..seam], false)
+                .push(&mut state, ("job", id), 0, 16000, &audio[..seam], false)
                 .unwrap();
             let mut restored =
                 serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
             let mut cold = Silero::load(&store, &dll).unwrap();
             let tail = &audio[seam..];
-            let next = cold.push(&mut restored, ("job", id), seam as u64, tail, true);
+            let next = cold.push(&mut restored, ("job", id), seam as u64, 16000, tail, true);
             resumed.extend(next.unwrap());
             assert_eq!(resumed, whole, "{id} cold seam");
             for key in [("new-job", id), ("new-job", "other-track")] {
-                let reset = cold.push(&mut restored, key, 0, &audio, true).unwrap();
+                let reset = cold
+                    .push(&mut restored, key, 0, 16000, &audio, true)
+                    .unwrap();
                 assert_eq!(reset, whole);
             }
         }
