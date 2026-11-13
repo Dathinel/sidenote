@@ -80,9 +80,10 @@ Gate 'relay-deps' { bun install --frozen-lockfile }
 Pop-Location
 Gate 'pipeline-tests' { python tools/pipeline-tests.py }
 Gate 'pipeline-install-dryrun' { python tools/pipeline-install-dryrun.py }
+Gate 'build-arguments' { powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/local-build-tests.ps1 }
 Gate 'fmt' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu fmt --check }
-Gate 'clippy' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets -j 1 -- -D warnings }
-Gate 'clippy-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets --features asr-runtime -j 1 -- -D warnings }
+Gate 'clippy' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets -j 1 '--' -D warnings }
+Gate 'clippy-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets --features asr-runtime -j 1 '--' -D warnings }
 Gate 'test' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -j 1 --quiet }
 Gate 'test-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -j 1 --quiet --features asr-runtime }
 (Get-Item (Join-Path $root 'src\main.rs')).LastWriteTime = Get-Date
