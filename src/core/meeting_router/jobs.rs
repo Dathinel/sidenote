@@ -124,7 +124,7 @@ pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    if let Ok(job) = snapshot(&root, id)
+    if let Ok(Some(job)) = snapshot(&root, id)
         && automatic_revision(&root, id).as_deref() == Some(job.input_revision.as_str())
     {
         return Ok(());
@@ -155,7 +155,7 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
     config.validate()?;
     Ok(config)
 }
-fn snapshot(root: &Path, id: &str) -> Result<Job> {
+fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
@@ -168,7 +168,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         &input.transcript,
     )? != super::super::recording_guard::Eligibility::Eligible
     {
-        return Err("Meeting is not eligible".into());
+        return Ok(None);
     }
     let mut baseline = Vec::new();
     for (i, line) in std::str::from_utf8(&input.transcript)?.lines().enumerate() {
@@ -204,7 +204,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         &input.revision()?,
         "pinned-input-v1",
     );
-    Ok(Job {
+    Ok(Some(Job {
         id: id.into(),
         folder,
         baseline,
@@ -213,7 +213,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         input_revision: revision,
         windows,
         input: Some(input),
-    })
+    }))
 }
 
 fn seconds_arg(flag: &str) -> Option<f64> {
@@ -509,7 +509,8 @@ pub fn run_pending() -> Result<()> {
             }
             found = true;
             let mut job = match snapshot(&root, &pending.id) {
-                Ok(job) => job,
+                Ok(Some(job)) => job,
+                Ok(None) => continue,
                 Err(_) => {
                     store_io::write(
                         &root
@@ -530,8 +531,9 @@ pub fn run_pending() -> Result<()> {
             {
                 if destination.exists()
                     && !crate::service::stopping()
-                    && snapshot(&root, &job.id)
-                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                    && snapshot(&root, &job.id).is_ok_and(|latest| {
+                        latest.is_some_and(|latest| latest.input_revision == job.input_revision)
+                    })
                 {
                     let mut english = english_fallback(
                         &job.baseline,
@@ -546,8 +548,9 @@ pub fn run_pending() -> Result<()> {
                     write_transcript(&destination, &english)?;
                 }
                 if crate::service::stopping()
-                    || !snapshot(&root, &job.id)
-                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                    || !snapshot(&root, &job.id).is_ok_and(|latest| {
+                        latest.is_some_and(|latest| latest.input_revision == job.input_revision)
+                    })
                 {
                     continue;
                 }
@@ -606,12 +609,12 @@ pub fn run_pending() -> Result<()> {
             }
             let mut stable = !crate::service::stopping();
             match snapshot(&root, &job.id) {
-                Ok(latest) if latest.input_revision != job.input_revision => {
+                Ok(Some(latest)) if latest.input_revision != job.input_revision => {
                     stable = false;
                     outcome.success = false;
                     outcome.error = Some("input changed during routing".into());
                 }
-                Err(_) => {
+                Ok(None) | Err(_) => {
                     stable = false;
                     outcome.success = false;
                     outcome.error = Some("input unavailable after routing".into());
@@ -723,7 +726,7 @@ pub fn start_worker() -> io::Result<()> {
                 let Some(pending) = pending else {
                     return true;
                 };
-                snapshot(&super::super::state_dir(), &pending.id).is_ok()
+                snapshot(&super::super::state_dir(), &pending.id).is_ok_and(|job| job.is_some())
                     && retry_ready(&super::super::state_dir(), &pending)
             })
         })
