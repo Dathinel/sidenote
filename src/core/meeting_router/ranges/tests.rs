@@ -21,11 +21,11 @@ fn run(bounds: Span, spans: &[Span], decisions: &[Decision]) -> Vec<AsrRange> {
             speaker_turn: Some(("public", "turn")),
         })
         .collect();
-    let out = plan(bounds, &speech).unwrap();
+    let out = plan(bounds, bounds, &speech).unwrap();
     assert!(out.windows(2).all(|w| w[0].context.1 <= w[1].context.0));
     for r in &out {
         assert!(bounds.0 <= r.context.0 && r.context.0 < r.context.1);
-        assert!(r.context.1 <= bounds.1 && r.context.1 - r.context.0 <= CAP);
+        assert!(r.context.1 <= bounds.1 && r.context.1 - r.context.0 <= 480_000);
     }
     for (i, &span) in spans.iter().enumerate() {
         let mut cursor = span.0;
@@ -67,7 +67,7 @@ fn edges_seams_changes_unsure_and_long_speech() {
     let spans = [(0, 10), (21, 30), (40, 100)];
     assert!(run((0, 0), &[], &[]).is_empty());
     assert_eq!(
-        padded((0, 100), &spans).unwrap(),
+        padded((0, 100), (0, 100), &spans).unwrap(),
         [(0, 15), (16, 35), (35, 100)]
     );
     for middle in [accepted("hi"), unsure] {
@@ -93,8 +93,47 @@ fn edges_seams_changes_unsure_and_long_speech() {
                 speaker_turn,
             })
             .collect();
-        assert_eq!(plan((0, 100), &speech).unwrap().len(), 2);
+        assert_eq!(plan((0, 100), (0, 100), &speech).unwrap().len(), 2);
     }
-    assert!(padded((0, 100), &[(0, 20), (10, 30)]).is_err());
-    assert!(padded((0, 100), &[(0, 101)]).is_err());
+    assert!(padded((0, 100), (0, 100), &[(0, 20), (10, 30)]).is_err());
+    assert!(padded((0, 100), (0, 100), &[(0, 101)]).is_err());
+}
+
+#[test]
+fn seam_context_crosses_without_duplicate_speech() {
+    let en = accepted("en");
+    let track = (0, 9_600_000);
+    let pieces = [(0, 4_800_000), (4_800_000, 9_600_000)];
+    let spans = [(4_790_000, 4_799_000), (4_800_000, 4_810_000)];
+    let mut owned = Vec::new();
+    for (piece, interval) in pieces.into_iter().zip(spans) {
+        let speech = [Speech {
+            interval,
+            decision: &en,
+            speaker_turn: Some(("a", "1")),
+        }];
+        let out = plan(track, piece, &speech).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].context, (interval.0 - 8_000, interval.1 + 8_000));
+        assert_eq!(out[0].members, [(0, interval)]);
+        owned.extend(out[0].members.iter().map(|m| m.1));
+        assert!(padded(track, piece, &[(piece.0, piece.1 + 1)]).is_err());
+    }
+    assert_eq!(owned, spans);
+    assert!(owned.windows(2).all(|w| w[0].1 <= w[1].0));
+    assert!(padded(track, (0, track.1 + 1), &[]).is_err());
+}
+
+#[test]
+fn join_cap_includes_padding_and_silence() {
+    let en = accepted("en");
+    // Speech totals only 20,000 samples; padding plus the gap makes 480,001.
+    let out = run(
+        (0, 500_000),
+        &[(8_000, 18_000), (462_001, 472_001)],
+        &[en.clone(), en],
+    );
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].context, (0, 26_000));
+    assert_eq!(out[1].context, (454_001, 480_001));
 }

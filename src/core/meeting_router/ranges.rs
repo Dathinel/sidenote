@@ -17,14 +17,14 @@ pub struct AsrRange {
 }
 /// Sorted half-open speech inside one piece; call separately for each track/piece.
 /// Silero splits short silence equally (floor on both sides, leaving an odd sample).
-/// Padding is clipped to this piece; seam-spanning speech must be partitioned first.
-pub fn padded(bounds: Span, speech: &[Span]) -> Result<Vec<Span>> {
-    if bounds.0 > bounds.1 {
-        return Err("Invalid piece bounds".into());
+/// Speech is partitioned to ownership first; context can cross a piece seam.
+pub fn padded(track: Span, ownership: Span, speech: &[Span]) -> Result<Vec<Span>> {
+    if track.0 > ownership.0 || ownership.0 > ownership.1 || ownership.1 > track.1 {
+        return Err("Ownership must be inside the track".into());
     }
-    let mut previous = bounds.0;
+    let mut previous = ownership.0;
     for &(start, end) in speech {
-        if start < previous || start >= end || end > bounds.1 {
+        if start < previous || start >= end || end > ownership.1 {
             return Err("Speech must be sorted, disjoint and inside the piece".into());
         }
         previous = end;
@@ -42,8 +42,8 @@ pub fn padded(bounds: Span, speech: &[Span]) -> Result<Vec<Span>> {
                 .get(i + 1)
                 .map_or(PAD, |next| ((next.0 - end) / 2).min(PAD));
             (
-                start.saturating_sub(left).max(bounds.0),
-                end.saturating_add(right).min(bounds.1),
+                start.saturating_sub(left).max(track.0),
+                end.saturating_add(right).min(track.1),
             )
         })
         .collect())
@@ -51,9 +51,9 @@ pub fn padded(bounds: Span, speech: &[Span]) -> Result<Vec<Span>> {
 /// Joins only adjacent accepted spans in one known speaker/turn, including silence.
 /// A single oversized span is split at the cap with disjoint context/ownership,
 /// matching S45d (no second padding pass at the artificial split).
-pub fn plan(bounds: Span, speech: &[Speech<'_>]) -> Result<Vec<AsrRange>> {
+pub fn plan(track: Span, ownership: Span, speech: &[Speech<'_>]) -> Result<Vec<AsrRange>> {
     let intervals: Vec<_> = speech.iter().map(|s| s.interval).collect();
-    let context = padded(bounds, &intervals)?;
+    let context = padded(track, ownership, &intervals)?;
     let mut groups: Vec<(Span, Option<&str>, Vec<usize>)> = Vec::new();
     for (i, s) in speech.iter().enumerate() {
         let language = match s.decision {
