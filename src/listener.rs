@@ -80,12 +80,11 @@ pub(crate) fn service_tick() -> io::Result<()> {
 /// Peer inventories remain read-only; their files are never edited in place.
 #[cfg(target_os = "linux")]
 fn native_service_tick() -> io::Result<()> {
-    let root = crate::core::state_dir();
     let meetings = crate::core::meetings_dir();
     fs::create_dir_all(&meetings)?;
     let mut failure = None;
     if crate::core::meeting_router::jobs::configured() {
-        if let Err(error) = catch_up_routing(&root, &meetings, |id| {
+        if let Err(error) = catch_up_routing(&meetings, |id| {
             crate::core::meeting_router::jobs::enqueue_automatic(id).map_err(io::Error::other)
         }) {
             failure = Some(error);
@@ -132,13 +131,6 @@ fn pipeline_in(
     meetings: &std::path::Path,
     meeting_id: Option<&str>,
 ) -> io::Result<()> {
-    if let Some(id) = meeting_id
-        && crate::core::recording_guard::eligibility(state, meetings, id)
-            .at(Stage::CatchUpEligibility)?
-            != crate::core::recording_guard::Eligibility::Eligible
-    {
-        return Ok(());
-    }
     let activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
@@ -250,7 +242,6 @@ fn script_folders(
         .collect())
 }
 fn catch_up_routing(
-    state: &std::path::Path,
     meetings: &std::path::Path,
     mut enqueue: impl FnMut(&str) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -260,9 +251,6 @@ fn catch_up_routing(
         if !id.is_empty()
             && id.bytes().any(|b| b.is_ascii_digit())
             && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-            && crate::core::recording_guard::eligibility(state, meetings, &id)
-                .at(Stage::CatchUpEligibility)?
-                == crate::core::recording_guard::Eligibility::Eligible
         {
             enqueue(&id).at(Stage::CatchUpRouting)?;
         }
@@ -327,11 +315,9 @@ fn script_command(
 fn catch_up() -> io::Result<()> {
     let _activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if crate::core::meeting_router::jobs::configured() {
-        catch_up_routing(
-            &crate::core::state_dir(),
-            &crate::core::meetings_dir(),
-            |id| crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other),
-        )
+        catch_up_routing(&crate::core::meetings_dir(), |id| {
+            crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
+        })
         .at(Stage::CatchUpRouting)?;
         crate::core::meeting_router::jobs::start_worker().at(Stage::CatchUpRouting)?;
     }
@@ -579,17 +565,13 @@ pub fn run() -> ! {
                 ));
             }
             if crate::core::meeting_router::jobs::configured() {
-                let _ = catch_up_routing(
-                    &crate::core::state_dir(),
-                    &crate::core::meetings_dir(),
-                    |id| {
-                        if crate::core::meeting_router::jobs::has_result(id) {
-                            Ok(())
-                        } else {
-                            crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
-                        }
-                    },
-                );
+                let _ = catch_up_routing(&crate::core::meetings_dir(), |id| {
+                    if crate::core::meeting_router::jobs::has_result(id) {
+                        Ok(())
+                    } else {
+                        crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
+                    }
+                });
             }
             if let Err(error) = pipeline(None) {
                 log(&format!(
@@ -658,6 +640,59 @@ pub(crate) fn service_background() -> Background {
 #[cfg(test)]
 mod pipeline_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovery_does_not_open_inputs_before_the_queue_captures_them() {
+        use std::os::{
+            fd::{AsRawFd, FromRawFd, OwnedFd},
+            unix::{ffi::OsStrExt, fs::symlink},
+        };
+        for ancestor in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let meetings = root.path().join("meetings");
+            let folder = meetings.join("123-4");
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("manifest.json"),
+                br#"{"status":"complete","duration_ms":30000}"#,
+            )
+            .unwrap();
+            fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+            )
+            .unwrap();
+            let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+            assert!(fd >= 0);
+            let watch = unsafe { OwnedFd::from_raw_fd(fd) };
+            let name = std::ffi::CString::new(folder.as_os_str().as_bytes()).unwrap();
+            assert!(unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) } >= 0);
+            catch_up_routing(&meetings, |id| {
+                let mut events = [0u8; 4096];
+                assert_eq!(
+                    unsafe {
+                        libc::read(watch.as_raw_fd(), events.as_mut_ptr().cast(), events.len())
+                    },
+                    -1,
+                    "discovery opened unpinned inputs before queue capture"
+                );
+                assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+                if ancestor {
+                    fs::rename(&meetings, root.path().join("saved")).unwrap();
+                    symlink(root.path().join("saved"), &meetings).unwrap();
+                } else {
+                    fs::rename(folder.join("transcript.ndjson"), folder.join("saved")).unwrap();
+                    symlink(folder.join("saved"), folder.join("transcript.ndjson")).unwrap();
+                }
+                assert!(
+                    crate::core::meeting_router::inputs::Snapshot::capture(&meetings.join(id))
+                        .is_err()
+                );
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn listener_retries_contention_and_acquires_after_the_probe_releases() {
@@ -724,7 +759,7 @@ mod pipeline_tests {
     }
 
     #[test]
-    fn event_catch_up_and_script_folders_share_the_gate() {
+    fn discovery_defers_to_the_pinned_queue_gate_and_scripts_share_it() {
         let root = std::env::temp_dir().join(format!(
             "rec-guard-listener-{}-{}",
             std::process::id(),
@@ -745,11 +780,13 @@ mod pipeline_tests {
             )
             .unwrap();
         }
-        // A rejected event returns before activity locks, config reads or worker launches.
-        pipeline_in(&root, &meetings, Some("1793946600000-1")).unwrap();
         let mut queued = Vec::new();
-        catch_up_routing(&root, &meetings, |id| {
-            queued.push(id.to_owned());
+        catch_up_routing(&meetings, |id| {
+            if crate::core::recording_guard::eligibility(&root, &meetings, id)?
+                == crate::core::recording_guard::Eligibility::Eligible
+            {
+                queued.push(id.to_owned());
+            }
             Ok(())
         })
         .unwrap();

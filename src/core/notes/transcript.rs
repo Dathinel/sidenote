@@ -1,4 +1,4 @@
-use crate::core::{file_reads, store_io};
+use crate::core::{file_reads, meeting_router::inputs::Snapshot, store_io};
 use serde::Deserialize;
 use std::{io, path::Path};
 
@@ -48,12 +48,13 @@ pub(super) fn render(raw: &str) -> String {
 
 pub(super) fn read(folder: &Path) -> io::Result<String> {
     let original = folder.join("hex-original/transcript.ndjson");
-    let source = if original.is_file() {
-        original
-    } else {
-        folder.join("transcript.ndjson")
+    let captured = match Snapshot::read_file(&original, file_reads::STORE_MAX) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Snapshot::read_file(&folder.join("transcript.ndjson"), file_reads::STORE_MAX)
+        }
+        result => result,
     };
-    let bytes = match store_io::read_bounded(&source, file_reads::STORE_MAX) {
+    let bytes = match captured {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
@@ -63,7 +64,7 @@ pub(super) fn read(folder: &Path) -> io::Result<String> {
 pub(super) fn write(folder: &Path) -> io::Result<String> {
     let path = folder.join("english-transcript.md");
     let existing = || -> io::Result<String> {
-        String::from_utf8(store_io::read_bounded(&path, file_reads::STORE_MAX)?)
+        String::from_utf8(Snapshot::read_file(&path, file_reads::STORE_MAX)?)
             .map_err(|_| store_io::invalid("Invalid text encoding"))
     };
     match existing() {

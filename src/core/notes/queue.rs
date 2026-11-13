@@ -105,7 +105,10 @@ fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
     writeln!(file, "{} notes: {id} {message}", now())
 }
 pub(super) fn manifest(folder: &Path) -> io::Result<serde_json::Value> {
-    let bytes = store_io::read_bounded(&folder.join("manifest.json"), file_reads::JOURNAL_MAX)?;
+    let bytes = core::meeting_router::inputs::Snapshot::read_file(
+        &folder.join("manifest.json"),
+        file_reads::JOURNAL_MAX,
+    )?;
     serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
         .map_err(io::Error::from)
 }
@@ -188,7 +191,7 @@ fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<(
     write(root, id, job, state, message)
 }
 fn text(path: &Path, cap: u64) -> io::Result<String> {
-    match store_io::read_bounded(path, cap) {
+    match core::meeting_router::inputs::Snapshot::read_file(path, cap) {
         Ok(bytes) => {
             String::from_utf8(bytes).map_err(|_| store_io::invalid("Invalid text encoding"))
         }
@@ -690,10 +693,6 @@ pub fn catch_up() -> io::Result<()> {
         let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if valid_id(&id)
-            && core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), &id)
-                .at(Stage::CatchUpEligibility)?
-                == core::recording_guard::Eligibility::Eligible
-            && complete(&entry.path())
             && let Err(error) = enqueue_in(
                 &core::state_dir(),
                 &core::meetings_dir(),

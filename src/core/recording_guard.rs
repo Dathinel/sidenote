@@ -4,7 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{self, BufRead, BufReader, Read},
+    io::{self, BufRead, Read},
     path::{Path, PathBuf},
     sync::LazyLock,
 };
@@ -36,27 +36,10 @@ fn state_path(root: &Path, id: &str) -> PathBuf {
         .join(format!("{id}.json"))
 }
 fn classify(folder: &Path) -> Eligibility {
-    classify_readable(folder).unwrap_or(Eligibility::Unknown)
-}
-fn classify_readable(folder: &Path) -> Option<Eligibility> {
-    store_io::reject_reparse(folder).ok()?;
-    let raw = store_io::read_bounded(&folder.join("manifest.json"), 1024 * 1024).ok()?;
-    let original = folder.join("hex-original/transcript.ndjson");
-    let source = if original.try_exists().ok()? {
-        original
-    } else {
-        folder.join("transcript.ndjson")
-    };
-    store_io::reject_reparse(&source).ok()?;
-    let file = fs::File::open(source).ok()?;
-    let before = file.metadata().ok()?;
-    let mut reader = BufReader::new(file);
-    let result = classify_reader(&raw, &mut reader)?;
-    let after = reader.get_ref().metadata().ok()?;
-    if before.len() != after.len() || before.modified().ok()? != after.modified().ok()? {
-        return None;
-    }
-    Some(result)
+    super::meeting_router::inputs::Snapshot::capture(folder)
+        .ok()
+        .and_then(|input| classify_reader(&input.manifest, &mut io::Cursor::new(&input.transcript)))
+        .unwrap_or(Eligibility::Unknown)
 }
 fn classify_reader(raw: &[u8], reader: &mut impl BufRead) -> Option<Eligibility> {
     let manifest: serde_json::Value =
@@ -190,10 +173,18 @@ pub fn short_recordings(root: &Path, meetings: &Path) -> io::Result<Vec<ShortRec
     for entry in fs::read_dir(meetings)? {
         let entry = entry?;
         let id = entry.file_name().to_string_lossy().into_owned();
-        if !valid_id(&id) || eligibility(root, meetings, &id)? != Eligibility::Short {
+        if !valid_id(&id) {
             continue;
         }
-        let raw = store_io::read_bounded(&entry.path().join("manifest.json"), 1024 * 1024)?;
+        let Ok(input) = super::meeting_router::inputs::Snapshot::capture(&entry.path()) else {
+            continue;
+        };
+        if eligibility_captured(root, &id, &input.manifest, &input.transcript)?
+            != Eligibility::Short
+        {
+            continue;
+        }
+        let raw = input.manifest;
         let m: serde_json::Value =
             serde_json::from_slice(raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&raw))?;
         let date = m["created_at_ms"]

@@ -22,7 +22,7 @@ fn invalid() -> io::Error {
 fn stamp(file: &fs::File, directory: bool) -> io::Result<String> {
     let m = file.metadata()?;
     #[cfg(unix)]
-    if !directory && m.nlink() > 1 {
+    if !directory && m.nlink() != 1 {
         return Err(invalid());
     }
     #[cfg(unix)]
@@ -157,7 +157,7 @@ impl Directory {
             Ok(f) => {
                 let m = f.metadata()?;
                 #[cfg(unix)]
-                if m.nlink() > 1 {
+                if m.nlink() != 1 {
                     return Err(invalid());
                 }
                 #[cfg(windows)]
@@ -178,7 +178,7 @@ struct Input {
     stamp: String,
     cap: u64,
 }
-pub(super) struct Snapshot {
+pub(crate) struct Snapshot {
     directory: Directory,
     files: Vec<Input>,
     pub manifest: Vec<u8>,
@@ -186,6 +186,29 @@ pub(super) struct Snapshot {
     pub windows: serde_json::Value,
 }
 impl Snapshot {
+    pub(crate) fn open_file(path: &Path) -> io::Result<fs::File> {
+        let mut directory = Directory::open(path.parent().ok_or_else(invalid)?)?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(invalid)?;
+        directory
+            .file(name)?
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+    pub(crate) fn read_file(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+        let mut file = Self::open_file(path)?;
+        if file.metadata()?.len() > cap {
+            return Err(invalid());
+        }
+        let before = stamp(&file, false)?;
+        let mut bytes = Vec::new();
+        (&mut file).take(cap + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > cap || stamp(&file, false)? != before {
+            return Err(invalid());
+        }
+        Ok(bytes)
+    }
     pub fn capture(folder: &Path) -> io::Result<Self> {
         let directory = Directory::open(folder)?;
         let mut snapshot = Self {
@@ -317,6 +340,79 @@ mod tests {
         )
         .unwrap();
         (root, folder)
+    }
+    #[test]
+    fn refuses_hardlinked_outside_inputs_for_every_role() {
+        for name in [
+            "manifest.json",
+            "transcript.ndjson",
+            "audio-evidence.json",
+            "system.wav",
+            "microphone.wav",
+            "hex-original/transcript.ndjson",
+        ] {
+            let (root, folder) = fixture();
+            let outside = root.path().join("outside");
+            fs::write(&outside, b"{}").unwrap();
+            let target = folder.join(name);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            if target.exists() {
+                fs::remove_file(&target).unwrap();
+            }
+            fs::hard_link(&outside, target).unwrap();
+            assert!(Snapshot::capture(&folder).is_err(), "{name}");
+        }
+    }
+    #[test]
+    fn discovery_cannot_authorize_a_later_transcript_or_ancestor_symlink() {
+        for ancestor in [false, true] {
+            let (root, folder) = fixture();
+            let meetings = folder.parent().unwrap();
+            let discovered = fs::read_dir(meetings)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let outside = root.path().join("outside");
+            fs::create_dir(&outside).unwrap();
+            fs::write(
+                outside.join("manifest.json"),
+                br#"{"status":"complete","duration_ms":29999}"#,
+            )
+            .unwrap();
+            fs::write(
+                outside.join("transcript.ndjson"),
+                br#"{"text":"outside synthetic data"}"#,
+            )
+            .unwrap();
+            if ancestor {
+                fs::rename(meetings, root.path().join("saved-meetings")).unwrap();
+                let replacement = root.path().join("replacement");
+                fs::create_dir(&replacement).unwrap();
+                fs::rename(&outside, replacement.join("123-4")).unwrap();
+                symlink(replacement, meetings).unwrap();
+            } else {
+                fs::remove_file(discovered.join("transcript.ndjson")).unwrap();
+                symlink(
+                    outside.join("transcript.ndjson"),
+                    discovered.join("transcript.ndjson"),
+                )
+                .unwrap();
+            }
+            assert!(Snapshot::capture(&discovered).is_err());
+            assert_eq!(
+                crate::core::recording_guard::eligibility(root.path(), meetings, "123-4").unwrap(),
+                crate::core::recording_guard::Eligibility::Unknown
+            );
+            assert!(
+                !root
+                    .path()
+                    .join("local/recording-guard/123-4.json")
+                    .exists(),
+                "unsafe input persisted a short-recording decision"
+            );
+        }
     }
     #[test]
     fn refuses_symlinks_at_every_input_and_directory_component() {
