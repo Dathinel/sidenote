@@ -33,8 +33,15 @@ function QuoteArg([string]$Value) {
     # Windows command-line quoting: preserve backslashes before quotes and at the end.
     return '"' + ([regex]::Replace($Value, '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
 }
+function Assert-TargetSpace {
+    $target = if (-not $Pack -and $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path (Get-Location) 'target' }
+    $target = [IO.Path]::GetFullPath($target)
+    $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($target))
+    if ($drive.AvailableFreeSpace -lt 40GB) { throw 'At least 40 GB free is required on the target drive.' }
+}
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
+    Assert-TargetSpace
     New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
     while (-not $slot) {
@@ -62,6 +69,7 @@ try {
                         $env:CARGO_BUILD_JOBS = '1'
                     }
                 }
+                Assert-TargetSpace
                 $info = New-Object Diagnostics.ProcessStartInfo
                 $info.FileName = $exe
                 $info.Arguments = (@($runArgs | ForEach-Object { QuoteArg $_ }) -join ' ')

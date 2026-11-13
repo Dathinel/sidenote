@@ -9,3 +9,5 @@ Knowledge base saves preserve newer unrelated settings and other unsaved edits. 
 Windows Full devices keep the dev.19 listener path, processing behaviour and update-stop handling. Existing devices and a missing device.json default to Full without an unavailable-role warning. Locked, unreadable or invalid device files retain the fallback warning.
 
 The local release-gate script is included for the release owner to run before packaging.
+
+Needs on your laptop: nothing

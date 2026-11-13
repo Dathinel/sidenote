@@ -1,2 +1,15 @@
 # Prompt texts are embedded with include_str! and compared byte for byte; keep LF on every platform.
 src/core/agent_instructions/*.txt text eol=lf
+scripts/meeting-pipeline/** text eol=lf
+src/pipeline_*.ps1 text eol=lf
+src/core/*_prompt.txt text eol=lf
+src/core/notes/*.txt text eol=lf
+src/core/annotations/prompts/** text eol=lf
+default-runners.json text eol=lf
+tests/fixtures/**/*.json text eol=lf
+tests/fixtures/**/*.ndjson text eol=lf
+tests/fixtures/**/*.txt text eol=lf
+tools/ui-fixtures/**/*.json text eol=lf
+Cargo.lock text eol=lf
+crates/meetings-domain/tests/fixtures/*.json text eol=lf
+crates/sidenote-sync/vendor/spake2/README.md text eol=lf

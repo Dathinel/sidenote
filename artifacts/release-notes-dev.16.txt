@@ -7,3 +7,5 @@ Sidenote 0.0.1-dev.16
 - Diary shows your daily history with a right rail for follow-ups and Memory suggestions.
 - Memory has Type, State and Project filters, with saved choices and Clear all.
 - Accepting a Memory suggestion no longer fails with 'Record changed' when nothing changed.
+
+Needs on your laptop: nothing

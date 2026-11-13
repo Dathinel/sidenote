@@ -154,3 +154,21 @@ No raw subprocess output, request, transcript, model text or exception message i
 copied to the diagnostic marker/log. The runner's temporary request, functional
 outputs and failure sidecar are removed by their existing wrapper cleanup paths.
 No payload or diagnostic-propagation runtime check was executed on this laptop.
+
+## Release proof checks
+
+The release gate runs every `test_*.py` pipeline unit test with the pinned baseline
+exported from Git into a temporary folder. It also runs the actual installer and
+entrypoint against a synthetic profile: missing settings preserve all legacy
+bytes; configured installation seals all 14 files and launches a stub watcher;
+a process killed after sealing and before pointer publication keeps the old
+selection usable. These checks do not exercise ASR, models, or notes services.
+
+A scripts-install failure is saved as an update error and its pending marker is
+retained for reopening/retry. It does not stop a pending app update from applying
+or prevent the already-prepared recorder from running.
+
+Release notes must contain a nonempty `Needs on your laptop:` line, including
+`nothing` when applicable. The pack command refuses missing/empty declarations.
+The local build guard requires at least 40 GiB free on the target drive, both
+before waiting for a slot and immediately before starting its child process.

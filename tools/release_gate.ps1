@@ -78,13 +78,15 @@ Write-Output "=== listener-start $($listenerStart.State)"
 Push-Location (Join-Path $root 'relay')
 Gate 'relay-deps' { bun install --frozen-lockfile }
 Pop-Location
-Gate 'fmt' { cargo fmt --check }
-Gate 'clippy' { cargo clippy --locked --all-targets -- -D warnings }
-Gate 'clippy-asr' { cargo clippy --locked --all-targets --features asr-runtime -- -D warnings }
-Gate 'test' { cargo test --locked --quiet }
-Gate 'test-asr' { cargo test --locked --quiet --features asr-runtime }
+Gate 'pipeline-tests' { python tools/pipeline-tests.py }
+Gate 'pipeline-install-dryrun' { python tools/pipeline-install-dryrun.py }
+Gate 'fmt' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu fmt --check }
+Gate 'clippy' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets -j 1 -- -D warnings }
+Gate 'clippy-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets --features asr-runtime -j 1 -- -D warnings }
+Gate 'test' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -j 1 --quiet }
+Gate 'test-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -j 1 --quiet --features asr-runtime }
 (Get-Item (Join-Path $root 'src\main.rs')).LastWriteTime = Get-Date
-Gate 'build-locked' { cargo build --locked }
+Gate 'build-locked' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu build --locked -j 1 }
 $exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-gnu\debug\sidenote.exe'
 if (-not (Test-Path $exe)) { $exe = Join-Path $env:CARGO_TARGET_DIR 'debug\sidenote.exe' }
 Gate 'mcp-smoke' { python tools/mcp-smoke.py $exe }
