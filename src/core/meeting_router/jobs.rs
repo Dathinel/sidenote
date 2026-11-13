@@ -23,6 +23,8 @@ struct Job {
     languages: Vec<String>,
     input_revision: String,
     windows: serde_json::Value,
+    #[serde(skip)]
+    input: Option<super::inputs::Snapshot>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Outcome {
@@ -33,7 +35,9 @@ struct Outcome {
 }
 
 fn valid_id(id: &str) -> bool {
-    id.bytes().any(|b| b.is_ascii_digit()) && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+    id.len() <= 100
+        && id.bytes().any(|b| b.is_ascii_digit())
+        && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
 fn queue(root: &Path) -> PathBuf {
     root.join("local/router-queue")
@@ -86,8 +90,16 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    if super::super::recording_guard::eligibility(root, meetings, id)?
-        != super::super::recording_guard::Eligibility::Eligible
+    let input = match super::inputs::Snapshot::capture(&meetings.join(id)) {
+        Ok(input) => input,
+        Err(_) => return Ok(()),
+    };
+    if super::super::recording_guard::eligibility_captured(
+        root,
+        id,
+        &input.manifest,
+        &input.transcript,
+    )? != super::super::recording_guard::Eligibility::Eligible
     {
         return Ok(());
     }
@@ -104,6 +116,39 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     )?;
     Ok(())
 }
+/// Automatic discovery must not create a new generation for unchanged input.
+/// Only successful output completes a revision; failed attempts remain retryable.
+#[cfg(target_os = "linux")]
+pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
+    let root = super::super::state_dir();
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
+    }
+    if let Ok(job) = snapshot(&root, id)
+        && automatic_revision(&root, id).as_deref() == Some(job.input_revision.as_str())
+    {
+        return Ok(());
+    }
+    enqueue(id)
+}
+#[cfg(target_os = "linux")]
+fn automatic_revision(root: &Path, id: &str) -> Option<String> {
+    fs::read(queue(root).join(format!("{id}.completed")))
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+}
+fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
+    // Persist before acknowledging: a crash between these writes safely reuses output.
+    if cfg!(target_os = "linux") {
+        store_io::atomic_write(
+            &queue(root).join(format!("{id}.completed")),
+            revision.as_bytes(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn load_config(root: &Path) -> Result<RoutingConfig> {
     let mut config = super::super::Config::load_in(root)?.pipeline;
     config.meeting_languages = super::super::model_catalog::load_meeting_languages(root)?;
@@ -111,19 +156,22 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
     Ok(config)
 }
 fn snapshot(root: &Path, id: &str) -> Result<Job> {
-    let folder = super::super::meetings_dir().join(id);
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(folder.join("manifest.json"))?)?;
-    if manifest["status"] != "complete" {
-        return Err("Meeting is not complete".into());
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
     }
-    let source = if folder.join("hex-original/transcript.ndjson").is_file() {
-        folder.join("hex-original/transcript.ndjson")
-    } else {
-        folder.join("transcript.ndjson")
-    };
+    let folder = super::super::meetings_dir().join(id);
+    let input = super::inputs::Snapshot::capture(&folder)?;
+    if super::super::recording_guard::eligibility_captured(
+        root,
+        id,
+        &input.manifest,
+        &input.transcript,
+    )? != super::super::recording_guard::Eligibility::Eligible
+    {
+        return Err("Meeting is not eligible".into());
+    }
     let mut baseline = Vec::new();
-    for (i, line) in fs::read_to_string(source)?.lines().enumerate() {
+    for (i, line) in std::str::from_utf8(&input.transcript)?.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -149,14 +197,13 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         });
     }
     let config = load_config(root)?;
-    let windows = fs::read(folder.join("audio-evidence.json"))
-        .ok()
-        .map(|b| serde_json::from_slice(&b))
-        .transpose()?
-        .unwrap_or(serde_json::Value::Null);
-    // Include missing tracks too, so adding/replacing an input always invalidates reuse.
-    let paths = vec![folder.join("system.wav"), folder.join("microphone.wav")];
-    let revision = input_revision(&config, &paths, &baseline, &windows)?;
+    let windows = input.windows.clone();
+    let revision = cache::key(
+        &[],
+        &configuration_key(&config)?,
+        &input.revision()?,
+        "pinned-input-v1",
+    );
     Ok(Job {
         id: id.into(),
         folder,
@@ -165,6 +212,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Job> {
         config,
         input_revision: revision,
         windows,
+        input: Some(input),
     })
 }
 
@@ -280,7 +328,7 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
                     ..Outcome::default()
                 };
             }
-            Ok(None) if start.elapsed().as_secs_f64() < seconds => {
+            Ok(None) if !crate::service::stopping() && start.elapsed().as_secs_f64() < seconds => {
                 thread::sleep(Duration::from_millis(50))
             }
             value => {
@@ -315,6 +363,18 @@ impl Drop for Cleanup {
     }
 }
 fn cleanup_work(work: &Path) {
+    if let Some(folder) = fs::read(work.join("request.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["folder"].as_str().map(PathBuf::from))
+        && folder.parent() == Some(work)
+        && folder
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("inputs-"))
+        && fs::symlink_metadata(&folder).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+    {
+        fs::remove_dir_all(folder).ok();
+    }
     // Only generated WAVs in this validated meeting's work directory, never source audio.
     if let Ok(entries) = fs::read_dir(work) {
         for entry in entries.flatten() {
@@ -329,14 +389,6 @@ fn cleanup_work(work: &Path) {
 pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
-    if super::super::recording_guard::eligibility(
-        &super::super::state_dir(),
-        &super::super::meetings_dir(),
-        &job.id,
-    )? != super::super::recording_guard::Eligibility::Eligible
-    {
-        return Ok(());
-    }
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
     let mut normalized = Cleanup(Vec::new());
@@ -378,7 +430,7 @@ pub fn run_one() -> Result<()> {
     let mut chunks = Vec::new();
     for (track, path) in &paths {
         let count = hound::WavReader::open(path)?.duration() as usize;
-        let mut windows = prepared_chunks(&job.folder, track, count).unwrap_or_else(|| {
+        let mut windows = prepared_chunks(&job.windows, track, count).unwrap_or_else(|| {
             detected
                 .iter()
                 .filter(|c| &c.track == track)
@@ -410,7 +462,7 @@ pub fn run_pending() -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
-    let automatic = args.iter().any(|arg| arg == "--automatic");
+    let automatic = crate::service::active() || args.iter().any(|arg| arg == "--automatic");
     if let Some(id) = args
         .windows(2)
         .find(|a| a[0] == "--meeting-id")
@@ -434,6 +486,9 @@ pub fn run_pending() -> Result<()> {
     fs::create_dir_all(queue(&root))?;
     let mut attempted = HashSet::new();
     loop {
+        if crate::service::stopping() {
+            return Ok(());
+        }
         let mut found = false;
         for entry in fs::read_dir(queue(&root))? {
             let entry = entry?;
@@ -449,15 +504,7 @@ pub fn run_pending() -> Result<()> {
             if !attempted.insert((pending.id.clone(), pending.generation)) {
                 continue;
             }
-            if super::super::recording_guard::eligibility(
-                &root,
-                &super::super::meetings_dir(),
-                &pending.id,
-            )? != super::super::recording_guard::Eligibility::Eligible
-            {
-                continue;
-            }
-            if automatic && completed_attempt(&root, &pending) {
+            if automatic && !retry_ready(&root, &pending) {
                 continue;
             }
             found = true;
@@ -481,7 +528,11 @@ pub fn run_pending() -> Result<()> {
                     "forced:hi" | "forced:mixed"
                 )
             {
-                if destination.exists() {
+                if destination.exists()
+                    && !crate::service::stopping()
+                    && snapshot(&root, &job.id)
+                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                {
                     let mut english = english_fallback(
                         &job.baseline,
                         &job.config,
@@ -494,6 +545,13 @@ pub fn run_pending() -> Result<()> {
                     english.warnings.clear();
                     write_transcript(&destination, &english)?;
                 }
+                if crate::service::stopping()
+                    || !snapshot(&root, &job.id)
+                        .is_ok_and(|latest| latest.input_revision == job.input_revision)
+                {
+                    continue;
+                }
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
@@ -503,12 +561,19 @@ pub fn run_pending() -> Result<()> {
                 && old.input_checksum == job.input_revision
                 && !old.degraded()
             {
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
             cleanup_work(&work);
+            let staged = job
+                .input
+                .as_mut()
+                .ok_or("Missing pinned inputs")?
+                .stage(&work)?;
+            job.folder = staged.path().to_owned();
             let request = work.join("request.json");
             store_io::write(&request, &job)?;
             let _ = fs::remove_file(work.join("result.json"));
@@ -539,13 +604,15 @@ pub fn run_pending() -> Result<()> {
             {
                 outcome.error = Some(error);
             }
+            let mut stable = !crate::service::stopping();
             match snapshot(&root, &job.id) {
                 Ok(latest) if latest.input_revision != job.input_revision => {
-                    job = latest;
+                    stable = false;
                     outcome.success = false;
                     outcome.error = Some("input changed during routing".into());
                 }
                 Err(_) => {
+                    stable = false;
                     outcome.success = false;
                     outcome.error = Some("input unavailable after routing".into());
                 }
@@ -582,13 +649,14 @@ pub fn run_pending() -> Result<()> {
                     ),
                 )
             });
-            write_transcript(&destination, &result)?;
+            let successful = stable && outcome.success && !result.degraded();
+            let published_fallback = publish_attempt(&destination, &result, successful, stable)?;
             let normalization = fs::read(work.join("normalization-outcome.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
             store_io::write(
                 &work.join("attempt.json"),
-                &serde_json::json!({"generation":pending.generation,"child":outcome,"published_fallback":result.degraded(),"segments":result.segments.len(),"normalization":normalization}),
+                &serde_json::json!({"generation":pending.generation,"child":outcome,"published_fallback":published_fallback,"retry_after_ms":chrono::Utc::now().timestamp_millis()+30_000,"segments":result.segments.len(),"normalization":normalization}),
             )?;
             cleanup_work(&work);
             if outcome
@@ -596,9 +664,10 @@ pub fn run_pending() -> Result<()> {
                 .as_deref()
                 .is_some_and(|e| e.contains("FATAL:"))
             {
-                return Err("FATAL: Hex selection check failed; English fallback published".into());
+                return Err("FATAL: Hex selection check failed; pending retained".into());
             }
-            if !result.degraded() {
+            if successful {
+                complete_automatic(&root, &job.id, &job.input_revision)?;
                 acknowledge(&root, &job.id, &path, &bytes)?;
             }
         }
@@ -609,15 +678,37 @@ pub fn run_pending() -> Result<()> {
     Ok(())
 }
 
-fn completed_attempt(root: &Path, pending: &Pending) -> bool {
+fn publish_attempt(
+    destination: &Path,
+    result: &Transcript,
+    successful: bool,
+    stable: bool,
+) -> Result<bool> {
+    if successful {
+        write_transcript(destination, result)?;
+    } else if stable && !crate::service::stopping() {
+        match store_io::publish(destination, &serde_json::to_vec_pretty(result)?) {
+            Ok(()) => return Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(false)
+}
+fn retry_ready(root: &Path, pending: &Pending) -> bool {
     let receipt = root
         .join("local/router-work")
         .join(&pending.id)
         .join("attempt.json");
-    fs::read(receipt)
+    !fs::read(receipt)
         .ok()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .is_some_and(|v| v["generation"].as_u64().map(u128::from) == Some(pending.generation))
+        .is_some_and(|v| {
+            v["generation"].as_u64().map(u128::from) == Some(pending.generation)
+                && v["retry_after_ms"]
+                    .as_i64()
+                    .is_some_and(|t| t > chrono::Utc::now().timestamp_millis())
+        })
 }
 pub fn start_worker() -> io::Result<()> {
     if !configured()
@@ -632,18 +723,18 @@ pub fn start_worker() -> io::Result<()> {
                 let Some(pending) = pending else {
                     return true;
                 };
-                // Recover unattempted generations; completed fallbacks await an explicit drain.
-                super::super::recording_guard::eligibility(
-                    &super::super::state_dir(),
-                    &super::super::meetings_dir(),
-                    &pending.id,
-                )
-                .is_ok_and(|e| e == super::super::recording_guard::Eligibility::Eligible)
-                    && !completed_attempt(&super::super::state_dir(), &pending)
+                snapshot(&super::super::state_dir(), &pending.id).is_ok()
+                    && retry_ready(&super::super::state_dir(), &pending)
             })
         })
     {
         return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if crate::service::active() {
+        return crate::service::workers::start("routing", || {
+            let _ = run_pending();
+        });
     }
     let child = crate::platform::worker_command(std::env::current_exe()?)?
         .arg("--route-pending")
@@ -659,9 +750,11 @@ pub fn start_worker() -> io::Result<()> {
         .spawn()?;
     crate::service::own_child(child)
 }
-fn prepared_chunks(folder: &Path, track: &str, sample_count: usize) -> Option<Vec<Chunk>> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&fs::read(folder.join("audio-evidence.json")).ok()?).ok()?;
+fn prepared_chunks(
+    value: &serde_json::Value,
+    track: &str,
+    sample_count: usize,
+) -> Option<Vec<Chunk>> {
     let mut spans: Vec<_> = value["segments"]
         .as_array()?
         .iter()
@@ -719,6 +812,32 @@ fn prepared_chunks(folder: &Path, track: &str, sample_count: usize) -> Option<Ve
 #[cfg(test)]
 mod recording_guard_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn automatic_completion_survives_crash_before_queue_acknowledgement() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "1700000000000-1";
+        let pending = queue(root.path()).join(format!("{id}.json"));
+        store_io::atomic_write(&pending, b"pending generation").unwrap();
+        let bytes = fs::read(&pending).unwrap();
+        assert!(automatic_revision(root.path(), id).is_none());
+        complete_automatic(root.path(), id, "input-a").unwrap();
+        assert_eq!(
+            automatic_revision(root.path(), id).as_deref(),
+            Some("input-a")
+        );
+        assert_eq!(fs::read(&pending).unwrap(), bytes);
+        // A newer enqueue must survive an older worker's acknowledgement.
+        store_io::atomic_write(&pending, b"new generation").unwrap();
+        acknowledge(root.path(), id, &pending, &bytes).unwrap();
+        assert_eq!(fs::read(&pending).unwrap(), b"new generation");
+        acknowledge(root.path(), id, &pending, b"new generation").unwrap();
+        assert!(!pending.exists());
+        assert_eq!(
+            automatic_revision(root.path(), id).as_deref(),
+            Some("input-a")
+        );
+    }
     #[test]
     fn routing_enqueue_skips_short_and_unknown_and_deduplicates_kept() {
         let root = std::env::temp_dir().join(format!(
@@ -730,6 +849,7 @@ mod recording_guard_tests {
                 .as_nanos()
         ));
         let meetings = root.join("meetings");
+        assert!(enqueue_in(&root, &meetings, &"1".repeat(101)).is_err());
         let id = "1793946600000-1";
         let folder = meetings.join(id);
         fs::create_dir_all(&folder).unwrap();
@@ -749,5 +869,46 @@ mod recording_guard_tests {
         let before = fs::read(&path).unwrap();
         enqueue_in(&root, &meetings, id).unwrap();
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    #[test]
+    fn failure_timeout_instability_preserve_success_and_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let dest = destination(root.path(), "123-4");
+        let config = RoutingConfig::default();
+        let mut good = english_fallback(&[], &config, "distinct-good".into(), "seed");
+        good.warnings.clear();
+        write_transcript(&dest, &good).unwrap();
+        let original = fs::read(&dest).unwrap();
+        let fallback = english_fallback(&[], &config, "new-input".into(), "forced failure");
+        for stable in [true, false] {
+            assert!(!publish_attempt(&dest, &fallback, false, stable).unwrap());
+            assert_eq!(fs::read(&dest).unwrap(), original);
+        }
+        let pending = Pending {
+            id: "123-4".into(),
+            generation: 1,
+        };
+        let receipt = root.path().join("local/router-work/123-4/attempt.json");
+        store_io::write(&receipt, &serde_json::json!({"generation":1,"retry_after_ms":chrono::Utc::now().timestamp_millis()+30000})).unwrap();
+        assert!(!retry_ready(root.path(), &pending));
+        store_io::write(
+            &receipt,
+            &serde_json::json!({"generation":1,"retry_after_ms":0}),
+        )
+        .unwrap();
+        assert!(retry_ready(root.path(), &pending));
+        assert!(!queue(root.path()).join("123-4.completed").exists());
+        fs::remove_file(&dest).unwrap();
+        assert!(!publish_attempt(&dest, &fallback, false, false).unwrap());
+        assert!(!dest.exists());
+        assert!(publish_attempt(&dest, &fallback, false, true).unwrap());
+        assert!(!publish_attempt(&dest, &fallback, false, true).unwrap());
+        assert!(publish_attempt(&dest, &good, true, true).is_ok());
+        assert_eq!(fs::read(&dest).unwrap(), original);
     }
 }

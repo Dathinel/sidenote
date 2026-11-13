@@ -483,6 +483,10 @@ fn display_drag_at_two_sizes_bakes_exactly_the_same_source_pixels() {
     }
 }
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn approval_seals_reviewed_bytes_and_send_pins_the_same_files() {
     use super::media::*;
     let temp = Temp::new();

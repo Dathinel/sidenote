@@ -14,6 +14,34 @@ use std::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+#[test]
+fn hardlinked_manifest_is_not_a_notes_input() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let outside = root.0.join("outside-manifest.json");
+    fs::write(&outside, br#"{"status":"complete","duration_ms":30000}"#).unwrap();
+    fs::remove_file(folder.join("manifest.json")).unwrap();
+    fs::hard_link(outside, folder.join("manifest.json")).unwrap();
+    assert!(queue::manifest(&folder).is_err());
+}
+#[cfg(target_os = "linux")]
+#[test]
+fn ancestor_swap_after_preflight_cannot_redirect_a_notes_read() {
+    use std::os::unix::fs::symlink;
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let path = folder.join("manifest.json");
+    crate::core::file_reads::checked_metadata(&path).unwrap();
+    let parent = folder.parent().unwrap();
+    fs::rename(parent, root.0.join("saved-meetings")).unwrap();
+    symlink(root.0.join("saved-meetings"), parent).unwrap();
+    assert!(
+        crate::core::file_reads::nofollow(&path).is_err(),
+        "ancestor swap bypassed preflight"
+    );
+    assert!(queue::manifest(&folder).is_err());
+}
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
@@ -1114,6 +1142,15 @@ fn oldest_meeting_runs_first_and_running_jobs_recover_after_a_crash() {
     assert!(fake.calls[0].0.contains("Title: Older meeting"));
     assert!(fake.calls[2].0.contains("Title: Delivery planning"));
     assert!(matches!(state(&root.0), JobState::Done { .. }));
+    let calls = fake.calls.len();
+    let summary = fs::read(folder.join("english-summary.json")).unwrap();
+    enqueue(&root.0, &s, None);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(fake.calls.len(), calls);
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        summary
+    );
 }
 #[test]
 fn external_summary_published_during_a_call_is_preserved() {

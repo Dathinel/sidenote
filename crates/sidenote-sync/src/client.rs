@@ -113,6 +113,10 @@ fn local_failure(reason: Reason) -> bool {
 
 impl SyncClient {
     pub fn start(device: Arc<Device>, group: Group, relay: RelayUrl) -> Result<Running> {
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            anyhow::bail!(crate::RELAY_UNAVAILABLE);
+        }
         Self::start_with_worker(device, group, relay, Pool::adjacent()?)
     }
     pub fn start_with_worker(
@@ -121,6 +125,10 @@ impl SyncClient {
         relay: RelayUrl,
         pool: Pool,
     ) -> Result<Running> {
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            anyhow::bail!(crate::RELAY_UNAVAILABLE);
+        }
         group.validate(device.identity.public())?;
         let group = device.merge_group(&group)?;
         let (updates, _) = watch::channel(None);

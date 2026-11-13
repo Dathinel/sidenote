@@ -1,4 +1,4 @@
-#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
+﻿#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
 #[cfg(all(test, windows, feature = "desktop"))]
@@ -66,6 +66,18 @@ fn main() {
             eprintln!("SYNC_CONTROL_UNAVAILABLE_ON_PLATFORM");
             std::process::exit(2);
         }
+    }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--mcp-access") {
+        std::process::exit(sidenote::mcp::access::cli(&args));
+    }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--ops") {
+        std::process::exit(sidenote::operations::cli(&args));
+    }
+    #[cfg(target_os = "linux")]
+    if args.iter().any(|a| a == "--cpu-models") {
+        std::process::exit(sidenote::server_models::cli(&args));
     }
     if !args.iter().any(|a| a == "--mcp") && sidenote::service::requested(&args) {
         std::process::exit(sidenote::service::run());

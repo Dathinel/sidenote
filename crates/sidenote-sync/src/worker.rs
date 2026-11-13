@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 #[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -57,7 +58,9 @@ enum Reply {
 }
 
 pub struct Pool {
+    #[cfg(windows)]
     executable: PathBuf,
+    #[cfg(windows)]
     slots: Arc<tokio::sync::Semaphore>,
 }
 impl Pool {
@@ -88,7 +91,9 @@ impl Pool {
             Failure(Reason::WorkerUnavailable)
         );
         Ok(Self {
+            #[cfg(windows)]
             executable,
+            #[cfg(windows)]
             slots: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
@@ -104,37 +109,7 @@ impl Pool {
         }
         #[cfg(target_os = "linux")]
         {
-            let slot = self
-                .slots
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| Failure(Reason::WorkerUnavailable))?;
-            let mut command = std::process::Command::new(&self.executable);
-            command
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null());
-            crate::containment::configure(&mut command);
-            let mut child = command
-                .spawn()
-                .map_err(|_| Failure(Reason::WorkerUnavailable))?;
-            use std::os::fd::OwnedFd;
-            let input: OwnedFd = child
-                .stdin
-                .take()
-                .ok_or(Failure(Reason::WorkerUnavailable))?
-                .into();
-            let output: OwnedFd = child
-                .stdout
-                .take()
-                .ok_or(Failure(Reason::WorkerUnavailable))?
-                .into();
-            Ok(Worker {
-                input: tokio::fs::File::from_std(std::fs::File::from(input)),
-                output: tokio::fs::File::from_std(std::fs::File::from(output)),
-                child,
-                _slot: slot,
-            })
+            anyhow::bail!(crate::RELAY_UNAVAILABLE)
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -365,6 +340,10 @@ pub fn suppress_crash_dialogs() {
     }
 }
 pub fn run_stdio() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if cfg!(target_os = "linux") {
+        anyhow::bail!(crate::RELAY_UNAVAILABLE);
+    }
     if !cfg!(any(windows, target_os = "linux")) {
         anyhow::bail!("UNAVAILABLE_ON_PLATFORM");
     }
@@ -747,6 +726,46 @@ mod tests {
         model,
         store::{Commit, Store},
     };
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn linux_decoder_is_unavailable_without_spawning_a_process() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir()?;
+        let marker = root.path().join("spawned");
+        let program = root.path().join("decoder");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        )?;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;
+        let pool = Pool::new(program.clone())?;
+        let error = pool.spawn().err().expect("Linux decoder must not spawn");
+        assert_eq!(error.to_string(), crate::RELAY_UNAVAILABLE);
+        let device = std::sync::Arc::new(crate::client::Device::open(
+            &root.path().join("replica.sqlite"),
+        )?);
+        let group = crate::identity::Group::new(&device.identity);
+        let started = crate::client::SyncClient::start_with_worker(
+            device,
+            group,
+            crate::transport::RelayUrl::local("ws://127.0.0.1:1")?,
+            Pool::new(program)?,
+        );
+        assert_eq!(
+            started
+                .err()
+                .expect("Linux sync start must fail")
+                .to_string(),
+            crate::RELAY_UNAVAILABLE
+        );
+        assert_eq!(
+            run_stdio().unwrap_err().to_string(),
+            crate::RELAY_UNAVAILABLE
+        );
+        assert!(!marker.exists());
+        Ok(())
+    }
+    #[cfg(windows)]
     fn fixture() -> Result<Worker> {
         let executable = std::env::current_exe()?
             .parent()
@@ -856,6 +875,7 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    #[cfg(windows)]
     async fn f5_operation_dense_near_cap_document_cold_loads_in_one_chunk() -> Result<()> {
         use automerge::{ROOT, transaction::Transactable};
         let dir = tempfile::tempdir()?;
@@ -894,7 +914,7 @@ mod tests {
         assert!(reply.bytes >= MAX_DOC * 8 / 10);
         Ok(())
     }
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(windows)]
     #[tokio::test]
     async fn f4_workers_have_independent_memory_and_pool_slots_are_released() -> Result<()> {
         let path = std::env::current_exe()?
@@ -934,6 +954,7 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    #[cfg(windows)]
     async fn c1_worker_crash_timeout_and_memory_limit_do_not_kill_the_caller() -> Result<()> {
         for mode in [0u8, 1, 2] {
             let mut worker = fixture()?;

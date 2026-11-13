@@ -9,6 +9,22 @@ struct Paths {
     read_only: bool,
 }
 static PATHS: OnceLock<Paths> = OnceLock::new();
+thread_local! {static READ_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
+
+pub(crate) struct ReadOnlyScope(bool, std::marker::PhantomData<std::rc::Rc<()>>);
+impl ReadOnlyScope {
+    pub(crate) fn begin(enabled: bool) -> Self {
+        Self(
+            READ_ONLY.with(|mode| mode.replace(mode.get() || enabled)),
+            Default::default(),
+        )
+    }
+}
+impl Drop for ReadOnlyScope {
+    fn drop(&mut self) {
+        READ_ONLY.with(|mode| mode.set(self.0));
+    }
+}
 
 /// Confine synthetic proof paths, including fresh descendants, to a named OS temp folder.
 #[doc(hidden)]
@@ -79,7 +95,9 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 pub(super) fn read_only() -> bool {
-    super::file_reads::refreshing() || PATHS.get().is_some_and(|p| p.read_only)
+    READ_ONLY.with(|mode| mode.get())
+        || super::file_reads::refreshing()
+        || PATHS.get().is_some_and(|p| p.read_only)
 }
 pub(super) fn data() -> Option<PathBuf> {
     #[cfg(test)]

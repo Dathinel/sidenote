@@ -2,6 +2,10 @@
 use crate::core::agent_tools;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
 use serde_json::{Value, json};
+#[cfg(target_os = "linux")]
+pub mod access;
+#[cfg(target_os = "linux")]
+pub(crate) mod network;
 
 fn string(description: &str) -> Value {
     json!({"type":"string","description":description})
@@ -138,8 +142,126 @@ pub fn tools() -> Vec<Tool> {
 }
 
 #[derive(Clone)]
-struct Meetings;
+struct Meetings {
+    remote: bool,
+}
+fn owner_backend() -> bool {
+    cfg!(target_os = "linux") && crate::service::role() != crate::service::DeviceRole::Full
+}
+fn owner_request(method: &str, params: Value, grant: Option<Value>) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::sync_owner::local_request(
+            &json!({"op":"mcp","method":method,"params":params,"grant":grant}),
+        )
+        .map_err(|_| "MCP_OWNER_UNAVAILABLE".into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (method, params, grant);
+        Err("MCP_OWNER_UNAVAILABLE".into())
+    }
+}
+fn catalog(grant: Option<Value>) -> Result<Vec<Tool>, String> {
+    if owner_backend() {
+        serde_json::from_value(owner_request("tools", json!({}), grant)?)
+            .map_err(|_| "MCP_OWNER_UNAVAILABLE".into())
+    } else {
+        Ok(tools())
+    }
+}
+fn call(name: &str, arguments: Value, grant: Option<Value>) -> Result<Value, String> {
+    if owner_backend() {
+        owner_request("call", json!({"name":name,"arguments":arguments}), grant)
+    } else {
+        agent_tools::call(name, arguments)
+    }
+}
+fn resource(uri: &str, grant: Option<Value>) -> Result<String, String> {
+    if owner_backend() {
+        owner_request("resource", json!({"uri":uri}), grant)?
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "MCP_OWNER_UNAVAILABLE".into())
+    } else {
+        agent_tools::meeting_resource(uri)
+    }
+}
+fn grant(context: &RequestContext<RoleServer>) -> Option<Value> {
+    #[cfg(target_os = "linux")]
+    {
+        context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<access::Grant>())
+            .and_then(|grant| serde_json::to_value(grant).ok())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = context;
+        None
+    }
+}
+impl Meetings {
+    fn checked_grant(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Option<Value>, ErrorData> {
+        let grant = grant(context);
+        if self.remote && grant.is_none() {
+            return Err(ErrorData::invalid_request("MCP_ACCESS_DENIED", None));
+        }
+        Ok(grant)
+    }
+}
 impl ServerHandler for Meetings {
+    async fn ping(&self, context: RequestContext<RoleServer>) -> Result<(), ErrorData> {
+        self.checked_grant(&context)?;
+        Ok(())
+    }
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        self.checked_grant(&context)?;
+        context.peer.set_peer_info(request.clone());
+        self.negotiate_initialize(&request)
+    }
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        self.checked_grant(&context)?;
+        Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        ))
+    }
+    async fn complete(
+        &self,
+        _: CompleteRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
+        self.checked_grant(&context)?;
+        Ok(CompleteResult::default())
+    }
+    async fn list_prompts(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        self.checked_grant(&context)?;
+        Ok(ListPromptsResult::default())
+    }
+    async fn list_resources(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        self.checked_grant(&context)?;
+        Ok(ListResourcesResult::default())
+    }
     fn get_info(&self) -> ServerConfig {
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -152,18 +274,24 @@ impl ServerHandler for Meetings {
     async fn list_tools(
         &self,
         _: Option<PaginatedRequestParams>,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(tools()))
+        let grant = self.checked_grant(&context)?;
+        let tools = tokio::task::spawn_blocking(move || catalog(grant))
+            .await
+            .map_err(|_| ErrorData::internal_error("MCP_OWNER_UNAVAILABLE", None))?
+            .map_err(|_| ErrorData::internal_error("MCP_OWNER_UNAVAILABLE", None))?;
+        Ok(ListToolsResult::with_all_items(tools))
     }
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let grant = self.checked_grant(&context)?;
         let result =
-            tokio::task::spawn_blocking(move || agent_tools::call(&request.name, arguments)).await;
+            tokio::task::spawn_blocking(move || call(&request.name, arguments, grant)).await;
         let result = match result {
             Ok(Ok(value)) => {
                 let summary = if let Some(items) = value["data"]["items"].as_array() {
@@ -202,8 +330,9 @@ impl ServerHandler for Meetings {
     async fn list_resource_templates(
         &self,
         _: Option<PaginatedRequestParams>,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        self.checked_grant(&context)?;
         Ok(ListResourceTemplatesResult::with_all_items(vec![
             ResourceTemplate::new("meeting://{id}", "Meeting summary"),
         ]))
@@ -211,11 +340,12 @@ impl ServerHandler for Meetings {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let uri = request.uri;
         let lookup = uri.clone();
-        let text = tokio::task::spawn_blocking(move || agent_tools::meeting_resource(&lookup))
+        let grant = self.checked_grant(&context)?;
+        let text = tokio::task::spawn_blocking(move || resource(&lookup, grant))
             .await
             .map_err(|_| ErrorData::internal_error("Local resource reader failed; retry", None))?
             .map_err(|message| ErrorData::resource_not_found(message, None))?;
@@ -231,7 +361,7 @@ pub fn run() -> i32 {
         .map_err(|_| "Could not start MCP runtime")
         .and_then(|runtime| {
             runtime.block_on(async {
-                let service = Meetings
+                let service = Meetings { remote: false }
                     .serve(rmcp::transport::stdio())
                     .await
                     .map_err(|_| "MCP connection failed")?;

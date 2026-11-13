@@ -133,6 +133,7 @@ impl ModelStore {
         let dir = self.dir(m);
         reject_link(&dir)?;
         let receipt = dir.join("installed.json");
+        reject_link(&receipt)?;
         let expected: Vec<_> = m
             .files
             .iter()
@@ -163,6 +164,24 @@ impl ModelStore {
         } else {
             Ok(None)
         }
+    }
+    /// Explicit administration re-hashes every file; readiness lookups remain inexpensive.
+    pub fn verify_installed(&self, id: &str) -> io::Result<bool> {
+        let m = model(id)?;
+        if m.runtime == Runtime::Hex {
+            return Err(store_io::invalid("Hex manages this model"));
+        }
+        let _lock = self.lock(m)?;
+        let Some(paths) = self.installed_paths(id)? else {
+            return Ok(false);
+        };
+        let cancel = AtomicBool::new(false);
+        for (path, file) in paths.iter().zip(m.files) {
+            if !verify(path, file, &cancel)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     /// Includes partial files so Settings can offer resume or cleanup after a restart.
     pub fn stored_bytes(&self, id: &str) -> io::Result<u64> {
@@ -419,6 +438,7 @@ fn allowed(url: &url::Url) -> bool {
                     | "cdn-lfs-eu-1.huggingface.co"
                     | "cas-bridge.xethub.hf.co"
                     | "us.aws.cdn.hf.co"
+                    | "us.gcp.cdn.hf.co"
             )
         )
 }
@@ -489,4 +509,58 @@ fn validate_languages(languages: &[String]) -> io::Result<()> {
         return Err(store_io::invalid("Choose known meeting languages"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+    const FILE: ModelFile = ModelFile {
+        name: "synthetic.bin",
+        url: "https://huggingface.co/synthetic",
+        bytes: 3,
+        sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    };
+    #[test]
+    fn documented_gcp_edge_preserves_https_exact_host_and_no_credentials_policy() {
+        // https://huggingface.co/docs/hub/models-downloading lists this CDN edge.
+        assert!(allowed(
+            &url::Url::parse("https://us.gcp.cdn.hf.co/model").unwrap()
+        ));
+        for value in [
+            "http://us.gcp.cdn.hf.co/model",
+            "https://us.gcp.cdn.hf.co:444/model",
+            "https://untrusted@us.gcp.cdn.hf.co/model",
+            "https://us.gcp.cdn.hf.co.example.invalid/model",
+            "https://unlisted.hf.co/model",
+            "https://127.0.0.1/model",
+        ] {
+            assert!(!allowed(&url::Url::parse(value).unwrap()));
+        }
+    }
+    #[test]
+    fn verification_rejects_same_size_corruption_truncation_and_cancellation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(FILE.name);
+        let cancel = AtomicBool::new(false);
+        for (bytes, accepted) in [
+            (b"abc".as_slice(), true),
+            (b"abd", false),
+            (b"ab", false),
+            (b"abcd", false),
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(verify(&path, &FILE, &cancel).unwrap(), accepted);
+        }
+        fs::write(&path, b"abc").unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        assert_eq!(
+            verify(&path, &FILE, &cancel).unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(
+            !ModelStore::new(root.path().into())
+                .verify_installed("indicconformer-hi-ctc")
+                .unwrap()
+        );
+    }
 }

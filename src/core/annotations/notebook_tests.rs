@@ -103,6 +103,10 @@ fn notebook_rejects_unapproved_assets_and_stale_jobs_before_starting_a_model() {
     assert!(old.check().is_err());
 }
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn shared_html_is_static_pathless_and_contains_exactly_the_approved_marked_pngs() {
     let temp = Temp::new();
     let (b, inputs, _) = notebook::synthetic(&temp.0, 3).unwrap();
@@ -183,6 +187,10 @@ fn notebook_stream_shows_sections_before_title_without_exposing_reference_keys()
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn conflicting_questions_remain_distinct_and_legacy_uncertainty_moves_to_the_end() {
     let temp = Temp::new();
     let (b, mut inputs, _) = notebook::synthetic(&temp.0, 1).unwrap();
@@ -197,6 +205,10 @@ fn conflicting_questions_remain_distinct_and_legacy_uncertainty_moves_to_the_end
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn shared_frames_appear_only_in_the_first_capture_with_unique_notebook_marks() {
     let temp = Temp::new();
     let (b, inputs, _) = notebook::synthetic(&temp.0, 2).unwrap();
@@ -231,6 +243,10 @@ fn shared_frames_appear_only_in_the_first_capture_with_unique_notebook_marks() {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn distinct_capture_frames_get_global_numbers_without_changing_approved_bytes() {
     let temp = Temp::new();
     let (b, mut inputs, captures) = notebook::synthetic(&temp.0, 2).unwrap();
@@ -274,6 +290,10 @@ fn distinct_capture_frames_get_global_numbers_without_changing_approved_bytes() 
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "requires immutable image pinning: Windows share-mode write exclusion"
+)]
 fn shared_screen_references_follow_reordering_and_keep_edited_explanations() {
     let temp = Temp::new();
     let (mut book, inputs, _) = notebook::synthetic(&temp.0, 2).unwrap();

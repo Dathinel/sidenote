@@ -6,6 +6,9 @@ use std::{
     sync::Mutex,
 };
 static CONFIG: Mutex<()> = Mutex::new(());
+#[cfg(target_os = "linux")]
+pub(crate) const NETWORK_UNAVAILABLE: &str =
+    "agent runners need network; not yet supported on Linux";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Runner {
     pub name: String,

@@ -1,4 +1,8 @@
 //! Device-local roles and a window-independent service lifetime.
+#[cfg(target_os = "linux")]
+mod schedule;
+#[cfg(target_os = "linux")]
+pub(crate) mod workers;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
@@ -208,13 +212,26 @@ fn sync_status(
 ) -> (&'static str, &'static str) {
     // Full devices leave journal and relay ownership with the window.
     if role == DeviceRole::Full {
-        return ("disabled", "disabled");
+        return (
+            "disabled",
+            if cfg!(target_os = "linux") {
+                "unavailable"
+            } else {
+                "disabled"
+            },
+        );
     }
     let sync_ok = reconcile();
     let relay = match crate::core::relay_preview::get(root) {
+        #[cfg(target_os = "linux")]
+        _ => "unavailable",
+        #[cfg(not(target_os = "linux"))]
         Ok(Some(_)) => "running",
+        #[cfg(not(target_os = "linux"))]
         Ok(None) => "disabled",
+        #[cfg(not(target_os = "linux"))]
         Err(_) if cfg!(windows) => "retry",
+        #[cfg(not(target_os = "linux"))]
         Err(_) => "UNAVAILABLE_ON_PLATFORM",
     };
     (if sync_ok { "ready" } else { "retry" }, relay)
@@ -222,6 +239,9 @@ fn sync_status(
 
 fn supervise() {
     let root = crate::core::state_dir();
+    #[cfg(target_os = "linux")]
+    let mut listener = None;
+    #[cfg(not(target_os = "linux"))]
     let mut listener = (role() == DeviceRole::Server).then(crate::listener::service_background);
     while !stopping() && !crate::updates::listener_stopping() {
         reap_children(false);
@@ -249,6 +269,10 @@ fn supervise() {
         } else {
             "unavailable"
         };
+        #[cfg(target_os = "linux")]
+        if schedule::tick().is_err() {
+            eprintln!("SERVICE_SCHEDULE_UNAVAILABLE");
+        }
         eprintln!(
             "service status=running role={} sync={} relay={} processing={} hex={} mcp=stdio ui={}",
             role().name(),
@@ -258,9 +282,16 @@ fn supervise() {
             hex,
             ui_allowed()
         );
+        #[cfg(target_os = "linux")]
+        if crate::operations::record(&root, crate::operations::EventKind::ServiceTick).is_err() {
+            eprintln!("OPS_LOG_UNAVAILABLE");
+        }
         pause(Duration::from_secs(30));
     }
     STOP.store(true, Ordering::Release);
+    #[cfg(target_os = "linux")]
+    workers::stop();
+    #[cfg(not(target_os = "linux"))]
     if role() != DeviceRole::Full {
         let _ = crate::core::relay_preview::disconnect(&root);
     }
@@ -269,6 +300,11 @@ fn supervise() {
 }
 
 pub fn run() -> i32 {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("SERVICE_ROOT_REFUSED");
+        return 2;
+    }
     crate::listener::log(&format!(
         "start pid={} role={}",
         std::process::id(),
@@ -407,10 +443,10 @@ pub fn run() -> i32 {
         STOP.store(true, Ordering::Release);
         #[cfg(target_os = "linux")]
         let owner_failed = sync_owner.as_ref().is_some_and(|owner| !owner.healthy());
-        #[cfg(target_os = "linux")]
-        drop(sync_owner);
         crate::core::ask::cancel_all(Duration::from_secs(3));
         let result = if worker.join().is_ok() { 0 } else { 2 };
+        #[cfg(target_os = "linux")]
+        drop(sync_owner);
         #[cfg(target_os = "linux")]
         let result = if owner_failed { eprintln!("SYNC_OWNER_STOPPED"); 2 } else { result };
         #[cfg(target_os = "linux")]
@@ -568,7 +604,14 @@ mod tests {
             sync_status(DeviceRole::Full, root.path(), || panic!(
                 "Full must not reconcile journals"
             )),
-            ("disabled", "disabled")
+            (
+                "disabled",
+                if cfg!(target_os = "linux") {
+                    "unavailable"
+                } else {
+                    "disabled"
+                }
+            )
         );
         assert!(!root.path().join(".stignore").exists());
         assert!(!root.path().join("device.json").exists());
@@ -584,7 +627,14 @@ mod tests {
                     reconciled = true;
                     true
                 }),
-                ("ready", "disabled")
+                (
+                    "ready",
+                    if cfg!(target_os = "linux") {
+                        "unavailable"
+                    } else {
+                        "disabled"
+                    }
+                )
             );
             assert!(reconciled);
         }

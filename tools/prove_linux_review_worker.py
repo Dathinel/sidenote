@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthetic worker-tree proof. Run the driver as a transient user service."""
+"""Synthetic worker-tree proof. The trusted driver stays outside each bounded owner unit."""
 import ctypes
 import json
 import os
@@ -36,15 +36,17 @@ def workload(root, allocate):
     child = os.fork()
     if child == 0:
         os.setsid()  # Escape the old process-group-only boundary.
+        (root / "grandchild.pid").write_text(Path("/proc/self/stat").read_text().split()[0])
         if allocate:
             wait(lambda: (root / "go").exists())
             held = bytearray(300 * 1024 * 1024)
             assert held[0] == 0
         time.sleep(90)
         os._exit(0)
+    grandchild = int(wait(lambda: (root / "grandchild.pid").read_text() if (root / "grandchild.pid").exists() else None))
     group = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
     (root / "pids.json").write_text(json.dumps({
-        "worker": os.getpid(), "grandchild": child, "group": group,
+        "worker": int(Path("/proc/self/stat").read_text().split()[0]), "grandchild": grandchild, "group": group,
     }))
     if allocate:
         wait(lambda: (root / "go").exists())
@@ -62,7 +64,12 @@ def driver(binary_dir, root):
     for mode in ("worker-death", "launcher-death", "owner-death", "aggregate-memory"):
         case = root / mode
         case.mkdir(mode=0o700)
+        unit = "sidenote-review-" + mode + "-" + str(os.getpid())
         process = subprocess.Popen([
+            "systemd-run", "--user", "--unit=" + unit, "--wait", "--pipe", "--collect",
+            "--service-type=exec", "--property=MemoryMax=512M", "--property=TasksMax=32",
+            "--property=CPUQuota=100%", "--property=OOMPolicy=stop",
+            "--setenv=R1_PUBLIC_ENV_CHECK=public-fixture",
             str(example), "tree", "/usr/bin/python3", str(Path(__file__).resolve()),
             "workload", str(case), "allocate" if mode == "aggregate-memory" else "wait",
         ], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -75,20 +82,22 @@ def driver(binary_dir, root):
             worker, grandchild = info["worker"], info["grandchild"]
             assert live(worker) and live(grandchild)
             group = Path("/sys/fs/cgroup") / info["group"].lstrip("/")
-            assert (group.parent / "memory.max").read_text().strip() == "536870912"
-            assert (group.parent / "pids.max").read_text().strip() == "32"
+            assert (group / "memory.max").read_text().strip() == "536870912"
+            assert (group / "pids.max").read_text().strip() == "32"
+            owner = int(subprocess.check_output(["systemctl","--user","show",unit,"-p","MainPID","--value"]))
             assert os.getsid(grandchild) == grandchild
-            print(f"{mode}: tree memory=536870912 tasks=32 cpu={(group.parent / 'cpu.max').read_text().strip()}", flush=True)
+            print(f"{mode}: tree memory=536870912 tasks=32 cpu={(group / 'cpu.max').read_text().strip()}", flush=True)
             if mode == "aggregate-memory":
                 (case / "go").touch()
             else:
                 victim = {"worker-death": worker, "launcher-death": launcher,
-                          "owner-death": process.pid}[mode]
+                          "owner-death": owner}[mode]
                 os.kill(victim, signal.SIGKILL)
             wait(lambda: not live(worker) and not live(grandchild))
             process.wait(timeout=5)
             print(f"{mode}: escaped grandchild dead, owner/front exit contained: PASS", flush=True)
         finally:
+            subprocess.run(["systemctl","--user","stop",unit], capture_output=True, timeout=10)
             if process.poll() is None:
                 process.kill()
                 process.wait()

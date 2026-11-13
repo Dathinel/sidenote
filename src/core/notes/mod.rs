@@ -189,6 +189,8 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
         .run(h, model, sample.into(), helper::TITLE_TIMEOUT)
         .map_err(|e| {
             match e {
+                #[cfg(target_os = "linux")]
+                helper::Failure::NetworkUnavailable => crate::core::runners::NETWORK_UNAVAILABLE,
                 helper::Failure::Missing => "The agent was not found on this PC",
                 helper::Failure::TimedOut => "The agent test timed out",
                 _ => "The agent test failed; check its sign-in",

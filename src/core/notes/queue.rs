@@ -96,6 +96,10 @@ fn write(root: &Path, id: &str, job: &mut Job, state: JobState, message: &str) -
     Ok(())
 }
 fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    if crate::service::role() != crate::service::DeviceRole::Full || crate::service::active() {
+        return crate::operations::record(root, crate::operations::EventKind::NotesChanged);
+    }
     fs::create_dir_all(root)?;
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -104,7 +108,10 @@ fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
     writeln!(file, "{} notes: {id} {message}", now())
 }
 pub(super) fn manifest(folder: &Path) -> io::Result<serde_json::Value> {
-    let bytes = store_io::read_bounded(&folder.join("manifest.json"), file_reads::JOURNAL_MAX)?;
+    let bytes = core::meeting_router::inputs::Snapshot::read_file(
+        &folder.join("manifest.json"),
+        file_reads::JOURNAL_MAX,
+    )?;
     serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
         .map_err(io::Error::from)
 }
@@ -166,6 +173,8 @@ pub(super) fn enqueue_in(
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
         Failure::Busy => return Err(io::ErrorKind::WouldBlock.into()),
+        #[cfg(target_os = "linux")]
+        Failure::NetworkUnavailable => (JobState::NoHelper, core::runners::NETWORK_UNAVAILABLE),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
         Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
@@ -188,7 +197,7 @@ fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<(
     write(root, id, job, state, message)
 }
 fn text(path: &Path, cap: u64) -> io::Result<String> {
-    match store_io::read_bounded(path, cap) {
+    match core::meeting_router::inputs::Snapshot::read_file(path, cap) {
         Ok(bytes) => {
             String::from_utf8(bytes).map_err(|_| store_io::invalid("Invalid text encoding"))
         }
@@ -572,6 +581,9 @@ fn drain_locked(
     load: impl Fn() -> io::Result<NotesSettings>,
 ) -> io::Result<()> {
     loop {
+        if crate::service::stopping() {
+            return Ok(());
+        }
         let Some(settings) = store_io::defer_busy(load())? else {
             return Ok(());
         };
@@ -707,10 +719,6 @@ pub fn catch_up() -> io::Result<()> {
         let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
         if valid_id(&id)
-            && core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), &id)
-                .at(Stage::CatchUpEligibility)?
-                == core::recording_guard::Eligibility::Eligible
-            && complete(&entry.path())
             && let Err(error) = enqueue_in(
                 &core::state_dir(),
                 &core::meetings_dir(),
@@ -753,6 +761,12 @@ pub fn start_worker() -> io::Result<()> {
         })
     }) {
         return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if crate::service::active() {
+        return crate::service::workers::start("notes", || {
+            let _ = run_pending();
+        });
     }
     let child = crate::platform::worker_command(std::env::current_exe().at(Stage::NotesExePath)?)?
         .arg("--notes-pending")

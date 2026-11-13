@@ -440,9 +440,40 @@ pub fn publish_latest(root: &Path, a: &ApprovedCapture) -> io::Result<()> {
     )
 }
 
+/// Windows share-mode handles deny replacement/writes while the model reads paths.
+/// Unix advisory locks do not provide that guarantee to an unrelated writer.
+pub fn immutable_image_pinning_supported() -> bool {
+    cfg!(windows)
+}
+
 #[cfg(not(windows))]
 impl ApprovedCapture {
     pub fn pin_images(&self, _images: &[PathBuf]) -> io::Result<Vec<fs::File>> {
         Err(crate::platform::unavailable())
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod linux_capability_tests {
+    #[test]
+    fn immutable_pinning_is_unavailable_and_never_sends_mutable_images() {
+        assert!(!super::immutable_image_pinning_supported());
+        let root = tempfile::tempdir().unwrap();
+        let capture = crate::core::annotations::read_capture(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/annotations/synthetic.scrawl"),
+        )
+        .unwrap();
+        let review = vec![super::ReviewFrame {
+            index: 1,
+            included: true,
+            masks: vec![],
+        }];
+        let approved = super::approve(&capture, &review, root.path()).unwrap();
+        let error = approved
+            .pin_images(&approved.images_for(&approved.approval.frames[0]))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("UNAVAILABLE_ON_PLATFORM"));
     }
 }

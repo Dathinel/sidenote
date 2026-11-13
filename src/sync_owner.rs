@@ -16,6 +16,7 @@ mod commands;
 mod inventory;
 #[cfg(target_os = "linux")]
 mod local;
+mod mcp;
 mod pages;
 use commands::Pair;
 const MAX_REQUEST: usize = 64 * 1024;
@@ -34,6 +35,10 @@ pub struct Ingested {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(skip)]
+    pub observed_at_ms: i64,
+    #[serde(skip)]
+    pub last_connected_observation_ms: Option<i64>,
     pub generation: u64,
     pub source_revision: String,
     pub meetings: Vec<Ingested>,
@@ -108,6 +113,15 @@ impl Controller {
         self.state.errors = errors;
         self.state.relay_enabled = settings.enabled;
         self.state.relay_status = relay_status;
+        #[cfg(target_os = "linux")]
+        {
+            self.state.relay_enabled = false;
+            self.state.relay_status = sidenote_sync::RELAY_UNAVAILABLE.into();
+        }
+        self.state.observed_at_ms = chrono::Utc::now().timestamp_millis();
+        if self.state.relay_status == "synced" {
+            self.state.last_connected_observation_ms = Some(self.state.observed_at_ms);
+        }
         self.state.peers = settings.peers.len();
         self.state.identity = identity;
         let path = self.root.join("local/sync/index.json");
@@ -146,6 +160,16 @@ impl Owner {
             threads: Vec::new(),
             controller: controller.clone(),
         };
+        #[cfg(target_os = "linux")]
+        if crate::service::role() != crate::service::DeviceRole::Full {
+            let endpoint = crate::mcp::network::Endpoint::bind(root)?;
+            let stopped = stop.clone();
+            owner.threads.push(
+                thread::Builder::new()
+                    .name("mcp-http".into())
+                    .spawn(move || endpoint.serve(stopped))?,
+            );
+        }
         #[cfg(target_os = "linux")]
         {
             let control = controller.clone();
@@ -213,6 +237,21 @@ pub fn cli() -> i32 {
     } else {
         0
     }
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn mcp_metrics() -> (u64, u64) {
+    mcp::metrics()
+}
+/// A one-shot helper never opens the service's relay replica.
+#[cfg(target_os = "linux")]
+pub(crate) fn local_request(value: &serde_json::Value) -> io::Result<serde_json::Value> {
+    let bytes = serde_json::to_vec(value)?;
+    let reply = local::request(&core::state_dir(), &bytes)?;
+    let envelope: serde_json::Value = serde_json::from_slice(&reply)?;
+    if envelope["ok"] != true {
+        return Err(io::Error::other("OWNER_REQUEST_REJECTED"));
+    }
+    Ok(envelope["value"].clone())
 }
 fn stream_commands(mut request: impl FnMut(&[u8]) -> io::Result<Vec<u8>>) -> io::Result<()> {
     let mut input = io::stdin().lock();

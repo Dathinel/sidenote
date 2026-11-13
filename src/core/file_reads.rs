@@ -2,8 +2,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs,
-    io::{self, Read},
+    fs, io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -119,29 +118,8 @@ pub fn read(path: &Path, cap: u64) -> io::Result<Arc<[u8]>> {
                 }
             });
     }
-    let result = (|| {
-        let m = checked_metadata(path)?;
-        if m.len() > cap {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Read budget exceeded",
-            ));
-        }
-        let file = nofollow(path)?;
-        let m = file.metadata()?;
-        if !regular(&m) || m.len() > cap {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "File skipped"));
-        }
-        let mut bytes = Vec::new();
-        file.take(cap + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > cap {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "File grew past limit",
-            ));
-        }
-        Ok(Arc::<[u8]>::from(bytes))
-    })();
+    let result =
+        super::meeting_router::inputs::Snapshot::read_file(path, cap).map(Arc::<[u8]>::from);
     CACHE.with(|c| {
         if let Some(c) = c.borrow_mut().as_mut() {
             if let Ok(b) = &result {
@@ -226,18 +204,7 @@ pub fn dir_iter(path: &Path) -> io::Result<impl Iterator<Item = io::Result<Arc<f
     Ok(entries(path)?.into_iter().map(Ok))
 }
 
+#[cfg(not(windows))]
 pub(crate) fn nofollow(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x00200000);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    options.open(path)
+    super::meeting_router::inputs::Snapshot::open_file(path)
 }

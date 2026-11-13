@@ -28,6 +28,7 @@ pub mod diary;
 pub mod memory;
 pub mod notes;
 mod paths;
+pub(crate) use paths::ReadOnlyScope;
 pub mod project_merge;
 pub mod prompt_library;
 pub mod settle;

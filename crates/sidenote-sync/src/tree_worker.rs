@@ -1,16 +1,15 @@
-//! A transient service per worker, nested slices for aggregate descendant budgets.
+//! Helpers inherit the sandbox and the aggregate resource budget of their owner.
 use std::{
     ffi::{OsStr, OsString},
     fs,
     io::{self, Read},
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
-    path::{Path, PathBuf},
+    os::fd::AsRawFd,
+    path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
 pub const UNAVAILABLE: &str = "UNAVAILABLE_ON_THIS_LINUX_SETUP: helpers require systemd user services with delegated memory, pids and cpu controllers";
-const WALL_SECONDS: u64 = 120;
 
 fn unavailable() -> io::Error {
     io::Error::new(io::ErrorKind::Unsupported, UNAVAILABLE)
@@ -46,7 +45,18 @@ pub fn owner_unit() -> io::Result<(String, PathBuf)> {
 }
 
 pub fn command(program: &OsStr) -> io::Result<Command> {
-    owner_unit().map_err(|_| unavailable())?;
+    if matches!(
+        std::path::Path::new(program)
+            .file_stem()
+            .and_then(OsStr::to_str),
+        Some("claude" | "codex" | "opencode" | "opencode2")
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "agent runners need network; not yet supported on Linux",
+        ));
+    }
+    budget().map_err(|_| unavailable())?;
     let executable = std::env::current_exe()?;
     let parent = executable.parent().ok_or_else(unavailable)?;
     let folder = if parent
@@ -122,145 +132,10 @@ pub fn bounded_output(command: &mut Command, limit: Duration) -> io::Result<std:
     }
 }
 
-fn control(args: &[&OsStr]) -> io::Result<Vec<u8>> {
-    let output = bounded_output(
-        Command::new("/usr/bin/systemctl").arg("--user").args(args),
-        Duration::from_secs(2),
-    )?;
-    if !output.status.success() {
-        return Err(unavailable());
-    }
-    Ok(output.stdout)
-}
-
-fn start_time(pid: u32) -> io::Result<String> {
-    fs::read_to_string(format!("/proc/{pid}/stat"))?
-        .rsplit(')')
-        .next()
-        .and_then(|rest| rest.split_whitespace().nth(19))
-        .map(str::to_owned)
-        .ok_or_else(unavailable)
-}
-
-fn pidfd(pid: u32, expected: &OsStr) -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) as i32 };
-    if fd < 0 {
-        return Err(unavailable());
-    }
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    if OsStr::new(&start_time(pid)?) != expected {
-        return Err(unavailable());
-    }
-    Ok(fd)
-}
-
-fn slice_limits(slice: &str) -> io::Result<()> {
-    control(&[OsStr::new("start"), OsStr::new(slice)])?;
-    control(&[
-        OsStr::new("set-property"),
-        OsStr::new("--runtime"),
-        OsStr::new(slice),
-        OsStr::new("MemoryMax=512M"),
-        OsStr::new("TasksMax=32"),
-        OsStr::new("CPUQuota=100%"),
-    ])?;
-    Ok(())
-}
-
-fn launch(args: &[OsString]) -> io::Result<i32> {
-    let (owner, path) = owner_unit()?;
-    let parent_slice = path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(OsStr::to_str)
-        .filter(|name| {
-            name.starts_with("sidenote-w")
-                && name.ends_with(".slice")
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-.".contains(&b))
-        });
-    let nonce = &hex::encode(crate::identity::random32())[..16];
-    let stem = parent_slice
-        .map(|s| s.trim_end_matches(".slice"))
-        .unwrap_or("sidenote");
-    let slice = format!("{stem}-w{nonce}.slice");
-    let unit = format!("sidenote-worker-{nonce}.service");
-    if let Err(error) = slice_limits(&slice) {
-        let _ = control(&[OsStr::new("stop"), OsStr::new(&slice)]);
-        return Err(error);
-    }
-    let front = std::process::id();
-    let parent = unsafe { libc::getppid() } as u32;
-    let mut run = Command::new("/usr/bin/systemd-run");
-    run.args([
-        "--user",
-        "--quiet",
-        "--pipe",
-        "--wait",
-        "--collect",
-        "--service-type=exec",
-    ])
-    .arg(format!("--unit={unit}"))
-    .arg(format!("--slice={slice}"))
-    .arg(format!("--property=BindsTo={owner}"))
-    .arg(format!("--property=After={owner}"))
-    .args([
-        "--property=MemoryMax=512M",
-        "--property=TasksMax=32",
-        "--property=CPUQuota=100%",
-        "--property=RuntimeMaxSec=120s",
-        "--property=TimeoutStopSec=1s",
-        "--property=KillMode=control-group",
-        "--property=KillSignal=SIGKILL",
-        "--property=NoNewPrivileges=yes",
-        "--property=LimitAS=536870912",
-        "--property=LimitCPU=120",
-        "--property=LimitCORE=0",
-        "--property=UMask=0077",
-        "--property=OOMPolicy=stop",
-    ])
-    .arg("--working-directory")
-    .arg(std::env::current_dir()?);
-    run.arg("--")
-        .arg(std::env::current_exe()?)
-        .arg("--guard")
-        .arg(parent.to_string())
-        .arg(start_time(parent)?)
-        .arg(front.to_string())
-        .arg(start_time(front)?)
-        .arg(&slice)
-        .args(args);
-    let result = run.status();
-    let _ = control(&[OsStr::new("stop"), OsStr::new(&slice)]);
-    result.map(|status| status.code().unwrap_or(1))
-}
-
-fn guard(args: &[OsString]) -> io::Result<i32> {
-    if args.len() < 6 {
-        return Err(unavailable());
-    }
-    let owner = pidfd(
-        args[0]
-            .to_string_lossy()
-            .parse()
-            .map_err(|_| unavailable())?,
-        &args[1],
-    )?;
-    let front = pidfd(
-        args[2]
-            .to_string_lossy()
-            .parse()
-            .map_err(|_| unavailable())?,
-        &args[3],
-    )?;
+fn budget() -> io::Result<()> {
     let (_, group) = owner_unit()?;
-    let parent = group.parent().ok_or_else(unavailable)?;
-    if parent.file_name() != Some(args[4].as_os_str()) {
-        return Err(unavailable());
-    }
-    let directory =
-        Path::new("/sys/fs/cgroup").join(parent.strip_prefix("/").map_err(|_| unavailable())?);
+    let directory = std::path::Path::new("/sys/fs/cgroup")
+        .join(group.strip_prefix("/").map_err(|_| unavailable())?);
     for (file, maximum) in [
         ("memory.max", crate::containment::MEMORY_LIMIT),
         ("pids.max", 32),
@@ -282,66 +157,15 @@ fn guard(args: &[OsString]) -> io::Result<i32> {
     {
         return Err(unavailable());
     }
-    let mut command = Command::new(&args[5]);
-    command.args(&args[6..]);
-    // Do not serialize API-key environment values into argv or transient unit files.
-    // Read the live launcher's private environment and pass it only to the real child.
-    use std::os::unix::ffi::OsStringExt;
-    let front_pid: u32 = args[2]
-        .to_string_lossy()
-        .parse()
-        .map_err(|_| unavailable())?;
-    let environment = zeroize::Zeroizing::new(fs::read(format!("/proc/{front_pid}/environ"))?);
-    command.env_clear();
-    for entry in environment.split(|b| *b == 0).filter(|e| !e.is_empty()) {
-        let Some(equal) = entry.iter().position(|b| *b == b'=') else {
-            return Err(unavailable());
-        };
-        let name = OsString::from_vec(entry[..equal].to_vec());
-        let mut value = OsString::from_vec(entry[equal + 1..].to_vec());
-        if name == "CREDENTIALS_DIRECTORY" {
-            let directory = Path::new(&value);
-            if !directory.is_absolute() {
-                return Err(unavailable());
-            }
-            value = Path::new(&format!("/proc/{front_pid}/root"))
-                .join(directory.strip_prefix("/").map_err(|_| unavailable())?)
-                .into_os_string();
-        }
-        command.env(name, value);
-    }
-    crate::containment::configure(&mut command);
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(WALL_SECONDS);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status.code().unwrap_or(1));
-        }
-        let mut fds = [
-            libc::pollfd {
-                fd: owner.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: front.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), 2, 25) };
-        if ready != 0 || Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(2); // MainPID exit makes systemd kill every remaining descendant.
-        }
-    }
+    Ok(())
 }
 
 pub fn run(args: Vec<OsString>) -> io::Result<i32> {
     match args.first().and_then(|a| a.to_str()) {
-        Some("--launch") if args.len() >= 2 => launch(&args[1..]),
-        Some("--guard") => guard(&args[1..]),
+        Some("--direct" | "--launch") if args.len() >= 2 => {
+            budget()?;
+            crate::pid_worker::run(&args[1..])
+        }
         _ => Err(unavailable()),
     }
 }
