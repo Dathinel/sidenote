@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "asr-runtime")]
 mod onnx;
 #[cfg(feature = "asr-runtime")]
-pub use onnx::{Anuvani, IndicConformer, initialize};
+pub use onnx::{Anuvani, IndicConformer, IndicError, initialize};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub const SAMPLE_RATE: u32 = 16000;
