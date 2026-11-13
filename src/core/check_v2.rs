@@ -1,7 +1,7 @@
 //! Report identity and comparison. Titles and explanations never establish identity.
 use super::{
     daily_check::{CheckContent, DailyCheck, Finding, KbSnapshot},
-    store_io::{fingerprint, invalid},
+    store_io::fingerprint,
 };
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,22 @@ fn material_signature(f: &Finding) -> String {
         f.material_state.clone(),
     ])
 }
+#[derive(Debug)]
+pub enum PreparationError {
+    InvalidContent,
+    Io(io::Error),
+}
+impl From<io::Error> for PreparationError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+impl From<serde_json::Error> for PreparationError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Io(error.into())
+    }
+}
+
 /// Called after source/subject validation. The engine assigns IDs, dates and comparisons.
 pub fn prepare_content(
     content: &mut CheckContent,
@@ -92,7 +108,7 @@ pub fn prepare_content(
     history: &[DailyCheck],
     kb: &KbSnapshot,
     complete: bool,
-) -> io::Result<()> {
+) -> Result<(), PreparationError> {
     let previous = history.first();
     let mut known = BTreeMap::new();
     for report in history {
@@ -204,9 +220,7 @@ pub fn prepare_content(
         }
         finding.last_seen = Some(today);
         if !ids.insert(finding.id.clone()) {
-            return Err(invalid(
-                "Ambiguous duplicate finding identity; supply distinct subject refs",
-            ));
+            return Err(PreparationError::InvalidContent);
         }
     }
     for (index, prior) in old.iter().enumerate() {

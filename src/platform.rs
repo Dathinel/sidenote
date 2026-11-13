@@ -99,33 +99,48 @@ impl CommandExt for std::process::Command {
 }
 
 pub fn data_home() -> std::path::PathBuf {
-    #[cfg(windows)]
+    #[cfg(test)]
+    {
+        crate::test_home().join("appdata")
+    }
+    #[cfg(all(windows, not(test)))]
     {
         std::env::var_os("APPDATA")
             .map(Into::into)
             .unwrap_or_default()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(test)))]
     {
         xdg("XDG_DATA_HOME", ".local/share")
     }
 }
 pub fn local_home() -> std::path::PathBuf {
-    #[cfg(windows)]
+    #[cfg(test)]
+    {
+        crate::test_home().join("localappdata")
+    }
+    #[cfg(all(windows, not(test)))]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(Into::into)
             .unwrap_or_default()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(test)))]
     {
         xdg("XDG_STATE_HOME", ".local/state")
     }
 }
 pub fn home() -> std::path::PathBuf {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .map(Into::into)
-        .unwrap_or_default()
+    #[cfg(test)]
+    {
+        crate::test_home().join("home")
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(Into::into)
+            .unwrap_or_default()
+    }
 }
 #[cfg(not(windows))]
 pub fn xdg(variable: &str, fallback: &str) -> std::path::PathBuf {

@@ -1,6 +1,14 @@
 #![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
+#[cfg(all(test, windows, feature = "desktop"))]
+#[path = "../tests/common/mod.rs"]
+mod test_paths;
+#[cfg(all(test, windows, feature = "desktop"))]
+#[test]
+fn default_test_paths_are_isolated_from_owner_appdata() {
+    test_paths::isolate();
+}
 #[cfg(all(windows, feature = "desktop"))]
 mod ui;
 #[cfg(all(windows, feature = "desktop"))]

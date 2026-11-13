@@ -2679,6 +2679,7 @@ mod tests {
     use super::*;
     #[test]
     fn merged_kb_validation_reason_reaches_the_inline_error_without_raw_io_details() {
+        crate::test_paths::isolate();
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("config.json");
         std::fs::write(&path, r#"{"version":1,"features":{},"notes":{}}"#).unwrap();

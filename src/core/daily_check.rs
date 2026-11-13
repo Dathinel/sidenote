@@ -679,23 +679,19 @@ fn validate_content(
     meetings: &[Meeting],
     kb: &KbSnapshot,
     records: &[MemoryRecord],
-) -> io::Result<()> {
+) -> Result<(), &'static str> {
     if content.brief.len() != 3
         || content
             .brief
             .iter()
             .any(|s| s.trim().is_empty() || s.lines().count() != 1)
     {
-        return Err(invalid(
-            "Runner must return exactly three nonempty brief lines",
-        ));
+        return Err("CHECK_OUTPUT_BRIEF");
     }
     // These legacy fields are never accepted from the v2 producer or stored in a v2 report.
     if !content.memory_update.is_empty() || !content.summary.is_empty() || !content.story.is_empty()
     {
-        return Err(invalid(
-            "V2 reports use brief, story_alignment and memory_proposals",
-        ));
+        return Err("CHECK_OUTPUT_LEGACY_FIELDS");
     }
     for finding in &mut content.findings {
         finding.subject_keys.clear();
@@ -710,9 +706,7 @@ fn validate_content(
             || finding.subject_refs.is_empty()
             || finding.material_state.trim().is_empty()
         {
-            return Err(invalid(
-                "Finding needs text, subjects, material state and valid sources",
-            ));
+            return Err("CHECK_OUTPUT_FINDING");
         }
         for subject in &finding.subject_refs {
             let valid = if let Some(task) = subject.strip_prefix("task:") {
@@ -737,7 +731,7 @@ fn validate_content(
                 false
             };
             if !valid {
-                return Err(invalid("Invalid finding subject reference"));
+                return Err("CHECK_OUTPUT_SUBJECT");
             }
             let key = if let Some(task) = subject.strip_prefix("task:") {
                 let (id, index) = task.rsplit_once(':').unwrap();
@@ -775,14 +769,12 @@ fn validate_content(
                 .iter()
                 .all(|s| s.starts_with("[[") && source_exists(s, meetings, &kb.path))
         {
-            return Err(invalid("Invalid story alignment claim or source"));
+            return Err("CHECK_OUTPUT_ALIGNMENT");
         }
         if !matches!(alignment.status, check_v2::AlignmentStatus::Unknown)
             && (alignment.kb_claim.sources.is_empty() || alignment.meeting_claim.sources.is_empty())
         {
-            return Err(invalid(
-                "Known alignment needs both KB and meeting evidence",
-            ));
+            return Err("CHECK_OUTPUT_ALIGNMENT_EVIDENCE");
         }
     }
     for resolution in &content.resolutions {
@@ -793,19 +785,19 @@ fn validate_content(
                 .iter()
                 .all(|s| source_exists(s, meetings, &kb.path))
         {
-            return Err(invalid("Resolution requires positive cited evidence"));
+            return Err("CHECK_OUTPUT_RESOLUTION");
         }
     }
     for proposal in &mut content.memory_proposals {
         for source in &mut proposal.sources {
             if !source_exists(source.reference(), meetings, &kb.path) {
-                return Err(invalid("Memory proposal cites an unknown source"));
+                return Err("CHECK_OUTPUT_MEMORY_SOURCE");
             }
             if let MemorySource::Kb { revision, .. } = source {
                 *revision = Some(kb.revision.clone());
             }
         }
-        memory::validate_proposal(proposal)?;
+        memory::validate_proposal(proposal).map_err(|_| "CHECK_OUTPUT_MEMORY_PROPOSAL")?;
         proposal.target_updated_at = proposal
             .target_id
             .as_ref()
@@ -814,7 +806,7 @@ fn validate_content(
                     .iter()
                     .find(|r| &r.id == id && r.status == RecordStatus::Active)
                     .map(|r| r.updated_at.clone())
-                    .ok_or_else(|| invalid("Proposal targets an inactive or unknown record"))
+                    .ok_or("CHECK_OUTPUT_MEMORY_TARGET")
             })
             .transpose()?;
         proposal.id = memory::proposal_id(proposal);
@@ -877,6 +869,86 @@ fn log_line(message: &str) {
             Local::now().format("%Y-%m-%dT%H:%M:%S")
         );
     }
+}
+fn parse_report(
+    answer: &str,
+    meetings: &[Meeting],
+    kb: &KbSnapshot,
+    records: &[MemoryRecord],
+) -> Result<CheckContent, &'static str> {
+    let mut value: Value = serde_json::from_str(answer).map_err(|_| "CHECK_OUTPUT_JSON")?;
+    let object = value.as_object_mut().ok_or("CHECK_OUTPUT_OBJECT")?;
+    if object.get("schema_version").and_then(Value::as_u64) != Some(2) {
+        return Err("CHECK_OUTPUT_SCHEMA_VERSION");
+    }
+    object.remove("schema_version");
+    let mut content = serde_json::from_value(value).map_err(|_| "CHECK_OUTPUT_SHAPE")?;
+    validate_content(&mut content, meetings, kb, records)?;
+    Ok(content)
+}
+fn normalize_day_summary(content: &mut CheckContent, today: NaiveDate) {
+    // The day summary is a nicety: a malformed one is dropped, never the whole report.
+    let day_summary = content
+        .day_summary
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    content.day_summary = if day_summary.chars().count() <= 1200 {
+        day_summary
+    } else {
+        String::new()
+    };
+    content.day_summary_date = (!content.day_summary.is_empty()).then(|| today - Days::days(1));
+}
+#[derive(Debug)]
+enum ReportFailure {
+    InvalidOutput(&'static str),
+    Preparation(io::Error),
+}
+impl From<&'static str> for ReportFailure {
+    fn from(code: &'static str) -> Self {
+        Self::InvalidOutput(code)
+    }
+}
+impl From<check_v2::PreparationError> for ReportFailure {
+    fn from(error: check_v2::PreparationError) -> Self {
+        match error {
+            check_v2::PreparationError::InvalidContent => {
+                Self::InvalidOutput("CHECK_OUTPUT_PREPARATION")
+            }
+            check_v2::PreparationError::Io(error) => Self::Preparation(error),
+        }
+    }
+}
+fn report_with_retry(
+    prompt: &str,
+    mut run: impl FnMut(&str) -> io::Result<String>,
+    mut validate: impl FnMut(&str) -> Result<CheckContent, ReportFailure>,
+    mut report: impl FnMut(&str),
+) -> io::Result<CheckContent> {
+    let mut request = prompt.to_owned();
+    for attempt in 1..=2 {
+        let answer = run(&request)?;
+        match validate(&answer) {
+            Ok(content) => return Ok(content),
+            Err(ReportFailure::Preparation(error)) => {
+                let error = Stage::CheckPreparation.error(error);
+                report(&format!("preparation failed: {error}"));
+                return Err(error);
+            }
+            Err(ReportFailure::InvalidOutput(code)) => {
+                report(&format!(
+                    "output failed code={code} attempt={attempt} retry={}",
+                    attempt == 1
+                ));
+                if attempt == 2 {
+                    return Err(Stage::CheckOutput.error(invalid(code)));
+                }
+                request.push_str("\nReturn only a JSON object with numeric schema_version 2. Follow the report schema exactly, including three nonempty brief lines and valid sources and subject references. Do not include Markdown fences or surrounding prose.");
+            }
+        }
+    }
+    unreachable!()
 }
 pub fn run_daily_check(
     runner_name: &str,
@@ -962,51 +1034,37 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
         ));
         return Ok(None);
     }
-    let answer = super::runner_process::run_runner_with_timeout(
-        &runner,
-        prompt,
-        &memory_dir,
-        Duration::from_secs(900),
-        |_| {},
-    )
-    .map_err(|e| Stage::CheckRunner.error(invalid(&e)))?;
-    let mut value: Value = serde_json::from_str(&answer)
-        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid report JSON")))?;
-    if value.get("schema_version").and_then(Value::as_u64) != Some(2) {
-        return Err(Stage::CheckOutput.error(invalid("Runner must return schema_version 2")));
-    }
-    value
-        .as_object_mut()
-        .ok_or_else(|| Stage::CheckOutput.error(invalid("Expected report object")))?
-        .remove("schema_version");
-    let mut content: CheckContent = serde_json::from_value(value)
-        .map_err(|_| Stage::CheckOutput.error(invalid("Runner returned invalid v2 report")))?;
-    validate_content(&mut content, &meetings, &kb, &memory_records).at(Stage::CheckOutput)?;
-    // The day summary is a nicety: a malformed one is dropped, never the whole report.
-    let day_summary = content
-        .day_summary
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    content.day_summary = if day_summary.chars().count() <= 1200 {
-        day_summary
-    } else {
-        String::new()
-    };
-    content.day_summary_date = (!content.day_summary.is_empty()).then(|| today - Days::days(1));
     let history = list_checks()?
         .into_iter()
         .filter(|d| *d < today)
         .map(load_check)
         .collect::<io::Result<Vec<_>>>()?;
-    check_v2::prepare_content(
-        &mut content,
-        today,
-        &history,
-        &kb,
-        warnings.is_empty() && !kb.stale,
-    )
-    .at(Stage::CheckOutput)?;
+    let mut content = report_with_retry(
+        &prompt,
+        |prompt| {
+            super::runner_process::run_runner_with_timeout(
+                &runner,
+                prompt.to_owned(),
+                &memory_dir,
+                Duration::from_secs(900),
+                |_| {},
+            )
+            .map_err(|e| Stage::CheckRunner.error(invalid(&e)))
+        },
+        |answer| {
+            let mut content = parse_report(answer, &meetings, &kb, &memory_records)?;
+            normalize_day_summary(&mut content, today);
+            check_v2::prepare_content(
+                &mut content,
+                today,
+                &history,
+                &kb,
+                warnings.is_empty() && !kb.stale,
+            )?;
+            Ok(content)
+        },
+        log_line,
+    )?;
     content.coverage = Coverage {
         meeting_count: sent.meetings_in,
         task_count,
@@ -1101,6 +1159,245 @@ pub fn run_cli() -> i32 {
             log_line(&format!("failed: {error}"));
             eprintln!("Daily check failed: {error}");
             1
+        }
+    }
+}
+
+#[cfg(test)]
+mod reliability_tests {
+    use super::*;
+
+    fn valid() -> Value {
+        json!({"schema_version":2,"findings":[],"brief":["Synthetic one","Synthetic two","Synthetic three"]})
+    }
+    fn finding() -> Value {
+        json!({"kind":"other","severity":"low","title":"Synthetic title",
+            "explanation":"Synthetic explanation","evidence":["evidence.md"],
+            "subject_refs":["project:Demo|synthetic"],"material_state":"synthetic"})
+    }
+    fn validate(answer: &str, kb: &KbSnapshot) -> Result<CheckContent, ReportFailure> {
+        let mut content = parse_report(answer, &[], kb, &[])?;
+        let today = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        normalize_day_summary(&mut content, today);
+        check_v2::prepare_content(&mut content, today, &[], kb, true)?;
+        Ok(content)
+    }
+    #[test]
+    fn fake_runner_retries_each_invalid_shape_once_with_content_free_codes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("evidence.md"), "Synthetic evidence").unwrap();
+        let kb = KbSnapshot {
+            revision: "a".repeat(40),
+            captured_at: String::new(),
+            path: root.path().into(),
+            stale: false,
+        };
+        let mut cases = vec![
+            ("synthetic private malformed {".into(), "CHECK_OUTPUT_JSON"),
+            (format!("```json\n{}\n```", valid()), "CHECK_OUTPUT_JSON"),
+            ("[]".into(), "CHECK_OUTPUT_OBJECT"),
+        ];
+        let mut bad_subject = finding();
+        bad_subject["subject_refs"] = json!(["task:missing:99"]);
+        let mut bad_source = finding();
+        bad_source["evidence"] = json!(["../synthetic-private.md"]);
+        let mut bad_enum = finding();
+        bad_enum["severity"] = json!("synthetic private enum");
+        let alignment = json!({"project":"Demo","status":"aligned","kb_claim":{"text":"Synthetic KB","sources":[]},
+            "meeting_claim":{"text":"Synthetic meeting","sources":[]},"question":"Synthetic question"});
+        let mut bad_alignment = alignment.clone();
+        bad_alignment["kb_claim"]["sources"] = json!(["missing.md"]);
+        let proposal = json!({"op":"confirm","target_id":"missing","text":"Synthetic text","rationale":"Synthetic rationale",
+            "sources":[{"type":"kb","path":"evidence.md"}]});
+        let mut bad_proposal_source = proposal.clone();
+        bad_proposal_source["sources"][0]["path"] = json!("missing.md");
+        for (patch, code) in [
+            (json!({"schema_version":1}), "CHECK_OUTPUT_SCHEMA_VERSION"),
+            (json!({"schema_version":"2"}), "CHECK_OUTPUT_SCHEMA_VERSION"),
+            (
+                json!({"schema_version":null}),
+                "CHECK_OUTPUT_SCHEMA_VERSION",
+            ),
+            (
+                json!({"synthetic_private_unknown":"private"}),
+                "CHECK_OUTPUT_SHAPE",
+            ),
+            (json!({"findings":{}}), "CHECK_OUTPUT_SHAPE"),
+            (json!({"findings":[bad_enum]}), "CHECK_OUTPUT_SHAPE"),
+            (json!({"brief":["only one"]}), "CHECK_OUTPUT_BRIEF"),
+            (json!({"brief":["one","two"," "]}), "CHECK_OUTPUT_BRIEF"),
+            (
+                json!({"brief":["one","two","three\nfour"]}),
+                "CHECK_OUTPUT_BRIEF",
+            ),
+            (
+                json!({"story":"synthetic private legacy"}),
+                "CHECK_OUTPUT_LEGACY_FIELDS",
+            ),
+            (json!({"findings":[bad_source]}), "CHECK_OUTPUT_FINDING"),
+            (json!({"findings":[bad_subject]}), "CHECK_OUTPUT_SUBJECT"),
+            (
+                json!({"story_alignment":[bad_alignment]}),
+                "CHECK_OUTPUT_ALIGNMENT",
+            ),
+            (
+                json!({"story_alignment":[alignment]}),
+                "CHECK_OUTPUT_ALIGNMENT_EVIDENCE",
+            ),
+            (
+                json!({"resolutions":[{"finding_id":"missing","explanation":"synthetic private","evidence":[]}]}),
+                "CHECK_OUTPUT_RESOLUTION",
+            ),
+            (
+                json!({"memory_proposals":[bad_proposal_source]}),
+                "CHECK_OUTPUT_MEMORY_SOURCE",
+            ),
+            (
+                json!({"memory_proposals":[{"op":"add","text":"synthetic private","rationale":"reason","sources":[]}]}),
+                "CHECK_OUTPUT_MEMORY_PROPOSAL",
+            ),
+            (
+                json!({"memory_proposals":[proposal]}),
+                "CHECK_OUTPUT_MEMORY_TARGET",
+            ),
+            (
+                json!({"findings":[finding(),finding()]}),
+                "CHECK_OUTPUT_PREPARATION",
+            ),
+        ] {
+            let mut value = valid();
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            cases.push((value.to_string(), code));
+        }
+        cases.push((
+            r#"{"schema_version":2,"brief":["a","b","c"]}"#.into(),
+            "CHECK_OUTPUT_SHAPE",
+        ));
+        for (bad, code) in cases {
+            // Exercise recovery and exhaustion for every shape, without a real model or meetings.
+            for recover in [true, false] {
+                let mut calls = 0;
+                let mut logs = Vec::new();
+                let result = report_with_retry(
+                    "synthetic prompt",
+                    |prompt| {
+                        calls += 1;
+                        assert_eq!(prompt.contains("Return only a JSON object"), calls == 2);
+                        Ok(if calls == 1 || !recover {
+                            bad.clone()
+                        } else {
+                            valid().to_string()
+                        })
+                    },
+                    |answer| validate(answer, &kb),
+                    |line| logs.push(line.to_owned()),
+                );
+                assert_eq!(calls, 2);
+                assert_eq!(result.is_ok(), recover, "{code}");
+                assert_eq!(
+                    logs[0],
+                    format!("output failed code={code} attempt=1 retry=true")
+                );
+                if recover {
+                    assert_eq!(logs.len(), 1);
+                } else {
+                    assert_eq!(
+                        logs,
+                        [
+                            format!("output failed code={code} attempt=1 retry=true"),
+                            format!("output failed code={code} attempt=2 retry=false")
+                        ]
+                    );
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "CHECK_OUTPUT (InvalidData)"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn valid_output_and_runner_errors_do_not_retry() {
+        for runner_error in [false, true] {
+            let mut calls = 0;
+            let result = report_with_retry(
+                "synthetic prompt",
+                |_| {
+                    calls += 1;
+                    if runner_error {
+                        Err(Stage::CheckRunner.error(io::Error::from_raw_os_error(5)))
+                    } else {
+                        Ok(String::new())
+                    }
+                },
+                |_| Ok(CheckContent::default()),
+                |_| panic!("not an output failure"),
+            );
+            assert_eq!(calls, 1);
+            assert_eq!(result.is_err(), runner_error);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preparation_file_io_fails_without_retry_and_preserves_content_free_os_diagnostic() {
+        use std::os::windows::fs::OpenOptionsExt;
+        for code in [2, 32] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("evidence.md");
+            fs::write(&path, "Synthetic private evidence").unwrap();
+            let kb = KbSnapshot {
+                revision: "a".repeat(40),
+                captured_at: String::new(),
+                path: root.path().into(),
+                stale: false,
+            };
+            let mut answer = valid();
+            answer["findings"] = json!([finding()]);
+            let mut calls = 0;
+            let mut logs = Vec::new();
+            let error = report_with_retry(
+                "synthetic prompt",
+                |_| {
+                    calls += 1;
+                    Ok(answer.to_string())
+                },
+                |answer| {
+                    let mut content = parse_report(answer, &[], &kb, &[])?;
+                    // Fail the real evidence read only after source validation has accepted the file.
+                    let _held = if code == 32 {
+                        Some(
+                            fs::OpenOptions::new()
+                                .read(true)
+                                .share_mode(0)
+                                .open(&path)
+                                .unwrap(),
+                        )
+                    } else {
+                        fs::remove_file(&path).unwrap();
+                        None
+                    };
+                    check_v2::prepare_content(
+                        &mut content,
+                        NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+                        &[],
+                        &kb,
+                        true,
+                    )?;
+                    Ok(content)
+                },
+                |line| logs.push(line.to_owned()),
+            )
+            .unwrap_err();
+            let expected = Stage::CheckPreparation.error(io::Error::from_raw_os_error(code));
+            assert_eq!(calls, 1);
+            assert_eq!(error.kind(), expected.kind());
+            assert_eq!(error.to_string(), expected.to_string());
+            assert_eq!(logs, [format!("preparation failed: {expected}")]);
+            assert!(error.to_string().contains(&format!("os {code}")));
         }
     }
 }

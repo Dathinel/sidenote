@@ -20,8 +20,11 @@ pub const NOTES_UNAVAILABLE: &str = "Meeting notes are not set up on this PC";
 pub const NOTES_FAILED: &str = "Meeting notes could not be created. Your recording is saved in Hex. Check the notes setup before trying again.";
 
 pub fn notes_pipeline() -> PathBuf {
-    PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default())
-        .join(".config/hex/scripts/hex-meeting-watch.ps1")
+    #[cfg(test)]
+    let home = crate::platform::home();
+    #[cfg(not(test))]
+    let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
+    home.join(".config/hex/scripts/hex-meeting-watch.ps1")
 }
 
 pub fn notes_problem(folder: &Path) -> Option<&'static str> {

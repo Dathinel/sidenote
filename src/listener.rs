@@ -14,6 +14,8 @@ use std::{
 #[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
 pub mod heartbeat;
+#[cfg(windows)]
+mod notes_environment;
 pub mod status;
 mod timings;
 #[derive(Deserialize)]
@@ -260,6 +262,22 @@ fn script_command(
     folders: &[PathBuf],
     report: impl FnOnce(&str),
 ) -> io::Result<(Command, bool)> {
+    script_command_with_environment(script, folders, report, |command| {
+        notes_environment::apply(
+            command,
+            notes_environment::read_user,
+            |name| std::env::var_os(name),
+            log,
+        )
+    })
+}
+#[cfg(windows)]
+fn script_command_with_environment(
+    script: &std::path::Path,
+    folders: &[PathBuf],
+    report: impl FnOnce(&str),
+    refresh: impl FnOnce(&mut Command) -> io::Result<()>,
+) -> io::Result<(Command, bool)> {
     let filtered = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command",
             "$ErrorActionPreference='Stop'; if ((Get-Command -Name $env:SIDENOTE_NOTES_SCRIPT).Parameters.ContainsKey('MeetingFolders')) { exit 0 }; exit 1"])
@@ -278,6 +296,7 @@ fn script_command(
             .arg(script);
     }
     command.creation_flags(HIDDEN);
+    refresh(&mut command)?;
     Ok((command, filtered))
 }
 fn catch_up() -> io::Result<()> {
@@ -615,6 +634,21 @@ pub(crate) fn service_background() -> Background {
 mod pipeline_tests {
     use super::*;
     #[cfg(windows)]
+    fn script_command(
+        script: &std::path::Path,
+        folders: &[PathBuf],
+        report: impl FnOnce(&str),
+    ) -> io::Result<(Command, bool)> {
+        super::script_command_with_environment(script, folders, report, |command| {
+            notes_environment::apply(
+                command,
+                |_| Ok(Some("synthetic environment value".into())),
+                |_| None,
+                |_| panic!("nothing missing"),
+            )
+        })
+    }
+    #[cfg(windows)]
     #[test]
     fn listener_retries_contention_and_acquires_after_the_probe_releases() {
         use std::os::windows::fs::OpenOptionsExt;
@@ -729,7 +763,7 @@ mod pipeline_tests {
     }
     #[test]
     #[cfg(windows)]
-    fn legacy_no_param_script_runs_without_arguments_or_changed_environment_and_logs_once() {
+    fn legacy_no_param_script_runs_without_arguments_or_folder_environment_and_logs_once() {
         let root = script_fixture();
         let script = root.join("notes.ps1");
         let output = root.join("legacy.json");
@@ -741,7 +775,12 @@ mod pipeline_tests {
             })
             .unwrap();
         assert!(!filtered);
-        assert_eq!(command.get_envs().count(), 0);
+        assert_eq!(command.get_envs().count(), 8);
+        assert!(
+            command.get_envs().all(
+                |(_, value)| value == Some(std::ffi::OsStr::new("synthetic environment value"))
+            )
+        );
         assert_eq!(
             command
                 .get_args()

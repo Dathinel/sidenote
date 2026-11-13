@@ -411,6 +411,8 @@ impl State {
     }
 
     pub fn new() -> Self {
+        #[cfg(test)]
+        crate::test_paths::isolate();
         let settle_recovery_error = core::settle::Store::default().recover().err();
         let (meetings, scan_errors) = core::scan();
         let (events_tx, events_rx) = mpsc::channel();

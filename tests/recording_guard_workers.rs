@@ -85,6 +85,7 @@ fn old_queued_short_jobs_are_skipped_by_both_worker_processes() {
             .arg(root.join("peers"))
             .env("APPDATA", root.join("appdata"))
             .env("LOCALAPPDATA", root.join("localappdata"))
+            .env("USERPROFILE", root.join("home"))
             .creation_flags(0x08000000)
             .output()
             .unwrap();
