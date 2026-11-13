@@ -554,8 +554,17 @@ function Read-ListenerTask {
     return $t
 }
 function Test-RestartSchedule($t) {
-    $logon = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled -and $_.UserId -eq $sid })
-    $retry = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and $_.Enabled -and $_.Repetition.Interval -eq 'PT5M' -and !$_.Repetition.Duration -and !$_.Repetition.StopAtDurationEnd })
+    # Windows saves logon users as account names and indefinite repetition with StopAtDurationEnd true.
+    $logon = @($t.Triggers | Where-Object {
+        if ($_.CimClass.CimClassName -ne 'MSFT_TaskLogonTrigger' -or !$_.Enabled) { return $false }
+        $user = $_.UserId
+        if ($user -ne $sid) {
+            try { $user = ([Security.Principal.NTAccount]$user).Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { return $false }
+        }
+        return $user -eq $sid
+    })
+    $retry = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and $_.Enabled -and $_.Repetition.Interval -eq 'PT5M' -and !$_.Repetition.Duration })
     return ($logon.Count -eq 1 -and $retry.Count -eq 1 -and @($t.Triggers).Count -eq 2 -and [string]$t.Settings.MultipleInstances -in @('IgnoreNew', '2') -and $t.Settings.ExecutionTimeLimit -eq 'PT0S')
 }
 $t = Read-ListenerTask
@@ -1371,7 +1380,8 @@ function Get-ScheduledTask {
 function New-ScheduledTaskTrigger {
     param([switch]$AtLogOn, [string]$User, [switch]$Once, $At, $RepetitionInterval)
     $kind = if ($AtLogOn) { 'MSFT_TaskLogonTrigger' } else { 'MSFT_TaskTimeTrigger' }
-    [PSCustomObject]@{ CimClass = [PSCustomObject]@{ CimClassName = $kind }; Enabled = $true; UserId = $User; Repetition = [PSCustomObject]@{ Interval = 'PT5M'; Duration = ''; StopAtDurationEnd = $false } }
+    if ($AtLogOn) { $User = ([Security.Principal.SecurityIdentifier]$User).Translate([Security.Principal.NTAccount]).Value }
+    [PSCustomObject]@{ CimClass = [PSCustomObject]@{ CimClassName = $kind }; Enabled = $true; UserId = $User; Repetition = [PSCustomObject]@{ Interval = 'PT5M'; Duration = ''; StopAtDurationEnd = $true } }
 }
 function Register-ScheduledTask { throw 'Registration is forbidden in this test' }
 function Set-ScheduledTask {
