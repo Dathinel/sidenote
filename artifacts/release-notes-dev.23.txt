@@ -1,0 +1,15 @@
+Sidenote 0.0.1-dev.23
+
+Meeting notes now pick up your settings fresh for every meeting. The background recorder reads your saved project, knowledge-base and name settings from Windows each time it makes notes, so a change no longer needs a restart. Settings that contain a folder placeholder such as %USERPROFILE% are expanded to the real folder.
+
+When the settings file is briefly in use by another program, Sidenote retries a few times instead of failing the notes job. If it still fails, the log says which kind of file and which Windows error, without your paths.
+
+The daily check now says why it failed (for example, the reply was not valid, or a local file could not be read) and retries once when the model's reply was unusable. Local file errors are reported straight away instead of being retried.
+
+The meeting scripts now have a time limit and readable error messages, and a failed scripts install can no longer block later Sidenote updates.
+
+Labs has the first steps of language routing (off by default) and response time measurements.
+
+Release checks now run the meeting scripts' tests and an interrupted-install proof, refuse to build with less than 40 GB free on the build drive, and keep test runs away from your real log and settings.
+
+Needs on your laptop: nothing
