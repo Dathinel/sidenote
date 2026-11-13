@@ -340,6 +340,7 @@ fn guard(args: &[OsString]) -> io::Result<i32> {
 
 pub fn run(args: Vec<OsString>) -> io::Result<i32> {
     match args.first().and_then(|a| a.to_str()) {
+        Some("--direct") if args.len() >= 2 => crate::pid_worker::run(&args[1..]),
         Some("--launch") if args.len() >= 2 => launch(&args[1..]),
         Some("--guard") => guard(&args[1..]),
         _ => Err(unavailable()),
