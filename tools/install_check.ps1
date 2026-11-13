@@ -56,6 +56,14 @@ if ($Before) {
     exit $listenerExit
 }
 
+$installTime = $null
+try {
+    if (-not $app) { throw 'App unavailable' }
+    $appFiles = @(Get-ChildItem -LiteralPath $app -File -Recurse -Force)
+    if (-not $appFiles.Count) { throw 'Install time unavailable' }
+    $installTime = ($appFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+} catch { $installTime = $null }
+
 try {
     if (-not $app -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'App unavailable' }
     # Disable XML entity resolution even though this is local installer metadata.
@@ -90,13 +98,32 @@ try {
 } catch { Add-Check 'Listener task state' $false 'missing or unreadable' }
 Add-Check 'Listener task check' ($listenerExit -eq 0) "exit=$listenerExit; run=no; register=no"
 
+$generation = 'invalid'
+$checks = [ordered]@{ id_match = $false; folder_exists = $false; manifest_match = $false
+    created_after_install = $false; previous_present = $false }
 try {
     if (-not $scripts) { throw 'Scripts unavailable' }
     $pointer = Get-Content -LiteralPath (Join-Path $scripts '.pipeline-current.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    $versions = @($pointer.version, $pointer.generation, $pointer.current.version, $pointer.current.generation)
-    $safe = @($versions | ForEach-Object { Safe-Version $_ } | Where-Object { $_ -ne 'missing or invalid' } | Select-Object -Unique)
-    Add-Check 'Pipeline generation/version' ($safe -ccontains $Expect) $(if ($safe.Count) { $safe -join ', ' } else { 'exists; version missing or invalid' })
-} catch { Add-Check 'Pipeline generation/version' $false 'missing or unreadable pointer' }
+    $checks.previous_present = $pointer.previous.generation -is [string] -and
+        -not [string]::IsNullOrWhiteSpace($pointer.previous.generation)
+    $checks.id_match = $pointer.current.generation -is [string] -and
+        $pointer.current.generation -cmatch '\Ageneration-[0-9a-f]{32}\z'
+    if ($checks.id_match) {
+        $generation = $pointer.current.generation
+        $folder = Get-Item -LiteralPath (Join-Path (Join-Path $scripts '.pipeline-generations') $generation) -Force
+        $checks.folder_exists = $folder.PSIsContainer
+        if ($checks.folder_exists) {
+            $checks.created_after_install = $null -ne $installTime -and $folder.CreationTimeUtc -ge $installTime
+            if ($pointer.current.manifest_sha256 -is [string] -and
+                $pointer.current.manifest_sha256 -cmatch '\A[0-9a-f]{64}\z') {
+                $hash = (Get-FileHash -LiteralPath (Join-Path $folder.FullName '.generation.json') -Algorithm SHA256).Hash
+                $checks.manifest_match = $hash -ieq $pointer.current.manifest_sha256
+            }
+        }
+    }
+} catch { } # Report only fixed flags, never filesystem or JSON error text.
+$flags = @($checks.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; '
+Add-Check 'Pipeline generation' (-not ($checks.Values -contains $false)) "$generation; $flags"
 
 try {
     if (-not $local) { throw 'Local app data unavailable' }
@@ -104,12 +131,8 @@ try {
     Add-Check 'Pending pipeline install' (-not $pending) $(if ($pending) { 'present' } else { 'absent' })
 } catch { Add-Check 'Pending pipeline install' $false 'unreadable' }
 
-$installTime = $null
 try {
-    if (-not $app -or -not $scripts) { throw 'Folders unavailable' }
-    $appFiles = @(Get-ChildItem -LiteralPath $app -File -Recurse -Force)
-    if (-not $appFiles.Count) { throw 'Install time unavailable' }
-    $installTime = ($appFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+    if (-not $installTime -or -not $scripts) { throw 'Folders or install time unavailable' }
     $newest = Get-ChildItem -LiteralPath $scripts -File -Recurse -Force | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     $observed = 'scripts=missing'
     if ($newest) { $observed = 'scripts=' + $newest.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ') }
