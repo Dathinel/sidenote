@@ -297,3 +297,144 @@ impl Snapshot {
         Ok(copy)
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+    fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("meetings/123-4");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("manifest.json"),
+            br#"{"status":"complete","duration_ms":30000}"#,
+        )
+        .unwrap();
+        fs::write(
+            folder.join("transcript.ndjson"),
+            serde_json::json!({"text":vec!["word";25].join(" ")}).to_string(),
+        )
+        .unwrap();
+        (root, folder)
+    }
+    #[test]
+    fn refuses_symlinks_at_every_input_and_directory_component() {
+        for name in [
+            "manifest.json",
+            "transcript.ndjson",
+            "audio-evidence.json",
+            "system.wav",
+            "microphone.wav",
+            "hex-original/transcript.ndjson",
+        ] {
+            let (root, folder) = fixture();
+            let source = root.path().join("outside");
+            fs::write(&source, b"[]").unwrap();
+            let target = folder.join(name);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            if target.exists() {
+                fs::remove_file(&target).unwrap();
+            }
+            symlink(&source, target).unwrap();
+            assert!(Snapshot::capture(&folder).is_err(), "{name}");
+        }
+        let (root, folder) = fixture();
+        symlink(&folder, root.path().join("linked")).unwrap();
+        assert!(Snapshot::capture(&root.path().join("linked")).is_err());
+        fs::create_dir(root.path().join("outside")).unwrap();
+        symlink(root.path().join("outside"), folder.join("hex-original")).unwrap();
+        assert!(Snapshot::capture(&folder).is_err());
+    }
+    #[test]
+    fn component_swaps_cannot_change_the_pinned_snapshot() {
+        let (root, folder) = fixture();
+        fs::write(folder.join("system.wav"), b"pinned audio").unwrap();
+        let mut captured = Snapshot::capture(&folder).unwrap();
+        let saved = folder.with_extension("saved");
+        fs::rename(&folder, &saved).unwrap();
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("system.wav"), b"replacement audio").unwrap();
+        let work = root.path().join("work");
+        fs::create_dir(&work).unwrap();
+        let staged = captured.stage(&work).unwrap();
+        assert_eq!(
+            fs::read(staged.path().join("system.wav")).unwrap(),
+            b"pinned audio"
+        );
+        let mut directory = Directory::open(&saved).unwrap();
+        fs::create_dir(saved.join("hex-original")).unwrap();
+        fs::rename(saved.join("hex-original"), saved.join("old-original")).unwrap();
+        symlink(&folder, saved.join("hex-original")).unwrap();
+        assert!(directory.file("hex-original/transcript.ndjson").is_err());
+    }
+    #[test]
+    fn rejects_special_files_without_blocking() {
+        for kind in ["fifo", "socket", "directory", "device"] {
+            let (_root, folder) = fixture();
+            let path = folder.join("system.wav");
+            let _socket;
+            match kind {
+                "fifo" => {
+                    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                }
+                "socket" => {
+                    _socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+                }
+                "directory" => fs::create_dir(&path).unwrap(),
+                _ => {
+                    symlink("/dev/zero", &path).unwrap();
+                }
+            }
+            assert!(Snapshot::capture(&folder).is_err(), "{kind}");
+        }
+    }
+    #[test]
+    fn caps_each_input_before_allocating_or_reading() {
+        for (name, cap) in [
+            ("manifest.json", 1024 * 1024),
+            ("transcript.ndjson", JSON_MAX),
+            ("audio-evidence.json", JSON_MAX),
+            ("system.wav", AUDIO_MAX),
+            ("microphone.wav", AUDIO_MAX),
+        ] {
+            let (_root, folder) = fixture();
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(folder.join(name))
+                .unwrap()
+                .set_len(cap + 1)
+                .unwrap();
+            assert!(Snapshot::capture(&folder).is_err(), "{name}");
+        }
+    }
+    #[test]
+    fn eligibility_and_processing_share_captured_bytes() {
+        let (root, folder) = fixture();
+        let mut captured = Snapshot::capture(&folder).unwrap();
+        let eligible = crate::core::recording_guard::eligibility_captured(
+            root.path(),
+            "123-4",
+            &captured.manifest,
+            &captured.transcript,
+        )
+        .unwrap();
+        assert_eq!(
+            eligible,
+            crate::core::recording_guard::Eligibility::Eligible
+        );
+        let original = captured.transcript.clone();
+        let work = root.path().join("work");
+        fs::create_dir(&work).unwrap();
+        let staged = captured.stage(&work).unwrap();
+        fs::rename(folder.join("transcript.ndjson"), folder.join("old")).unwrap();
+        fs::write(folder.join("transcript.ndjson"), b"untrusted replacement").unwrap();
+        assert_eq!(
+            fs::read(staged.path().join("transcript.ndjson")).unwrap(),
+            original
+        );
+    }
+}

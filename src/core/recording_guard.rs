@@ -41,14 +41,6 @@ fn classify(folder: &Path) -> Eligibility {
 fn classify_readable(folder: &Path) -> Option<Eligibility> {
     store_io::reject_reparse(folder).ok()?;
     let raw = store_io::read_bounded(&folder.join("manifest.json"), 1024 * 1024).ok()?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&raw)).ok()?;
-    if manifest["status"] != "complete" {
-        return None;
-    }
-    let duration = manifest["duration_ms"]
-        .as_f64()
-        .filter(|d| d.is_finite() && *d >= 0.0)?;
     let original = folder.join("hex-original/transcript.ndjson");
     let source = if original.try_exists().ok()? {
         original
@@ -59,6 +51,22 @@ fn classify_readable(folder: &Path) -> Option<Eligibility> {
     let file = fs::File::open(source).ok()?;
     let before = file.metadata().ok()?;
     let mut reader = BufReader::new(file);
+    let result = classify_reader(&raw, &mut reader)?;
+    let after = reader.get_ref().metadata().ok()?;
+    if before.len() != after.len() || before.modified().ok()? != after.modified().ok()? {
+        return None;
+    }
+    Some(result)
+}
+fn classify_reader(raw: &[u8], reader: &mut impl BufRead) -> Option<Eligibility> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(raw.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(raw)).ok()?;
+    if manifest["status"] != "complete" {
+        return None;
+    }
+    let duration = manifest["duration_ms"]
+        .as_f64()
+        .filter(|d| d.is_finite() && *d >= 0.0)?;
     let mut count = 0;
     let mut line = String::new();
     #[derive(Deserialize)]
@@ -93,10 +101,6 @@ fn classify_readable(folder: &Path) -> Option<Eligibility> {
         }
         // Continue validating after 25 words: a later partial JSON line is still UNKNOWN.
     }
-    let after = reader.get_ref().metadata().ok()?;
-    if before.len() != after.len() || before.modified().ok()? != after.modified().ok()? {
-        return None;
-    }
     Some(if duration < 30_000.0 || count < 25 {
         Eligibility::Short
     } else {
@@ -108,10 +112,28 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
+    apply_eligibility(root, id, classify(&meetings.join(id)))
+}
+pub(crate) fn eligibility_captured(
+    root: &Path,
+    id: &str,
+    manifest: &[u8],
+    transcript: &[u8],
+) -> io::Result<Eligibility> {
+    apply_eligibility(
+        root,
+        id,
+        classify_reader(manifest, &mut io::Cursor::new(transcript)).unwrap_or(Eligibility::Unknown),
+    )
+}
+fn apply_eligibility(root: &Path, id: &str, result: Eligibility) -> io::Result<Eligibility> {
+    if !valid_id(id) {
+        return Err(store_io::invalid("Invalid meeting id"));
+    }
     let path = state_path(root, id);
     let state: State = store_io::read(&path)?;
     if state.kept {
-        return Ok(match classify(&meetings.join(id)) {
+        return Ok(match result {
             Eligibility::Unknown => Eligibility::Unknown,
             _ => Eligibility::Eligible,
         });
@@ -119,7 +141,6 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     if state.short {
         return Ok(Eligibility::Short);
     }
-    let result = classify(&meetings.join(id));
     if result == Eligibility::Short && !super::paths::read_only() {
         let _lock = store_io::lock(&path.with_extension("lock"))?;
         let mut state: State = store_io::read(&path)?;
@@ -267,6 +288,51 @@ mod tests {
             serde_json::json!({"text":text}).to_string(),
         )
         .unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn invalid_id_is_rejected_before_opening_inputs() {
+        use std::os::{
+            fd::{AsRawFd, FromRawFd, OwnedFd},
+            unix::ffi::OsStrExt,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(
+            outside.join("manifest.json"),
+            br#"{"status":"complete","duration_ms":30000}"#,
+        )
+        .unwrap();
+        fs::write(
+            outside.join("transcript.ndjson"),
+            br#"{"text":"synthetic fixture"}"#,
+        )
+        .unwrap();
+        let raw = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(raw >= 0);
+        let watch = unsafe { OwnedFd::from_raw_fd(raw) };
+        let name = std::ffi::CString::new(outside.as_os_str().as_bytes()).unwrap();
+        assert!(
+            unsafe { libc::inotify_add_watch(watch.as_raw_fd(), name.as_ptr(), libc::IN_OPEN) }
+                >= 0
+        );
+        // An absolute ID would replace the configured root in Path::join.
+        assert!(
+            eligibility(
+                root.path(),
+                &root.path().join("meetings"),
+                outside.to_str().unwrap()
+            )
+            .is_err()
+        );
+        let mut events = [0u8; 4096];
+        assert_eq!(
+            unsafe { libc::read(watch.as_raw_fd(), events.as_mut_ptr().cast(), events.len()) },
+            -1,
+            "invalid ID unexpectedly opened filesystem inputs"
+        );
+        assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
     }
     #[test]
     fn strict_boundaries_and_indic_words() {

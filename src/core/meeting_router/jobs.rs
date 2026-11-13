@@ -35,7 +35,9 @@ struct Outcome {
 }
 
 fn valid_id(id: &str) -> bool {
-    id.bytes().any(|b| b.is_ascii_digit()) && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+    id.len() <= 100
+        && id.bytes().any(|b| b.is_ascii_digit())
+        && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
 fn queue(root: &Path) -> PathBuf {
     root.join("local/router-queue")
@@ -88,8 +90,16 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    if super::super::recording_guard::eligibility(root, meetings, id)?
-        != super::super::recording_guard::Eligibility::Eligible
+    let input = match super::inputs::Snapshot::capture(&meetings.join(id)) {
+        Ok(input) => input,
+        Err(_) => return Ok(()),
+    };
+    if super::super::recording_guard::eligibility_captured(
+        root,
+        id,
+        &input.manifest,
+        &input.transcript,
+    )? != super::super::recording_guard::Eligibility::Eligible
     {
         return Ok(());
     }
@@ -113,11 +123,19 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
     Ok(config)
 }
 fn snapshot(root: &Path, id: &str) -> Result<Job> {
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
+    }
     let folder = super::super::meetings_dir().join(id);
     let input = super::inputs::Snapshot::capture(&folder)?;
-    let manifest: serde_json::Value = serde_json::from_slice(&input.manifest)?;
-    if manifest["status"] != "complete" {
-        return Err("Meeting is not complete".into());
+    if super::super::recording_guard::eligibility_captured(
+        root,
+        id,
+        &input.manifest,
+        &input.transcript,
+    )? != super::super::recording_guard::Eligibility::Eligible
+    {
+        return Err("Meeting is not eligible".into());
     }
     let mut baseline = Vec::new();
     for (i, line) in std::str::from_utf8(&input.transcript)?.lines().enumerate() {
@@ -338,14 +356,6 @@ fn cleanup_work(work: &Path) {
 pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
-    if super::super::recording_guard::eligibility(
-        &super::super::state_dir(),
-        &super::super::meetings_dir(),
-        &job.id,
-    )? != super::super::recording_guard::Eligibility::Eligible
-    {
-        return Ok(());
-    }
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
     let mut normalized = Cleanup(Vec::new());
@@ -456,14 +466,6 @@ pub fn run_pending() -> Result<()> {
                 return Err("Invalid queued meeting".into());
             }
             if !attempted.insert((pending.id.clone(), pending.generation)) {
-                continue;
-            }
-            if super::super::recording_guard::eligibility(
-                &root,
-                &super::super::meetings_dir(),
-                &pending.id,
-            )? != super::super::recording_guard::Eligibility::Eligible
-            {
                 continue;
             }
             if automatic && completed_attempt(&root, &pending) {
@@ -647,13 +649,7 @@ pub fn start_worker() -> io::Result<()> {
                 let Some(pending) = pending else {
                     return true;
                 };
-                // Recover unattempted generations; completed fallbacks await an explicit drain.
-                super::super::recording_guard::eligibility(
-                    &super::super::state_dir(),
-                    &super::super::meetings_dir(),
-                    &pending.id,
-                )
-                .is_ok_and(|e| e == super::super::recording_guard::Eligibility::Eligible)
+                snapshot(&super::super::state_dir(), &pending.id).is_ok()
                     && !completed_attempt(&super::super::state_dir(), &pending)
             })
         })
@@ -747,6 +743,7 @@ mod recording_guard_tests {
                 .as_nanos()
         ));
         let meetings = root.join("meetings");
+        assert!(enqueue_in(&root, &meetings, &"1".repeat(101)).is_err());
         let id = "1793946600000-1";
         let folder = meetings.join(id);
         fs::create_dir_all(&folder).unwrap();
