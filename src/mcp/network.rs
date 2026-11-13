@@ -178,3 +178,174 @@ impl Drop for Endpoint {
         let _ = std::fs::remove_file(self.root.join("local/mcp/endpoint.json"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::{RoleServer, Service, service::RequestContext};
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn remote_requests_without_grants_fail_closed() {
+        let (transport, _client) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly::<RoleServer, _, _, _, _>(
+            Meetings { remote: false },
+            transport,
+            None,
+        );
+        for request in [
+            json!({"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"synthetic","version":"1"}}}),
+            json!({"method":"ping"}),
+            json!({"method":"tools/list"}),
+            json!({"method":"tools/call","params":{"name":"propose_memory","arguments":{}}}),
+            json!({"method":"resources/read","params":{"uri":"meeting://synthetic"}}),
+            json!({"method":"resources/templates/list"}),
+            json!({"method":"resources/list"}),
+            json!({"method":"prompts/list"}),
+        ] {
+            for has_parts in [false, true] {
+                let mut context = RequestContext::new(
+                    rmcp::model::NumberOrString::Number(1),
+                    running.peer().clone(),
+                );
+                if has_parts {
+                    context.extensions.insert(Request::new(()).into_parts().0);
+                }
+                let error = Meetings { remote: true }
+                    .handle_request(serde_json::from_value(request.clone()).unwrap(), context)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.message, "MCP_ACCESS_DENIED");
+            }
+        }
+        running.cancel().await.unwrap();
+    }
+    #[tokio::test]
+    async fn request_limit_precedes_token_file_access() {
+        let root = tempfile::tempdir().unwrap();
+        let root = Arc::new(root.path().to_path_buf());
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let router = Router::new()
+            .fallback(|| async { "unreachable" })
+            .layer(middleware::from_fn(move |request, next| {
+                authorize(root.clone(), slots.clone(), request, next)
+            }));
+        let response = hyper_util::service::TowerToHyperService::new(router);
+        use hyper::service::Service;
+        let request = Request::builder()
+            .uri("/mcp")
+            .header("host", "127.0.0.1:6791")
+            .header(
+                "authorization",
+                format!("Bearer synthetic.{}", "0".repeat(64)),
+            )
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            response.call(request).await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    async fn server() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<io::Result<()>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        (
+            address,
+            tokio::spawn(serve(
+                listener,
+                Router::new().fallback(|| async { "ready" }),
+            )),
+        )
+    }
+    #[tokio::test]
+    async fn idle_connections_are_capped_before_headers() {
+        let (address, server) = server().await;
+        let mut held = Vec::new();
+        for _ in 0..CONNECTIONS {
+            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            stream.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+            held.push(stream);
+            tokio::task::yield_now().await;
+        }
+        let mut extra = tokio::net::TcpStream::connect(address).await.unwrap();
+        let _ = extra
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(500), extra.read(&mut [0; 64])).await;
+        server.abort();
+        assert!(
+            matches!(result, Ok(Ok(0)) | Ok(Err(_))),
+            "over-cap connection was served or retained"
+        );
+    }
+    #[tokio::test]
+    async fn blocked_response_writes_release_connection_permits() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let (mut client, stream) = tokio::io::duplex(64);
+        let router = Router::new().fallback(|| async { vec![b'x'; 128 * 1024] });
+        let mut stalled = tokio::spawn(connection(
+            stream,
+            router,
+            slots.clone().try_acquire_owned().unwrap(),
+        ));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), client.read_exact(&mut [0; 1]))
+            .await
+            .expect("response must start before testing write backpressure")
+            .unwrap();
+        // Keep the reader open but stop consuming: the 128 KiB body cannot fit in 64 bytes.
+        assert_eq!(slots.available_permits(), 0);
+        assert!(!stalled.is_finished());
+        tokio::time::timeout(CONNECTION_TIMEOUT + Duration::from_secs(1), &mut stalled)
+            .await
+            .expect("blocked response writes retained the connection permit")
+            .unwrap();
+        assert_eq!(slots.available_permits(), 1);
+
+        let (mut next, stream) = tokio::io::duplex(64);
+        let served = tokio::spawn(connection(
+            stream,
+            Router::new().fallback(|| async { "ready" }),
+            slots.clone().try_acquire_owned().unwrap(),
+        ));
+        next.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), next.read_to_end(&mut response))
+            .await
+            .expect("a subsequent connection must be served")
+            .unwrap();
+        served.await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with(b"ready"));
+        assert_eq!(slots.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn partial_headers_expire() {
+        let (address, server) = server().await;
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nHost:").await.unwrap();
+        let mut response = Vec::new();
+        let result = tokio::time::timeout(
+            HEADER_TIMEOUT + Duration::from_secs(1),
+            stream.read_to_end(&mut response),
+        )
+        .await;
+        server.abort();
+        assert!(
+            result.is_ok(),
+            "partial headers retained the connection beyond its deadline"
+        );
+    }
+}
