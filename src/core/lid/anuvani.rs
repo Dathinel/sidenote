@@ -15,12 +15,14 @@ struct Runtime {
 #[cfg(all(windows, feature = "asr-runtime"))]
 impl Detector for Runtime {
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
-        use crate::core::asr::LanguageId;
-        // Reuse the spike's pinned 23-label output without changing the existing router.
-        Ok(self
-            .model
-            .identify(samples, &["en".into(), "hi".into()])?
-            .unrestricted)
+        let logits = self.model.logits(samples)?;
+        let peak = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut scores: Vec<_> = logits.iter().map(|v| (v - peak).exp()).collect();
+        let mass: f32 = scores.iter().sum();
+        for score in &mut scores {
+            *score /= mass;
+        }
+        Ok(scores)
     }
 }
 

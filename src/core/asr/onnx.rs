@@ -112,17 +112,9 @@ impl Anuvani {
             load_seconds: start.elapsed().as_secs_f64(),
         })
     }
-}
-impl LanguageId for Anuvani {
-    fn identify(&mut self, samples: &[f32], declared: &[String]) -> Result<LanguageScores> {
-        if declared.iter().any(|s| !matches!(s.as_str(), "en" | "hi"))
-            || !declared.iter().any(|s| s == "en")
-            || !declared.iter().any(|s| s == "hi")
-        {
-            return Err(
-                "Anuvani routing currently supports the declared English/Hindi pair".into(),
-            );
-        }
+
+    /// Pinned 23-label inference before any declared-set decision.
+    pub fn logits(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         if samples.len() < 1600
             || samples.len() > SAMPLE_RATE as usize * 24
             || samples.iter().any(|s| !s.is_finite())
@@ -137,6 +129,20 @@ impl LanguageId for Anuvani {
         if logits.len() != 23 || logits.iter().any(|s| !s.is_finite()) {
             return Err("Invalid Anuvani scores".into());
         }
+        Ok(logits.to_vec())
+    }
+}
+impl LanguageId for Anuvani {
+    fn identify(&mut self, samples: &[f32], declared: &[String]) -> Result<LanguageScores> {
+        if declared.iter().any(|s| !matches!(s.as_str(), "en" | "hi"))
+            || !declared.iter().any(|s| s == "en")
+            || !declared.iter().any(|s| s == "hi")
+        {
+            return Err(
+                "Anuvani routing currently supports the declared English/Hindi pair".into(),
+            );
+        }
+        let logits = self.logits(samples)?;
         let peak = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let mut unrestricted: Vec<_> = logits.iter().map(|v| (v - peak).exp()).collect();
         let sum: f32 = unrestricted.iter().sum();

@@ -26,7 +26,7 @@
   "src/core/ask_all.rs": "a7d8a969cc7a512e1c890ff4ccc68bf8f4090475fdcc92c161e9cc9373388c24",
   "src/core/ask_options.rs": "80c7a1acd17b37d681638e55f4864fa3d990a0231fd1db035a0a7758760c3416",
   "src/core/ask_session.rs": "ea0edff902c3363160531255da49b99f16d7449407a1e88d0b2c85d4a3ec9be1",
-  "src/core/asr/onnx.rs": "e5183bbd0621a2aa131ae6cd586ac09fbbedfcd7934855f13087417c7738faef",
+  "src/core/asr/onnx.rs": "76f102ca439e145e2c2ac38a1fb75a5f673767767871bb5570d365d40dd50e56",
   "src/core/check_v2.rs": "6b532606ea2645a3213c63abe858039095ec03a2dc33f807519855efe391a14f",
   "src/core/companies.rs": "95a3cb0629a7a9c2706124dc8f79d2d4d377f3810b312beb59122b19d4ed38e6",
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
