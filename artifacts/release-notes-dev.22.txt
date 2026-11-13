@@ -13,3 +13,5 @@ The prompt library has a new layout: see which prompts you edited, compare an ed
 Labs has a new experimental language detection stage, off by default. When on, it labels the language of each part of a meeting in a side file. It does not change transcription yet.
 
 Linux server work continues: owner control, pairing, sync transport and peer proof for a server-only device. Windows behaviour is unchanged.
+
+Needs on your laptop: nothing

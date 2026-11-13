@@ -1,1 +1,3 @@
 Live transcript shows again during a meeting. Sidenote 0.0.1-dev.5 could not find the meeting folder because Hex does not report a recording id.
+
+Needs on your laptop: nothing

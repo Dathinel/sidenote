@@ -1,4 +1,4 @@
-"""Synthetic routing proofs. Run on an approved box, never on the laptop."""
+"""Synthetic routing proofs. Run via tools/pipeline-tests.py; fake engines only."""
 import copy
 import importlib.util
 import contextlib
@@ -21,7 +21,7 @@ audio = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audio)
 
 
-BASELINE_REVISION = 'cf25d979369133045e8574cd302133929117e332'
+BASELINE_REVISION = 'c21611294e5669174eaa459876d5909ecb7ec97d'
 BASELINE_SHA256 = '98fc0c9bf85d1fc9346e9534c55948c9953c657ab50ea9e4d53cd1f2c0133b2d'
 
 
@@ -257,7 +257,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_off_matches_pinned_baseline_bytes(self):
         baseline = Path(__file__).with_name('baseline-audio.py')
-        self.assertTrue(baseline.is_file(), 'Box driver must export the pinned baseline')
+        self.assertTrue(baseline.is_file(), 'Pipeline test runner must export the pinned baseline')
         self.assertEqual(audio.hashlib.sha256(baseline.read_bytes()).hexdigest(), BASELINE_SHA256,
                          f'Baseline must match {BASELINE_REVISION}; export its original Git bytes')
         baseline_spec = importlib.util.spec_from_file_location('baseline_audio', baseline)

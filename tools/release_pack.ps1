@@ -26,6 +26,8 @@ try {
     if (-not [IO.Path]::IsPathRooted($Feed) -or $Feed -match '^[a-z]+://') { throw 'Feed must be an absolute local path or file share.' }
     if (-not [IO.Path]::IsPathRooted($Log)) { throw 'Log must be an absolute path.' }
     foreach ($path in @($DotnetRoot, $GnuBin, $ReleaseNotes)) { if (-not (Test-Path -LiteralPath $path)) { throw 'A toolchain path or release notes file is missing.' } }
+    $notesText = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $ReleaseNotes).Path)
+    if ($notesText -notmatch '(?m)^Needs on your laptop:[ \t]*\S[^\r\n]*\r?$') { throw 'Release notes need a nonempty Needs on your laptop: line (use nothing when none). More details: docs/meeting-pipeline.md.' }
     $env:DOTNET_ROOT = $DotnetRoot
     $env:PATH = "$GnuBin;$DotnetRoot;$DotnetRoot\tools;$env:USERPROFILE\.cargo\bin;$env:PATH"
     foreach ($tool in @('cargo.exe', 'rustup.exe', 'as.exe', 'dlltool.exe', 'dotnet.exe', 'vpk.exe')) {

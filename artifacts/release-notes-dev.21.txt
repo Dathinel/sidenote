@@ -13,3 +13,5 @@ Failure codes in the log now include the operating system error number when avai
 Recording no longer becomes unavailable when the window opens while the meeting listener is starting. The window now rechecks the listener every few seconds, clears the warning on its own when the listener is back, shows the specific reason when it is not, and the listener logs why it stops.
 
 A crashed sync worker is now reported as a crash straight away instead of as a timeout.
+
+Needs on your laptop: nothing
