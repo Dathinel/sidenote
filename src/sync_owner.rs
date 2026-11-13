@@ -148,6 +148,16 @@ impl Owner {
             controller: controller.clone(),
         };
         #[cfg(target_os = "linux")]
+        if crate::service::role() != crate::service::DeviceRole::Full {
+            let endpoint = crate::mcp::network::Endpoint::bind(root)?;
+            let stopped = stop.clone();
+            owner.threads.push(
+                thread::Builder::new()
+                    .name("mcp-http".into())
+                    .spawn(move || endpoint.serve(stopped))?,
+            );
+        }
+        #[cfg(target_os = "linux")]
         {
             let control = controller.clone();
             let stopped = stop.clone();
