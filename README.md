@@ -98,5 +98,8 @@ builds and waits for recent meeting activity. For example:
 ./tools/local_build.ps1 build --locked
 ```
 
+Quote Cargo's separator in PowerShell: `./tools/local_build.ps1 clippy '--' -D warnings`.
+PowerShell consumes a bare `--` before the wrapper receives its arguments.
+
 Use `./tools/local_build.ps1 -Pack` with the parameters in `tools/release_pack.ps1`
 for release packing. The meeting activity check is a log-based heuristic.
