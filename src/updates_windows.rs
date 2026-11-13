@@ -862,14 +862,33 @@ pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
         .ok()
         .and_then(|mgr| mgr.get_update_pending_restart());
     ensure_listener()?;
-    complete_pipeline_install()?;
-    if listener_stopping() {
-        return Ok(());
+    finish_window_start(
+        complete_pipeline_install(),
+        |error| {
+            let _ = save(&Status {
+                phase: Phase::Error,
+                error: Some(error),
+                ..load()
+            });
+        },
+        || {
+            if !listener_stopping() && pending.is_some() {
+                apply(true, Vec::new(), publish)?;
+            }
+            Ok(())
+        },
+    )
+}
+fn finish_window_start(
+    pipeline: Result<(), String>,
+    report: impl FnOnce(String),
+    resume: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // Keep the pending marker for retry without gating app updates or listener readiness.
+    if let Err(error) = pipeline {
+        report(error);
     }
-    if pending.is_some() {
-        apply(true, Vec::new(), publish)?;
-    }
-    Ok(())
+    resume()
 }
 const PIPELINE_INSTALL_ERROR: &str = "The update could not install the meeting scripts. Check private pipeline settings, close processing jobs and reopen Sidenote to retry; the previous generation and original script backups are retained.";
 
@@ -1227,6 +1246,28 @@ mod window_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipeline_failure_reports_and_still_resumes_app_update() {
+        let reported = std::cell::RefCell::new(None);
+        let applied = std::cell::Cell::new(false);
+        let result = finish_window_start(
+            Err(PIPELINE_INSTALL_ERROR.into()),
+            |error| *reported.borrow_mut() = Some(error),
+            || {
+                applied.set(true);
+                Err("app update failure".into())
+            },
+        );
+        assert!(applied.get());
+        assert_eq!(reported.borrow().as_deref(), Some(PIPELINE_INSTALL_ERROR));
+        assert_eq!(result.unwrap_err(), "app update failure");
+    }
+
+    #[test]
+    fn successful_pipeline_retry_resumes_without_reporting_failure() {
+        assert!(finish_window_start(Ok(()), |_| panic!("unexpected failure"), || Ok(())).is_ok());
+    }
 
     // The stalled peer exits when the operation returns; no detached request or worker remains.
     fn with_stalled_server(headers: bool, test: impl FnOnce(HttpSource)) {
