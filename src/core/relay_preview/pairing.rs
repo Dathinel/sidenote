@@ -246,6 +246,7 @@ mod security_tests {
         assert!(!confirmation_reply(42, &mut replies).await.unwrap());
     }
     #[test]
+    #[cfg(windows)]
     fn uncertain_pairing_status_and_peer_name_survive_restart() -> anyhow::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path();

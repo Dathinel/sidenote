@@ -1,5 +1,9 @@
 # Unattended Linux processing
 
+Relay sync is not yet available on Linux. Relay start and the decoder entry point
+fail closed; settings/status report unavailable even for a stored opt-in. Folder
+journal ingestion and MCP remain available. Windows relay behavior is unchanged.
+
 Use the Server role for routing. Hub owns sync/MCP
 and starts none of these workers. No Hex installation or display is required.
 The listener connects only when the configured meetings root's parent contains

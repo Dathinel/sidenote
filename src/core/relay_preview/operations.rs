@@ -158,6 +158,14 @@ fn finish(root: &Path, address: &str, generation: u64) {
     };
 }
 pub fn check_now(root: &Path) -> io::Result<Operational> {
+    #[cfg(target_os = "linux")]
+    if cfg!(target_os = "linux") {
+        return Ok(Operational {
+            read_only: true,
+            message: sidenote_sync::RELAY_UNAVAILABLE.into(),
+            last_contact: None,
+        });
+    }
     let settings = Settings::load(root)?;
     if let Some(generation) = begin(root, &settings.address, true)? {
         finish(root, &settings.address, generation);
@@ -192,6 +200,14 @@ impl Preview {
     }
 }
 pub fn status(root: &Path) -> io::Result<Operational> {
+    #[cfg(target_os = "linux")]
+    if cfg!(target_os = "linux") {
+        return Ok(Operational {
+            read_only: true,
+            message: sidenote_sync::RELAY_UNAVAILABLE.into(),
+            last_contact: None,
+        });
+    }
     get(root)?
         .map(|p| p.operational())
         .unwrap_or_else(|| Ok(Operational::default()))
@@ -199,22 +215,86 @@ pub fn status(root: &Path) -> io::Result<Operational> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn invalid_unreachable_and_wrong_service_are_distinct() {
-        assert_eq!(probe("ws://localhost:8787"), Err(ProbeError::Invalid));
+    fn health_server(body: &'static [u8]) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let worker = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
             use std::io::{Read, Write};
-            let mut request = [0; 2048];
-            let _ = socket.read(&mut request);
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nwrong",
+            for _ in 0..16 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                // Closing with unread request bytes can reset TCP and discard the response.
+                let mut header = Vec::new();
+                while header.len() < 8192 && !header.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    header.push(byte[0]);
+                }
+                assert!(header.ends_with(b"\r\n\r\n"));
+                // Box port discovery sends HEAD / before the test's health request.
+                if !header.starts_with(b"GET /health HTTP/1.1\r\n") {
+                    socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    continue;
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
                 )
                 .unwrap();
+                socket.write_all(body).unwrap();
+                return;
+            }
+            panic!("health fixture received too many unrelated requests");
         });
+        (address, worker)
+    }
+    #[test]
+    fn health_fixture_keeps_listening_after_an_unrelated_port_probe() {
+        use std::io::{Read, Write};
+        let (address, worker) = health_server(b"sidenote-relay-v1");
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        socket
+            .write_all(b"HEAD / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 404"));
+        assert_eq!(probe(&format!("ws://{address}")), Ok(()));
+        worker.join().unwrap();
+    }
+    #[test]
+    fn health_fixture_waits_for_fragmented_request_headers() {
+        use std::io::{Read, Write};
+        let (address, worker) = health_server(b"sidenote-relay-v1");
+        let mut socket = std::net::TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+            .unwrap();
+        socket.write_all(b"GET /health HTTP/1.1\r\nHost: ").unwrap();
+        let error = socket.read(&mut [0]).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        socket.write_all(b"localhost\r\n\r\n").unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).unwrap();
+        assert!(response.ends_with(b"sidenote-relay-v1"));
+        worker.join().unwrap();
+    }
+    #[test]
+    fn invalid_unreachable_and_wrong_service_are_distinct() {
+        assert_eq!(probe("ws://localhost:8787"), Err(ProbeError::Invalid));
+        let (address, worker) = health_server(b"wrong");
         assert_eq!(
             probe(&format!("ws://{address}")),
             Err(ProbeError::WrongService)
@@ -226,6 +306,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(windows)]
     fn successful_contact_survives_outage_and_a_fresh_status_cache() {
         let parent = std::env::temp_dir().join("sidenote-relay-preview");
         std::fs::create_dir_all(&parent).unwrap();
@@ -240,15 +321,7 @@ mod tests {
             },
         )
         .unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let worker = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            use std::io::{Read, Write};
-            let mut request = [0; 2048];
-            let _ = socket.read(&mut request);
-            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\nsidenote-relay-v1").unwrap();
-        });
+        let (address, worker) = health_server(b"sidenote-relay-v1");
         Settings {
             enabled: true,
             address: format!("ws://{address}"),
@@ -258,7 +331,7 @@ mod tests {
         .unwrap();
         let first = check_now(root.path()).unwrap();
         worker.join().unwrap();
-        assert!(first.last_contact.is_some());
+        assert!(first.last_contact.is_some(), "{}", first.message);
         let failed = check_now(root.path()).unwrap();
         assert!(failed.message.starts_with("Relay unavailable."));
         assert_eq!(failed.last_contact, first.last_contact);

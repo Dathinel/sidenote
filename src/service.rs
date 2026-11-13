@@ -212,13 +212,26 @@ fn sync_status(
 ) -> (&'static str, &'static str) {
     // Full devices leave journal and relay ownership with the window.
     if role == DeviceRole::Full {
-        return ("disabled", "disabled");
+        return (
+            "disabled",
+            if cfg!(target_os = "linux") {
+                "unavailable"
+            } else {
+                "disabled"
+            },
+        );
     }
     let sync_ok = reconcile();
     let relay = match crate::core::relay_preview::get(root) {
+        #[cfg(target_os = "linux")]
+        _ => "unavailable",
+        #[cfg(not(target_os = "linux"))]
         Ok(Some(_)) => "running",
+        #[cfg(not(target_os = "linux"))]
         Ok(None) => "disabled",
+        #[cfg(not(target_os = "linux"))]
         Err(_) if cfg!(windows) => "retry",
+        #[cfg(not(target_os = "linux"))]
         Err(_) => "UNAVAILABLE_ON_PLATFORM",
     };
     (if sync_ok { "ready" } else { "retry" }, relay)
@@ -591,7 +604,14 @@ mod tests {
             sync_status(DeviceRole::Full, root.path(), || panic!(
                 "Full must not reconcile journals"
             )),
-            ("disabled", "disabled")
+            (
+                "disabled",
+                if cfg!(target_os = "linux") {
+                    "unavailable"
+                } else {
+                    "disabled"
+                }
+            )
         );
         assert!(!root.path().join(".stignore").exists());
         assert!(!root.path().join("device.json").exists());
@@ -607,7 +627,14 @@ mod tests {
                     reconciled = true;
                     true
                 }),
-                ("ready", "disabled")
+                (
+                    "ready",
+                    if cfg!(target_os = "linux") {
+                        "unavailable"
+                    } else {
+                        "disabled"
+                    }
+                )
             );
             assert!(reconciled);
         }

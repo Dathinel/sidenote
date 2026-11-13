@@ -304,7 +304,7 @@ pub(super) fn verify_shared(root: &Path, receipt: &str) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod security_tests {
     use super::*;
     fn folder(root: &Path) -> super::super::super::TaskStore {

@@ -151,6 +151,8 @@ pub fn seed_shared_render_conflict(root: &Path) -> io::Result<()> {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[cfg(target_os = "linux")]
+    pub unavailable_reason: Option<String>,
     pub enabled: bool,
     pub address: String,
     pub room: String,
@@ -162,12 +164,26 @@ pub struct Settings {
 
 impl Settings {
     pub fn load(root: &Path) -> io::Result<Self> {
+        #[cfg(target_os = "linux")]
+        if cfg!(target_os = "linux") {
+            let mut settings: Self = store_io::read(&root.join("local/relay/settings.json"))?;
+            settings.enabled = false;
+            settings.unavailable_reason = Some(sidenote_sync::RELAY_UNAVAILABLE.into());
+            return Ok(settings);
+        }
         match store_io::read(&root.join("local/relay/settings.json")) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             result => result,
         }
     }
     pub fn save(&self, root: &Path) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        if self.enabled {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                sidenote_sync::RELAY_UNAVAILABLE,
+            ));
+        }
         if !self.address.is_empty() {
             endpoint(&self.address)?;
         }
@@ -327,6 +343,13 @@ impl Preview {
     }
 
     pub fn online(&self, online: bool) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        if online {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                sidenote_sync::RELAY_UNAVAILABLE,
+            ));
+        }
         let mut connection = self.connection.lock().map_err(failed)?;
         if let Some(old) = connection.take() {
             let _ = old.stop.send(());
@@ -446,6 +469,45 @@ impl Drop for Preview {
 }
 
 type Registry = Mutex<BTreeMap<PathBuf, Arc<Preview>>>;
+#[cfg(all(test, target_os = "linux"))]
+mod linux_unavailable_tests {
+    use super::*;
+    #[test]
+    fn relay_settings_and_start_are_unavailable_on_linux() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let settings = Settings {
+            enabled: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.save(root.path()).unwrap_err().to_string(),
+            sidenote_sync::RELAY_UNAVAILABLE
+        );
+        store_io::write(&root.path().join("local/relay/settings.json"), &settings)?;
+        let loaded = Settings::load(root.path())?;
+        assert!(!loaded.enabled);
+        assert_eq!(
+            loaded.unavailable_reason.as_deref(),
+            Some(sidenote_sync::RELAY_UNAVAILABLE)
+        );
+        assert!(get(root.path())?.is_none());
+        assert_eq!(
+            operations::status(root.path())?.message,
+            sidenote_sync::RELAY_UNAVAILABLE
+        );
+        let device = Arc::new(Device::open(&root.path().join("replica.sqlite"))?);
+        let group = Group::new(&device.identity);
+        let result = SyncClient::start(device, group, RelayUrl::local("ws://127.0.0.1:1")?);
+        assert_eq!(
+            result
+                .err()
+                .expect("Linux sync start must fail")
+                .to_string(),
+            sidenote_sync::RELAY_UNAVAILABLE
+        );
+        Ok(())
+    }
+}
 static REPLICAS: OnceLock<Registry> = OnceLock::new();
 fn registry() -> &'static Registry {
     REPLICAS.get_or_init(Mutex::default)
@@ -703,6 +765,7 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg(windows)]
     fn manual_and_meeting_edits_commit_together_without_folder_writes() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
@@ -761,6 +824,7 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg(windows)]
     fn legacy_identity_backup_drift_and_resume_keep_both_collections() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
@@ -824,6 +888,7 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[cfg(windows)]
     fn a_stale_address_save_cannot_restore_an_old_pairing_group() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();

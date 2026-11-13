@@ -113,6 +113,11 @@ impl Controller {
         self.state.errors = errors;
         self.state.relay_enabled = settings.enabled;
         self.state.relay_status = relay_status;
+        #[cfg(target_os = "linux")]
+        {
+            self.state.relay_enabled = false;
+            self.state.relay_status = sidenote_sync::RELAY_UNAVAILABLE.into();
+        }
         self.state.observed_at_ms = chrono::Utc::now().timestamp_millis();
         if self.state.relay_status == "synced" {
             self.state.last_connected_observation_ms = Some(self.state.observed_at_ms);

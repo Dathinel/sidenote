@@ -21,6 +21,8 @@ pub mod transport;
 pub mod tree_worker;
 mod wire;
 pub mod worker;
+#[cfg(target_os = "linux")]
+pub const RELAY_UNAVAILABLE: &str = "Relay sync is not yet available on Linux";
 /// Reuse the Linux StrictModes boundary for the owner's private local endpoint.
 #[cfg(target_os = "linux")]
 pub fn validate_private_directory(path: &std::path::Path) -> anyhow::Result<()> {

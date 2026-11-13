@@ -97,6 +97,10 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 fn relay(state: &str) -> &'static str {
+    #[cfg(target_os = "linux")]
+    if state == sidenote_sync::RELAY_UNAVAILABLE {
+        return "unavailable";
+    }
     match state {
         "disabled" => "disabled",
         "offline" => "offline",
