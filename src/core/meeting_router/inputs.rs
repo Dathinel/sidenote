@@ -277,6 +277,26 @@ impl Snapshot {
                 .collect::<Vec<_>>()
         ))
     }
+    pub(crate) fn wav_header(
+        &mut self,
+        track: &str,
+    ) -> io::Result<Option<crate::core::meeting_watch::WavHeader>> {
+        let name = match track {
+            "system" => "system.wav",
+            "microphone" => "microphone.wav",
+            _ => return Err(invalid()),
+        };
+        let Some(input) = self.files.iter_mut().find(|f| f.name == name) else {
+            return Ok(None);
+        };
+        input.file.seek(SeekFrom::Start(0))?;
+        let length = input.file.metadata()?.len();
+        let header = crate::core::meeting_watch::wav_header(&mut input.file, length)?;
+        if stamp(&input.file, false)? != input.stamp {
+            return Err(invalid());
+        }
+        Ok(Some(header))
+    }
     pub fn stage(&mut self, work: &Path) -> io::Result<tempfile::TempDir> {
         let copy = tempfile::Builder::new()
             .prefix("inputs-")

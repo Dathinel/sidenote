@@ -7,6 +7,7 @@ mod config;
 mod hex;
 pub(crate) mod inputs;
 pub mod jobs;
+pub mod pieces;
 use super::{
     asr::{self, LanguageScores, Result},
     store_io,
