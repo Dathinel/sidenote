@@ -130,6 +130,7 @@ impl Store {
         #[cfg(target_os = "linux")]
         crate::secure_store::private_file(&lock)?;
         lock.try_lock()
+            .map_err(std::io::Error::from)
             .context("sync store already open; one writer per install is required")?;
         #[cfg(target_os = "linux")]
         let db = local(Connection::open_with_flags(

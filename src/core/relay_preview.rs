@@ -287,8 +287,34 @@ fn qualification_point(root: &Path, point: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn failed(_: impl std::fmt::Display) -> io::Error {
-    io::Error::other("Relay preview could not read or save its local replica")
+fn failed(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    use sidenote_sync::status::{Failure, Reason};
+    let error = error.into();
+    let mut cause: &(dyn std::error::Error + 'static) = error.as_ref();
+    loop {
+        if let Some(error) = cause.downcast_ref::<io::Error>() {
+            return match error.raw_os_error() {
+                Some(code) => io::Error::from_raw_os_error(code),
+                None => io::Error::new(error.kind(), "relay_io"),
+            };
+        }
+        if let Some(Failure(reason)) = cause.downcast_ref::<Failure>() {
+            return match reason {
+                Reason::CorruptDocument => {
+                    io::Error::new(io::ErrorKind::InvalidData, "relay_decode")
+                }
+                Reason::LocalStore | Reason::StoreFull => io::Error::other("relay_database"),
+                _ => io::Error::other("relay_setup"),
+            };
+        }
+        if cause.is::<serde_json::Error>() || cause.is::<automerge::AutomergeError>() {
+            return io::Error::new(io::ErrorKind::InvalidData, "relay_decode");
+        }
+        match cause.source() {
+            Some(source) => cause = source,
+            None => return io::Error::other("relay_setup"),
+        }
+    }
 }
 
 struct Connection {
@@ -305,7 +331,7 @@ pub struct Preview {
 
 impl Preview {
     pub(crate) fn session_status(&self) -> io::Result<String> {
-        let connection = self.connection.lock().map_err(failed)?;
+        let connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         let Some(connection) = connection.as_ref() else {
             return Ok("offline".into());
         };
@@ -350,7 +376,7 @@ impl Preview {
                 sidenote_sync::RELAY_UNAVAILABLE,
             ));
         }
-        let mut connection = self.connection.lock().map_err(failed)?;
+        let mut connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         if let Some(old) = connection.take() {
             let _ = old.stop.send(());
             old.thread.join().map_err(|_| failed("session stopped"))?;
@@ -415,12 +441,13 @@ impl Preview {
     }
 
     pub fn tasks(&self) -> io::Result<Vec<ManualTask>> {
-        project(&self.device.load("tasks").map_err(failed)?).map_err(failed)
+        project(&self.device.load("tasks").map_err(failed)?)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "relay_decode"))
     }
 
     pub fn edit(&self, before: &[ManualTask], after: &[ManualTask]) -> io::Result<()> {
         let name = super::DeviceSettings::read_in(&self.root)?.name;
-        let connection = self.connection.lock().map_err(failed)?;
+        let connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         if let Some(connection) = connection.as_ref() {
             connection
                 .client
@@ -518,7 +545,7 @@ pub fn get(root: &Path) -> io::Result<Option<Arc<Preview>>> {
     if !settings.enabled {
         return Ok(None);
     }
-    let mut replicas = registry().lock().map_err(failed)?;
+    let mut replicas = registry().lock().map_err(|_| failed("mutex"))?;
     if let Some(preview) = replicas.get(root) {
         return Ok(Some(preview.clone()));
     }
@@ -529,7 +556,7 @@ pub fn get(root: &Path) -> io::Result<Option<Arc<Preview>>> {
 }
 
 pub fn disconnect(root: &Path) -> io::Result<()> {
-    if let Some(preview) = registry().lock().map_err(failed)?.remove(root) {
+    if let Some(preview) = registry().lock().map_err(|_| failed("mutex"))?.remove(root) {
         preview.online(false)?;
     }
     Ok(())
@@ -701,6 +728,53 @@ pub fn headless(args: &[std::ffi::OsString]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replica_errors_keep_only_fixed_categories_and_os_codes() {
+        let source = io::Error::from_raw_os_error(5);
+        let expected = source.kind();
+        let error = failed(anyhow::Error::new(source).context("private context"));
+        assert_eq!(error.raw_os_error(), Some(5));
+        assert_eq!(error.kind(), expected);
+        let source = serde_json::from_str::<Value>("synthetic invalid JSON").unwrap_err();
+        let error = failed(anyhow::Error::new(source).context("private context"));
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "relay_decode");
+        assert_eq!(failed("private setup detail").to_string(), "relay_setup");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn corrupt_shared_profile_fails_instead_of_returning_default() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let device = Arc::new(Device::open(&root.path().join("replica.sqlite"))?);
+        device.store(|s| {
+            s.edit("settings", |doc| {
+                shared::apply(
+                    doc,
+                    "profile.json",
+                    &Value::Null,
+                    &serde_json::json!({"your_name":"Synthetic"}),
+                    "Synthetic",
+                    "edit",
+                    true,
+                )?;
+                let mut tx = doc.transaction();
+                tx.put(ROOT, "synthetic invalid key", "synthetic value")?;
+                tx.commit();
+                Ok(())
+            })
+        })?;
+        let preview = Preview {
+            device,
+            root: root.path().into(),
+            connection: Mutex::new(None),
+        };
+        let error =
+            store_io::defer_busy(preview.shared_value("profile.json", Value::Null)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "relay_decode");
+        Ok(())
+    }
     #[test]
     fn defaults_and_endpoint_boundaries() {
         assert!(!Settings::default().enabled);

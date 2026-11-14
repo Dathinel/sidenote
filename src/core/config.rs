@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::Path};
 
 fn operation<T>(result: io::Result<T>, operation: &str, path_kind: &str) -> io::Result<T> {
-    result.inspect_err(|error| crate::listener::log(&diagnostic(operation, path_kind, error)))
+    result.inspect_err(|error| {
+        if error.kind() != io::ErrorKind::WouldBlock {
+            crate::listener::log(&diagnostic(operation, path_kind, error));
+        }
+    })
 }
 fn diagnostic(operation: &str, path_kind: &str, error: &io::Error) -> String {
     format!(
@@ -545,6 +549,70 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[cfg(windows)]
+    fn relay_fixture(root: &Path) {
+        std::fs::create_dir_all(root.join("local/relay")).unwrap();
+        store_io::write(
+            &root.join("local/relay/settings.json"),
+            &super::super::relay_preview::Settings {
+                enabled: true,
+                backup: "synthetic".into(),
+                shared_backup: "synthetic".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn held_replica_lock_defers_notes_overlay_then_retries() {
+        let root = tempfile::tempdir().unwrap();
+        relay_fixture(root.path());
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.path().join("local/relay/replica.sqlite.sync-lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let mut config = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Default::default()
+        };
+        let error = config.overlay_profile(root.path()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(
+            store_io::defer_busy(config.overlay_profile(root.path()))
+                .unwrap()
+                .is_none()
+        );
+        drop(lock);
+        assert!(
+            store_io::defer_busy(config.overlay_profile(root.path()))
+                .unwrap()
+                .is_some()
+        );
+        super::super::relay_preview::disconnect(root.path()).unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn corrupt_replica_does_not_defer_or_use_stale_notes_name() {
+        let root = tempfile::tempdir().unwrap();
+        relay_fixture(root.path());
+        std::fs::write(
+            root.path().join("local/relay/replica.sqlite"),
+            b"synthetic corrupt database",
+        )
+        .unwrap();
+        let mut config = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Default::default()
+        };
+        let error = store_io::defer_busy(config.overlay_profile(root.path())).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "relay_database");
+    }
     #[test]
     fn diagnostics_keep_only_operation_path_kind_and_os_code() {
         let error = io::Error::new(
