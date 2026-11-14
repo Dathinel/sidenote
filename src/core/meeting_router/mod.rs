@@ -532,7 +532,7 @@ pub fn route(request: Request<'_>) -> Result<Transcript> {
                     if let Some(reading) = cache::get(cache_root, "transcribe", &key) {
                         return Ok(reading);
                     }
-                    let reading = engine.transcribe(&waveform, "hi")?;
+                    let reading = engine.transcribe(&waveform, asr::SAMPLE_RATE, "hi")?;
                     let _ = cache::put(cache_root, "transcribe", &key, &reading);
                     Ok(reading)
                 })();

@@ -166,6 +166,9 @@ pub enum IndicError {
     Metadata,
     Language,
     Audio,
+    InvalidSampleRate(u32),
+    OutputShape,
+    RuntimeUnavailable,
 }
 impl std::fmt::Display for IndicError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -200,7 +203,10 @@ fn indic_metadata(values: &[Option<String>]) -> Result<()> {
     }
     Ok(())
 }
-fn indic_audio(samples: &[f32], requested: &str, loaded: &str) -> Result<()> {
+fn indic_audio(samples: &[f32], sample_rate: u32, requested: &str, loaded: &str) -> Result<()> {
+    if sample_rate != SAMPLE_RATE {
+        return Err(IndicError::InvalidSampleRate(sample_rate).into());
+    }
     if requested != loaded {
         return Err(IndicError::Language.into());
     }
@@ -209,6 +215,16 @@ fn indic_audio(samples: &[f32], requested: &str, loaded: &str) -> Result<()> {
         || samples.iter().any(|s| !s.is_finite())
     {
         return Err(IndicError::Audio.into());
+    }
+    Ok(())
+}
+
+const INDIC_SUBSAMPLING: usize = 4;
+fn indic_output(shape: &[i64], input_frames: usize, vocabulary: usize) -> Result<()> {
+    // Both pinned graphs use two padded stride-2 convolutions: ceil(feature frames / 4).
+    let frames = input_frames.div_ceil(INDIC_SUBSAMPLING);
+    if frames == 0 || vocabulary != 5633 || shape != [1, frames as i64, vocabulary as i64] {
+        return Err(IndicError::OutputShape.into());
     }
     Ok(())
 }
@@ -228,13 +244,13 @@ impl IndicConformer {
     /// Explicit pack identity; never load a different language as fallback.
     pub fn load_for_language(model: &Path, tokens: &Path, language: &str) -> Result<Self> {
         let start = Instant::now();
+        if !cfg!(windows) || RUNTIME.get().is_none_or(|r| r.is_err()) {
+            return Err(IndicError::RuntimeUnavailable.into());
+        }
         let graph = fs::read(model)?;
         indic_hash(&graph, language)?;
         let token_bytes = fs::read(tokens)?;
         let token_text = indic_tokens(&token_bytes)?;
-        if RUNTIME.get().is_none_or(|r| r.is_err()) {
-            return Err("Initialize the local ONNX runtime first".into());
-        }
         // Infer from the exact verified bytes, even if the source path changes.
         let session = Session::builder()?
             .with_intra_threads(1)?
@@ -282,8 +298,8 @@ impl IndicConformer {
     }
 }
 impl SpeechEngine for IndicConformer {
-    fn transcribe(&mut self, samples: &[f32], language: &str) -> Result<Reading> {
-        indic_audio(samples, language, &self.language)?;
+    fn transcribe(&mut self, samples: &[f32], sample_rate: u32, language: &str) -> Result<Reading> {
+        indic_audio(samples, sample_rate, language, &self.language)?;
         let mut opts = FbankOptions::default();
         opts.frame_opts.dither = 0.0;
         opts.frame_opts.snip_edges = false;
@@ -324,14 +340,12 @@ impl SpeechEngine for IndicConformer {
             "length" => Tensor::from_array(([1], vec![n as i64]))?
         ])?;
         let (shape, probs) = out[0].try_extract_tensor::<f32>()?;
-        if shape.len() != 3 || shape[2] != self.tokens.len() as i64 {
-            return Err("Invalid CTC output shape".into());
-        }
+        indic_output(shape, n, self.tokens.len())?;
         let mut previous = self.blank;
         let mut tokens = Vec::new();
         for (frame, row) in probs
             .chunks_exact(self.tokens.len())
-            .take(n / 4)
+            .take(n / INDIC_SUBSAMPLING)
             .enumerate()
         {
             let id = row

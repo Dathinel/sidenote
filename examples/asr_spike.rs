@@ -25,7 +25,7 @@ fn main() -> sidenote::core::asr::Result<()> {
     for file in files.into_iter().take(50) {
         let audio = asr::read_wav(&file)?;
         let scores = lid.identify(&audio, &["en".into(), "hi".into()])?;
-        let reading = hi.transcribe(&audio, "hi")?;
+        let reading = hi.transcribe(&audio, asr::SAMPLE_RATE, "hi")?;
         readings
             .push(serde_json::json!({"id":file.file_stem().and_then(|s| s.to_str()), "scores":scores, "reading":reading}));
     }

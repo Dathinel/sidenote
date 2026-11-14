@@ -9,14 +9,8 @@ fn typed<T: std::fmt::Debug>(result: Result<T>, expected: IndicError) {
 
 #[test]
 fn indic_rejects_untrusted_pack_and_input_without_runtime() {
-    let temp = tempfile::tempdir().unwrap();
-    let graph = temp.path().join("model.onnx");
-    fs::write(&graph, b"wrong graph").unwrap();
     for language in ["hi", "te"] {
-        let error = IndicConformer::load_for_language(&graph, &graph, language)
-            .err()
-            .unwrap();
-        typed::<()>(Err(error), IndicError::ModelHash);
+        typed(indic_hash(b"wrong graph", language), IndicError::ModelHash);
     }
     typed(indic_tokens(b"wrong tokens"), IndicError::Tokens);
     let valid =
@@ -31,10 +25,64 @@ fn indic_rejects_untrusted_pack_and_input_without_runtime() {
     }
     typed(indic_hash(b"", "en"), IndicError::Language);
     for audio in [vec![0.0; 480_001], vec![f32::NAN; 1600], vec![]] {
-        typed(indic_audio(&audio, "hi", "hi"), IndicError::Audio);
+        typed(
+            indic_audio(&audio, SAMPLE_RATE, "hi", "hi"),
+            IndicError::Audio,
+        );
     }
-    indic_audio(&vec![0.0; 480_000], "te", "te").unwrap();
-    typed(indic_audio(&[0.0; 1600], "hi", "te"), IndicError::Language);
+    indic_audio(&vec![0.0; 480_000], SAMPLE_RATE, "te", "te").unwrap();
+    typed(
+        indic_audio(&[0.0; 1600], SAMPLE_RATE, "hi", "te"),
+        IndicError::Language,
+    );
+}
+
+#[test]
+fn indic_rejects_incomplete_output_and_wrong_rate() {
+    for input_frames in [100usize, 101, 102, 103, 104] {
+        let frames = input_frames.div_ceil(INDIC_SUBSAMPLING) as i64;
+        indic_output(&[1, frames, 5633], input_frames, 5633).unwrap();
+        for shape in [
+            vec![1, 0, 5633],
+            vec![1, frames, 5632],
+            vec![1, frames - 1, 5633],
+            vec![2, frames, 5633],
+            vec![1, frames + 1, 5633],
+            vec![frames, 5633],
+        ] {
+            typed(
+                indic_output(&shape, input_frames, 5633),
+                IndicError::OutputShape,
+            );
+        }
+    }
+    typed(
+        indic_output(&[1, 0, 5633], 0, 5633),
+        IndicError::OutputShape,
+    );
+    typed(
+        indic_output(&[1, 25, 5632], 100, 5632),
+        IndicError::OutputShape,
+    );
+    for rate in [8000, 48000] {
+        typed(
+            indic_audio(&[0.0; 1600], rate, "hi", "hi"),
+            IndicError::InvalidSampleRate(rate),
+        );
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn indic_linux_refuses_before_opening_missing_paths() {
+    let error = IndicConformer::load_for_language(
+        Path::new("/missing/model"),
+        Path::new("/missing/tokens"),
+        "hi",
+    )
+    .err()
+    .unwrap();
+    typed::<()>(Err(error), IndicError::RuntimeUnavailable);
 }
 
 #[cfg(windows)]
@@ -70,7 +118,7 @@ fn parity(language: &str) {
     )
     .unwrap();
     for _ in 0..2 {
-        let result = engine.transcribe(&samples, language).unwrap();
+        let result = engine.transcribe(&samples, SAMPLE_RATE, language).unwrap();
         assert_eq!(result.text, reference["text"]);
         assert_eq!(
             serde_json::to_value(result.tokens.iter().map(|t| &t.text).collect::<Vec<_>>())
@@ -78,10 +126,19 @@ fn parity(language: &str) {
             reference["tokens"]
         );
     }
+    for rate in [8000, 48000] {
+        typed(
+            engine.transcribe(&samples, rate, language),
+            IndicError::InvalidSampleRate(rate),
+        );
+    }
     let other = if language == "hi" { "te" } else { "hi" };
-    typed(engine.transcribe(&samples, other), IndicError::Language);
     typed(
-        engine.transcribe(&vec![0.0; 480_001], language),
+        engine.transcribe(&samples, SAMPLE_RATE, other),
+        IndicError::Language,
+    );
+    typed(
+        engine.transcribe(&vec![0.0; 480_001], SAMPLE_RATE, language),
         IndicError::Audio,
     );
 }

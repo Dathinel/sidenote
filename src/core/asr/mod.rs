@@ -35,7 +35,7 @@ pub trait LanguageId {
 }
 
 pub trait SpeechEngine {
-    fn transcribe(&mut self, samples: &[f32], language: &str) -> Result<Reading>;
+    fn transcribe(&mut self, samples: &[f32], sample_rate: u32, language: &str) -> Result<Reading>;
 }
 
 /// Catalogue paths are snapshots. Constructors must still handle every file-open failure.
