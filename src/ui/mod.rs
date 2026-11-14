@@ -804,11 +804,13 @@ impl State {
         if let Some(m) = self.current()
             && m.folder.parent().is_some_and(|p| p == core::meetings_dir())
         {
+            #[cfg(windows)]
             let raw = if m.summary_raw.is_empty() {
                 &m.draft_raw
             } else {
                 &m.summary_raw
             };
+            #[cfg(windows)]
             sidenote::meeting_icon::draft_seen(&m.id, raw);
         }
     }

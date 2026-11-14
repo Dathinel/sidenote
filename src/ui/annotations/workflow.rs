@@ -1,8 +1,8 @@
 use super::*;
 use crate::ui::widgets::ButtonDisabled;
 use serde_json::{Value, json};
+use sidenote::platform::CommandExt;
 use std::{
-    os::windows::process::CommandExt,
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},

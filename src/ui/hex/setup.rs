@@ -54,6 +54,7 @@ impl State {
         }
     }
 
+    #[cfg(windows)]
     fn open_installed_hex(&mut self) {
         if super::super::isolated() {
             return;
@@ -79,6 +80,7 @@ impl State {
         }
     }
 
+    #[cfg(windows)]
     fn hex_download_page(&mut self) {
         if super::super::isolated() {
             return;
@@ -105,6 +107,14 @@ impl State {
                 "Could not open the download page. Visit github.com/anomalyco/hex/releases/latest.",
             );
         }
+    }
+    #[cfg(not(windows))]
+    fn open_installed_hex(&mut self) {
+        self.hex.install = InstallState::Failed("Opening Hex is unavailable on Linux.");
+    }
+    #[cfg(not(windows))]
+    fn hex_download_page(&mut self) {
+        self.hex.install = InstallState::Failed("Hex installation is unavailable on Linux.");
     }
 }
 

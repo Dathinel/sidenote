@@ -1,18 +1,18 @@
 #![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
-#[cfg(all(test, windows, feature = "desktop"))]
+#[cfg(all(test, feature = "desktop"))]
 #[path = "../tests/common/mod.rs"]
 mod test_paths;
-#[cfg(all(test, windows, feature = "desktop"))]
+#[cfg(all(test, feature = "desktop"))]
 #[test]
 fn default_test_paths_are_isolated_from_owner_appdata() {
     test_paths::isolate();
 }
-#[cfg(all(windows, feature = "desktop"))]
+#[cfg(feature = "desktop")]
 mod ui;
 fn main() {
-    #[cfg(all(windows, feature = "desktop"))]
+    #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--language-detect") {
@@ -31,7 +31,7 @@ fn main() {
             .on_restarted(|_| sidenote::updates::restarted())
             .run();
     }
-    #[cfg(all(windows, feature = "desktop"))]
+    #[cfg(feature = "desktop")]
     if args.iter().any(|arg| arg == "--response-times") {
         sidenote::response_time::startup(process_started);
     }
@@ -229,9 +229,9 @@ fn main() {
     if std::env::args().any(|a| a == "--daily-check") {
         std::process::exit(sidenote::core::daily_check::run_cli());
     }
-    #[cfg(all(windows, feature = "desktop"))]
+    #[cfg(feature = "desktop")]
     sidenote::desktop::run(ui::run);
-    #[cfg(not(all(windows, feature = "desktop")))]
+    #[cfg(not(feature = "desktop"))]
     {
         eprintln!("UNAVAILABLE_ON_PLATFORM");
         std::process::exit(2);

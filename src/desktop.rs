@@ -15,9 +15,12 @@ pub fn run(open_screens: impl FnOnce()) {
             Ok(Some(instance)) => Some(instance),
             Ok(None) => return,
             Err(_) => {
+                #[cfg(windows)]
                 platform::show_error(
                     "Sidenote could not check whether it is already open. Reopen Sidenote to try again. If this continues, restart Windows.",
                 );
+                #[cfg(not(windows))]
+                platform::show_error("Sidenote could not acquire its desktop instance lock.");
                 return;
             }
         }

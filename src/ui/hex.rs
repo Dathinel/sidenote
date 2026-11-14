@@ -23,13 +23,11 @@ use sidenote::hex_engine::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicIsize, Ordering},
-        mpsc::{self, RecvTimeoutError, Sender, TryRecvError},
-    },
+    sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError},
     thread,
     time::{Duration, Instant, SystemTime},
 };
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
 
 /// How long after a failed capability lookup the next status sample may try again.
@@ -39,16 +37,21 @@ const FORWARD_TICK: Duration = Duration::from_millis(500);
 
 // ---- window visibility ----------------------------------------------------------------------
 
-static WINDOW: AtomicIsize = AtomicIsize::new(0);
+#[cfg(windows)]
+static WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 /// Called once with the window's handle, so the indicator can tell shown from minimized.
+#[cfg(windows)]
 pub fn remember_window(hwnd: isize) {
+    use std::sync::atomic::Ordering;
     WINDOW.store(hwnd, Ordering::Relaxed);
     sidenote::listener::status::remember_window(hwnd);
 }
 
 /// On screen and not minimized. Before the handle is known the window counts as shown.
+#[cfg(windows)]
 pub fn window_shown() -> bool {
+    use std::sync::atomic::Ordering;
     let hwnd = WINDOW.load(Ordering::Relaxed);
     if hwnd == 0 {
         return true;
@@ -56,6 +59,11 @@ pub fn window_shown() -> bool {
     let handle = hwnd as *mut std::ffi::c_void;
     // SAFETY: the handle belongs to this process's window; both calls only read its state.
     unsafe { IsWindowVisible(handle) != 0 && IsIconic(handle) == 0 }
+}
+
+#[cfg(not(windows))]
+pub fn window_shown() -> bool {
+    super::window::shown()
 }
 
 // ---- messages from worker threads -----------------------------------------------------------

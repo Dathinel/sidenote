@@ -17,3 +17,45 @@ pub fn cli(_args: &[std::ffi::OsString]) -> i32 {
     eprintln!("{}", crate::platform::UNAVAILABLE);
     2
 }
+
+// Desktop launch has no Linux updater or tray/listener installer yet.
+pub const FOCUS_CHECK_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+pub fn installed() -> bool {
+    false
+}
+pub fn load() -> Status {
+    Status {
+        phase: Phase::Manual,
+        ..Status::default()
+    }
+}
+pub fn listener_status() -> ListenerStatus {
+    ListenerStatus {
+        ready: false,
+        error: Some("The desktop meeting listener is unavailable on Linux.".into()),
+    }
+}
+pub fn listener_ready() -> bool {
+    false
+}
+pub fn probe_listener() -> Option<ListenerStatus> {
+    Some(listener_status())
+}
+pub fn ensure_listener() -> Result<(), String> {
+    Err("The desktop meeting listener is unavailable on Linux.".into())
+}
+pub fn start(_: impl Fn(Status) + Send + 'static) -> Option<std::sync::mpsc::Sender<CheckRequest>> {
+    None
+}
+pub fn window_start(_: impl Fn(Phase)) -> Result<(), String> {
+    Err("Updates are unavailable on Linux.".into())
+}
+pub fn apply(_: bool, _: Vec<String>, _: impl FnMut(Phase)) -> Result<(), String> {
+    Err("Updates are unavailable on Linux.".into())
+}
+pub fn source_label() -> String {
+    "Updates are unavailable on Linux.".into()
+}
+pub fn feed() -> Option<std::path::PathBuf> {
+    None
+}
