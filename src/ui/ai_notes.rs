@@ -374,6 +374,7 @@ impl State {
         }
         self.notes_work(Work::Load, "Loading Meeting summary...");
     }
+    #[cfg(windows)]
     fn open_notes_install_page(&mut self) {
         if self.ai_notes.scene {
             return;
@@ -396,6 +397,10 @@ impl State {
                 "Could not open your browser. Open {INSTALL_URL} to install Claude Code."
             ));
         }
+    }
+    #[cfg(not(windows))]
+    fn open_notes_install_page(&mut self) {
+        self.ai_notes.error = Some(format!("Open {INSTALL_URL} to install Claude Code."));
     }
     pub fn open_ai_notes(&mut self) {
         if self.ai_notes.scene {

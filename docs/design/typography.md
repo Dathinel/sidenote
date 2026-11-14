@@ -2,8 +2,9 @@
 
 Sidenote separates text by size, weight and colour, the way GitHub's Primer does: names
 are heavier than body, body is regular, and facts about an item are smaller and greyer.
-Space groups things first; lines come second. We keep Sidenote's own look: Georgia page
-titles, Inter for everything else, and the warm palette in `src/ui/theme.rs`. The roles
+Space groups things first; lines come second. Windows page titles use Georgia when
+available, with the existing Inter fallback. Linux page titles and all other text use
+bundled Inter, with the warm palette in `src/ui/theme.rs`. The roles
 live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
 
 ## What we took from Primer
@@ -20,7 +21,7 @@ live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
 
 | Role | Size / line height | Weight | Colour | Use |
 |---|---|---|---|---|
-| Page title | Georgia 34/42 (28/35 at 560 px) | 400 | `ink` | One per page |
+| Page title | Georgia on Windows, Inter on Linux; 34/42 (28/35 at 560 px) | 400 | `ink` | One per page |
 | `SECTION` | 20/28 | 600 | `ink` | Needs attention, Decisions, To do, a settings section, Memory and Tasks panels |
 | `TITLE` | 16/24 | 600 | `ink` | A meeting in the list, a topic, a model card, the Ask question |
 | `READ` | 16/27 | 400 | `ink` | Summary points, to-dos, Ask answers, live notes |

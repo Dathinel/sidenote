@@ -158,8 +158,11 @@ pub fn kit(p: &Palette) -> Kit {
 pub const BODY: f32 = 16.0;
 pub const BODY_LH: f32 = 27.0;
 
-/// The serif used for page titles. Windows ships Georgia; without it titles fall back to Inter.
+/// Windows keeps its existing Georgia title face and Inter fallback.
+#[cfg(windows)]
 const DISPLAY: Family = Family::Named("Georgia");
+#[cfg(not(windows))]
+const DISPLAY: Family = Family::Named("Inter");
 
 pub fn display(size: f32) -> TextStyle {
     TextStyle::new(size, 400.0)
@@ -167,8 +170,18 @@ pub fn display(size: f32) -> TextStyle {
         .lh((size * 1.25).round())
 }
 
-/// Inter as before, plus Georgia from the Windows fonts folder for titles. Rune replaces its
-/// built-in Inter when an app passes any fonts, so Inter is bundled here too.
+/// Linux uses only the repo's licensed Inter fonts.
+#[cfg(not(windows))]
+pub fn fonts() -> &'static [&'static [u8]] {
+    &[
+        include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
+        include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
+        include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
+    ]
+}
+
+/// Preserve the Windows Georgia load and its existing Inter fallback.
+#[cfg(windows)]
 pub fn fonts() -> &'static [&'static [u8]] {
     let mut list: Vec<&'static [u8]> = vec![
         include_bytes!("../../assets/fonts/Inter-Regular.ttf"),

@@ -1,4 +1,5 @@
 //! Public and local Velopack feeds. Checks and downloads never apply an update.
+pub use crate::update_state::{CheckRequest, ListenerStatus, Phase, Status};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -227,10 +228,7 @@ pub const PUBLIC_FEED: &str =
     "https://github.com/harshanandak/hex-meetings/releases/latest/download/";
 
 pub const FOCUS_CHECK_AFTER: Duration = Duration::from_secs(30 * 60);
-pub enum CheckRequest {
-    Manual,
-    Focus,
-}
+
 fn focus_check_due(last_attempt: Instant, now: Instant) -> bool {
     now.duration_since(last_attempt) > FOCUS_CHECK_AFTER
 }
@@ -259,29 +257,6 @@ pub fn start(publish: impl Fn(Status) + Send + 'static) -> Option<mpsc::Sender<C
     Some(tx)
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Phase {
-    #[default]
-    Idle,
-    Manual,
-    Preparing,
-    StoppingListener,
-    Checking,
-    Available,
-    Downloading,
-    Ready,
-    Error,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Status {
-    pub phase: Phase,
-    pub version: String,
-    pub progress: u8,
-    pub notes: String,
-    pub checked: Option<String>,
-    pub error: Option<String>,
-}
 pub fn installed() -> bool {
     static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *INSTALLED.get_or_init(|| {
@@ -672,11 +647,7 @@ fn listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
         Err(ListenerTaskError::Failed("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into()))
     }
 }
-#[derive(Clone, Debug, Default)]
-pub struct ListenerStatus {
-    pub ready: bool,
-    pub error: Option<String>,
-}
+
 impl ListenerStatus {
     fn complete(&mut self, result: &Result<(), String>) {
         self.ready = result.is_ok();

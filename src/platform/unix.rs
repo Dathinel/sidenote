@@ -25,8 +25,19 @@ pub fn publish_file(from: &Path, to: &Path) -> io::Result<()> {
     fs::hard_link(from, to)?;
     fs::File::open(to.parent().ok_or(io::ErrorKind::InvalidInput)?)?.sync_all()
 }
-pub struct Instance;
+pub struct Instance {
+    _lock: fs::File,
+}
+#[cfg(target_os = "linux")]
+#[path = "desktop_lock.rs"]
+mod desktop_lock;
 pub fn single_instance() -> io::Result<Option<Instance>> {
+    #[cfg(target_os = "linux")]
+    {
+        desktop_lock::acquire(&crate::core::state_dir())
+            .map(|lock| lock.map(|file| Instance { _lock: file }))
+    }
+    #[cfg(not(target_os = "linux"))]
     Err(super::unavailable())
 }
 #[cfg(target_os = "linux")]
@@ -78,11 +89,29 @@ pub fn set_window_icon(_hwnd: isize) {}
 pub fn fit_to_work_area(_hwnd: isize, want: (f32, f32)) -> (f32, f32) {
     want
 }
-pub fn open_folder(_path: &Path) -> io::Result<()> {
-    Err(super::unavailable())
+pub fn open_folder(path: &Path) -> io::Result<()> {
+    if !crate::service::ui_allowed() {
+        return Err(super::unavailable());
+    }
+    let path = path.canonicalize()?;
+    if !path.is_dir() {
+        return Err(io::ErrorKind::NotADirectory.into());
+    }
+    let status = std::process::Command::new("xdg-open")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(super::unavailable())
+    }
 }
-pub fn reveal_file(_path: &Path) -> io::Result<()> {
-    Err(super::unavailable())
+pub fn reveal_file(path: &Path) -> io::Result<()> {
+    let path = path.canonicalize()?;
+    open_folder(path.parent().ok_or(io::ErrorKind::InvalidInput)?)
 }
 pub fn guard_window_close(_hwnd: isize, _request: impl Fn() + 'static) -> io::Result<()> {
     Err(super::unavailable())

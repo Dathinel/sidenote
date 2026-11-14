@@ -676,14 +676,16 @@ mod tests {
     use super::*;
     #[test]
     fn chat_overrides_and_models_persist_without_changing_meeting_defaults_or_summary_settings() {
-        use std::{fs, os::windows::process::CommandExt, process::Command};
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        use std::{fs, process::Command};
         if std::env::var_os("SIDENOTE_ASK_PREFS_CHILD").is_none() {
             let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("target")
                 .join(format!("ask-prefs-{}", std::process::id()));
             fs::create_dir_all(&root).unwrap();
-            let status = Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "ui::ask_settings::tests::chat_overrides_and_models_persist_without_changing_meeting_defaults_or_summary_settings", "--nocapture"])
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "ui::ask_settings::tests::chat_overrides_and_models_persist_without_changing_meeting_defaults_or_summary_settings", "--nocapture"])
                 .env("SIDENOTE_ASK_PREFS_CHILD", "1")
                 .env("APPDATA", root.join("appdata"))
                 .env("LOCALAPPDATA", root.join("localappdata"))
@@ -692,7 +694,10 @@ mod tests {
                 .env("SIDENOTE_STATE_DIR", root.join("state"))
                 .env("SIDENOTE_HEX_DIR", root.join("meetings"))
                 .env("SIDENOTE_PEERS_DIR", root.join("peers"))
-                .creation_flags(0x08000000).status().unwrap();
+                ;
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
+            let status = command.status().unwrap();
             assert!(status.success());
             return;
         }

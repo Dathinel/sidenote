@@ -24,6 +24,7 @@ pub(super) fn configure(mut app: rune::App<State>) -> rune::App<State> {
     app
 }
 
+#[cfg(windows)]
 pub(super) fn show_offscreen(win: &rune::WindowHandle, hwnd: isize) -> bool {
     if sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_none() {
         return false;

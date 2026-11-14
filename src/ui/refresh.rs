@@ -183,6 +183,7 @@ pub(super) struct Metadata {
     relay_revision: Option<String>,
 }
 fn walk(path: &Path, out: &mut Metadata, depth: usize) {
+    #[cfg(windows)]
     use std::os::windows::fs::MetadataExt;
     if depth > 8 {
         out.skipped += 1;
@@ -222,7 +223,11 @@ fn walk(path: &Path, out: &mut Metadata, depth: usize) {
                 continue;
             }
         };
-        if path.as_os_str().len() > 1024 || m.file_attributes() & 0x400 != 0 {
+        #[cfg(windows)]
+        let linked = m.file_attributes() & 0x400 != 0;
+        #[cfg(not(windows))]
+        let linked = m.file_type().is_symlink();
+        if path.as_os_str().len() > 1024 || linked {
             out.skipped += 1;
             continue;
         }

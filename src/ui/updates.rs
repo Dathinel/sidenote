@@ -383,6 +383,11 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
     actions
 }
 pub fn section(s: &State, p: Palette) -> El {
+    if cfg!(target_os = "linux") {
+        return col().w_full().gap(12.0).key("updates-unavailable")
+            .child(roles::SECTION.wrap("Updates and tray", p.ink))
+            .child(roles::SMALL.wrap("Automatic updates and the tray indicator are unavailable on Linux. Close the window to quit Sidenote.", p.soft));
+    }
     let status = &s.updates.status;
     let checked = status
         .checked
@@ -503,6 +508,9 @@ pub fn section(s: &State, p: Palette) -> El {
         .child(roles::META.wrap("Sidenote checks every 6 hours and installs when recording, Ask and jobs are idle.",p.faint).mt(8.0))
 }
 pub fn source(s: &State, p: Palette) -> El {
+    if cfg!(target_os = "linux") {
+        return roles::SMALL.wrap("Linux update packaging is not available yet.", p.soft);
+    }
     col().w_full()
         .child(roles::SMALL.wrap(if s.updates.scene {
                 "E:\\Sidenote updates".into()
