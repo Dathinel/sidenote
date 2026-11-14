@@ -150,7 +150,7 @@ impl Job {
         &mut self,
         execute: impl FnOnce(Stage, &str, Action) -> Result<Availability, Cause>,
     ) -> io::Result<bool> {
-        self.advance_inner(execute, |path, journal| store_io::write(path, journal))
+        self.advance_inner(execute, store_io::write)
             .at(Diagnostic::MeetingJob)
     }
 

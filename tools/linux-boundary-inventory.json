@@ -49,7 +49,7 @@
   "src/core/mcp_connect.rs": "2cbc0651912ca36c50cc7f725b99bb79f88b2704a65edb94329778f49af394e9",
   "src/core/meeting_evidence.rs": "68bc9cfdd6ec3a3c19efa0cd45b54c3f479e160e5076d7ead8ca124fa9c9808f",
   "src/core/meeting_job.rs": "5c3051f8f4e0873415705505823b6dcff3a15360b74889ec50c2612ee89ffe05",
-  "src/core/meeting_job/checkpoint.rs": "cfdbbeffe2166821658ef3026779435106a7bb59db59ee7de8f0443c68a30adb",
+  "src/core/meeting_job/checkpoint.rs": "6c21475b0a2c6400906e8fd03d6deed17224af530dd3079cf6ffa7d870cb86c6",
   "src/core/meeting_job/checkpoint/tests.rs": "897842550f58e485517b0025361589160f4a1c8c125635532853d3dd9d06a1b7",
   "src/core/meeting_router/batches.rs": "733102cd74d65095556a4177399d1c3465fdce35f2556bf43fa635e045391c5f",
   "src/core/meeting_router/batches/worker.rs": "a4b4d7c5577c13397749af9a0974a62c5dcec9e643aeeb446422f55b422e94a2",
