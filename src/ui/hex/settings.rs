@@ -2200,6 +2200,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(super::super::cloud_ask::section(s, k, p, layer))
             .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
+            .child(ai_notes::summary_model(s, k, p, layer))
             .child(super::super::annotations::agents_section(s, k, p, layer)),
         (Page::Helpers, _) => col()
             .w_full()

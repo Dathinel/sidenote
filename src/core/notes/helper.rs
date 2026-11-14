@@ -17,7 +17,10 @@ pub(super) const TITLE_TIMEOUT: Duration = Duration::from_secs(60);
 impl Helper {
     /// Detection is independent of whether this release permits a helper to run.
     pub fn offered(self) -> bool {
-        self == Self::Claude
+        matches!(self, Self::Claude | Self::Codex)
+    }
+    pub fn models(self) -> Vec<crate::core::ask_session::Model> {
+        crate::core::ask_session::models(&runner(self, ""))
     }
     pub fn default_model(self) -> &'static str {
         match self {
@@ -48,7 +51,7 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
                 "",
                 "--no-session-persistence",
                 "--output-format",
-                "text",
+                "json",
             ],
             false,
         ),
@@ -95,15 +98,14 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
     Busy,
-    #[cfg(target_os = "linux")]
-    NetworkUnavailable,
+    LinuxUnavailable,
     Consent,
     Missing,
     TimedOut,
-    Backend {
-        exit: Option<i32>,
-    },
+    Backend { exit: Option<i32> },
     BadOutput,
+    Limit { exit: Option<i32> },
+    Auth { exit: Option<i32> },
 }
 
 /// The test seam never launches a CLI or inspects the host's helper installation.
@@ -186,7 +188,7 @@ impl Run for Cli {
         }
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
-            return Err(Failure::NetworkUnavailable);
+            return Err(Failure::LinuxUnavailable);
         }
         if let Some(root) = &self.root
             && !authorized(root, helper)?
@@ -197,26 +199,34 @@ impl Run for Cli {
             return Err(Failure::Missing);
         }
         let scratch = Scratch::new().map_err(|_| Failure::Backend { exit: None })?;
-        runner_process::run_runner_with_timeout(
-            &runner(helper, model),
-            prompt,
-            &scratch.0,
-            timeout,
-            |_| {},
-        )
-        .map_err(|error| {
-            if error == "The runner exceeded its time limit." {
-                Failure::TimedOut
-            } else {
-                Failure::Backend { exit: None }
-            }
-        })
+        runner_process::run_classified(&runner(helper, model), prompt, &scratch.0, timeout, |_| {})
+            .map_err(|error| {
+                if error.category == "HELPER_TIMEOUT" {
+                    Failure::TimedOut
+                } else if error.category == "HELPER_UNAVAILABLE_LINUX" {
+                    Failure::LinuxUnavailable
+                } else if error.category == "HELPER_LIMIT" {
+                    Failure::Limit { exit: error.exit }
+                } else if error.category == "HELPER_AUTH" {
+                    Failure::Auth { exit: error.exit }
+                } else {
+                    Failure::Backend { exit: error.exit }
+                }
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_helper_stops_with_typed_unavailable_before_lookup_or_launch() {
+        assert_eq!(
+            Cli { root: None }.run(Helper::Codex, "", "synthetic".into(), Duration::ZERO),
+            Err(Failure::LinuxUnavailable)
+        );
+    }
     #[test]
     fn locked_commands_validate_and_never_load_runner_settings() {
         for helper in [Helper::Claude, Helper::Codex, Helper::OpenCode] {

@@ -30,13 +30,22 @@ pub(super) struct Job {
     pub sorting_pending: bool,
 }
 impl Job {
-    fn new(request: Option<Request>) -> Self {
+    fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
         Self {
             state: JobState::Queued,
             attempts: 0,
             next_try_at: None,
-            helper: None,
-            model: String::new(),
+            helper: settings.effective_helper(),
+            model: settings
+                .effective_helper()
+                .map(|h| {
+                    if settings.model.trim().is_empty() {
+                        h.default_model().into()
+                    } else {
+                        settings.model.clone()
+                    }
+                })
+                .unwrap_or_default(),
             instructions: "default".into(),
             updated_at: now(),
             message: "queued".into(),
@@ -143,6 +152,31 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
+    let previous = read(root, id)?;
+    if previous.as_ref().is_some_and(|job| {
+        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+    }) {
+        return Ok(());
+    }
+    let recovery = mode == Some(Request::UseCodex);
+    let mode = if recovery {
+        let job = previous
+            .as_ref()
+            .filter(|job| {
+                matches!(job.state, JobState::HelperLimit { .. })
+                    && job.helper == Some(Helper::Claude)
+            })
+            .ok_or_else(|| store_io::invalid("This meeting does not need Codex recovery"))?;
+        if settings.effective_helper() != Some(Helper::Codex) || settings.enabled_at_ms.is_none() {
+            return Err(store_io::invalid(
+                "Choose Codex for summaries before retrying",
+            ));
+        }
+        Some(job.request.unwrap_or(Request::TryAgain))
+    } else {
+        mode
+    };
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     if !complete(&folder) {
@@ -155,28 +189,25 @@ pub(super) fn enqueue_in(
     if sorting && !folder.join("english-summary.json").is_file() {
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
-    if let Some(job) = read(root, id)?
-        && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
-    {
-        return Ok(());
+    let mut next = Job::new(mode, settings);
+    if !recovery && let Some(previous) = previous.filter(|job| job.helper.is_some()) {
+        next.helper = previous.helper;
+        next.model = previous.model;
     }
-    let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
-    // A different enqueue may have won while we acquired the writer lock.
-    if let Some(job) = read(root, id)?
-        && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
-    {
-        return Ok(());
-    }
-    store_io::write(&job_path(root, id), &Job::new(mode))
+    store_io::write(&job_path(root, id), &next)
 }
 
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
         Failure::Busy => return Err(io::ErrorKind::WouldBlock.into()),
-        #[cfg(target_os = "linux")]
-        Failure::NetworkUnavailable => (JobState::NoHelper, core::runners::NETWORK_UNAVAILABLE),
+        Failure::LinuxUnavailable => (
+            JobState::HelperUnavailableOnLinux,
+            "HELPER_UNAVAILABLE_LINUX",
+        ),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
+        Failure::Limit { exit } => (JobState::HelperLimit { exit }, "HELPER_LIMIT"),
+        Failure::Auth { exit } => (JobState::HelperAuth { exit }, "HELPER_AUTH"),
         Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
         Failure::BadOutput => (JobState::BadOutput, "invalid agent output"),
         Failure::Backend { exit } => {
@@ -297,6 +328,17 @@ fn process(
             "notes need setup or an explicit click",
         );
     }
+    // Global changes can revoke consent, but never select a different agent for this job.
+    let Some(helper) = job.helper.filter(|h| h.offered()) else {
+        return failure(root, id, job, Failure::Consent);
+    };
+    if settings.effective_helper() != Some(helper) {
+        return failure(root, id, job, Failure::Consent);
+    }
+    let mut pinned = settings.clone();
+    pinned.helper = Some(helper);
+    pinned.model = job.model.clone();
+    let settings = &pinned;
     let mut transcript = if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
@@ -371,7 +413,6 @@ fn process(
     } else {
         &settings.model
     };
-    job.helper = Some(helper);
     job.model = model.into();
     job.attempts = job.attempts.saturating_add(1);
     write(root, id, job, JobState::Running, "running")?;

@@ -57,8 +57,11 @@ pub fn read(root: &Path, meetings: &[Meeting]) -> BTreeMap<String, Job> {
 pub fn is_failure(state: &JobState) -> bool {
     matches!(
         state,
-        JobState::HelperMissing
+        JobState::HelperUnavailableOnLinux
+            | JobState::HelperMissing
             | JobState::BackendError { .. }
+            | JobState::HelperLimit { .. }
+            | JobState::HelperAuth { .. }
             | JobState::TimedOut
             | JobState::BadOutput
             | JobState::TooLong { .. }
@@ -83,12 +86,15 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
         JobState::Running => running_message(name, job.updated_at),
+        JobState::HelperUnavailableOnLinux => core::notes::LINUX_HELPER_UNAVAILABLE.into(),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
             let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your agent" };
             let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
+        JobState::HelperLimit { .. } => format!("{name} has hit its usage limit. Your transcript is saved."),
+        JobState::HelperAuth { .. } => format!("{name} needs you to sign in again. Your transcript is saved."),
         JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Try again in a few minutes. Your transcript is saved."),
         JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into a summary. Try again. If it keeps happening, press Open instructions to review or reset them. Your transcript is saved."),
         JobState::Done { fallback: true, .. } => "This summary used the default instructions because your own instructions did not work. Edit your instructions before trying again.".into(),
@@ -114,12 +120,15 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::NeedsClick => "Ready to write a summary",
         JobState::Queued => "Summary queued",
         JobState::Running => "Writing summary",
+        JobState::HelperUnavailableOnLinux => "Summaries not available on Linux yet",
         JobState::HelperMissing => "Agent not found",
         JobState::BackendError {
             next_try_ms: Some(_),
             ..
         } => "Agent failed, retry scheduled",
         JobState::BackendError { .. } => "Agent failed, retry needed",
+        JobState::HelperLimit { .. } => "Agent usage limit reached",
+        JobState::HelperAuth { .. } => "Agent sign-in needed",
         JobState::TimedOut => "Agent took too long",
         JobState::BadOutput => "Agent reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for a summary",
@@ -197,6 +206,28 @@ pub fn banner(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let job = job(s, m)?;
     banner_for(s, &m.id, &job, p)
 }
+pub(super) fn can_use_codex(job: &Job, found: &[(Helper, bool)]) -> bool {
+    matches!(job.state, JobState::HelperLimit { .. })
+        && job.helper == Some(Helper::Claude)
+        && found.contains(&(Helper::Codex, true))
+}
+pub(super) fn use_codex_button(
+    s: &State,
+    id: &str,
+    job: &Job,
+    key: &str,
+    p: Palette,
+) -> Option<El> {
+    if !can_use_codex(job, &s.ai_notes.found) {
+        return None;
+    }
+    let id = id.to_string();
+    Some(
+        button("Use Codex for summaries", key, p)
+            .disabled(s.ai_notes.pending.is_some())
+            .on_press(move |s: &mut State| s.use_codex_for_summary(id.clone())),
+    )
+}
 pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     if matches!(
         job.state,
@@ -249,12 +280,14 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
-        JobState::BackendError { .. } => {
+        JobState::BackendError { .. }
+        | JobState::HelperAuth { .. }
+        | JobState::HelperLimit { .. } => {
             buttons = buttons
                 .child(request_button(
                     "Try again",
                     id,
-                    Request::TryAgain,
+                    job.retry_request(),
                     "notes-state-retry",
                     s,
                     p,
@@ -309,7 +342,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                 }),
         );
     }
-    c = c.child(buttons);
+    c = c.child(buttons.children(use_codex_button(s, id, job, "notes-use-codex", p)));
     if let JobState::BackendError {
         exit: Some(code), ..
     } = job.state
@@ -414,6 +447,39 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_unavailable_has_specific_copy_in_both_shared_banners() {
+        let job = Job {
+            state: JobState::HelperUnavailableOnLinux,
+            helper: Some(Helper::Codex),
+            updated_at: 0,
+            request: None,
+        };
+        assert!(is_failure(&job.state));
+        assert!(message(&job, None).contains("not available on Linux yet"));
+        assert_eq!(label(&job.state), "Summaries not available on Linux yet");
+    }
+    #[test]
+    fn limit_recovery_requires_detected_codex_and_preserves_the_failed_request() {
+        let mut job = Job {
+            state: JobState::HelperLimit { exit: Some(1) },
+            helper: Some(Helper::Claude),
+            updated_at: 0,
+            request: Some(Request::FirstPart),
+        };
+        assert_eq!(job.retry_request(), Request::FirstPart);
+        assert_eq!(
+            message(&job, None),
+            "Claude Code has hit its usage limit. Your transcript is saved."
+        );
+        assert!(can_use_codex(&job, &[(Helper::Codex, true)]));
+        assert!(!can_use_codex(&job, &[(Helper::Codex, false)]));
+        job.helper = Some(Helper::Codex);
+        assert!(!can_use_codex(&job, &[(Helper::Codex, true)]));
+        job.helper = Some(Helper::Claude);
+        job.state = JobState::HelperAuth { exit: Some(1) };
+        assert!(!can_use_codex(&job, &[(Helper::Codex, true)]));
+    }
     #[test]
     fn meetings_that_previously_needed_setup_offer_a_manual_request_after_setup() {
         let job: Job = serde_json::from_str(r#"{"state":"no_helper","updated_at":1}"#).unwrap();

@@ -2966,6 +2966,29 @@ pub fn spec() -> AppSpec<State> {
             ("settings-hex-meetings-enable", |s| {
                 hex::settings::scene(s, "settings-hex-meetings-enable")
             }),
+            ("settings-summary-models", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                s.ai_notes.settings.as_mut().unwrap().helper = Some(core::notes::Helper::Codex);
+                s.ai_notes.settings.as_mut().unwrap().model =
+                    core::notes::Helper::Codex.default_model().into();
+                s.ai_notes.model_open = true;
+            }),
+            ("settings-summary-limit", |s| {
+                hex::settings::scene(s, "settings-helpers");
+                let id = s.meetings.first().unwrap().id.clone();
+                s.ai_notes.jobs.insert(
+                    id,
+                    notes_status::Job {
+                        state: notes_scene::state("helper-limit"),
+                        helper: Some(core::notes::Helper::Claude),
+                        updated_at: 1,
+                        request: None,
+                    },
+                );
+            }),
+            ("notes-meeting-helper-limit", |s| {
+                notes_scene::meeting(s, "helper-limit")
+            }),
             ("settings-helpers", |s| {
                 hex::settings::scene(s, "settings-helpers")
             }),

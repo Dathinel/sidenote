@@ -65,6 +65,7 @@ struct Fake {
     glossary: Vec<String>,
     replies: VecDeque<Result<String, Failure>>,
     calls: Vec<(String, Duration)>,
+    selections: Vec<(Helper, String)>,
 }
 impl Fake {
     fn new(replies: Vec<Result<String, Failure>>) -> Self {
@@ -73,6 +74,7 @@ impl Fake {
             glossary: Vec::new(),
             replies: replies.into(),
             calls: Vec::new(),
+            selections: Vec::new(),
         }
     }
 }
@@ -85,11 +87,12 @@ impl Run for Fake {
     }
     fn run(
         &mut self,
-        _: Helper,
-        _: &str,
+        helper: Helper,
+        model: &str,
         prompt: String,
         timeout: Duration,
     ) -> Result<String, Failure> {
+        self.selections.push((helper, model.into()));
         self.calls.push((prompt, timeout));
         self.replies.pop_front().expect("unexpected helper call")
     }
@@ -418,7 +421,9 @@ fn state(root: &Path) -> JobState {
 #[test]
 fn unoffered_saved_helpers_never_run_and_have_a_fixed_reason() {
     assert!(Helper::Claude.offered());
-    for helper in [Helper::Codex, Helper::OpenCode] {
+    assert!(Helper::Codex.offered());
+    {
+        let helper = Helper::OpenCode;
         assert!(!helper.offered());
         let s: NotesSettings = serde_json::from_value(serde_json::json!({
             "helper": helper, "enabled_at_ms": 1
@@ -1278,7 +1283,8 @@ fn redo_uses_existing_english_transcript_without_rewriting_it() {
 
 #[test]
 fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting() {
-    for helper in [Helper::Codex, Helper::OpenCode] {
+    {
+        let helper = Helper::OpenCode;
         let root = Temp::new();
         let folder = meeting(&root.0, PRIVATE);
         let t1 = 1;
@@ -1467,4 +1473,161 @@ fn hex_labs_original_transcript_fallback_contract() {
             .unwrap()
             .contains("Synthetic original transcript")
     );
+}
+
+#[test]
+fn codex_uses_the_notes_parser_and_limit_auth_failures_are_terminal() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = NotesSettings {
+        helper: Some(Helper::Codex),
+        ..settings_fixture()
+    };
+    enqueue(&root.0, &s, Some(Request::MakeNotes));
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    for (failure, expected) in [
+        (Failure::Limit { exit: Some(1) }, "HELPER_LIMIT"),
+        (Failure::Auth { exit: Some(2) }, "HELPER_AUTH"),
+    ] {
+        let root = Temp::new();
+        meeting(&root.0, PRIVATE);
+        enqueue(&root.0, &s, Some(Request::MakeNotes));
+        let mut fake = Fake::new(vec![Err(failure)]);
+        drain(&root.0, &s, &mut fake);
+        let job = queue::read(&root.0, ID).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&job).unwrap()["state"], expected);
+        assert!(job.next_try_at.is_none());
+        assert!(
+            !fs::read_to_string(root.0.join("sidenote.log"))
+                .unwrap()
+                .contains(PRIVATE)
+        );
+    }
+}
+
+#[test]
+fn summary_model_defaults_and_custom_models_survive_settings_roundtrip() {
+    let legacy: NotesSettings = serde_json::from_str(r#"{"helper":"claude"}"#).unwrap();
+    assert!(legacy.model.is_empty());
+    assert_eq!(legacy.effective_helper(), Some(Helper::Claude));
+    let root = Temp::new();
+    let baseline = settings_fixture();
+    save_fixture_settings(&root.0, &baseline).unwrap();
+    for model in ["gpt-6.1-terra", "my-custom-model"] {
+        let edited = NotesSettings {
+            helper: Some(Helper::Codex),
+            model: model.into(),
+            ..baseline.clone()
+        };
+        save_fixture_settings(&root.0, &edited).unwrap();
+        let saved = crate::core::Config::load_in(&root.0)
+            .unwrap()
+            .notes
+            .unwrap();
+        assert_eq!(saved.helper, Some(Helper::Codex));
+        assert_eq!(saved.model, model);
+    }
+}
+
+#[test]
+fn queued_restarted_and_manual_retries_keep_the_enqueued_selection() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let original = NotesSettings {
+        model: "original-model".into(),
+        ..settings_fixture()
+    };
+    enqueue(&root.0, &original, Some(Request::MakeNotes));
+    let path = root.0.join(format!("local/notes-jobs/{ID}.json"));
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, original.helper);
+    assert_eq!(job.model, "original-model");
+    job.state = JobState::Running;
+    store_io::write(&path, &job).unwrap();
+    let changed_model = NotesSettings {
+        model: "different-model".into(),
+        ..original.clone()
+    };
+    let mut fake = Fake::new(vec![Err(Failure::Backend { exit: Some(1) })]);
+    drain(&root.0, &changed_model, &mut fake);
+    assert_eq!(fake.selections, [(Helper::Claude, "original-model".into())]);
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    job.state = JobState::BackendError {
+        next_try_ms: Some(0),
+        exit: Some(1),
+    };
+    store_io::write(&path, &job).unwrap();
+    let changed_helper = NotesSettings {
+        helper: Some(Helper::Codex),
+        ..changed_model.clone()
+    };
+    let mut no_calls = Fake::new(vec![]);
+    drain(&root.0, &changed_helper, &mut no_calls);
+    assert!(no_calls.calls.is_empty());
+    assert_eq!(state(&root.0), JobState::NoHelper);
+    enqueue(&root.0, &changed_helper, Some(Request::TryAgain));
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, Some(Helper::Claude));
+    assert_eq!(job.model, "original-model");
+    let mut retry = Fake::new(vec![Err(Failure::TimedOut)]);
+    drain(&root.0, &changed_model, &mut retry);
+    assert_eq!(
+        retry.selections,
+        [(Helper::Claude, "original-model".into())]
+    );
+}
+
+#[test]
+fn only_explicit_codex_recovery_retargets_one_job_and_preserves_first_part() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let original = settings_fixture();
+    enqueue(&root.0, &original, Some(Request::FirstPart));
+    let mut fake = Fake::new(vec![Err(Failure::Limit { exit: Some(1) })]);
+    drain(&root.0, &original, &mut fake);
+    let path = root.0.join(format!("local/notes-jobs/{ID}.json"));
+    let before = fs::read(&path).unwrap();
+    let codex = NotesSettings {
+        helper: Some(Helper::Codex),
+        model: "codex-choice".into(),
+        ..original
+    };
+    drain(&root.0, &codex, &mut Fake::new(vec![]));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    enqueue(&root.0, &codex, Some(Request::UseCodex));
+    let queued = fs::read(&path).unwrap();
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, Some(Helper::Codex));
+    assert_eq!(job.model, "codex-choice");
+    assert_eq!(job.request, Some(Request::FirstPart));
+    assert_eq!(job.state, JobState::Queued);
+    enqueue(&root.0, &codex, Some(Request::UseCodex));
+    assert_eq!(fs::read(&path).unwrap(), queued);
+    assert_eq!(
+        fs::read_dir(root.0.join("local/notes-jobs"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|f| f.path().extension().is_some_and(|e| e == "json"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn unavailable_linux_execution_is_terminal_and_not_a_backend_or_setup_error() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, Some(Request::MakeNotes));
+    drain(
+        &root.0,
+        &settings,
+        &mut Fake::new(vec![Err(Failure::LinuxUnavailable)]),
+    );
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.state, JobState::HelperUnavailableOnLinux);
+    assert_eq!(job.message, "HELPER_UNAVAILABLE_LINUX");
+    assert!(job.next_try_at.is_none());
 }
