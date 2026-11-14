@@ -17,6 +17,10 @@ fn worker_child() {
         }
     }
     let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
+    if mode.starts_with("deadline-") {
+        super::lifetime_tests::drive(&mode, &output);
+        return;
+    }
     if mode == "owner" {
         let inner = start("hang");
         let pid = inner.output.path().join("pid");
@@ -58,7 +62,7 @@ fn worker_child() {
     grandchild.kill().unwrap();
     grandchild.wait().unwrap();
 }
-fn command(mode: &str) -> Command {
+pub(super) fn command(mode: &str) -> Command {
     let mut c = Command::new(std::env::current_exe().unwrap());
     c.creation_flags(0x08000000)
         .args([
@@ -112,6 +116,11 @@ fn cancel_timeout_drop_reap_worker_tree() {
                 .unwrap_err();
             if mode == "timeout" {
                 assert_eq!(error.downcast_ref::<Failure>(), Some(&Failure::Timeout));
+            } else {
+                assert_eq!(
+                    error.downcast_ref::<WorkerFailure>(),
+                    Some(&WorkerFailure::Cancelled)
+                );
             }
             cancelling.join().unwrap();
             assert!(worker.child.try_wait().unwrap().is_some());
@@ -136,7 +145,10 @@ fn process_crash_preserves_completed_receipts() {
     let inflight = id(&plan, "b");
     std::fs::remove_file(path(root, &plan, &inflight, "receipt")).unwrap();
     let mut bridge = Fakes(Default::default());
-    assert!(run(root, &plan, &mut Loader("crash"), &mut bridge).is_err());
+    let error = run(root, &plan, &mut Loader("crash"), &mut bridge).unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<WorkerFailure>(), Some(WorkerFailure::Exited(status)) if status.code() == Some(7))
+    );
     for batch in plan.batches.values() {
         for id in batch.keys() {
             assert_eq!(cached(root, &plan, id), *id != inflight);
@@ -156,7 +168,7 @@ impl NativeLoader for Loader {
     }
 }
 
-fn start(mode: &str) -> Worker {
+pub(super) fn start(mode: &str) -> Worker {
     Worker::spawn(
         command(mode),
         Arc::new(AtomicBool::new(false)),
@@ -186,8 +198,19 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
     };
-    let owner = start("owner");
-    let path = owner.output.path().join("tree");
+    let output = tempfile::tempdir().unwrap();
+    let mut c = command("owner");
+    c.env_clear()
+        .env("SIDENOTE_BATCH_OUTPUT", output.path())
+        .env("SIDENOTE_BATCH_THREADS", "4");
+    for key in ["SystemRoot", "TEMP", "TMP"] {
+        if let Some(v) = std::env::var_os(key) {
+            c.env(key, v);
+        }
+    }
+    let owner_job = crate::platform::ProcessJob::new().unwrap();
+    let owner = owner_job.spawn(&c).unwrap();
+    let path = output.path().join("tree");
     let deadline = Instant::now() + Duration::from_secs(10);
     while !path.exists() {
         assert!(Instant::now() < deadline);
@@ -203,7 +226,8 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
             OwnedHandle::from_raw_handle(h)
         })
         .collect();
-    owner.child.kill().unwrap();
+    owner.kill().unwrap();
+    assert!(owner.wait_for(1000).unwrap().is_some());
     for handle in handles {
         assert_eq!(
             unsafe { WaitForSingleObject(handle.as_raw_handle(), 5000) },

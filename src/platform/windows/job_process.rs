@@ -79,11 +79,17 @@ impl JobProcess {
             .ok_or_else(|| io::Error::other("Process wait timed out"))
     }
     pub fn wait_for(&self, milliseconds: u32) -> io::Result<Option<ExitStatus>> {
-        match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), milliseconds) } {
+        Self::wait_handle(&self.handle, milliseconds)
+    }
+    pub(crate) fn wait_handle(
+        handle: &OwnedHandle,
+        milliseconds: u32,
+    ) -> io::Result<Option<ExitStatus>> {
+        match unsafe { WaitForSingleObject(handle.as_raw_handle(), milliseconds) } {
             WAIT_TIMEOUT => Ok(None),
             WAIT_OBJECT_0 => {
                 let mut code = 0;
-                if unsafe { GetExitCodeProcess(self.handle.as_raw_handle(), &mut code) } == 0 {
+                if unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) } == 0 {
                     return Err(io::Error::last_os_error());
                 }
                 Ok(Some(ExitStatus::from_raw(code)))

@@ -254,6 +254,34 @@ impl ProcessJob {
             Ok(job)
         }
     }
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        if unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0.as_raw_handle(), 1)
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    pub(crate) fn empty(&self) -> io::Result<bool> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::*;
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe {
+            QueryInformationJobObject(
+                self.0.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                std::mem::size_of_val(&info) as u32,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(info.ActiveProcesses == 0)
+    }
     pub fn attach(child: &std::process::Child) -> io::Result<Self> {
         use std::os::windows::io::AsRawHandle;
         let job = Self::new()?;

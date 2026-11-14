@@ -95,7 +95,7 @@
   "src/meeting_icon.rs": "c5dc8dd673cf14a3062dc33d30da48a882a24386fb2fb4873ce57debffa5a049",
   "src/operations.rs": "0dfc204d0fb7235730bf0e70e8e7f1f4df945e520de7fe05e0954576e31d44f9",
   "src/platform/unix.rs": "6b756fbbf44dea7241df5037d82c87e22e8549cb8165e43123592c81623ec3b9",
-  "src/platform/windows.rs": "ccef7b89567dbd4f8f0a4aab990badcf01ba261efc435f7bd657a4cf39ca3ff0",
+  "src/platform/windows.rs": "d07f17f4d7c38f665c77ced313844a616c26a07a2a322792f10d6c4728d86c47",
   "src/platform.rs": "f9a352e0cd6193102caa8e1b93aefa22ce62ab7c32503066af0fec4cd3e68421",
   "src/response_time.rs": "508cc3d4ae57ac8277982199a998f222b8c1ffc2bccd11b55920ce3152c43540",
   "src/service/schedule.rs": "7e3ea0f6e9c73326c56f73682585b8a3d4bc66b39d47c4bc9fe963efea9ae2ee",
@@ -134,8 +134,9 @@
   "src/ui/updates.rs": "a61731670c43cdf181206607b296db42c7d41fb38859bc830d3612890e292dea",
   "src/updates_windows.rs": "a58b97255666e35afcea6a2d643d1d778947e45820881017fc39fca09654c63a",
   "src/core/meeting_router/batches.rs": "733102cd74d65095556a4177399d1c3465fdce35f2556bf43fa635e045391c5f",
-  "src/core/meeting_router/batches/worker.rs": "d1bf5f17af7972a0729ba3553c45ae81e46cd1f60961b8bb9e4a147b370038cd",
-  "src/core/meeting_router/batches/worker/tests.rs": "72a6af77c238b55987d6d01cae3eaf61e229f26e4895f5f62ae7faf13121c759",
+  "src/core/meeting_router/batches/worker.rs": "a4b4d7c5577c13397749af9a0974a62c5dcec9e643aeeb446422f55b422e94a2",
+  "src/core/meeting_router/batches/worker/tests.rs": "313871c64a2d36d3bc5890a5e68c9e15fdec2f190b926408204806503ba3805e",
   "crates/sidenote-sync/src/windows_launch.rs": "2e435b57c7c43749f62b03f53c5c4e969065ca4ac9f30b451ca0e3aff407059c",
-  "src/platform/windows/job_process.rs": "7e650b62dee714f006a0626fcd007c2763b03f18b32b3734daa878b71f0f6ba1"
+  "src/platform/windows/job_process.rs": "6faf71890cd3daf9efb3b3e0713424fdff1d1f58f83a2f9a26e83ded17fe672d",
+  "src/core/meeting_router/batches/worker/lifetime_tests.rs": "a4e764b15e04a9a7d2c8b92586dd24b897c74ff5b5030f93a7e29083210e7feb"
 }
