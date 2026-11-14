@@ -218,7 +218,9 @@ pub fn scripts_policy() -> &'static str {
         Err(e)
             if matches!(
                 e.kind(),
-                io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput
+                io::ErrorKind::InvalidData
+                    | io::ErrorKind::InvalidInput
+                    | io::ErrorKind::UnexpectedEof
             ) =>
         {
             "settings_invalid"
