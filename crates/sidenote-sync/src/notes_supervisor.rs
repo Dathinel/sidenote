@@ -19,6 +19,8 @@ pub enum Failure {
     Replay,
     BeforeReady,
     CgroupBudgetUnavailable,
+    CgroupIsolationUnavailable,
+    CgroupCleanupTimeout,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stage {
@@ -127,6 +129,13 @@ impl Pipes {
     }
 }
 #[derive(Default)]
+pub struct CgroupIsolation(bool); // Layer 2 must prove no cgroupfs mount or inherited cgroup FDs.
+#[derive(Default)]
+pub struct JobSetup {
+    pub child: Option<Child>,
+    pub isolation: CgroupIsolation,
+}
+#[derive(Default)]
 pub struct Supervisor {
     seen: BTreeSet<u128>,
     busy: bool,
@@ -139,25 +148,29 @@ impl Supervisor {
         self.owned.as_ref().and_then(Child::id)
     }
     pub async fn finish(&mut self) -> Result<(), Failure> {
-        self.busy = false;
         if let Some(leaf) = &self.leaf {
             leaf.kill()?;
         }
-        if let Some(mut child) = self.owned.take() {
+        if let Some(child) = self.owned.as_mut() {
             let killed = child.start_kill();
-            killed.and(child.wait().await.map(|_| ())).map_err(io)?;
+            let reaped = timeout(DEADLINE, child.wait())
+                .await
+                .map_err(|_| Failure::CgroupCleanupTimeout)?;
+            killed.and(reaped.map(|_| ())).map_err(io)?;
+            self.owned = None;
         }
         if let Some(leaf) = &self.leaf {
-            leaf.remove()?;
+            leaf.remove().await?;
             self.leaf = None;
         }
+        self.busy = false;
         Ok(())
     }
     pub async fn run(
         &mut self,
         pipes: &mut Pipes,
         unit: &str,
-        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<Option<Child>, Failure>,
+        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<JobSetup, Failure>,
     ) -> Result<String, Failure> {
         if self.budget.is_none() {
             self.budget = Some(super::notes_cgroup::Budget::prepare(unit)?);
@@ -167,7 +180,7 @@ impl Supervisor {
     async fn exchange(
         &mut self,
         pipes: &mut Pipes,
-        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<Option<Child>, Failure>,
+        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<JobSetup, Failure>,
     ) -> Result<String, Failure> {
         let result = async {
             let Frame::Begin((nonce, stage, model)) = pipes.read().await? else {
@@ -184,13 +197,17 @@ impl Supervisor {
             if let Some(budget) = &self.budget {
                 self.leaf = Some(budget.job(nonce)?);
             }
-            self.owned = setup(
+            let prepared = setup(
                 stage,
                 model,
                 self.leaf
                     .as_ref()
                     .map_or(std::path::Path::new(""), |l| &l.0),
             )?;
+            self.owned = prepared.child;
+            if !prepared.isolation.0 {
+                return Err(Failure::CgroupIsolationUnavailable);
+            }
             if let (Some(leaf), Some(pid)) = (&self.leaf, self.owned_pid()) {
                 leaf.contains(pid)?;
             }
@@ -217,6 +234,12 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn isolated(child: Option<Child>) -> JobSetup {
+        JobSetup {
+            child,
+            isolation: CgroupIsolation(true),
+        }
+    }
     fn pair() -> (Pipes, Pipes) {
         let (tx, rx) = tokio::net::unix::pipe::pipe().unwrap();
         let (tx2, rx2) = tokio::net::unix::pipe::pipe().unwrap();
@@ -225,7 +248,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn contract() {
         let deny = |_, _, _: &std::path::Path| panic!("no launch");
-        let stub = |_, _, _: &std::path::Path| Ok(None);
+        let stub = |_, _, _: &std::path::Path| Ok(isolated(None));
         let begin = Frame::Begin((1, Stage::Title, Model::ClaudeSonnet55));
         let mut bytes = encode(&begin).unwrap();
         let mut bad = vec![vec![], vec![2], vec![1], vec![1, b'{']];
@@ -324,8 +347,10 @@ mod tests {
                     server.write(&material).await.unwrap();
                 }
             };
-            let (result, _) =
-                tokio::join!(s.exchange(&mut host, |_, _, _| Ok(Some(child))), client);
+            let (result, _) = tokio::join!(
+                s.exchange(&mut host, |_, _, _| Ok(isolated(Some(child)))),
+                client
+            );
             assert_eq!(result, Err(Failure::BeforeReady));
             assert_eq!(s.owned_pid(), None);
             let reaped = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 1) };
@@ -356,5 +381,18 @@ mod tests {
         };
         let (result, _) = tokio::join!(host.read(), send);
         assert_eq!(result, Ok(begin));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn isolation_required_before_ready() {
+        let (mut host, mut server) = pair();
+        server
+            .write(&Frame::Begin((1, Stage::Title, Model::ClaudeSonnet55)))
+            .await
+            .unwrap();
+        let result = Supervisor::default()
+            .exchange(&mut host, |_, _, _| Ok(JobSetup::default()))
+            .await;
+        assert_eq!(result, Err(Failure::CgroupIsolationUnavailable));
+        assert_eq!(server.read().await, Err(Failure::Deadline));
     }
 }
