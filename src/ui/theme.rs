@@ -158,7 +158,10 @@ pub fn kit(p: &Palette) -> Kit {
 pub const BODY: f32 = 16.0;
 pub const BODY_LH: f32 = 27.0;
 
-/// Bundled Inter keeps title metrics consistent on Windows and Linux.
+/// Windows keeps its existing Georgia title face and Inter fallback.
+#[cfg(windows)]
+const DISPLAY: Family = Family::Named("Georgia");
+#[cfg(not(windows))]
 const DISPLAY: Family = Family::Named("Inter");
 
 pub fn display(size: f32) -> TextStyle {
@@ -167,13 +170,33 @@ pub fn display(size: f32) -> TextStyle {
         .lh((size * 1.25).round())
 }
 
-/// All desktop text uses the repo's licensed Inter fonts, independent of OS font folders.
+/// Linux uses only the repo's licensed Inter fonts.
+#[cfg(not(windows))]
 pub fn fonts() -> &'static [&'static [u8]] {
     &[
         include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
         include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
         include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
     ]
+}
+
+/// Preserve the Windows Georgia load and its existing Inter fallback.
+#[cfg(windows)]
+pub fn fonts() -> &'static [&'static [u8]] {
+    let mut list: Vec<&'static [u8]> = vec![
+        include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
+        include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
+        include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
+    ];
+    let dir = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "C:\\Windows".into())
+        .join("Fonts");
+    if let Ok(bytes) = std::fs::read(dir.join("georgia.ttf")) {
+        // Read once at startup and kept for the life of the process, as Rune requires.
+        list.push(Box::leak(bytes.into_boxed_slice()));
+    }
+    Box::leak(list.into_boxed_slice())
 }
 
 #[cfg(test)]

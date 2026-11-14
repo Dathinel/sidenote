@@ -15,7 +15,8 @@ RUSTUP_TOOLCHAIN=stable cargo clippy --no-default-features --features desktop --
 
 The compositor/window manager places the Linux window; Rune's portable center request
 is used where supported. The compositor supplies the window icon until Linux packaging.
-Bundled, OFL-licensed Inter supplies titles and body text on both Windows and Linux.
+Bundled, OFL-licensed Inter supplies Linux titles and body text. Windows keeps its
+existing Georgia title loading, with Inter as the fallback when Georgia is unavailable.
 
 An OS-held lock in an owner-checked 0700 user namespace excludes a second desktop
 process for the same canonical data directory (SHA-256 key). XDG_RUNTIME_DIR is used
