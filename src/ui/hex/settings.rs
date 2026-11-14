@@ -21,6 +21,7 @@ pub struct Settings {
     back: Option<ReturnTo>,
     pub advanced: HashSet<&'static str>,
     pub highlighted: Option<(String, Instant)>,
+    pub highlight_clock: Option<(Instant, f64)>,
     pub saved: Option<Instant>,
     pub helper_query: TextEdit,
     pub model_query: TextEdit,
@@ -293,7 +294,7 @@ pub fn tick(s: &mut State) -> bool {
         .shell
         .highlighted
         .as_ref()
-        .is_some_and(|(_, until)| Instant::now() >= *until)
+        .is_some_and(|(_, until)| highlight_now(s) >= *until)
     {
         s.hex.shell.highlighted = None;
         changed = true;
@@ -309,12 +310,21 @@ pub fn tick(s: &mut State) -> bool {
     }
     changed
 }
+pub(crate) fn highlight_now(s: &State) -> Instant {
+    // Headless deadlines follow Rune's virtual clock; live input keeps its wall-clock timing.
+    s.hex
+        .shell
+        .highlight_clock
+        .map_or_else(Instant::now, |(start, clock)| {
+            start + Duration::from_secs_f64(clock)
+        })
+}
 pub(crate) fn highlight(s: &State, key: &str, p: Palette) -> Color {
     if s.hex
         .shell
         .highlighted
         .as_ref()
-        .is_some_and(|(id, until)| id == key && Instant::now() < *until)
+        .is_some_and(|(id, until)| id == key && highlight_now(s) < *until)
     {
         p.hit
     } else {
@@ -326,7 +336,7 @@ pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
         .shell
         .highlighted
         .as_ref()
-        .is_some_and(|(id, until)| id == key && Instant::now() < *until)
+        .is_some_and(|(id, until)| id == key && highlight_now(s) < *until)
     {
         p.hit
     } else {
@@ -1066,7 +1076,7 @@ fn jump(s: &mut State, dest: Destination) {
     if dest.key == "hex-vocabulary" {
         s.hex.open_groups.insert("vocabulary-edit");
     }
-    s.hex.shell.highlighted = Some((dest.key.clone(), Instant::now() + Duration::from_secs(2)));
+    s.hex.shell.highlighted = Some((dest.key.clone(), highlight_now(s) + Duration::from_secs(2)));
     super::super::scene_scroll(s, &dest.key);
 }
 

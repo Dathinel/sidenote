@@ -1725,8 +1725,16 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
     }
     (changed, events)
 }
-fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
+fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
     let headless = rune::tooling::headless_run().is_some();
+    if headless {
+        let (_, now) = s
+            .hex
+            .shell
+            .highlight_clock
+            .get_or_insert_with(|| (Instant::now(), 0.0));
+        *now = clock;
+    }
     let (mut changed, _) = apply_pending(s, headless);
     if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
         s.show_toast(message, tx);
@@ -1781,10 +1789,15 @@ fn poll(s: &mut State, _clock: f64, tx: &mut Tx) -> bool {
         .shell
         .highlighted
         .as_ref()
-        .map(|(_, until)| *until)
-        .or(s.hex.shell.saved)
+        .map(|(_, until)| until.saturating_duration_since(hex::settings::highlight_now(s)))
+        .or_else(|| {
+            s.hex
+                .shell
+                .saved
+                .map(|until| until.saturating_duration_since(Instant::now()))
+        })
     {
-        tx.wake_after(until.saturating_duration_since(Instant::now()));
+        tx.wake_after(until);
     }
     if let Some(id) = s.live_ready.take() {
         s.select(&id, tx);
