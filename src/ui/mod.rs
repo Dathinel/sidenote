@@ -2643,6 +2643,7 @@ pub fn spec() -> AppSpec<State> {
     AppSpec {
         min_size: Some((360.0, 480.0)),
         fonts: theme::fonts(),
+        families: (theme::SANS, "Inter"),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),

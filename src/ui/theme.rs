@@ -170,6 +170,14 @@ pub fn display(size: f32) -> TextStyle {
         .lh((size * 1.25).round())
 }
 
+/// The sans list. Inter draws Latin. Windows ships Nirmala UI, which draws Telugu and
+/// Devanagari, so text in those scripts, such as the Telugu examples in the translation prompt,
+/// shows letters and not empty boxes. Rune has no Telugu fallback of its own.
+#[cfg(windows)]
+pub const SANS: &str = "Inter, Nirmala UI";
+#[cfg(not(windows))]
+pub const SANS: &str = "Inter";
+
 /// Linux uses only the repo's licensed Inter fonts.
 #[cfg(not(windows))]
 pub fn fonts() -> &'static [&'static [u8]] {
@@ -180,7 +188,8 @@ pub fn fonts() -> &'static [&'static [u8]] {
     ]
 }
 
-/// Preserve the Windows Georgia load and its existing Inter fallback.
+/// Preserve the Windows Georgia load and its existing Inter fallback, and add Nirmala UI for
+/// the scripts Inter lacks.
 #[cfg(windows)]
 pub fn fonts() -> &'static [&'static [u8]] {
     let mut list: Vec<&'static [u8]> = vec![
@@ -192,9 +201,11 @@ pub fn fonts() -> &'static [&'static [u8]] {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "C:\\Windows".into())
         .join("Fonts");
-    if let Ok(bytes) = std::fs::read(dir.join("georgia.ttf")) {
-        // Read once at startup and kept for the life of the process, as Rune requires.
-        list.push(Box::leak(bytes.into_boxed_slice()));
+    for file in ["georgia.ttf", "nirmala.ttc"] {
+        if let Ok(bytes) = std::fs::read(dir.join(file)) {
+            // Read once at startup and kept for the life of the process, as Rune requires.
+            list.push(Box::leak(bytes.into_boxed_slice()));
+        }
     }
     Box::leak(list.into_boxed_slice())
 }
@@ -202,6 +213,12 @@ pub fn fonts() -> &'static [&'static [u8]] {
 #[cfg(test)]
 mod quiet_ink_switch_tests {
     use super::*;
+
+    #[test]
+    fn the_sans_list_keeps_inter_first_and_names_a_telugu_font_on_windows() {
+        assert!(SANS.starts_with("Inter"));
+        assert_eq!(SANS.contains("Nirmala UI"), cfg!(windows));
+    }
 
     #[test]
     fn off_switches_keep_a_light_knob_in_both_themes() {

@@ -950,7 +950,8 @@ pub(super) fn scene_config(config: &mut Config) {
     models.insert("te".into(), "synthetic-te-model".into());
     config.engine_settings.stages.title_model = "synthetic-title-model".into();
     config.engine_settings.steps.tasks = false;
-    let prompt = "Synthetic notes instructions for the render.";
+    // A Telugu and a Hindi word, so the render shows both scripts drawing as letters.
+    let prompt = "Telugu \u{c24}\u{c46}\u{c32}\u{c41}\u{c17}\u{c41}, Hindi \u{939}\u{93f}\u{928}\u{94d}\u{926}\u{940}. Synthetic notes instructions for the render.";
     config.engine_settings.notes_prompt = Some(prompt.into());
     let route = ProviderRoute {
         provider: "local".into(),
