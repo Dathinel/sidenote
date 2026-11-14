@@ -169,7 +169,12 @@ fn pipeline_in(
             }
             script
         }
-        crate::core::notes::Engine::Off => return Ok(()),
+        crate::core::notes::Engine::Off => {
+            if let Some(id) = meeting_id {
+                log(&format!("notes engine=off meeting={id}"));
+            }
+            return Ok(());
+        }
     };
     if !script.is_file() {
         log(crate::core::live::NOTES_UNAVAILABLE);
@@ -192,6 +197,7 @@ fn pipeline_in(
         folders = legacy_script_folders(meetings, meeting_id).at(Stage::CatchUpMeetings)?;
     }
     command
+        .env("SIDENOTE_DATA_DIR", state)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     let child = command.spawn().at(Stage::CatchUpScriptCommand);

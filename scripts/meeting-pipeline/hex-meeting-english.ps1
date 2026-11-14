@@ -18,6 +18,9 @@ param(
 )
 $promptDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
+$notesEngine = Get-ScriptsNotesEngine
+if ($notesEngine -cne 'scripts') { Write-Output "notes skipped engine=$notesEngine"; return }
+
 $glossaryFile = Join-Path $env:USERPROFILE '.config\hex\meeting-glossary.txt'
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +28,7 @@ $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encodin
 $pipelineStage = 'pipeline'; $pipelineDeadline = 0
 $pipelineStep = [Diagnostics.Stopwatch]::StartNew()
 $temp = $null
+$notesClaim = $null
 try {
 $total = [Diagnostics.Stopwatch]::StartNew()
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -37,6 +41,10 @@ if (-not $MeetingDir) {
 }
 $dir = Get-Item -LiteralPath $MeetingDir
 if (-not $dir.PSIsContainer) { throw "MeetingDir is not a folder: $MeetingDir" }
+$notesClaim = Enter-NotesEngine $dir.FullName
+if ($null -eq $notesClaim) { Write-Output 'notes deferred engine busy'; return }
+if ($dir.Name -cmatch '\A[0-9][0-9-]{0,99}\z') { Write-Output "notes engine=scripts meeting=$($dir.Name)" }
+
 # Quick title (a cheap, fast model, a few seconds) before translation, so the app can name the meeting
 # early. hex-meeting-watch.ps1 usually has done this already, and the script then skips. It never
 # fails the notes: any problem is one log line.
@@ -280,5 +288,6 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
 } catch {
     throw (Get-PipelineFailure $_ $pipelineStage $pipelineDeadline $pipelineStep.Elapsed.TotalSeconds)
 } finally {
+    if ($null -ne $notesClaim) { $notesClaim.Dispose() }
     if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
 }

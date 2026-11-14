@@ -79,3 +79,25 @@ function Read-HexPrompt([string]$Path) {
     }
     return $text
 }
+
+function Enter-NotesEngine([string]$MeetingDir) {
+    # FileShare.None matches store_io::lock. The OS expires ownership on process death.
+    try {
+        return [IO.File]::Open((Join-Path $MeetingDir '.notes-engine.lock'),
+            [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    } catch [IO.IOException] {
+        if (($_.Exception.HResult -band 0xffff) -in @(32,33)) { return $null }
+        throw
+    }
+}
+
+function Get-ScriptsNotesEngine {
+    try {
+        $state = if ($env:SIDENOTE_DATA_DIR) { $env:SIDENOTE_DATA_DIR }
+                 elseif ($env:SIDENOTE_STATE_DIR) { $env:SIDENOTE_STATE_DIR }
+                 else { Join-Path $env:APPDATA 'hex-meetings' }
+        $config = [IO.File]::ReadAllText((Join-Path $state 'config.json')) | ConvertFrom-Json
+        if ($config.notes.engine -cin @('app','scripts','off')) { return [string]$config.notes.engine }
+    } catch {} # Missing or unreadable settings never authorize scripts.
+    return 'off'
+}

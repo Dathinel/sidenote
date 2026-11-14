@@ -249,6 +249,19 @@ fn process(
 ) -> io::Result<()> {
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
+    // Both engines hold this OS lock until publication finishes; a crash releases it immediately.
+    let _claim = match store_io::lock(&folder.join(".notes-engine.lock")) {
+        Ok(claim) => claim,
+        Err(e)
+            if matches!(e.raw_os_error(), Some(32 | 33))
+                || e.kind() == io::ErrorKind::WouldBlock =>
+        {
+            let _ = log(root, id, "notes deferred engine busy");
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Err(e) => return Err(e),
+    };
+    let _ = log(root, id, &format!("notes engine=app meeting={id}"));
     let m = manifest(&folder)?;
     if m["status"] != "complete" {
         return write(
@@ -485,7 +498,7 @@ fn process(
             answer.fallback,
         ));
         let bytes = serde_json::to_vec_pretty(&summary)?;
-        // An external scripts process may still finish while the helper is running.
+        // Publication also preserves a summary written before this engine acquired the lock.
         let settle = core::settle::Store::new(
             root.to_owned(),
             folder

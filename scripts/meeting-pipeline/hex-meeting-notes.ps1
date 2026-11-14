@@ -11,6 +11,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
+$notesEngine = Get-ScriptsNotesEngine
+if ($notesEngine -cne 'scripts') { Write-Output "notes skipped engine=$notesEngine"; return }
+
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $text = [IO.File]::ReadAllText($InputFile, $utf8)
 

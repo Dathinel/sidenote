@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:APPDATA 'hex\meetings'
 $log = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
 function Log($text) { Add-Content -LiteralPath $log -Value "$(Get-Date -Format s) $text" -Encoding utf8 }
+$notesEngine = Get-ScriptsNotesEngine
+if ($notesEngine -cne 'scripts') { Log "notes skipped engine=$notesEngine"; return }
 
 $watcherClock = [Diagnostics.Stopwatch]::StartNew()
 $failed = $null
@@ -44,8 +46,12 @@ try {
         Log 'start'
         $pipelineClock = [Diagnostics.Stopwatch]::StartNew()
         try {
+            $deferred = $false
             & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName *>&1 | ForEach-Object {
                 $line = "$_"
+                if ($line -ceq 'notes deferred engine busy' -or $line -cmatch '\Anotes skipped engine=(app|off)\z') { $deferred = $true; Log $line }
+                if ($line -cmatch '\Anotes engine=scripts meeting=[0-9][0-9-]{0,99}\z') { Log $line }
+
                 if ($line.StartsWith('pipeline-failure ')) {
                     Log (Get-PipelineFailure ([Management.Automation.ErrorRecord]::new([Exception]::new($line), 'Pipeline', 'NotSpecified', $null)))
                 }
@@ -60,6 +66,7 @@ try {
                     }
                 }
             }
+            if ($deferred) { continue }
             Remove-Item -LiteralPath $failed -ErrorAction SilentlyContinue
             Log 'done'
         } catch {
