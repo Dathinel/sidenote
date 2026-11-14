@@ -179,3 +179,29 @@ fn lifecycle_corruption_deleted_and_incomplete_inputs_fail_closed() {
         Err(Error::Cursor(_))
     ));
 }
+
+#[test]
+fn full_listing_prunes_only_absent_receipts_and_preserves_partial_inputs_on_restart() {
+    use super::folders::Discovery;
+    let (root, meetings, cursor) = fixture();
+    let discovery = || Discovery::new(meetings.clone()).unwrap();
+    let mut session = Session::open(discovery(), cursor.clone()).unwrap();
+    session.drain(|_| Ok(())).unwrap();
+    fs::remove_dir_all(meetings.join("99-1")).unwrap();
+    let transcript = meetings.join("100-1/transcript.ndjson");
+    fs::remove_file(&transcript).unwrap();
+    session.drain(|_| panic!("partial input")).unwrap();
+    let receipts: Cursor = store_io::read(&cursor).unwrap();
+    assert_eq!(receipts.delivered, BTreeSet::from(["100-1".into()]));
+    fs::rename(&meetings, root.path().join("hidden")).unwrap();
+    assert_eq!(session.drain(|_| panic!("offline")), Err(Error::Offline));
+    let receipts: Cursor = store_io::read(&cursor).unwrap();
+    assert_eq!(receipts.delivered, BTreeSet::from(["100-1".into()]));
+    fs::rename(root.path().join("hidden"), &meetings).unwrap();
+    fs::write(transcript, b"{\"text\":\"synthetic restored\"}\n").unwrap();
+    drop(session);
+    Session::open(discovery(), cursor)
+        .unwrap()
+        .drain(|_| panic!("retained input replayed after restart"))
+        .unwrap();
+}

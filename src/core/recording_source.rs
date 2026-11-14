@@ -77,13 +77,19 @@ impl CompletedMeeting {
     }
 }
 
-/// Future adapters may subscribe before catch-up here. Poll must replay unacknowledged IDs;
+/// Completed inputs and an optional full listing, including incomplete inputs, for receipt retention.
+pub type CatchUp = (Vec<CompletedMeeting>, Option<BTreeSet<String>>);
+
+/// Adapters subscribe before catch-up here. Poll must replay unacknowledged IDs;
 /// neither a timestamp high-water mark nor a transient event stream is sufficient.
 pub trait Source {
     fn start(&mut self) -> Result<(), Error> {
         Ok(())
     }
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error>;
+    fn catch_up(&mut self) -> Result<CatchUp, Error> {
+        Ok((self.poll()?, None))
+    }
     fn stop(&mut self) {}
 }
 
@@ -110,6 +116,11 @@ impl<S: Source> Session<S> {
         })
     }
 
+    /// Subscription/control availability remains observable while folder fallback runs.
+    pub fn source(&self) -> &S {
+        &self.source
+    }
+
     pub fn drain(
         &mut self,
         mut enqueue: impl FnMut(&CompletedMeeting) -> io::Result<()>,
@@ -121,7 +132,15 @@ impl<S: Source> Session<S> {
             .map_err(|e| Error::Cursor(e.kind()))?;
         let mut cursor: Cursor =
             store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
-        for meeting in self.source.poll()? {
+        let (meetings, retained) = self.source.catch_up()?;
+        if let Some(ids) = retained {
+            let before = cursor.delivered.len();
+            cursor.delivered.retain(|id| ids.contains(id));
+            if cursor.delivered.len() != before {
+                store_io::write(&self.cursor, &cursor).map_err(|e| Error::Cursor(e.kind()))?;
+            }
+        }
+        for meeting in meetings {
             if cursor.delivered.contains(meeting.id()) {
                 continue;
             }
@@ -149,6 +168,7 @@ impl<S: Source> Drop for Session<S> {
     }
 }
 
+pub mod events;
 pub mod folders;
 #[cfg(test)]
 mod tests;
