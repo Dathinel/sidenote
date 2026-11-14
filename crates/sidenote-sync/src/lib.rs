@@ -14,7 +14,7 @@ pub mod notes_cgroup;
 pub mod notes_supervisor;
 pub mod pairing;
 #[cfg(target_os = "linux")]
-mod pid_worker;
+pub mod pid_worker;
 mod preflight;
 #[cfg(target_os = "linux")]
 mod secure_store;
