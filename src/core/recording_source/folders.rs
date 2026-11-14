@@ -1,21 +1,40 @@
-//! Existing Windows folder discovery; no Linux Hex root or event API is introduced here.
+//! Shared completed-folder discovery. Configuration is explicit; no API credentials are read.
 use super::{CompletedMeeting, Error, Source};
-use std::{fs, io, path::PathBuf};
+use crate::core::meeting_router::inputs::Snapshot;
+use std::{
+    io,
+    path::{Component, PathBuf},
+};
 
-pub(crate) struct Discovery(pub PathBuf);
+pub struct Discovery(pub(crate) PathBuf);
+impl Discovery {
+    /// An explicitly selected meetings folder, e.g. Sidenote's --meetings-dir.
+    pub fn new(meetings: PathBuf) -> Result<Self, Error> {
+        if !meetings.is_absolute() || meetings.components().any(|c| c == Component::ParentDir) {
+            return Err(Error::InvalidInput);
+        }
+        Ok(Self(meetings))
+    }
+
+    /// Hex 7681742 stores meetings below its application support directory on both OSes.
+    /// Pass the configured HEX_APPLICATION_SUPPORT_DIR, or the caller's selected data root
+    /// (on Linux, XDG_DATA_HOME/hex or HOME/.local/share/hex). No environment is inferred here.
+    pub fn hex_support(application_support: PathBuf) -> Result<Self, Error> {
+        Self::new(application_support.join("meetings"))
+    }
+}
 impl Source for Discovery {
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error> {
-        let entries = fs::read_dir(&self.0).map_err(|e| match e.kind() {
+        let entries = Snapshot::meeting_names(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
         })?;
         let mut completed = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| Error::Input(e.kind()))?;
-            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+        for name in entries {
+            let Some(id) = name.to_str() else {
                 continue;
             };
-            match CompletedMeeting::capture(&self.0, &id) {
+            match CompletedMeeting::capture(&self.0, id) {
                 Ok(meeting) => completed.push(meeting),
                 // A deleted, growing or temporarily locked folder cannot starve other meetings.
                 Err(Error::InvalidInput | Error::Incomplete | Error::Input(_)) => {}
@@ -31,6 +50,7 @@ impl Source for Discovery {
 mod tests {
     use super::*;
     use crate::core::recording_source::Session;
+    use std::fs;
 
     #[test]
     fn folder_scan_and_repeated_event_wakeups_share_the_durable_cursor() {
@@ -126,3 +146,6 @@ mod tests {
         fs::remove_dir_all(folder).unwrap();
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests;

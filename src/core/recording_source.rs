@@ -137,7 +137,6 @@ impl<S: Source> Drop for Session<S> {
     }
 }
 
-#[cfg(any(windows, test))]
-pub(crate) mod legacy;
+pub mod folders;
 #[cfg(test)]
 mod tests;

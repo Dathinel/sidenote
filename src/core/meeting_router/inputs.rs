@@ -186,6 +186,21 @@ pub(crate) struct Snapshot {
     pub windows: serde_json::Value,
 }
 impl Snapshot {
+    pub(crate) fn meeting_names(path: &Path) -> io::Result<Vec<std::ffi::OsString>> {
+        let directory = Directory::open(path)?;
+        // Linux enumeration follows the pinned descriptor, not a replaceable root pathname.
+        #[cfg(target_os = "linux")]
+        let enumeration =
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.base.as_raw_fd()));
+        #[cfg(not(target_os = "linux"))]
+        let enumeration = path;
+        let names = fs::read_dir(enumeration)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect();
+        drop(directory);
+        names
+    }
+
     pub(crate) fn open_file(path: &Path) -> io::Result<fs::File> {
         let mut directory = Directory::open(path.parent().ok_or_else(invalid)?)?;
         let name = path

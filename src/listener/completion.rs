@@ -204,7 +204,7 @@ mod tests {
         .unwrap();
         let cursor = f.root.path().join("source.json");
         let mut session = Session::open(
-            core::recording_source::legacy::Discovery(f.meetings.clone()),
+            core::recording_source::folders::Discovery(f.meetings.clone()),
             cursor.clone(),
         )
         .unwrap();
@@ -232,7 +232,7 @@ mod tests {
         let saved: serde_json::Value = store_io::read(&cursor).unwrap();
         assert_eq!(saved["delivered"], serde_json::json!(["100-2"]));
         Session::open(
-            core::recording_source::legacy::Discovery(f.meetings.clone()),
+            core::recording_source::folders::Discovery(f.meetings.clone()),
             cursor,
         )
         .unwrap()
