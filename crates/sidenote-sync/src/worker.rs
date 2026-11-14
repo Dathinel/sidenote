@@ -21,6 +21,18 @@ use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[derive(Debug)]
+pub struct WorkerLaunch(pub Option<i32>);
+impl std::fmt::Display for WorkerLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(code) => write!(f, "worker_launch:os:{code}"),
+            None => f.write_str("worker_launch"),
+        }
+    }
+}
+impl std::error::Error for WorkerLaunch {}
+
 pub const MEMORY_LIMIT: usize = 512 * 1024 * 1024;
 pub const MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 fn load_timeout(bytes: usize) -> Duration {
@@ -591,7 +603,11 @@ mod platform {
             CREATE_SUSPENDED,
             None,
         )
-        .map_err(|_| Failure(Reason::WorkerUnavailable))?;
+        .map_err(|e| {
+            let error = WorkerLaunch(e.raw_os_error());
+            eprintln!("sync {error}");
+            anyhow::Error::new(error).context(Failure(Reason::WorkerUnavailable))
+        })?;
         let assigned =
             unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), handle.as_raw_handle()) };
         if assigned == 0 {

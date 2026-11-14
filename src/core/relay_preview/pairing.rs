@@ -7,6 +7,29 @@ use std::{
 
 pub const TIMED_OUT: &str = "Pairing timed out. Start again on both devices.";
 pub const UNCONFIRMED: &str = "The other device may have joined. Check it. If you don't trust it, turn off relay sync on all devices and pair again.";
+fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
+    let category = if error.is::<tokio::time::error::Elapsed>() {
+        stage = "timeout";
+        "deadline".into()
+    } else if let Some(error) = error.downcast_ref::<sidenote_sync::worker::WorkerLaunch>() {
+        error.to_string()
+    } else if let Some(error) = error.chain().find_map(|e| e.downcast_ref::<io::Error>()) {
+        error.raw_os_error().map_or_else(
+            || format!("io:{:?}", error.kind()),
+            |code| format!("os:{code}"),
+        )
+    } else {
+        "protocol".into()
+    };
+    if stage != "timeout"
+        && let Some(marker) = error.downcast_ref::<protocol::FailureStage>()
+    {
+        stage = marker.0;
+    }
+    eprintln!("pairing failed at {stage} ({category})");
+    Update::Failed { stage, category }
+}
+
 static ATTEMPT: AtomicU64 = AtomicU64::new(1);
 struct Reply {
     attempt: u64,
@@ -34,8 +57,8 @@ async fn await_confirmation(
 ) -> bool {
     match confirmation_reply(attempt, replies).await {
         Ok(accepted) => accepted,
-        Err(_) => {
-            let _ = events.send(Update::TimedOut);
+        Err(error) => {
+            let _ = events.send(failure("timeout", &error.into()));
             let _ = cancel.send(true);
             false
         }
@@ -56,7 +79,10 @@ pub enum Update {
     Ready,
     TimedOut,
     Unconfirmed,
-    Failed,
+    Failed {
+        stage: &'static str,
+        category: String,
+    },
 }
 
 pub struct Pairing {
@@ -113,9 +139,12 @@ pub fn start(
             .worker_threads(2)
             .enable_all()
             .build();
-        let Ok(runtime) = runtime else {
-            let _ = events.send(Update::Failed);
-            return;
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = events.send(failure("exchange", &error.into()));
+                return;
+            }
         };
         runtime.block_on(async move {
             let confirmed_peer = Arc::new(Mutex::new(None::<Confirmation>));
@@ -154,6 +183,7 @@ pub fn start(
                 }
             };
             let mut receipt = Receipt::Confirmed;
+            let mut stage = "exchange";
             let operation = async {
                 let group = if let Some(code) = join {
                     protocol::join_named(&relay, &code, &preview.device, &name, confirm).await?
@@ -170,15 +200,18 @@ pub fn start(
                     let grant = host
                         .accept_named(&preview.device, Some(existing), &name, confirm)
                         .await?;
+                    stage = "receipt";
                     receipt = grant.receipt;
                     anyhow::ensure!(receipt != Receipt::NotSent, "pairing receipt missing");
                     grant.group
                 };
+                stage = "confirm";
                 let peer = confirmed_peer
                     .lock()
                     .map_err(|_| anyhow::anyhow!("confirmation unavailable"))?
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("confirmation missing"))?;
+                stage = "adopt";
                 preview
                     .adopt(&group, &peer, receipt)
                     .map_err(anyhow::Error::from)?;
@@ -190,10 +223,10 @@ pub fn start(
             }
             let _ = events.send(if receipt == Receipt::Unknown {
                 Update::Unconfirmed
-            } else if result.is_ok() {
-                Update::Ready
+            } else if let Err(error) = result {
+                failure(stage, &error)
             } else {
-                Update::Failed
+                Update::Ready
             });
         });
     });
@@ -210,6 +243,20 @@ pub fn start(
 #[cfg(test)]
 mod security_tests {
     use super::*;
+    #[test]
+    fn failure_categories_suppress_private_error_text() {
+        let io = io::Error::new(io::ErrorKind::PermissionDenied, "private path key");
+        let launch = sidenote_sync::worker::WorkerLaunch(Some(5));
+        for (error, expected) in [
+            (anyhow::anyhow!("private code"), "protocol"),
+            (io.into(), "io:PermissionDenied"),
+            (launch.into(), "worker_launch:os:5"),
+        ] {
+            assert!(
+                matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category } if category == expected)
+            );
+        }
+    }
     #[tokio::test(start_paused = true)]
     async fn confirmation_timeout_ends_job_and_expired_replies_cannot_approve_next_prompt() {
         let (send, mut replies) = tokio::sync::mpsc::unbounded_channel();
@@ -217,7 +264,9 @@ mod security_tests {
         let (cancel, cancelled) = tokio::sync::watch::channel(false);
         assert!(!await_confirmation(1, &mut replies, &events, &cancel).await);
         assert!(*cancelled.borrow());
-        assert!(matches!(updates.try_recv(), Ok(Update::TimedOut)));
+        assert!(
+            matches!(updates.try_recv(), Ok(Update::Failed { stage: "timeout", category }) if category == "deadline")
+        );
         send.send(Reply {
             attempt: 1,
             accept: true,

@@ -21,6 +21,14 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[derive(Debug)]
+pub struct FailureStage(pub &'static str);
+impl std::fmt::Display for FailureStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for FailureStage {}
 pub const INVITATION_TTL: Duration = Duration::from_secs(600);
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(150);
 
@@ -225,7 +233,7 @@ where
                 })
             }
             Ok(Err(error)) => Err(error),
-            Err(_) => bail!("pairing attempt timed out"),
+            Err(error) => Err(anyhow::Error::from(error).context("pairing attempt timed out")),
         }
     })
     .await;
@@ -233,7 +241,7 @@ where
         Ok(Ok(grant)) => Ok(grant),
         _ if granted.is_some() => Ok(granted.take().context("missing grant")?),
         Ok(Err(error)) => Err(error),
-        Err(_) => bail!("invitation expired"),
+        Err(error) => Err(anyhow::Error::from(error).context("invitation expired")),
     }
 }
 
@@ -324,7 +332,7 @@ where
         Ok(Ok(group)) => Ok(group),
         _ if stored.is_some() => Ok(stored.take().context("missing stored grant")?),
         Ok(Err(error)) => Err(error),
-        Err(_) => bail!("pairing timed out"),
+        Err(error) => Err(anyhow::Error::from(error).context("pairing timed out")),
     }
 }
 
@@ -519,10 +527,17 @@ where
     .await;
     channel
         .send(transport, if accepted { b"confirmed" } else { b"rejected" })
-        .await?;
+        .await
+        .context(FailureStage("confirm"))?;
     ensure!(
-        accepted && channel.recv(transport).await?.as_slice() == b"confirmed",
-        "confirmation declined"
+        accepted
+            && channel
+                .recv(transport)
+                .await
+                .context(FailureStage("confirm"))?
+                .as_slice()
+                == b"confirmed",
+        FailureStage("confirm")
     );
     if let Side::Host { group, grant, .. } = side {
         let mut group = group.clone();

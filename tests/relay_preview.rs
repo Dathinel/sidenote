@@ -275,6 +275,13 @@ fn status(app: &mut App, phase: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let value = app.request(json!({"op":"status"}));
+        assert!(
+            value["phase"] != "failed",
+            "pairing failed at {} ({}) for {}",
+            value["stage"].as_str().unwrap_or("unknown"),
+            value["category"].as_str().unwrap_or("unknown"),
+            value["device"].as_str().unwrap_or("unknown")
+        );
         if value["phase"] == phase {
             return value;
         }
