@@ -1,4 +1,5 @@
 use super::{
+    StageSettings, field_pointer,
     migration::{LEGACY, empty},
     valid_model,
 };
@@ -86,6 +87,31 @@ impl Config {
                 )
             })
             .collect();
+        for field in StageSettings::FIELDS {
+            let pointer = field_pointer(field);
+            let current = value.pointer(&pointer).unwrap_or(&Value::Null);
+            statuses.insert(
+                (*field).into(),
+                FieldStatus {
+                    source: if defaults.pointer(&pointer) == Some(current) {
+                        Source::Default
+                    } else {
+                        Source::Saved
+                    },
+                    validation: if errors.contains(field) {
+                        Validation::Invalid
+                    } else if field.ends_with("_model") {
+                        Validation::ModelQualificationRequired
+                    } else if empty(current) {
+                        Validation::Empty
+                    } else {
+                        Validation::Valid
+                    },
+                    conflict: false,
+                    invalid_import: false,
+                },
+            );
+        }
         // Always expose English, Hindi and Telugu; include every additional declared language.
         for language in crate::core::lid::LANGUAGES {
             let route = self
@@ -145,7 +171,7 @@ mod tests {
             })
         });
         let statuses = config.engine_field_status();
-        assert_eq!(statuses.len(), 24);
+        assert_eq!(statuses.len(), 24 + StageSettings::FIELDS.len());
         for field in [
             "models.en",
             "models.hi",

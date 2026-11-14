@@ -2,7 +2,9 @@
 mod migration;
 mod persistence;
 pub(super) use persistence::prepare_save;
+mod stages;
 mod status;
+pub use stages::StageSettings;
 pub use status::{FieldStatus, Source, Validation};
 
 use super::{
@@ -26,9 +28,10 @@ pub struct EngineSettings {
     /// Legacy Hex model identifiers, with existing explicit routes taking precedence.
     pub models: BTreeMap<String, String>,
     pub worker_threads: u32,
-    /// None uses the stage's computed deadline; Some(0) explicitly selects it too.
+    /// Transcription override only; None and Some(0) use the computed ASR deadline.
     pub stage_deadline_seconds: Option<u32>,
     pub steps: Steps,
+    pub stages: StageSettings,
     pub notes_prompt: Option<String>,
     pub translation_prompt: Option<String>,
     #[serde(default)]
@@ -57,6 +60,7 @@ impl Default for EngineSettings {
             worker_threads: 4,
             stage_deadline_seconds: None,
             steps: Steps::default(),
+            stages: StageSettings::default(),
             notes_prompt: None,
             translation_prompt: None,
             backup_file: None,
@@ -194,6 +198,7 @@ impl Config {
         {
             errors.push("notes.helper");
         }
+        errors.extend(settings.stages.errors());
         errors
     }
 }
@@ -227,6 +232,20 @@ fn valid_prompt(value: &str) -> bool {
             .chars()
             .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
 }
+/// Canonical paths are shared by validation, field status, and edit-scoped saves.
+pub(super) fn field_pointer(field: &str) -> String {
+    match field {
+        "company" => "/knowledge_base/company_name".into(),
+        f if f.starts_with("notes.")
+            || f.starts_with("knowledge_base.")
+            || f.starts_with("engine_settings.") =>
+        {
+            format!("/{}", f.replace('.', "/"))
+        }
+        f => format!("/engine_settings/{}", f.replace('.', "/")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
