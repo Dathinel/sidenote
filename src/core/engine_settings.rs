@@ -80,6 +80,8 @@ pub struct Steps {
     pub tasks: bool,
     pub publish_to_hex: bool,
     pub external_comparison: bool,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 impl Default for Steps {
     fn default() -> Self {
@@ -89,6 +91,7 @@ impl Default for Steps {
             tasks: true,
             publish_to_hex: true,
             external_comparison: false,
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -254,6 +257,11 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(config.engine_settings.worker_threads, 4);
         assert!(!config.engine_settings.steps.external_comparison);
+        config.engine_settings.worker_threads = 8;
+        config.engine_settings.steps.translation = false;
+        config.engine_settings.steps.tasks = false;
+        config.engine_settings.steps.external_comparison = true;
+        config.engine_settings.stage_deadline_seconds = Some(321);
         config.engine_settings.notes_prompt = Some("Synthetic notes instructions".into());
         config.engine_settings.translation_prompt =
             Some("Synthetic translation instructions".into());
@@ -268,6 +276,7 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&config).unwrap();
         let mut loaded: Config = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&loaded).unwrap(), bytes);
         assert!(loaded.validate_engine_settings().is_empty());
         assert_eq!(loaded.engine_model("ur"), Some("example-model"));
         for prompt in [Prompt::Notes, Prompt::Translation] {
@@ -277,7 +286,6 @@ mod tests {
                 EngineSettings::default().prompt(prompt)
             );
         }
-        assert_eq!(serde_json::to_vec(&config).unwrap(), bytes);
     }
     #[test]
     fn validation_reports_only_field_names() {

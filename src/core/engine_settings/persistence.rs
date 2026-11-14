@@ -144,6 +144,7 @@ mod tests {
     fn fixture(root: &Path) -> Vec<u8> {
         let value = serde_json::json!({
             "version":1, "features":{}, "future_field":{"keep":"synthetic"},
+            "engine_settings":{"steps":{"render_html":false,"future":{"mode":"synthetic","enabled":false}}},
             "notes":{"engine":"scripts", "helper":"codex", "model":"synthetic-notes-model",
                 "auto":false, "enabled_at_ms":123456, "script":"C:/synthetic/custom.ps1",
                 "future_notes_field":"keep-synthetic"}
@@ -173,6 +174,13 @@ mod tests {
         );
         assert_eq!(raw["notes"]["future_notes_field"], "keep-synthetic");
         assert_eq!(raw["future_field"]["keep"], "synthetic");
+        let original: Value = serde_json::from_slice(&prior).unwrap();
+        for key in ["render_html", "future"] {
+            assert_eq!(
+                raw["engine_settings"]["steps"][key],
+                original["engine_settings"]["steps"][key]
+            );
+        }
         let again = migrate_in(root, |_| panic!("must not read environment twice")).unwrap();
         assert_eq!(std::fs::read(root.join("config.json")).unwrap(), after);
         assert_eq!(std::fs::read_dir(root.join("local")).unwrap().count(), 2); // backup + writer lock
