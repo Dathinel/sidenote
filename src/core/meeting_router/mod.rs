@@ -5,6 +5,7 @@ mod cache;
 mod cli;
 mod config;
 mod hex;
+pub mod hex_bridge;
 pub(crate) mod inputs;
 pub mod jobs;
 pub mod pieces;

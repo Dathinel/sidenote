@@ -1,4 +1,5 @@
 use super::super::asr::{Result, write_wav};
+use super::hex_bridge::{HexFailure, reply_error};
 use crate::platform::CommandExt;
 use serde_json::Value;
 use std::{
@@ -21,6 +22,14 @@ impl Default for HexSpeech {
 }
 impl HexSpeech {
     fn run(&self, args: &[&str], wav: Option<&Path>) -> Result<String> {
+        self.run_for(args, wav, Duration::from_secs(7200))
+    }
+    pub(super) fn run_for(
+        &self,
+        args: &[&str],
+        wav: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<String> {
         crate::platform::require_process_support()?;
         let mut command = crate::platform::worker_command(&self.executable)?;
         command
@@ -53,22 +62,24 @@ impl HexSpeech {
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
-                Ok(None) if start.elapsed() < Duration::from_secs(7200) => {
-                    thread::sleep(Duration::from_millis(50))
-                }
+                Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(50)),
                 _ => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    break Err("Speech process timed out or failed");
+                    break Err(HexFailure::Timeout);
                 }
             }
         };
         drop(job);
         let bytes = reader.join().map_err(|_| "Speech reader failed")??;
-        if !status?.success() || bytes.len() > 8 * 1024 * 1024 {
+        if bytes.len() > 8 * 1024 * 1024 {
             return Err("Hex transcription failed; raw diagnostics suppressed".into());
         }
-        Ok(String::from_utf8(bytes)?.trim().to_owned())
+        let output = String::from_utf8(bytes)?.trim().to_owned();
+        if !status?.success() {
+            return Err(reply_error(&output).unwrap_or(HexFailure::Failed).into());
+        }
+        Ok(output)
     }
     pub fn selection(&self) -> Result<String> {
         let value: Value = serde_json::from_str(&self.run(&["model", "list", "--json"], None)?)?;
