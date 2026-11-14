@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
+mod publication;
+pub use publication::{begin, commit, load};
 
 #[derive(Serialize, Deserialize)]
 pub struct Revision {
@@ -226,3 +228,6 @@ pub fn assemble(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, windows))]
+mod receipts;

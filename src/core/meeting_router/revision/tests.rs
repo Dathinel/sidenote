@@ -16,6 +16,36 @@ pub(super) fn range() -> Range {
     }
 }
 #[test]
+fn new_english_coverage_outside_baseline_is_selected() {
+    let mut r = range();
+    r.range.language = Some("en".into());
+    let b = Chunk {
+        id: "other".into(),
+        start: 3.0,
+        end: 4.0,
+        track: r.track.clone(),
+        speaker: None,
+        turn: None,
+        english: "Existing".into(),
+        audio_start: None,
+    };
+    let mut t = english_fallback(
+        std::slice::from_ref(&b),
+        &Default::default(),
+        "input".into(),
+        "failed",
+    );
+    t.segments = vec![segment("r", &r, 0, &json!({"text":"New English"})).unwrap()];
+    reconcile(&mut t, &[b]);
+    assert_eq!(
+        t.segments
+            .iter()
+            .map(|s| s.text_original.as_str())
+            .collect::<Vec<_>>(),
+        ["New English", "Existing"]
+    );
+}
+#[test]
 fn mapping_owns_tokens_and_keeps_segment_level_times() {
     let r = range();
     let text = segment("r", &r, 80_000, &json!({"text":"నమస్కారం"})).unwrap();
