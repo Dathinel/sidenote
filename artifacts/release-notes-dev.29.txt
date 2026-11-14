@@ -1,0 +1,15 @@
+Sidenote 0.0.1-dev.29
+
+A very short call no longer leaves "Writing the summary" on screen. When a meeting gets no notes, Sidenote now shows that the summary was skipped.
+
+When a summary fails, the meeting now shows the reason, also for meetings handled by the older meeting scripts.
+
+Every meeting now follows the same steps and restart rules, whichever engine handles it. This is the first step of moving the meeting scripts into the app, where you will be able to control each step from Settings.
+
+Updating the meeting scripts now keeps what is needed to roll them back.
+
+This release also carries more groundwork for the Linux app. It is switched off. There is no Linux download yet.
+
+Still not fixed: in Sync preview (Labs, off by default), pairing two devices can fail about 1 time in 5 with "file in use". If that happens, try pairing again. Work on the fix has started.
+
+Needs on your laptop: nothing
