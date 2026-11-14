@@ -43,7 +43,8 @@ def render(job):
  assert not tree['warnings'],(base.name,tree['warnings'])
  if scene.startswith('settings-engine'):
   keys={n.get('key') for n in tree['elements']}
-  need={'engine-transcription','engine-worker-threads-status','engine-worker-threads-usage','engine-worker-threads-input','engine-transcription-save'}
+  need={'engine-transcription','engine-worker-threads-status','engine-worker-threads-usage','engine-worker-threads-input','engine-transcription-save','engine-model-te-status','engine-model-te-usage','engine-model-te-input','engine-model-hi-value'}
+  assert 'engine-model-hi-input' not in keys,'A routed language must be read only'
   assert need<=keys,(base.name,sorted(need-keys))
  if scene=='people-suggestion':
   elements=tree['elements']

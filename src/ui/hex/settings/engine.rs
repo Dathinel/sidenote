@@ -27,36 +27,81 @@ const SAVE_FAILED: &str = "Could not save. Reload Settings and try again.";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Field {
+    English,
+    Hindi,
+    Telugu,
     Threads,
     Deadline,
     RequestDeadline,
 }
 impl Field {
-    pub(super) const TRANSCRIPTION: [Field; 3] =
-        [Self::Threads, Self::Deadline, Self::RequestDeadline];
-    const COUNT: usize = 3;
+    pub(super) const TRANSCRIPTION: [Field; 6] = [
+        Self::English,
+        Self::Hindi,
+        Self::Telugu,
+        Self::Threads,
+        Self::Deadline,
+        Self::RequestDeadline,
+    ];
+    const COUNT: usize = 6;
     fn index(self) -> usize {
         self as usize
+    }
+    fn language(self) -> Option<&'static str> {
+        match self {
+            Self::English => Some("en"),
+            Self::Hindi => Some("hi"),
+            Self::Telugu => Some("te"),
+            _ => None,
+        }
     }
     /// The row key, also the scroll target for search.
     fn key(self) -> &'static str {
         match self {
+            Self::English => "engine-model-en",
+            Self::Hindi => "engine-model-hi",
+            Self::Telugu => "engine-model-te",
             Self::Threads => "engine-worker-threads",
             Self::Deadline => "engine-transcription-deadline",
             Self::RequestDeadline => "engine-request-deadline",
         }
     }
-    /// The name `Config::engine_field_status` and `validate_engine_settings` both use.
+    /// The name `Config::engine_field_status` uses.
     fn status_key(self) -> &'static str {
         match self {
+            Self::English => "models.en",
+            Self::Hindi => "models.hi",
+            Self::Telugu => "models.te",
             Self::Threads => "worker_threads",
             Self::Deadline => "stage_deadline_seconds",
             Self::RequestDeadline => "stages.asr_request_deadline_seconds",
         }
     }
+    /// The name `Config::validate_engine_settings` reports; one name covers every language.
+    fn error_name(self) -> &'static str {
+        match self {
+            Self::English | Self::Hindi | Self::Telugu => "models",
+            _ => self.status_key(),
+        }
+    }
     /// Label, help and the hint shown in an empty box.
     fn text(self) -> (&'static str, &'static str, &'static str) {
         match self {
+            Self::English => (
+                "English model",
+                "The speech model used for English parts of a meeting.",
+                "Default",
+            ),
+            Self::Hindi => (
+                "Hindi model",
+                "The speech model used for Hindi parts of a meeting.",
+                "Default",
+            ),
+            Self::Telugu => (
+                "Telugu model",
+                "The speech model used for Telugu parts of a meeting.",
+                "Default",
+            ),
             Self::Threads => (
                 "Worker threads",
                 "How many transcription workers run at the same time. The default is 4.",
@@ -76,6 +121,9 @@ impl Field {
     }
     fn hint(self) -> &'static str {
         match self {
+            Self::English | Self::Hindi | Self::Telugu => {
+                "Not valid. Use letters, numbers and - _ / . : only."
+            }
             Self::Threads => "Not valid. Use a whole number from 1 to 256.",
             Self::Deadline | Self::RequestDeadline => {
                 "Not valid. Use a whole number of seconds from 1 to 3600."
@@ -89,9 +137,21 @@ impl Field {
 fn in_use(status_key: &str) -> bool {
     matches!(status_key, "notes.helper" | "notes.model")
 }
+/// A language the person already routed in their language settings keeps that one home.
+fn routed(config: &Config, field: Field) -> bool {
+    let routes = config.pipeline.after_stop_languages.as_ref();
+    field.language().is_some_and(|language| {
+        let route = routes.and_then(|routes| routes.routes.get(language));
+        route.is_some_and(|route| !route.model.trim().is_empty())
+    })
+}
 fn read(config: &Config, field: Field) -> String {
     let settings = &config.engine_settings;
     match field {
+        Field::English | Field::Hindi | Field::Telugu => config
+            .engine_model(field.language().unwrap_or_default())
+            .unwrap_or_default()
+            .to_owned(),
         Field::Threads => settings.worker_threads.to_string(),
         Field::Deadline => settings
             .stage_deadline_seconds
@@ -104,6 +164,14 @@ fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
     let number = || text.parse::<u32>().map_err(|_| ());
     let settings = &mut config.engine_settings;
     match field {
+        Field::English | Field::Hindi | Field::Telugu => {
+            let language = field.language().unwrap_or_default().to_owned();
+            if text.is_empty() {
+                settings.models.remove(&language);
+            } else {
+                settings.models.insert(language, text.to_owned());
+            }
+        }
         Field::Threads => settings.worker_threads = number()?,
         Field::Deadline => {
             settings.stage_deadline_seconds = if text.is_empty() {
@@ -119,10 +187,15 @@ fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
 /// Would this one edit be valid? Other fields, even ones already wrong, do not count.
 fn probe(base: &Config, field: Field, text: &str) -> bool {
     let mut config = base.clone();
+    if let Some(language) = field.language() {
+        // One error name covers every language, so judge only this one.
+        let models = &mut config.engine_settings.models;
+        models.retain(|name, _| name == language);
+    }
     write(&mut config, field, text).is_ok()
         && !config
             .validate_engine_settings()
-            .contains(&field.status_key())
+            .contains(&field.error_name())
 }
 /// The base with every changed, valid draft applied. `Ok(None)` means nothing changed.
 fn apply(base: &Config, edits: &[(Field, &str)]) -> Result<Option<Config>, Vec<Field>> {
@@ -130,7 +203,7 @@ fn apply(base: &Config, edits: &[(Field, &str)]) -> Result<Option<Config>, Vec<F
     let (mut bad, mut changed) = (Vec::new(), false);
     for &(field, text) in edits {
         let text = text.trim();
-        if text == read(base, field) {
+        if routed(base, field) || text == read(base, field) {
             continue;
         }
         if probe(base, field, text) && write(&mut edited, field, text).is_ok() {
@@ -179,7 +252,8 @@ impl Engine {
         self.base.as_ref().is_some_and(|base| {
             fields.iter().any(|field| {
                 let draft = self.drafts.get(field.index());
-                draft.is_some_and(|d| d.text.trim() != read(base, *field))
+                let changed = draft.is_some_and(|d| d.text.trim() != read(base, *field));
+                changed && !routed(base, *field)
             })
         })
     }
@@ -284,13 +358,19 @@ fn field_row(
     }
     let index = field.index();
     let fallback = TextEdit::default();
-    let input = TextInput::new(engine.drafts.get(index).unwrap_or(&fallback))
-        .label(name)
-        .placeholder(placeholder)
-        .on_edit(move |s: &mut State| draft_mut(s, index))
-        .build(k)
-        .key(format!("{key}-input"))
-        .w(220.0);
+    let config = engine.base.as_ref().unwrap_or(&s.config);
+    let input = if routed(config, field) {
+        let value = roles::CONTROL.wrap(read(config, field), p.ink);
+        value.key(format!("{key}-value")).max_w(220.0)
+    } else {
+        TextInput::new(engine.drafts.get(index).unwrap_or(&fallback))
+            .label(name)
+            .placeholder(placeholder)
+            .on_edit(move |s: &mut State| draft_mut(s, index))
+            .build(k)
+            .key(format!("{key}-input"))
+            .w(220.0)
+    };
     crate::ui::cards::row_shell()
         .key(key)
         .flex_wrap()
@@ -354,9 +434,30 @@ pub(super) fn body(s: &State, k: &Kit, p: Palette) -> El {
         ))
 }
 
+/// Render fixtures, used only by the isolated scenes: a saved Telugu model and a Hindi model
+/// that comes from the language settings. Everything else stays at its default.
+pub(super) fn scene_config(config: &mut Config) {
+    use sidenote::core::meeting_router::{LanguageRoutes, ProviderRoute};
+    let models = &mut config.engine_settings.models;
+    models.insert("te".into(), "synthetic-te-model".into());
+    let route = ProviderRoute {
+        provider: "local".into(),
+        model: "synthetic-hi-route-model".into(),
+    };
+    config.pipeline.after_stop_languages = Some(LanguageRoutes {
+        primary: "hi".into(),
+        supporting: vec!["en".into()],
+        routes: [("hi".into(), route)].into(),
+    });
+}
 /// Type values that cannot be saved and press Save, as the person would. Render scenes only.
 pub(super) fn scene_invalid(s: &mut State) {
-    for (field, text) in [(Field::Threads, "0"), (Field::Deadline, "9999")] {
+    let edits = [
+        (Field::English, "bad model name"),
+        (Field::Threads, "0"),
+        (Field::Deadline, "9999"),
+    ];
+    for (field, text) in edits {
         *draft_mut(s, field.index()) = TextEdit::new(text);
     }
     save(s, &Field::TRANSCRIPTION);
@@ -396,6 +497,35 @@ mod tests {
         ];
         let bad = apply(&base, &edits).err().unwrap();
         assert_eq!(bad, [Field::Threads, Field::Deadline]);
+    }
+    #[test]
+    fn models_edit_per_language_and_a_wrong_sibling_does_not_block_them() {
+        let mut base = Config::default();
+        base.engine_settings
+            .models
+            .insert("hi".into(), "not a model".into());
+        let edits = [(Field::English, " synthetic-en "), (Field::Telugu, "")];
+        let edited = apply(&base, &edits).unwrap().unwrap();
+        assert_eq!(read(&edited, Field::English), "synthetic-en");
+        assert_eq!(read(&edited, Field::Hindi), "not a model");
+        let bad = apply(&base, &[(Field::Telugu, "bad model")]).err().unwrap();
+        assert_eq!(bad, [Field::Telugu]);
+        let mut config = edited;
+        assert!(write(&mut config, Field::English, "").is_ok());
+        assert!(!config.engine_settings.models.contains_key("en"));
+    }
+    #[test]
+    fn a_language_route_stays_the_only_home_of_its_model() {
+        let mut config = Config::default();
+        scene_config(&mut config);
+        assert!(routed(&config, Field::Hindi) && !routed(&config, Field::Telugu));
+        assert_eq!(read(&config, Field::Hindi), "synthetic-hi-route-model");
+        let edits = [(Field::Hindi, "other-model")];
+        assert!(apply(&config, &edits).unwrap().is_none());
+        let statuses = config.engine_field_status();
+        assert_eq!(statuses["models.hi"].source, Source::ExistingRoute);
+        let te = statuses["models.te"].validation;
+        assert_eq!(te, Validation::ModelQualificationRequired);
     }
     #[test]
     fn status_words_cover_every_state_without_a_value() {

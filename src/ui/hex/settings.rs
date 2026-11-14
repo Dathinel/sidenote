@@ -707,6 +707,30 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "engine-model-en",
+            "English model",
+            "meeting engine transcription speech model english",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-model-hi",
+            "Hindi model",
+            "meeting engine transcription speech model hindi",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-model-te",
+            "Telugu model",
+            "meeting engine transcription speech model telugu",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
             "engine-worker-threads",
             "Worker threads",
             "meeting engine transcription workers parallel",
@@ -2637,6 +2661,9 @@ pub fn scene(s: &mut State, name: &str) {
     };
     if page == Page::Updates {
         super::super::updates::settings_fixture(s);
+    }
+    if name.starts_with("settings-engine") {
+        engine::scene_config(&mut s.config);
     }
     navigate(s, page, tab);
     if name == "settings-engine-invalid" {
