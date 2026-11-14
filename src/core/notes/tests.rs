@@ -2,6 +2,7 @@ use super::{
     helper::{Failure, Run},
     *,
 };
+mod routing;
 use crate::core::{
     agent_instructions::{self, Agent},
     store_io,
