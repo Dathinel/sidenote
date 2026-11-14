@@ -3,6 +3,8 @@ use super::{
     *,
 };
 #[cfg(windows)]
+mod review;
+#[cfg(windows)]
 mod routing;
 use crate::core::{
     agent_instructions::{self, Agent},
