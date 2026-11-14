@@ -63,10 +63,24 @@ impl Notice {
         }
     }
 }
+fn summary_skip(id: &str) -> Option<core::notes::SummarySkip> {
+    core::notes::summary_skip(
+        core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), id)
+            .unwrap_or(core::recording_guard::Eligibility::Unknown),
+        core::notes::scripts_policy() == "off",
+        core::notes::status(id).as_ref(),
+    )
+}
 fn notice(id: &str) -> Notice {
     use core::notes::JobState;
-    match core::notes::scripts_policy() {
-        "off" => return Notice::Off,
+    if let Some(skipped) = summary_skip(id) {
+        return match skipped {
+            core::notes::SummarySkip::Off => Notice::Off,
+            _ => Notice::Skipped,
+        };
+    }
+    let policy = core::notes::scripts_policy();
+    match policy {
         "app" | "scripts" => {}
         _ => return Notice::Unavailable,
     }
@@ -398,13 +412,10 @@ fn run(isolated: bool, replay: bool) {
                     dirty = true;
                 }
                 let stopped_since = *p.stopped_since.get_or_insert_with(Instant::now);
-                let short = core::recording_guard::eligibility(
-                    &core::state_dir(),
-                    &core::meetings_dir(),
-                    id,
-                )
-                .is_ok_and(|e| e == core::recording_guard::Eligibility::Short);
-                if short {
+                if let Some(raw) = summary(id) {
+                    return !was_seen(id, &raw);
+                }
+                if summary_skip(id).is_some_and(|s| s != core::notes::SummarySkip::Off) {
                     if p.skipped_at_ms.is_none_or(|t| t > now) {
                         p.skipped_at_ms = Some(now);
                         dirty = true;
@@ -418,9 +429,6 @@ fn run(isolated: bool, replay: bool) {
                     dirty = true;
                 }
                 p.skipped_since = None;
-                if let Some(raw) = summary(id) {
-                    return !was_seen(id, &raw);
-                }
                 let state = notice(id);
                 let expired = now.saturating_sub(p.stopped_at_ms.unwrap_or(now))
                     >= NO_DRAFT_BOUND_MS

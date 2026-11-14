@@ -64,6 +64,40 @@ pub enum JobState {
     },
     Empty,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummarySkip {
+    Short,
+    Off,
+    Empty,
+}
+impl SummarySkip {
+    pub fn heading(self) -> &'static str {
+        "Summary skipped"
+    }
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Short => "This meeting was too short to summarise. You can leave this page.",
+            Self::Off => "Meeting summary is off. You can leave this page.",
+            Self::Empty => "No speech was heard in this meeting, so there is nothing to summarise.",
+        }
+    }
+}
+/// A terminal summary outcome, shared by the live page, Today card and floating indicator.
+pub fn summary_skip(
+    eligibility: super::recording_guard::Eligibility,
+    notes_off: bool,
+    job: Option<&JobState>,
+) -> Option<SummarySkip> {
+    if matches!(job, Some(JobState::Empty)) {
+        Some(SummarySkip::Empty)
+    } else if notes_off {
+        Some(SummarySkip::Off)
+    } else if eligibility == super::recording_guard::Eligibility::Short {
+        Some(SummarySkip::Short)
+    } else {
+        None
+    }
+}
 impl JobState {
     pub fn failure_cause(&self) -> Option<super::meeting_job::Cause> {
         use super::meeting_job::Cause;

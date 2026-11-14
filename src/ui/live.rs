@@ -156,6 +156,15 @@ fn making_transcript(s: &State) -> Transcript {
         })
 }
 
+pub(super) fn summary_skip(s: &State) -> Option<sidenote::core::notes::SummarySkip> {
+    s.live
+        .as_ref()?
+        .feed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .summary_skip
+}
+
 pub(super) fn scene_making(s: &mut State, status: &str) {
     hex::scene(s, false);
     let mut live = Live::scene(Phase::Making, Some("Weekly planning"));
@@ -167,6 +176,16 @@ pub(super) fn scene_making(s: &mut State, status: &str) {
         "interrupted" => Transcript::Interrupted,
         _ => Transcript::Ready,
     });
+    if status == "short" {
+        live.feed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .summary_skip = sidenote::core::notes::summary_skip(
+            sidenote::core::recording_guard::Eligibility::Short,
+            false,
+            None,
+        );
+    }
     if status == "slow" {
         live.stopped = Some(Instant::now() - Duration::from_secs(49 * 60));
     }
@@ -202,6 +221,7 @@ pub struct Feed {
     stamp: Option<feed_io::Stamp>,
     /// Counts every change, so the page knows to draw again.
     version: u64,
+    summary_skip: Option<sidenote::core::notes::SummarySkip>,
     notes_problem: Option<&'static str>,
     transcript: Option<Transcript>,
 }
@@ -687,7 +707,7 @@ impl State {
 
 // ---- the live transcript and the notes -------------------------------------------------------
 
-/// Reads the live transcript while the page is shown. One `stat` per round when nothing changed.
+/// Reads while the page is shown or a stopped meeting still needs a summary outcome.
 fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, waker: &rune::Waker) {
     let root = sidenote::core::meetings_dir();
     let mut wait = Duration::from_millis(600);
@@ -713,12 +733,29 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         let read = feed_io::read_rolling(&folder, last);
         let notes_problem = feed_io::notes_problem(&folder);
         let transcript = read_transcript_state(&folder);
+        let skipped = (transcript == Some(Transcript::Ready))
+            .then(|| {
+                let id = folder.file_name()?.to_str()?;
+                sidenote::core::notes::summary_skip(
+                    sidenote::core::recording_guard::eligibility(
+                        &sidenote::core::state_dir(),
+                        &root,
+                        id,
+                    )
+                    .unwrap_or(sidenote::core::recording_guard::Eligibility::Unknown),
+                    sidenote::core::notes::scripts_policy() == "off",
+                    sidenote::core::notes::status(id).as_ref(),
+                )
+            })
+            .flatten();
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
         let mut changed = f.folder.as_ref() != Some(&folder)
             || f.notes_problem != notes_problem
-            || f.transcript != transcript;
+            || f.transcript != transcript
+            || f.summary_skip != skipped;
         f.notes_problem = notes_problem;
         f.transcript = transcript;
+        f.summary_skip = skipped;
         f.folder = Some(folder);
         match read {
             Ok(Read::Waiting | Read::Same) => {
@@ -784,7 +821,8 @@ impl State {
             return false;
         }
         let mut changed = saved;
-        live.watching.store(visible, Ordering::Relaxed);
+        live.watching
+            .store(visible || live.phase == Phase::Making, Ordering::Relaxed);
         {
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if feed.hint.is_none() {
@@ -1309,6 +1347,20 @@ fn heading(s: &State) -> String {
 }
 
 fn making_view(s: &State, p: Palette, narrow: bool) -> El {
+    if let Some(skipped) = summary_skip(s) {
+        return col()
+            .key("live-summary-skipped")
+            .w_full()
+            .gap(16.0)
+            .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+            .child(roles::SECTION.wrap(skipped.heading(), p.ink).role("status"))
+            .child(roles::SMALL.wrap(skipped.detail(), p.soft))
+            .children(
+                (!s.live_notes.text.trim().is_empty())
+                    .then(|| your_notes(s.live_notes.text.trim(), p)),
+            )
+            .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()));
+    }
     let transcript = making_transcript(s);
     let finishing = transcript != Transcript::Ready;
     let scripts = s

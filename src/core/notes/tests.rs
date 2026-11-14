@@ -1691,3 +1691,59 @@ fn old_jobs_default_to_pipeline_and_failure_keeps_the_current_stage() {
         Some(crate::core::meeting_job::Cause::Auth)
     );
 }
+
+#[test]
+fn summary_skip_covers_guard_policy_and_empty_jobs() {
+    use crate::core::recording_guard::Eligibility::{Eligible, Short, Unknown};
+    assert_eq!(summary_skip(Short, false, None), Some(SummarySkip::Short));
+    assert_eq!(summary_skip(Eligible, true, None), Some(SummarySkip::Off));
+    assert_eq!(
+        summary_skip(Eligible, false, Some(&JobState::Empty)),
+        Some(SummarySkip::Empty)
+    );
+    for eligibility in [Eligible, Unknown] {
+        assert_eq!(summary_skip(eligibility, false, None), None);
+    }
+    for state in [
+        JobState::Queued,
+        JobState::Running,
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false,
+        },
+    ] {
+        assert_eq!(summary_skip(Eligible, false, Some(&state)), None);
+        assert_eq!(
+            summary_skip(Short, false, Some(&state)),
+            Some(SummarySkip::Short)
+        );
+    }
+}
+
+#[test]
+fn accidental_seventeen_second_call_has_no_job_and_a_terminal_skip() {
+    let root = tempfile::tempdir().unwrap();
+    let meetings = root.path().join("meetings");
+    let folder = meetings.join(ID);
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("manifest.json"),
+        r#"{"status":"complete","duration_ms":16700}"#,
+    )
+    .unwrap();
+    fs::write(folder.join("transcript.ndjson"), "").unwrap();
+    queue::enqueue_in(root.path(), &meetings, ID, None, &settings_fixture()).unwrap();
+    assert!(queue::read(root.path(), ID).unwrap().is_none());
+    let eligibility =
+        crate::core::recording_guard::eligibility(root.path(), &meetings, ID).unwrap();
+    let skipped = summary_skip(eligibility, false, None).unwrap();
+    assert_eq!(skipped.heading(), "Summary skipped");
+    assert!(skipped.detail().contains("too short to summarise"));
+    crate::core::recording_guard::keep_in(root.path(), ID).unwrap();
+    let eligibility =
+        crate::core::recording_guard::eligibility(root.path(), &meetings, ID).unwrap();
+    assert_eq!(
+        summary_skip(eligibility, false, Some(&JobState::Queued)),
+        None
+    );
+}
