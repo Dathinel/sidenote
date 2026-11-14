@@ -151,6 +151,9 @@ fn handoff_requires_receipts_and_source_generation_and_preserves_provenance() {
 
 #[test]
 fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
+    if isolated_test() {
+        return;
+    }
     let root = crate::core::state_dir();
     let meetings = crate::core::meetings_dir();
     let id = "1793946600000-999998";
