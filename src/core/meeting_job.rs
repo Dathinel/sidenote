@@ -2,12 +2,16 @@
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io, path::Path, sync::OnceLock};
 
+pub mod checkpoint;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     #[default]
     Pipeline,
+    Discover,
     Prepare,
+    Route,
     Transcribe,
     Translate,
     Notes,
@@ -16,6 +20,12 @@ pub enum Stage {
     Tasks,
     Compare,
     Title,
+}
+impl Stage {
+    /// Legacy best-effort work; failure must not prevent required meeting outputs.
+    pub fn is_optional(self) -> bool {
+        matches!(self, Self::Tasks | Self::Compare | Self::Title)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

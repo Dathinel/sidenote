@@ -1,0 +1,495 @@
+use super::*;
+use std::sync::{
+    Arc, Barrier,
+    atomic::{AtomicUsize, Ordering},
+};
+
+const INPUTS: [u8; 32] = [7; 32];
+
+#[test]
+fn scoped_reads_never_repeat_a_completed_stage_or_regress_the_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    let mut keys = std::collections::BTreeSet::new();
+    assert!(
+        job.advance(|stage, key, action| {
+            assert_eq!((stage, action), (Stage::Discover, Action::Start));
+            assert!(keys.insert(key.to_owned()));
+            Ok(Availability::Completed)
+        })
+        .unwrap()
+    );
+    let _scope = crate::core::file_reads::Scope::begin();
+    let cached = crate::core::file_reads::read(&job.path, 8192).unwrap();
+    for (index, expected) in STAGES.iter().copied().enumerate().skip(1) {
+        assert_eq!(job.completed().len(), index);
+        assert!(
+            job.advance(|stage, key, action| {
+                assert_eq!((stage, action), (expected, Action::Start));
+                assert!(keys.insert(key.to_owned()), "repeated stage key");
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        );
+        assert_eq!(job.completed().len(), index + 1);
+    }
+    assert_eq!(keys.len(), STAGES.len());
+    assert_eq!(
+        crate::core::file_reads::read(&job.path, 8192).unwrap(),
+        cached
+    );
+    drop(job);
+    let mut reopened = Job::open(temp.path(), INPUTS).unwrap();
+    assert_eq!(reopened.completed().len(), STAGES.len());
+    assert!(
+        !reopened
+            .advance(|_, _, _| panic!("repeated completed job"))
+            .unwrap()
+    );
+}
+
+fn finish(job: &mut Job) {
+    while job.advance(|_, _, _| Ok(Availability::Completed)).unwrap() {}
+    assert_eq!(job.completed().len(), STAGES.len());
+    assert_eq!(job.failure(), None);
+}
+
+#[test]
+fn two_triggers_execute_one_job_and_share_the_legacy_claim() {
+    let temp = tempfile::tempdir().unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    let other = barrier.clone();
+    let other_calls = calls.clone();
+    let folder = temp.path().to_owned();
+    let trigger = std::thread::spawn(move || {
+        other.wait();
+        let result = Job::open(&folder, INPUTS);
+        assert!(matches!(result, Err(e) if e.kind() == io::ErrorKind::WouldBlock));
+        assert!(claim(&folder).is_err());
+        other_calls.load(Ordering::SeqCst)
+    });
+    barrier.wait();
+    trigger.join().unwrap();
+    while job
+        .advance(|_, _, action| {
+            assert_eq!(action, Action::Start);
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Availability::Completed)
+        })
+        .unwrap()
+    {}
+    drop(job);
+    let mut duplicate = Job::open(temp.path(), INPUTS).unwrap();
+    assert!(
+        !duplicate
+            .advance(|_, _, _| panic!("duplicate stage"))
+            .unwrap()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), STAGES.len());
+}
+
+#[test]
+fn resume_after_every_completed_boundary_skips_the_completed_prefix() {
+    use crate::platform::CommandExt;
+    for boundary in 0..=STAGES.len() {
+        let temp = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "core::meeting_job::checkpoint::tests::boundary_exit_worker",
+            ])
+            .env("SYNTHETIC_JOB_FOLDER", temp.path())
+            .env("SYNTHETIC_JOB_BOUNDARY", boundary.to_string())
+            .creation_flags(0x08000000)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(77));
+        let mut restarted = Job::open(temp.path(), INPUTS).unwrap();
+        assert_eq!(restarted.completed().len(), boundary);
+        let mut remaining = STAGES[boundary..].iter();
+        while restarted
+            .advance(|stage, _, action| {
+                assert_eq!(action, Action::Start);
+                assert_eq!(Some(&stage), remaining.next());
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        {}
+        assert_eq!(remaining.next(), None);
+    }
+}
+
+#[test]
+fn boundary_exit_worker() {
+    let Some(folder) = std::env::var_os("SYNTHETIC_JOB_FOLDER") else {
+        return;
+    };
+    let boundary: usize = std::env::var("SYNTHETIC_JOB_BOUNDARY")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut job = Job::open(Path::new(&folder), INPUTS).unwrap();
+    for stage in STAGES.iter().take(boundary) {
+        assert!(
+            job.advance(|actual, _, action| {
+                assert_eq!((actual, action), (*stage, Action::Start));
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        );
+    }
+    // Deliberately bypass Drop: restart must reclaim the OS handle and completed journal.
+    std::process::exit(77);
+}
+
+#[test]
+fn interruption_before_or_after_stage_commit_recovers_the_same_key() {
+    for (boundary, expected) in STAGES.iter().copied().enumerate() {
+        for committed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut receipt = None;
+            let mut first_key = String::new();
+            let mut effects = 0;
+            let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut job = Job::open(temp.path(), INPUTS).unwrap();
+                for _ in 0..boundary {
+                    job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
+                }
+                job.advance(|stage, key, action| {
+                    assert_eq!((stage, action), (expected, Action::Start));
+                    first_key = key.to_owned();
+                    if committed {
+                        receipt = Some(key.to_owned());
+                        effects += 1;
+                    }
+                    panic!("synthetic interruption before checkpoint");
+                })
+                .unwrap();
+            }));
+            assert!(stopped.is_err());
+            let mut restarted = Job::open(temp.path(), INPUTS).unwrap();
+            assert_eq!(restarted.completed().len(), boundary);
+            assert!(
+                restarted
+                    .advance(|stage, key, action| {
+                        assert_eq!((stage, action), (expected, Action::Recover));
+                        assert_eq!(key, first_key);
+                        if receipt.as_deref() != Some(key) {
+                            effects += 1;
+                        }
+                        Ok(Availability::Completed)
+                    })
+                    .unwrap()
+            );
+            finish(&mut restarted);
+            assert_eq!(effects, 1);
+        }
+    }
+}
+
+#[test]
+fn unavailable_stages_are_nonfatal_and_input_history_is_retained() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    while job
+        .advance(|stage, _, _| {
+            Ok(if stage == Stage::Translate {
+                Availability::NotAvailable
+            } else {
+                Availability::Completed
+            })
+        })
+        .unwrap()
+    {}
+    assert_eq!(job.completed()[4], Availability::NotAvailable);
+    assert_eq!(job.failure(), None);
+    drop(job);
+    let mut changed = Job::open(temp.path(), [8; 32]).unwrap();
+    assert_eq!(changed.next_stage(), Some(Stage::Discover));
+    finish(&mut changed);
+    drop(changed);
+    let mut original = Job::open(temp.path(), INPUTS).unwrap();
+    assert!(
+        !original
+            .advance(|_, _, _| panic!("input A was already processed"))
+            .unwrap()
+    );
+    assert_eq!(original.completed()[4], Availability::NotAvailable);
+}
+
+#[test]
+fn each_stage_retains_its_existing_typed_cause_and_recovers() {
+    for (boundary, expected) in STAGES.iter().copied().enumerate() {
+        for cause in [Cause::Limit, Cause::Auth, Cause::TimedOut, Cause::Other] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut job = Job::open(temp.path(), INPUTS).unwrap();
+            for _ in 0..boundary {
+                job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
+            }
+            assert_eq!(
+                job.advance(|_, _, _| Err(cause)).unwrap(),
+                expected.is_optional()
+            );
+            drop(job);
+            let mut restarted = Job::open(temp.path(), INPUTS).unwrap();
+            if expected.is_optional() {
+                assert_eq!(
+                    restarted.completed()[boundary],
+                    Availability::Failed { cause }
+                );
+                assert_eq!(restarted.failure(), None);
+                continue;
+            }
+            assert_eq!(restarted.failure(), Some((expected, cause)));
+            assert!(
+                restarted
+                    .advance(|stage, _, action| {
+                        assert_eq!((stage, action), (expected, Action::Recover));
+                        Ok(Availability::Completed)
+                    })
+                    .unwrap()
+            );
+            assert_eq!(restarted.failure(), None);
+        }
+    }
+}
+
+#[test]
+fn optional_failures_retain_their_cause_and_render_publish_still_finish() {
+    for stage in [Stage::Tasks, Stage::Compare, Stage::Title] {
+        assert!(stage.is_optional());
+    }
+    for cause in [Cause::Limit, Cause::Auth, Cause::TimedOut, Cause::Other] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut calls = Vec::new();
+        for expected in STAGES {
+            let mut job = Job::open(temp.path(), INPUTS).unwrap();
+            assert!(
+                job.advance(|stage, _, action| {
+                    assert_eq!((stage, action), (expected, Action::Start));
+                    calls.push(stage);
+                    if stage == Stage::Tasks {
+                        Err(cause)
+                    } else {
+                        Ok(Availability::Completed)
+                    }
+                })
+                .unwrap()
+            );
+            assert_eq!(job.failure(), None);
+        }
+        assert_eq!(calls, STAGES);
+        let mut reopened = Job::open(temp.path(), INPUTS).unwrap();
+        assert_eq!(reopened.completed()[6], Availability::Failed { cause });
+        assert_eq!(&reopened.completed()[7..], &[Availability::Completed; 2]);
+        assert_eq!(reopened.next_stage(), None);
+        assert!(
+            !reopened
+                .advance(|_, _, _| panic!("repeated optional failure"))
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn required_failure_cannot_be_disguised_as_a_nonfatal_outcome() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    assert!(
+        !job.advance(|_, _, _| Ok(Availability::Failed { cause: Cause::Auth }))
+            .unwrap()
+    );
+    assert_eq!(job.failure(), Some((Stage::Discover, Cause::Auth)));
+    assert_eq!(job.completed(), &[]);
+}
+
+#[test]
+fn invalid_journals_fail_closed_and_io_diagnostics_are_content_free() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
+    let path = job.path.clone();
+    let valid = serde_json::to_value(&job.journal).unwrap();
+    drop(job);
+    for (field, value) in [
+        ("version", serde_json::json!(2)),
+        ("inputs", serde_json::to_value([0; 32]).unwrap()),
+        (
+            "completed",
+            serde_json::json!(vec![Availability::Completed; 10]),
+        ),
+        ("failure", serde_json::json!(Cause::Auth)),
+        (
+            "completed",
+            serde_json::json!([Availability::Failed { cause: Cause::Auth }]),
+        ),
+        ("unknown", serde_json::json!("synthetic private text")),
+    ] {
+        let mut corrupt = valid.clone();
+        corrupt[field] = value;
+        store_io::write(&path, &corrupt).unwrap();
+        let error = Job::open(temp.path(), INPUTS).err().unwrap();
+        assert_eq!(error.to_string(), "MEETING_JOB (InvalidData)");
+    }
+    store_io::atomic_write(&path, b"synthetic private text").unwrap();
+    let error = Job::open(temp.path(), INPUTS).err().unwrap();
+    assert!(!error.to_string().contains("private"));
+}
+
+#[test]
+fn failed_start_write_reaches_the_writer_without_calling_the_adapter() {
+    for reopen in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut job = Job::open(temp.path(), INPUTS).unwrap();
+        let path = job.path.clone();
+        let mut writes = 0;
+        assert!(
+            job.advance_inner(
+                |_, _, _| panic!("unsaved start"),
+                |path, journal| {
+                    writes += 1;
+                    assert!(journal.started);
+                    // Introduce the obstruction only after the journal read returns.
+                    std::fs::create_dir_all(path).unwrap();
+                    store_io::write(path, journal)
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(writes, 1);
+        assert!(!job.journal.started);
+        assert_eq!(job.completed().len(), 0);
+        std::fs::remove_dir(&path).unwrap();
+        if reopen {
+            drop(job);
+            job = Job::open(temp.path(), INPUTS).unwrap();
+        }
+        assert!(
+            job.advance(|stage, _, action| {
+                assert_eq!((stage, action), (Stage::Discover, Action::Start));
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        );
+    }
+}
+
+fn commit_synthetic_effect(folder: &Path, key: &str, effects: &mut usize) {
+    let receipt = folder.join(format!("synthetic-effect-{key}"));
+    if !receipt.exists() {
+        store_io::publish(&receipt, b"committed").unwrap();
+        *effects += 1;
+    }
+}
+
+#[test]
+fn every_write_boundary_reloads_committed_state_without_repeating_or_losing_effects() {
+    for (boundary, expected) in STAGES.iter().copied().enumerate() {
+        for at_start in [true, false] {
+            for after_replace in [false, true] {
+                for reopen in [false, true] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+                    for _ in 0..boundary {
+                        job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
+                    }
+                    let _scope = crate::core::file_reads::Scope::begin();
+                    let _ = crate::core::file_reads::read(&job.path, 8192);
+                    let expected_key = format!("engine-1-{}-{boundary}", hex::encode(INPUTS));
+                    let mut calls = Vec::new();
+                    let mut effects = 0;
+                    let mut writes = 0;
+                    let failed_write = if at_start { 1 } else { 2 };
+                    let result = job.advance_inner(
+                        |stage, key, action| {
+                            assert_eq!(
+                                (stage, key, action),
+                                (expected, expected_key.as_str(), Action::Start)
+                            );
+                            calls.push(stage);
+                            commit_synthetic_effect(temp.path(), key, &mut effects);
+                            if expected == Stage::Tasks {
+                                Err(Cause::Auth)
+                            } else {
+                                Ok(Availability::Completed)
+                            }
+                        },
+                        |path, journal| {
+                            writes += 1;
+                            if writes == failed_write {
+                                if after_replace {
+                                    store_io::write(path, journal)?;
+                                }
+                                return Err(io::ErrorKind::Other.into());
+                            }
+                            store_io::write(path, journal)
+                        },
+                    );
+                    assert!(result.is_err());
+                    assert_eq!(writes, failed_write);
+                    assert_eq!(effects, usize::from(!at_start));
+                    let settled = !at_start && after_replace;
+                    let disk = Journal::read(&job.path, INPUTS).unwrap();
+                    assert_eq!(disk.completed.len(), boundary + usize::from(settled));
+                    assert_eq!(disk.started, at_start == after_replace);
+                    assert_eq!(job.completed().len(), boundary);
+                    if reopen {
+                        drop(job);
+                        job = Job::open(temp.path(), INPUTS).unwrap();
+                    }
+                    let advanced = job
+                        .advance(|stage, key, action| {
+                            let next = if settled {
+                                STAGES[boundary + 1]
+                            } else {
+                                expected
+                            };
+                            let expected_action = if settled || at_start && !after_replace {
+                                Action::Start
+                            } else {
+                                Action::Recover
+                            };
+                            assert_eq!((stage, action), (next, expected_action));
+                            if !settled {
+                                assert_eq!(key, expected_key);
+                                commit_synthetic_effect(temp.path(), key, &mut effects);
+                            }
+                            calls.push(stage);
+                            if stage == Stage::Tasks && expected == Stage::Tasks {
+                                Err(Cause::Auth)
+                            } else {
+                                Ok(Availability::Completed)
+                            }
+                        })
+                        .unwrap();
+                    assert_eq!(advanced, !settled || boundary + 1 < STAGES.len());
+                    assert_eq!(effects, 1);
+                    let expected_calls = if !at_start && !after_replace { 2 } else { 1 };
+                    assert_eq!(
+                        calls.iter().filter(|s| **s == expected).count(),
+                        expected_calls
+                    );
+                    finish(&mut job);
+                    drop(job);
+                    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+                    assert_eq!(job.completed().len(), STAGES.len());
+                    if expected == Stage::Tasks {
+                        assert_eq!(
+                            job.completed()[6],
+                            Availability::Failed { cause: Cause::Auth }
+                        );
+                    }
+                    assert!(
+                        !job.advance(|_, _, _| panic!("repeated completed effect"))
+                            .unwrap()
+                    );
+                }
+            }
+        }
+    }
+}

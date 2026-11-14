@@ -22,13 +22,64 @@ the job without consuming an attempt. A crashed process loses ownership immediat
 On restart, queued/running work may reacquire the lock; a stored stage never authorizes
 skipping validation or executing two producers. Recheck completed output under that lock.
 An existing `english-summary.json` completes automatic work and is preserved, even if a
-failure marker or running journal was left behind. No new journal or completion marker is
-introduced. Explicit script NotesOnly replay retains its existing transcript and output
+failure marker or running journal was left behind. This legacy/active-engine contract adds
+no journal or completion marker; the dormant coordinator below has its own journal.
+Explicit script NotesOnly replay retains its existing transcript and output
 backup rules; standalone notes invocation is an explicit replay. Built-in sorting/task
 replay retains its existing summary-preservation behavior. Typed user `notes.md` is input.
 This contract does not claim transactional render/export/task publication: those ports and
 engine-specific retry spacing/discovery policy remain later retirement stages.
 
-Release tests cover competing claims, released claims, interrupted jobs, existing-output
-preservation, old journal decoding, stage attribution and allowlisted UI causes. They must
-run in the release check; no unit tests or installed-app acceptance run on the laptop here.
+## Built-in checkpoint contract (retirement stage 1)
+
+`meeting_job::checkpoint::Job` is a dormant shared coordinator, not a change to active
+engine selection or the notes queue. It uses the same Stage and Cause types and the same
+meeting claim. Its fixed order is discover, prepare (audio), route, transcribe, translate,
+notes, tasks, render, publish. Existing script wire vocabulary remains version 1.
+
+Each input identity has a bounded versioned journal in `.sidenote-jobs/<digest>.json`.
+The caller supplies a 32-byte digest covering meeting identity, inputs, configuration, adapter
+versions and available capabilities. No paths, helper output or meeting content are stored.
+Previous identities are retained so switching inputs A -> B -> A does not rerun A.
+New capabilities require a new identity; NotAvailable is recorded without failing the job.
+The journal stores a completed prefix and a content-free Cause for the active Stage.
+Tasks, Compare and Title are optional in the shared Stage policy. Only Tasks is in the
+fixed checkpoint order. Optional failure appends `Failed { cause }` to the settled prefix,
+retaining the existing typed Cause without setting a blocking failure. Render and Publish
+continue, and restart skips the failed optional stage for those same inputs. NotAvailable
+remains distinct from attempted failure. Required stages cannot settle as Failed.
+
+Evidence at the stage-1 base f94f0fe: `hex-meeting-english.ps1:277-282` catches task
+failure without failing the meeting; `:50-53` catches quick-title failure; `:283-287`
+declares comparison nonfatal, and `hex-meeting-compare-delayed.ps1:8-12` catches it.
+These paths are under `scripts/meeting-pipeline/`. Title/comparison adapter substeps must
+use the same optional policy; this layer neither adds checkpoints nor invokes them.
+IO errors use `failure.rs`'s redacted MEETING_JOB boundary; invalid journals fail closed.
+
+The claim covers journal reads, flushed atomic replacement and all adapter calls. A
+completed stage is never called again for that identity. Before calling a new stage the
+coordinator durably records its start and supplies a stable version/input/stage key.
+After interruption or a required-stage typed failure the same stage receives Recover,
+never another Start. A settled optional failure is skipped like other settled outcomes.
+An adapter must reconcile a durable receipt for that key, returning committed results or
+finishing uncommitted work idempotently. It must not repeat committed effects. Arbitrary
+external effects cannot be made exactly-once by a journal alone; later adapters must
+provide atomic publication or destination-side key deduplication before being wired in.
+An interrupted save reloads the current journal before another call, bypassing refresh-scope
+read caches while retaining bounded, pinned-descriptor reads. Missing adapters return
+NotAvailable. No real processing, helper, UI, discovery or external effects are added here.
+
+Synthetic tests cover competing triggers, process exit at each completed boundary,
+recovery before/after stage commit, unavailable adapters, retained input identities,
+per-stage typed failures, invalid journals and failed checkpoint writes. The existing
+meeting-guards tests retain legacy lock interoperability and output preservation coverage.
+These tests do not qualify real stage adapters or installed-app acceptance.
+
+Write-fault tests cover start and completion persistence before replacement and after a
+real flushed replacement followed by an injected error, at every fixed stage. Both retry
+on the same Job and reopen run within a primed refresh Scope. They retain the disk state
+under test, assert the action/key and settled prefix, and use immutable synthetic receipts
+to count effects. Tasks fail nonfatally in this matrix and still reach Render/Publish.
+A separate failed-start test obstructs the target inside the writer after reading, and
+asserts that the real store write fails before any adapter call. These are controlled IO
+faults and process-exit tests, not a claim of hardware power-loss qualification.
