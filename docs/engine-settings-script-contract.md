@@ -36,7 +36,7 @@ clear the `models.te` migration status, including changes to its provider or del
 | Project list / comparison playbook paths: `hex-meeting-tasks.py:48`; `hex-meeting-compare-granola.py:179` | `stages.project_list_source`, `comparison_playbook_source`; both use the existing KB revision |
 | Allowed export roots: `hex-meeting-render.py:50-55` | `stages.export_roots`; empty delegates to the platform Documents/Hex Meetings default at later integration |
 | Eight legacy values, aliases and transcription timeout | Existing ten-name table in `src/core/engine_settings/migration.rs`; no new environment reads |
-| Notes / translation instructions: `hex-meeting-english.ps1:170-216,222` | Existing local `engine_settings.notes_prompt`, `translation_prompt`, with reset to shipped defaults |
+| Notes / translation instructions: `hex-meeting-english.ps1:170-216,225` | Existing local `engine_settings.notes_prompt`, `translation_prompt`, with reset to shipped defaults |
 
 The computed ASR formula retains its fixed startup allowance (300) and clamps (1800..3600)
 from `hex-meeting-english.ps1:109`; these are algorithm constants, not additional overrides.
@@ -45,7 +45,7 @@ The worker-thread setting remains `engine_settings.worker_threads` (4).
 Meeting directories, input/output files, `NotesOnly`, force/rerun targets, project overrides,
 comparison time windows and supplied comparison CSVs are per-meeting/job inputs, not device
 settings. `RoutingConfig` supplies an explicit pipeline snapshot for an experiment; the
-persistent home is the existing `pipeline` section. Executable locations, temporary folders,
+persistent homes are the existing `pipeline` and `labs` sections. Executable locations, temporary folders,
 process cleanup, audio segmentation constants and model catalog/checksum definitions remain
 runtime/algorithm contracts, not duplicated user settings. Custom scripts and their files are
 preserved; porting arbitrary script edits is not established by this schema.
