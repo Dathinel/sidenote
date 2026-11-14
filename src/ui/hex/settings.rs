@@ -4,6 +4,8 @@ use crate::ui::{ai_notes, icons, nav, tasks, widgets::ButtonDisabled};
 use sidenote::core::{Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
+mod engine;
+
 #[derive(Default)]
 pub struct Settings {
     pub navigation_open: bool,
@@ -101,7 +103,7 @@ impl Page {
     fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::People => &["Our team", "External"],
-            Self::Meetings => &["Recording", "Summaries", "Tasks"],
+            Self::Meetings => &["Recording", "Summaries", "Tasks", "Engine"],
             Self::Helpers => &["Agents", "Speech model"],
             _ => &[],
         }
@@ -112,6 +114,7 @@ impl Page {
             Self::Meetings => match tab {
                 1 => Section::AiNotes,
                 2 => Section::Features,
+                3 => Section::MeetingEngine,
                 _ => Section::Meetings,
             },
             Self::Prompts => Section::PromptLibrary,
@@ -152,6 +155,7 @@ fn current(section: Section) -> (Page, usize) {
         Section::Meetings | Section::Vocabulary => (Page::Meetings, 0),
         Section::AiNotes => (Page::Meetings, 1),
         Section::Features => (Page::Meetings, 2),
+        Section::MeetingEngine => (Page::Meetings, 3),
         Section::PromptLibrary => (Page::Prompts, 0),
         Section::Teams => (Page::People, 0),
         Section::Model => (Page::Hex, 0),
@@ -696,6 +700,30 @@ fn app_index() -> Vec<Destination> {
             "tasks",
             Page::Meetings,
             2,
+            false,
+        ),
+        entry(
+            "engine-worker-threads",
+            "Worker threads",
+            "meeting engine transcription workers parallel",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-transcription-deadline",
+            "Transcription deadline",
+            "meeting engine transcription timeout seconds",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-request-deadline",
+            "Request deadline",
+            "meeting engine transcription request timeout seconds",
+            Page::Meetings,
+            3,
             false,
         ),
         entry(
@@ -2175,6 +2203,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
+        (Page::Meetings, 3) => engine::body(s, p),
         (Page::Meetings, _) => col()
             .w_full()
             .child(card(
@@ -2572,6 +2601,7 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
+        "settings-engine" => (Page::Meetings, 3),
         "settings-prompts"
         | "settings-prompts-edited"
         | "settings-prompts-diff"
@@ -2744,7 +2774,11 @@ mod tests {
     #[test]
     fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
         assert!(jump_groups(Page::Meetings, 0).is_empty());
-        assert_eq!(Page::Meetings.tabs(), ["Recording", "Summaries", "Tasks"]);
+        assert_eq!(
+            Page::Meetings.tabs(),
+            ["Recording", "Summaries", "Tasks", "Engine"]
+        );
+        assert_eq!(current(Page::Meetings.section(3)), (Page::Meetings, 3));
         assert_eq!(jump_groups(Page::Hex, 0).len(), 7);
         assert_eq!(
             ownership_text(Page::Hex),

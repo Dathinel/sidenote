@@ -2943,6 +2943,9 @@ pub fn spec() -> AppSpec<State> {
             ("settings-tasks", |s| {
                 hex::settings::scene(s, "settings-tasks")
             }),
+            ("settings-engine", |s| {
+                hex::settings::scene(s, "settings-engine")
+            }),
             ("settings-prompts", |s| {
                 hex::settings::scene(s, "settings-prompts")
             }),
