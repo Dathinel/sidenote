@@ -404,8 +404,7 @@ mod platform {
     };
     use windows_sys::Win32::{
         Foundation::{
-            CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
-            WAIT_OBJECT_0,
+            HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation, WAIT_OBJECT_0,
         },
         Security::SECURITY_ATTRIBUTES,
         System::{JobObjects::*, Pipes::CreatePipe, Threading::*},
@@ -544,14 +543,6 @@ mod platform {
     fn wide(value: &OsStr) -> Vec<u16> {
         value.encode_wide().chain(Some(0)).collect()
     }
-    struct Attributes(Vec<usize>);
-    impl Drop for Attributes {
-        fn drop(&mut self) {
-            unsafe {
-                DeleteProcThreadAttributeList(self.0.as_mut_ptr().cast());
-            }
-        }
-    }
     pub fn spawn(
         path: &Path,
         job: Arc<Job>,
@@ -578,51 +569,6 @@ mod platform {
                 Failure(Reason::WorkerUnavailable)
             );
         }
-        let handles = [
-            child_in.as_raw_handle(),
-            child_out.as_raw_handle(),
-            null.as_raw_handle(),
-        ];
-        let mut size = 0;
-        unsafe {
-            InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size);
-        }
-        ensure!(size > 0, Failure(Reason::WorkerUnavailable));
-        let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
-        ensure!(
-            unsafe {
-                InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 1, 0, &mut size)
-            } != 0,
-            Failure(Reason::WorkerUnavailable)
-        );
-        let mut attributes = Attributes(storage);
-        let list = attributes.0.as_mut_ptr().cast();
-        ensure!(
-            unsafe {
-                UpdateProcThreadAttribute(
-                    list,
-                    0,
-                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                    handles.as_ptr().cast(),
-                    std::mem::size_of_val(&handles),
-                    ptr::null_mut(),
-                    ptr::null(),
-                )
-            } != 0,
-            Failure(Reason::WorkerUnavailable)
-        );
-        let startup = STARTUPINFOEXW {
-            StartupInfo: STARTUPINFOW {
-                cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
-                dwFlags: STARTF_USESTDHANDLES,
-                hStdInput: child_in.as_raw_handle(),
-                hStdOutput: child_out.as_raw_handle(),
-                hStdError: null.as_raw_handle(),
-                ..Default::default()
-            },
-            lpAttributeList: list,
-        };
-        let mut process = PROCESS_INFORMATION::default();
         let app = wide(path.as_os_str());
         let mut command = wide(OsStr::new(&format!("\"{}\" --stdio", path.display())));
         // Do not copy the parent's credentials/environment into a parser process.
@@ -632,37 +578,30 @@ mod platform {
             system.to_string_lossy()
         )));
         environment.push(0);
-        ensure!(
-            unsafe {
-                CreateProcessW(
-                    app.as_ptr(),
-                    command.as_mut_ptr(),
-                    ptr::null(),
-                    ptr::null(),
-                    1,
-                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                    environment.as_ptr().cast(),
-                    ptr::null(),
-                    &startup.StartupInfo,
-                    &mut process,
-                )
-            } != 0,
-            Failure(Reason::WorkerUnavailable)
-        );
-        let handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess) };
+        let (handle, thread) = crate::windows_launch::spawn(
+            &app,
+            &mut command,
+            &environment,
+            [
+                child_in.as_handle(),
+                child_out.as_handle(),
+                null.as_handle(),
+            ],
+            None,
+            CREATE_SUSPENDED,
+        )
+        .map_err(|_| Failure(Reason::WorkerUnavailable))?;
         let assigned =
             unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), handle.as_raw_handle()) };
         if assigned == 0 {
             unsafe {
                 TerminateProcess(handle.as_raw_handle(), 1);
-                CloseHandle(process.hThread);
+                drop(thread);
             }
             return Err(Failure(Reason::WorkerCrashed).into());
         }
-        let resumed = unsafe { ResumeThread(process.hThread) };
-        unsafe {
-            CloseHandle(process.hThread);
-        }
+        let resumed = unsafe { ResumeThread(thread.as_raw_handle()) };
+        drop(thread);
         if resumed == u32::MAX {
             unsafe {
                 TerminateProcess(handle.as_raw_handle(), 1);

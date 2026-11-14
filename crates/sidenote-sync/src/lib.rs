@@ -35,3 +35,6 @@ pub fn validate_private_directory(path: &std::path::Path) -> anyhow::Result<()> 
     );
     Ok(())
 }
+
+#[cfg(windows)]
+pub mod windows_launch;
