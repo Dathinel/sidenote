@@ -13,6 +13,8 @@ use std::{
 
 #[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
+#[cfg(any(windows, test))]
+pub(crate) mod completion;
 pub mod heartbeat;
 #[cfg(windows)]
 mod notes_environment;
@@ -86,9 +88,7 @@ fn native_service_tick() -> io::Result<()> {
     fs::create_dir_all(&meetings)?;
     let mut failure = None;
     if crate::core::meeting_router::jobs::configured() {
-        if let Err(error) = catch_up_routing(&meetings, |id| {
-            crate::core::meeting_router::jobs::enqueue_automatic(id).map_err(io::Error::other)
-        }) {
+        if let Err(error) = catch_up_routing_automatic(&meetings) {
             failure = Some(error);
         }
         if let Err(error) = crate::core::meeting_router::jobs::start_worker() {
@@ -133,11 +133,24 @@ fn pipeline_in(
     meetings: &std::path::Path,
     meeting_id: Option<&str>,
 ) -> io::Result<()> {
+    pipeline_with(state, meetings, meeting_id, false)
+}
+fn pipeline_with(
+    state: &std::path::Path,
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+    automatic: bool,
+) -> io::Result<()> {
     let activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
     {
-        if crate::core::meeting_router::jobs::enqueue(id).is_err() {
+        let queued = if automatic {
+            crate::core::meeting_router::jobs::enqueue_automatic(id)
+        } else {
+            crate::core::meeting_router::jobs::enqueue(id)
+        };
+        if queued.is_err() {
             log("could not queue meeting routing; existing pipeline continues");
         } else if crate::core::meeting_router::jobs::start_worker().is_err() {
             log("routing remains queued for the next drain");
@@ -254,6 +267,11 @@ fn script_folders(
         })
         .collect())
 }
+pub(crate) fn catch_up_routing_automatic(meetings: &std::path::Path) -> io::Result<()> {
+    catch_up_routing(meetings, |id| {
+        crate::core::meeting_router::jobs::enqueue_automatic(id).map_err(io::Error::other)
+    })
+}
 fn catch_up_routing(
     meetings: &std::path::Path,
     mut enqueue: impl FnMut(&str) -> io::Result<()>,
@@ -345,10 +363,7 @@ fn script_command_with_environment(
 fn catch_up() -> io::Result<()> {
     let _activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if crate::core::meeting_router::jobs::configured() {
-        catch_up_routing(&crate::core::meetings_dir(), |id| {
-            crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
-        })
-        .at(Stage::CatchUpRouting)?;
+        catch_up_routing_automatic(&crate::core::meetings_dir()).at(Stage::CatchUpRouting)?;
         crate::core::meeting_router::jobs::start_worker().at(Stage::CatchUpRouting)?;
     }
     pipeline(None)
@@ -500,7 +515,20 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
             if valid {
                 let _ = finished.send(id.to_owned());
             }
-            continue_after_pipeline(pipeline(valid.then_some(id)), log);
+            #[cfg(not(windows))]
+            continue_after_pipeline(
+                pipeline_with(
+                    &crate::core::state_dir(),
+                    &crate::core::meetings_dir(),
+                    valid.then_some(id),
+                    true,
+                ),
+                log,
+            );
+            #[cfg(windows)]
+            if !valid {
+                continue_after_pipeline(pipeline(None), log);
+            }
         }
     }
     Ok(())
@@ -595,13 +623,7 @@ pub fn run() -> ! {
                 ));
             }
             if crate::core::meeting_router::jobs::configured() {
-                let _ = catch_up_routing(&crate::core::meetings_dir(), |id| {
-                    if crate::core::meeting_router::jobs::has_result(id) {
-                        Ok(())
-                    } else {
-                        crate::core::meeting_router::jobs::enqueue(id).map_err(io::Error::other)
-                    }
-                });
+                let _ = catch_up_routing_automatic(&crate::core::meetings_dir());
             }
             if let Err(error) = pipeline(None) {
                 log(&format!(

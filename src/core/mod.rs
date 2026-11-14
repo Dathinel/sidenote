@@ -21,6 +21,7 @@ pub mod meeting_router;
 pub mod meeting_watch;
 pub mod provider;
 pub mod recording_guard;
+pub mod recording_source;
 pub mod relay_preview;
 pub use config::{Config, Feature, Features};
 pub mod check_v2;

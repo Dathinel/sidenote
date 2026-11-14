@@ -96,6 +96,10 @@ pub(super) fn read(root: &Path, id: &str) -> io::Result<Option<Job>> {
         Err(e) => Err(e),
     }
 }
+#[cfg(any(windows, test))]
+pub(crate) fn accepted(root: &Path, id: &str) -> io::Result<bool> {
+    Ok(read(root, id)?.is_some())
+}
 fn write(root: &Path, id: &str, job: &mut Job, state: JobState, message: &str) -> io::Result<()> {
     job.state = state;
     job.updated_at = now();

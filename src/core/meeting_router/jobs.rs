@@ -70,9 +70,6 @@ fn acknowledge(root: &Path, id: &str, path: &Path, bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
-pub(crate) fn has_result(id: &str) -> bool {
-    valid_id(id) && destination(&super::super::state_dir(), id).is_file()
-}
 pub fn configured() -> bool {
     super::super::config::read(&super::super::state_dir())
         .ok()
@@ -87,6 +84,9 @@ pub fn enqueue(id: &str) -> Result<()> {
     )
 }
 fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
+    enqueue_with(root, meetings, id, false)
+}
+fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Result<()> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
@@ -104,8 +104,16 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
         return Ok(());
     }
     let _lock = pending_lock(root, id)?;
-    if queue(root).join(format!("{id}.json")).exists() {
+    if (automatic && automatic_accepted_locked(root, id)?)
+        || queue(root).join(format!("{id}.json")).exists()
+    {
         return Ok(());
+    }
+    if !automatic {
+        match fs::remove_file(queue(root).join(format!("{id}.completed"))) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
     }
     store_io::write(
         &queue(root).join(format!("{id}.json")),
@@ -118,35 +126,54 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
 }
 /// Automatic discovery must not create a new generation for unchanged input.
 /// Only successful output completes a revision; failed attempts remain retryable.
-#[cfg(target_os = "linux")]
 pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
-    let root = super::super::state_dir();
+    enqueue_with(
+        &super::super::state_dir(),
+        &super::super::meetings_dir(),
+        id,
+        true,
+    )
+}
+fn automatic_revision(root: &Path, id: &str) -> io::Result<Option<String>> {
+    match store_io::read_bounded(&queue(root).join(format!("{id}.completed")), 1024) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| store_io::invalid("Invalid completion receipt")),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
+    let pending: Option<Pending> = store_io::read(&queue(root).join(format!("{id}.json")))?;
+    if let Some(pending) = pending {
+        if pending.id != id {
+            return Err("Invalid queued meeting".into());
+        }
+        return Ok(true);
+    }
+    match snapshot(root, id)? {
+        Some(job) => completed(root, &job),
+        None => Ok(false),
+    }
+}
+fn completed(root: &Path, job: &Job) -> Result<bool> {
+    Ok(automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str()))
+}
+#[cfg(any(windows, test))]
+pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    if let Ok(Some(job)) = snapshot(&root, id)
-        && automatic_revision(&root, id).as_deref() == Some(job.input_revision.as_str())
-    {
-        return Ok(());
-    }
-    enqueue(id)
-}
-#[cfg(target_os = "linux")]
-fn automatic_revision(root: &Path, id: &str) -> Option<String> {
-    fs::read(queue(root).join(format!("{id}.completed")))
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
+    let root = super::super::state_dir();
+    let _lock = pending_lock(&root, id)?;
+    automatic_accepted_locked(&root, id)
 }
 fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
     // Persist before acknowledging: a crash between these writes safely reuses output.
-    if cfg!(target_os = "linux") {
-        store_io::atomic_write(
-            &queue(root).join(format!("{id}.completed")),
-            revision.as_bytes(),
-        )
-    } else {
-        Ok(())
-    }
+    store_io::atomic_write(
+        &queue(root).join(format!("{id}.completed")),
+        revision.as_bytes(),
+    )
 }
 
 fn load_config(root: &Path) -> Result<RoutingConfig> {
@@ -468,7 +495,11 @@ pub fn run_pending() -> Result<()> {
         .find(|a| a[0] == "--meeting-id")
         .map(|a| a[1].as_str())
     {
-        enqueue(id)?;
+        if automatic {
+            enqueue_automatic(id)?;
+        } else {
+            enqueue(id)?;
+        }
     }
     if !configured() {
         return Ok(());
@@ -504,9 +535,6 @@ pub fn run_pending() -> Result<()> {
             if !attempted.insert((pending.id.clone(), pending.generation)) {
                 continue;
             }
-            if automatic && !retry_ready(&root, &pending) {
-                continue;
-            }
             found = true;
             let mut job = match snapshot(&root, &pending.id) {
                 Ok(Some(job)) => job,
@@ -523,6 +551,13 @@ pub fn run_pending() -> Result<()> {
                 }
             };
             let destination = destination(&root, &job.id);
+            if completed(&root, &job)? {
+                acknowledge(&root, &job.id, &path, &bytes)?;
+                continue;
+            }
+            if automatic && !retry_ready(&root, &pending) {
+                continue;
+            }
             if job.config.meeting_languages == ["en"]
                 && !matches!(
                     job.config.language_mode.as_str(),
@@ -815,7 +850,6 @@ fn prepared_chunks(
 #[cfg(test)]
 mod recording_guard_tests {
     use super::*;
-    #[cfg(target_os = "linux")]
     #[test]
     fn automatic_completion_survives_crash_before_queue_acknowledgement() {
         let root = tempfile::tempdir().unwrap();
@@ -823,10 +857,10 @@ mod recording_guard_tests {
         let pending = queue(root.path()).join(format!("{id}.json"));
         store_io::atomic_write(&pending, b"pending generation").unwrap();
         let bytes = fs::read(&pending).unwrap();
-        assert!(automatic_revision(root.path(), id).is_none());
+        assert!(automatic_revision(root.path(), id).unwrap().is_none());
         complete_automatic(root.path(), id, "input-a").unwrap();
         assert_eq!(
-            automatic_revision(root.path(), id).as_deref(),
+            automatic_revision(root.path(), id).unwrap().as_deref(),
             Some("input-a")
         );
         assert_eq!(fs::read(&pending).unwrap(), bytes);
@@ -837,9 +871,127 @@ mod recording_guard_tests {
         acknowledge(root.path(), id, &pending, b"new generation").unwrap();
         assert!(!pending.exists());
         assert_eq!(
-            automatic_revision(root.path(), id).as_deref(),
+            automatic_revision(root.path(), id).unwrap().as_deref(),
             Some("input-a")
         );
+    }
+    #[test]
+    fn recording_source_reconnect_and_worker_recovery_reuse_completion() {
+        use crate::core;
+        const ID: &str = "9944771122-887768";
+        let root = core::state_dir();
+        let folder = core::meetings_dir().join(ID);
+        fs::create_dir_all(&folder).unwrap();
+        store_io::write(
+            &folder.join("manifest.json"),
+            &serde_json::json!({"status":"complete","duration_ms":30000}),
+        )
+        .unwrap();
+        fs::write(
+            folder.join("transcript.ndjson"),
+            serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+        )
+        .unwrap();
+        let mut config = core::Config::load().unwrap();
+        config.pipeline.profile = "experimental".into();
+        store_io::write(&root.join("config.json"), &config).unwrap();
+        let dest = destination(&root, ID);
+        write_transcript(
+            &dest,
+            &english_fallback(&[], &config.pipeline, "seed".into(), "synthetic"),
+        )
+        .unwrap();
+        enqueue_automatic(ID).unwrap();
+        let pending = queue(&root).join(format!("{ID}.json"));
+        let generation = fs::read(&pending).unwrap();
+        run_pending().unwrap();
+        assert!(!pending.exists());
+        let output = fs::read(&dest).unwrap();
+        let modified = fs::metadata(&dest).unwrap().modified().unwrap();
+        crate::listener::catch_up_routing_automatic(&core::meetings_dir()).unwrap();
+        assert!(!pending.exists(), "reconnect created another generation");
+        // Restore the real pending generation: crash after receipt, before acknowledgement.
+        store_io::atomic_write(&pending, &generation).unwrap();
+        run_pending().unwrap();
+        assert!(!pending.exists());
+        assert_eq!(fs::read(&dest).unwrap(), output);
+        assert_eq!(fs::metadata(&dest).unwrap().modified().unwrap(), modified);
+        enqueue(ID).unwrap();
+        assert!(pending.is_file());
+        assert!(automatic_revision(&root, ID).unwrap().is_none());
+        fs::remove_file(pending).unwrap();
+        fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn recording_source_replay_after_finished_job_preserves_generation_and_publication() {
+        use crate::core::{
+            self,
+            recording_source::{CompletedMeeting, Error, Session, Source},
+        };
+        const ID: &str = "9944771122-887767";
+        struct One;
+        impl Source for One {
+            fn poll(&mut self) -> std::result::Result<Vec<CompletedMeeting>, Error> {
+                Ok(vec![CompletedMeeting::capture(&core::meetings_dir(), ID)?])
+            }
+        }
+        let root = core::state_dir();
+        let folder = core::meetings_dir().join(ID);
+        fs::create_dir_all(&folder).unwrap();
+        store_io::write(
+            &folder.join("manifest.json"),
+            &serde_json::json!({"status":"complete","duration_ms":30000}),
+        )
+        .unwrap();
+        fs::write(
+            folder.join("transcript.ndjson"),
+            serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+        )
+        .unwrap();
+        let mut config = core::Config::load().unwrap();
+        config.pipeline.profile = "experimental".into();
+        store_io::write(&root.join("config.json"), &config).unwrap();
+        let dest = destination(&root, ID);
+        write_transcript(
+            &dest,
+            &english_fallback(&[], &config.pipeline, "seed".into(), "synthetic"),
+        )
+        .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("source.json");
+        let mut first = Session::open(One, cursor.clone()).unwrap();
+        assert_eq!(
+            first.drain(|m| {
+                enqueue_automatic(m.id()).map_err(io::Error::other)?;
+                run_pending().map_err(io::Error::other)?;
+                Err(io::ErrorKind::Interrupted.into())
+            }),
+            Err(Error::Dispatch(io::ErrorKind::Interrupted))
+        );
+        drop(first);
+        let pending = queue(&root).join(format!("{ID}.json"));
+        assert!(!pending.exists());
+        let completed = automatic_revision(&root, ID).unwrap().unwrap();
+        let output = fs::read(&dest).unwrap();
+        let modified = fs::metadata(&dest).unwrap().modified().unwrap();
+        Session::open(One, cursor)
+            .unwrap()
+            .drain(|m| {
+                enqueue_automatic(m.id()).map_err(io::Error::other)?;
+                assert!(!pending.exists(), "replay created another generation");
+                run_pending().map_err(io::Error::other)
+            })
+            .unwrap();
+        assert_eq!(
+            automatic_revision(&root, ID).unwrap().as_deref(),
+            Some(completed.as_str())
+        );
+        assert_eq!(fs::read(&dest).unwrap(), output);
+        assert_eq!(fs::metadata(&dest).unwrap().modified().unwrap(), modified);
+        // An explicit retry still creates a fresh request after automatic completion.
+        enqueue(ID).unwrap();
+        assert!(pending.is_file());
+        fs::remove_file(pending).unwrap();
     }
     #[test]
     fn routing_enqueue_skips_short_and_unknown_and_deduplicates_kept() {

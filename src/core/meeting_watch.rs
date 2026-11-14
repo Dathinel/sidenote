@@ -502,6 +502,26 @@ impl Watch {
 pub(crate) fn start(log: fn(&str)) -> Sender<String> {
     start_managed(log).0
 }
+#[cfg(windows)]
+fn dispatch_completions(
+    source: &mut Result<
+        super::recording_source::Session<super::recording_source::legacy::Discovery>,
+        super::recording_source::Error,
+    >,
+    log: fn(&str),
+) {
+    let result = match source {
+        Ok(source) => source
+            .drain(|meeting| crate::listener::completion::handoff(meeting.id())?.acknowledge()),
+        Err(error) => {
+            log(&format!("recording source: {error:?}"));
+            return;
+        }
+    };
+    if let Err(error) = result {
+        log(&format!("recording source: {error:?}"));
+    }
+}
 pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::JoinHandle<()>) {
     let (send, receive) = mpsc::channel::<String>();
     let worker = std::thread::spawn(move || {
@@ -510,6 +530,11 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
         let start = Instant::now();
         let state = super::state_dir();
         let meetings = super::meetings_dir();
+        #[cfg(windows)]
+        let mut source = super::recording_source::Session::open(
+            super::recording_source::legacy::Discovery(meetings.clone()),
+            state.join("local/recording-source.json"),
+        );
         loop {
             let labs = super::store_io::defer_busy(super::config::Config::load_in(&state));
             if let Ok(Some(config)) = &labs {
@@ -528,10 +553,16 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
             } else if labs.is_err() {
                 watch.timer.baseline = None;
             }
+            #[cfg(windows)]
+            dispatch_completions(&mut source, log);
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                    Ok(id) => watch.finished(&id, &state),
+                    Ok(id) => {
+                        watch.finished(&id, &state);
+                        #[cfg(windows)]
+                        dispatch_completions(&mut source, log);
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 }
