@@ -1,4 +1,6 @@
 //! Device-local preparation only. No stage consumes these choices yet.
+mod migration;
+
 use super::{
     Config,
     agent_instructions::{self, Agent},
@@ -111,6 +113,7 @@ impl Config {
             .after_stop_languages
             .as_ref()
             .and_then(|routes| routes.routes.get(language))
+            .filter(|route| !route.model.trim().is_empty())
             .map(|route| route.model.as_str())
             .or_else(|| {
                 self.engine_settings
