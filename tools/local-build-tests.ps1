@@ -20,8 +20,10 @@ class CargoArgs {
 '@
     $env:PATH = "$temp;" + $env:PATH
     $env:LOCALAPPDATA = $temp
-    $env:CARGO_TARGET_DIR = Join-Path $temp 'fallback'
-    $env:CARGO_BUILD_TARGET_DIR = Join-Path $temp 'other-fallback'
+    # local_build refuses targets outside the worktree, so the fallbacks live inside it.
+    $fallback = Join-Path $root ('target\local-build-test-' + [guid]::NewGuid().ToString('N'))
+    $env:CARGO_TARGET_DIR = Join-Path $fallback 'fallback'
+    $env:CARGO_BUILD_TARGET_DIR = Join-Path $fallback 'other-fallback'
     $gate = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'release_gate.ps1'))
     $calls = [regex]::Matches($gate, "(?m)^Gate 'clippy(?:-asr)?' \{ (& tools/local_build.ps1 .+) \}\r?$")
     if ($calls.Count -ne 2) { throw 'Expected both Clippy gate calls.' }
@@ -51,7 +53,12 @@ class CargoArgs {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '& tools/local_build.ps1 check --config build.target-dir=unchecked' 2>$null
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1) { throw 'Unchecked Cargo config was accepted.' }
-    Write-Output 'PASS: both gate calls, separator suffix, target overrides, and config rejection.'
+    $ErrorActionPreference = 'Continue'
+    $outside = Join-Path $temp 'outside'
+    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& tools/local_build.ps1 check --target-dir '$outside'" 2>$null)
+    $ErrorActionPreference = 'Stop'
+    if ($LASTEXITCODE -ne 1 -or @($output | Where-Object { $_.StartsWith('arg:') }).Count) { throw 'Target outside the worktree was accepted.' }
+    Write-Output 'PASS: both gate calls, separator suffix, target overrides, config rejection, and outside-target rejection.'
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
