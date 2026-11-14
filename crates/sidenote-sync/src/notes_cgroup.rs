@@ -271,15 +271,23 @@ mod tests {
                 assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
             }
             assert!(!leaf.0.exists());
-            println!("PASS job {nonce}: limit enforced; supervisor alive; leaf removed after reap");
+            println!(
+                "PASS job {nonce}: limit enforced; supervisor alive; descendants reaped; leaf removed"
+            );
         }
         let peak = read(budget.0.join("supervisor/memory.peak")).unwrap();
         assert!(peak.trim().parse::<u64>().unwrap() < 16777216);
         let status = read("/proc/self/status").unwrap();
-        println!(
-            "MEASURE supervisor cgroup peak={}; {}",
-            peak.trim(),
-            status.lines().find(|s| s.starts_with("VmHWM:")).unwrap()
+        let high = status.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
+        assert!(
+            high.split_whitespace()
+                .nth(1)
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                * 1024
+                < 16777216
         );
+        println!("MEASURE supervisor cgroup peak={}; {}", peak.trim(), high);
     }
 }

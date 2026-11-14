@@ -245,7 +245,7 @@ mod tests {
         let (tx2, rx2) = tokio::net::unix::pipe::pipe().unwrap();
         (Pipes { rx, tx: tx2 }, Pipes { rx: rx2, tx })
     }
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn contract() {
         let deny = |_, _, _: &std::path::Path| panic!("no launch");
         let stub = |_, _, _: &std::path::Path| Ok(isolated(None));
