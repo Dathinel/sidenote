@@ -131,10 +131,14 @@ pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
         true,
     )
 }
-fn automatic_revision(root: &Path, id: &str) -> Option<String> {
-    store_io::read_bounded(&queue(root).join(format!("{id}.completed")), 1024)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
+fn automatic_revision(root: &Path, id: &str) -> io::Result<Option<String>> {
+    match store_io::read_bounded(&queue(root).join(format!("{id}.completed")), 1024) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| store_io::invalid("Invalid completion receipt")),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
     let pending: Option<Pending> = store_io::read(&queue(root).join(format!("{id}.json")))?;
@@ -144,9 +148,18 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
         }
         return Ok(true);
     }
-    Ok(snapshot(root, id)?.is_some_and(|job| {
-        automatic_revision(root, id).as_deref() == Some(job.input_revision.as_str())
-    }))
+    let revision = automatic_revision(root, id)?;
+    Ok(snapshot(root, id)?
+        .is_some_and(|job| revision.as_deref() == Some(job.input_revision.as_str())))
+}
+#[cfg(any(windows, test))]
+pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
+    }
+    let root = super::super::state_dir();
+    let _lock = pending_lock(&root, id)?;
+    automatic_accepted_locked(&root, id)
 }
 fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
     // Persist before acknowledging: a crash between these writes safely reuses output.
@@ -829,10 +842,10 @@ mod recording_guard_tests {
         let pending = queue(root.path()).join(format!("{id}.json"));
         store_io::atomic_write(&pending, b"pending generation").unwrap();
         let bytes = fs::read(&pending).unwrap();
-        assert!(automatic_revision(root.path(), id).is_none());
+        assert!(automatic_revision(root.path(), id).unwrap().is_none());
         complete_automatic(root.path(), id, "input-a").unwrap();
         assert_eq!(
-            automatic_revision(root.path(), id).as_deref(),
+            automatic_revision(root.path(), id).unwrap().as_deref(),
             Some("input-a")
         );
         assert_eq!(fs::read(&pending).unwrap(), bytes);
@@ -843,7 +856,7 @@ mod recording_guard_tests {
         acknowledge(root.path(), id, &pending, b"new generation").unwrap();
         assert!(!pending.exists());
         assert_eq!(
-            automatic_revision(root.path(), id).as_deref(),
+            automatic_revision(root.path(), id).unwrap().as_deref(),
             Some("input-a")
         );
     }
@@ -896,7 +909,7 @@ mod recording_guard_tests {
         drop(first);
         let pending = queue(&root).join(format!("{ID}.json"));
         assert!(!pending.exists());
-        let completed = automatic_revision(&root, ID).unwrap();
+        let completed = automatic_revision(&root, ID).unwrap().unwrap();
         let output = fs::read(&dest).unwrap();
         let modified = fs::metadata(&dest).unwrap().modified().unwrap();
         Session::open(One, cursor)
@@ -908,7 +921,7 @@ mod recording_guard_tests {
             })
             .unwrap();
         assert_eq!(
-            automatic_revision(&root, ID).as_deref(),
+            automatic_revision(&root, ID).unwrap().as_deref(),
             Some(completed.as_str())
         );
         assert_eq!(fs::read(&dest).unwrap(), output);

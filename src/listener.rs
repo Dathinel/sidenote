@@ -13,6 +13,8 @@ use std::{
 
 #[cfg(windows)]
 const HIDDEN: u32 = 0x08000000;
+#[cfg(any(windows, test))]
+pub(crate) mod completion;
 pub mod heartbeat;
 #[cfg(windows)]
 mod notes_environment;
@@ -133,11 +135,24 @@ fn pipeline_in(
     meetings: &std::path::Path,
     meeting_id: Option<&str>,
 ) -> io::Result<()> {
+    pipeline_with(state, meetings, meeting_id, false)
+}
+fn pipeline_with(
+    state: &std::path::Path,
+    meetings: &std::path::Path,
+    meeting_id: Option<&str>,
+    automatic: bool,
+) -> io::Result<()> {
     let activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if let Some(id) = meeting_id
         && crate::core::meeting_router::jobs::configured()
     {
-        if crate::core::meeting_router::jobs::enqueue(id).is_err() {
+        let queued = if automatic {
+            crate::core::meeting_router::jobs::enqueue_automatic(id)
+        } else {
+            crate::core::meeting_router::jobs::enqueue(id)
+        };
+        if queued.is_err() {
             log("could not queue meeting routing; existing pipeline continues");
         } else if crate::core::meeting_router::jobs::start_worker().is_err() {
             log("routing remains queued for the next drain");

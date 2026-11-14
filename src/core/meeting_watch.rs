@@ -511,13 +511,16 @@ fn dispatch_completions(
     log: fn(&str),
 ) {
     let result = match source {
-        Ok(source) => source.drain(|meeting| crate::listener::pipeline(Some(meeting.id()))),
+        Ok(source) => source
+            .drain(|meeting| crate::listener::completion::handoff(meeting.id())?.acknowledge()),
         Err(error) => {
             log(&format!("recording source: {error:?}"));
             return;
         }
     };
-    if let Err(error) = result {
+    if let Err(error) = result
+        && error != super::recording_source::Error::Dispatch(io::ErrorKind::WouldBlock)
+    {
         log(&format!("recording source: {error:?}"));
     }
 }
