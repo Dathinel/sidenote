@@ -46,6 +46,7 @@ mod today;
 mod todo;
 mod updates;
 mod widgets;
+mod window;
 
 use rune::{AppSpec, Cx, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use sidenote::core::{
@@ -4128,7 +4129,6 @@ pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // encoded (a display proxy). The file gets Unix microseconds. Nothing is written otherwise.
     let mut app = benchmark::configure(rune::App::new(spec()));
-    let close_handle = app.handle();
     let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
     let refresh_handle = app.handle();
     let mut first_frame = false;
@@ -4153,38 +4153,5 @@ pub fn run() {
             }
         }
     });
-    // The OS places a new window at a cascade offset, which at 125% scaling on a 1080p screen
-    // pushes the bottom (and the Ask bar) off screen. Fit the size to the work area and centre.
-    app = app.on_window(move |win| {
-        let hwnd = win
-            .with_raw_handle(|h| match h.as_raw() {
-                rune::raw_window_handle::RawWindowHandle::Win32(w) => w.hwnd.get(),
-                _ => 0,
-            })
-            .unwrap_or(0);
-        if hwnd != 0 {
-            let handle = close_handle.clone();
-            if let Err(error) = sidenote::platform::guard_window_close(hwnd, move || {
-                handle.update(|s, tx| {
-                    if s.live_close() {
-                        tx.quit();
-                    }
-                });
-            }) {
-                sidenote::platform::show_error(&format!(
-                    "Could not protect unsaved notes: {error}"
-                ));
-                close_handle.quit();
-                return;
-            }
-            hex::remember_window(hwnd);
-            sidenote::platform::set_window_icon(hwnd);
-            if benchmark::show_offscreen(win, hwnd) {
-                return;
-            }
-            win.resize_instant(sidenote::platform::fit_to_work_area(hwnd, DEFAULT_SIZE));
-        }
-        win.center();
-    });
-    app.run();
+    window::configure(app).run();
 }

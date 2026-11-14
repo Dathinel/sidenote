@@ -1,4 +1,6 @@
 pub mod core;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 pub mod hex_engine;
 #[cfg(windows)]
 pub mod hex_install;

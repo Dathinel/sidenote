@@ -1,4 +1,4 @@
-﻿#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
 #[cfg(all(test, windows, feature = "desktop"))]
@@ -11,8 +11,6 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 }
 #[cfg(all(windows, feature = "desktop"))]
 mod ui;
-#[cfg(all(windows, feature = "desktop"))]
-use sidenote::platform;
 fn main() {
     #[cfg(all(windows, feature = "desktop"))]
     let process_started = std::time::Instant::now();
@@ -232,74 +230,10 @@ fn main() {
         std::process::exit(sidenote::core::daily_check::run_cli());
     }
     #[cfg(all(windows, feature = "desktop"))]
-    desktop();
+    sidenote::desktop::run(ui::run);
     #[cfg(not(all(windows, feature = "desktop")))]
     {
         eprintln!("UNAVAILABLE_ON_PLATFORM");
         std::process::exit(2);
     }
-}
-
-#[cfg(all(windows, feature = "desktop"))]
-fn desktop() {
-    if sidenote::service::role() != sidenote::service::DeviceRole::Full {
-        eprintln!("UNAVAILABLE_ON_PLATFORM");
-        return;
-    }
-    let headless = std::env::args().any(|a| {
-        matches!(
-            a.as_str(),
-            "--snap"
-                | "--tree"
-                | "--script"
-                | "--frames"
-                | "--video"
-                | "--strip"
-                | "--list-scenes"
-                | "--help"
-        )
-    });
-    let offscreen_bench = sidenote::env_var("SIDENOTE_BENCH_OFFSCREEN").is_some();
-    let _instance = if headless || offscreen_bench {
-        None
-    } else {
-        match platform::single_instance() {
-            Ok(Some(instance)) => Some(instance),
-            Ok(None) => return,
-            Err(_) => {
-                platform::show_error(
-                    "Sidenote could not check whether it is already open. Reopen Sidenote to try again. If this continues, restart Windows.",
-                );
-                return;
-            }
-        }
-    };
-    let _update_window = if headless || offscreen_bench {
-        None
-    } else {
-        match sidenote::updates::window_lock() {
-            Ok(guard) => Some(guard),
-            Err(sidenote::updates::WindowLockError::AlreadyOpen) => return,
-            Err(sidenote::updates::WindowLockError::Io(error)) => {
-                let message = match error.kind() {
-                    std::io::ErrorKind::PermissionDenied => {
-                        "Sidenote cannot access its update folder. Check your Windows account's folder permissions, then reopen Sidenote."
-                    }
-                    _ => {
-                        "Sidenote could not open its update lock. Check that your local drive is available and has free space, then reopen Sidenote."
-                    }
-                };
-                platform::show_error(message);
-                return;
-            }
-        }
-    };
-    if !headless && (!offscreen_bench || sidenote::env_var("SIDENOTE_BENCH_NO_WARM").is_none()) {
-        rune::warm_gpu(Default::default());
-    }
-    ui::run();
-    // Closing the window ends the process. A running Ask is stopped first so its CLI, that CLI's
-    // children and its temporary prompt file go with it. The question is already saved.
-    sidenote::core::ask::cancel_all(std::time::Duration::from_secs(3));
-    std::process::exit(0);
 }
