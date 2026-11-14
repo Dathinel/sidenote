@@ -250,8 +250,18 @@ impl super::Source for Events {
         if self.state == State::Stopped {
             return Err(super::Error::Stopped);
         }
+        if self.state == State::OptedOut {
+            return Ok(Vec::new());
+        }
         self.tick();
         super::Source::poll(&mut self.folders)
+    }
+
+    fn retained_ids(&self) -> Option<&super::BTreeSet<String>> {
+        if matches!(self.state, State::OptedOut | State::Stopped) {
+            return None;
+        }
+        super::Source::retained_ids(&self.folders)
     }
 
     fn stop(&mut self) {

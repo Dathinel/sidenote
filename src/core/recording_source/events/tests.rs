@@ -120,8 +120,8 @@ fn oversized_lines_and_silent_peers_disconnect() {
 
 #[test]
 fn opt_out_never_connects_and_control_is_explicit() {
-    use super::super::{Source, folders::Discovery};
-    let (root, meetings, _) = super::super::tests::fixture();
+    use super::super::{Session, folders::Discovery};
+    let (root, meetings, cursor) = super::super::tests::fixture();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let discovery = root.path().join("local-api.json");
     fs::write(
@@ -131,37 +131,79 @@ fn opt_out_never_connects_and_control_is_explicit() {
     )
     .unwrap();
     listener.set_nonblocking(true).unwrap();
-    let mut source = Events::new(Discovery::new(meetings).unwrap(), discovery, false).unwrap();
-    source.start().unwrap();
-    assert_eq!(source.poll().unwrap().len(), 2);
-    assert_eq!(source.state(), State::OptedOut);
-    assert_eq!(source.control_state(), ControlState::Unsupported);
+    let source = Events::new(Discovery::new(meetings.clone()).unwrap(), discovery, false).unwrap();
+    let mut session = Session::open(source, cursor).unwrap();
+    session.drain(|_| panic!("opted-out delivery")).unwrap();
+    assert_eq!(session.source().state(), State::OptedOut);
+    assert_eq!(session.source().control_state(), ControlState::Unsupported);
+    fs::rename(&meetings, root.path().join("hidden")).unwrap();
+    session.drain(|_| panic!("opted-out folder read")).unwrap();
     assert_eq!(
         listener.accept().err().unwrap().kind(),
         std::io::ErrorKind::WouldBlock
     );
-    source.stop();
-    assert_eq!(source.state(), State::Stopped);
-    assert!(matches!(source.poll(), Err(super::super::Error::Stopped)));
+    session.stop();
+    assert_eq!(session.source().state(), State::Stopped);
+    assert_eq!(
+        session.drain(|_| panic!("stopped")),
+        Err(super::super::Error::Stopped)
+    );
 }
 
 #[test]
 fn subscribe_then_catch_up_deduplicates_reconnect_and_restart() {
     use super::super::{Session, folders::Discovery};
-    let (_root, meetings, cursor) = super::super::tests::fixture();
-    fs::remove_file(meetings.join("99-1/transcript.ndjson")).unwrap();
-    let deleted = meetings.join("998-1");
-    fs::create_dir(&deleted).unwrap();
-    fs::write(deleted.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+    use std::sync::mpsc::channel;
+    let (root, meetings, cursor) = super::super::tests::fixture();
+    let arriving = meetings.join("99-1");
+    fs::remove_dir_all(&arriving).unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let discovery = root.path().join("local-api.json");
     fs::write(
-        deleted.join("transcript.ndjson"),
-        b"{\"text\":\"synthetic\"}\n",
+        &discovery,
+        serde_json::json!({"port":listener.local_addr().unwrap().port(),"token":"synthetic"})
+            .to_string(),
     )
     .unwrap();
-    fs::remove_dir_all(deleted).unwrap();
-    const FINISHED: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"type\":\"meeting.finished\",\"id\":\"100-1\"}\n\ndata: {\"type\":\"meeting.finished\",\"id\":\"998-1\"}\n\n";
-    let (api, task) = server(FINISHED);
-    let discovery = api.path().join("local-api.json");
+    let (subscribed, subscription) = channel();
+    let (publish, publication) = channel();
+    let (written, completion) = channel();
+    let (close, closed) = channel();
+    let folder = arriving.clone();
+    let task = thread::spawn(move || {
+        for generation in 0..2 {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            assert!(request.starts_with(b"GET /meetings/events HTTP/1.1\r\n"));
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+                .unwrap();
+            subscribed.send(generation).unwrap();
+            if generation == 0 {
+                publication.recv().unwrap();
+                fs::create_dir(&folder).unwrap();
+                fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+                fs::write(
+                    folder.join("transcript.ndjson"),
+                    b"{\"text\":\"synthetic gap\"}\n",
+                )
+                .unwrap();
+            }
+            socket
+                .write_all(b"data: {\"type\":\"meeting.finished\",\"id\":\"99-1\"}\n\n")
+                .unwrap();
+            written.send(()).unwrap();
+            closed.recv().unwrap();
+        }
+    });
     let source = Events::new(
         Discovery::new(meetings.clone()).unwrap(),
         discovery.clone(),
@@ -170,7 +212,13 @@ fn subscribe_then_catch_up_deduplicates_reconnect_and_restart() {
     .unwrap();
     let mut session = Session::open(source, cursor.clone()).unwrap();
     assert_eq!(session.source().state(), State::Connected);
-    task.join().unwrap();
+    assert_eq!(
+        subscription.recv_timeout(Duration::from_secs(5)).unwrap(),
+        0
+    );
+    assert!(!arriving.exists());
+    publish.send(()).unwrap();
+    completion.recv_timeout(Duration::from_secs(5)).unwrap();
     let mut queued = Vec::new();
     session
         .drain(|m| {
@@ -178,33 +226,23 @@ fn subscribe_then_catch_up_deduplicates_reconnect_and_restart() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(queued, ["100-1"]);
-    assert_eq!(session.source().state(), State::Offline);
-    let retry = Instant::now() + Duration::from_secs(3600);
-    session.source.retry_at = retry;
-    session
-        .drain(|_| panic!("duplicate during backoff"))
-        .unwrap();
-    assert_eq!(session.source.retry_at, retry);
-
-    let (replacement, task) = server(FINISHED);
-    fs::copy(replacement.path().join("local-api.json"), &discovery).unwrap();
-    fs::write(
-        meetings.join("99-1/transcript.ndjson"),
-        b"{\"text\":\"synthetic complete\"}\n",
-    )
-    .unwrap();
+    assert_eq!(queued, ["100-1", "99-1"]);
+    session.drain(|_| panic!("duplicate after gap")).unwrap();
+    session.source.failed(State::Offline);
+    close.send(()).unwrap();
     session.source.retry_at = Instant::now();
-    session
-        .drain(|m| {
-            queued.push(m.id().to_owned());
-            Ok(())
-        })
-        .unwrap();
+    session.drain(|_| panic!("duplicate at reconnect")).unwrap();
+    assert_eq!(
+        subscription.recv_timeout(Duration::from_secs(5)).unwrap(),
+        1
+    );
+    completion.recv_timeout(Duration::from_secs(5)).unwrap();
+    session.drain(|_| panic!("replayed event")).unwrap();
     assert_eq!(session.source().state(), State::Connected);
     assert_eq!(queued, ["100-1", "99-1"]);
-    task.join().unwrap();
     session.stop();
+    close.send(()).unwrap();
+    task.join().unwrap();
     assert_eq!(session.source().state(), State::Stopped);
     drop(session);
     let source = Events::new(Discovery::new(meetings).unwrap(), discovery, true).unwrap();

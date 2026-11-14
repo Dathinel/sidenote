@@ -84,6 +84,10 @@ pub trait Source {
         Ok(())
     }
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error>;
+    /// Full listing from the last successful poll, including incomplete inputs; None preserves receipts.
+    fn retained_ids(&self) -> Option<&BTreeSet<String>> {
+        None
+    }
     fn stop(&mut self) {}
 }
 
@@ -126,7 +130,15 @@ impl<S: Source> Session<S> {
             .map_err(|e| Error::Cursor(e.kind()))?;
         let mut cursor: Cursor =
             store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
-        for meeting in self.source.poll()? {
+        let meetings = self.source.poll()?;
+        if let Some(ids) = self.source.retained_ids() {
+            let before = cursor.delivered.len();
+            cursor.delivered.retain(|id| ids.contains(id));
+            if cursor.delivered.len() != before {
+                store_io::write(&self.cursor, &cursor).map_err(|e| Error::Cursor(e.kind()))?;
+            }
+        }
+        for meeting in meetings {
             if cursor.delivered.contains(meeting.id()) {
                 continue;
             }
