@@ -1686,4 +1686,8 @@ fn old_jobs_default_to_pipeline_and_failure_keeps_the_current_stage() {
     let job = queue::read(&root.0, ID).unwrap().unwrap();
     assert_eq!(job.stage, crate::core::meeting_job::Stage::Notes);
     assert!(matches!(job.state, JobState::HelperAuth { .. }));
+    assert_eq!(
+        job.state.failure_cause(),
+        Some(crate::core::meeting_job::Cause::Auth)
+    );
 }

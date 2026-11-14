@@ -1,5 +1,6 @@
 //! A lazy, native listener overlay. No Rune application or GPU device is initialized here.
 mod native;
+use crate::core::meeting_job::Cause;
 use crate::core::{self, file_reads, store_io};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -45,7 +46,7 @@ const SUMMARY_NOTICE_MS: i64 = 30_000;
 pub(super) enum Notice {
     Writing,
     Later,
-    Failed,
+    Failed(Cause),
     Off,
     Skipped,
     Unavailable,
@@ -55,7 +56,7 @@ impl Notice {
         match self {
             Self::Writing => "Writing summary...",
             Self::Later => "Summary will be written later",
-            Self::Failed => "Summary failed, open Sidenote",
+            Self::Failed(cause) => cause.label(),
             Self::Off => "Meeting summary is off",
             Self::Skipped => "Summary skipped",
             Self::Unavailable => "Summary unavailable, open Sidenote",
@@ -69,22 +70,10 @@ fn notice(id: &str) -> Notice {
         "app" | "scripts" => {}
         _ => return Notice::Unavailable,
     }
-    if core::meetings_dir()
-        .join(id)
-        .join("pipeline-failed.txt")
-        .is_file()
-        || core::notes::status(id).is_some_and(|s| {
-            !matches!(
-                s,
-                JobState::Queued
-                    | JobState::Running
-                    | JobState::Done { .. }
-                    | JobState::NoHelper
-                    | JobState::NeedsClick
-            )
-        })
+    if let Some(cause) = core::meeting_job::script_failure(&core::meetings_dir().join(id))
+        .or_else(|| core::notes::status(id).and_then(|s| s.failure_cause()))
     {
-        return Notice::Failed;
+        return Notice::Failed(cause);
     }
     let deferred = store_io::read::<String>(
         &core::state_dir()
@@ -102,7 +91,11 @@ fn notice(id: &str) -> Notice {
     } else if matches!(core::notes::status(id), Some(JobState::Queued))
         || (matches!(core::notes::status(id), Some(JobState::Running))
             && claim_busy(&core::state_dir().join("local/notes-jobs/worker.lock")))
-        || claim_busy(&core::meetings_dir().join(id).join(".notes-engine.lock"))
+        || claim_busy(
+            &core::meetings_dir()
+                .join(id)
+                .join(&core::meeting_job::contract().lock_file),
+        )
         || claim_busy(
             &core::state_dir()
                 .join("local/draft-summaries")
@@ -205,7 +198,7 @@ fn summary(id: &str) -> Option<String> {
     let final_path = core::meetings_dir().join(id).join("english-summary.json");
     let path = if final_path.is_file() {
         final_path
-    } else if notice(id) == Notice::Failed {
+    } else if matches!(notice(id), Notice::Failed(_)) {
         return None;
     } else {
         core::state_dir()
@@ -504,6 +497,14 @@ mod tests {
         assert!(!notice_fresh(1000, 1001, Some(1001)));
         assert!(notice_fresh(1000, 1001, Some(999)));
         assert_eq!(Notice::Later.text(), "Summary will be written later");
-        assert_eq!(Notice::Failed.text(), "Summary failed, open Sidenote");
+        assert_eq!(Notice::Failed(Cause::Auth).text(), "Agent sign-in needed");
+        assert_eq!(
+            Notice::Failed(Cause::Limit).text(),
+            "Agent usage limit reached"
+        );
+        assert_eq!(
+            Notice::Failed(Cause::TimedOut).text(),
+            "Meeting processing took too long"
+        );
     }
 }

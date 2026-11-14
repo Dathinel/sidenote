@@ -30,8 +30,12 @@ pub fn notes_pipeline() -> PathBuf {
 pub fn notes_problem(folder: &Path) -> Option<&'static str> {
     if folder.join("english-summary.json").is_file() {
         None
-    } else if folder.join("notes-failed").is_file() {
-        Some(NOTES_FAILED)
+    } else if let Some(cause) = super::meeting_job::script_failure(folder) {
+        Some(if cause == super::meeting_job::Cause::Other {
+            NOTES_FAILED
+        } else {
+            cause.message()
+        })
     } else if !notes_pipeline().is_file() {
         Some(NOTES_UNAVAILABLE)
     } else {
@@ -345,6 +349,16 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join("notes-failed"), b"failed").unwrap();
         assert_eq!(notes_problem(&folder), Some(NOTES_FAILED));
+        for (category, words) in [
+            ("HELPER_AUTH", "sign in"),
+            ("HELPER_LIMIT", "usage limit"),
+            ("timeout", "too long"),
+        ] {
+            fs::write(folder.join("pipeline-failed.txt"), format!("try 2026-11-14T12:00:00: pipeline-failure stage=notes category={category} kind=claude exit_code=1 deadline_seconds=600 elapsed_seconds=1.000\n")).unwrap();
+            let message = notes_problem(&folder).unwrap();
+            assert!(message.contains(words));
+            assert!(!message.contains(category));
+        }
         fs::write(folder.join("english-summary.json"), b"{}").unwrap();
         assert_eq!(notes_problem(&folder), None);
         fs::remove_dir_all(folder).unwrap();
