@@ -8,9 +8,13 @@ pub mod identity;
 #[cfg(target_os = "linux")]
 mod linux_secret;
 pub mod model;
+#[cfg(target_os = "linux")]
+pub mod notes_cgroup;
+#[cfg(target_os = "linux")]
+pub mod notes_supervisor;
 pub mod pairing;
 #[cfg(target_os = "linux")]
-mod pid_worker;
+pub mod pid_worker;
 mod preflight;
 #[cfg(target_os = "linux")]
 mod secure_store;
