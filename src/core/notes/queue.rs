@@ -30,13 +30,22 @@ pub(super) struct Job {
     pub sorting_pending: bool,
 }
 impl Job {
-    fn new(request: Option<Request>) -> Self {
+    fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
         Self {
             state: JobState::Queued,
             attempts: 0,
             next_try_at: None,
-            helper: None,
-            model: String::new(),
+            helper: settings.effective_helper(),
+            model: settings
+                .effective_helper()
+                .map(|h| {
+                    if settings.model.trim().is_empty() {
+                        h.default_model().into()
+                    } else {
+                        settings.model.clone()
+                    }
+                })
+                .unwrap_or_default(),
             instructions: "default".into(),
             updated_at: now(),
             message: "queued".into(),
@@ -167,7 +176,14 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
-    store_io::write(&job_path(root, id), &Job::new(mode))
+    let mut next = Job::new(mode, settings);
+    if let Some(previous) = read(root, id)?
+        && previous.helper.is_some()
+    {
+        next.helper = previous.helper;
+        next.model = previous.model;
+    }
+    store_io::write(&job_path(root, id), &next)
 }
 
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
@@ -249,6 +265,17 @@ fn process(
     settings: &NotesSettings,
     run: &mut impl Run,
 ) -> io::Result<()> {
+    // Global changes can revoke consent, but never select a different agent for this job.
+    let Some(helper) = job.helper.filter(|h| h.offered()) else {
+        return failure(root, id, job, Failure::Consent);
+    };
+    if settings.effective_helper() != Some(helper) {
+        return failure(root, id, job, Failure::Consent);
+    }
+    let mut pinned = settings.clone();
+    pinned.helper = Some(helper);
+    pinned.model = job.model.clone();
+    let settings = &pinned;
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     let m = manifest(&folder)?;
@@ -373,7 +400,6 @@ fn process(
     } else {
         &settings.model
     };
-    job.helper = Some(helper);
     job.model = model.into();
     job.attempts = job.attempts.saturating_add(1);
     write(root, id, job, JobState::Running, "running")?;

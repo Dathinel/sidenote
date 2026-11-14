@@ -65,6 +65,7 @@ struct Fake {
     glossary: Vec<String>,
     replies: VecDeque<Result<String, Failure>>,
     calls: Vec<(String, Duration)>,
+    selections: Vec<(Helper, String)>,
 }
 impl Fake {
     fn new(replies: Vec<Result<String, Failure>>) -> Self {
@@ -73,6 +74,7 @@ impl Fake {
             glossary: Vec::new(),
             replies: replies.into(),
             calls: Vec::new(),
+            selections: Vec::new(),
         }
     }
 }
@@ -85,11 +87,12 @@ impl Run for Fake {
     }
     fn run(
         &mut self,
-        _: Helper,
-        _: &str,
+        helper: Helper,
+        model: &str,
         prompt: String,
         timeout: Duration,
     ) -> Result<String, Failure> {
+        self.selections.push((helper, model.into()));
         self.calls.push((prompt, timeout));
         self.replies.pop_front().expect("unexpected helper call")
     }
@@ -1526,4 +1529,52 @@ fn summary_model_defaults_and_custom_models_survive_settings_roundtrip() {
         assert_eq!(saved.helper, Some(Helper::Codex));
         assert_eq!(saved.model, model);
     }
+}
+
+#[test]
+fn queued_restarted_and_manual_retries_keep_the_enqueued_selection() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let original = NotesSettings {
+        model: "original-model".into(),
+        ..settings_fixture()
+    };
+    enqueue(&root.0, &original, Some(Request::MakeNotes));
+    let path = root.0.join(format!("local/notes-jobs/{ID}.json"));
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, original.helper);
+    assert_eq!(job.model, "original-model");
+    job.state = JobState::Running;
+    store_io::write(&path, &job).unwrap();
+    let changed_model = NotesSettings {
+        model: "different-model".into(),
+        ..original.clone()
+    };
+    let mut fake = Fake::new(vec![Err(Failure::Backend { exit: Some(1) })]);
+    drain(&root.0, &changed_model, &mut fake);
+    assert_eq!(fake.selections, [(Helper::Claude, "original-model".into())]);
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    job.state = JobState::BackendError {
+        next_try_ms: Some(0),
+        exit: Some(1),
+    };
+    store_io::write(&path, &job).unwrap();
+    let changed_helper = NotesSettings {
+        helper: Some(Helper::Codex),
+        ..changed_model.clone()
+    };
+    let mut no_calls = Fake::new(vec![]);
+    drain(&root.0, &changed_helper, &mut no_calls);
+    assert!(no_calls.calls.is_empty());
+    assert_eq!(state(&root.0), JobState::NoHelper);
+    enqueue(&root.0, &changed_helper, Some(Request::TryAgain));
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, Some(Helper::Claude));
+    assert_eq!(job.model, "original-model");
+    let mut retry = Fake::new(vec![Err(Failure::TimedOut)]);
+    drain(&root.0, &changed_model, &mut retry);
+    assert_eq!(
+        retry.selections,
+        [(Helper::Claude, "original-model".into())]
+    );
 }
