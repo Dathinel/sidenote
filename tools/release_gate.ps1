@@ -99,6 +99,7 @@ Push-Location (Join-Path $root 'relay')
 Gate 'relay-deps' { bun install --frozen-lockfile }
 Pop-Location
 Gate 'pipeline-tests' { python tools/pipeline-tests.py }
+Gate 'linux-boundaries' { python tools/prove_linux_boundaries.py . --self-test }
 Gate 'pipeline-install-dryrun' { python tools/pipeline-install-dryrun.py }
 Gate 'build-arguments' { powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/local-build-tests.ps1 }
 Gate 'fmt' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu fmt --check }
