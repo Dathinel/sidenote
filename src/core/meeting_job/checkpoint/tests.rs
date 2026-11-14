@@ -324,6 +324,10 @@ fn invalid_journals_fail_closed_and_io_diagnostics_are_content_free() {
             serde_json::json!(vec![Availability::Completed; 10]),
         ),
         ("failure", serde_json::json!(Cause::Auth)),
+        (
+            "completed",
+            serde_json::json!([Availability::Failed { cause: Cause::Auth }]),
+        ),
         ("unknown", serde_json::json!("synthetic private text")),
     ] {
         let mut corrupt = valid.clone();
@@ -338,37 +342,154 @@ fn invalid_journals_fail_closed_and_io_diagnostics_are_content_free() {
 }
 
 #[test]
-fn failed_start_and_completion_writes_never_authorize_a_duplicate_start() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut job = Job::open(temp.path(), INPUTS).unwrap();
-    let path = job.path.clone();
-    std::fs::create_dir_all(&path).unwrap();
-    assert!(
-        job.advance(|_, _, _| panic!("start was not saved"))
+fn failed_start_write_reaches_the_writer_without_calling_the_adapter() {
+    for reopen in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut job = Job::open(temp.path(), INPUTS).unwrap();
+        let path = job.path.clone();
+        let mut writes = 0;
+        assert!(
+            job.advance_inner(
+                |_, _, _| panic!("unsaved start"),
+                |path, journal| {
+                    writes += 1;
+                    assert!(journal.started);
+                    // Introduce the obstruction only after the journal read returns.
+                    std::fs::create_dir_all(path).unwrap();
+                    store_io::write(path, journal)
+                }
+            )
             .is_err()
-    );
-    std::fs::remove_dir(&path).unwrap();
-    let saved = temp.path().join("synthetic-started.json");
-    let mut original_key = String::new();
-    assert!(
-        job.advance(|_, key, action| {
-            assert_eq!(action, Action::Start);
-            original_key = key.to_owned();
-            std::fs::rename(&path, &saved).unwrap();
-            std::fs::create_dir(&path).unwrap();
-            Ok(Availability::Completed)
-        })
-        .is_err()
-    );
-    std::fs::remove_dir(&path).unwrap();
-    std::fs::rename(&saved, &path).unwrap();
-    assert!(
-        job.advance(|stage, key, action| {
-            assert_eq!((stage, action), (Stage::Discover, Action::Recover));
-            assert_eq!(key, original_key);
-            Ok(Availability::Completed)
-        })
-        .unwrap()
-    );
-    assert_eq!(job.completed().len(), 1);
+        );
+        assert_eq!(writes, 1);
+        assert!(!job.journal.started);
+        assert_eq!(job.completed().len(), 0);
+        std::fs::remove_dir(&path).unwrap();
+        if reopen {
+            drop(job);
+            job = Job::open(temp.path(), INPUTS).unwrap();
+        }
+        assert!(
+            job.advance(|stage, _, action| {
+                assert_eq!((stage, action), (Stage::Discover, Action::Start));
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        );
+    }
+}
+
+fn commit_synthetic_effect(folder: &Path, key: &str, effects: &mut usize) {
+    let receipt = folder.join(format!("synthetic-effect-{key}"));
+    if !receipt.exists() {
+        store_io::publish(&receipt, b"committed").unwrap();
+        *effects += 1;
+    }
+}
+
+#[test]
+fn every_write_boundary_reloads_committed_state_without_repeating_or_losing_effects() {
+    for (boundary, expected) in STAGES.iter().copied().enumerate() {
+        for at_start in [true, false] {
+            for after_replace in [false, true] {
+                for reopen in [false, true] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+                    for _ in 0..boundary {
+                        job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
+                    }
+                    let _scope = crate::core::file_reads::Scope::begin();
+                    let _ = crate::core::file_reads::read(&job.path, 8192);
+                    let expected_key = format!("engine-1-{}-{boundary}", hex::encode(INPUTS));
+                    let mut calls = Vec::new();
+                    let mut effects = 0;
+                    let mut writes = 0;
+                    let failed_write = if at_start { 1 } else { 2 };
+                    let result = job.advance_inner(
+                        |stage, key, action| {
+                            assert_eq!(
+                                (stage, key, action),
+                                (expected, expected_key.as_str(), Action::Start)
+                            );
+                            calls.push(stage);
+                            commit_synthetic_effect(temp.path(), key, &mut effects);
+                            if expected == Stage::Tasks {
+                                Err(Cause::Auth)
+                            } else {
+                                Ok(Availability::Completed)
+                            }
+                        },
+                        |path, journal| {
+                            writes += 1;
+                            if writes == failed_write {
+                                if after_replace {
+                                    store_io::write(path, journal)?;
+                                }
+                                return Err(io::ErrorKind::Other.into());
+                            }
+                            store_io::write(path, journal)
+                        },
+                    );
+                    assert!(result.is_err());
+                    assert_eq!(writes, failed_write);
+                    assert_eq!(effects, usize::from(!at_start));
+                    let settled = !at_start && after_replace;
+                    let disk = Journal::read(&job.path, INPUTS).unwrap();
+                    assert_eq!(disk.completed.len(), boundary + usize::from(settled));
+                    assert_eq!(disk.started, at_start == after_replace);
+                    assert_eq!(job.completed().len(), boundary);
+                    if reopen {
+                        drop(job);
+                        job = Job::open(temp.path(), INPUTS).unwrap();
+                    }
+                    let advanced = job
+                        .advance(|stage, key, action| {
+                            let next = if settled {
+                                STAGES[boundary + 1]
+                            } else {
+                                expected
+                            };
+                            let expected_action = if settled || at_start && !after_replace {
+                                Action::Start
+                            } else {
+                                Action::Recover
+                            };
+                            assert_eq!((stage, action), (next, expected_action));
+                            if !settled {
+                                assert_eq!(key, expected_key);
+                                commit_synthetic_effect(temp.path(), key, &mut effects);
+                            }
+                            calls.push(stage);
+                            if stage == Stage::Tasks && expected == Stage::Tasks {
+                                Err(Cause::Auth)
+                            } else {
+                                Ok(Availability::Completed)
+                            }
+                        })
+                        .unwrap();
+                    assert_eq!(advanced, !settled || boundary + 1 < STAGES.len());
+                    assert_eq!(effects, 1);
+                    let expected_calls = if !at_start && !after_replace { 2 } else { 1 };
+                    assert_eq!(
+                        calls.iter().filter(|s| **s == expected).count(),
+                        expected_calls
+                    );
+                    finish(&mut job);
+                    drop(job);
+                    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+                    assert_eq!(job.completed().len(), STAGES.len());
+                    if expected == Stage::Tasks {
+                        assert_eq!(
+                            job.completed()[6],
+                            Availability::Failed { cause: Cause::Auth }
+                        );
+                    }
+                    assert!(
+                        !job.advance(|_, _, _| panic!("repeated completed effect"))
+                            .unwrap()
+                    );
+                }
+            }
+        }
+    }
 }

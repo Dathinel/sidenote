@@ -74,3 +74,12 @@ recovery before/after stage commit, unavailable adapters, retained input identit
 per-stage typed failures, invalid journals and failed checkpoint writes. The existing
 meeting-guards tests retain legacy lock interoperability and output preservation coverage.
 These tests do not qualify real stage adapters or installed-app acceptance.
+
+Write-fault tests cover start and completion persistence before replacement and after a
+real flushed replacement followed by an injected error, at every fixed stage. Both retry
+on the same Job and reopen run within a primed refresh Scope. They retain the disk state
+under test, assert the action/key and settled prefix, and use immutable synthetic receipts
+to count effects. Tasks fail nonfatally in this matrix and still reach Render/Publish.
+A separate failed-start test obstructs the target inside the writer after reading, and
+asserts that the real store write fails before any adapter call. These are controlled IO
+faults and process-exit tests, not a claim of hardware power-loss qualification.

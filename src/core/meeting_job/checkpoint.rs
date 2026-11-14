@@ -129,8 +129,12 @@ impl Job {
         self.next_stage().zip(self.journal.failure)
     }
 
-    fn save(&mut self, journal: Journal) -> io::Result<()> {
-        store_io::write(&self.path, &journal)?;
+    fn save(
+        &mut self,
+        journal: Journal,
+        persist: &mut impl FnMut(&Path, &Journal) -> io::Result<()>,
+    ) -> io::Result<()> {
+        persist(&self.path, &journal)?;
         self.journal = journal;
         Ok(())
     }
@@ -146,12 +150,14 @@ impl Job {
         &mut self,
         execute: impl FnOnce(Stage, &str, Action) -> Result<Availability, Cause>,
     ) -> io::Result<bool> {
-        self.advance_inner(execute).at(Diagnostic::MeetingJob)
+        self.advance_inner(execute, |path, journal| store_io::write(path, journal))
+            .at(Diagnostic::MeetingJob)
     }
 
     fn advance_inner(
         &mut self,
         execute: impl FnOnce(Stage, &str, Action) -> Result<Availability, Cause>,
+        mut persist: impl FnMut(&Path, &Journal) -> io::Result<()>,
     ) -> io::Result<bool> {
         // Reload even after a failed write: replacement may have succeeded before an IO error.
         self.journal = Journal::read(&self.path, self.journal.inputs)?;
@@ -166,7 +172,7 @@ impl Job {
         if !self.journal.started {
             let mut journal = self.journal.clone();
             journal.started = true;
-            self.save(journal)?;
+            self.save(journal, &mut persist)?;
         }
         let key = format!(
             "engine-1-{}-{}",
@@ -191,7 +197,7 @@ impl Job {
             journal.started = false;
             journal.failure = None;
         }
-        self.save(journal)?;
+        self.save(journal, &mut persist)?;
         Ok(outcome.is_some())
     }
 }
