@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "stages": ["pipeline", "prepare", "transcribe", "translate", "notes", "render", "publish", "tasks", "compare", "title"],
+  "categories": ["HELPER_LIMIT", "HELPER_AUTH", "timeout", "other"],
+  "lock_file": ".notes-engine.lock",
+  "summary_file": "english-summary.json",
+  "preserve_completed": true
+}
