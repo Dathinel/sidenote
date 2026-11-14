@@ -1,7 +1,6 @@
 //! Experimental meeting-only routing. The compatibility profile never opens a local model.
 mod audio;
 mod baseline;
-#[cfg(windows)]
 pub mod batches;
 mod cache;
 mod cli;

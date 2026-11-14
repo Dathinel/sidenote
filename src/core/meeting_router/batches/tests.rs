@@ -1,7 +1,7 @@
 use super::*;
 use std::{cell::RefCell, rc::Rc};
 type Log = Rc<RefCell<Vec<String>>>;
-struct Fakes(Log);
+pub(super) struct Fakes(pub(super) Log);
 struct Session(Log);
 impl Drop for Session {
     fn drop(&mut self) {
@@ -37,10 +37,10 @@ impl EnglishBridge for Fakes {
         Ok(serde_json::json!({"text":"English"}))
     }
 }
-fn fake(root: &Path, plan: &Plan, log: &Log) -> Result<()> {
+pub(super) fn fake(root: &Path, plan: &Plan, log: &Log) -> Result<()> {
     run(root, plan, &mut Fakes(log.clone()), &mut Fakes(log.clone()))
 }
-fn ranges(wav: &Path) -> Vec<Range> {
+pub(super) fn ranges(wav: &Path) -> Vec<Range> {
     [
         ("en", "en"),
         ("hi", "a"),
@@ -64,7 +64,7 @@ fn ranges(wav: &Path) -> Vec<Range> {
     })
     .collect()
 }
-fn id(plan: &Plan, piece: &str) -> String {
+pub(super) fn id(plan: &Plan, piece: &str) -> String {
     plan.batches
         .values()
         .flat_map(|b| b.iter())
