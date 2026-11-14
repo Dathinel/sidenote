@@ -17,9 +17,14 @@ try {
     $category = 'exit'
     if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ine $selected.manifest_sha256) { throw 'Hash mismatch' }
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
-    if ($manifest.schema -cne 'sidenote.pipeline/1' -or @($manifest.files.PSObject.Properties).Count -ne 14) { throw 'Invalid manifest' }
+    $names = @('hex-meeting-compare-delayed.ps1','hex-meeting-compare-granola.py','hex-meeting-english.ps1',
+        'hex-meeting-notes.ps1','hex-meeting-publish.py','hex-meeting-quick-title.ps1','hex-meeting-render.py',
+        'hex-meeting-tasks.py','hex-meeting-watch.ps1','hex-pipeline-cli.ps1','hex-pipeline-run.py',
+        'meeting-audio.py','meeting-notes-prompt.md','meeting-translate-prompt.md')
+    if ($manifest.files.PSObject.Properties.Name -ccontains 'job-contract.json') { $names += 'job-contract.json' }
+    if ($manifest.schema -cne 'sidenote.pipeline/1' -or @($manifest.files.PSObject.Properties).Count -ne $names.Count) { throw 'Invalid manifest' }
     foreach ($file in $manifest.files.PSObject.Properties) {
-        if ($file.Name -cnotmatch '\A[a-z][a-z0-9-]*\.(?:ps1|py|md)\z' -or $file.Value -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Invalid manifest' }
+        if ($file.Name -cnotin $names -or $file.Value -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Invalid manifest' }
         $path = Join-Path $generation $file.Name
         $category = 'missing'
         if (-not [IO.File]::Exists($path)) { throw 'Generation incomplete' }

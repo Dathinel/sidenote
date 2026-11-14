@@ -21,18 +21,22 @@ function Verify-Generation($Selection) {
     if ((Get-Item -LiteralPath $manifestPath).Length -gt 8192 -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ine $Selection.manifest_sha256) { throw 'Invalid manifest' }
     $manifest = [IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
-    if ($manifest.schema -cne 'sidenote.pipeline/1' -or @($manifest.files.PSObject.Properties).Count -ne $names.Count) { throw 'Invalid manifest' }
-    foreach ($name in $names) {
+    $members = if ($manifest.files.PSObject.Properties.Name -ccontains 'job-contract.json') { $names } else { $legacyNames }
+    if ($manifest.schema -cne 'sidenote.pipeline/1' -or @($manifest.files.PSObject.Properties).Count -ne $members.Count) { throw 'Invalid manifest' }
+    foreach ($property in $manifest.files.PSObject.Properties) {
+        if ($property.Name -cnotin $members) { throw 'Invalid manifest' }
+    }
+    foreach ($name in $members) {
         if ($manifest.files.$name -cnotmatch '\A[0-9a-f]{64}\z' -or
             (Get-FileHash -LiteralPath (Join-Path $folder $name) -Algorithm SHA256).Hash -ine $manifest.files.$name) { throw 'Generation incomplete' }
     }
     return $manifest
 }
-function New-Generation([string]$Version, $Files, $Hashes, [string]$Prefix) {
+function New-Generation([string]$Version, $Files, $Hashes, [string]$Prefix, [string[]]$Members) {
     $id = $Prefix + '-' + [guid]::NewGuid().ToString('N')
     $folder = Join-Path $generations $id
     New-Item -ItemType Directory -Path $folder | Out-Null
-    foreach ($name in $names) {
+    foreach ($name in $Members) {
         $path = Join-Path $folder $name
         Write-Durable $path $Files[$name]
         if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $Hashes[$name]) { throw 'Hash mismatch' }
@@ -72,6 +76,7 @@ try {
         'hex-meeting-notes.ps1','hex-meeting-publish.py','hex-meeting-quick-title.ps1','hex-meeting-render.py',
         'hex-meeting-tasks.py','hex-meeting-watch.ps1','hex-pipeline-cli.ps1','hex-pipeline-run.py','job-contract.json',
         'meeting-audio.py','meeting-notes-prompt.md','meeting-translate-prompt.md')
+    $legacyNames = @($names | Where-Object { $_ -cne 'job-contract.json' })
     if (@($payload.files.PSObject.Properties).Count -ne $names.Count -or
         @($payload.hashes.PSObject.Properties).Count -ne $names.Count -or -not $payload.version -or -not $payload.entry) { throw 'Invalid bundle' }
     $files = @{}; $hashes = @{}
@@ -95,7 +100,8 @@ try {
         $backup = Join-Path (Join-Path $root '.pipeline-backups') ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $backup | Out-Null
         $oldFiles = @{}; $oldHashes = @{}
-        foreach ($name in $names) {
+        $oldNames = if ([IO.File]::Exists((Join-Path $root 'job-contract.json'))) { $names } else { $legacyNames }
+        foreach ($name in $oldNames) {
             $source = Join-Path $root $name
             if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Invalid legacy source' }
             $oldFiles[$name] = [IO.File]::ReadAllBytes($source)
@@ -113,7 +119,7 @@ try {
             $oldFiles[$comparison] = $utf8.GetBytes($text.Replace($oldSelector, $newSelector))
             $oldHashes[$comparison] = Hash-Bytes $oldFiles[$comparison]
         } elseif (-not $text.Contains($newSelector)) { throw 'Unsupported legacy script root' }
-        $current = New-Generation 'legacy' $oldFiles $oldHashes 'legacy'
+        $current = New-Generation 'legacy' $oldFiles $oldHashes 'legacy' $oldNames
         Publish-Pointer $current $null
         $manifest = Verify-Generation $current
     }
@@ -131,7 +137,7 @@ try {
     $same = $manifest.version -ceq $payload.version
     foreach ($name in $names) { $same = $same -and $manifest.files.$name -ceq $hashes[$name] }
     if (-not $same) {
-        $next = New-Generation $payload.version $files $hashes 'generation'
+        $next = New-Generation $payload.version $files $hashes 'generation' $names
         # The only commit point: all generation files are sealed and immutable.
         Publish-Pointer $next $current
     }
