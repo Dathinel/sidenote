@@ -788,6 +788,9 @@ impl View {
                         Notice::Writing => "floating-icon-writing.png",
                         Notice::Later => "floating-icon-later.png",
                         Notice::Failed => "floating-icon-failed.png",
+                        Notice::Off => "floating-icon-off.png",
+                        Notice::Skipped => "floating-icon-summary-skipped.png",
+                        Notice::Unavailable => "floating-icon-unavailable.png",
                     }
                 } else if frame.skipped {
                     "floating-icon-skipped.png"
@@ -1164,7 +1167,14 @@ pub(super) fn render_synthetic() -> io::Result<()> {
             replay: true,
             control: Arc::new(Control::new()),
         };
-        for notice in [Notice::Writing, Notice::Later, Notice::Failed] {
+        for notice in [
+            Notice::Writing,
+            Notice::Later,
+            Notice::Failed,
+            Notice::Off,
+            Notice::Skipped,
+            Notice::Unavailable,
+        ] {
             view.frame.borrow_mut().notice = Some(notice);
             view.paint_icon()?;
         }

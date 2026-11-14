@@ -19,7 +19,7 @@ struct Snapshot {
     now_ms: Option<i64>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct Pending {
     elapsed: u64,
     #[serde(default)]
@@ -46,6 +46,9 @@ pub(super) enum Notice {
     Writing,
     Later,
     Failed,
+    Off,
+    Skipped,
+    Unavailable,
 }
 impl Notice {
     fn text(self) -> &'static str {
@@ -53,11 +56,19 @@ impl Notice {
             Self::Writing => "Writing summary...",
             Self::Later => "Summary will be written later",
             Self::Failed => "Summary failed, open Sidenote",
+            Self::Off => "Meeting summary is off",
+            Self::Skipped => "Summary skipped",
+            Self::Unavailable => "Summary unavailable, open Sidenote",
         }
     }
 }
 fn notice(id: &str) -> Notice {
     use core::notes::JobState;
+    match core::notes::scripts_policy() {
+        "off" => return Notice::Off,
+        "app" | "scripts" => {}
+        _ => return Notice::Unavailable,
+    }
     if core::meetings_dir()
         .join(id)
         .join("pipeline-failed.txt")
@@ -88,9 +99,26 @@ fn notice(id: &str) -> Notice {
         )
     {
         Notice::Later
-    } else {
+    } else if matches!(core::notes::status(id), Some(JobState::Queued))
+        || (matches!(core::notes::status(id), Some(JobState::Running))
+            && claim_busy(&core::state_dir().join("local/notes-jobs/worker.lock")))
+        || claim_busy(&core::meetings_dir().join(id).join(".notes-engine.lock"))
+        || claim_busy(
+            &core::state_dir()
+                .join("local/draft-summaries")
+                .join(format!("{id}.lock")),
+        )
+    {
         Notice::Writing
+    } else {
+        Notice::Skipped
     }
+}
+fn claim_busy(path: &std::path::Path) -> bool {
+    path.is_file()
+        && store_io::lock(path).is_err_and(|e| {
+            matches!(e.raw_os_error(), Some(32 | 33)) || e.kind() == std::io::ErrorKind::WouldBlock
+        })
 }
 fn dismissed_path(id: &str) -> PathBuf {
     core::state_dir()
@@ -106,6 +134,24 @@ fn notice_fresh(at: i64, now: i64, dismissed: Option<i64>) -> bool {
     now.saturating_sub(at) < SUMMARY_NOTICE_MS && dismissed.is_none_or(|d| d < at)
 }
 
+fn retain_notice(
+    p: &mut Pending,
+    state: Notice,
+    now: i64,
+    expired: bool,
+    dismissed: Option<i64>,
+) -> bool {
+    if state == Notice::Writing && !expired {
+        p.notice_at_ms = None;
+        p.notice_since = None;
+        return true;
+    }
+    let at = *p.notice_at_ms.get_or_insert(now);
+    let since = *p.notice_since.get_or_insert_with(Instant::now);
+    notice_fresh(at, now, dismissed)
+        && since.elapsed() < Duration::from_millis(SUMMARY_NOTICE_MS as u64)
+}
+
 /// Render the native indicator without creating windows or starting a listener.
 #[doc(hidden)]
 pub fn render_synthetic() -> std::io::Result<()> {
@@ -113,6 +159,18 @@ pub fn render_synthetic() -> std::io::Result<()> {
         return Err(std::io::ErrorKind::PermissionDenied.into());
     }
     std::fs::create_dir_all(core::state_dir().join("local"))?;
+    let selected = notice("1800000000000-1");
+    let mut pending = Pending {
+        elapsed: 120,
+        stopped_at_ms: Some(1000),
+        ..Pending::default()
+    };
+    let first = retain_notice(&mut pending, selected, 1000, false, None);
+    let after_30s = retain_notice(&mut pending, selected, 31_000, false, None);
+    store_io::write(
+        &core::state_dir().join("local/notice-selection.json"),
+        &serde_json::json!({"notice":format!("{selected:?}"),"initial":first,"after_30s":after_30s}),
+    )?;
     native::render_synthetic()
 }
 
@@ -374,17 +432,16 @@ fn run(isolated: bool, replay: bool) {
                 let expired = now.saturating_sub(p.stopped_at_ms.unwrap_or(now))
                     >= NO_DRAFT_BOUND_MS
                     || stopped_since.elapsed() >= Duration::from_millis(NO_DRAFT_BOUND_MS as u64);
-                if state != Notice::Writing || expired || p.notice_at_ms.is_some() {
-                    let at = *p.notice_at_ms.get_or_insert_with(|| {
-                        dirty = true;
-                        now
-                    });
-                    let since = *p.notice_since.get_or_insert_with(Instant::now);
-                    let dismissed = store_io::read::<i64>(&dismissed_path(id)).ok();
-                    return notice_fresh(at, now, dismissed)
-                        && since.elapsed() < Duration::from_millis(SUMMARY_NOTICE_MS as u64);
-                }
-                true
+                let previous = p.notice_at_ms;
+                let keep = retain_notice(
+                    p,
+                    state,
+                    now,
+                    expired,
+                    store_io::read::<i64>(&dismissed_path(id)).ok(),
+                );
+                dirty |= previous != p.notice_at_ms;
+                keep
             });
             if (dirty || pending.len() != before)
                 && store_io::write(&pending_path(), &pending).is_err()
