@@ -58,7 +58,8 @@ impl Stage {
             Failure {
                 stage: self,
                 kind: error.kind(),
-                os: error.raw_os_error(),
+                os: super::store_io::os_code(&error),
+                reason: super::store_io::relay_reason(&error),
             },
         )
     }
@@ -70,13 +71,18 @@ struct Failure {
     /// The OS error number, kept so an `Uncategorized` kind (for example a
     /// Windows sharing or lock violation) can still be told apart in the log.
     os: Option<i32>,
+    reason: Option<&'static str>,
 }
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.os {
             Some(code) => write!(f, "{} ({:?}, os {code})", self.stage.code(), self.kind),
             None => write!(f, "{} ({:?})", self.stage.code(), self.kind),
+        }?;
+        if let Some(reason) = self.reason {
+            write!(f, " reason={reason}")?;
         }
+        Ok(())
     }
 }
 impl std::error::Error for Failure {}

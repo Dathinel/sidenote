@@ -164,14 +164,15 @@ pub struct Settings {
 
 impl Settings {
     pub fn load(root: &Path) -> io::Result<Self> {
+        let read = store_io::read(&root.join("local/relay/settings.json")).map_err(failed);
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
-            let mut settings: Self = store_io::read(&root.join("local/relay/settings.json"))?;
+            let mut settings: Self = read?;
             settings.enabled = false;
             settings.unavailable_reason = Some(sidenote_sync::RELAY_UNAVAILABLE.into());
             return Ok(settings);
         }
-        match store_io::read(&root.join("local/relay/settings.json")) {
+        match read {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             result => result,
         }
@@ -287,32 +288,42 @@ fn qualification_point(root: &Path, point: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn failed(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    use sidenote_sync::status::{Failure, Reason};
+fn category(kind: io::ErrorKind, reason: &'static str, os: Option<i32>) -> io::Error {
+    io::Error::new(kind, store_io::RelayFailure(reason, os))
+}
+fn failed(error: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> io::Error {
+    // anyhow's boxed conversion hides its root type, so inspect its own chain first.
+    if let Some(error) = (&error as &dyn std::any::Any).downcast_ref::<anyhow::Error>() {
+        return failed_root(error.as_ref());
+    }
     let error = error.into();
-    let mut cause: &(dyn std::error::Error + 'static) = error.as_ref();
+    failed_root(error.as_ref())
+}
+fn failed_root(mut cause: &(dyn std::error::Error + 'static)) -> io::Error {
+    use io::ErrorKind::{InvalidData, Other, UnexpectedEof};
+    use sidenote_sync::status::{Failure, Reason};
     loop {
         if let Some(error) = cause.downcast_ref::<io::Error>() {
-            return match error.raw_os_error() {
-                Some(code) => io::Error::from_raw_os_error(code),
-                None => io::Error::new(error.kind(), "relay_io"),
+            let reason = match error.kind() {
+                io::ErrorKind::WouldBlock => "relay_lock",
+                InvalidData | UnexpectedEof => "relay_decode",
+                _ => "relay_io",
             };
+            return category(error.kind(), reason, error.raw_os_error());
         }
         if let Some(Failure(reason)) = cause.downcast_ref::<Failure>() {
             return match reason {
-                Reason::CorruptDocument => {
-                    io::Error::new(io::ErrorKind::InvalidData, "relay_decode")
-                }
-                Reason::LocalStore | Reason::StoreFull => io::Error::other("relay_database"),
-                _ => io::Error::other("relay_setup"),
+                Reason::CorruptDocument => category(InvalidData, "relay_decode", None),
+                Reason::LocalStore | Reason::StoreFull => category(Other, "relay_database", None),
+                _ => category(Other, "relay_setup", None),
             };
         }
         if cause.is::<serde_json::Error>() || cause.is::<automerge::AutomergeError>() {
-            return io::Error::new(io::ErrorKind::InvalidData, "relay_decode");
+            return category(InvalidData, "relay_decode", None);
         }
         match cause.source() {
             Some(source) => cause = source,
-            None => return io::Error::other("relay_setup"),
+            None => return category(Other, "relay_setup", None),
         }
     }
 }
@@ -442,7 +453,7 @@ impl Preview {
 
     pub fn tasks(&self) -> io::Result<Vec<ManualTask>> {
         project(&self.device.load("tasks").map_err(failed)?)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "relay_decode"))
+            .map_err(|_| category(io::ErrorKind::InvalidData, "relay_decode", None))
     }
 
     pub fn edit(&self, before: &[ManualTask], after: &[ManualTask]) -> io::Result<()> {
@@ -733,13 +744,32 @@ mod tests {
         let source = io::Error::from_raw_os_error(5);
         let expected = source.kind();
         let error = failed(anyhow::Error::new(source).context("private context"));
-        assert_eq!(error.raw_os_error(), Some(5));
+        assert_eq!(store_io::os_code(&error), Some(5));
         assert_eq!(error.kind(), expected);
         let source = serde_json::from_str::<Value>("synthetic invalid JSON").unwrap_err();
         let error = failed(anyhow::Error::new(source).context("private context"));
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(error.to_string(), "relay_decode");
         assert_eq!(failed("private setup detail").to_string(), "relay_setup");
+        use super::super::failure::Stage;
+        use sidenote_sync::status::{Failure, Reason};
+        let json = serde_json::from_str::<Value>("!").unwrap_err();
+        let busy = io::Error::from(io::ErrorKind::WouldBlock);
+        for (source, reason) in [
+            (io::Error::from_raw_os_error(5).into(), "relay_io"),
+            (busy.into(), "relay_lock"),
+            (Failure(Reason::LocalStore).into(), "relay_database"),
+            (Failure(Reason::CorruptDocument).into(), "relay_decode"),
+            (json.into(), "relay_decode"),
+            (anyhow::Error::msg("synthetic setup"), "relay_setup"),
+        ] {
+            let error = failed(source);
+            let line = super::super::config::diagnostic("overlay_read", "relay_profile", &error);
+            assert_eq!(line.contains("os=Some(5)"), reason == "relay_io");
+            assert!(line.contains(&format!("reason={reason}")));
+            let line = Stage::NotesSettingsRead.error(error).to_string();
+            assert!(line.ends_with(&format!("reason={reason}")));
+        }
     }
 
     #[test]

@@ -354,7 +354,7 @@ impl Preview {
     pub(crate) fn shared_value(&self, store: &str, default: Value) -> io::Result<Value> {
         let domain = domain(store).ok_or_else(|| failed("shared domain"))?;
         project(&self.device.load(&domain).map_err(failed)?, store, default)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "relay_decode"))
+            .map_err(|_| category(io::ErrorKind::InvalidData, "relay_decode", None))
     }
     pub(crate) fn shared_edit(&self, store: &str, before: &Value, after: &Value) -> io::Result<()> {
         let domain = domain(store).ok_or_else(|| failed("shared domain"))?;
