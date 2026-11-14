@@ -1,4 +1,5 @@
 use super::{Control, Frame, RETIRE, callback_boundary};
+use crate::core::notes::SummarySkip;
 use crate::{
     core::{self, store_io},
     meeting_icon::{Notice, card_text, dismiss_notice, draft_seen},
@@ -490,7 +491,7 @@ impl View {
                 return;
             }
             let text = if let Some(notice) = frame.notice {
-                notice.text().into()
+                notice.text()
             } else if frame.skipped {
                 "Skipped. Short recordings are not processed.".into()
             } else {
@@ -706,7 +707,7 @@ impl View {
             let (width, height) = (self.px(self.width()), self.px(HEIGHT));
             let left = if pill { 0 } else { width - height };
             let label = wide(&if let Some(notice) = frame.notice {
-                notice.text().into()
+                notice.text()
             } else if frame.skipped {
                 "Skipped".into()
             } else {
@@ -788,8 +789,9 @@ impl View {
                         Notice::Writing => "floating-icon-writing.png",
                         Notice::Later => "floating-icon-later.png",
                         Notice::Failed(_) => "floating-icon-failed.png",
-                        Notice::Off => "floating-icon-off.png",
-                        Notice::Skipped => "floating-icon-summary-skipped.png",
+                        Notice::Skipped(SummarySkip::Off) => "floating-icon-off.png",
+                        Notice::Skipped(SummarySkip::Short) => "floating-icon-summary-skipped.png",
+                        Notice::Skipped(SummarySkip::Empty) => "floating-icon-empty.png",
                         Notice::Unavailable => "floating-icon-unavailable.png",
                     }
                 } else if frame.skipped {
@@ -1171,8 +1173,9 @@ pub(super) fn render_synthetic() -> io::Result<()> {
             Notice::Writing,
             Notice::Later,
             Notice::Failed(crate::core::meeting_job::Cause::Other),
-            Notice::Off,
-            Notice::Skipped,
+            Notice::Skipped(SummarySkip::Off),
+            Notice::Skipped(SummarySkip::Short),
+            Notice::Skipped(SummarySkip::Empty),
             Notice::Unavailable,
         ] {
             view.frame.borrow_mut().notice = Some(notice);

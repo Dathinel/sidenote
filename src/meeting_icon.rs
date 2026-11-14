@@ -47,28 +47,45 @@ pub(super) enum Notice {
     Writing,
     Later,
     Failed(Cause),
-    Off,
-    Skipped,
+    Skipped(core::notes::SummarySkip),
     Unavailable,
 }
 impl Notice {
-    fn text(self) -> &'static str {
+    fn text(self) -> String {
         match self {
             Self::Writing => "Writing summary...",
             Self::Later => "Summary will be written later",
             Self::Failed(cause) => cause.label(),
-            Self::Off => "Meeting summary is off",
-            Self::Skipped => "Summary skipped",
+            Self::Skipped(reason) => return reason.notice(),
             Self::Unavailable => "Summary unavailable, open Sidenote",
         }
+        .into()
     }
+}
+fn summary_skip(id: &str) -> Option<core::notes::SummarySkip> {
+    core::notes::summary_skip(
+        core::recording_guard::receipt(&core::state_dir(), id),
+        core::notes::scripts_policy() == "off",
+        core::notes::status(id).as_ref(),
+    )
 }
 fn notice(id: &str) -> Notice {
     use core::notes::JobState;
-    match core::notes::scripts_policy() {
-        "off" => return Notice::Off,
-        "app" | "scripts" => {}
+    if let Some(skipped) = summary_skip(id) {
+        return Notice::Skipped(skipped);
+    }
+    let policy = core::notes::scripts_policy();
+    match policy {
+        "app" | "scripts" | "off" => {}
         _ => return Notice::Unavailable,
+    }
+    match core::notes::status(id) {
+        Some(JobState::Queued | JobState::Running) => return Notice::Writing,
+        Some(JobState::BackendError {
+            next_try_ms: Some(_),
+            ..
+        }) => return Notice::Later,
+        _ => {}
     }
     if let Some(cause) = core::meeting_job::script_failure(&core::meetings_dir().join(id))
         .or_else(|| core::notes::status(id).and_then(|s| s.failure_cause()))
@@ -104,7 +121,7 @@ fn notice(id: &str) -> Notice {
     {
         Notice::Writing
     } else {
-        Notice::Skipped
+        Notice::Unavailable
     }
 }
 fn claim_busy(path: &std::path::Path) -> bool {
@@ -398,13 +415,10 @@ fn run(isolated: bool, replay: bool) {
                     dirty = true;
                 }
                 let stopped_since = *p.stopped_since.get_or_insert_with(Instant::now);
-                let short = core::recording_guard::eligibility(
-                    &core::state_dir(),
-                    &core::meetings_dir(),
-                    id,
-                )
-                .is_ok_and(|e| e == core::recording_guard::Eligibility::Short);
-                if short {
+                if let Some(raw) = summary(id) {
+                    return !was_seen(id, &raw);
+                }
+                if summary_skip(id).is_some_and(|s| s != core::notes::SummarySkip::Off) {
                     if p.skipped_at_ms.is_none_or(|t| t > now) {
                         p.skipped_at_ms = Some(now);
                         dirty = true;
@@ -418,9 +432,6 @@ fn run(isolated: bool, replay: bool) {
                     dirty = true;
                 }
                 p.skipped_since = None;
-                if let Some(raw) = summary(id) {
-                    return !was_seen(id, &raw);
-                }
                 let state = notice(id);
                 let expired = now.saturating_sub(p.stopped_at_ms.unwrap_or(now))
                     >= NO_DRAFT_BOUND_MS
@@ -460,10 +471,7 @@ fn run(isolated: bool, replay: bool) {
                         recording,
                         pill: recording && (current.speaking || Instant::now() < speech_until),
                         elapsed: pending[id].elapsed,
-                        notice: (!recording
-                            && raw.is_none()
-                            && pending[id].skipped_at_ms.is_none())
-                        .then(|| {
+                        notice: (!recording && raw.is_none()).then(|| {
                             let state = notice(id);
                             if state == Notice::Writing && pending[id].notice_at_ms.is_some() {
                                 Notice::Later

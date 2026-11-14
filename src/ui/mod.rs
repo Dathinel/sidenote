@@ -3838,6 +3838,7 @@ pub fn spec() -> AppSpec<State> {
             // Notes being made: with the quick title, and before it has arrived ("Naming...").
             ("live-finishing", |s| live::scene_making(s, "transcribing")),
             ("live-interrupted", |s| live::scene_making(s, "interrupted")),
+            ("live-summary-skipped", |s| live::scene_making(s, "short")),
             ("live-making-slow", |s| live::scene_making(s, "slow")),
             ("live-making", |s| {
                 hex::scene(s, false);

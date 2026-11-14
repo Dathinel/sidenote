@@ -64,6 +64,53 @@ pub enum JobState {
     },
     Empty,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SummarySkip {
+    Short,
+    Off,
+    Empty,
+}
+impl SummarySkip {
+    pub fn heading(self) -> &'static str {
+        "Summary skipped"
+    }
+    pub fn notice(self) -> String {
+        format!("{}: {}", self.heading(), self.detail())
+    }
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Short => "Too short to summarise.",
+            Self::Off => "Summaries off.",
+            Self::Empty => "No speech heard.",
+        }
+    }
+}
+/// A terminal summary outcome, shared by the live page, Today card and floating indicator.
+pub fn summary_skip(
+    eligibility: super::recording_guard::Eligibility,
+    notes_off: bool,
+    job: Option<&JobState>,
+) -> Option<SummarySkip> {
+    if notes_off {
+        match job {
+            Some(JobState::Queued | JobState::Running | JobState::Done { .. }) => return None,
+            Some(JobState::BackendError {
+                next_try_ms: Some(_),
+                ..
+            }) => return None,
+            _ => {}
+        }
+    }
+    if matches!(job, Some(JobState::Empty)) {
+        Some(SummarySkip::Empty)
+    } else if notes_off {
+        Some(SummarySkip::Off)
+    } else if eligibility == super::recording_guard::Eligibility::Short {
+        Some(SummarySkip::Short)
+    } else {
+        None
+    }
+}
 impl JobState {
     pub fn failure_cause(&self) -> Option<super::meeting_job::Cause> {
         use super::meeting_job::Cause;
