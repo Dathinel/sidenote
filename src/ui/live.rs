@@ -133,6 +133,25 @@ fn read_transcript_state(folder: &Path) -> Option<Transcript> {
     }
 }
 
+fn feed_summary_state(
+    feed: &mut Feed,
+    folder: &Path,
+    root: &Path,
+    off: bool,
+    job: Option<&sidenote::core::notes::JobState>,
+) -> bool {
+    use sidenote::core::{notes, recording_guard};
+    let transcript = read_transcript_state(folder);
+    let skipped = (transcript == Some(Transcript::Ready))
+        .then(|| folder.file_name()?.to_str())
+        .flatten()
+        .and_then(|id| notes::summary_skip(recording_guard::receipt(root, id), off, job));
+    let changed = feed.transcript != transcript || feed.summary_skip != skipped;
+    feed.transcript = transcript;
+    feed.summary_skip = skipped;
+    changed
+}
+
 fn making_transcript(s: &State) -> Transcript {
     s.live
         .as_ref()
@@ -732,30 +751,20 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         };
         let read = feed_io::read_rolling(&folder, last);
         let notes_problem = feed_io::notes_problem(&folder);
-        let transcript = read_transcript_state(&folder);
-        let skipped = (transcript == Some(Transcript::Ready))
-            .then(|| {
-                let id = folder.file_name()?.to_str()?;
-                sidenote::core::notes::summary_skip(
-                    sidenote::core::recording_guard::eligibility(
-                        &sidenote::core::state_dir(),
-                        &root,
-                        id,
-                    )
-                    .unwrap_or(sidenote::core::recording_guard::Eligibility::Unknown),
-                    sidenote::core::notes::scripts_policy() == "off",
-                    sidenote::core::notes::status(id).as_ref(),
-                )
-            })
-            .flatten();
+        let job = folder
+            .file_name()
+            .and_then(|id| id.to_str())
+            .and_then(sidenote::core::notes::status);
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
-        let mut changed = f.folder.as_ref() != Some(&folder)
-            || f.notes_problem != notes_problem
-            || f.transcript != transcript
-            || f.summary_skip != skipped;
+        let mut changed = feed_summary_state(
+            &mut f,
+            &folder,
+            &sidenote::core::state_dir(),
+            sidenote::core::notes::scripts_policy() == "off",
+            job.as_ref(),
+        );
+        changed |= f.folder.as_ref() != Some(&folder) || f.notes_problem != notes_problem;
         f.notes_problem = notes_problem;
-        f.transcript = transcript;
-        f.summary_skip = skipped;
         f.folder = Some(folder);
         match read {
             Ok(Read::Waiting | Read::Same) => {
@@ -1617,6 +1626,54 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 
 #[cfg(test)]
 mod writer_tests {
+    #[test]
+    fn feed_skip_requires_ready_receipt_and_clears_on_resume() {
+        use sidenote::core::notes::{JobState, SummarySkip};
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let folder = temp.path().join("1800000000000-1");
+        fs::create_dir(&folder).unwrap();
+        let manifest = |status| {
+            let value = serde_json::json!({"status":status,"duration_ms":16700});
+            fs::write(folder.join("manifest.json"), value.to_string()).unwrap();
+        };
+        fs::write(folder.join("transcript.ndjson"), "").unwrap();
+        manifest("complete");
+        let mut feed = Feed::default();
+        feed_summary_state(&mut feed, &folder, &root, false, None);
+        assert_eq!(feed.summary_skip, None);
+        assert!(!root.exists(), "UI read created guard state or a lock");
+        for job in [
+            JobState::Queued,
+            JobState::Running,
+            JobState::BackendError {
+                next_try_ms: Some(i64::MAX),
+                exit: None,
+            },
+        ] {
+            feed_summary_state(&mut feed, &folder, &root, true, Some(&job));
+            assert_eq!(feed.summary_skip, None);
+        }
+        let receipt = root.join("local/recording-guard/1800000000000-1.json");
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, r#"{"short":true,"kept":false}"#).unwrap();
+        fs::write(folder.join("final.pending"), "").unwrap();
+        for status in ["transcribing", "interrupted", "recording", "starting"] {
+            manifest("complete");
+            feed_summary_state(&mut feed, &folder, &root, false, None);
+            assert_eq!(feed.summary_skip, Some(SummarySkip::Short));
+            manifest(status);
+            feed_summary_state(&mut feed, &folder, &root, true, Some(&JobState::Empty));
+            assert_eq!(feed.summary_skip, None);
+        }
+        manifest("complete");
+        fs::write(&receipt, r#"{"short":true,"kept":true}"#).unwrap();
+        feed_summary_state(&mut feed, &folder, &root, false, None);
+        assert_eq!(feed.summary_skip, None);
+        assert!(!receipt.with_extension("lock").exists());
+    }
+
     use super::*;
 
     #[test]

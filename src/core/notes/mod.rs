@@ -74,11 +74,14 @@ impl SummarySkip {
     pub fn heading(self) -> &'static str {
         "Summary skipped"
     }
+    pub fn notice(self) -> String {
+        format!("{}: {}", self.heading(), self.detail())
+    }
     pub fn detail(self) -> &'static str {
         match self {
-            Self::Short => "This meeting was too short to summarise. You can leave this page.",
-            Self::Off => "Meeting summary is off. You can leave this page.",
-            Self::Empty => "No speech was heard in this meeting, so there is nothing to summarise.",
+            Self::Short => "Too short to summarise.",
+            Self::Off => "Summaries off.",
+            Self::Empty => "No speech heard.",
         }
     }
 }
@@ -88,6 +91,16 @@ pub fn summary_skip(
     notes_off: bool,
     job: Option<&JobState>,
 ) -> Option<SummarySkip> {
+    if notes_off {
+        match job {
+            Some(JobState::Queued | JobState::Running | JobState::Done { .. }) => return None,
+            Some(JobState::BackendError {
+                next_try_ms: Some(_),
+                ..
+            }) => return None,
+            _ => {}
+        }
+    }
     if matches!(job, Some(JobState::Empty)) {
         Some(SummarySkip::Empty)
     } else if notes_off {

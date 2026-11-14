@@ -47,26 +47,24 @@ pub(super) enum Notice {
     Writing,
     Later,
     Failed(Cause),
-    Off,
-    Skipped,
+    Skipped(core::notes::SummarySkip),
     Unavailable,
 }
 impl Notice {
-    fn text(self) -> &'static str {
+    fn text(self) -> String {
         match self {
             Self::Writing => "Writing summary...",
             Self::Later => "Summary will be written later",
             Self::Failed(cause) => cause.label(),
-            Self::Off => "Meeting summary is off",
-            Self::Skipped => "Summary skipped",
+            Self::Skipped(reason) => return reason.notice(),
             Self::Unavailable => "Summary unavailable, open Sidenote",
         }
+        .into()
     }
 }
 fn summary_skip(id: &str) -> Option<core::notes::SummarySkip> {
     core::notes::summary_skip(
-        core::recording_guard::eligibility(&core::state_dir(), &core::meetings_dir(), id)
-            .unwrap_or(core::recording_guard::Eligibility::Unknown),
+        core::recording_guard::receipt(&core::state_dir(), id),
         core::notes::scripts_policy() == "off",
         core::notes::status(id).as_ref(),
     )
@@ -74,15 +72,20 @@ fn summary_skip(id: &str) -> Option<core::notes::SummarySkip> {
 fn notice(id: &str) -> Notice {
     use core::notes::JobState;
     if let Some(skipped) = summary_skip(id) {
-        return match skipped {
-            core::notes::SummarySkip::Off => Notice::Off,
-            _ => Notice::Skipped,
-        };
+        return Notice::Skipped(skipped);
     }
     let policy = core::notes::scripts_policy();
     match policy {
-        "app" | "scripts" => {}
+        "app" | "scripts" | "off" => {}
         _ => return Notice::Unavailable,
+    }
+    match core::notes::status(id) {
+        Some(JobState::Queued | JobState::Running) => return Notice::Writing,
+        Some(JobState::BackendError {
+            next_try_ms: Some(_),
+            ..
+        }) => return Notice::Later,
+        _ => {}
     }
     if let Some(cause) = core::meeting_job::script_failure(&core::meetings_dir().join(id))
         .or_else(|| core::notes::status(id).and_then(|s| s.failure_cause()))
@@ -118,7 +121,7 @@ fn notice(id: &str) -> Notice {
     {
         Notice::Writing
     } else {
-        Notice::Skipped
+        Notice::Unavailable
     }
 }
 fn claim_busy(path: &std::path::Path) -> bool {
@@ -468,10 +471,7 @@ fn run(isolated: bool, replay: bool) {
                         recording,
                         pill: recording && (current.speaking || Instant::now() < speech_until),
                         elapsed: pending[id].elapsed,
-                        notice: (!recording
-                            && raw.is_none()
-                            && pending[id].skipped_at_ms.is_none())
-                        .then(|| {
+                        notice: (!recording && raw.is_none()).then(|| {
                             let state = notice(id);
                             if state == Notice::Writing && pending[id].notice_at_ms.is_some() {
                                 Notice::Later

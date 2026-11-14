@@ -47,7 +47,8 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 fn items(s: &State, p: Palette) -> Vec<Item> {
     let mut out = Vec::new();
     if let Some(l) = s.live.as_ref().filter(|l| l.phase == live::Phase::Making) {
-        let heading = live::summary_skip(s).map_or("Writing the summary", |skip| skip.heading());
+        let heading = live::summary_skip(s)
+            .map_or_else(|| "Writing the summary".into(), |skip| skip.notice());
         let (lead, words) = match l.quick_title() {
             Some(title) => (heading.to_string(), title),
             None => (

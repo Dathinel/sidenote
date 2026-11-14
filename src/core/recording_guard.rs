@@ -138,6 +138,17 @@ fn apply_eligibility(root: &Path, id: &str, result: Eligibility) -> io::Result<E
     }
     Ok(result)
 }
+/// UI status reads only the listener's receipt; missing or unreadable means unclassified.
+pub fn receipt(root: &Path, id: &str) -> Eligibility {
+    if !valid_id(id) {
+        return Eligibility::Unknown;
+    }
+    match store_io::read::<State>(&state_path(root, id)) {
+        Ok(s) if s.kept => Eligibility::Eligible,
+        Ok(s) if s.short => Eligibility::Short,
+        _ => Eligibility::Unknown,
+    }
+}
 /// Read-only visibility also detects older short recordings before a listener has caught up.
 pub fn hidden(root: &Path, folder: &Path, id: &str) -> bool {
     if !valid_id(id) {

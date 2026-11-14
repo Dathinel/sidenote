@@ -1707,11 +1707,16 @@ fn summary_skip_covers_guard_policy_and_empty_jobs() {
     for state in [
         JobState::Queued,
         JobState::Running,
+        JobState::BackendError {
+            next_try_ms: Some(i64::MAX),
+            exit: None,
+        },
         JobState::Done {
             fallback: false,
             tasks_failed: false,
         },
     ] {
+        assert_eq!(summary_skip(Eligible, true, Some(&state)), None);
         assert_eq!(summary_skip(Eligible, false, Some(&state)), None);
         assert_eq!(
             summary_skip(Short, false, Some(&state)),
@@ -1738,7 +1743,7 @@ fn accidental_seventeen_second_call_has_no_job_and_a_terminal_skip() {
         crate::core::recording_guard::eligibility(root.path(), &meetings, ID).unwrap();
     let skipped = summary_skip(eligibility, false, None).unwrap();
     assert_eq!(skipped.heading(), "Summary skipped");
-    assert!(skipped.detail().contains("too short to summarise"));
+    assert!(skipped.detail().contains("Too short to summarise"));
     crate::core::recording_guard::keep_in(root.path(), ID).unwrap();
     let eligibility =
         crate::core::recording_guard::eligibility(root.path(), &meetings, ID).unwrap();
