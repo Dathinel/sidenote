@@ -177,6 +177,8 @@ fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<(
         Failure::NetworkUnavailable => (JobState::NoHelper, core::runners::NETWORK_UNAVAILABLE),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
+        Failure::Limit { exit } => (JobState::HelperLimit { exit }, "HELPER_LIMIT"),
+        Failure::Auth { exit } => (JobState::HelperAuth { exit }, "HELPER_AUTH"),
         Failure::TimedOut => (JobState::TimedOut, "agent timed out"),
         Failure::BadOutput => (JobState::BadOutput, "invalid agent output"),
         Failure::Backend { exit } => {

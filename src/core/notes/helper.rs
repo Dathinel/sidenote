@@ -17,7 +17,7 @@ pub(super) const TITLE_TIMEOUT: Duration = Duration::from_secs(60);
 impl Helper {
     /// Detection is independent of whether this release permits a helper to run.
     pub fn offered(self) -> bool {
-        self == Self::Claude
+        matches!(self, Self::Claude | Self::Codex)
     }
     pub fn default_model(self) -> &'static str {
         match self {
@@ -48,7 +48,7 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
                 "",
                 "--no-session-persistence",
                 "--output-format",
-                "text",
+                "json",
             ],
             false,
         ),
@@ -104,6 +104,12 @@ pub(super) enum Failure {
         exit: Option<i32>,
     },
     BadOutput,
+    Limit {
+        exit: Option<i32>,
+    },
+    Auth {
+        exit: Option<i32>,
+    },
 }
 
 /// The test seam never launches a CLI or inspects the host's helper installation.
@@ -197,20 +203,18 @@ impl Run for Cli {
             return Err(Failure::Missing);
         }
         let scratch = Scratch::new().map_err(|_| Failure::Backend { exit: None })?;
-        runner_process::run_runner_with_timeout(
-            &runner(helper, model),
-            prompt,
-            &scratch.0,
-            timeout,
-            |_| {},
-        )
-        .map_err(|error| {
-            if error == "The runner exceeded its time limit." {
-                Failure::TimedOut
-            } else {
-                Failure::Backend { exit: None }
-            }
-        })
+        runner_process::run_classified(&runner(helper, model), prompt, &scratch.0, timeout, |_| {})
+            .map_err(|error| {
+                if error.category == "HELPER_TIMEOUT" {
+                    Failure::TimedOut
+                } else if error.category == "HELPER_LIMIT" {
+                    Failure::Limit { exit: error.exit }
+                } else if error.category == "HELPER_AUTH" {
+                    Failure::Auth { exit: error.exit }
+                } else {
+                    Failure::Backend { exit: error.exit }
+                }
+            })
     }
 }
 

@@ -418,7 +418,9 @@ fn state(root: &Path) -> JobState {
 #[test]
 fn unoffered_saved_helpers_never_run_and_have_a_fixed_reason() {
     assert!(Helper::Claude.offered());
-    for helper in [Helper::Codex, Helper::OpenCode] {
+    assert!(Helper::Codex.offered());
+    {
+        let helper = Helper::OpenCode;
         assert!(!helper.offered());
         let s: NotesSettings = serde_json::from_value(serde_json::json!({
             "helper": helper, "enabled_at_ms": 1
@@ -1278,7 +1280,8 @@ fn redo_uses_existing_english_transcript_without_rewriting_it() {
 
 #[test]
 fn switching_from_unavailable_helper_requires_a_click_for_queued_older_meeting() {
-    for helper in [Helper::Codex, Helper::OpenCode] {
+    {
+        let helper = Helper::OpenCode;
         let root = Temp::new();
         let folder = meeting(&root.0, PRIVATE);
         let t1 = 1;
@@ -1467,4 +1470,36 @@ fn hex_labs_original_transcript_fallback_contract() {
             .unwrap()
             .contains("Synthetic original transcript")
     );
+}
+
+#[test]
+fn codex_uses_the_notes_parser_and_limit_auth_failures_are_terminal() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let s = NotesSettings {
+        helper: Some(Helper::Codex),
+        ..settings_fixture()
+    };
+    enqueue(&root.0, &s, Some(Request::MakeNotes));
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(matches!(state(&root.0), JobState::Done { .. }));
+    for (failure, expected) in [
+        (Failure::Limit { exit: Some(1) }, "HELPER_LIMIT"),
+        (Failure::Auth { exit: Some(2) }, "HELPER_AUTH"),
+    ] {
+        let root = Temp::new();
+        meeting(&root.0, PRIVATE);
+        enqueue(&root.0, &s, Some(Request::MakeNotes));
+        let mut fake = Fake::new(vec![Err(failure)]);
+        drain(&root.0, &s, &mut fake);
+        let job = queue::read(&root.0, ID).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&job).unwrap()["state"], expected);
+        assert!(job.next_try_at.is_none());
+        assert!(
+            !fs::read_to_string(root.0.join("sidenote.log"))
+                .unwrap()
+                .contains(PRIVATE)
+        );
+    }
 }

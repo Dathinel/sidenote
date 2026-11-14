@@ -1223,7 +1223,8 @@ mod tests {
             assert!(request_problem(Some(&settings)).is_some());
         }
         settings.engine = "app".into();
-        for helper in [Helper::Codex, Helper::OpenCode] {
+        {
+            let helper = Helper::OpenCode;
             settings.helper = Some(helper);
             assert!(
                 request_problem(Some(&settings))
@@ -1235,9 +1236,10 @@ mod tests {
         assert!(request_problem(Some(&settings)).is_some());
     }
     #[test]
-    fn only_claude_is_offered_and_other_sample_calls_are_refused() {
+    fn only_opencode_sample_calls_are_refused() {
         assert!(Helper::Claude.offered());
-        for (index, helper) in [(1, Helper::Codex), (2, Helper::OpenCode)] {
+        {
+            let (index, helper) = (2, Helper::OpenCode);
             assert!(!helper.offered());
             let error = run(
                 Path::new("unused-policy-test"),

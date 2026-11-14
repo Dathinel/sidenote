@@ -41,6 +41,14 @@ pub enum JobState {
         next_try_ms: Option<i64>,
         exit: Option<i32>,
     },
+    #[serde(rename = "HELPER_LIMIT")]
+    HelperLimit {
+        exit: Option<i32>,
+    },
+    #[serde(rename = "HELPER_AUTH")]
+    HelperAuth {
+        exit: Option<i32>,
+    },
     TimedOut,
     BadOutput,
     TooLong {
@@ -182,11 +190,18 @@ pub fn request(meeting_id: &str, mode: Request) -> io::Result<()> {
 }
 pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
     use helper::Run;
-    let sample =
-        "Read this fixed sample, without tools. Reply with only this JSON object: {\"ok\":true}";
+    // Public-domain words, fixed in code; never reads a meeting or the glossary.
+    let transcript = "[00:00] Speaker: Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.";
+    let date = chrono::NaiveDate::from_ymd_opt(1863, 11, 19).unwrap();
+    let sample = format!(
+        "{}\n{}\n{}\n<meeting>\nTitle: Public-domain sample\nDate: 1863-11-19\nTranscript: {transcript}\n</meeting>",
+        super::agent_instructions::core_head(super::agent_instructions::Agent::Notes),
+        super::agent_instructions::default_base(super::agent_instructions::Agent::Notes),
+        super::agent_instructions::core_tail(super::agent_instructions::Agent::Notes)
+    );
     let start = std::time::Instant::now();
     let raw = helper::Cli { root: None }
-        .run(h, model, sample.into(), helper::TITLE_TIMEOUT)
+        .run(h, model, sample, helper::NOTES_TIMEOUT)
         .map_err(|e| {
             match e {
                 #[cfg(target_os = "linux")]
@@ -197,10 +212,8 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
             }
             .to_string()
         })?;
-    let value: serde_json::Value = schema::object(&raw).map_err(str::to_string)?;
-    if value["ok"] != true {
-        return Err("The agent test returned invalid JSON".into());
-    }
+    schema::parse(&raw, "1-1", date, transcript, &[])
+        .map_err(|_| "The agent test returned invalid JSON".to_string())?;
     Ok(start.elapsed())
 }
 

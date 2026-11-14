@@ -79,6 +79,74 @@ fn diagnosis(text: &str) -> &'static str {
         "The CLI did not return a final answer. Check the runner arguments and CLI account."
     }
 }
+// Only fixed categories and exit codes cross the notes boundary.
+#[derive(Debug)]
+pub(super) struct RunnerFailure {
+    pub category: &'static str,
+    pub exit: Option<i32>,
+    message: String,
+}
+impl From<String> for RunnerFailure {
+    fn from(message: String) -> Self {
+        Self {
+            category: if message == "The runner exceeded its time limit." {
+                "HELPER_TIMEOUT"
+            } else {
+                "HELPER_BACKEND"
+            },
+            exit: None,
+            message,
+        }
+    }
+}
+impl From<&str> for RunnerFailure {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+fn category(text: &str) -> &'static str {
+    let text = text.to_lowercase();
+    if [
+        "usage limit",
+        "usage_limit",
+        "rate limit",
+        "rate_limit",
+        "quota",
+        "limit reached",
+        "hit your limit",
+        "out of extra usage",
+        "credit balance",
+        "too many requests",
+    ]
+    .iter()
+    .any(|v| text.contains(v))
+    {
+        "HELPER_LIMIT"
+    } else if [
+        "unauthorized",
+        "authentication",
+        "not logged in",
+        "api key",
+        "refresh token",
+        "refresh_token",
+        "invalid_token",
+        "oauth",
+        "token has expired",
+        "sign in",
+        "sign-in",
+        "login",
+        "token expired",
+        "401",
+    ]
+    .iter()
+    .any(|v| text.contains(v))
+    {
+        "HELPER_AUTH"
+    } else {
+        "HELPER_BACKEND"
+    }
+}
+
 enum Stream {
     Line(String),
     TooLarge,
@@ -144,6 +212,8 @@ impl Output {
             return;
         }
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            self.plain.push_str(line);
+            self.plain.push('\n');
             return;
         };
         let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -176,6 +246,10 @@ impl Output {
                     self.text(text, progress);
                 }
             }
+            if kind == "error" {
+                self.failed = true;
+                self.plain.push_str(line);
+            }
             if kind == "result" {
                 if let Some(text) = event.get("result").and_then(|v| v.as_str()) {
                     self.final_text = text.into();
@@ -185,6 +259,9 @@ impl Output {
                     .get("is_error")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                if self.failed {
+                    self.plain.push_str(line);
+                }
             }
             if let Some(content) = event.pointer("/message/content").and_then(|v| v.as_array()) {
                 for block in content {
@@ -291,6 +368,16 @@ pub(super) fn run_runner_with_timeout(
     timeout: Duration,
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
+    run_classified(runner, prompt, working_dir, timeout, progress).map_err(|e| e.message)
+}
+
+pub(super) fn run_classified(
+    runner: &Runner,
+    prompt: String,
+    working_dir: &Path,
+    timeout: Duration,
+    progress: impl Fn(AskProgress),
+) -> Result<String, RunnerFailure> {
     runners::validate(runner)?;
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
@@ -327,7 +414,8 @@ pub(super) fn run_runner_with_timeout(
         })
         .collect();
     let pair = |flag: &str, value: &str| args.windows(2).any(|a| a[0] == flag && a[1] == value);
-    let structured = pair("--output-format", "stream-json")
+    let structured = pair("--output-format", "json")
+        || pair("--output-format", "stream-json")
         || args.iter().any(|a| a == "--json")
         || pair("--format", "json");
     let started = Instant::now();
@@ -443,26 +531,24 @@ pub(super) fn run_runner_with_timeout(
     drop(job);
     let _ = reader.join();
     let error_text = errors.join().unwrap_or_default();
-    if let Some(writer) = writer {
-        writer
-            .join()
-            .map_err(|_| "Could not send the prompt to the CLI")?
-            .map_err(|_| "Could not send the prompt to the CLI")?;
-    }
     let answer = if structured {
         output.final_text.trim()
     } else {
         output.plain.trim()
     };
     if !status.is_some_and(|s| s.success()) || output.failed || answer.is_empty() {
-        return Err(format!(
-            "{}: {}",
-            runner.name,
-            diagnosis(&format!(
-                "{error_text}\n{}\n{}",
-                output.plain, output.final_text
-            ))
-        ));
+        let detail = format!("{error_text}\n{}\n{}", output.plain, output.final_text);
+        return Err(RunnerFailure {
+            category: category(&detail),
+            exit: status.and_then(|s| s.code()),
+            message: format!("{}: {}", runner.name, diagnosis(&detail)),
+        });
+    }
+    if let Some(writer) = writer {
+        writer
+            .join()
+            .map_err(|_| "Could not send the prompt to the CLI")?
+            .map_err(|_| "Could not send the prompt to the CLI")?;
     }
     Ok(answer.into())
 }
@@ -594,6 +680,45 @@ mod tests {
         }
         reader.join().unwrap();
         (total, limited)
+    }
+    #[test]
+    fn cli_failures_have_fixed_categories_and_ignore_private_details() {
+        for text in [
+            "You've hit your limit. PRIVATE",
+            "usage_limit_reached",
+            "rate limit exceeded",
+            "quota exhausted",
+        ] {
+            assert_eq!(category(text), "HELPER_LIMIT");
+        }
+        for text in [
+            "401 Unauthorized PRIVATE",
+            "authentication failed",
+            "not logged in",
+        ] {
+            assert_eq!(category(text), "HELPER_AUTH");
+        }
+        assert_eq!(category("unknown error PRIVATE"), "HELPER_BACKEND");
+        let mut output = Output::default();
+        output.line(
+            r#"{"type":"result","result":"You've hit your limit","is_error":true}"#,
+            "claude",
+            true,
+            &|_| {},
+        );
+        assert!(output.failed);
+        assert_eq!(category(&output.final_text), "HELPER_LIMIT");
+        output.line(
+            r#"{"type":"turn.failed","error":{"message":"usage_limit_reached"}}"#,
+            "codex",
+            true,
+            &|_| {},
+        );
+        assert!(output.failed);
+        assert_eq!(category(&output.plain), "HELPER_LIMIT");
+        let mut plain = Output::default();
+        plain.line("Invalid API key PRIVATE", "claude", true, &|_| {});
+        assert_eq!(category(&plain.plain), "HELPER_AUTH");
     }
     #[test]
     fn stdout_caps_unterminated_lines_and_streams_without_running_a_cli() {

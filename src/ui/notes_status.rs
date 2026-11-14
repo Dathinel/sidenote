@@ -59,6 +59,8 @@ pub fn is_failure(state: &JobState) -> bool {
         state,
         JobState::HelperMissing
             | JobState::BackendError { .. }
+            | JobState::HelperLimit { .. }
+            | JobState::HelperAuth { .. }
             | JobState::TimedOut
             | JobState::BadOutput
             | JobState::TooLong { .. }
@@ -89,6 +91,8 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
             let retry = next_try_ms.and_then(chrono::DateTime::from_timestamp_millis).map(|t| format!(" Sidenote tries again at {}.", t.with_timezone(&chrono::Local).format("%H:%M"))).unwrap_or_else(|| " Press Try again when you are ready.".into());
             format!("{name} did not finish. This often means you need to sign in again. Open a terminal, type {command}, and sign in.{retry} Your transcript is saved.")
         }
+        JobState::HelperLimit { .. } => format!("{name} has hit its usage limit. Your transcript is saved."),
+        JobState::HelperAuth { .. } => format!("{name} needs you to sign in again. Your transcript is saved."),
         JobState::TimedOut => format!("{name} took more than 15 minutes and was stopped. Try again in a few minutes. Your transcript is saved."),
         JobState::BadOutput => format!("{name} replied, but Sidenote could not turn the reply into a summary. Try again. If it keeps happening, press Open instructions to review or reset them. Your transcript is saved."),
         JobState::Done { fallback: true, .. } => "This summary used the default instructions because your own instructions did not work. Edit your instructions before trying again.".into(),
@@ -120,6 +124,8 @@ pub fn label(state: &JobState) -> &'static str {
             ..
         } => "Agent failed, retry scheduled",
         JobState::BackendError { .. } => "Agent failed, retry needed",
+        JobState::HelperLimit { .. } => "Agent usage limit reached",
+        JobState::HelperAuth { .. } => "Agent sign-in needed",
         JobState::TimedOut => "Agent took too long",
         JobState::BadOutput => "Agent reply could not be read",
         JobState::TooLong { .. } => "Meeting too long for a summary",
