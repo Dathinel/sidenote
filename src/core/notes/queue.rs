@@ -152,6 +152,31 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
+    let previous = read(root, id)?;
+    if previous.as_ref().is_some_and(|job| {
+        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+    }) {
+        return Ok(());
+    }
+    let recovery = mode == Some(Request::UseCodex);
+    let mode = if recovery {
+        let job = previous
+            .as_ref()
+            .filter(|job| {
+                matches!(job.state, JobState::HelperLimit { .. })
+                    && job.helper == Some(Helper::Claude)
+            })
+            .ok_or_else(|| store_io::invalid("This meeting does not need Codex recovery"))?;
+        if settings.effective_helper() != Some(Helper::Codex) || settings.enabled_at_ms.is_none() {
+            return Err(store_io::invalid(
+                "Choose Codex for summaries before retrying",
+            ));
+        }
+        Some(job.request.unwrap_or(Request::TryAgain))
+    } else {
+        mode
+    };
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     if !complete(&folder) {
@@ -164,22 +189,8 @@ pub(super) fn enqueue_in(
     if sorting && !folder.join("english-summary.json").is_file() {
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
-    if let Some(job) = read(root, id)?
-        && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
-    {
-        return Ok(());
-    }
-    let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
-    // A different enqueue may have won while we acquired the writer lock.
-    if let Some(job) = read(root, id)?
-        && (mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued))
-    {
-        return Ok(());
-    }
     let mut next = Job::new(mode, settings);
-    if let Some(previous) = read(root, id)?
-        && previous.helper.is_some()
-    {
+    if !recovery && let Some(previous) = previous.filter(|job| job.helper.is_some()) {
         next.helper = previous.helper;
         next.model = previous.model;
     }

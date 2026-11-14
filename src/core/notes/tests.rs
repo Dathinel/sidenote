@@ -1578,3 +1578,39 @@ fn queued_restarted_and_manual_retries_keep_the_enqueued_selection() {
         [(Helper::Claude, "original-model".into())]
     );
 }
+
+#[test]
+fn only_explicit_codex_recovery_retargets_one_job_and_preserves_first_part() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let original = settings_fixture();
+    enqueue(&root.0, &original, Some(Request::FirstPart));
+    let mut fake = Fake::new(vec![Err(Failure::Limit { exit: Some(1) })]);
+    drain(&root.0, &original, &mut fake);
+    let path = root.0.join(format!("local/notes-jobs/{ID}.json"));
+    let before = fs::read(&path).unwrap();
+    let codex = NotesSettings {
+        helper: Some(Helper::Codex),
+        model: "codex-choice".into(),
+        ..original
+    };
+    drain(&root.0, &codex, &mut Fake::new(vec![]));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    enqueue(&root.0, &codex, Some(Request::UseCodex));
+    let queued = fs::read(&path).unwrap();
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.helper, Some(Helper::Codex));
+    assert_eq!(job.model, "codex-choice");
+    assert_eq!(job.request, Some(Request::FirstPart));
+    assert_eq!(job.state, JobState::Queued);
+    enqueue(&root.0, &codex, Some(Request::UseCodex));
+    assert_eq!(fs::read(&path).unwrap(), queued);
+    assert_eq!(
+        fs::read_dir(root.0.join("local/notes-jobs"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|f| f.path().extension().is_some_and(|e| e == "json"))
+            .count(),
+        1
+    );
+}

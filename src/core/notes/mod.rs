@@ -66,6 +66,7 @@ pub enum JobState {
 pub enum Request {
     MakeNotes,
     TryAgain,
+    UseCodex,
     FirstPart,
     SortAgain,
     RedoTasks,

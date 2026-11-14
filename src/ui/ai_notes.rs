@@ -36,13 +36,16 @@ fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
             return Some(helper_fallback_message(helper));
         }
         if settings.engine == "app"
-            && settings.effective_helper() == Some(Helper::Claude)
+            && settings.effective_helper().is_some()
             && settings.enabled_at_ms.is_some()
         {
             return None;
         }
     }
-    Some("Meeting summaries are off. Choose Claude Code in Meeting summary settings, then try again.".into())
+    Some(
+        "Meeting summaries are off. Choose an agent in Meeting summary settings, then try again."
+            .into(),
+    )
 }
 
 /// What a save or reset was asked to do when it found another window's newer copy.
@@ -153,6 +156,25 @@ pub struct AiNotes {
     pub switch_confirm: Option<Helper>,
     pub generation: u64,
     pub scene: bool,
+}
+impl AiNotes {
+    fn prepare_codex_recovery(&mut self, id: String) -> Option<NotesSettings> {
+        let job = self.jobs.get(&id)?;
+        if !super::notes_status::can_use_codex(job, &self.found) {
+            return None;
+        }
+        let mut settings = self.settings.clone()?;
+        settings.engine = "app".into();
+        settings.helper = Some(Helper::Codex);
+        settings.model = self.models[1].text.trim().into();
+        self.retry_after_save = Some((id, job.retry_request()));
+        Some(settings)
+    }
+    fn saved_recovery_request(&mut self) -> Option<(String, Request)> {
+        self.retry_after_save
+            .take()
+            .map(|(id, _)| (id, Request::UseCodex))
+    }
 }
 impl Default for AiNotes {
     fn default() -> Self {
@@ -437,7 +459,7 @@ impl State {
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Meeting summary settings saved.".into());
-                if let Some((id, mode)) = self.ai_notes.retry_after_save.take() {
+                if let Some((id, mode)) = self.ai_notes.saved_recovery_request() {
                     self.request_notes(id, mode);
                 }
             }
@@ -555,21 +577,9 @@ impl State {
         if self.ai_notes.pending.is_some() || self.ai_notes.scene {
             return;
         }
-        let Some(job) = self.ai_notes.jobs.get(&id) else {
-            return;
-        };
-        if !super::notes_status::can_use_codex(job, &self.ai_notes.found) {
-            return;
+        if let Some(settings) = self.ai_notes.prepare_codex_recovery(id) {
+            self.notes_save_settings(settings, "Switching summaries to Codex...");
         }
-        let mode = job.retry_request();
-        let Some(mut settings) = self.ai_notes.settings.clone() else {
-            return;
-        };
-        settings.engine = "app".into();
-        settings.helper = Some(Helper::Codex);
-        settings.model = self.ai_notes.models[1].text.trim().into();
-        self.ai_notes.retry_after_save = Some((id, mode));
-        self.notes_save_settings(settings, "Switching summaries to Codex...");
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
         if let Some(problem) = self.notes_request_problem() {
@@ -1279,6 +1289,38 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 mod tests {
     use super::*;
     #[test]
+    fn recovery_click_then_save_completion_dispatches_exactly_one_codex_retry() {
+        let id = "123-1".to_string();
+        let mut a = AiNotes {
+            settings: Some(NotesSettings {
+                helper: Some(Helper::Claude),
+                enabled_at_ms: Some(1),
+                ..NotesSettings::default()
+            }),
+            found: vec![(Helper::Codex, true)],
+            ..AiNotes::default()
+        };
+        a.jobs.insert(
+            id.clone(),
+            super::super::notes_status::Job {
+                state: notes::JobState::HelperLimit { exit: Some(1) },
+                helper: Some(Helper::Claude),
+                updated_at: 0,
+                request: Some(Request::FirstPart),
+            },
+        );
+        assert!(a.saved_recovery_request().is_none()); // A limit alone cannot schedule recovery.
+        let saved = a.prepare_codex_recovery(id.clone()).unwrap();
+        assert_eq!(saved.helper, Some(Helper::Codex));
+        assert_eq!(a.retry_after_save, Some((id.clone(), Request::FirstPart)));
+        a.settings = Some(saved); // The actual save completion installs the re-read config first.
+        assert!(request_problem(a.settings.as_ref()).is_none());
+        let mut enqueues = Vec::new();
+        enqueues.extend(a.saved_recovery_request());
+        enqueues.extend(a.saved_recovery_request());
+        assert_eq!(enqueues, [(id, Request::UseCodex)]);
+    }
+    #[test]
     fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {
         assert!(!needs_sign_in(false, None));
         assert!(needs_sign_in(true, None));
@@ -1307,6 +1349,8 @@ mod tests {
         settings.helper = Some(Helper::Claude);
         assert!(request_problem(Some(&settings)).is_some());
         settings.enabled_at_ms = Some(1);
+        assert!(request_problem(Some(&settings)).is_none());
+        settings.helper = Some(Helper::Codex);
         assert!(request_problem(Some(&settings)).is_none());
         for engine in ["off", "scripts"] {
             settings.engine = engine.into();
