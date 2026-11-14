@@ -1,10 +1,8 @@
 use super::runners::{self, AskProgress, Runner};
-use crate::platform::CommandExt;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Stdio,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc,
@@ -432,34 +430,19 @@ pub(super) fn run_classified(
     progress(AskProgress::Started {
         runner: runner.name.clone(),
     });
-    let mut child = crate::platform::worker_command(program)
-        .map_err(|e| e.to_string())?
-        .args(&args)
-        .current_dir(working_dir)
-        .creation_flags(0x08000000)
-        .stdin(if runner.stdin {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            format!(
-                "Could not start {} (OS error {})",
-                runner.name,
-                e.raw_os_error().unwrap_or(0)
-            )
-        })?;
-    let job = match crate::platform::ProcessJob::attach(&child) {
-        Ok(job) => job,
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Could not contain the CLI process for timeout cleanup".into());
-        }
-    };
+    let mut child = crate::platform::UserRunner::spawn(
+        std::process::Command::new(program)
+            .args(&args)
+            .current_dir(working_dir),
+        runner.stdin,
+    )
+    .map_err(|e| {
+        format!(
+            "Could not start {} (OS error {})",
+            runner.name,
+            e.raw_os_error().unwrap_or(0)
+        )
+    })?;
     let stdout = child
         .stdout
         .take()
@@ -513,9 +496,7 @@ pub(super) fn run_classified(
         };
         if let Some(message) = stop {
             drop(receiver);
-            drop(job);
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = child.stop();
             let _ = reader.join();
             let _ = errors.join();
             if let Some(writer) = writer {
@@ -538,7 +519,7 @@ pub(super) fn run_classified(
             break;
         }
     }
-    drop(job);
+    child.stop().map_err(|_| "Could not stop the CLI process")?;
     let _ = reader.join();
     let error_text = errors.join().unwrap_or_default();
     let answer = if structured {

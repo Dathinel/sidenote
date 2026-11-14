@@ -7,6 +7,10 @@ pub use windows::*;
 mod unix;
 #[cfg(not(windows))]
 pub use unix::*;
+mod user_runner;
+pub use user_runner::UserRunner;
+#[cfg(target_os = "linux")]
+pub use user_runner::supervisor_entry;
 
 pub const UNAVAILABLE: &str = "UNAVAILABLE_ON_PLATFORM";
 pub fn worker_command(

@@ -33,6 +33,17 @@ in these launch layers. Settings labels those limits. File/folder reveal uses xd
 only in a desktop session. Save dialogs and file clipboard actions remain unavailable.
 The server worker containment and notes execution policies are unchanged.
 
+Layer 8 provides `platform::UserRunner` for explicit desktop-user execution. The
+notes queue remains blocked on Linux until layer 9. The helper inherits the user
+identity, PATH, login environment and network access. No credentials are copied.
+A re-executed supervisor blocks SIGTERM before exec, installs PDEATHSIG and checks
+its parent immediately. It starts the helper in a new process group with its own
+PDEATHSIG/parent check, kills the group on completion or cancellation, and reaps
+group descendants as a subreaper. Dropping the owner requests cleanup and waits.
+This is lifecycle cleanup, not a security sandbox: descendants can escape using
+setsid/setpgid; SIGKILL of the supervisor itself cannot run group cleanup. The
+headless worker, its limits, sandbox and guards remain separate.
+
 Qualification must use an empty temporary `SIDENOTE_DATA_DIR`, explicit meetings and
 peers directories, and only synthetic repo fixtures. `SIDENOTE_STATE_DIR` marks an
 isolated UI fixture run and disables live Hex watchers; never point it at owner data.
