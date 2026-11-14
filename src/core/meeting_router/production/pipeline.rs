@@ -137,7 +137,7 @@ pub(super) fn english_pin(config: &Config) -> Result<(String, fs::File)> {
     use std::io::Read;
     let model = config.engine_model("en").ok_or("Missing English model")?;
     let status = hex_speech().run_for(
-        &["model", "status", "--model", model, "--language", "en"],
+        &["model", "status", model, "--language", "en"],
         None,
         Duration::from_secs(2),
     )?;
