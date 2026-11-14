@@ -189,7 +189,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
         &root,
         id,
         None,
-        &baseline,
+        || Ok(baseline.clone()),
         0,
         chrono::Utc::now().timestamp_millis(),
     )
@@ -234,7 +234,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
         &root,
         id,
         None,
-        &baseline,
+        || Ok(baseline.clone()),
         0,
         chrono::Utc::now().timestamp_millis(),
     )
@@ -245,7 +245,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
         &root,
         id,
         Some(&fallback),
-        &[],
+        || panic!("healthy pin requested original Hex input"),
         0,
         chrono::Utc::now().timestamp_millis(),
     )

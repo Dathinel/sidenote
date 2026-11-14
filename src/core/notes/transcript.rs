@@ -77,10 +77,9 @@ pub(super) fn chosen(
     if !router::jobs::notes_enabled(root)? {
         return Ok(None);
     }
-    let baseline = if chosen.is_some() {
-        Vec::new()
-    } else {
-        String::from_utf8_lossy(&captured(folder)?)
+    // Healthy pins never need originals; failed pins can request Hex at the deadline.
+    let baseline = || -> io::Result<Vec<Chunk>> {
+        Ok(String::from_utf8_lossy(&captured(folder)?)
             .lines()
             .enumerate()
             .filter_map(|(i, line)| {
@@ -112,9 +111,9 @@ pub(super) fn chosen(
                     audio_start: None,
                 })
             })
-            .collect()
+            .collect())
     };
-    router::jobs::notes_input(root, id, chosen, &baseline, ended_ms, now_ms)?
+    router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
         .map(|(id, t)| {
             let mut text = String::new();
             for s in t.segments {

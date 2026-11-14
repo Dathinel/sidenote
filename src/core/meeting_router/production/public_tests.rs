@@ -37,7 +37,7 @@ fn public_revision_reaches_notes_without_audio() {
             &state,
             id,
             chosen,
-            &revision.transcript.baseline,
+            || Ok(revision.transcript.baseline.clone()),
             ended,
             now,
         )
