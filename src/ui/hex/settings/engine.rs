@@ -11,7 +11,7 @@ use crate::ui::{
     widgets::{ButtonDisabled, action, hairline},
 };
 use rune::{El, TextEdit, col, row};
-use rune_kit::{Kit, TextInput};
+use rune_kit::{Kit, Switch, TextInput};
 use sidenote::core::{
     Config,
     engine_settings::{FieldStatus, Source, Validation},
@@ -390,6 +390,171 @@ fn save(s: &mut State, fields: &[Field]) {
     }
 }
 
+/// Name, help, status and the not-used line, shared by every kind of row.
+fn copy_column(
+    p: Palette,
+    key: &str,
+    text: (&str, &str),
+    status_key: &str,
+    statuses: &BTreeMap<String, FieldStatus>,
+) -> El {
+    let mut copy = col()
+        .grow(1.0)
+        .min_w(170.0)
+        .gap(4.0)
+        .child(roles::NAME.wrap(text.0, p.ink))
+        .child(roles::SMALL.wrap(text.1, p.soft));
+    if let Some(status) = statuses.get(status_key) {
+        let (line, warn) = status_text(status);
+        let color = if warn { p.warn } else { p.soft };
+        copy = copy.child(roles::META.wrap(line, color).key(format!("{key}-status")));
+    }
+    if !in_use(status_key) {
+        let usage = roles::META.medium().wrap(NOT_USED, p.soft);
+        copy = copy.child(usage.key(format!("{key}-usage")));
+    }
+    copy
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    Tasks,
+    Title,
+    Comparison,
+}
+impl Step {
+    const ALL: [Step; 3] = [Self::Tasks, Self::Title, Self::Comparison];
+    fn key(self) -> &'static str {
+        match self {
+            Self::Tasks => "engine-step-tasks",
+            Self::Title => "engine-step-title",
+            Self::Comparison => "engine-step-comparison",
+        }
+    }
+    /// The name `Config::engine_field_status` uses.
+    fn status_key(self) -> &'static str {
+        match self {
+            Self::Tasks => "tasks",
+            Self::Title => "quick_title",
+            Self::Comparison => "external_comparison",
+        }
+    }
+    fn text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Tasks => ("Tasks", "Pick out tasks and follow-ups after each meeting."),
+            Self::Title => ("Meeting title", "Give each meeting a short title."),
+            Self::Comparison => (
+                "Comparison",
+                "Compare your notes with an outside note taker. This is off by default.",
+            ),
+        }
+    }
+    fn get(self, config: &Config) -> bool {
+        let steps = &config.engine_settings.steps;
+        match self {
+            Self::Tasks => steps.tasks,
+            Self::Title => steps.quick_title,
+            Self::Comparison => steps.external_comparison,
+        }
+    }
+    fn set(self, config: &mut Config, on: bool) {
+        let steps = &mut config.engine_settings.steps;
+        match self {
+            Self::Tasks => steps.tasks = on,
+            Self::Title => steps.quick_title = on,
+            Self::Comparison => steps.external_comparison = on,
+        }
+    }
+}
+/// Turning a step on or off saves at once, through the same reviewed path, and keeps any text
+/// the person has typed in the other cards.
+fn toggle(s: &mut State, step: Step) {
+    let mut config = s.hex.shell.engine.base.clone().unwrap_or(s.config.clone());
+    let on = !step.get(&config);
+    step.set(&mut config, on);
+    s.hex.shell.engine.error = None;
+    match config.save(&s.store.root) {
+        Ok(()) => {
+            s.config = config.clone();
+            s.hex.shell.engine.base = Some(config);
+            s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+        }
+        Err(_) => s.hex.shell.engine.error = Some(SAVE_FAILED),
+    }
+}
+fn step_row(
+    s: &State,
+    k: &Kit,
+    p: Palette,
+    step: Step,
+    statuses: &BTreeMap<String, FieldStatus>,
+) -> El {
+    let (name, help) = step.text();
+    let key = step.key();
+    let copy = copy_column(p, key, (name, help), step.status_key(), statuses);
+    let on = step.get(&s.config);
+    let switch = Switch::new(on)
+        .label(name)
+        .hide_label()
+        .on_toggle(move |s: &mut State| toggle(s, step))
+        .build(k)
+        .key(format!("{key}-switch"));
+    crate::ui::cards::row_shell()
+        .key(key)
+        .flex_wrap()
+        .fill(group_highlight(s, key, p))
+        .child(icon_tile(row_icon(key), p))
+        .child(copy)
+        .child(switch)
+}
+fn steps_card(s: &State, k: &Kit, p: Palette, statuses: &BTreeMap<String, FieldStatus>) -> El {
+    let mut rows = col().w_full();
+    for (index, step) in Step::ALL.iter().enumerate() {
+        if index > 0 {
+            rows = rows.child(hairline(p));
+        }
+        rows = rows.child(step_row(s, k, p, *step, statuses));
+    }
+    if let Some(error) = s.hex.shell.engine.error {
+        let alert = roles::SMALL.wrap(error, p.warn).role("alert");
+        rows = rows.child(col().w_full().padding(14.0).child(alert));
+    }
+    col()
+        .w_full()
+        .gap(8.0)
+        .mt(18.0)
+        .key("engine-steps")
+        .child(roles::GROUP.wrap("Optional steps", p.soft))
+        .child(panel(p).child(rows))
+}
+/// The one-time import of script settings is not wired to anything yet.
+fn import_row(s: &State, p: Palette) -> El {
+    let key = "engine-import";
+    let name = "Import from scripts";
+    let help =
+        "Bring in the settings your old scripts use, one time. This comes in a later version.";
+    let copy = col()
+        .grow(1.0)
+        .min_w(170.0)
+        .gap(4.0)
+        .child(roles::NAME.wrap(name, p.ink))
+        .child(roles::SMALL.wrap(help, p.soft));
+    let button = action("Import", p)
+        .key("engine-import-button")
+        .button_disabled(true);
+    let line = crate::ui::cards::row_shell()
+        .key(key)
+        .flex_wrap()
+        .fill(group_highlight(s, key, p))
+        .child(icon_tile(row_icon(key), p))
+        .child(copy)
+        .child(button);
+    col()
+        .w_full()
+        .gap(8.0)
+        .mt(18.0)
+        .child(roles::GROUP.wrap("Script settings", p.soft))
+        .child(panel(p).child(line))
+}
 fn field_row(
     s: &State,
     k: &Kit,
@@ -400,21 +565,7 @@ fn field_row(
     let (name, help, placeholder) = field.text();
     let key = field.key();
     let engine = &s.hex.shell.engine;
-    let mut copy = col()
-        .grow(1.0)
-        .min_w(170.0)
-        .gap(4.0)
-        .child(roles::NAME.wrap(name, p.ink))
-        .child(roles::SMALL.wrap(help, p.soft));
-    if let Some(status) = statuses.get(field.status_key()) {
-        let (line, warn) = status_text(status);
-        let color = if warn { p.warn } else { p.soft };
-        copy = copy.child(roles::META.wrap(line, color).key(format!("{key}-status")));
-    }
-    if !in_use(field.status_key()) {
-        let usage = roles::META.medium().wrap(NOT_USED, p.soft);
-        copy = copy.child(usage.key(format!("{key}-usage")));
-    }
+    let mut copy = copy_column(p, key, (name, help), field.status_key(), statuses);
     if engine.bad.contains(&field) {
         let hint = roles::META.medium().wrap(field.hint(), p.warn);
         copy = copy.child(hint.role("alert"));
@@ -572,6 +723,8 @@ pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             &Field::STEP_MODELS,
             &statuses,
         ))
+        .child(steps_card(s, k, p, &statuses))
+        .child(import_row(s, p))
 }
 
 /// Render fixtures, used only by the isolated scenes: a saved Telugu model and a Hindi model
@@ -581,6 +734,7 @@ pub(super) fn scene_config(config: &mut Config) {
     let models = &mut config.engine_settings.models;
     models.insert("te".into(), "synthetic-te-model".into());
     config.engine_settings.stages.title_model = "synthetic-title-model".into();
+    config.engine_settings.steps.tasks = false;
     let route = ProviderRoute {
         provider: "local".into(),
         model: "synthetic-hi-route-model".into(),
@@ -705,6 +859,42 @@ mod tests {
         assert!(in_use("notes.helper") && in_use("notes.model"));
         assert_eq!(Field::ALL.len(), Field::COUNT);
         assert!(Field::ALL.iter().enumerate().all(|(i, f)| f.index() == i));
+    }
+    #[test]
+    fn steps_start_as_the_model_says_and_comparison_is_off_by_default() {
+        let mut config = Config::default();
+        let on: Vec<_> = Step::ALL.iter().map(|step| step.get(&config)).collect();
+        assert_eq!(on, [true, true, false]);
+        Step::Comparison.set(&mut config, true);
+        Step::Tasks.set(&mut config, false);
+        assert!(config.engine_settings.steps.external_comparison);
+        assert!(!config.engine_settings.steps.tasks && config.engine_settings.steps.quick_title);
+        let status = config.engine_field_status();
+        for step in Step::ALL {
+            assert!(status.contains_key(step.status_key()), "{step:?}");
+            assert!(!in_use(step.status_key()));
+        }
+        assert_eq!(status["external_comparison"].source, Source::Saved);
+        assert_eq!(status["quick_title"].source, Source::Default);
+    }
+    #[test]
+    fn a_step_toggle_goes_through_the_reviewed_save_and_keeps_other_edits() {
+        crate::test_paths::isolate();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        std::fs::write(&path, r#"{"version":1,"features":{},"notes":{}}"#).unwrap();
+        let mut config = Config::load_in(root.path()).unwrap();
+        Step::Comparison.set(&mut config, true);
+        config.save(root.path()).unwrap();
+        let mut stale = Config::load_in(root.path()).unwrap();
+        let mut other = Config::load_in(root.path()).unwrap();
+        other.engine_settings.worker_threads = 8;
+        other.save(root.path()).unwrap();
+        Step::Tasks.set(&mut stale, false);
+        stale.save(root.path()).unwrap();
+        let loaded = Config::load_in(root.path()).unwrap();
+        assert!(Step::Comparison.get(&loaded) && !Step::Tasks.get(&loaded));
+        assert_eq!(loaded.engine_settings.worker_threads, 8);
     }
     #[test]
     fn status_words_cover_every_state_without_a_value() {
