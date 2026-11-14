@@ -133,6 +133,5 @@
   "src/ui/theme.rs": "cf1b44f8360c57dca3f80d5a82f72245a75614d7cbc2451e7c9d99c8595d0c30",
   "src/ui/updates.rs": "a61731670c43cdf181206607b296db42c7d41fb38859bc830d3612890e292dea",
   "src/updates_windows.rs": "a58b97255666e35afcea6a2d643d1d778947e45820881017fc39fca09654c63a",
-  "src/core/meeting_router/batches.rs": "1ff2a076dea62a5395535232b0780900d116df87a8f9be566314e74bdea49dfc",
-  "src/core/meeting_router/batches/tests.rs": "0478a3e56316fc87b865e53d475cb8d432c5b94d881fdd40b6deca56009938d6"
+  "src/core/meeting_router/batches.rs": "55a35b2db87d8157a5c2fc6a3e5c80af864c8d279d6c8f6011c615d39296ff53"
 }

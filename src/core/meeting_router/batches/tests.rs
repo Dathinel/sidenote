@@ -1,142 +1,154 @@
 use super::*;
 use std::{cell::RefCell, rc::Rc};
 type Log = Rc<RefCell<Vec<String>>>;
-struct Native(String, Log, bool);
-impl Drop for Native {
+struct Fakes(Log);
+struct Session(Log);
+impl Drop for Session {
     fn drop(&mut self) {
-        self.1.borrow_mut().push(format!("unload {}", self.0));
+        self.0.borrow_mut().push("unload".into());
     }
 }
-impl Recognizer for Native {
+impl Recognizer for Session {
     fn recognize(&mut self, r: &Range) -> Result<Value> {
-        self.1
-            .borrow_mut()
-            .push(format!("read {} {}", self.0, r.piece));
-        assert!(!(self.2 && r.piece == "second"), "fake crash");
-        Ok(serde_json::json!({"text":self.0}))
+        self.0.borrow_mut().push(format!("read {}", r.piece));
+        Ok(serde_json::json!({"text":r.piece}))
     }
 }
-struct Bridge(Log);
-impl Recognizer for Bridge {
-    fn recognize(&mut self, _: &Range) -> Result<Value> {
-        self.0.borrow_mut().push("hex".into());
-        Ok(serde_json::json!({"text":"English", "timing":"segment"}))
-    }
-}
-fn fake(root: &Path, plan: &Plan, log: &Log, crash: bool) -> Result<()> {
-    run(root, plan, |lang| {
-        if lang == "en" {
-            return Ok(Box::new(Bridge(log.clone())));
-        }
-        let mut events = log.borrow_mut();
+impl NativeLoader for Fakes {
+    fn load(&mut self, lang: NativeLanguage, r: &Range) -> Result<Box<dyn Recognizer>> {
+        let expected = match lang {
+            NativeLanguage::Hindi => "hi",
+            NativeLanguage::Telugu => "te",
+        };
+        assert_eq!(r.range.language.as_deref(), Some(expected));
+        let mut events = self.0.borrow_mut();
         assert_eq!(
-            events.iter().filter(|e| e.starts_with("load")).count(),
-            events.iter().filter(|e| e.starts_with("unload")).count()
+            events.iter().filter(|s| s.starts_with("load")).count(),
+            events.iter().filter(|s| *s == "unload").count()
         );
-        events.push(format!("load {lang}"));
-        Ok(Box::new(Native(lang.into(), log.clone(), crash)))
-    })
+        events.push(format!("load {lang:?}"));
+        Ok(Box::new(Session(self.0.clone())))
+    }
 }
-fn ranges() -> Vec<Range> {
+impl EnglishBridge for Fakes {
+    fn transcribe(&mut self, r: &Range) -> Result<Value> {
+        assert_eq!(r.range.language.as_deref(), Some("en"));
+        self.0.borrow_mut().push("English".into());
+        Ok(serde_json::json!({"text":"English"}))
+    }
+}
+fn fake(root: &Path, plan: &Plan, log: &Log) -> Result<()> {
+    run(root, plan, &mut Fakes(log.clone()), &mut Fakes(log.clone()))
+}
+fn ranges(wav: &Path) -> Vec<Range> {
     [
-        ("hi", "first"),
-        ("en", "first"),
-        ("te", "first"),
-        ("hi", "second"),
+        ("en", "en"),
+        ("hi", "a"),
+        ("hi", "b"),
+        ("hi", "c"),
+        ("te", "te"),
     ]
     .into_iter()
-    .map(|(lang, piece)| {
-        let start = if piece == "first" { 0 } else { 4_800_000 };
-        Range {
-            track: "system".into(),
-            piece: piece.into(),
-            wav: PathBuf::from("synthetic.wav"),
-            range: AsrRange {
-                context: (start, start + 160),
-                members: vec![(0, (start, start + 160))],
-                language: Some(lang.into()),
-            },
-        }
+    .enumerate()
+    .map(|(i, (lang, piece))| Range {
+        track: "system".into(),
+        piece: piece.into(),
+        wav: wav.into(),
+        range: AsrRange {
+            context: (i as u64 * 4_800_000, i as u64 * 4_800_000 + 160),
+            members: vec![(0, (i as u64 * 4_800_000, i as u64 * 4_800_000 + 160))],
+            language: Some(lang.into()),
+        },
+        model_id: format!("fake-{lang}"),
+        model_sha256: hash(lang.as_bytes()),
     })
     .collect()
 }
-#[test]
-fn sequential_batches_resume_and_reject_stale_or_partial() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let plan = spool(root, "source+config+models-v1".into(), ranges()).unwrap();
-    assert!(spool(root, plan.revision.clone(), ranges()).is_ok());
-    let log = Log::default();
-    fake(root, &plan, &log, false).unwrap();
-    assert_eq!(
-        *log.borrow(),
-        [
-            "hex",
-            "load hi",
-            "read hi first",
-            "read hi second",
-            "unload hi",
-            "load te",
-            "read te first",
-            "unload te"
-        ]
-    );
-    log.borrow_mut().clear();
-    fake(root, &plan, &log, false).unwrap();
-    assert!(log.borrow().is_empty());
-    let id = key(&(&plan, &plan.batches["hi"][0])).unwrap();
-    store_io::atomic_write(&root.join(&id), b"[\"partial").unwrap();
-    fake(root, &plan, &log, false).unwrap();
-    assert_eq!(*log.borrow(), ["load hi", "read hi first", "unload hi"]);
-    assert!(spool(root, "v2".into(), ranges()).is_err());
-    let stale = Plan {
-        revision: "v2".into(),
-        batches: plan.batches,
-    };
-    assert!(run(root, &stale, |_| panic!("stale loader")).is_err());
-    assert!(spool(&root.join("new"), "".into(), ranges()).is_err());
+fn id(plan: &Plan, piece: &str) -> String {
+    plan.batches
+        .values()
+        .flat_map(|b| b.iter())
+        .find(|(_, r)| r.piece == piece)
+        .unwrap()
+        .0
+        .clone()
 }
 #[test]
-fn crash_mid_batch_keeps_complete_ranges() {
+fn identities_integrity_and_sequential_native_batches() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    let plan = spool(root, "v1".into(), ranges()).unwrap();
+    let wav = root.join("audio.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(root, ranges(&wav)).unwrap();
+    let mut reversed = ranges(&wav);
+    reversed.reverse();
+    assert_eq!(spool(root, reversed).unwrap().revision, plan.revision);
     let log = Log::default();
-    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        fake(root, &plan, &log, true)
-    }));
-    assert!(crash.is_err());
-    assert_eq!(
-        *log.borrow(),
-        [
-            "hex",
-            "load hi",
-            "read hi first",
-            "read hi second",
-            "unload hi"
-        ]
-    );
+    fake(root, &plan, &log).unwrap();
+    for name in ["load Hindi", "load Telugu"] {
+        assert_eq!(
+            log.borrow().iter().filter(|e| e.as_str() == name).count(),
+            1
+        );
+    }
+    assert_eq!(log.borrow().iter().filter(|e| *e == "English").count(), 1);
     log.borrow_mut().clear();
-    let resumed: Plan =
-        serde_json::from_slice(&store_io::read_bounded(&root.join("plan.json"), 16 << 20).unwrap())
-            .unwrap();
-    fake(root, &resumed, &log, false).unwrap();
+    fake(root, &plan, &log).unwrap();
+    assert!(log.borrow().is_empty());
+    for bytes in [
+        b"{".as_slice(),
+        br#"{"text":"edited valid JSON, same identity"}"#,
+    ] {
+        store_io::atomic_write(&path(root, &plan, &id(&plan, "a"), "result"), bytes).unwrap();
+        fake(root, &plan, &log).unwrap();
+        assert_eq!(*log.borrow(), ["load Hindi", "read a", "unload"]);
+        log.borrow_mut().clear();
+    }
+    crate::core::asr::write_wav(&wav, &[0.5; 160]).unwrap();
+    assert!(fake(root, &plan, &log).is_err());
+    assert!(log.borrow().is_empty());
+    let changed = spool(root, ranges(&wav)).unwrap();
+    assert_ne!(changed.revision, plan.revision);
+    fake(root, &changed, &log).unwrap();
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .filter(|s| s.starts_with("read") || *s == "English")
+            .count(),
+        5
+    );
+    let mut pins = ranges(&wav);
+    pins[4].model_sha256 = hash(b"new pinned model");
+    assert_ne!(spool(root, pins).unwrap().revision, changed.revision);
+}
+#[test]
+fn abrupt_death_artifacts_redo_only_incomplete_ranges() {
+    // Simulate on-disk artifacts without unwinding; real process kill/reap belongs to 8b.
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let wav = root.join("audio.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(root, ranges(&wav)).unwrap();
+    fake(root, &plan, &Log::default()).unwrap();
+    for (piece, kind) in [
+        ("a", "result"),
+        ("a", "receipt"),
+        ("b", "receipt"),
+        ("c", "result"),
+    ] {
+        std::fs::remove_file(path(root, &plan, &id(&plan, piece), kind)).unwrap();
+    }
+    std::fs::write(
+        path(root, &plan, &id(&plan, "a"), "result.tmp"),
+        b"unrenamed partial",
+    )
+    .unwrap();
+    let fresh = spool(root, ranges(&wav)).unwrap();
+    let log = Log::default();
+    fake(root, &fresh, &log).unwrap();
+    log.borrow_mut().sort();
     assert_eq!(
         *log.borrow(),
-        [
-            "load hi",
-            "read hi second",
-            "unload hi",
-            "load te",
-            "read te first",
-            "unload te"
-        ]
+        ["load Hindi", "read a", "read b", "read c", "unload"]
     );
-    let new = spool(&root.join("v2"), "v2".into(), ranges()).unwrap();
-    let old_id = key(&(&plan, &plan.batches["hi"][0])).unwrap();
-    let new_id = key(&(&new, &new.batches["hi"][0])).unwrap();
-    assert_ne!(old_id, new_id);
-    let old = store_io::read_bounded(&root.join(&old_id), 1 << 20).unwrap();
-    store_io::atomic_write(&root.join("v2").join(&new_id), &old).unwrap();
-    assert!(!cached(&root.join("v2"), &new_id));
 }
