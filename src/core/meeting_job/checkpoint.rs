@@ -29,6 +29,10 @@ pub const STAGES: [Stage; 9] = [
 pub enum Availability {
     Completed,
     NotAvailable,
+    /// An attempted optional stage failed; retain the cause and continue required work.
+    Failed {
+        cause: Cause,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +72,13 @@ impl Journal {
             || journal.completed.len() > STAGES.len()
             || (journal.completed.len() == STAGES.len() && journal.started)
             || (journal.failure.is_some() && !journal.started)
+            || journal
+                .completed
+                .iter()
+                .zip(STAGES)
+                .any(|(outcome, stage)| {
+                    matches!(outcome, Availability::Failed { .. }) && !stage.is_optional()
+                })
         {
             return Err(io::ErrorKind::InvalidData.into());
         }
@@ -124,7 +135,7 @@ impl Job {
         Ok(())
     }
 
-    /// Returns true after completing one stage, false on completion or a typed stage failure.
+    /// Returns true after settling one stage, false on completion or a required-stage failure.
     /// Missing adapters return NotAvailable, a durable nonfailure outcome.
     ///
     /// Start is issued at most once per stage/input identity. On Recover an adapter must
@@ -162,17 +173,25 @@ impl Job {
             hex::encode(self.journal.inputs),
             self.journal.completed.len()
         );
-        let result = execute(stage, &key, action);
+        let result = execute(stage, &key, action).and_then(|outcome| match outcome {
+            Availability::Failed { cause } => Err(cause),
+            outcome => Ok(outcome),
+        });
         let mut journal = self.journal.clone();
-        match result {
-            Ok(outcome) => {
-                journal.completed.push(outcome);
-                journal.started = false;
-                journal.failure = None;
+        let outcome = match result {
+            Ok(outcome) => Some(outcome),
+            Err(cause) if stage.is_optional() => Some(Availability::Failed { cause }),
+            Err(cause) => {
+                journal.failure = Some(cause);
+                None
             }
-            Err(cause) => journal.failure = Some(cause),
+        };
+        if let Some(outcome) = outcome {
+            journal.completed.push(outcome);
+            journal.started = false;
+            journal.failure = None;
         }
         self.save(journal)?;
-        Ok(result.is_ok())
+        Ok(outcome.is_some())
     }
 }

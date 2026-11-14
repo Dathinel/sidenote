@@ -21,6 +21,12 @@ pub enum Stage {
     Compare,
     Title,
 }
+impl Stage {
+    /// Legacy best-effort work; failure must not prevent required meeting outputs.
+    pub fn is_optional(self) -> bool {
+        matches!(self, Self::Tasks | Self::Compare | Self::Title)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Cause {

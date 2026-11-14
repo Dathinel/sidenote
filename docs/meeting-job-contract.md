@@ -43,12 +43,24 @@ versions and available capabilities. No paths, helper output or meeting content 
 Previous identities are retained so switching inputs A -> B -> A does not rerun A.
 New capabilities require a new identity; NotAvailable is recorded without failing the job.
 The journal stores a completed prefix and a content-free Cause for the active Stage.
+Tasks, Compare and Title are optional in the shared Stage policy. Only Tasks is in the
+fixed checkpoint order. Optional failure appends `Failed { cause }` to the settled prefix,
+retaining the existing typed Cause without setting a blocking failure. Render and Publish
+continue, and restart skips the failed optional stage for those same inputs. NotAvailable
+remains distinct from attempted failure. Required stages cannot settle as Failed.
+
+Evidence at the stage-1 base f94f0fe: `hex-meeting-english.ps1:277-282` catches task
+failure without failing the meeting; `:50-53` catches quick-title failure; `:283-287`
+declares comparison nonfatal, and `hex-meeting-compare-delayed.ps1:8-12` catches it.
+These paths are under `scripts/meeting-pipeline/`. Title/comparison adapter substeps must
+use the same optional policy; this layer neither adds checkpoints nor invokes them.
 IO errors use `failure.rs`'s redacted MEETING_JOB boundary; invalid journals fail closed.
 
 The claim covers journal reads, flushed atomic replacement and all adapter calls. A
 completed stage is never called again for that identity. Before calling a new stage the
 coordinator durably records its start and supplies a stable version/input/stage key.
-After interruption or typed failure the same stage receives Recover, never another Start.
+After interruption or a required-stage typed failure the same stage receives Recover,
+never another Start. A settled optional failure is skipped like other settled outcomes.
 An adapter must reconcile a durable receipt for that key, returning committed results or
 finishing uncommitted work idempotently. It must not repeat committed effects. Arbitrary
 external effects cannot be made exactly-once by a journal alone; later adapters must

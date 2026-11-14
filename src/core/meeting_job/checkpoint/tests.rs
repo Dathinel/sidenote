@@ -231,9 +231,20 @@ fn each_stage_retains_its_existing_typed_cause_and_recovers() {
             for _ in 0..boundary {
                 job.advance(|_, _, _| Ok(Availability::Completed)).unwrap();
             }
-            assert!(!job.advance(|_, _, _| Err(cause)).unwrap());
+            assert_eq!(
+                job.advance(|_, _, _| Err(cause)).unwrap(),
+                expected.is_optional()
+            );
             drop(job);
             let mut restarted = Job::open(temp.path(), INPUTS).unwrap();
+            if expected.is_optional() {
+                assert_eq!(
+                    restarted.completed()[boundary],
+                    Availability::Failed { cause }
+                );
+                assert_eq!(restarted.failure(), None);
+                continue;
+            }
             assert_eq!(restarted.failure(), Some((expected, cause)));
             assert!(
                 restarted
@@ -246,6 +257,55 @@ fn each_stage_retains_its_existing_typed_cause_and_recovers() {
             assert_eq!(restarted.failure(), None);
         }
     }
+}
+
+#[test]
+fn optional_failures_retain_their_cause_and_render_publish_still_finish() {
+    for stage in [Stage::Tasks, Stage::Compare, Stage::Title] {
+        assert!(stage.is_optional());
+    }
+    for cause in [Cause::Limit, Cause::Auth, Cause::TimedOut, Cause::Other] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut calls = Vec::new();
+        for expected in STAGES {
+            let mut job = Job::open(temp.path(), INPUTS).unwrap();
+            assert!(
+                job.advance(|stage, _, action| {
+                    assert_eq!((stage, action), (expected, Action::Start));
+                    calls.push(stage);
+                    if stage == Stage::Tasks {
+                        Err(cause)
+                    } else {
+                        Ok(Availability::Completed)
+                    }
+                })
+                .unwrap()
+            );
+            assert_eq!(job.failure(), None);
+        }
+        assert_eq!(calls, STAGES);
+        let mut reopened = Job::open(temp.path(), INPUTS).unwrap();
+        assert_eq!(reopened.completed()[6], Availability::Failed { cause });
+        assert_eq!(&reopened.completed()[7..], &[Availability::Completed; 2]);
+        assert_eq!(reopened.next_stage(), None);
+        assert!(
+            !reopened
+                .advance(|_, _, _| panic!("repeated optional failure"))
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+fn required_failure_cannot_be_disguised_as_a_nonfatal_outcome() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    assert!(
+        !job.advance(|_, _, _| Ok(Availability::Failed { cause: Cause::Auth }))
+            .unwrap()
+    );
+    assert_eq!(job.failure(), Some((Stage::Discover, Cause::Auth)));
+    assert_eq!(job.completed(), &[]);
 }
 
 #[test]
