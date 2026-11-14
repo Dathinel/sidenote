@@ -18,6 +18,7 @@ pub enum Failure {
     Busy,
     Replay,
     BeforeReady,
+    CgroupBudgetUnavailable,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stage {
@@ -130,6 +131,8 @@ pub struct Supervisor {
     seen: BTreeSet<u128>,
     busy: bool,
     owned: Option<Child>,
+    budget: Option<super::notes_cgroup::Budget>,
+    leaf: Option<super::notes_cgroup::Leaf>,
 }
 impl Supervisor {
     pub fn owned_pid(&self) -> Option<u32> {
@@ -137,16 +140,34 @@ impl Supervisor {
     }
     pub async fn finish(&mut self) -> Result<(), Failure> {
         self.busy = false;
+        if let Some(leaf) = &self.leaf {
+            leaf.kill()?;
+        }
         if let Some(mut child) = self.owned.take() {
             let killed = child.start_kill();
             killed.and(child.wait().await.map(|_| ())).map_err(io)?;
+        }
+        if let Some(leaf) = &self.leaf {
+            leaf.remove()?;
+            self.leaf = None;
         }
         Ok(())
     }
     pub async fn run(
         &mut self,
         pipes: &mut Pipes,
-        setup: impl FnOnce(Stage, Model) -> Result<Option<Child>, Failure>,
+        unit: &str,
+        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<Option<Child>, Failure>,
+    ) -> Result<String, Failure> {
+        if self.budget.is_none() {
+            self.budget = Some(super::notes_cgroup::Budget::prepare(unit)?);
+        }
+        self.exchange(pipes, setup).await
+    }
+    async fn exchange(
+        &mut self,
+        pipes: &mut Pipes,
+        setup: impl FnOnce(Stage, Model, &std::path::Path) -> Result<Option<Child>, Failure>,
     ) -> Result<String, Failure> {
         let result = async {
             let Frame::Begin((nonce, stage, model)) = pipes.read().await? else {
@@ -160,7 +181,19 @@ impl Supervisor {
             }
             self.seen.insert(nonce);
             self.busy = true;
-            self.owned = setup(stage, model)?;
+            if let Some(budget) = &self.budget {
+                self.leaf = Some(budget.job(nonce)?);
+            }
+            self.owned = setup(
+                stage,
+                model,
+                self.leaf
+                    .as_ref()
+                    .map_or(std::path::Path::new(""), |l| &l.0),
+            )?;
+            if let (Some(leaf), Some(pid)) = (&self.leaf, self.owned_pid()) {
+                leaf.contains(pid)?;
+            }
             let mut token = 0u128;
             let pointer = std::ptr::addr_of_mut!(token).cast();
             if unsafe { libc::getrandom(pointer, 16, libc::GRND_NONBLOCK) } != 16 {
@@ -191,8 +224,8 @@ mod tests {
     }
     #[tokio::test(start_paused = true)]
     async fn contract() {
-        let deny = |_, _| panic!("no launch");
-        let stub = |_, _| Ok(None);
+        let deny = |_, _, _: &std::path::Path| panic!("no launch");
+        let stub = |_, _, _: &std::path::Path| Ok(None);
         let begin = Frame::Begin((1, Stage::Title, Model::ClaudeSonnet55));
         let mut bytes = encode(&begin).unwrap();
         let mut bad = vec![vec![], vec![2], vec![1], vec![1, b'{']];
@@ -216,7 +249,7 @@ mod tests {
                 let pid = s.owned_pid();
                 server.tx.write_all(&wire).await.unwrap();
                 drop(server);
-                assert!(s.run(&mut host, deny).await.is_err());
+                assert!(s.exchange(&mut host, deny).await.is_err());
                 assert_eq!(s.owned_pid(), None);
                 if let Some(pid) = pid {
                     let reaped = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 1) };
@@ -228,19 +261,19 @@ mod tests {
             let (mut host, mut server) = pair();
             let mut s = Supervisor::default();
             let (result, sent) = tokio::join!(
-                s.run(&mut host, stub),
+                s.exchange(&mut host, stub),
                 server.submit((1, stage, Model::ClaudeSonnet55), "ok".into())
             );
             assert_eq!(result, Ok("ok".into()));
             sent.unwrap();
             for reason in [Failure::Busy, Failure::Replay] {
                 server.write(&begin).await.unwrap();
-                assert_eq!(s.run(&mut host, stub).await, Err(reason));
+                assert_eq!(s.exchange(&mut host, stub).await, Err(reason));
             }
             s.seen = (0..1024).collect();
             let next = Frame::Begin((1024, stage, Model::ClaudeSonnet55));
             server.write(&next).await.unwrap();
-            assert_eq!(s.run(&mut host, deny).await, Err(Failure::Busy));
+            assert_eq!(s.exchange(&mut host, deny).await, Err(Failure::Busy));
             assert_eq!(s.seen, (0..1024).collect());
         }
         let mut stale = None;
@@ -267,9 +300,9 @@ mod tests {
                 }
                 drop(server);
             };
-            let (result, _) = tokio::join!(s.run(&mut host, stub), client);
+            let (result, _) = tokio::join!(s.exchange(&mut host, stub), client);
             assert_eq!(result.is_ok(), phase == 3);
-            assert_eq!(s.run(&mut host, stub).await, Err(Failure::Eof));
+            assert_eq!(s.exchange(&mut host, stub).await, Err(Failure::Eof));
         }
         for proof in [None, stale] {
             let (mut host, mut server) = pair();
@@ -291,7 +324,8 @@ mod tests {
                     server.write(&material).await.unwrap();
                 }
             };
-            let (result, _) = tokio::join!(s.run(&mut host, |_, _| Ok(Some(child))), client);
+            let (result, _) =
+                tokio::join!(s.exchange(&mut host, |_, _, _| Ok(Some(child))), client);
             assert_eq!(result, Err(Failure::BeforeReady));
             assert_eq!(s.owned_pid(), None);
             let reaped = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 1) };
@@ -300,7 +334,7 @@ mod tests {
         let mut s = Supervisor::default();
         let (mut host, mut server) = pair();
         server.tx.write_u32((LIMIT + 1) as u32).await.unwrap();
-        assert_eq!(s.run(&mut host, deny).await, Err(Failure::Oversized));
+        assert_eq!(s.exchange(&mut host, deny).await, Err(Failure::Oversized));
         assert_eq!(host.read().await, Err(Failure::Deadline));
         let material = |n| Frame::Material(1, Some(1), "x".repeat(n));
         let overhead = encoded_len(&material(0)).unwrap();

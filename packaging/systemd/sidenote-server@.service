@@ -7,6 +7,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=exec
+Delegate=memory pids cpu
 User=%i
 ExecStartPre=/usr/bin/test %i -ne 0
 ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/sidenote-%i/state /var/lib/sidenote-%i/meetings /var/lib/sidenote-%i/peers

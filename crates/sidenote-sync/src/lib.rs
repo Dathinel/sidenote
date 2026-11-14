@@ -9,6 +9,8 @@ pub mod identity;
 mod linux_secret;
 pub mod model;
 #[cfg(target_os = "linux")]
+pub mod notes_cgroup;
+#[cfg(target_os = "linux")]
 pub mod notes_supervisor;
 pub mod pairing;
 #[cfg(target_os = "linux")]
