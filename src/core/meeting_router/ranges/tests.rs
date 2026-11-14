@@ -79,7 +79,7 @@ fn edges_seams_changes_unsure_and_long_speech() {
         );
     }
     for bounds in [(0, 4_800_000), (4_800_000, 9_600_000)] {
-        let out = run(bounds, &[bounds], &[en.clone()]);
+        let out = run(bounds, &[bounds], std::slice::from_ref(&en));
         assert_eq!(out.len(), 10);
     }
     for next in [None, Some(("b", "1")), Some(("a", "2"))] {
