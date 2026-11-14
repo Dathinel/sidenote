@@ -47,7 +47,7 @@
   "src/core/meeting_router/cache.rs": "6e2137b05436cfc8f5fcfd4f5971222e2bcadad091a8681d98b809db780d6cb1",
   "src/core/meeting_router/cli.rs": "591f0e9afde44fd37c2ecbebe6dfffd1549af087432856f44d4fbcef00e5c742",
   "src/core/meeting_router/hex.rs": "71d08f8b6be18694504feb898c0b481455a4d36c33782e44936773a79ebfedc1",
-  "src/core/meeting_router/hex_bridge.rs": "df93d7667e3cbb89ac46e3b7fbc1f4c7d2fdc1d08d301208bbc09dee83320a6e",
+  "src/core/meeting_router/hex_bridge.rs": "15b7066989b662ba51eaf9973f38f6c146bd38639475fa851aa80f0ee69603e7",
   "src/core/meeting_router/inputs.rs": "11ddb8260c308e3392a2a304079c76c1b994ef651f539853adf117d7c27fb105",
   "src/core/meeting_router/jobs.rs": "e489f7ba053350b79d5a49a4fc8c1fb40b9d089b0bee24fc5ee74bd2539dcd02",
   "src/core/meeting_router/pieces.rs": "2a1b3919d047b09f87307726d029d9189b875a519c223911eb8312849018a8b8",
