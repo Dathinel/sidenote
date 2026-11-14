@@ -1,5 +1,7 @@
 //! Device-local preparation only. No stage consumes these choices yet.
 mod migration;
+mod persistence;
+pub(super) use persistence::prepare_save;
 mod status;
 pub use status::{FieldStatus, Source, Validation};
 
@@ -31,6 +33,7 @@ pub struct EngineSettings {
     pub translation_prompt: Option<String>,
     #[serde(default)]
     pub(super) legacy_imported: bool,
+    pub(super) backup_file: Option<String>,
     #[serde(default)]
     pub(super) imported_fields: BTreeSet<String>,
     #[serde(default)]
@@ -56,6 +59,7 @@ impl Default for EngineSettings {
             steps: Steps::default(),
             notes_prompt: None,
             translation_prompt: None,
+            backup_file: None,
             legacy_imported: false,
             imported_fields: BTreeSet::new(),
             conflicts: BTreeSet::new(),

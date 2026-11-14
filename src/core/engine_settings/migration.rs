@@ -88,7 +88,7 @@ pub(super) fn import(
         return false;
     }
     // Snapshot the pre-existing local profile without writing the synced notes name.
-    if config.engine_settings.owner_name.is_empty() {
+    if config.engine_settings.owner_name.trim().is_empty() {
         config.engine_settings.owner_name = config
             .notes
             .as_ref()
@@ -247,6 +247,11 @@ mod conflict_tests {
     fn equal_values_are_not_conflicts_and_existing_route_wins() {
         let mut config = Config::default();
         config.engine_settings.product = "same-synthetic".into();
+        config.engine_settings.owner_name = "   ".into();
+        config.notes = Some(crate::core::notes::NotesSettings {
+            your_name: "Existing synthetic owner".into(),
+            ..Default::default()
+        });
         config.pipeline.after_stop_languages = Some(crate::core::meeting_router::LanguageRoutes {
             primary: "te".into(),
             supporting: vec!["en".into()],
@@ -278,5 +283,9 @@ mod conflict_tests {
         assert!(config.engine_settings.imported_fields.is_empty());
         assert_eq!(config.engine_model("te"), Some("indicconformer-te-ctc"));
         assert!(config.engine_settings.models.is_empty());
+        assert_eq!(
+            config.engine_settings.owner_name,
+            "Existing synthetic owner"
+        );
     }
 }
