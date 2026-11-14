@@ -1,4 +1,4 @@
-//! Unwired spool. Process ownership and real adapters belong to layer 8b.
+//! Unwired spool. Real adapters belong to layer 8c.
 use super::{inputs::Snapshot, ranges::AsrRange};
 use crate::core::{asr::Result, store_io};
 use serde::{Deserialize, Serialize};
@@ -76,15 +76,18 @@ pub fn spool(root: &Path, ranges: Vec<Range>) -> Result<Plan> {
     }
     Ok(plan)
 }
+#[cfg(windows)]
 fn path(root: &Path, plan: &Plan, id: &str, kind: &str) -> PathBuf {
     root.join(format!("{}-{id}.{kind}", plan.revision))
 }
+#[cfg(windows)]
 #[derive(Serialize, Deserialize)]
 struct Receipt {
     revision: String,
     range: String,
     sha256: String,
 }
+#[cfg(windows)]
 fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
     let check = || -> Result<bool> {
         let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
@@ -115,6 +118,23 @@ pub trait NativeLoader {
     fn load(&mut self, language: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>>;
 }
 pub fn run(
+    root: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    bridge: &mut impl EnglishBridge,
+) -> Result<()> {
+    #[cfg(not(windows))]
+    {
+        let _ = (root, plan, native, bridge);
+        Err(super::hex_bridge::HexFailure::Unsupported.into())
+    }
+    #[cfg(windows)]
+    {
+        run_windows(root, plan, native, bridge)
+    }
+}
+#[cfg(windows)]
+fn run_windows(
     root: &Path,
     plan: &Plan,
     native: &mut impl NativeLoader,
@@ -164,5 +184,7 @@ pub fn run(
     }
     Ok(())
 }
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests;
+#[cfg(windows)]
+pub mod worker;
