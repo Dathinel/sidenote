@@ -198,6 +198,7 @@ fn pipeline_in(
     }
     command
         .env("SIDENOTE_DATA_DIR", state)
+        .env("SIDENOTE_NOTES_QUERY_EXE", std::env::current_exe()?)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     let child = command.spawn().at(Stage::CatchUpScriptCommand);

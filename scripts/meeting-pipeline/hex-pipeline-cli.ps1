@@ -92,12 +92,28 @@ function Enter-NotesEngine([string]$MeetingDir) {
 }
 
 function Get-ScriptsNotesEngine {
+    $child = $null
     try {
-        $state = if ($env:SIDENOTE_DATA_DIR) { $env:SIDENOTE_DATA_DIR }
-                 elseif ($env:SIDENOTE_STATE_DIR) { $env:SIDENOTE_STATE_DIR }
-                 else { Join-Path $env:APPDATA 'hex-meetings' }
-        $config = [IO.File]::ReadAllText((Join-Path $state 'config.json')) | ConvertFrom-Json
-        if ($config.notes.engine -cin @('app','scripts','off')) { return [string]$config.notes.engine }
-    } catch {} # Missing or unreadable settings never authorize scripts.
-    return 'off'
+        $exe = if ($env:SIDENOTE_NOTES_QUERY_EXE) { $env:SIDENOTE_NOTES_QUERY_EXE }
+               else { Join-Path $env:LOCALAPPDATA 'Sidenote\current\sidenote.exe' }
+        $info = New-Object Diagnostics.ProcessStartInfo
+        $info.FileName = $exe; $info.Arguments = '--notes-engine'
+        $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+        $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+        $child = [Diagnostics.Process]::Start($info)
+        $output = $child.StandardOutput.ReadToEndAsync()
+        $errors = $child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(15000)) { $child.Kill(); $child.WaitForExit(); return 'query_unavailable' }
+        $value = $output.Result.Trim()
+        if ($child.ExitCode -eq 0 -and -not $errors.Result -and
+            $value -cin @('app','scripts','off','settings_invalid','settings_unavailable')) { return $value }
+    } catch {} # No raw subprocess or configuration diagnostics escape the policy protocol.
+    finally { if ($null -ne $child) { $child.Dispose() } }
+    return 'query_unavailable'
+}
+
+function Format-NotesSkip([string]$Policy) {
+    if ($Policy -cin @('app','off')) { return "notes skipped engine=$Policy" }
+    if ($Policy -cnotin @('settings_invalid','settings_unavailable')) { $Policy = 'query_unavailable' }
+    return "notes skipped category=$Policy"
 }

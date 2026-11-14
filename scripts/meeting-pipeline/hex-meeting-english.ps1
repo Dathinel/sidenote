@@ -19,7 +19,7 @@ param(
 $promptDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
 $notesEngine = Get-ScriptsNotesEngine
-if ($notesEngine -cne 'scripts') { Write-Output "notes skipped engine=$notesEngine"; return }
+if ($notesEngine -cne 'scripts') { Write-Output (Format-NotesSkip $notesEngine); return }
 
 $glossaryFile = Join-Path $env:USERPROFILE '.config\hex\meeting-glossary.txt'
 
@@ -226,7 +226,7 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     $notesOut = Join-Path $temp 'notes-output.json'
     [IO.File]::WriteAllText($notesIn, "# Instructions`n`n$notesRule`n`n# Input`n`n## Context`n$context`n`n$workingTitleSection## My notes`n$myNotes`n`n## Transcript`n$transcript", $utf8)
     Set-PipelineStage 'notes' 600
-    & (Join-Path $promptDir 'hex-meeting-notes.ps1') -InputFile $notesIn -OutFile $notesOut -Project $Project -Model $NotesModel
+    & (Join-Path $promptDir 'hex-meeting-notes.ps1') -InputFile $notesIn -OutFile $notesOut -MeetingDir $dir.FullName -NotesClaim $notesClaim -Project $Project -Model $NotesModel
     $notes = [IO.File]::ReadAllText($notesOut, $utf8).Trim()
     Write-Host ('Translation and notes: {0:N1}s' -f $step.Elapsed.TotalSeconds)
     # Two files: the transcript is the record of what was said; the summary is written from it.

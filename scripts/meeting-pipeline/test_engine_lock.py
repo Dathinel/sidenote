@@ -9,6 +9,19 @@ import unittest
 HERE = Path(__file__).resolve().parent
 
 
+def query_environment(root, policy="scripts"):
+    """Protocol stub only; typed config parity is exercised by the native synthetic proof."""
+    exe = root / 'policy.exe'
+    if not exe.exists():
+        setup = root / 'policy.ps1'
+        setup.write_text("Add-Type -OutputType ConsoleApplication -OutputAssembly '" + str(exe) + "' -TypeDefinition @'\n" +
+            'using System; class Policy { static void Main() { Console.WriteLine(Environment.GetEnvironmentVariable("SIDENOTE_SYNTHETIC_POLICY")); } }' + "\n'@")
+        subprocess.run(['powershell', '-NoProfile', '-File', str(setup)], check=True,
+                       capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    return os.environ | {'SIDENOTE_DATA_DIR': str(root), 'SIDENOTE_NOTES_QUERY_EXE': str(exe),
+                         'SIDENOTE_SYNTHETIC_POLICY': policy}
+
+
 class EngineLockTests(unittest.TestCase):
     def test_app_off_and_unreadable_block_watcher_and_replays(self):
         with tempfile.TemporaryDirectory(prefix="notes-engine-policy-") as tmp:
@@ -24,14 +37,15 @@ class EngineLockTests(unittest.TestCase):
             absent = root / 'must-not-read'
             for engine in ['app', 'off', 'unknown', None]:
                 (root / 'config.json').write_text(json.dumps(dict(notes=dict(engine=engine))) if engine else '{')
-                expected = 'notes skipped engine=' + ('app' if engine == 'app' else 'off')
+                policy = 'settings_invalid' if engine is None else ('app' if engine == 'app' else 'off')
+                expected = 'notes skipped ' + ('category=' + policy if engine is None else 'engine=' + policy)
                 for name, args in [('hex-meeting-watch.ps1', []),
                                    ('hex-meeting-english.ps1', ['-MeetingDir', str(absent)]),
                                    ('hex-meeting-english.ps1', ['-MeetingDir', str(absent), '-NotesOnly']),
                                    ('hex-meeting-notes.ps1', ['-InputFile', str(absent), '-OutFile', str(absent)])]:
                     result = subprocess.run(['powershell', '-NoProfile', '-File', str(root / name), *args],
                         capture_output=True, text=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW,
-                        env=os.environ | {'SIDENOTE_DATA_DIR': str(root)})
+                        env=query_environment(root, policy))
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stderr, "")
                     if name == 'hex-meeting-watch.ps1':
@@ -71,7 +85,7 @@ class EngineLockTests(unittest.TestCase):
             result = subprocess.run(['powershell', '-NoProfile', '-File', str(script)],
                                     capture_output=True, text=True, timeout=20,
                                     creationflags=subprocess.CREATE_NO_WINDOW,
-                                    env=os.environ | {'SIDENOTE_DATA_DIR': str(root)})
+                                    env=query_environment(root))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(marker.read_text(), "try synthetic failure")
             self.assertIn("notes deferred engine busy", log.read_text(encoding="utf-8-sig"))
@@ -118,7 +132,7 @@ Write-Output 'PASS contention, release, crash expiry; notes deferred engine busy
     .replace('MEETING', str(meeting)).replace('HOLDER', str(root / 'holder.ps1')).replace('READY', str(root / 'ready')))
             (root / 'holder.ps1').write_text(". '" + str(HERE / 'hex-pipeline-cli.ps1') + "'\n$claim = Enter-NotesEngine '" + str(meeting) + "'\n[IO.File]::WriteAllText('" + str(root / 'ready') + "','ready')\nStart-Sleep -Seconds 60")
             result = subprocess.run(['powershell', '-NoProfile', '-File', str(script)], capture_output=True, text=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW,
-                                    env=os.environ | {'SIDENOTE_DATA_DIR': str(root)})
+                                    env=query_environment(root))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(list(meeting.iterdir()), [meeting / '.notes-engine.lock'])
             print(result.stdout.strip())
