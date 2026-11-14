@@ -4,6 +4,8 @@ use crate::ui::{ai_notes, icons, nav, tasks, widgets::ButtonDisabled};
 use sidenote::core::{Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
+mod engine;
+
 #[derive(Default)]
 pub struct Settings {
     pub navigation_open: bool,
@@ -34,6 +36,7 @@ pub struct Settings {
     kb_fields: [TextEdit; 5],
     kb_base: Option<sidenote::core::Config>,
     kb_error: Option<String>,
+    engine: engine::Engine,
 }
 
 struct ReturnTo {
@@ -101,7 +104,7 @@ impl Page {
     fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::People => &["Our team", "External"],
-            Self::Meetings => &["Recording", "Summaries", "Tasks"],
+            Self::Meetings => &["Recording", "Summaries", "Tasks", "Engine"],
             Self::Helpers => &["Agents", "Speech model"],
             _ => &[],
         }
@@ -112,6 +115,7 @@ impl Page {
             Self::Meetings => match tab {
                 1 => Section::AiNotes,
                 2 => Section::Features,
+                3 => Section::MeetingEngine,
                 _ => Section::Meetings,
             },
             Self::Prompts => Section::PromptLibrary,
@@ -152,6 +156,7 @@ fn current(section: Section) -> (Page, usize) {
         Section::Meetings | Section::Vocabulary => (Page::Meetings, 0),
         Section::AiNotes => (Page::Meetings, 1),
         Section::Features => (Page::Meetings, 2),
+        Section::MeetingEngine => (Page::Meetings, 3),
         Section::PromptLibrary => (Page::Prompts, 0),
         Section::Teams => (Page::People, 0),
         Section::Model => (Page::Hex, 0),
@@ -190,6 +195,9 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     };
     if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
         load_kb(s);
+    }
+    if page == Page::Meetings && tab == 3 {
+        engine::enter(s);
     }
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
@@ -696,6 +704,142 @@ fn app_index() -> Vec<Destination> {
             "tasks",
             Page::Meetings,
             2,
+            false,
+        ),
+        entry(
+            "engine-notes-writer",
+            "Notes writer",
+            "meeting engine notes summary agent helper writer",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-translation-model",
+            "Translation model",
+            "meeting engine translate english model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-title-model",
+            "Title model",
+            "meeting engine meeting title model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-tasks-model",
+            "Task model",
+            "meeting engine tasks follow-ups model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-comparison-model",
+            "Comparison model",
+            "meeting engine compare outside notes model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-prompt-notes",
+            "Notes prompt",
+            "meeting engine prompt instructions notes summary reset default",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-prompt-translation",
+            "Translation prompt",
+            "meeting engine prompt instructions translation reset default",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-step-tasks",
+            "Tasks step",
+            "meeting engine optional step tasks follow-ups on off",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-step-title",
+            "Meeting title step",
+            "meeting engine optional step title on off",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-step-comparison",
+            "Comparison step",
+            "meeting engine optional step compare outside notes on off",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-import",
+            "Import from scripts",
+            "meeting engine import migrate script settings",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-model-en",
+            "English model",
+            "meeting engine transcription speech model english",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-model-hi",
+            "Hindi model",
+            "meeting engine transcription speech model hindi",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-model-te",
+            "Telugu model",
+            "meeting engine transcription speech model telugu",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-worker-threads",
+            "Worker threads",
+            "meeting engine transcription workers parallel",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-transcription-deadline",
+            "Transcription deadline",
+            "meeting engine transcription timeout seconds",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-request-deadline",
+            "Request deadline",
+            "meeting engine transcription request timeout seconds",
+            Page::Meetings,
+            3,
             false,
         ),
         entry(
@@ -2175,6 +2319,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
+        (Page::Meetings, 3) => engine::body(s, k, p, layer),
         (Page::Meetings, _) => col()
             .w_full()
             .child(card(
@@ -2210,7 +2355,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(super::super::cloud_ask::section(s, k, p, layer))
             .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
-            .child(ai_notes::summary_model(s, k, p, layer))
+            .child(ai_notes::summary_model(s, k, p, layer, Vec::new()))
             .child(super::super::annotations::agents_section(s, k, p, layer)),
         (Page::Helpers, _) => col()
             .w_full()
@@ -2572,6 +2717,9 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
+        "settings-engine" | "settings-engine-invalid" | "settings-engine-notes-error" => {
+            (Page::Meetings, 3)
+        }
         "settings-prompts"
         | "settings-prompts-edited"
         | "settings-prompts-diff"
@@ -2604,7 +2752,17 @@ pub fn scene(s: &mut State, name: &str) {
     if page == Page::Updates {
         super::super::updates::settings_fixture(s);
     }
+    if name.starts_with("settings-engine") {
+        engine::scene_config(&mut s.config);
+        s.config.notes = s.ai_notes.settings.clone();
+    }
     navigate(s, page, tab);
+    if name == "settings-engine-invalid" {
+        engine::scene_invalid(s);
+    }
+    if name == "settings-engine-notes-error" {
+        engine::scene_notes_error(s);
+    }
     if page == Page::Prompts {
         super::super::prompt_library::scene(s, name);
     }
@@ -2744,7 +2902,11 @@ mod tests {
     #[test]
     fn final_review_uses_one_meetings_tab_row_and_scopes_hex_ownership() {
         assert!(jump_groups(Page::Meetings, 0).is_empty());
-        assert_eq!(Page::Meetings.tabs(), ["Recording", "Summaries", "Tasks"]);
+        assert_eq!(
+            Page::Meetings.tabs(),
+            ["Recording", "Summaries", "Tasks", "Engine"]
+        );
+        assert_eq!(current(Page::Meetings.section(3)), (Page::Meetings, 3));
         assert_eq!(jump_groups(Page::Hex, 0).len(), 7);
         assert_eq!(
             ownership_text(Page::Hex),

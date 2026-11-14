@@ -8,7 +8,7 @@ STATE=ROOT/'target/settings-build-render'
 EXE=Path(os.environ.get('CARGO_TARGET_DIR',str(ROOT/'target')))/'x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
 from prepare_people_fixture import prepare
-PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
+PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
@@ -41,6 +41,16 @@ def render(job):
  assert base.with_suffix('.png').is_file(),base
  tree=json.loads(base.with_suffix('.json').read_text(encoding='utf-8-sig'))
  assert not tree['warnings'],(base.name,tree['warnings'])
+ if scene.startswith('settings-engine'):
+  keys={n.get('key') for n in tree['elements']}
+  need={'engine-transcription','engine-worker-threads-status','engine-worker-threads-usage','engine-worker-threads-input','engine-transcription-save','engine-model-te-status','engine-model-te-usage','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-translation-model-usage','engine-title-model-status','engine-step-tasks-switch','engine-step-comparison-switch','engine-step-comparison-usage','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-status','engine-prompt-translation-reset'}
+  assert 'engine-model-hi-input' not in keys,'A routed language must be read only'
+  paths={n.get('key'):n.get('path','') for n in tree['elements']}
+  rects={n.get('key'):n.get('rect') for n in tree['elements']}
+  end=rects['engine-import'];assert end[1]+end[3]<=height,(base.name,'The Engine tab runs past the render',end,height)
+  assert 'notes-model-card' in paths.get('engine-notes-model-status',''),'The Summary model status must sit inside its card'
+  if scene=='settings-engine-notes-error':assert 'notes-model-card' in paths.get('engine-notes-error',''),'A failed Summary model save must show its error in the card'
+  assert need<=keys,(base.name,sorted(need-keys))
  if scene=='people-suggestion':
   elements=tree['elements']
   assert any(n.get('text')=='Suggested: Our team' for n in elements), 'Suggestion missing'
@@ -59,7 +69,8 @@ def main():
    for name,scene in setup_scenes:
     jobs.append((name,scene,width,theme,900,None))
    for name,scene,height in PAGES:
-    jobs.append((name,scene,width,theme,height,None))
+    # The narrow Engine tab is longer than the wide one; the render checks that nothing is cut off.
+    jobs.append((name,scene,width,theme,7600 if width==390 and scene.startswith('settings-engine') else height,None))
    for name,scene,events in [('updates-available','updates-ready',None),('updates-checking','updates-checking',None),('hex-scrolled','settings-hex-expanded',[tap('settings-jump-5')]),('recording-expanded','settings-recording-expanded',None),('summaries-expanded','settings-summaries-expanded',None),('helpers-expanded','settings-helpers-expanded',None),('speech-expanded','settings-speech-expanded',None),('privacy-expanded','settings-privacy',[tap('notes-privacy-details')]),('diagnostics-expanded','settings-diagnostics',None),('sync-expanded','settings-sync-expanded',None),('people-editor','people-team-editor',[tap('team-advanced')])]:
     jobs.append((name,scene,width,theme,2200 if 'expanded' in name or 'editor' in name else 900,events))
  jobs.append(('people-suggestion','people-suggestion',1280,'dark',1800,None))

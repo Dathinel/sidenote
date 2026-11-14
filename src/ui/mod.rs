@@ -2643,6 +2643,7 @@ pub fn spec() -> AppSpec<State> {
     AppSpec {
         min_size: Some((360.0, 480.0)),
         fonts: theme::fonts(),
+        families: (theme::SANS, "Inter"),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
@@ -2942,6 +2943,15 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-tasks", |s| {
                 hex::settings::scene(s, "settings-tasks")
+            }),
+            ("settings-engine", |s| {
+                hex::settings::scene(s, "settings-engine")
+            }),
+            ("settings-engine-invalid", |s| {
+                hex::settings::scene(s, "settings-engine-invalid")
+            }),
+            ("settings-engine-notes-error", |s| {
+                hex::settings::scene(s, "settings-engine-notes-error")
             }),
             ("settings-prompts", |s| {
                 hex::settings::scene(s, "settings-prompts")

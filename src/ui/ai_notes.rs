@@ -659,7 +659,9 @@ pub enum Part {
     Scripts,
     Privacy,
 }
-pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+/// `extras` are lines inside the same card, under the picker: a status, a save in progress or
+/// a failed save.
+pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras: Vec<El>) -> El {
     let Some(helper) = s
         .ai_notes
         .settings
@@ -712,7 +714,7 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El 
                 ),
         );
     }
-    super::hex::settings::panel(p).child(super::hex::settings::setting_row(
+    let row = super::hex::settings::setting_row(
         s,
         "notes-model-0",
         "Summary model",
@@ -720,7 +722,14 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El 
         control,
         true,
         p,
-    ))
+    );
+    let mut card = super::hex::settings::panel(p)
+        .key("notes-model-card")
+        .child(row);
+    for extra in extras {
+        card = card.child(extra);
+    }
+    card
 }
 
 pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
@@ -1360,6 +1369,28 @@ mod tests {
         enqueues.extend(a.saved_recovery_request());
         enqueues.extend(a.saved_recovery_request());
         assert_eq!(enqueues, [(id, Request::UseCodex)]);
+    }
+    #[test]
+    fn a_failed_model_save_keeps_what_was_typed_and_shows_the_error() {
+        crate::test_paths::isolate();
+        let mut s = State::new();
+        let index = HELPERS.iter().position(|h| *h == Helper::Claude).unwrap();
+        s.ai_notes.settings = Some(NotesSettings {
+            helper: Some(Helper::Claude),
+            model: "synthetic-saved".into(),
+            enabled_at_ms: Some(1),
+            ..NotesSettings::default()
+        });
+        s.ai_notes.generation = 1;
+        s.ai_notes.models[index] = TextEdit::new("synthetic-typed");
+        s.ai_notes.other_model = true;
+        s.ai_notes.pending = Some("Saving Meeting summary...");
+        let failure = "Could not save Meeting summary settings. Your previous choice was kept.";
+        s.notes_finished(1, Err(failure.into()));
+        // The typed model stays for a retry, and the error is shown.
+        assert_eq!(s.ai_notes.models[index].text, "synthetic-typed");
+        assert!(s.ai_notes.other_model && s.ai_notes.pending.is_none());
+        assert_eq!(s.ai_notes.error.as_deref(), Some(failure));
     }
     #[test]
     fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {

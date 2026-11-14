@@ -1,4 +1,4 @@
-use super::{field_pointer, migration};
+use super::{field_pointer, migration, valid_model};
 use crate::core::{Config, config, store_io};
 use serde_json::Value;
 use std::{io, path::Path};
@@ -132,10 +132,11 @@ pub(in crate::core) fn prepare_save(
     if baseline.get("engine_settings") != edited.get("engine_settings") {
         let merged: Config = serde_json::from_value(latest.clone())
             .map_err(|_| store_io::invalid("Invalid engine settings"))?;
-        if merged.validate_engine_settings().into_iter().any(|field| {
-            let pointer = field_pointer(field);
-            baseline.pointer(&pointer) != edited.pointer(&pointer)
-        }) {
+        let failed = merged.validate_engine_settings();
+        if failed
+            .into_iter()
+            .any(|field| edited_invalid(&merged, field, baseline, edited))
+        {
             return Err(store_io::invalid(
                 "Invalid engine settings; inspect field validation",
             ));
@@ -143,6 +144,26 @@ pub(in crate::core) fn prepare_save(
     }
     clear_edited_sources(latest, baseline, edited);
     Ok(())
+}
+/// Did this save edit the field that failed validation? The language models share one error
+/// name, so they are judged one language at a time: a wrong model for a language this edit did
+/// not touch never blocks it.
+fn edited_invalid(merged: &Config, field: &str, baseline: &Value, edited: &Value) -> bool {
+    if field != "models" {
+        let pointer = field_pointer(field);
+        return baseline.pointer(&pointer) != edited.pointer(&pointer);
+    }
+    let before = baseline.pointer("/engine_settings/models");
+    let after = edited.pointer("/engine_settings/models");
+    merged
+        .engine_settings
+        .models
+        .iter()
+        .any(|(language, model)| {
+            let known = super::super::lid::LANGUAGES.contains(&language.as_str());
+            let wrong = !known || !valid_model(model);
+            wrong && before.and_then(|m| m.get(language)) != after.and_then(|m| m.get(language))
+        })
 }
 /// Clear only explicitly edited migration fields, preserving concurrent card changes.
 pub(super) fn clear_edited_sources(latest: &mut Value, baseline: &Value, edited: &Value) {
