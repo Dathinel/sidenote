@@ -19,6 +19,7 @@ pub enum Validation {
     Empty,
     Valid,
     Invalid,
+    Unavailable,
     ModelQualificationRequired,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +73,14 @@ impl Config {
                     field.into(),
                     FieldStatus {
                         source,
-                        validation: if errors.contains(&field) {
+                        validation: if field == "notes.helper"
+                            && self
+                                .notes
+                                .as_ref()
+                                .is_some_and(|s| s.helper_reason().is_some())
+                        {
+                            Validation::Unavailable
+                        } else if errors.contains(&field) {
                             Validation::Invalid
                         } else if empty(current)
                             && !["notes_prompt", "translation_prompt"].contains(&field)

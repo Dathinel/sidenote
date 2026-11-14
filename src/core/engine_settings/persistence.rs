@@ -1,4 +1,4 @@
-use super::migration;
+use super::{field_pointer, migration};
 use crate::core::{Config, config, store_io};
 use serde_json::Value;
 use std::{io, path::Path};
@@ -110,7 +110,10 @@ pub(in crate::core) fn prepare_save(
     if baseline.get("engine_settings") != edited.get("engine_settings") {
         let merged: Config = serde_json::from_value(latest.clone())
             .map_err(|_| store_io::invalid("Invalid engine settings"))?;
-        if !merged.validate_engine_settings().is_empty() {
+        if merged.validate_engine_settings().into_iter().any(|field| {
+            let pointer = field_pointer(field);
+            baseline.pointer(&pointer) != edited.pointer(&pointer)
+        }) {
             return Err(store_io::invalid(
                 "Invalid engine settings; inspect field validation",
             ));
@@ -121,11 +124,15 @@ pub(in crate::core) fn prepare_save(
 }
 /// Clear only explicitly edited migration fields, preserving concurrent card changes.
 pub(super) fn clear_edited_sources(latest: &mut Value, baseline: &Value, edited: &Value) {
-    let changed: Vec<_> = migration::LEGACY
+    let mut changed: Vec<_> = migration::LEGACY
         .iter()
         .filter(|(_, _, p)| baseline.pointer(p) != edited.pointer(p))
         .map(|(_, field, _)| *field)
         .collect();
+    let route = "/pipeline/after_stop_languages/routes/te";
+    if baseline.pointer(route) != edited.pointer(route) {
+        changed.push("models.te");
+    }
     for key in ["imported_fields", "conflicts", "invalid_imports"] {
         if let Some(fields) = latest
             .get_mut("engine_settings")
@@ -141,7 +148,7 @@ pub(super) fn clear_edited_sources(latest: &mut Value, baseline: &Value, edited:
 mod tests {
     use super::*;
     use crate::core::engine_settings::Source;
-    fn fixture(root: &Path) -> Vec<u8> {
+    pub(super) fn fixture(root: &Path) -> Vec<u8> {
         let value = serde_json::json!({
             "version":1, "features":{}, "future_field":{"keep":"synthetic"},
             "engine_settings":{"steps":{"render_html":false,"future":{"mode":"synthetic","enabled":false}}},
@@ -276,3 +283,7 @@ mod restore_tests {
         assert_eq!(std::fs::read(root.join("config.json")).unwrap(), prior);
     }
 }
+
+#[cfg(test)]
+#[path = "save_tests.rs"]
+mod save_tests;

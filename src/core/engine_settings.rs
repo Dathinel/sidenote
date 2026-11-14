@@ -194,13 +194,6 @@ impl Config {
                 errors.push(field);
             }
         }
-        if self
-            .notes
-            .as_ref()
-            .is_some_and(|s| s.helper == Some(super::notes::Helper::OpenCode))
-        {
-            errors.push("notes.helper");
-        }
         errors.extend(settings.stages.errors());
         errors
     }
