@@ -6,14 +6,29 @@ fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if let Some(root) = args.first() {
         let pinned = fs::File::open(root).unwrap();
-        if args.len() == 1 {
-            use sidenote_sync::pid_worker::AgentUnavailable::RootIsolationUnavailable;
+        if std::env::var("SIDENOTE_ROOT_PREEXEC").as_deref() == Ok("1") {
+            let limit = libc::rlimit {
+                rlim_cur: 268435456,
+                rlim_max: 268435456,
+            };
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) }, 0);
+        }
+        let program = if args.len() == 1 {
+            &["/runtime/probe".into()][..]
+        } else {
+            &args[1..]
+        };
+        let result = agent_notes(program, pinned);
+        if let Ok(expected) = std::env::var("SIDENOTE_ROOT_EXPECT") {
+            assert_eq!(format!("{:?}", result.unwrap_err()), expected);
+            println!("DENY typed {expected}");
+        } else if args.len() == 1 {
             assert_eq!(
-                agent_notes(&["/runtime/probe".into()], &pinned),
-                Err(RootIsolationUnavailable)
+                result,
+                Err(sidenote_sync::pid_worker::AgentUnavailable::RootIsolationUnavailable)
             );
         } else {
-            assert_eq!(agent_notes(&args[1..], &pinned), Ok(0));
+            assert_eq!(result, Ok(0));
         }
         return;
     }
@@ -51,6 +66,61 @@ fn main() {
         .status()
         .unwrap();
     assert!(status.success());
+    let trial = |reason: &str, program: &str, preexec: bool| {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg(&stage)
+            .arg(program)
+            .env("SIDENOTE_ROOT_EXPECT", reason)
+            .env("SIDENOTE_ROOT_PREEXEC", if preexec { "1" } else { "0" })
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    let bad = stage.join("meeting/bad");
+    for kind in ["symlink", "hardlink", "fifo", "deep", "large"] {
+        let reason = match kind {
+            "symlink" => {
+                std::os::unix::fs::symlink(&outside, &bad).unwrap();
+                assert_eq!(fs::read_to_string(&bad).unwrap(), "canary");
+                "StagingSymlink"
+            }
+            "hardlink" => {
+                fs::hard_link(&outside, &bad).unwrap();
+                assert_eq!(fs::read_to_string(&bad).unwrap(), "canary");
+                "StagingHardlink"
+            }
+            "fifo" => {
+                let path = std::ffi::CString::new(bad.as_os_str().as_encoded_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+                "StagingSpecialFile"
+            }
+            _ => {
+                let mut path = bad.clone();
+                fs::create_dir(&path).unwrap();
+                if kind == "deep" {
+                    for _ in 0..17 {
+                        path = path.join("d");
+                        fs::create_dir(&path).unwrap();
+                    }
+                } else {
+                    for n in 0..513 {
+                        fs::write(path.join(n.to_string()), "").unwrap();
+                    }
+                }
+                assert!(path.is_dir());
+                "StagingTreeLimit"
+            }
+        };
+        println!("CONTROL existing {kind} staging fixture");
+        trial(reason, "/runtime/probe", false);
+        if bad.is_dir() {
+            fs::remove_dir_all(&bad).unwrap();
+        } else {
+            fs::remove_file(&bad).unwrap();
+        }
+    }
+    trial("ExecSetupUnavailable", "/runtime/missing", false);
+    trial("ExecSetupUnavailable", "/runtime/probe", true);
     let mut command = Command::new(std::env::current_exe().unwrap());
     assert!(command.arg(temp.path()).status().unwrap().success());
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -108,6 +178,6 @@ int main(int argc,char **argv) {
  assert(rename("/meeting/input","/meeting/moved")<0 && errno==EROFS);
  fd=open("/auth/fill",O_CREAT|O_WRONLY,0600); assert(fd>=0); char b[4096]={0}; long total=0,n; while((n=write(fd,b,sizeof b))>0)total+=n; assert(errno==ENOSPC && total<=1048576); close(fd);
  fd=open("/work/ok",O_CREAT|O_WRONLY,0600); assert(fd>=0 && write(fd,"ok",2)==2); close(fd);
- puts("DENY auth ENOSPC at 1MiB; PASS work writable, root/meeting read-only, no proc/sys/old root, PID1 parent and no_new_privs"); return 0;
+ puts("DENY auth ENOSPC at 1MiB; PASS work writable, root/meeting read-only, no proc/sys/old root, PID1 parent and no_new_privs"); puts("FD_READY"); fflush(stdout); sleep(2); return 0;
 }
 "#;

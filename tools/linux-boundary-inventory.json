@@ -1,5 +1,5 @@
 {
-  "crates/sidenote-sync/examples/linux_notes_root.rs": "0ace31ebbeeb4c294423297d15976b8d4843f9ade6adf74c548abc5c4deffb17",
+  "crates/sidenote-sync/examples/linux_notes_root.rs": "43609a6e9bea12083a12fd1af239cc45205c89147ec8ba1787f875e23902f738",
   "crates/sidenote-sync/examples/linux_platform_proof.rs": "0e4ac3c683d5b431e35c3b5615969b843670656ca37d104117e263603bbc5771",
   "crates/sidenote-sync/examples/local_e2e.rs": "b4568096ac1d5a4a8424f4e01d136212fcd58f77abd2594af5c5125c06545527",
   "crates/sidenote-sync/src/client.rs": "2e75bae6fbaa7f1a7da224a9e5f597d797771a4f28ba70b822e22280a25c84f1",
@@ -8,7 +8,7 @@
   "crates/sidenote-sync/src/notes_cgroup.rs": "99446f7bca46b9a31a1cec1b7aa5afbc1b23c3ff79608ca0fdc52b177dc008c9",
   "crates/sidenote-sync/src/notes_supervisor.rs": "1d8676b4e06b05aaba83c2a64871d67f161d1717f19df19f3a7d00c0daac7edb",
   "crates/sidenote-sync/src/pairing.rs": "028d1ba4548855895c6021f914bc83947dda4ef344ea923fe05d3dcc753ad9e1",
-  "crates/sidenote-sync/src/pid_worker.rs": "21666cd6abda21a1defdd8c4dcd67071f3e480d233057004554b3f2ab9596f16",
+  "crates/sidenote-sync/src/pid_worker.rs": "e9aa22c8e0efbeac1b01696a3879636d6c6885ebd5f7949d477e93f77e2c9bea",
   "crates/sidenote-sync/src/tree_worker.rs": "76c62ba8170ecdbd2b8effebb777c3769262319394bbdbecfa5851d5e4f8b7d5",
   "crates/sidenote-sync/src/worker.rs": "4a013f65046499279692f5cf4667da5dd9b1e41a3d24566f23a53f33cba52482",
   "crates/sidenote-sync/tests/round1_store.rs": "e1072d697e506f6ee4cba7d5bde4dbe4175788caafb02dee27a9d64a120b511e",

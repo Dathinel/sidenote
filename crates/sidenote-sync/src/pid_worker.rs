@@ -8,18 +8,14 @@ use std::{
 };
 mod root;
 pub use root::AgentUnavailable;
-enum Profile<'a> {
+enum Profile {
     Offline,
-    AgentNotes(&'a fs::File),
+    AgentNotes(fs::File),
 }
 /// Dormant trusted setup seam; call only in a single-threaded disposable process.
 /// `root` pins a private staged tree containing only runtime/meeting and empty mountpoints.
-pub fn agent_notes(args: &[OsString], root: &fs::File) -> Result<i32, AgentUnavailable> {
-    run_profile(args, Profile::AgentNotes(root)).map_err(|e| {
-        e.get_ref()
-            .and_then(|e| e.downcast_ref().copied())
-            .unwrap_or(AgentUnavailable::ProcessIsolationUnavailable)
-    })
+pub fn agent_notes(args: &[OsString], root: fs::File) -> Result<i32, AgentUnavailable> {
+    run_profile(args, Profile::AgentNotes(root)).map_err(|e| root::reason(&e))
 }
 fn error() -> io::Error {
     io::Error::other("PID_NAMESPACE_CONTAINMENT_UNAVAILABLE")
@@ -35,7 +31,8 @@ fn dead(fd: &OwnedFd) -> bool {
 pub(crate) fn run(args: &[OsString]) -> io::Result<i32> {
     run_profile(args, Profile::Offline)
 }
-fn run_profile(args: &[OsString], profile: Profile<'_>) -> io::Result<i32> {
+fn run_profile(args: &[OsString], profile: Profile) -> io::Result<i32> {
+    let agent = matches!(profile, Profile::AgentNotes(_));
     if args.is_empty() {
         return Err(error());
     }
@@ -52,7 +49,7 @@ fn run_profile(args: &[OsString], profile: Profile<'_>) -> io::Result<i32> {
     let front = unsafe { OwnedFd::from_raw_fd(fd) };
     // A private user namespace permits private PID and empty network namespaces.
     // Keep the numeric identity: exec as a nonzero uid drops its namespace capabilities.
-    root::namespaces(matches!(profile, Profile::AgentNotes(_)))?;
+    root::namespaces(agent)?;
     fs::write("/proc/self/setgroups", "deny")?;
     fs::write("/proc/self/uid_map", format!("{uid} {uid} 1"))?;
     fs::write("/proc/self/gid_map", format!("{gid} {gid} 1"))?;
@@ -74,28 +71,31 @@ fn run_profile(args: &[OsString], profile: Profile<'_>) -> io::Result<i32> {
     if init == 0 {
         let result = (|| -> io::Result<i32> {
             if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } != 0 || dead(&front) {
-                return Err(error());
+                return Err(io::Error::other(
+                    AgentUnavailable::ChildDeathCheckUnavailable,
+                ));
             }
-            if let Profile::AgentNotes(root) = profile
-                && let Err(reason) = root::enter(root)
-            {
-                unsafe {
-                    libc::write(tx.as_raw_fd(), [reason as u8].as_ptr().cast(), 1);
-                }
-                return Err(io::Error::other(reason));
+            drop(front);
+            drop(rx);
+            if let Profile::AgentNotes(root) = profile {
+                root::enter(root).map_err(io::Error::other)?;
             }
             let mut command = Command::new(&args[0]);
             command.args(&args[1..]);
-            if matches!(profile, Profile::AgentNotes(_)) {
+            if agent {
                 command.env_clear().current_dir("/work");
             }
             crate::containment::configure(&mut command);
-            let status = command.status()?;
+            let status = command
+                .status()
+                .map_err(|_| io::Error::other(AgentUnavailable::ExecSetupUnavailable))?;
             Ok(status.code().unwrap_or(1))
         })();
         // Exiting namespace PID 1 makes the kernel kill *all* remaining descendants,
         // including grandchildren which called setsid or entered another PID namespace.
         unsafe {
+            let code = result.as_ref().err().map_or(0, |e| root::reason(e) as u8);
+            libc::write(tx.as_raw_fd(), [code].as_ptr().cast(), 1);
             libc::_exit(result.unwrap_or(2));
         }
     }
@@ -106,8 +106,13 @@ fn run_profile(args: &[OsString], profile: Profile<'_>) -> io::Result<i32> {
         let waited = unsafe { libc::waitpid(init, &mut status, libc::WNOHANG) };
         if waited == init {
             let mut reason = [0u8];
-            if unsafe { libc::read(rx.as_raw_fd(), reason.as_mut_ptr().cast(), 1) } == 1 {
-                return Err(io::Error::other(AgentUnavailable::RootIsolationUnavailable));
+            if unsafe { libc::read(rx.as_raw_fd(), reason.as_mut_ptr().cast(), 1) } != 1 {
+                return Err(io::Error::other(
+                    AgentUnavailable::ProcessIsolationUnavailable,
+                ));
+            }
+            if reason[0] != 0 {
+                return Err(io::Error::other(root::decode(reason[0])));
             }
             return Ok(if libc::WIFEXITED(status) {
                 libc::WEXITSTATUS(status)
