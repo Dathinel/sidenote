@@ -5,7 +5,7 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::{fs, io, io::Write, path::Path};
 
 #[derive(Debug)]
-pub(crate) struct RelayFailure(pub &'static str, pub Option<i32>);
+pub(crate) struct RelayFailure(pub &'static str, pub Option<i32>, pub Option<&'static str>);
 impl std::fmt::Display for RelayFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

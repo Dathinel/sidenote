@@ -234,7 +234,8 @@ impl Settings {
         if previous_room != current.room {
             device
                 .store(|s| s.retire_group(&previous_room))
-                .map_err(failed)?;
+                .map_err(failed)
+                .context(Operation("retire old group replica database"))?;
         }
         Ok(())
     }
@@ -293,7 +294,7 @@ fn qualification_point(root: &Path, point: &str) -> io::Result<()> {
 }
 
 fn category(kind: io::ErrorKind, reason: &'static str, os: Option<i32>) -> io::Error {
-    io::Error::new(kind, store_io::RelayFailure(reason, os))
+    io::Error::new(kind, store_io::RelayFailure(reason, os, None))
 }
 fn failed(error: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> io::Error {
     // anyhow's boxed conversion hides its root type, so inspect its own chain first.
@@ -400,10 +401,12 @@ impl Preview {
             return Ok(());
         }
         let device = self.device.clone();
-        let settings = Settings::load(&self.root)?;
+        let settings = Settings::load(&self.root)
+            .map_err(|error| pairing::Operation("read session relay settings.json").io(error))?;
         let group = device
             .store(|s| Group::load(s, &settings.room))
-            .map_err(failed)?;
+            .map_err(failed)
+            .map_err(|error| pairing::Operation("read session group replica database").io(error))?;
         if settings.address.is_empty() || group.members().len() < 2 {
             return Ok(());
         }
