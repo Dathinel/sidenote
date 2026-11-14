@@ -5,6 +5,7 @@ use std::{io, path::Path};
 #[derive(Deserialize)]
 struct Row {
     start_ms: f64,
+    end_ms: Option<f64>,
     text: String,
     #[serde(default)]
     source: String,
@@ -47,6 +48,9 @@ pub(super) fn render(raw: &str) -> String {
 }
 
 pub(super) fn read(folder: &Path) -> io::Result<String> {
+    Ok(render(&String::from_utf8_lossy(&captured(folder)?)))
+}
+fn captured(folder: &Path) -> io::Result<Vec<u8>> {
     let original = folder.join("hex-original/transcript.ndjson");
     let captured = match Snapshot::read_file(&original, file_reads::STORE_MAX) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -59,7 +63,89 @@ pub(super) fn read(folder: &Path) -> io::Result<String> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
-    Ok(render(&String::from_utf8_lossy(&bytes)))
+    Ok(bytes)
+}
+pub(super) fn chosen(
+    root: &Path,
+    id: &str,
+    folder: &Path,
+    chosen: Option<&str>,
+    ended_ms: i64,
+    now_ms: i64,
+) -> io::Result<Option<(String, String)>> {
+    use crate::core::meeting_router::{self as router, Chunk};
+    // With Labs off, retain the compatibility reader and its existing-file behavior.
+    if chosen.is_none() && !router::jobs::notes_enabled(root)? {
+        return Ok(None);
+    }
+    let baseline = if chosen.is_some() {
+        Vec::new()
+    } else {
+        String::from_utf8_lossy(&captured(folder)?)
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let r: Row = serde_json::from_str(line).ok()?;
+                let start = r.start_ms / 1000.0;
+                let end = r.end_ms.map_or(start + 0.1, |v| v / 1000.0);
+                (start.is_finite()
+                    && end.is_finite()
+                    && start >= 0.0
+                    && end > start
+                    && !r.text.trim().is_empty())
+                .then_some(Chunk {
+                    id: format!("english-{i}"),
+                    start,
+                    end,
+                    track: if r.source.is_empty() {
+                        "system".into()
+                    } else {
+                        r.source
+                    },
+                    speaker: r.speaker,
+                    turn: None,
+                    english: r.text,
+                    audio_start: None,
+                })
+            })
+            .collect()
+    };
+    router::jobs::notes_input(root, id, chosen, &baseline, ended_ms, now_ms)?
+        .map(|(id, t)| {
+            let mut text = String::new();
+            for s in t.segments {
+                let lang = match s.lang.as_str() {
+                    "en" => "English",
+                    "hi" => "Hindi",
+                    "te" => "Telugu",
+                    other => other,
+                };
+                let speaker = s
+                    .sources
+                    .first()
+                    .and_then(|o| o.chunk.speaker.as_deref())
+                    .unwrap_or(if s.track == "microphone" {
+                        "You"
+                    } else {
+                        "Them"
+                    });
+                let ms = (s.start * 1000.0).round() as u64;
+                text.push_str(&format!(
+                    "[{:02}:{:02}:{:02}.{:03}] {} ({lang}): {}\n",
+                    ms / 3_600_000,
+                    ms / 60_000 % 60,
+                    ms / 1000 % 60,
+                    ms % 1000,
+                    speaker.split_whitespace().collect::<Vec<_>>().join("_"),
+                    s.text_original
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            Ok((id, text))
+        })
+        .transpose()
 }
 pub(super) fn write(folder: &Path) -> io::Result<String> {
     let path = folder.join("english-transcript.md");

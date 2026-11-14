@@ -1,5 +1,10 @@
 //! Durable per-meeting requests. The lock serializes drains, never enqueues.
 use super::*;
+mod notes;
+pub(crate) use notes::notes_input;
+pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
+    Ok(notes::enabled(root)?.is_some())
+}
 use crate::platform::CommandExt;
 use std::{
     collections::HashSet,
@@ -115,11 +120,15 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
             _ => {}
         }
     }
+    let generation = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    if notes::enabled(root)?.is_some() {
+        revision::begin(destination(root, id).parent().unwrap(), generation)?;
+    }
     store_io::write(
         &queue(root).join(format!("{id}.json")),
         &Pending {
             id: id.into(),
-            generation: SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+            generation,
         },
     )?;
     Ok(())
@@ -545,7 +554,7 @@ pub fn run_pending() -> Result<()> {
                             .join("local/router-work")
                             .join(&pending.id)
                             .join("attempt.json"),
-                        &serde_json::json!({"setup_failed":true,"pending_retained":true}),
+                        &serde_json::json!({"generation":pending.generation,"setup_failed":true,"pending_retained":true,"child":{"success":false,"exit_code":null,"timed_out":false,"error":"setup_failed"}}),
                     )?;
                     continue;
                 }
@@ -564,7 +573,8 @@ pub fn run_pending() -> Result<()> {
                     "forced:hi" | "forced:mixed"
                 )
             {
-                if destination.exists()
+                let labs = notes::enabled(&root)?.is_some();
+                if (destination.exists() || labs)
                     && !crate::service::stopping()
                     && snapshot(&root, &job.id).is_ok_and(|latest| {
                         latest.is_some_and(|latest| latest.input_revision == job.input_revision)
@@ -580,7 +590,11 @@ pub fn run_pending() -> Result<()> {
                         segment.status = "declared".into();
                     }
                     english.warnings.clear();
-                    write_transcript(&destination, &english)?;
+                    if labs {
+                        notes::release(&root, &pending, &english)?;
+                    } else {
+                        write_transcript(&destination, &english)?;
+                    }
                 }
                 if crate::service::stopping()
                     || !snapshot(&root, &job.id).is_ok_and(|latest| {
@@ -593,15 +607,23 @@ pub fn run_pending() -> Result<()> {
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
-            if let Some(old) = fs::read(&destination)
+            if let Some(mut old) = fs::read(&destination)
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
                 && old.input_checksum == job.input_revision
-                && !old.degraded()
             {
-                complete_automatic(&root, &job.id, &job.input_revision)?;
-                acknowledge(&root, &job.id, &path, &bytes)?;
-                continue;
+                let labs = notes::enabled(&root)?.is_some();
+                if labs {
+                    super::baseline::reconcile_exact(&mut old, &job.baseline);
+                }
+                if !old.degraded() {
+                    if labs {
+                        notes::release(&root, &pending, &old)?;
+                    }
+                    complete_automatic(&root, &job.id, &job.input_revision)?;
+                    acknowledge(&root, &job.id, &path, &bytes)?;
+                    continue;
+                }
             }
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
@@ -632,9 +654,40 @@ pub fn run_pending() -> Result<()> {
                 }
             }
             let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
-            let timeout = seconds_arg("--router-timeout-seconds")
+            let mut timeout = seconds_arg("--router-timeout-seconds")
                 .unwrap_or((duration * 4.0 + 120.0).clamp(120.0, 86400.0));
-            let mut outcome = supervise(command, timeout, Some(&work.join("active.json")));
+            if let Some(config) = notes::enabled(&root)? {
+                let seconds = config.engine_settings.stages.routing_deadline_seconds;
+                if !(1..=3600).contains(&seconds) {
+                    return Err("Invalid routing deadline".into());
+                }
+                let manifest: serde_json::Value =
+                    serde_json::from_slice(&job.input.as_ref().ok_or("Missing input")?.manifest)?;
+                let end = manifest["ended_at_ms"].as_i64().or_else(|| {
+                    Some(
+                        manifest["created_at_ms"]
+                            .as_i64()?
+                            .saturating_add(manifest["duration_ms"].as_f64()? as i64),
+                    )
+                });
+                let remaining = end.map_or(f64::from(seconds), |end| {
+                    ((end
+                        .saturating_add(i64::from(seconds) * 1000)
+                        .saturating_sub(chrono::Utc::now().timestamp_millis()))
+                    .max(0) as f64)
+                        / 1000.0
+                });
+                timeout = timeout.min(remaining);
+            }
+            let mut outcome = if timeout <= 0.0 {
+                Outcome {
+                    timed_out: true,
+                    error: Some("routing dependency expired".into()),
+                    ..Outcome::default()
+                }
+            } else {
+                supervise(command, timeout, Some(&work.join("active.json")))
+            };
             if let Some(error) = fs::read(work.join("failure.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -674,7 +727,7 @@ pub fn run_pending() -> Result<()> {
                     outcome.error = Some("routing output absent or invalid".into());
                 }
             }
-            let result = result.unwrap_or_else(|| {
+            let mut result = result.unwrap_or_else(|| {
                 english_fallback(
                     &job.baseline,
                     &job.config,
@@ -687,8 +740,19 @@ pub fn run_pending() -> Result<()> {
                     ),
                 )
             });
+            let labs = notes::enabled(&root)?.is_some();
+            if labs {
+                super::baseline::reconcile_exact(&mut result, &job.baseline);
+            }
             let successful = stable && outcome.success && !result.degraded();
-            let published_fallback = publish_attempt(&destination, &result, successful, stable)?;
+            let published_fallback = if !labs {
+                publish_attempt(&destination, &result, successful, stable)?
+            } else {
+                false
+            };
+            if stable && labs {
+                notes::release(&root, &pending, &result)?;
+            }
             let normalization = fs::read(work.join("normalization-outcome.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
@@ -1030,6 +1094,44 @@ mod recording_guard_tests {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+    #[test]
+    fn chosen_release_sorts_fallback_and_ignores_an_old_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let pending = Pending {
+            id: "123-4".into(),
+            generation: 1,
+        };
+        store_io::write(&queue(root.path()).join("123-4.json"), &pending).unwrap();
+        let dest = destination(root.path(), "123-4");
+        let dir = dest.parent().unwrap();
+        revision::begin(dir, 1).unwrap();
+        let late:Chunk=serde_json::from_value(serde_json::json!({"id":"late","start":2.0,"end":3.0,"track":"system","english":"Later baseline"})).unwrap();
+        let mut early = late.clone();
+        early.id = "early".into();
+        early.start = 0.0;
+        early.end = 1.0;
+        let result = english_fallback(
+            &[late, early],
+            &Default::default(),
+            "input".into(),
+            "failed",
+        );
+        notes::release(root.path(), &pending, &result).unwrap();
+        let (id, chosen) = revision::load(dir, None).unwrap().unwrap();
+        assert_eq!(chosen.transcript.segments[0].start, 0.0);
+        assert!(chosen.transcript.degraded());
+        store_io::write(
+            &queue(root.path()).join("123-4.json"),
+            &Pending {
+                id: pending.id.clone(),
+                generation: 2,
+            },
+        )
+        .unwrap();
+        revision::begin(dir, 2).unwrap();
+        notes::release(root.path(), &pending, &result).unwrap();
+        assert_eq!(revision::load(dir, None).unwrap().unwrap().0, id);
+    }
     #[test]
     fn failure_timeout_instability_preserve_success_and_retry() {
         let root = tempfile::tempdir().unwrap();
