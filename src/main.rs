@@ -1,4 +1,4 @@
-﻿#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
 #[cfg(all(test, windows, feature = "desktop"))]
@@ -19,6 +19,15 @@ fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|a| a == "--language-detect") {
         std::process::exit(sidenote::core::lid::run_cli(&args));
+    }
+    #[cfg(all(windows, feature = "desktop"))]
+    if args.iter().any(|a| a == "--render-meeting-indicator") {
+        if sidenote::core::configure_paths(&args).is_err()
+            || sidenote::meeting_icon::render_synthetic().is_err()
+        {
+            std::process::exit(2);
+        }
+        return;
     }
     #[cfg(windows)]
     {

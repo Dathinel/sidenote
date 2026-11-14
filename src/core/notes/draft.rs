@@ -51,11 +51,19 @@ pub fn start(root: PathBuf, meetings: PathBuf, id: String, settings: NotesSettin
         let mut run = DraftCli { root: root.clone() };
         let result = generate(&root, &meetings, &id, &settings, &mut run);
         let outcome = match result {
-            Ok(Outcome::Skipped) => return,
+            Ok(Outcome::Skipped) => "skipped",
             Ok(Outcome::Written) => "written",
             Ok(Outcome::NoHelper) => "skipped helper unavailable",
             Err(_) => "skipped helper or local data unavailable",
         };
+        let _ = store_io::write(
+            &root.join("local/draft-outcomes").join(format!("{id}.json")),
+            &if outcome == "written" {
+                "written"
+            } else {
+                "deferred"
+            },
+        );
         crate::listener::log(&format!(
             "draft {id} duration={:.1}s {outcome}",
             started.elapsed().as_secs_f64()

@@ -1,4 +1,7 @@
 mod window;
+pub(super) fn render_synthetic() -> io::Result<()> {
+    window::render_synthetic()
+}
 use std::{
     io,
     os::windows::io::AsRawHandle,
@@ -31,6 +34,7 @@ pub(super) struct Frame {
     pub recording: bool,
     pub pill: bool,
     pub skipped: bool,
+    pub notice: Option<super::Notice>,
     pub elapsed: u64,
     pub raw: Option<String>,
     pub transcript_revision: u64,

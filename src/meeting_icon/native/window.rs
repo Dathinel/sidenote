@@ -1,7 +1,7 @@
 use super::{Control, Frame, RETIRE, callback_boundary};
 use crate::{
     core::{self, store_io},
-    meeting_icon::{card_text, draft_seen},
+    meeting_icon::{Notice, card_text, dismiss_notice, draft_seen},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -301,16 +301,21 @@ impl NativeWindow {
         let changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.pill != frame.pill
+            || prior.notice != frame.notice
             || prior.skipped != frame.skipped
             || (frame.pill && prior.elapsed != frame.elapsed);
         let card_changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.raw != frame.raw
+            || prior.notice != frame.notice
             || prior.skipped != frame.skipped;
         unsafe {
             let geometry = self.view.geometry();
             if (changed || geometry) && self.view.paint_icon().is_err() {
                 crate::listener::log("FI_PAINT_FAILED");
+            }
+            if changed {
+                self.view.position_card();
             }
             if !self.view.control.stop.load(Ordering::Acquire)
                 && IsWindowVisible(self.view.icon.get()) == 0
@@ -362,6 +367,13 @@ enum Scroll {
     End,
 }
 impl View {
+    fn width(&self) -> f32 {
+        if self.frame.borrow().notice.is_some() {
+            300.0
+        } else {
+            WIDTH
+        }
+    }
     fn px(&self, value: f32) -> i32 {
         (value * self.layout.get().scale).round() as i32
     }
@@ -372,7 +384,7 @@ impl View {
     fn point(&self) -> POINT {
         let g = self.layout.get();
         POINT {
-            x: g.work.right - self.px(WIDTH + 8.0),
+            x: g.work.right - self.px(self.width() + 8.0),
             y: g.work.top + self.px(8.0) + (g.fraction * self.travel() as f32).round() as i32,
         }
     }
@@ -434,7 +446,7 @@ impl View {
                 HWND_TOPMOST,
                 p.x,
                 p.y,
-                self.px(WIDTH),
+                self.px(self.width()),
                 self.px(HEIGHT),
                 SWP_NOACTIVATE,
             );
@@ -477,7 +489,9 @@ impl View {
             {
                 return;
             }
-            let text = if frame.skipped {
+            let text = if let Some(notice) = frame.notice {
+                notice.text().into()
+            } else if frame.skipped {
                 "Skipped. Short recordings are not processed.".into()
             } else {
                 card_text(&frame.id, frame.recording, frame.raw.as_deref())
@@ -688,10 +702,12 @@ impl View {
     unsafe fn paint_icon(&self) -> io::Result<()> {
         unsafe {
             let frame = self.frame.borrow().clone();
-            let pill = frame.pill || frame.skipped;
-            let (width, height) = (self.px(WIDTH), self.px(HEIGHT));
+            let pill = frame.pill || frame.skipped || frame.notice.is_some();
+            let (width, height) = (self.px(self.width()), self.px(HEIGHT));
             let left = if pill { 0 } else { width - height };
-            let label = wide(&if frame.skipped {
+            let label = wide(&if let Some(notice) = frame.notice {
+                notice.text().into()
+            } else if frame.skipped {
                 "Skipped".into()
             } else {
                 format!("{}:{:02}", frame.elapsed / 60, frame.elapsed % 60)
@@ -709,7 +725,11 @@ impl View {
                 SetTextColor(surface.dc, 0x00faf3ea);
                 if pill {
                     let mut r = RECT {
-                        left: self.px(if frame.skipped { 8.0 } else { 37.0 }),
+                        left: self.px(if frame.skipped || frame.notice.is_some() {
+                            8.0
+                        } else {
+                            37.0
+                        }),
                         top: 0,
                         right: width - self.px(8.0),
                         bottom: height,
@@ -727,7 +747,7 @@ impl View {
                 } else {
                     0x00b5c9ed
                 });
-                if pill && !frame.skipped {
+                if pill && !frame.skipped && frame.notice.is_none() {
                     for (offset, h) in [(15.0, 10.0), (21.0, 20.0), (27.0, 14.0)] {
                         let r = RECT {
                             left: self.px(offset),
@@ -763,7 +783,13 @@ impl View {
                 }
             }
             if self.replay {
-                let name = if frame.skipped {
+                let name = if let Some(notice) = frame.notice {
+                    match notice {
+                        Notice::Writing => "floating-icon-writing.png",
+                        Notice::Later => "floating-icon-later.png",
+                        Notice::Failed => "floating-icon-failed.png",
+                    }
+                } else if frame.skipped {
                     "floating-icon-skipped.png"
                 } else if pill {
                     "floating-icon-pill.png"
@@ -773,6 +799,9 @@ impl View {
                 if !core::state_dir().join("local").join(name).exists() {
                     surface.save(name, true);
                 }
+            }
+            if self.icon.get().is_null() {
+                return Ok(());
             }
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -944,6 +973,14 @@ unsafe fn icon_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
                             if v.reopen.get() {
                                 v.open_card();
                             }
+                        } else if v
+                            .frame
+                            .borrow()
+                            .notice
+                            .is_some_and(|s| s != Notice::Writing)
+                        {
+                            dismiss_notice(&v.frame.borrow().id);
+                            ShowWindow(v.icon.get(), SW_HIDE);
                         } else {
                             v.open_card();
                         }
@@ -1078,5 +1115,73 @@ unsafe fn card_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         }
         // In particular, SC_CLOSE can synchronously re-enter WM_CLOSE without any state borrow.
         DefWindowProcW(hwnd, msg, w, l)
+    }
+}
+
+pub(super) fn render_synthetic() -> io::Result<()> {
+    unsafe {
+        let font = CreateFontW(
+            -13,
+            0,
+            0,
+            0,
+            500,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            OUT_DEFAULT_PRECIS as u32,
+            CLIP_DEFAULT_PRECIS as u32,
+            ANTIALIASED_QUALITY as u32,
+            0,
+            wide("Segoe UI").as_ptr(),
+        );
+        if font.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let view = View {
+            icon: Cell::new(ptr::null_mut()),
+            card: Cell::new(ptr::null_mut()),
+            font: RefCell::new(Some(Rc::new(Font(font)))),
+            layout: Cell::new(Layout {
+                scale: 1.0,
+                work: RECT {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1080,
+                },
+                fraction: 0.6,
+            }),
+            frame: RefCell::new(Frame::default()),
+            content: RefCell::new(Card::default()),
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(0),
+            wheel: Cell::new(0),
+            drag: Cell::new(None),
+            moved: Cell::new(false),
+            reopen: Cell::new(false),
+            replay: true,
+            control: Arc::new(Control::new()),
+        };
+        for notice in [Notice::Writing, Notice::Later, Notice::Failed] {
+            view.frame.borrow_mut().notice = Some(notice);
+            view.paint_icon()?;
+        }
+        view.frame.borrow_mut().notice = None;
+        for (recording, pill, skipped) in [
+            (true, false, false),
+            (true, true, false),
+            (false, false, true),
+        ] {
+            let mut frame = view.frame.borrow_mut();
+            frame.recording = recording;
+            frame.pill = pill;
+            frame.skipped = skipped;
+            frame.elapsed = 120;
+            drop(frame);
+            view.paint_icon()?;
+        }
+        Ok(())
     }
 }
