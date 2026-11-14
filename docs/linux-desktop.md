@@ -17,7 +17,12 @@ The compositor/window manager places the Linux window; Rune's portable center re
 is used where supported. The compositor supplies the window icon until Linux packaging.
 Bundled, OFL-licensed Inter supplies titles and body text on both Windows and Linux.
 
-An OS-held lock in the selected data directory excludes a second desktop process.
+An OS-held lock in an owner-checked 0700 user namespace excludes a second desktop
+process for the same canonical data directory (SHA-256 key). XDG_RUNTIME_DIR is used
+when set; otherwise the namespace is ~/.local/state/sidenote/desktop-locks. Ancestors
+are pinned without symlinks and must be self/root-owned and protected from other
+users replacing entries. Lock files are owner-checked regular 0600 files opened
+without following symlinks. They are never unlinked while active.
 A second launch exits with `SIDENOTE_ALREADY_OPEN`; focus forwarding is not implemented.
 Closing flushes the shared draft state and quits. If saving fails, the window reopens
 with its draft retained. The kernel releases the lock when the process exits or crashes.
