@@ -11,10 +11,10 @@ use crate::ui::{
     widgets::{ButtonDisabled, action, hairline},
 };
 use rune::{El, TextEdit, col, row};
-use rune_kit::{Kit, Switch, TextInput};
+use rune_kit::{Kit, Switch, TextArea, TextInput};
 use sidenote::core::{
     Config,
-    engine_settings::{FieldStatus, Source, Validation},
+    engine_settings::{EngineSettings, FieldStatus, Prompt, Source, Validation},
 };
 use std::{
     collections::BTreeMap,
@@ -37,6 +37,8 @@ pub(super) enum Field {
     Title,
     Tasks,
     Comparison,
+    NotesPrompt,
+    TranslationPrompt,
 }
 impl Field {
     pub(super) const TRANSCRIPTION: [Field; 6] = [
@@ -54,8 +56,9 @@ impl Field {
         Self::Tasks,
         Self::Comparison,
     ];
+    const PROMPTS: [Field; 2] = [Self::NotesPrompt, Self::TranslationPrompt];
     /// Every field with a draft, in the order of `index`.
-    const ALL: [Field; 10] = [
+    const ALL: [Field; 12] = [
         Self::English,
         Self::Hindi,
         Self::Telugu,
@@ -66,8 +69,10 @@ impl Field {
         Self::Title,
         Self::Tasks,
         Self::Comparison,
+        Self::NotesPrompt,
+        Self::TranslationPrompt,
     ];
-    const COUNT: usize = 10;
+    const COUNT: usize = 12;
     fn index(self) -> usize {
         self as usize
     }
@@ -92,6 +97,8 @@ impl Field {
             Self::Title => "engine-title-model",
             Self::Tasks => "engine-tasks-model",
             Self::Comparison => "engine-comparison-model",
+            Self::NotesPrompt => "engine-prompt-notes",
+            Self::TranslationPrompt => "engine-prompt-translation",
         }
     }
     /// The name `Config::engine_field_status` uses.
@@ -107,6 +114,8 @@ impl Field {
             Self::Title => "stages.title_model",
             Self::Tasks => "stages.tasks_model",
             Self::Comparison => "stages.comparison_model",
+            Self::NotesPrompt => "notes_prompt",
+            Self::TranslationPrompt => "translation_prompt",
         }
     }
     /// The name `Config::validate_engine_settings` reports; one name covers every language.
@@ -169,6 +178,16 @@ impl Field {
                 "The model that compares your notes with an outside note taker. That step is off by default.",
                 "Model name",
             ),
+            Self::NotesPrompt => (
+                "Notes prompt",
+                "The instructions the notes writer follows to write a meeting summary.",
+                "",
+            ),
+            Self::TranslationPrompt => (
+                "Translation prompt",
+                "The instructions the translation step follows to turn speech into English.",
+                "",
+            ),
         }
     }
     fn hint(self) -> &'static str {
@@ -178,6 +197,9 @@ impl Field {
             }
             Self::Translation | Self::Title | Self::Tasks | Self::Comparison => {
                 "Not valid. Enter a model name with letters, numbers and - _ / . : only."
+            }
+            Self::NotesPrompt | Self::TranslationPrompt => {
+                "Not valid. A prompt cannot be empty or use control characters."
             }
             Self::Threads => "Not valid. Use a whole number from 1 to 256.",
             Self::Deadline | Self::RequestDeadline => {
@@ -217,6 +239,29 @@ fn read(config: &Config, field: Field) -> String {
         Field::Title => settings.stages.title_model.clone(),
         Field::Tasks => settings.stages.tasks_model.clone(),
         Field::Comparison => settings.stages.comparison_model.clone(),
+        Field::NotesPrompt => settings.prompt(Prompt::Notes).trim().to_owned(),
+        Field::TranslationPrompt => settings.prompt(Prompt::Translation).trim().to_owned(),
+    }
+}
+/// Text equal to the shipped prompt is stored as no override, so it stays "default".
+fn custom_prompt(prompt: Prompt, text: &str) -> Option<String> {
+    let default = EngineSettings::default();
+    (text != default.prompt(prompt).trim()).then(|| text.to_owned())
+}
+fn customised(config: &Config, field: Field) -> bool {
+    let settings = &config.engine_settings;
+    match field {
+        Field::NotesPrompt => settings.notes_prompt.is_some(),
+        Field::TranslationPrompt => settings.translation_prompt.is_some(),
+        _ => false,
+    }
+}
+fn reset_prompt(config: &mut Config, field: Field) {
+    let settings = &mut config.engine_settings;
+    match field {
+        Field::NotesPrompt => settings.reset_prompt(Prompt::Notes),
+        Field::TranslationPrompt => settings.reset_prompt(Prompt::Translation),
+        _ => {}
     }
 }
 fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
@@ -244,6 +289,10 @@ fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
         Field::Title => settings.stages.title_model = text.to_owned(),
         Field::Tasks => settings.stages.tasks_model = text.to_owned(),
         Field::Comparison => settings.stages.comparison_model = text.to_owned(),
+        Field::NotesPrompt => settings.notes_prompt = custom_prompt(Prompt::Notes, text),
+        Field::TranslationPrompt => {
+            settings.translation_prompt = custom_prompt(Prompt::Translation, text);
+        }
     }
     Ok(())
 }
@@ -309,6 +358,8 @@ pub(super) struct Engine {
     drafts: Vec<TextEdit>,
     bad: Vec<Field>,
     error: Option<&'static str>,
+    /// The prompt whose Reset to default was pressed once and waits for a second press.
+    confirm_reset: Option<Field>,
 }
 impl Engine {
     fn dirty(&self, fields: &[Field]) -> bool {
@@ -353,6 +404,34 @@ fn rebase(engine: &mut Engine, fresh: Config) {
     }
     engine.base = Some(fresh);
 }
+/// A save went through: its fields take the stored text, and drafts in other cards stay.
+fn adopt(engine: &mut Engine, config: Config, fields: &[Field]) {
+    for field in fields {
+        if let Some(draft) = engine.drafts.get_mut(field.index()) {
+            *draft = TextEdit::new(read(&config, *field));
+        }
+    }
+    engine.base = Some(config);
+}
+/// Reset to default asks twice, because it throws away the person's own text.
+fn reset(s: &mut State, field: Field) {
+    if s.hex.shell.engine.confirm_reset != Some(field) {
+        s.hex.shell.engine.confirm_reset = Some(field);
+        return;
+    }
+    s.hex.shell.engine.confirm_reset = None;
+    s.hex.shell.engine.error = None;
+    let mut config = s.hex.shell.engine.base.clone().unwrap_or(s.config.clone());
+    reset_prompt(&mut config, field);
+    match config.save(&s.store.root) {
+        Ok(()) => {
+            s.config = config.clone();
+            adopt(&mut s.hex.shell.engine, config, &[field]);
+            s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+        }
+        Err(_) => s.hex.shell.engine.error = Some(SAVE_FAILED),
+    }
+}
 fn save(s: &mut State, fields: &[Field]) {
     let Some(base) = s.hex.shell.engine.base.clone() else {
         return;
@@ -368,6 +447,7 @@ fn save(s: &mut State, fields: &[Field]) {
     let outcome = apply(&base, &edits);
     s.hex.shell.engine.bad.clear();
     s.hex.shell.engine.error = None;
+    s.hex.shell.engine.confirm_reset = None;
     match outcome {
         Err(bad) => {
             s.hex.shell.engine.bad = bad;
@@ -376,8 +456,8 @@ fn save(s: &mut State, fields: &[Field]) {
         Ok(None) => {}
         Ok(Some(mut config)) => match config.save(&s.store.root) {
             Ok(()) => {
-                s.config = config;
-                load(s);
+                s.config = config.clone();
+                adopt(&mut s.hex.shell.engine, config, fields);
                 s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
             }
             Err(_) => {
@@ -555,6 +635,91 @@ fn import_row(s: &State, p: Palette) -> El {
         .child(roles::GROUP.wrap("Script settings", p.soft))
         .child(panel(p).child(line))
 }
+fn prompt_row(
+    s: &State,
+    k: &Kit,
+    p: Palette,
+    field: Field,
+    statuses: &BTreeMap<String, FieldStatus>,
+) -> El {
+    let (name, help, _) = field.text();
+    let key = field.key();
+    let engine = &s.hex.shell.engine;
+    let mut copy = copy_column(p, key, (name, help), field.status_key(), statuses);
+    if engine.bad.contains(&field) {
+        let hint = roles::META.medium().wrap(field.hint(), p.warn);
+        copy = copy.child(hint.role("alert"));
+    }
+    let index = field.index();
+    let fallback = TextEdit::default();
+    let area = TextArea::new(engine.drafts.get(index).unwrap_or(&fallback))
+        .label(name)
+        .auto_grow(4, 10)
+        .on_edit(move |s: &mut State| draft_mut(s, index))
+        .build(k)
+        .key(format!("{key}-input"))
+        .w_full()
+        .min_w(0.0);
+    let config = engine.base.as_ref().unwrap_or(&s.config);
+    let confirming = engine.confirm_reset == Some(field);
+    let reset_label = if confirming {
+        "Press again to reset"
+    } else {
+        "Reset to default"
+    };
+    let buttons = row()
+        .gap(8.0)
+        .flex_wrap()
+        .child(
+            action("Save prompt", p)
+                .key(format!("{key}-save"))
+                .button_disabled(!engine.dirty(&[field]))
+                .on_press(move |s: &mut State| save(s, &[field])),
+        )
+        .child(
+            action(reset_label, p)
+                .key(format!("{key}-reset"))
+                .button_disabled(!customised(config, field))
+                .on_press(move |s: &mut State| reset(s, field)),
+        );
+    let top = crate::ui::cards::row_shell()
+        .key(key)
+        .flex_wrap()
+        .fill(group_highlight(s, key, p))
+        .child(icon_tile(row_icon(key), p))
+        .child(copy);
+    let edit = col().w_full().gap(10.0).px(14.0).pb(14.0);
+    col()
+        .w_full()
+        .child(top)
+        .child(edit.child(area).child(buttons))
+}
+fn prompts_card(s: &State, k: &Kit, p: Palette, statuses: &BTreeMap<String, FieldStatus>) -> El {
+    let mut rows = col().w_full();
+    for (index, field) in Field::PROMPTS.iter().enumerate() {
+        if index > 0 {
+            rows = rows.child(hairline(p));
+        }
+        rows = rows.child(prompt_row(s, k, p, *field, statuses));
+    }
+    let engine = &s.hex.shell.engine;
+    if let Some(error) = engine.error.filter(|_| {
+        engine.bad.iter().any(|f| Field::PROMPTS.contains(f)) || error_is_save_failure(engine)
+    }) {
+        let alert = roles::SMALL.wrap(error, p.warn).role("alert");
+        rows = rows.child(col().w_full().padding(14.0).child(alert));
+    }
+    col()
+        .w_full()
+        .gap(8.0)
+        .mt(18.0)
+        .key("engine-prompts")
+        .child(roles::GROUP.wrap("Prompts", p.soft))
+        .child(panel(p).child(rows))
+}
+fn error_is_save_failure(engine: &Engine) -> bool {
+    engine.error == Some(SAVE_FAILED)
+}
 fn field_row(
     s: &State,
     k: &Kit,
@@ -723,6 +888,7 @@ pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             &Field::STEP_MODELS,
             &statuses,
         ))
+        .child(prompts_card(s, k, p, &statuses))
         .child(steps_card(s, k, p, &statuses))
         .child(import_row(s, p))
 }
@@ -735,6 +901,8 @@ pub(super) fn scene_config(config: &mut Config) {
     models.insert("te".into(), "synthetic-te-model".into());
     config.engine_settings.stages.title_model = "synthetic-title-model".into();
     config.engine_settings.steps.tasks = false;
+    let prompt = "Synthetic notes instructions for the render.";
+    config.engine_settings.notes_prompt = Some(prompt.into());
     let route = ProviderRoute {
         provider: "local".into(),
         model: "synthetic-hi-route-model".into(),
@@ -895,6 +1063,70 @@ mod tests {
         let loaded = Config::load_in(root.path()).unwrap();
         assert!(Step::Comparison.get(&loaded) && !Step::Tasks.get(&loaded));
         assert_eq!(loaded.engine_settings.worker_threads, 8);
+    }
+    #[test]
+    fn prompts_show_the_shipped_text_and_text_equal_to_it_is_not_stored() {
+        let base = Config::default();
+        let shipped = read(&base, Field::NotesPrompt);
+        assert!(!shipped.is_empty() && !customised(&base, Field::NotesPrompt));
+        assert!(
+            apply(&base, &[(Field::NotesPrompt, &shipped)])
+                .unwrap()
+                .is_none()
+        );
+        let custom = apply(&base, &[(Field::NotesPrompt, "Synthetic instructions")]);
+        let custom = custom.unwrap().unwrap();
+        assert!(customised(&custom, Field::NotesPrompt));
+        assert!(!customised(&custom, Field::TranslationPrompt));
+        let back = apply(&custom, &[(Field::NotesPrompt, &shipped)])
+            .unwrap()
+            .unwrap();
+        assert!(back.engine_settings.notes_prompt.is_none());
+        let bad = apply(&base, &[(Field::TranslationPrompt, " ")])
+            .err()
+            .unwrap();
+        assert_eq!(bad, [Field::TranslationPrompt]);
+    }
+    #[test]
+    fn reset_to_default_goes_through_the_reviewed_save_and_leaves_the_other_prompt() {
+        crate::test_paths::isolate();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        std::fs::write(&path, r#"{"version":1,"features":{},"notes":{}}"#).unwrap();
+        let mut config = Config::load_in(root.path()).unwrap();
+        config.engine_settings.notes_prompt = Some("Synthetic notes".into());
+        config.engine_settings.translation_prompt = Some("Synthetic translation".into());
+        config.save(root.path()).unwrap();
+        let mut config = Config::load_in(root.path()).unwrap();
+        reset_prompt(&mut config, Field::NotesPrompt);
+        config.save(root.path()).unwrap();
+        let loaded = Config::load_in(root.path()).unwrap();
+        assert!(!customised(&loaded, Field::NotesPrompt));
+        assert!(customised(&loaded, Field::TranslationPrompt));
+        let status = loaded.engine_field_status();
+        assert_eq!(status["notes_prompt"].source, Source::Default);
+        assert_eq!(status["translation_prompt"].source, Source::Saved);
+    }
+    #[test]
+    fn a_save_refreshes_only_its_own_drafts() {
+        let base = Config::default();
+        let drafts = Field::ALL.map(|f| TextEdit::new(read(&base, f)));
+        let mut engine = Engine {
+            drafts: drafts.to_vec(),
+            base: Some(base.clone()),
+            ..Default::default()
+        };
+        engine.drafts[Field::Threads.index()] = TextEdit::new("7");
+        engine.drafts[Field::Title.index()] = TextEdit::new("typed title model");
+        let mut saved = base;
+        saved.engine_settings.stages.title_model = "stored-title-model".into();
+        adopt(&mut engine, saved, &[Field::Title]);
+        assert_eq!(
+            engine.drafts[Field::Title.index()].text,
+            "stored-title-model"
+        );
+        assert_eq!(engine.drafts[Field::Threads.index()].text, "7");
+        assert!(engine.dirty(&[Field::Threads]) && !engine.dirty(&[Field::Title]));
     }
     #[test]
     fn status_words_cover_every_state_without_a_value() {

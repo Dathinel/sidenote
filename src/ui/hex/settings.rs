@@ -747,6 +747,22 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "engine-prompt-notes",
+            "Notes prompt",
+            "meeting engine prompt instructions notes summary reset default",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-prompt-translation",
+            "Translation prompt",
+            "meeting engine prompt instructions translation reset default",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
             "engine-step-tasks",
             "Tasks step",
             "meeting engine optional step tasks follow-ups on off",
