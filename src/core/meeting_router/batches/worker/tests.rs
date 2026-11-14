@@ -1,20 +1,40 @@
 use super::super::tests::{Fakes, fake, id, ranges};
 use super::*;
-use std::{io::BufRead, os::windows::process::CommandExt};
+use std::{io::BufRead, os::windows::process::CommandExt, process::Stdio};
 #[test]
 fn worker_child() {
-    let Some(mode) = std::env::var_os("BATCH_TEST_MODE") else {
+    let Some(mode) = std::env::args().skip_while(|a| a != "--skip").nth(1) else {
         return;
     };
     if mode == "grandchild" {
         std::thread::sleep(Duration::from_secs(60));
         return;
     }
+    assert!(std::env::var_os("SIDENOTE_SENTINEL").is_none());
+    if let Some(handle) = mode.strip_prefix("sentinel-") {
+        unsafe {
+            windows_sys::Win32::System::Threading::SetEvent(handle.parse::<usize>().unwrap() as _);
+        }
+    }
+    let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
+    if mode == "owner" {
+        let inner = start("hang");
+        let pid = inner.output.path().join("pid");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pid.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let grandchild: u32 = std::fs::read_to_string(pid).unwrap().parse().unwrap();
+        store_io::write(&output.join("tree"), &[inner.child.id(), grandchild]).unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+        return;
+    }
+    // Deliberately spawn before reading any handshake.
+    let mut grandchild = command("grandchild").spawn().unwrap();
+    store_io::write(&output.join("pid"), &grandchild.id()).unwrap();
     let mut lines = std::io::stdin().lock().lines();
     assert_eq!(lines.next().unwrap().unwrap(), "start");
-    let mut grandchild = command("grandchild").spawn().unwrap();
-    let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
-    store_io::write(&output.join("pid"), &grandchild.id()).unwrap();
     for line in lines {
         assert_eq!(line.unwrap(), "range");
         let _range: Range = serde_json::from_slice(
@@ -45,8 +65,9 @@ fn command(mode: &str) -> Command {
             "--exact",
             "core::meeting_router::batches::worker::tests::worker_child",
             "--nocapture",
+            "--skip",
+            mode,
         ])
-        .env("BATCH_TEST_MODE", mode)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     c
@@ -157,4 +178,63 @@ fn worker_thread_default_and_override_reach_child() {
     )
     .unwrap();
     assert_eq!(configured.recognize(&range).unwrap()["native_threads"], 2);
+}
+
+#[test]
+fn killing_owner_reaps_eager_worker_and_grandchild() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    let owner = start("owner");
+    let path = owner.output.path().join("tree");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pids: Vec<u32> =
+        serde_json::from_slice(&store_io::read_bounded(&path, 4096).unwrap()).unwrap();
+    let handles: Vec<_> = pids
+        .into_iter()
+        .map(|pid| unsafe {
+            let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            assert!(!h.is_null());
+            OwnedHandle::from_raw_handle(h)
+        })
+        .collect();
+    owner.child.kill().unwrap();
+    for handle in handles {
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), 5000) },
+            0
+        );
+    }
+}
+#[test]
+fn environment_and_inheritable_handle_sentinels_are_excluded() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::WAIT_TIMEOUT,
+        Security::SECURITY_ATTRIBUTES,
+        System::Threading::{CreateEventW, WaitForSingleObject},
+    };
+    let security = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let raw = unsafe { CreateEventW(&security, 1, 0, std::ptr::null()) };
+    assert!(!raw.is_null());
+    let sentinel = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut c = command(&format!("sentinel-{}", raw as usize));
+    c.env("SIDENOTE_SENTINEL", "synthetic-marker");
+    let mut worker = Worker::spawn(c, Default::default(), Duration::from_secs(10)).unwrap();
+    worker
+        .recognize(&ranges(Path::new("unused.wav")).remove(1))
+        .unwrap();
+    assert_eq!(
+        unsafe { WaitForSingleObject(sentinel.as_raw_handle(), 0) },
+        WAIT_TIMEOUT
+    );
 }

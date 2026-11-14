@@ -589,6 +589,7 @@ mod platform {
             ],
             None,
             CREATE_SUSPENDED,
+            None,
         )
         .map_err(|_| Failure(Reason::WorkerUnavailable))?;
         let assigned =

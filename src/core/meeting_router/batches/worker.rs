@@ -3,7 +3,7 @@ use super::*;
 use std::{
     io::Write,
     num::NonZeroUsize,
-    process::{Child, Command, Stdio},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 pub struct Worker {
-    child: Child,
+    child: crate::platform::JobProcess,
     job: Option<crate::platform::ProcessJob>,
     output: tempfile::TempDir,
     pub cancel: Arc<AtomicBool>,
@@ -30,29 +30,31 @@ impl Worker {
         timeout: Duration,
         threads: NonZeroUsize,
     ) -> Result<Self> {
-        use std::os::windows::process::CommandExt;
         let output = tempfile::tempdir()?;
+        command.env_clear();
+        // The runtime uses an absolute DLL path; PATH and owner state are unnecessary.
+        for key in ["SystemRoot", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
         command
             .env("SIDENOTE_BATCH_OUTPUT", output.path())
-            .env("SIDENOTE_BATCH_THREADS", threads.to_string())
-            .creation_flags(0x08000000)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let child = command.spawn()?;
+            .env("SIDENOTE_BATCH_THREADS", threads.to_string());
+        let job = crate::platform::ProcessJob::new()?;
+        let child = job.spawn(&command)?;
         let mut worker = Self {
             child,
-            job: None,
+            job: Some(job),
             output,
             cancel,
             timeout,
         };
-        worker.job = Some(crate::platform::ProcessJob::attach(&worker.child)?);
         worker.input().write_all(b"start\n")?;
         Ok(worker)
     }
-    fn input(&mut self) -> &mut std::process::ChildStdin {
-        self.child.stdin.as_mut().unwrap()
+    fn input(&mut self) -> &mut std::io::PipeWriter {
+        &mut self.child.input
     }
     fn stop(&mut self) {
         drop(self.job.take());

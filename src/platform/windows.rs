@@ -229,17 +229,17 @@ fn move_file_using(
 }
 pub struct Instance(HANDLE);
 /// All runner children die when their owning job closes, including on timeout.
-pub struct ProcessJob(HANDLE);
+pub struct ProcessJob(std::os::windows::io::OwnedHandle);
 impl ProcessJob {
-    pub fn attach(child: &std::process::Child) -> io::Result<Self> {
-        use std::os::windows::io::AsRawHandle;
+    pub fn new() -> io::Result<Self> {
+        use std::os::windows::io::FromRawHandle;
         use windows_sys::Win32::System::JobObjects::*;
         unsafe {
             let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if handle.is_null() {
                 return Err(io::Error::last_os_error());
             }
-            let job = Self(handle);
+            let job = Self(std::os::windows::io::OwnedHandle::from_raw_handle(handle));
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             if SetInformationJobObject(
@@ -248,19 +248,25 @@ impl ProcessJob {
                 &info as *const _ as *const _,
                 std::mem::size_of_val(&info) as u32,
             ) == 0
-                || AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0
             {
                 return Err(io::Error::last_os_error());
             }
             Ok(job)
         }
     }
-}
-impl Drop for ProcessJob {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.0);
+    pub fn attach(child: &std::process::Child) -> io::Result<Self> {
+        use std::os::windows::io::AsRawHandle;
+        let job = Self::new()?;
+        if unsafe {
+            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
+                job.0.as_raw_handle(),
+                child.as_raw_handle(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
         }
+        Ok(job)
     }
 }
 impl Drop for Instance {
@@ -711,3 +717,6 @@ pub fn copy_file(file: &Path) -> io::Result<()> {
         result
     }
 }
+
+mod job_process;
+pub use job_process::JobProcess;

@@ -27,6 +27,7 @@ pub fn spawn(
     handles: [BorrowedHandle<'_>; 3],
     directory: Option<&[u16]>,
     flags: u32,
+    job: Option<BorrowedHandle<'_>>,
 ) -> io::Result<(OwnedHandle, OwnedHandle)> {
     if app.last() != Some(&0)
         || command.last() != Some(&0)
@@ -39,16 +40,18 @@ pub fn spawn(
         ));
     }
     let handles = handles.map(|h| h.as_raw_handle());
+    let count = 1 + u32::from(job.is_some());
+    let jobs = job.map(|h| [h.as_raw_handle()]);
     let mut size = 0;
     unsafe {
-        InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size);
+        InitializeProcThreadAttributeList(ptr::null_mut(), count, 0, &mut size);
     }
     if size == 0 {
         return Err(io::Error::last_os_error());
     }
     let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
     check(unsafe {
-        InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 1, 0, &mut size)
+        InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), count, 0, &mut size)
     })?;
     let mut attributes = Attributes(storage);
     let list = attributes.0.as_mut_ptr().cast();
@@ -63,6 +66,19 @@ pub fn spawn(
             ptr::null(),
         )
     })?;
+    if let Some(jobs) = &jobs {
+        check(unsafe {
+            UpdateProcThreadAttribute(
+                list,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                jobs.as_ptr().cast(),
+                std::mem::size_of_val(jobs),
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        })?;
+    }
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
@@ -95,4 +111,33 @@ pub fn spawn(
             OwnedHandle::from_raw_handle(process.hThread),
         )
     })
+}
+
+pub fn command_line(command: &std::process::Command) -> io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut out = Vec::new();
+    for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
+        out.push(34);
+        let mut slashes = 0;
+        for c in arg.encode_wide() {
+            if c == 0 {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "NUL argument"));
+            }
+            if c == 92 {
+                slashes += 1;
+                continue;
+            }
+            out.extend(std::iter::repeat_n(
+                92,
+                if c == 34 { slashes * 2 + 1 } else { slashes },
+            ));
+            out.push(c);
+            slashes = 0;
+        }
+        out.extend(std::iter::repeat_n(92, slashes * 2));
+        out.extend([34, 32]);
+    }
+    out.pop();
+    out.push(0);
+    Ok(out)
 }
