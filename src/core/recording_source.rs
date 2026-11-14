@@ -54,9 +54,6 @@ impl CompletedMeeting {
             _text: String,
         }
         let text = std::str::from_utf8(&input.transcript).map_err(|_| Error::Incomplete)?;
-        if text.trim().is_empty() {
-            return Err(Error::Incomplete);
-        }
         for line in text
             .trim_start_matches('\u{feff}')
             .lines()

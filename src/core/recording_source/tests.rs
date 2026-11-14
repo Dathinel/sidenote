@@ -113,6 +113,43 @@ fn sessions_opened_before_ack_reload_the_locked_cursor() {
 }
 
 #[test]
+fn silence_is_complete_but_missing_and_partial_transcripts_are_not() {
+    let (_root, meetings, cursor) = fixture();
+    let path = meetings.join("100-1/transcript.ndjson");
+    for bytes in [b"".as_slice(), b" \r\n\t", b"\xef\xbb\xbf\n"] {
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            CompletedMeeting::capture(&meetings, "100-1").unwrap().id(),
+            "100-1"
+        );
+    }
+    let mut session = Session::open(source(&meetings), cursor.clone()).unwrap();
+    let mut calls = 0;
+    session
+        .drain(|_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(calls, 2);
+    drop(session);
+    Session::open(source(&meetings), cursor)
+        .unwrap()
+        .drain(|_| panic!("silent completion was not acknowledged"))
+        .unwrap();
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        CompletedMeeting::capture(&meetings, "100-1"),
+        Err(Error::Input(_))
+    ));
+    fs::write(path, b"{\"text\":\"partial").unwrap();
+    assert!(matches!(
+        CompletedMeeting::capture(&meetings, "100-1"),
+        Err(Error::Incomplete)
+    ));
+}
+
+#[test]
 fn lifecycle_corruption_deleted_and_incomplete_inputs_fail_closed() {
     let (_root, meetings, cursor) = fixture();
     for id in ["../100-1", "missing", "999-1"] {
