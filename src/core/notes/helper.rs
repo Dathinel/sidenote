@@ -19,6 +19,9 @@ impl Helper {
     pub fn offered(self) -> bool {
         matches!(self, Self::Claude | Self::Codex)
     }
+    pub fn models(self) -> Vec<crate::core::ask_session::Model> {
+        crate::core::ask_session::models(&runner(self, ""))
+    }
     pub fn default_model(self) -> &'static str {
         match self {
             Self::Claude => "claude-sonnet-5-5",

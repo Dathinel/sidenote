@@ -1503,3 +1503,27 @@ fn codex_uses_the_notes_parser_and_limit_auth_failures_are_terminal() {
         );
     }
 }
+
+#[test]
+fn summary_model_defaults_and_custom_models_survive_settings_roundtrip() {
+    let legacy: NotesSettings = serde_json::from_str(r#"{"helper":"claude"}"#).unwrap();
+    assert!(legacy.model.is_empty());
+    assert_eq!(legacy.effective_helper(), Some(Helper::Claude));
+    let root = Temp::new();
+    let baseline = settings_fixture();
+    save_fixture_settings(&root.0, &baseline).unwrap();
+    for model in ["gpt-6.1-terra", "my-custom-model"] {
+        let edited = NotesSettings {
+            helper: Some(Helper::Codex),
+            model: model.into(),
+            ..baseline.clone()
+        };
+        save_fixture_settings(&root.0, &edited).unwrap();
+        let saved = crate::core::Config::load_in(&root.0)
+            .unwrap()
+            .notes
+            .unwrap();
+        assert_eq!(saved.helper, Some(Helper::Codex));
+        assert_eq!(saved.model, model);
+    }
+}
