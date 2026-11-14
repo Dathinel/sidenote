@@ -1,5 +1,7 @@
 //! Device-local preparation only. No stage consumes these choices yet.
 mod migration;
+mod status;
+pub use status::{FieldStatus, Source, Validation};
 
 use super::{
     Config,
