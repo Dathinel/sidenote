@@ -89,22 +89,48 @@ struct Receipt {
 }
 #[cfg(windows)]
 fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
-    let check = || -> Result<bool> {
-        let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
-        let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
-            &path(root, plan, id, "receipt"),
-            4096,
-        )?)?;
-        let value: Value = serde_json::from_slice(&bytes)?;
-        Ok(receipt.revision == plan.revision
-            && receipt.range == id
-            && receipt.sha256 == hash(&bytes)
-            && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
-    };
-    check().unwrap_or(false)
+    read_result(root, plan, id).ok().flatten().is_some()
 }
 pub trait Recognizer {
     fn recognize(&mut self, range: &Range) -> Result<Value>;
+}
+/// Validate the receipt before exposing a reading to reconciliation; no audio is opened.
+pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> {
+    let range = plan
+        .batches
+        .values()
+        .find_map(|b| b.get(id))
+        .ok_or("Range is not in plan")?;
+    if id.len() != 64
+        || !id.bytes().all(|b| b.is_ascii_hexdigit())
+        || key(range)? != id
+        || plan.revision.len() != 64
+        || !plan.revision.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("Invalid plan/range identity".into());
+    }
+    #[cfg(windows)]
+    {
+        let check = || -> Result<Option<Value>> {
+            let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
+            let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
+                &path(root, plan, id, "receipt"),
+                4096,
+            )?)?;
+            let value: Value = serde_json::from_slice(&bytes)?;
+            Ok((receipt.revision == plan.revision
+                && receipt.range == id
+                && receipt.sha256 == hash(&bytes)
+                && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
+            .then_some(value))
+        };
+        Ok(check().unwrap_or(None))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Ok(None)
+    }
 }
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;

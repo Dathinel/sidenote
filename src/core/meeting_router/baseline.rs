@@ -43,7 +43,7 @@ fn overlaps(segment: &Segment, baseline: &Chunk) -> bool {
             && s.chunk.end > baseline.start
     })
 }
-fn covered(baseline: &Chunk, segments: &[Segment], valid: &[bool]) -> bool {
+fn covered(baseline: &Chunk, segments: &[Segment], valid: &[bool], tolerance: f64) -> bool {
     let mut spans: Vec<_> = segments
         .iter()
         .zip(valid)
@@ -59,28 +59,42 @@ fn covered(baseline: &Chunk, segments: &[Segment], valid: &[bool]) -> bool {
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut until = baseline.start;
     for (start, end) in spans {
-        if start > until + 0.0001 {
+        if start > until + tolerance {
             return false;
         }
         until = until.max(end);
-        if until + 0.0001 >= baseline.end {
+        if until + tolerance >= baseline.end {
             return true;
         }
     }
     false
 }
+pub(super) fn source_covered(baseline: &Chunk, segments: &[Segment]) -> bool {
+    covered(baseline, segments, &vec![true; segments.len()], 0.0)
+}
 
 /// A partial reading cannot replace any part of a baseline sentence. Keep its own interval.
 pub fn reconcile(transcript: &mut Transcript, baseline: &[Chunk]) {
+    reconcile_with_tolerance(transcript, baseline, 0.0001, false);
+}
+pub(super) fn reconcile_exact(transcript: &mut Transcript, baseline: &[Chunk]) {
+    reconcile_with_tolerance(transcript, baseline, 0.0, true);
+}
+fn reconcile_with_tolerance(
+    transcript: &mut Transcript,
+    baseline: &[Chunk],
+    tolerance: f64,
+    include_english: bool,
+) {
     let original = std::mem::take(&mut transcript.segments);
     let mut valid: Vec<_> = original
         .iter()
-        .map(|s| s.route != "en" && !s.text_original.trim().is_empty())
+        .map(|s| (include_english || s.route != "en") && !s.text_original.trim().is_empty())
         .collect();
     loop {
         let complete: Vec<_> = baseline
             .iter()
-            .map(|b| covered(b, &original, &valid))
+            .map(|b| covered(b, &original, &valid, tolerance))
             .collect();
         let mut changed = false;
         for (i, s) in original.iter().enumerate() {
@@ -107,14 +121,14 @@ pub fn reconcile(transcript: &mut Transcript, baseline: &[Chunk]) {
                 .map(|b| b.english.as_str())
                 .collect::<Vec<_>>()
                 .join(" ");
-            if !reading.is_empty() {
+            if !reading.is_empty() && (s.route != "en" || s.english_reading.is_empty()) {
                 s.english_reading = reading;
             }
             transcript.segments.push(s);
         }
     }
     for b in baseline {
-        if covered(b, &original, &valid) {
+        if covered(b, &original, &valid, tolerance) {
             continue;
         }
         let matching: Vec<_> = original.iter().filter(|s| overlaps(s, b)).collect();

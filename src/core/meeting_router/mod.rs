@@ -11,6 +11,7 @@ pub(crate) mod inputs;
 pub mod jobs;
 pub mod pieces;
 pub mod ranges;
+pub mod revision;
 pub mod vad;
 use super::{
     asr::{self, LanguageScores, Result},
