@@ -49,3 +49,11 @@ persistent home is the existing `pipeline` section. Executable locations, tempor
 process cleanup, audio segmentation constants and model catalog/checksum definitions remain
 runtime/algorithm contracts, not duplicated user settings. Custom scripts and their files are
 preserved; porting arbitrary script edits is not established by this schema.
+
+Recovery uses `Config::engine_backup_names(root)` and explicit
+`Config::restore_engine_backup(root, name)`. Neither operation deserializes the primary
+config. Names are restricted to generated v1 snapshot names; restoration validates and
+bounds the selected snapshot before atomically replacing the primary under its writer lock.
+Snapshots are retained, including an orphan produced before a failed primary publication.
+Ordinary config saves validate explicitly edited fields; unavailable preserved helper choices
+remain stored and appear as availability status rather than a reason to reject another edit.

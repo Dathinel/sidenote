@@ -17,25 +17,35 @@ impl Config {
             })
         })
     }
-    /// Restore the exact pre-import config under the same writer lock. Backup is retained.
-    /// Explicit action only; the caller must reload settings after restoring.
-    pub fn restore_engine_backup(root: &Path) -> io::Result<()> {
+    /// Discover recovery points even when the primary config is missing or damaged.
+    pub fn engine_backup_names(root: &Path) -> io::Result<Vec<String>> {
+        let entries = match std::fs::read_dir(root.join("local")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if let Some(name) = entry.file_name().to_str()
+                && valid_backup_name(name)
+                && entry.file_type()?.is_file()
+            {
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+    /// Explicit selection; never read the primary to locate or validate a backup.
+    /// Restore exact prior bytes under the writer lock and retain the recovery point.
+    pub fn restore_engine_backup(root: &Path, name: &str) -> io::Result<()> {
         let _lock = config::lock(root)?;
-        let config = required_config(root)?;
-        let name = config
-            .engine_settings
-            .backup_file
-            .as_deref()
-            .ok_or_else(|| store_io::invalid("No engine settings backup"))?;
-        let id = name
-            .strip_prefix("engine-settings-v1-")
-            .and_then(|s| s.strip_suffix(".json"))
-            .filter(|s| s.len() == 32 && s.bytes().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| store_io::invalid("Invalid engine settings backup name"))?;
+        if !valid_backup_name(name) {
+            return Err(store_io::invalid("Invalid engine settings backup name"));
+        }
         let bytes = store_io::read_bounded(
-            &root
-                .join("local")
-                .join(format!("engine-settings-v1-{id}.json")),
+            &root.join("local").join(name),
             super::super::file_reads::SUMMARY_MAX,
         )?;
         let prior: Config =
@@ -48,6 +58,11 @@ impl Config {
         }
         store_io::atomic_write(&root.join("config.json"), &bytes)
     }
+}
+fn valid_backup_name(name: &str) -> bool {
+    name.strip_prefix("engine-settings-v1-")
+        .and_then(|s| s.strip_suffix(".json"))
+        .is_some_and(|id| id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()))
 }
 fn required_config(root: &Path) -> io::Result<Config> {
     let config = Config::read_config(root)?
@@ -66,6 +81,13 @@ fn migrate_in(
     root: &Path,
     read: impl FnMut(&str) -> Result<Option<String>, ()>,
 ) -> io::Result<Config> {
+    migrate_with_writer(root, read, store_io::atomic_write)
+}
+fn migrate_with_writer(
+    root: &Path,
+    read: impl FnMut(&str) -> Result<Option<String>, ()>,
+    mut publish: impl FnMut(&Path, &[u8]) -> io::Result<()>,
+) -> io::Result<Config> {
     {
         let _lock = config::lock(root)?;
         let mut config = required_config(root)?;
@@ -80,7 +102,7 @@ fn migrate_in(
                 super::super::device::random_id()?
             );
             // Flush the immutable backup before publishing the migration marker.
-            store_io::atomic_write(&root.join("local").join(&backup), &prior)?;
+            publish(&root.join("local").join(&backup), &prior)?;
             config.engine_settings.backup_file = Some(backup);
             let mut raw: Value =
                 serde_json::from_slice(prior.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&prior))
@@ -97,7 +119,7 @@ fn migrate_in(
                     raw["knowledge_base"][key] = Value::String(imported.clone());
                 }
             }
-            store_io::write(&root.join("config.json"), &raw)?;
+            publish(&root.join("config.json"), &serde_json::to_vec_pretty(&raw)?)?;
         }
     }
     Config::load_existing(root)
@@ -196,7 +218,7 @@ mod tests {
         assert_eq!(notes.engine, "scripts");
         assert!(!notes.auto);
         assert_eq!(notes.model, "synthetic-notes-model");
-        Config::restore_engine_backup(root).unwrap();
+        Config::restore_engine_backup(root, backup.file_name().unwrap().to_str().unwrap()).unwrap();
         assert_eq!(std::fs::read(root.join("config.json")).unwrap(), prior);
         assert_eq!(std::fs::read(backup).unwrap(), prior);
     }
@@ -243,7 +265,7 @@ mod tests {
         config.engine_settings.backup_file = Some("../synthetic".into());
         store_io::write(&root.join("config.json"), &config).unwrap();
         let prior = std::fs::read(root.join("config.json")).unwrap();
-        assert!(Config::restore_engine_backup(root).is_err());
+        assert!(Config::restore_engine_backup(root, "../synthetic").is_err());
         assert_eq!(std::fs::read(root.join("config.json")).unwrap(), prior);
     }
 }
@@ -266,9 +288,12 @@ mod restore_tests {
         let backup = root
             .join("local")
             .join(migrated.engine_settings.backup_file.unwrap());
-        std::fs::write(backup, b"synthetic invalid config").unwrap();
+        std::fs::write(&backup, b"synthetic invalid config").unwrap();
         let prior = std::fs::read(root.join("config.json")).unwrap();
-        assert!(Config::restore_engine_backup(root).is_err());
+        assert!(
+            Config::restore_engine_backup(root, backup.file_name().unwrap().to_str().unwrap())
+                .is_err()
+        );
         assert_eq!(std::fs::read(root.join("config.json")).unwrap(), prior);
         let mut future: Value = serde_json::from_slice(&prior).unwrap();
         future["engine_settings"]["version"] = 2.into();
@@ -287,3 +312,7 @@ mod restore_tests {
 #[cfg(test)]
 #[path = "save_tests.rs"]
 mod save_tests;
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod recovery_tests;
