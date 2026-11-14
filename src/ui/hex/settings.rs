@@ -707,6 +707,46 @@ fn app_index() -> Vec<Destination> {
             false,
         ),
         entry(
+            "engine-notes-writer",
+            "Notes writer",
+            "meeting engine notes summary agent helper writer",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-translation-model",
+            "Translation model",
+            "meeting engine translate english model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-title-model",
+            "Title model",
+            "meeting engine meeting title model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-tasks-model",
+            "Task model",
+            "meeting engine tasks follow-ups model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
+            "engine-comparison-model",
+            "Comparison model",
+            "meeting engine compare outside notes model",
+            Page::Meetings,
+            3,
+            false,
+        ),
+        entry(
             "engine-model-en",
             "English model",
             "meeting engine transcription speech model english",
@@ -2231,7 +2271,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
-        (Page::Meetings, 3) => engine::body(s, k, p),
+        (Page::Meetings, 3) => engine::body(s, k, p, layer),
         (Page::Meetings, _) => col()
             .w_full()
             .child(card(
@@ -2664,6 +2704,7 @@ pub fn scene(s: &mut State, name: &str) {
     }
     if name.starts_with("settings-engine") {
         engine::scene_config(&mut s.config);
+        s.config.notes = s.ai_notes.settings.clone();
     }
     navigate(s, page, tab);
     if name == "settings-engine-invalid" {

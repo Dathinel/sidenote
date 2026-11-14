@@ -4,13 +4,13 @@
 //! validates only that field and a stored value that is already wrong never blocks another edit.
 //! Status lines say where a value came from and whether it is valid. They never print a value
 //! the status did not come from, so nothing a script import rejected can appear here.
-use super::{group_highlight, icon_tile, panel, row_icon};
+use super::{Page, group_highlight, icon_tile, navigate, panel, row_icon};
 use crate::ui::{
-    State, roles,
+    State, ai_notes, roles,
     theme::Palette,
     widgets::{ButtonDisabled, action, hairline},
 };
-use rune::{El, TextEdit, col};
+use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::{
     Config,
@@ -33,6 +33,10 @@ pub(super) enum Field {
     Threads,
     Deadline,
     RequestDeadline,
+    Translation,
+    Title,
+    Tasks,
+    Comparison,
 }
 impl Field {
     pub(super) const TRANSCRIPTION: [Field; 6] = [
@@ -43,7 +47,27 @@ impl Field {
         Self::Deadline,
         Self::RequestDeadline,
     ];
-    const COUNT: usize = 6;
+    /// Models for the steps after transcription. The notes model has its own existing home.
+    const STEP_MODELS: [Field; 4] = [
+        Self::Translation,
+        Self::Title,
+        Self::Tasks,
+        Self::Comparison,
+    ];
+    /// Every field with a draft, in the order of `index`.
+    const ALL: [Field; 10] = [
+        Self::English,
+        Self::Hindi,
+        Self::Telugu,
+        Self::Threads,
+        Self::Deadline,
+        Self::RequestDeadline,
+        Self::Translation,
+        Self::Title,
+        Self::Tasks,
+        Self::Comparison,
+    ];
+    const COUNT: usize = 10;
     fn index(self) -> usize {
         self as usize
     }
@@ -64,6 +88,10 @@ impl Field {
             Self::Threads => "engine-worker-threads",
             Self::Deadline => "engine-transcription-deadline",
             Self::RequestDeadline => "engine-request-deadline",
+            Self::Translation => "engine-translation-model",
+            Self::Title => "engine-title-model",
+            Self::Tasks => "engine-tasks-model",
+            Self::Comparison => "engine-comparison-model",
         }
     }
     /// The name `Config::engine_field_status` uses.
@@ -75,6 +103,10 @@ impl Field {
             Self::Threads => "worker_threads",
             Self::Deadline => "stage_deadline_seconds",
             Self::RequestDeadline => "stages.asr_request_deadline_seconds",
+            Self::Translation => "stages.translation_model",
+            Self::Title => "stages.title_model",
+            Self::Tasks => "stages.tasks_model",
+            Self::Comparison => "stages.comparison_model",
         }
     }
     /// The name `Config::validate_engine_settings` reports; one name covers every language.
@@ -117,12 +149,35 @@ impl Field {
                 "The longest one transcription request may take. The default is 180.",
                 "180",
             ),
+            Self::Translation => (
+                "Translation model",
+                "The model that translates speech in other languages into English.",
+                "Model name",
+            ),
+            Self::Title => (
+                "Title model",
+                "The model that gives a meeting its short title.",
+                "Model name",
+            ),
+            Self::Tasks => (
+                "Task model",
+                "The model that picks out tasks and follow-ups.",
+                "Model name",
+            ),
+            Self::Comparison => (
+                "Comparison model",
+                "The model that compares your notes with an outside note taker. That step is off by default.",
+                "Model name",
+            ),
         }
     }
     fn hint(self) -> &'static str {
         match self {
             Self::English | Self::Hindi | Self::Telugu => {
                 "Not valid. Use letters, numbers and - _ / . : only."
+            }
+            Self::Translation | Self::Title | Self::Tasks | Self::Comparison => {
+                "Not valid. Enter a model name with letters, numbers and - _ / . : only."
             }
             Self::Threads => "Not valid. Use a whole number from 1 to 256.",
             Self::Deadline | Self::RequestDeadline => {
@@ -158,6 +213,10 @@ fn read(config: &Config, field: Field) -> String {
             .filter(|v| *v > 0)
             .map_or(String::new(), |v| v.to_string()),
         Field::RequestDeadline => settings.stages.asr_request_deadline_seconds.to_string(),
+        Field::Translation => settings.stages.translation_model.clone(),
+        Field::Title => settings.stages.title_model.clone(),
+        Field::Tasks => settings.stages.tasks_model.clone(),
+        Field::Comparison => settings.stages.comparison_model.clone(),
     }
 }
 fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
@@ -181,6 +240,10 @@ fn write(config: &mut Config, field: Field, text: &str) -> Result<(), ()> {
             }
         }
         Field::RequestDeadline => settings.stages.asr_request_deadline_seconds = number()?,
+        Field::Translation => settings.stages.translation_model = text.to_owned(),
+        Field::Title => settings.stages.title_model = text.to_owned(),
+        Field::Tasks => settings.stages.tasks_model = text.to_owned(),
+        Field::Comparison => settings.stages.comparison_model = text.to_owned(),
     }
     Ok(())
 }
@@ -263,7 +326,7 @@ impl Engine {
 pub(super) fn load(s: &mut State) {
     let config = s.config.clone();
     s.hex.shell.engine = Engine {
-        drafts: Field::TRANSCRIPTION
+        drafts: Field::ALL
             .iter()
             .map(|field| TextEdit::new(read(&config, *field)))
             .collect(),
@@ -280,7 +343,7 @@ fn draft_mut(s: &mut State, index: usize) -> &mut TextEdit {
 /// After a failed save: fields the person changed keep their text, the rest take what is stored.
 fn rebase(engine: &mut Engine, fresh: Config) {
     if let Some(old) = &engine.base {
-        for field in Field::TRANSCRIPTION {
+        for field in Field::ALL {
             if let Some(draft) = engine.drafts.get_mut(field.index())
                 && draft.text == read(old, field)
             {
@@ -416,7 +479,74 @@ fn group(
         .child(panel(p).child(rows.child(hairline(p)).child(footer)))
 }
 
-pub(super) fn body(s: &State, k: &Kit, p: Palette) -> El {
+/// The notes writer is the existing dev.28 choice. This row shows it and links to where it is
+/// changed, so there is one setting and one save path.
+fn notes_writer(s: &State, p: Palette, statuses: &BTreeMap<String, FieldStatus>) -> El {
+    let settings = s.ai_notes.settings.as_ref();
+    let writer = settings.and_then(|notes| notes.effective_helper());
+    let help =
+        "The agent that writes meeting summaries. It is the same choice as in Models and agents.";
+    let mut copy = col()
+        .grow(1.0)
+        .min_w(170.0)
+        .gap(4.0)
+        .child(roles::NAME.wrap("Notes writer", p.ink))
+        .child(roles::SMALL.wrap(help, p.soft));
+    if let Some(status) = statuses.get("notes.helper") {
+        let (line, warn) = status_text(status);
+        let color = if warn { p.warn } else { p.soft };
+        let line = roles::META.wrap(line, color);
+        copy = copy.child(line.key("engine-notes-writer-status"));
+    }
+    let name = writer.map_or("None chosen", |helper| helper.name());
+    let control = row()
+        .gap(10.0)
+        .items_center()
+        .flex_wrap()
+        .child(
+            roles::CONTROL
+                .wrap(name, p.ink)
+                .key("engine-notes-writer-value"),
+        )
+        .child(
+            action("Change writer", p)
+                .key("engine-notes-writer-change")
+                .on_press(|s: &mut State| navigate(s, Page::Helpers, 0)),
+        );
+    let key = "engine-notes-writer";
+    let line = crate::ui::cards::row_shell()
+        .key(key)
+        .flex_wrap()
+        .fill(group_highlight(s, key, p))
+        .child(icon_tile(row_icon(key), p))
+        .child(copy)
+        .child(control);
+    panel(p).child(line)
+}
+fn notes(
+    s: &State,
+    k: &Kit,
+    p: Palette,
+    layer: &mut Vec<El>,
+    st: &BTreeMap<String, FieldStatus>,
+) -> El {
+    let mut out = col()
+        .w_full()
+        .gap(8.0)
+        .mt(18.0)
+        .key("engine-notes")
+        .child(roles::GROUP.wrap("Notes", p.soft))
+        .child(notes_writer(s, p, st))
+        .child(ai_notes::summary_model(s, k, p, layer));
+    if let Some(status) = st.get("notes.model") {
+        let (line, warn) = status_text(status);
+        let line = roles::META.wrap(line, if warn { p.warn } else { p.soft });
+        out = out.child(line.key("engine-notes-model-status"));
+    }
+    out
+}
+
+pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let statuses = s.config.engine_field_status();
     let intro = "Choices for how Sidenote turns a meeting into notes. They are saved on this PC. Each one says whether the built-in engine uses it yet.";
     col()
@@ -432,6 +562,16 @@ pub(super) fn body(s: &State, k: &Kit, p: Palette) -> El {
             &Field::TRANSCRIPTION,
             &statuses,
         ))
+        .child(notes(s, k, p, layer, &statuses))
+        .child(group(
+            s,
+            k,
+            p,
+            "Step models",
+            "engine-step-models",
+            &Field::STEP_MODELS,
+            &statuses,
+        ))
 }
 
 /// Render fixtures, used only by the isolated scenes: a saved Telugu model and a Hindi model
@@ -440,6 +580,7 @@ pub(super) fn scene_config(config: &mut Config) {
     use sidenote::core::meeting_router::{LanguageRoutes, ProviderRoute};
     let models = &mut config.engine_settings.models;
     models.insert("te".into(), "synthetic-te-model".into());
+    config.engine_settings.stages.title_model = "synthetic-title-model".into();
     let route = ProviderRoute {
         provider: "local".into(),
         model: "synthetic-hi-route-model".into(),
@@ -528,6 +669,44 @@ mod tests {
         assert_eq!(te, Validation::ModelQualificationRequired);
     }
     #[test]
+    fn step_models_read_defaults_edit_alone_and_reject_empty_or_odd_names() {
+        let base = Config::default();
+        assert_eq!(read(&base, Field::Title), "claude-haiku-5-5");
+        assert_eq!(read(&base, Field::Comparison), "sonnet");
+        let edits = [
+            (Field::Tasks, " synthetic-tasks-model "),
+            (Field::Title, "claude-haiku-5-5"),
+        ];
+        let edited = apply(&base, &edits).unwrap().unwrap();
+        assert_eq!(
+            edited.engine_settings.stages.tasks_model,
+            "synthetic-tasks-model"
+        );
+        assert_eq!(
+            read(&edited, Field::Translation),
+            read(&base, Field::Translation)
+        );
+        let edits = [
+            (Field::Translation, ""),
+            (Field::Comparison, "bad model"),
+            (Field::Title, "ok-model"),
+        ];
+        let bad = apply(&base, &edits).err().unwrap();
+        assert_eq!(bad, [Field::Translation, Field::Comparison]);
+    }
+    #[test]
+    fn every_step_model_says_its_name_is_unchecked_and_not_used() {
+        let status = Config::default().engine_field_status();
+        for field in Field::STEP_MODELS {
+            assert!(!in_use(field.status_key()), "{field:?}");
+            let validation = status[field.status_key()].validation;
+            assert_eq!(validation, Validation::ModelQualificationRequired);
+        }
+        assert!(in_use("notes.helper") && in_use("notes.model"));
+        assert_eq!(Field::ALL.len(), Field::COUNT);
+        assert!(Field::ALL.iter().enumerate().all(|(i, f)| f.index() == i));
+    }
+    #[test]
     fn status_words_cover_every_state_without_a_value() {
         let sources = [
             Source::Default,
@@ -564,7 +743,7 @@ mod tests {
         old.engine_settings.worker_threads = 5;
         fresh.engine_settings.worker_threads = 6;
         fresh.engine_settings.stages.asr_request_deadline_seconds = 200;
-        let drafts = Field::TRANSCRIPTION.map(|f| TextEdit::new(read(&old, f)));
+        let drafts = Field::ALL.map(|f| TextEdit::new(read(&old, f)));
         let mut engine = Engine {
             drafts: drafts.to_vec(),
             base: Some(old),
