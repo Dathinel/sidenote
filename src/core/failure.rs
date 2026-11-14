@@ -3,6 +3,7 @@ use std::{fmt, io};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Stage {
+    MeetingJob,
     KbConfigEmpty,
     KbConfigInvalid,
     KbGit,
@@ -27,6 +28,7 @@ pub(crate) enum Stage {
 impl Stage {
     pub(crate) fn code(self) -> &'static str {
         match self {
+            Self::MeetingJob => "MEETING_JOB",
             Self::KbConfigEmpty => "KB_CONFIG_EMPTY",
             Self::KbConfigInvalid => "KB_CONFIG_INVALID",
             Self::KbGit => "KB_GIT",

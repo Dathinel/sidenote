@@ -29,6 +29,32 @@ replay retains its existing summary-preservation behavior. Typed user `notes.md`
 This contract does not claim transactional render/export/task publication: those ports and
 engine-specific retry spacing/discovery policy remain later retirement stages.
 
+## Built-in checkpoint contract (retirement stage 1)
+
+`meeting_job::checkpoint::Job` is a dormant shared coordinator, not a change to active
+engine selection or the notes queue. It uses the same Stage and Cause types and the same
+meeting claim. Its fixed order is discover, prepare (audio), route, transcribe, translate,
+notes, tasks, render, publish. Existing script wire vocabulary remains version 1.
+
+Each input identity has a bounded versioned journal in `.sidenote-jobs/<digest>.json`.
+The caller supplies a 32-byte digest covering meeting identity, inputs, configuration, adapter
+versions and available capabilities. No paths, helper output or meeting content are stored.
+Previous identities are retained so switching inputs A -> B -> A does not rerun A.
+New capabilities require a new identity; NotAvailable is recorded without failing the job.
+The journal stores a completed prefix and a content-free Cause for the active Stage.
+IO errors use `failure.rs`'s redacted MEETING_JOB boundary; invalid journals fail closed.
+
+The claim covers journal reads, flushed atomic replacement and all adapter calls. A
+completed stage is never called again for that identity. Before calling a new stage the
+coordinator durably records its start and supplies a stable version/input/stage key.
+After interruption or typed failure the same stage receives Recover, never another Start.
+An adapter must reconcile a durable receipt for that key, returning committed results or
+finishing uncommitted work idempotently. It must not repeat committed effects. Arbitrary
+external effects cannot be made exactly-once by a journal alone; later adapters must
+provide atomic publication or destination-side key deduplication before being wired in.
+An interrupted save reloads the journal before another call. Missing adapters return
+NotAvailable. No real processing, helper, UI, discovery or external effects are added here.
+
 Release tests cover competing claims, released claims, interrupted jobs, existing-output
 preservation, old journal decoding, stage attribution and allowlisted UI causes. They must
 run in the release check; no unit tests or installed-app acceptance run on the laptop here.

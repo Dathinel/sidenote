@@ -2,12 +2,16 @@
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io, path::Path, sync::OnceLock};
 
+pub mod checkpoint;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     #[default]
     Pipeline,
+    Discover,
     Prepare,
+    Route,
     Transcribe,
     Translate,
     Notes,
