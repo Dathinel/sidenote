@@ -165,6 +165,9 @@ impl Recognizer for Worker {
     fn finish(&mut self) -> Result<()> {
         self.shutdown()
     }
+    fn limit(&mut self, remaining: Duration) {
+        self.timeout = self.timeout.min(remaining);
+    }
     fn recognize(&mut self, range: &Range) -> Result<Value> {
         let result = (|| {
             self.running()?;

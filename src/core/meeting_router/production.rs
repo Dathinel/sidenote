@@ -50,6 +50,9 @@ impl NativeLoader for Native<'_> {
 
 pub struct English(pub HexBridge<HexSpeech>);
 impl EnglishBridge for English {
+    fn limit(&mut self, remaining: Duration) {
+        self.0.limit(remaining);
+    }
     fn transcribe(&mut self, range: &Range) -> Result<Value> {
         let reading = self.0.transcribe(
             &range.wav,

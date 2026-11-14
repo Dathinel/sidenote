@@ -56,7 +56,33 @@ pub fn run(
             origins: &origins,
         };
         let batches_started = Instant::now();
-        batches::run(work, &plan, &mut Native(config), &mut bridge)?;
+        let stages = &config.engine_settings.stages;
+        let audio_seconds: f64 = plan
+            .batches
+            .values()
+            .flat_map(|b| b.values())
+            .map(|r| (r.range.context.1 - r.range.context.0) as f64 / 16000.0)
+            .sum();
+        let seconds = config
+            .engine_settings
+            .stage_deadline_seconds
+            .filter(|s| *s > 0)
+            .map(f64::from)
+            .unwrap_or(
+                (audio_seconds
+                    * stages.asr_seconds_per_audio_second_per_pass
+                    * stages.asr_deadline_headroom
+                    + 15.0)
+                    .clamp(30.0, 7200.0),
+            );
+        clocks.insert("asr_budget_seconds".into(), seconds);
+        batches::run_until(
+            work,
+            &plan,
+            &mut Native(config),
+            &mut bridge,
+            Duration::from_secs_f64(seconds),
+        )?;
         clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
         let assemble_started = Instant::now();
         let mut revision = revision::assemble(work, &plan, &pieces, baseline, 0)?;
@@ -136,6 +162,9 @@ struct Reuse<'a> {
 }
 #[cfg(feature = "asr-runtime")]
 impl EnglishBridge for Reuse<'_> {
+    fn limit(&mut self, remaining: Duration) {
+        self.bridge.limit(remaining);
+    }
     fn transcribe(&mut self, range: &Range) -> Result<Value> {
         let origin = self.origins[&range.track] as f64 / 16000.0;
         let start = origin + range.range.context.0 as f64 / 16000.0;

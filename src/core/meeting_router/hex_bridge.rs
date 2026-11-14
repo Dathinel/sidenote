@@ -67,6 +67,7 @@ pub struct HexBridge<C> {
     json: Option<bool>,
     busy_wait: Duration,
     request_timeout: Duration,
+    deadline: Option<Instant>,
 }
 impl<C: HexCommand> HexBridge<C> {
     pub fn new(command: C) -> Self {
@@ -75,21 +76,36 @@ impl<C: HexCommand> HexBridge<C> {
             json: None,
             busy_wait: Duration::from_secs(15),
             request_timeout: Duration::from_secs(120),
+            deadline: None,
         }
     }
     fn call(&mut self, args: &[&str]) -> Result<String> {
         let control = args.contains(&"--help") || args[0] == "status";
-        let timeout = if control {
-            Duration::from_secs(2)
+        let mut timeout = if control {
+            Duration::from_secs(2).min(self.request_timeout)
         } else {
             self.request_timeout
         };
+        if let Some(deadline) = self.deadline {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(Timeout)?;
+            if left.is_zero() {
+                return Err(Timeout);
+            }
+            timeout = timeout.min(left);
+        }
         let out = self.command.call(args, timeout)?;
         reply_error(&out).map_or(Ok(out), Err)
     }
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
+    }
+    pub fn limit(&mut self, remaining: Duration) {
+        self.request_timeout = self.request_timeout.min(remaining);
+        self.busy_wait = self.busy_wait.min(remaining);
+        self.deadline = Some(Instant::now() + remaining);
     }
     fn status(&mut self) -> Result<Value> {
         let v: Value =
