@@ -73,6 +73,8 @@
   "src/core/project_merge.rs": "a0ed36a42eda784e254d694ea97184c35d3054a6656a4e06cd828026be09fc93",
   "src/core/provider.rs": "32c166722fc94ce4a899774c35e42ad8e8ef1e5f63d495f450468c4708b055f6",
   "src/core/recording_guard.rs": "62929f0114ecfed84b7f72cb7bf2bb969bb4552a126c4384db0f6e8eb773a8de",
+  "src/core/recording_source.rs": "bf6d3b57499ae9c2f047005db4d304d731c432f6e62b74b2e0b6424071231062",
+  "src/core/recording_source/tests.rs": "2597cd9c078329bec0c2dfb889d55c1a7dbb03b0bd609f1d4d2b68b0b7c20039",
   "src/core/relay_preview.rs": "fef310aed7b1d38ef73af72d41ffc179d9e5a2a987f75f7af40758ef023e3cf6",
   "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
   "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
