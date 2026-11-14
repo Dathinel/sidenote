@@ -203,6 +203,28 @@ pub fn banner(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let job = job(s, m)?;
     banner_for(s, &m.id, &job, p)
 }
+pub(super) fn can_use_codex(job: &Job, found: &[(Helper, bool)]) -> bool {
+    matches!(job.state, JobState::HelperLimit { .. })
+        && job.helper == Some(Helper::Claude)
+        && found.contains(&(Helper::Codex, true))
+}
+pub(super) fn use_codex_button(
+    s: &State,
+    id: &str,
+    job: &Job,
+    key: &str,
+    p: Palette,
+) -> Option<El> {
+    if !can_use_codex(job, &s.ai_notes.found) {
+        return None;
+    }
+    let id = id.to_string();
+    Some(
+        button("Use Codex for summaries", key, p)
+            .disabled(s.ai_notes.pending.is_some())
+            .on_press(move |s: &mut State| s.use_codex_for_summary(id.clone())),
+    )
+}
 pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     if matches!(
         job.state,
@@ -255,12 +277,14 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                     .on_press(|s: &mut State| s.open_ai_notes()),
             )
         }
-        JobState::BackendError { .. } => {
+        JobState::BackendError { .. }
+        | JobState::HelperAuth { .. }
+        | JobState::HelperLimit { .. } => {
             buttons = buttons
                 .child(request_button(
                     "Try again",
                     id,
-                    Request::TryAgain,
+                    job.retry_request(),
                     "notes-state-retry",
                     s,
                     p,
@@ -315,7 +339,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
                 }),
         );
     }
-    c = c.child(buttons);
+    c = c.child(buttons.children(use_codex_button(s, id, job, "notes-use-codex", p)));
     if let JobState::BackendError {
         exit: Some(code), ..
     } = job.state
@@ -420,6 +444,27 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn limit_recovery_requires_detected_codex_and_preserves_the_failed_request() {
+        let mut job = Job {
+            state: JobState::HelperLimit { exit: Some(1) },
+            helper: Some(Helper::Claude),
+            updated_at: 0,
+            request: Some(Request::FirstPart),
+        };
+        assert_eq!(job.retry_request(), Request::FirstPart);
+        assert_eq!(
+            message(&job, None),
+            "Claude Code has hit its usage limit. Your transcript is saved."
+        );
+        assert!(can_use_codex(&job, &[(Helper::Codex, true)]));
+        assert!(!can_use_codex(&job, &[(Helper::Codex, false)]));
+        job.helper = Some(Helper::Codex);
+        assert!(!can_use_codex(&job, &[(Helper::Codex, true)]));
+        job.helper = Some(Helper::Claude);
+        job.state = JobState::HelperAuth { exit: Some(1) };
+        assert!(!can_use_codex(&job, &[(Helper::Codex, true)]));
+    }
     #[test]
     fn meetings_that_previously_needed_setup_offer_a_manual_request_after_setup() {
         let job: Job = serde_json::from_str(r#"{"state":"no_helper","updated_at":1}"#).unwrap();

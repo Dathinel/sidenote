@@ -186,6 +186,7 @@ pub fn state(name: &str) -> JobState {
             next_try_ms: None,
             exit: None,
         },
+        "helper-limit" => JobState::HelperLimit { exit: Some(1) },
         "timeout" => JobState::TimedOut,
         "bad-output" => JobState::BadOutput,
         "fallback" => JobState::Done {

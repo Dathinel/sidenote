@@ -147,6 +147,7 @@ pub struct AiNotes {
     pub privacy_open: bool,
     pub model_open: bool,
     pub other_model: bool,
+    pub retry_after_save: Option<(String, Request)>,
     pub ask_setup_open: bool,
     pub fallback: Option<Helper>,
     pub switch_confirm: Option<Helper>,
@@ -174,6 +175,7 @@ impl Default for AiNotes {
             privacy_open: false,
             model_open: false,
             other_model: false,
+            retry_after_save: None,
             ask_setup_open: false,
             fallback: None,
             switch_confirm: None,
@@ -338,6 +340,7 @@ impl State {
             .is_err()
         {
             self.ai_notes.pending = None;
+            self.ai_notes.retry_after_save = None;
             self.ai_notes.error =
                 Some("Could not start the Meeting summary worker. Try again.".into());
         }
@@ -393,7 +396,10 @@ impl State {
         }
         self.ai_notes.pending = None;
         match result {
-            Err(error) => self.ai_notes.error = Some(error),
+            Err(error) => {
+                self.ai_notes.retry_after_save = None;
+                self.ai_notes.error = Some(error);
+            }
             Ok(Completion::Loaded(snapshot)) => {
                 let s = &mut self.ai_notes;
                 s.error = instructions_warning(&snapshot.store);
@@ -431,6 +437,9 @@ impl State {
                 self.hex.shell.saved =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 self.ai_notes.notice = Some("Meeting summary settings saved.".into());
+                if let Some((id, mode)) = self.ai_notes.retry_after_save.take() {
+                    self.request_notes(id, mode);
+                }
             }
             Ok(Completion::Instructions(index, entry, reset)) => {
                 self.notes_editor_loaded(index, entry, reset, true);
@@ -541,6 +550,26 @@ impl State {
         settings.model = self.ai_notes.models[index].text.trim().into();
         settings.your_name = self.ai_notes.name.text.trim().into();
         self.notes_save_settings(settings, "Saving Meeting summary...");
+    }
+    pub fn use_codex_for_summary(&mut self, id: String) {
+        if self.ai_notes.pending.is_some() || self.ai_notes.scene {
+            return;
+        }
+        let Some(job) = self.ai_notes.jobs.get(&id) else {
+            return;
+        };
+        if !super::notes_status::can_use_codex(job, &self.ai_notes.found) {
+            return;
+        }
+        let mode = job.retry_request();
+        let Some(mut settings) = self.ai_notes.settings.clone() else {
+            return;
+        };
+        settings.engine = "app".into();
+        settings.helper = Some(Helper::Codex);
+        settings.model = self.ai_notes.models[1].text.trim().into();
+        self.ai_notes.retry_after_save = Some((id, mode));
+        self.notes_save_settings(settings, "Switching summaries to Codex...");
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
         if let Some(problem) = self.notes_request_problem() {
@@ -762,18 +791,27 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 .fill(p.chip),
         );
     }
-    if let Some((_, job)) = a
+    if let Some((id, job)) = a
         .jobs
         .iter()
         .filter(|(_, j)| super::notes_status::is_failure(&j.state))
         .max_by_key(|(_, j)| j.updated_at)
     {
-        c = c.child(super::widgets::banner(
-            "Last summary problem",
-            super::notes_status::message(job, settings.helper),
-            super::widgets::BannerKind::Problem,
-            p,
-        ));
+        c = c.child(
+            super::widgets::banner(
+                "Last summary problem",
+                super::notes_status::message(job, settings.helper),
+                super::widgets::BannerKind::Problem,
+                p,
+            )
+            .children(super::notes_status::use_codex_button(
+                s,
+                id,
+                job,
+                "settings-use-codex",
+                p,
+            )),
+        );
     }
 
     let off = settings.engine != "scripts"
