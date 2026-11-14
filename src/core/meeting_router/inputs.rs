@@ -178,6 +178,68 @@ struct Input {
     stamp: String,
     cap: u64,
 }
+pub(crate) struct MeetingScan {
+    directory: Directory,
+    pub names: Vec<std::ffi::OsString>,
+}
+impl MeetingScan {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
+        let directory = Directory::open(path)?;
+        // Linux enumeration follows the pinned descriptor, not a replaceable root pathname.
+        #[cfg(target_os = "linux")]
+        let enumeration =
+            std::path::PathBuf::from(format!("/proc/self/fd/{}", directory.base.as_raw_fd()));
+        #[cfg(windows)]
+        let enumeration = &directory.path;
+        #[cfg(all(unix, not(target_os = "linux")))]
+        let enumeration = path;
+        let names = fs::read_dir(enumeration)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<_>>()?;
+        Ok(Self { directory, names })
+    }
+    pub(crate) fn capture(&self, id: &str) -> io::Result<Snapshot> {
+        let name = std::ffi::OsStr::new(id);
+        if Path::new(id).file_name() != Some(name) {
+            return Err(invalid());
+        }
+        #[cfg(unix)]
+        let directory = Directory {
+            base: open(&self.directory.base, name, true)?,
+            _pins: Vec::new(),
+        };
+        #[cfg(windows)]
+        let directory = {
+            let root = Directory::open(&self.directory.path)?;
+            if directory_id(&root.base)? != directory_id(&self.directory.base)? {
+                return Err(invalid());
+            }
+            // Both root walks retain handles without delete sharing through the child open.
+            Directory::open(&self.directory.path.join(id))?
+        };
+        Snapshot::capture_directory(directory)
+    }
+}
+#[cfg(windows)]
+fn directory_id(file: &fs::File) -> io::Result<(u64, [u8; 16])> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as _,
+            FileIdInfo,
+            &mut info as *mut _ as _,
+            std::mem::size_of_val(&info) as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
 pub(crate) struct Snapshot {
     directory: Directory,
     files: Vec<Input>,
@@ -210,7 +272,9 @@ impl Snapshot {
         Ok(bytes)
     }
     pub fn capture(folder: &Path) -> io::Result<Self> {
-        let directory = Directory::open(folder)?;
+        Self::capture_directory(Directory::open(folder)?)
+    }
+    fn capture_directory(directory: Directory) -> io::Result<Self> {
         let mut snapshot = Self {
             directory,
             files: Vec::new(),
