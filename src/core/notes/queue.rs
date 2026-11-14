@@ -4,6 +4,7 @@ use super::{
     prompt, schema, transcript,
 };
 use crate::core::failure::{AtStage, Stage};
+use crate::core::meeting_job::{self, Stage as JobStage};
 use crate::core::{self, agent_instructions::Agent, file_reads, store_io};
 use crate::platform::CommandExt;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,8 @@ use std::{
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Job {
+    #[serde(default)]
+    pub stage: JobStage,
     #[serde(flatten)]
     pub state: JobState,
     pub attempts: u32,
@@ -32,6 +35,7 @@ pub(super) struct Job {
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
         Self {
+            stage: JobStage::Pipeline,
             state: JobState::Queued,
             attempts: 0,
             next_try_at: None,
@@ -116,6 +120,10 @@ fn log(root: &Path, id: &str, message: &str) -> io::Result<()> {
         .open(root.join("sidenote.log"))?;
     writeln!(file, "{} notes: {id} {message}", now())
 }
+fn stage(root: &Path, id: &str, job: &mut Job, stage: JobStage) -> io::Result<()> {
+    job.stage = stage;
+    store_io::write(&job_path(root, id), job)
+}
 pub(super) fn manifest(folder: &Path) -> io::Result<serde_json::Value> {
     let bytes = core::meeting_router::inputs::Snapshot::read_file(
         &folder.join("manifest.json"),
@@ -190,7 +198,7 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Meeting is not complete"));
     }
     let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
-    if folder.join("english-summary.json").exists() && !sorting {
+    if meeting_job::preserve_summary(&folder, sorting) {
         return Ok(());
     }
     if sorting && !folder.join("english-summary.json").is_file() {
@@ -288,7 +296,7 @@ fn process(
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     // Both engines hold this OS lock until publication finishes; a crash releases it immediately.
-    let _claim = match store_io::lock(&folder.join(".notes-engine.lock")) {
+    let _claim = match meeting_job::claim(&folder) {
         Ok(claim) => claim,
         Err(e)
             if matches!(e.raw_os_error(), Some(32 | 33))
@@ -312,7 +320,7 @@ fn process(
     }
     let sort_only =
         job.sorting_pending || matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
-    if folder.join("english-summary.json").exists() && !sort_only {
+    if meeting_job::preserve_summary(&folder, sort_only) {
         return write(
             root,
             id,
@@ -359,6 +367,7 @@ fn process(
     pinned.helper = Some(helper);
     pinned.model = job.model.clone();
     let settings = &pinned;
+    stage(root, id, job, JobStage::Prepare)?;
     let mut transcript = if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
@@ -467,6 +476,7 @@ fn process(
         (existing_summary(&raw)?, false)
     } else {
         if !folder.join("quick-title.json").exists() {
+            stage(root, id, job, JobStage::Title)?;
             let title_model = if helper == Helper::Claude {
                 "claude-haiku-5-5"
             } else {
@@ -524,6 +534,7 @@ fn process(
             model,
             timeout: helper::NOTES_TIMEOUT,
         };
+        stage(root, id, job, JobStage::Notes)?;
         let answer = match call.ladder(run, Agent::Notes, &material, |raw| {
             schema::parse(raw, id, date, &transcript, &teams)
         }) {
@@ -554,6 +565,7 @@ fn process(
                 .ok_or_else(|| store_io::invalid("Missing meetings folder"))?
                 .to_owned(),
         );
+        stage(root, id, job, JobStage::Publish)?;
         match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, true) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -581,6 +593,7 @@ fn process(
         model,
         timeout: helper::TASKS_TIMEOUT,
     };
+    stage(root, id, job, JobStage::Tasks)?;
     let answer = call.ladder(run, Agent::Tasks, &material, |raw| {
         schema::sorting(raw, &summary, &projects, &settings.your_name)
     });
@@ -931,6 +944,7 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
         model,
         timeout: helper::TASKS_TIMEOUT,
     };
+    stage(root, id, job, JobStage::Tasks)?;
     let answer = match call.ladder_output(run,Agent::Tasks,&material,|raw| {
         let tasks: serde_json::Value = schema::object(raw)?;
         let todo = tasks.get("todo").filter(|v| v.is_array()).ok_or("missing tasks list")?;

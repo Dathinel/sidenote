@@ -43,6 +43,8 @@ $dir = Get-Item -LiteralPath $MeetingDir
 if (-not $dir.PSIsContainer) { throw "MeetingDir is not a folder: $MeetingDir" }
 $notesClaim = Enter-NotesEngine $dir.FullName
 if ($null -eq $notesClaim) { Write-Output 'notes deferred engine busy'; return }
+if ($script:JobContract.preserve_completed -and -not $NotesOnly -and
+    (Test-Path -LiteralPath (Join-Path $dir.FullName $script:JobContract.summary_file))) { return }
 if ($dir.Name -cmatch '\A[0-9][0-9-]{0,99}\z') { Write-Output "notes engine=scripts meeting=$($dir.Name)" }
 
 # Quick title (a cheap, fast model, a few seconds) before translation, so the app can name the meeting

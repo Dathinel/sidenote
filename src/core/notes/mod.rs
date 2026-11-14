@@ -64,6 +64,22 @@ pub enum JobState {
     },
     Empty,
 }
+impl JobState {
+    pub fn failure_cause(&self) -> Option<super::meeting_job::Cause> {
+        use super::meeting_job::Cause;
+        match self {
+            Self::HelperLimit { .. } => Some(Cause::Limit),
+            Self::HelperAuth { .. } => Some(Cause::Auth),
+            Self::TimedOut => Some(Cause::TimedOut),
+            Self::Queued
+            | Self::Running
+            | Self::Done { .. }
+            | Self::NoHelper
+            | Self::NeedsClick => None,
+            _ => Some(Cause::Other),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

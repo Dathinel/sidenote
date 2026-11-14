@@ -787,7 +787,7 @@ impl View {
                     match notice {
                         Notice::Writing => "floating-icon-writing.png",
                         Notice::Later => "floating-icon-later.png",
-                        Notice::Failed => "floating-icon-failed.png",
+                        Notice::Failed(_) => "floating-icon-failed.png",
                         Notice::Off => "floating-icon-off.png",
                         Notice::Skipped => "floating-icon-summary-skipped.png",
                         Notice::Unavailable => "floating-icon-unavailable.png",
@@ -1170,7 +1170,7 @@ pub(super) fn render_synthetic() -> io::Result<()> {
         for notice in [
             Notice::Writing,
             Notice::Later,
-            Notice::Failed,
+            Notice::Failed(crate::core::meeting_job::Cause::Other),
             Notice::Off,
             Notice::Skipped,
             Notice::Unavailable,

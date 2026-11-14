@@ -21,13 +21,13 @@ try {
     if (-not $MeetingDir -or (Split-Path -Leaf $MeetingDir) -cnotmatch '\A[0-9][0-9-]{0,99}\z') {
         Write-Output 'notes skipped category=claim_invalid'; return
     }
-    $claimPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir '.notes-engine.lock'))
+    $claimPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir $script:JobContract.lock_file))
     if ($null -ne $NotesClaim) {
         if (-not $NotesClaim.CanWrite -or -not [string]::Equals($NotesClaim.Name, $claimPath, [StringComparison]::OrdinalIgnoreCase)) {
             Write-Output 'notes skipped category=claim_invalid'; return
         }
     } else {
-        $summaryPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir 'english-summary.json'))
+        $summaryPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir $script:JobContract.summary_file))
         if (-not [string]::Equals([IO.Path]::GetFullPath($OutFile), $summaryPath, [StringComparison]::OrdinalIgnoreCase)) {
             Write-Output 'notes skipped category=claim_invalid'; return
         }

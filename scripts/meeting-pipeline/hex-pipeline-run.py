@@ -11,7 +11,10 @@ import tempfile
 import time
 
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-STAGES = {"pipeline", "prepare", "transcribe", "translate", "notes", "render", "publish", "tasks", "compare", "title"}
+CONTRACT = json.loads(Path(__file__).with_name("job-contract.json").read_text(encoding="utf-8"))
+if CONTRACT["version"] != 1:
+    raise ValueError("Unsupported meeting job contract")
+STAGES = set(CONTRACT["stages"])
 STAGE, DEADLINE, STARTED = "pipeline", 240, time.monotonic()
 
 
@@ -21,7 +24,7 @@ class SafeParser(argparse.ArgumentParser):
 
 
 KINDS = {"git", "claude", "codex", "python", "opencode", "other"}
-CATEGORIES = {"HELPER_LIMIT", "HELPER_AUTH", "timeout", "other"}
+CATEGORIES = set(CONTRACT["categories"])
 
 
 class PipelineFailure(Exception):

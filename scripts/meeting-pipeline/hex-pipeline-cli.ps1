@@ -1,8 +1,10 @@
-$script:PipelineStages = @('pipeline', 'prepare', 'transcribe', 'translate', 'notes', 'render', 'publish', 'tasks', 'compare', 'title')
+$script:JobContract = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'job-contract.json')) | ConvertFrom-Json
+if ($script:JobContract.version -ne 1) { throw 'Unsupported meeting job contract' }
+$script:PipelineStages = @($script:JobContract.stages)
 
 function Format-PipelineFailure([string]$Stage, [string]$Category, [int]$DeadlineSeconds, [double]$ElapsedSeconds, [string]$Kind = 'other', $ExitCode = $null) {
     if ($Stage -cnotin $script:PipelineStages) { $Stage = 'pipeline' }
-    if ($Category -cnotin @('HELPER_LIMIT', 'HELPER_AUTH', 'timeout', 'other')) { $Category = 'other' }
+    if ($Category -cnotin $script:JobContract.categories) { $Category = 'other' }
     if ($Kind -cnotin @('git','claude','codex','python','opencode','other')) { $Kind = 'other' }
     $exitText = if ($ExitCode -is [int] -or $ExitCode -is [long]) { [string]$ExitCode } else { 'none' }
     $DeadlineSeconds = [Math]::Min(3600, [Math]::Max(0, $DeadlineSeconds))
@@ -13,7 +15,9 @@ function Format-PipelineFailure([string]$Stage, [string]$Category, [int]$Deadlin
 
 function Get-PipelineFailure($Record, [string]$Stage = 'pipeline', [int]$DeadlineSeconds = 0, [double]$ElapsedSeconds = 0) {
     $message = [string]$Record.Exception.Message
-    $pattern = '\Apipeline-failure stage=(pipeline|prepare|transcribe|translate|notes|render|publish|tasks|compare|title) category=(HELPER_LIMIT|HELPER_AUTH|timeout|other) kind=(git|claude|codex|python|opencode|other) exit_code=(none|-?[0-9]{1,10}) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z'
+    $stages = ($script:PipelineStages | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $categories = ($script:JobContract.categories | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $pattern = '\Apipeline-failure stage=(' + $stages + ') category=(' + $categories + ') kind=(git|claude|codex|python|opencode|other) exit_code=(none|-?[0-9]{1,10}) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z'
     if ($message -cmatch $pattern) {
         $exitCode = if ($Matches[4] -ceq 'none') { $null } else { [long]$Matches[4] }
         return Format-PipelineFailure $Matches[1] $Matches[2] ([int]$Matches[5]) ([double]::Parse($Matches[6], [Globalization.CultureInfo]::InvariantCulture)) $Matches[3] $exitCode
@@ -24,7 +28,8 @@ function Get-PipelineFailure($Record, [string]$Stage = 'pipeline', [int]$Deadlin
 function Invoke-HexCli {
     param([ValidateSet('native','translate','claude')][string]$Kind = 'native', [string[]]$CliArgs, [string]$InputFile,
           [string]$OutputFile, [string]$Model, [ValidateRange(1,3600)][int]$TimeoutSeconds = 240, [string]$WorkingDirectory,
-          [ValidateSet('pipeline','prepare','transcribe','translate','notes','render','publish','tasks','compare','title')][string]$Stage = 'pipeline')
+          [string]$Stage = 'pipeline')
+    if ($Stage -cnotin $script:PipelineStages) { throw 'Invalid meeting job stage' }
     if ($Stage -eq 'pipeline') {
         if ($Kind -eq 'translate') { $Stage = 'translate' }
         elseif ($Kind -eq 'claude') { $Stage = 'notes' }
@@ -55,7 +60,7 @@ function Invoke-HexCli {
                     if (@($data.PSObject.Properties).Count -eq 6 -and $data.stage -ceq $Stage -and
                         $data.kind -cin @('git','claude','codex','python','opencode','other') -and
                         ($null -eq $data.exit_code -or $data.exit_code -is [int] -or $data.exit_code -is [long]) -and
-                        $data.category -cin @('HELPER_LIMIT','HELPER_AUTH','timeout','other') -and $data.deadline_seconds -eq $TimeoutSeconds -and
+                        $data.category -cin $script:JobContract.categories -and $data.deadline_seconds -eq $TimeoutSeconds -and
                         $data.elapsed_seconds -is [ValueType] -and $data.elapsed_seconds -ge 0 -and $data.elapsed_seconds -le 86400) {
                         $safe = Format-PipelineFailure $Stage $data.category $TimeoutSeconds ([double]$data.elapsed_seconds) $data.kind $data.exit_code
                     }
@@ -83,7 +88,7 @@ function Read-HexPrompt([string]$Path) {
 function Enter-NotesEngine([string]$MeetingDir) {
     # FileShare.None matches store_io::lock. The OS expires ownership on process death.
     try {
-        return [IO.File]::Open((Join-Path $MeetingDir '.notes-engine.lock'),
+        return [IO.File]::Open((Join-Path $MeetingDir $script:JobContract.lock_file),
             [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch [IO.IOException] {
         if (($_.Exception.HResult -band 0xffff) -in @(32,33)) { return $null }

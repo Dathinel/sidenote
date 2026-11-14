@@ -26,6 +26,7 @@ class EngineLockTests(unittest.TestCase):
     def test_app_off_and_unreadable_block_watcher_and_replays(self):
         with tempfile.TemporaryDirectory(prefix="notes-engine-policy-") as tmp:
             root = Path(tmp)
+            (root / 'job-contract.json').write_bytes((HERE / 'job-contract.json').read_bytes())
             for name in ['hex-pipeline-cli.ps1', 'hex-meeting-watch.ps1',
                          'hex-meeting-english.ps1', 'hex-meeting-notes.ps1']:
                 source = (HERE / name).read_text()
@@ -77,6 +78,7 @@ class EngineLockTests(unittest.TestCase):
             source = source.replace('Local\\HexMeeting', 'Local\\Synthetic-' + root.name + '-HexMeeting')
             (root / "hex-meeting-watch.ps1").write_text(source)
             (root / "hex-pipeline-cli.ps1").write_text((HERE / "hex-pipeline-cli.ps1").read_text())
+            (root / 'job-contract.json').write_bytes((HERE / 'job-contract.json').read_bytes())
             (root / "hex-meeting-english.ps1").write_text("param($MeetingDir)\nWrite-Output 'notes deferred engine busy'\nWrite-Output 'PRIVATE_SENTINEL'")
             (root / "hex-meeting-quick-title.ps1").write_text("param($MeetingDir)\nreturn")
             script = root / "run.ps1"

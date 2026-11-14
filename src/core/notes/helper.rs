@@ -95,18 +95,7 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Failure {
-    Busy,
-    LinuxUnavailable,
-    Consent,
-    Missing,
-    TimedOut,
-    Backend { exit: Option<i32> },
-    BadOutput,
-    Limit { exit: Option<i32> },
-    Auth { exit: Option<i32> },
-}
+pub(super) use crate::core::meeting_job::Failure;
 
 /// The test seam never launches a CLI or inspects the host's helper installation.
 pub(super) trait Run {
