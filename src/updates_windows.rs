@@ -283,10 +283,17 @@ pub fn load() -> Status {
     read_status(&directory())
 }
 fn read_status(directory: &Path) -> Status {
-    pipeline_status(
+    let mut status = pipeline_status(
         read_saved_status(directory),
         &directory.join("pipeline-install.pending"),
-    )
+    );
+    if directory.join("update-listener.resume").exists()
+        && !directory.join("pipeline-install.pending").exists()
+    {
+        status.phase = Phase::Error;
+        status.error = Some(INSTALL_LISTENER_ERROR.into());
+    }
+    status
 }
 fn read_saved_status(directory: &Path) -> Status {
     fs::read(directory.join("updates.json"))
@@ -582,7 +589,24 @@ if (!(Test-RestartSchedule $t)) {
     $t = Read-ListenerTask
     if (!(Test-RestartSchedule $t)) { throw 'Listener task restart schedule was not saved' }
 }
-if ($env:SIDENOTE_TASK_RUN -eq 'yes') { Start-ScheduledTask -InputObject $t }
+if ($env:SIDENOTE_TASK_RUN -eq 'yes') {
+    Start-ScheduledTask -InputObject $t
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $previous = $null
+    while ($true) {
+        $running = @(Get-CimInstance Win32_Process -Filter "Name = 'sidenote.exe'" | Where-Object {
+            $_.ExecutablePath -ieq $env:SIDENOTE_TASK_EXE -and $_.CreationDate -and
+            $_.CommandLine -match '(?i)(?:^|\s)"?--listen"?(?=\s|$)'
+        })
+        $current = if ($running.Count -eq 1) { "$($running[0].ProcessId):$($running[0].CreationDate.Ticks)" } else { $null }
+        if ($current -and $current -eq $previous) { break }
+        if ($watch.Elapsed.TotalSeconds -ge 7) { throw 'Listener process did not become ready' }
+        $previous = $current
+        # IgnoreNew can have ignored the first start while the old process was exiting.
+        if (-not $running.Count) { Start-ScheduledTask -InputObject $t }
+        Start-Sleep -Milliseconds 250
+    }
+}
 "#;
 fn listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
     let name = task().map_err(ListenerTaskError::Failed)?;
@@ -855,6 +879,9 @@ pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
     if !installed() {
         return Ok(());
     }
+    if local("update-listener.resume").exists() {
+        let _ = after_update();
+    }
     let pending = manager()
         .ok()
         .and_then(|mgr| mgr.get_update_pending_restart());
@@ -1032,36 +1059,44 @@ fn install_pipeline_scripts() -> Result<(), String> {
     Ok(())
 }
 
-pub fn after_update() {
+const INSTALL_LISTENER_ERROR: &str = "Sidenote could not restart its meeting listener after installation. Reopen Sidenote to retry, or reinstall it if this continues.";
+
+pub fn after_update() -> Result<(), String> {
     if !installed() {
-        return;
+        return Ok(());
     }
-    let result = reconcile_install(&directory(), complete_pipeline_install, || {
-        fs::remove_file(local("update-listener.stop"))
-            .or_else(|error| {
-                if error.kind() == io::ErrorKind::NotFound {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            })
-            .map_err(|_| "Could not clear the listener stop marker.")?;
-        checked_listener_task(true, true).map_err(ListenerTaskError::message)
-    });
+    let result = reconcile_install(&directory(), complete_pipeline_install, recover_listener);
     if let Err(error) = result {
         let _ = save(&Status {
             phase: Phase::Error,
             version: VERSION.into(),
-            error: Some(error),
+            error: Some(error.clone()),
             ..load()
         });
-        return;
+        return Err(error);
     }
-    let _ = write_report(&load());
-    let _ = save(&after_update_status(
+    save(&after_update_status(
         load(),
         &local("pipeline-install.pending"),
-    ));
+    ))
+    .map_err(|_| "Could not save installation status.".into())
+}
+fn recover_listener() -> Result<(), String> {
+    fs::remove_file(local("update-listener.stop"))
+        .or_else(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
+        .map_err(|_| "Could not clear the listener stop marker.")?;
+    checked_listener_task(true, true).map_err(ListenerTaskError::message)?;
+    wait_for_listener(
+        Instant::now() + Duration::from_secs(8),
+        listener_lock,
+        std::thread::sleep,
+    )
 }
 fn reconcile_install(
     directory: &Path,
@@ -1079,23 +1114,25 @@ fn reconcile_install(
         .map_err(|_| "Another install hook is reconciling Sidenote. Try again.")?;
     let receipt = directory.join("install-hook.complete");
     let pending = directory.join("pipeline-install.pending");
-    if fs::read(&receipt).ok().as_deref() == Some(VERSION.as_bytes()) && !pending.exists() {
-        return Ok(false);
-    }
+    let current =
+        fs::read(&receipt).ok().as_deref() == Some(VERSION.as_bytes()) && !pending.exists();
     if receipt.exists() {
         fs::remove_file(&receipt).map_err(|_| "Could not retire install hook completion.")?;
     }
     fs::write(&pending, VERSION).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+    fs::write(directory.join("update-listener.resume"), b"resume")
+        .map_err(|_| INSTALL_LISTENER_ERROR)?;
+    // The generation installer verifies hashes and deduplicates publication, even on reinstall.
     let pipeline_result = pipeline();
     let listener_result = listener();
     pipeline_result?;
     listener_result?;
+    fs::write(receipt, VERSION).map_err(|_| "Could not save install hook completion.")?;
     let resume = directory.join("update-listener.resume");
     if resume.exists() {
         fs::remove_file(resume).map_err(|_| "Could not clear listener restart state.")?;
     }
-    fs::write(receipt, VERSION).map_err(|_| "Could not save install hook completion.")?;
-    Ok(true)
+    Ok(!current)
 }
 fn after_update_status(status: Status, marker: &Path) -> Status {
     let status = if status.version == VERSION && !marker.exists() {
@@ -1109,13 +1146,12 @@ fn after_update_status(status: Status, marker: &Path) -> Status {
     pipeline_status(status, marker)
 }
 pub fn restarted() {
-    after_update();
-    restart_listener();
+    let _ = after_update();
 }
 fn restart_listener() {
     if local("update-listener.resume").exists() {
         let _ = fs::remove_file(local("update-listener.stop"));
-        if task_command(true).is_ok() {
+        if recover_listener().is_ok() {
             let _ = fs::remove_file(local("update-listener.resume"));
         } else {
             let _ = save(&Status { phase: Phase::Error, error: Some("The update finished, but the listener could not restart. Check its Sidenote task.".into()), ..load() });
@@ -1317,7 +1353,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_and_update_hooks_reconcile_once_per_version() {
+    fn same_version_hooks_revalidate_scripts_and_listener() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("install-hook.complete"), "old version").unwrap();
         fs::write(root.path().join("update-listener.resume"), "resume").unwrap();
@@ -1351,7 +1387,12 @@ mod tests {
             );
             assert!(!root.path().join("update-listener.resume").exists());
         }
-        assert_eq!(*calls.borrow(), ["pipeline", "listener"]);
+        assert_eq!(
+            *calls.borrow(),
+            [
+                "pipeline", "listener", "pipeline", "listener", "pipeline", "listener"
+            ]
+        );
     }
 
     #[test]
@@ -1389,6 +1430,7 @@ mod tests {
                 "pipeline failure must not leave the listener stopped"
             );
             assert!(!root.path().join("install-hook.complete").exists());
+            assert!(root.path().join("update-listener.resume").exists());
             assert_eq!(
                 root.path().join("pipeline-install.pending").exists(),
                 failed_step == "pipeline"
@@ -1438,6 +1480,34 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn same_version_listener_failure_is_visible_without_a_saved_status_and_can_retry() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("install-hook.complete"), VERSION).unwrap();
+        // Simulate a failed status save: the existing resume marker must still expose failure.
+        fs::create_dir(root.path().join("updates.json")).unwrap();
+        let pipeline = || {
+            install_pending_pipeline(
+                &root.path().join("pipeline-install.pending"),
+                || Ok(()),
+                || Ok(()),
+            )
+            .map(|_| ())
+        };
+        assert!(
+            reconcile_install(root.path(), pipeline, || Err(INSTALL_LISTENER_ERROR.into()))
+                .is_err()
+        );
+        assert!(!root.path().join("install-hook.complete").exists());
+        assert_eq!(
+            read_status(root.path()).error.as_deref(),
+            Some(INSTALL_LISTENER_ERROR)
+        );
+        assert!(reconcile_install(root.path(), pipeline, || Ok(())).unwrap());
+        assert!(!root.path().join("update-listener.resume").exists());
+        assert!(read_status(root.path()).error.is_none());
     }
 
     #[test]
@@ -1729,6 +1799,14 @@ function Set-ScheduledTask {
     $script:migrated = $env:SIDENOTE_TEST_MISMATCH -ne 'unsaved'
 }
 function Start-ScheduledTask { $script:started = $true }
+function Get-CimInstance {
+    $script:samples++
+    if ($env:SIDENOTE_TEST_MISMATCH -eq 'no-process' -or
+        ($env:SIDENOTE_TEST_MISMATCH -eq 'exits' -and $script:samples -gt 1) -or
+        ($env:SIDENOTE_TEST_MISMATCH -eq 'restarting' -and $script:samples -lt 3)) { return }
+    [PSCustomObject]@{ ExecutablePath = $env:SIDENOTE_TASK_EXE; CommandLine = '--listen'; ProcessId = 123; CreationDate = [datetime]'2026-01-01' }
+}
+$script:samples = 0
 $script:started = $false
 $script:migrated = $false
 try {
@@ -1746,6 +1824,9 @@ if ($script:started) { exit 0 }; exit 3
             "legacy",
             "unsaved",
             "validate-only",
+            "no-process",
+            "exits",
+            "restarting",
         ] {
             let status = Command::new("powershell.exe")
                 .args([
@@ -1772,8 +1853,10 @@ if ($script:started) { exit 0 }; exit 3
                 .unwrap();
             assert_eq!(
                 status.code(),
-                Some(if matches!(mismatch, "none" | "legacy") {
+                Some(if matches!(mismatch, "none" | "legacy" | "restarting") {
                     0
+                } else if matches!(mismatch, "no-process" | "exits") {
+                    2
                 } else {
                     1
                 }),

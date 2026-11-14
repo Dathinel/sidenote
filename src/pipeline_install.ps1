@@ -65,7 +65,7 @@ try {
     $root = Join-Path $env:USERPROFILE '.config\hex\scripts'
     $pointerPath = Join-Path $root '.pipeline-current.json'
     $entryPath = Join-Path $root 'hex-meeting-watch.ps1'
-    if (-not [IO.File]::Exists($pointerPath) -and -not [IO.File]::Exists($entryPath)) { exit 0 }
+    if (-not [IO.File]::Exists($pointerPath) -and -not [IO.File]::Exists($entryPath)) { throw 'Meeting scripts are not configured' }
     foreach ($setting in @('HEX_MEETING_PROJECT','HEX_MEETING_PROJECT_PATTERN','HEX_MEETING_PROJECT_CONTEXT_PATTERN',
         'HEX_MEETING_KB_REPO','HEX_MEETING_OWNER_NAME','HEX_MEETING_COMPANY_NAME','HEX_MEETING_PRODUCT_NAME','HEX_TE_ASR_MODEL')) {
         $value = [Environment]::GetEnvironmentVariable($setting)
