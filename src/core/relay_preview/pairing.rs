@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use sidenote_sync::pairing::{self as protocol, Confirmation, PairHost, Receipt, SecretCode};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
@@ -7,19 +8,52 @@ use std::{
 
 pub const TIMED_OUT: &str = "Pairing timed out. Start again on both devices.";
 pub const UNCONFIRMED: &str = "The other device may have joined. Check it. If you don't trust it, turn off relay sync on all devices and pair again.";
+#[derive(Debug)]
+pub(super) struct Operation(pub &'static str);
+impl Operation {
+    pub(super) fn io(self, error: io::Error) -> io::Error {
+        io::Error::new(
+            error.kind(),
+            store_io::RelayFailure(
+                store_io::relay_reason(&error).unwrap_or("relay_io"),
+                store_io::os_code(&error),
+                Some(self.0),
+            ),
+        )
+    }
+}
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for Operation {}
+
 fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
+    let io = error.chain().find_map(|e| e.downcast_ref::<io::Error>());
     let category = if error.is::<tokio::time::error::Elapsed>() {
         stage = "timeout";
         "deadline".into()
     } else if let Some(error) = error.downcast_ref::<sidenote_sync::worker::WorkerLaunch>() {
         error.to_string()
-    } else if let Some(error) = error.chain().find_map(|e| e.downcast_ref::<io::Error>()) {
+    } else if let Some(error) = io {
         store_io::os_code(error).map_or_else(
             || format!("io:{:?}", error.kind()),
             |code| format!("os:{code}"),
         )
     } else {
         "protocol".into()
+    };
+    let operation = io
+        .and_then(|e| e.get_ref()?.downcast_ref::<store_io::RelayFailure>()?.2)
+        .or_else(|| {
+            error
+                .downcast_ref::<Operation>()
+                .map(|operation| operation.0)
+        });
+    let category = match operation {
+        Some(operation) => format!("{category}:{operation}"),
+        None => category,
     };
     if stage != "timeout"
         && let Some(marker) = error.downcast_ref::<protocol::FailureStage>()
@@ -211,9 +245,7 @@ pub fn start(
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("confirmation missing"))?;
                 stage = "adopt";
-                preview
-                    .adopt(&group, &peer, receipt)
-                    .map_err(anyhow::Error::from)?;
+                preview.adopt(&group, &peer, receipt)?;
                 Ok::<_, anyhow::Error>(())
             };
             let result = tokio::select! {_=cancelled.changed()=>return,result=operation=>result};
@@ -244,9 +276,10 @@ mod security_tests {
     use super::*;
     #[test]
     fn failure_categories_suppress_private_error_text() {
+        use sidenote_sync::status::{Failure, Reason};
         let io = io::Error::new(io::ErrorKind::PermissionDenied, "private path key");
         let launch = sidenote_sync::worker::WorkerLaunch(Some(5));
-        let wrapped = io::Error::other(store_io::RelayFailure("private path", Some(32)));
+        let wrapped = io::Error::other(store_io::RelayFailure("private path", Some(32), None));
         for (error, expected) in [
             (anyhow::anyhow!("private code"), "protocol"),
             (io.into(), "io:PermissionDenied"),
@@ -256,6 +289,60 @@ mod security_tests {
             assert!(
                 matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category } if category == expected)
             );
+        }
+        let error = anyhow::Error::new(io::Error::from_raw_os_error(32))
+            .context("private path key")
+            .context(Operation("open mode.lock"));
+        assert!(
+            matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category }
+            if category == "os:32:open mode.lock")
+        );
+        let settings = Operation("read session relay settings.json").io(io::Error::other(
+            store_io::RelayFailure("relay_io", Some(32), None),
+        ));
+        assert_eq!(settings.kind(), io::ErrorKind::Other);
+        assert_eq!(store_io::relay_reason(&settings), Some("relay_io"));
+        assert_eq!(store_io::os_code(&settings), Some(32));
+        assert_eq!(settings.to_string(), "relay_io");
+        let error = anyhow::Error::new(settings)
+            .context("private path key")
+            .context(Operation("start sync session"));
+        assert!(
+            matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category }
+            if category == "os:32:read session relay settings.json")
+        );
+        for label in [
+            "read active group replica database",
+            "merge membership replica database",
+            "publish capabilities replica database",
+            "persist peer names replica database",
+            "retire old group replica database",
+            "read session group replica database",
+        ] {
+            for code in [None, Some(32)] {
+                let source = match code {
+                    Some(code) => {
+                        io::Error::other(store_io::RelayFailure("relay_database", Some(code), None))
+                    }
+                    None => failed(Failure(Reason::LocalStore)),
+                };
+                let error = if label == "read session group replica database" {
+                    let source = Operation(label).io(source);
+                    assert_eq!(store_io::relay_reason(&source), Some("relay_database"));
+                    assert_eq!(store_io::os_code(&source), code);
+                    assert_eq!(source.to_string(), "relay_database");
+                    anyhow::Error::new(source).context(Operation("start sync session"))
+                } else {
+                    anyhow::Error::new(source).context(Operation(label))
+                }
+                .context("private path key");
+                let category = code.map_or_else(|| "io:Other".into(), |code| format!("os:{code}"));
+                let expected = format!("{category}:{label}");
+                assert!(
+                    matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category }
+                    if category == expected)
+                );
+            }
         }
     }
     #[tokio::test(start_paused = true)]
@@ -387,25 +474,31 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
 }
 
 impl Preview {
-    fn adopt(&self, group: &Group, peer: &Confirmation, receipt: Receipt) -> io::Result<()> {
-        self.online(false)?;
+    fn adopt(&self, group: &Group, peer: &Confirmation, receipt: Receipt) -> anyhow::Result<()> {
+        self.online(false).context(Operation("stop sync session"))?;
         self.device
             .store(|s| s.check_compatible())
             .map_err(failed)?;
-        let mut settings = Settings::load(&self.root)?;
+        let mut settings =
+            Settings::load(&self.root).context(Operation("read relay settings.json"))?;
         if !settings.enabled {
-            return Err(store_io::invalid("Relay preview was turned off"));
+            return Err(store_io::invalid("Relay preview was turned off").into());
         }
         self.device
             .store(|s| s.check_group_active(&group.room()))
-            .map_err(failed)?;
-        self.device.merge_group(group).map_err(failed)?;
+            .map_err(failed)
+            .context(Operation("read active group replica database"))?;
+        self.device
+            .merge_group(group)
+            .map_err(failed)
+            .context(Operation("merge membership replica database"))?;
         settings.room = group.room();
         self.device
             .store(|s| {
                 s.configure_capabilities(&settings.room, super::operations::supported(&self.root))
             })
-            .map_err(failed)?;
+            .map_err(failed)
+            .context(Operation("publish capabilities replica database"))?;
         settings
             .peers
             .insert(token(&peer.peer), peer.peer_name.clone());
@@ -414,7 +507,9 @@ impl Preview {
         } else {
             settings.unconfirmed.remove(&token(&peer.peer));
         }
-        let local_name = super::super::DeviceSettings::read_in(&self.root)?.name;
+        let local_name = super::super::DeviceSettings::read_in(&self.root)
+            .context(Operation("read device.json"))?
+            .name;
         self.device
             .store(|s| {
                 s.edit("tasks", |doc| {
@@ -433,9 +528,10 @@ impl Preview {
                     Ok(())
                 })
             })
-            .map_err(failed)?;
+            .map_err(failed)
+            .context(Operation("persist peer names replica database"))?;
         settings.save_authority(&self.root, &self.device)?;
-        self.online(true)
+        self.online(true).context(Operation("start sync session"))
     }
     pub fn remove_device(&self, _target: &str) -> io::Result<()> {
         Err(store_io::invalid(
