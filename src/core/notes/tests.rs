@@ -1631,3 +1631,27 @@ fn unavailable_linux_execution_is_terminal_and_not_a_backend_or_setup_error() {
     assert_eq!(job.message, "HELPER_UNAVAILABLE_LINUX");
     assert!(job.next_try_at.is_none());
 }
+
+#[test]
+fn scripts_claim_defers_app_without_consuming_attempt_then_releases() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    queue::enqueue_in(
+        &root.0,
+        &root.0.join("meetings"),
+        ID,
+        Some(Request::MakeNotes),
+        &settings,
+    )
+    .unwrap();
+    let claim = store_io::lock(&folder.join(".notes-engine.lock")).unwrap();
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &settings, &mut fake);
+    assert!(fake.calls.is_empty());
+    assert_eq!(queue::read(&root.0, ID).unwrap().unwrap().attempts, 0);
+    assert!(!folder.join("english-summary.json").exists());
+    drop(claim);
+    drain(&root.0, &settings, &mut fake);
+    assert!(folder.join("english-summary.json").exists());
+}

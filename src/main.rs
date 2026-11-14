@@ -18,6 +18,24 @@ fn main() {
     if args.iter().any(|a| a == "--language-detect") {
         std::process::exit(sidenote::core::lid::run_cli(&args));
     }
+    if args.iter().any(|a| a == "--notes-engine") {
+        let policy = if sidenote::core::configure_paths(&args).is_ok() {
+            sidenote::core::notes::scripts_policy()
+        } else {
+            "settings_invalid"
+        };
+        println!("{policy}");
+        return;
+    }
+    #[cfg(all(windows, feature = "desktop"))]
+    if args.iter().any(|a| a == "--render-meeting-indicator") {
+        if sidenote::core::configure_paths(&args).is_err()
+            || sidenote::meeting_icon::render_synthetic().is_err()
+        {
+            std::process::exit(2);
+        }
+        return;
+    }
     #[cfg(windows)]
     {
         velopack::VelopackApp::build()

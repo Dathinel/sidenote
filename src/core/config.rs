@@ -299,7 +299,21 @@ impl Config {
                 config = Some(migrated);
             }
         }
-        let mut config = config.expect("config published under the writer lock");
+        Self::effective(
+            config.expect("config published under the writer lock"),
+            root,
+        )
+    }
+
+    pub(crate) fn load_existing(root: &Path) -> io::Result<Self> {
+        let config = Self::read_config(root)?.ok_or(io::ErrorKind::NotFound)?;
+        if config.notes.is_none() {
+            return Err(store_io::invalid("Missing notes settings"));
+        }
+        Self::effective(config, root)
+    }
+
+    fn effective(mut config: Self, root: &Path) -> io::Result<Self> {
         operation(
             config.overlay_profile(root),
             "overlay_read",

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,22 +20,50 @@ class SafeParser(argparse.ArgumentParser):
         raise ValueError("Invalid pipeline arguments")
 
 
+KINDS = {"git", "claude", "codex", "python", "opencode", "other"}
+CATEGORIES = {"HELPER_LIMIT", "HELPER_AUTH", "timeout", "other"}
+
+
 class PipelineFailure(Exception):
-    def __init__(self, category):
-        self.category = category
+    def __init__(self, category="other", kind="other", exit_code=None):
+        self.category = category if category in CATEGORIES else "other"
+        self.kind = kind if kind in KINDS else "other"
+        self.exit_code = exit_code
+
+
+def child_kind(args):
+    name = Path(args[0]).stem.lower() if args else ""
+    if name in ("python3", "uv"):
+        return "python"
+    return name if name in KINDS else "other"
+
+
+def category(stderr):
+    # Match fixed diagnostic phrases; never copy any part of the child output.
+    for code, pattern in (
+        ("HELPER_LIMIT", r"usage limit|quota exceeded|rate limit|too many requests|insufficient_quota|hit your limit|usage_limit_reached|rate_limit_exceeded"),
+        ("HELPER_AUTH", r"authentication failed|unauthorized|invalid api key|not logged in|login required|authentication_error|invalid_api_key|please run /login"),
+    ):
+        if re.search(pattern, stderr, re.IGNORECASE):
+            return code
+    return "other"
 
 
 def failure(error):
-    category = error.category if isinstance(error, PipelineFailure) else (
-        "missing" if isinstance(error, FileNotFoundError) else "exit")
-    return {"stage": STAGE, "category": category, "deadline_seconds": DEADLINE,
+    safe = error if isinstance(error, PipelineFailure) else PipelineFailure()
+    return {"stage": STAGE, "category": safe.category, "kind": safe.kind,
+            "exit_code": safe.exit_code, "deadline_seconds": DEADLINE,
             "elapsed_seconds": round(max(0, time.monotonic() - STARTED), 3)}
 
 
 def execute(args, cwd, timeout, input_text=None, env=None):
-    process = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
+    kind = child_kind(args)
+    try:
+        process = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, encoding="utf-8", errors="replace", creationflags=FLAGS)
+    except OSError:
+        raise PipelineFailure(kind=kind) from None
     try:
         output, error = process.communicate(input_text, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -54,9 +83,9 @@ def execute(args, cwd, timeout, input_text=None, env=None):
             except subprocess.TimeoutExpired:
                 output, error = "", ""
         finally:
-            raise PipelineFailure("timeout") from None
+            raise PipelineFailure("timeout", kind, process.poll()) from None
     if process.returncode:
-        raise PipelineFailure("exit")
+        raise PipelineFailure(category(error), kind, process.returncode)
     return output
 
 
@@ -82,7 +111,7 @@ def translate(text, model, timeout):
         cmd = shutil.which("opencode2.cmd")
         exe = Path(cmd).parent / "node_modules/@opencode/cli/bin/opencode.exe" if cmd else None
         if not exe or not exe.is_file():
-            raise PipelineFailure("missing")
+            raise PipelineFailure(kind="opencode")
         output = execute([str(exe), "run", "--standalone", "--agent", agent,
                           "--model", model, "--format", "json"], work, timeout, text, env)
         parts = []

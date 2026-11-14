@@ -8,6 +8,8 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:APPDATA 'hex\meetings'
 $log = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
 function Log($text) { Add-Content -LiteralPath $log -Value "$(Get-Date -Format s) $text" -Encoding utf8 }
+$notesEngine = Get-ScriptsNotesEngine
+if ($notesEngine -cne 'scripts') { Log (Format-NotesSkip $notesEngine); return }
 
 $watcherClock = [Diagnostics.Stopwatch]::StartNew()
 $failed = $null
@@ -44,10 +46,14 @@ try {
         Log 'start'
         $pipelineClock = [Diagnostics.Stopwatch]::StartNew()
         try {
+            $deferred = $false
             & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName *>&1 | ForEach-Object {
                 $line = "$_"
-                if ($line -cmatch '\Apipeline-failure stage=(pipeline|prepare|transcribe|translate|notes|render|publish|tasks|compare|title) category=(timeout|exit|missing) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z') {
-                    Log (Format-PipelineFailure $Matches[1] $Matches[2] ([int]$Matches[3]) ([double]::Parse($Matches[4], [Globalization.CultureInfo]::InvariantCulture)))
+                if ($line -ceq 'notes deferred engine busy' -or $line -cmatch '\Anotes skipped (?:engine=(app|off)|category=(settings_invalid|settings_unavailable|query_unavailable))\z') { $deferred = $true; Log $line }
+                if ($line -cmatch '\Anotes engine=scripts meeting=[0-9][0-9-]{0,99}\z') { Log $line }
+
+                if ($line.StartsWith('pipeline-failure ')) {
+                    Log (Get-PipelineFailure ([Management.Automation.ErrorRecord]::new([Exception]::new($line), 'Pipeline', 'NotSpecified', $null)))
                 }
                 if ($line -match '^(Audio preparation|te transcription|hi transcription|Translation and notes|Total): ([0-9][0-9,.]*)s(?:;.*)?$') {
                     $label = $Matches[1]
@@ -60,6 +66,7 @@ try {
                     }
                 }
             }
+            if ($deferred) { continue }
             Remove-Item -LiteralPath $failed -ErrorAction SilentlyContinue
             Log 'done'
         } catch {

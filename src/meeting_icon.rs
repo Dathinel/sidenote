@@ -19,13 +19,17 @@ struct Snapshot {
     now_ms: Option<i64>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct Pending {
     elapsed: u64,
     #[serde(default)]
     stopped_at_ms: Option<i64>,
     #[serde(default)]
     skipped_at_ms: Option<i64>,
+    #[serde(default)]
+    notice_at_ms: Option<i64>,
+    #[serde(skip)]
+    notice_since: Option<Instant>,
     #[serde(skip)]
     stopped_since: Option<Instant>,
     #[serde(skip)]
@@ -35,6 +39,140 @@ struct Pending {
 // Ten minutes allows queued notes/retries without pinning GUI resources when notes never arrive.
 const NO_DRAFT_BOUND_MS: i64 = 10 * 60 * 1000;
 const SKIPPED_NOTICE_MS: i64 = 3000;
+const SUMMARY_NOTICE_MS: i64 = 30_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Notice {
+    Writing,
+    Later,
+    Failed,
+    Off,
+    Skipped,
+    Unavailable,
+}
+impl Notice {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Writing => "Writing summary...",
+            Self::Later => "Summary will be written later",
+            Self::Failed => "Summary failed, open Sidenote",
+            Self::Off => "Meeting summary is off",
+            Self::Skipped => "Summary skipped",
+            Self::Unavailable => "Summary unavailable, open Sidenote",
+        }
+    }
+}
+fn notice(id: &str) -> Notice {
+    use core::notes::JobState;
+    match core::notes::scripts_policy() {
+        "off" => return Notice::Off,
+        "app" | "scripts" => {}
+        _ => return Notice::Unavailable,
+    }
+    if core::meetings_dir()
+        .join(id)
+        .join("pipeline-failed.txt")
+        .is_file()
+        || core::notes::status(id).is_some_and(|s| {
+            !matches!(
+                s,
+                JobState::Queued
+                    | JobState::Running
+                    | JobState::Done { .. }
+                    | JobState::NoHelper
+                    | JobState::NeedsClick
+            )
+        })
+    {
+        return Notice::Failed;
+    }
+    let deferred = store_io::read::<String>(
+        &core::state_dir()
+            .join("local/draft-outcomes")
+            .join(format!("{id}.json")),
+    )
+    .is_ok_and(|s| s == "deferred");
+    if deferred
+        || matches!(
+            core::notes::status(id),
+            Some(JobState::NoHelper | JobState::NeedsClick)
+        )
+    {
+        Notice::Later
+    } else if matches!(core::notes::status(id), Some(JobState::Queued))
+        || (matches!(core::notes::status(id), Some(JobState::Running))
+            && claim_busy(&core::state_dir().join("local/notes-jobs/worker.lock")))
+        || claim_busy(&core::meetings_dir().join(id).join(".notes-engine.lock"))
+        || claim_busy(
+            &core::state_dir()
+                .join("local/draft-summaries")
+                .join(format!("{id}.lock")),
+        )
+    {
+        Notice::Writing
+    } else {
+        Notice::Skipped
+    }
+}
+fn claim_busy(path: &std::path::Path) -> bool {
+    path.is_file()
+        && store_io::lock(path).is_err_and(|e| {
+            matches!(e.raw_os_error(), Some(32 | 33)) || e.kind() == std::io::ErrorKind::WouldBlock
+        })
+}
+fn dismissed_path(id: &str) -> PathBuf {
+    core::state_dir()
+        .join("local/floating-icon-dismissed")
+        .join(format!("{id}.json"))
+}
+fn dismiss_notice(id: &str) {
+    if valid_id(id) {
+        let _ = store_io::write(&dismissed_path(id), &chrono::Utc::now().timestamp_millis());
+    }
+}
+fn notice_fresh(at: i64, now: i64, dismissed: Option<i64>) -> bool {
+    now.saturating_sub(at) < SUMMARY_NOTICE_MS && dismissed.is_none_or(|d| d < at)
+}
+
+fn retain_notice(
+    p: &mut Pending,
+    state: Notice,
+    now: i64,
+    expired: bool,
+    dismissed: Option<i64>,
+) -> bool {
+    if state == Notice::Writing && !expired {
+        p.notice_at_ms = None;
+        p.notice_since = None;
+        return true;
+    }
+    let at = *p.notice_at_ms.get_or_insert(now);
+    let since = *p.notice_since.get_or_insert_with(Instant::now);
+    notice_fresh(at, now, dismissed)
+        && since.elapsed() < Duration::from_millis(SUMMARY_NOTICE_MS as u64)
+}
+
+/// Render the native indicator without creating windows or starting a listener.
+#[doc(hidden)]
+pub fn render_synthetic() -> std::io::Result<()> {
+    if !core::is_proof_path(&core::state_dir(), "meeting-indicator-proof") {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    std::fs::create_dir_all(core::state_dir().join("local"))?;
+    let selected = notice("1800000000000-1");
+    let mut pending = Pending {
+        elapsed: 120,
+        stopped_at_ms: Some(1000),
+        ..Pending::default()
+    };
+    let first = retain_notice(&mut pending, selected, 1000, false, None);
+    let after_30s = retain_notice(&mut pending, selected, 31_000, false, None);
+    store_io::write(
+        &core::state_dir().join("local/notice-selection.json"),
+        &serde_json::json!({"notice":format!("{selected:?}"),"initial":first,"after_30s":after_30s}),
+    )?;
+    native::render_synthetic()
+}
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -67,6 +205,8 @@ fn summary(id: &str) -> Option<String> {
     let final_path = core::meetings_dir().join(id).join("english-summary.json");
     let path = if final_path.is_file() {
         final_path
+    } else if notice(id) == Notice::Failed {
+        return None;
     } else {
         core::state_dir()
             .join("local/draft-summaries")
@@ -231,6 +371,8 @@ fn run(isolated: bool, replay: bool) {
                     Pending {
                         elapsed: current.elapsed,
                         stopped_at_ms: None,
+                        notice_at_ms: None,
+                        notice_since: None,
                         skipped_at_ms: None,
                         stopped_since: None,
                         skipped_since: None,
@@ -286,13 +428,20 @@ fn run(isolated: bool, replay: bool) {
                 if let Some(raw) = summary(id) {
                     return !was_seen(id, &raw);
                 }
-                if now.saturating_sub(p.stopped_at_ms.unwrap_or(now)) >= NO_DRAFT_BOUND_MS
-                    || stopped_since.elapsed() >= Duration::from_millis(NO_DRAFT_BOUND_MS as u64)
-                {
-                    crate::listener::log("FI_DRAFT_WAIT_EXPIRED");
-                    return false;
-                }
-                true
+                let state = notice(id);
+                let expired = now.saturating_sub(p.stopped_at_ms.unwrap_or(now))
+                    >= NO_DRAFT_BOUND_MS
+                    || stopped_since.elapsed() >= Duration::from_millis(NO_DRAFT_BOUND_MS as u64);
+                let previous = p.notice_at_ms;
+                let keep = retain_notice(
+                    p,
+                    state,
+                    now,
+                    expired,
+                    store_io::read::<i64>(&dismissed_path(id)).ok(),
+                );
+                dirty |= previous != p.notice_at_ms;
+                keep
             });
             if (dirty || pending.len() != before)
                 && store_io::write(&pending_path(), &pending).is_err()
@@ -318,6 +467,17 @@ fn run(isolated: bool, replay: bool) {
                         recording,
                         pill: recording && (current.speaking || Instant::now() < speech_until),
                         elapsed: pending[id].elapsed,
+                        notice: (!recording
+                            && raw.is_none()
+                            && pending[id].skipped_at_ms.is_none())
+                        .then(|| {
+                            let state = notice(id);
+                            if state == Notice::Writing && pending[id].notice_at_ms.is_some() {
+                                Notice::Later
+                            } else {
+                                state
+                            }
+                        }),
                         raw,
                         transcript_revision,
                         skipped: pending[id].skipped_at_ms.is_some(),
@@ -331,5 +491,19 @@ fn run(isolated: bool, replay: bool) {
         }
         native::maintenance();
         std::thread::sleep(Duration::from_millis(if replay { 100 } else { 250 }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn terminal_notice_is_bounded_and_click_dismisses() {
+        assert!(notice_fresh(1000, 30_999, None));
+        assert!(!notice_fresh(1000, 31_000, None));
+        assert!(!notice_fresh(1000, 1001, Some(1001)));
+        assert!(notice_fresh(1000, 1001, Some(999)));
+        assert_eq!(Notice::Later.text(), "Summary will be written later");
+        assert_eq!(Notice::Failed.text(), "Summary failed, open Sidenote");
     }
 }

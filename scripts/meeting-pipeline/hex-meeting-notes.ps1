@@ -4,6 +4,8 @@
 param(
     [Parameter(Mandatory)][string]$InputFile,   # "# Instructions ... # Input ..." file built by hex-meeting-english.ps1
     [Parameter(Mandatory)][string]$OutFile,
+    [string]$MeetingDir,
+    [IO.FileStream]$NotesClaim,
     [ValidateScript({ $_ -in @('auto', 'other', $env:HEX_MEETING_PROJECT) })][string]$Project = 'auto',
     [string]$Model = 'claude-sonnet-5-5',
     [string]$RepoDir = $env:HEX_MEETING_KB_REPO,
@@ -11,6 +13,27 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
+$notesEngine = Get-ScriptsNotesEngine
+if ($notesEngine -cne 'scripts') { Write-Output (Format-NotesSkip $notesEngine); return }
+
+$ownedClaim = $null
+try {
+    if (-not $MeetingDir -or (Split-Path -Leaf $MeetingDir) -cnotmatch '\A[0-9][0-9-]{0,99}\z') {
+        Write-Output 'notes skipped category=claim_invalid'; return
+    }
+    $claimPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir '.notes-engine.lock'))
+    if ($null -ne $NotesClaim) {
+        if (-not $NotesClaim.CanWrite -or -not [string]::Equals($NotesClaim.Name, $claimPath, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Output 'notes skipped category=claim_invalid'; return
+        }
+    } else {
+        $summaryPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir 'english-summary.json'))
+        if (-not [string]::Equals([IO.Path]::GetFullPath($OutFile), $summaryPath, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Output 'notes skipped category=claim_invalid'; return
+        }
+        $ownedClaim = Enter-NotesEngine $MeetingDir
+        if ($null -eq $ownedClaim) { Write-Output 'notes deferred engine busy'; return }
+    }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $text = [IO.File]::ReadAllText($InputFile, $utf8)
 
@@ -68,3 +91,7 @@ foreach ($field in 'title', 'context', 'topics', 'todo', 'to_settle') {
 }
 [IO.File]::WriteAllText($OutFile, $result + "`n", $utf8)
 Write-Output "notes: $Project, $Model -> $OutFile"
+
+} finally {
+    if ($null -ne $ownedClaim) { $ownedClaim.Dispose() }
+}

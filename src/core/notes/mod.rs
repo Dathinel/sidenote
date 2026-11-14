@@ -223,3 +223,25 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
 
 #[cfg(test)]
 mod tests;
+
+/// Fixed policy result for the independent scripts entry points; never migrate missing settings.
+pub fn scripts_policy() -> &'static str {
+    match super::Config::load_existing(&super::state_dir()) {
+        Ok(config) => match config.notes.map(|s| s.engine()) {
+            Some(Engine::App) => "app",
+            Some(Engine::Scripts(_)) => "scripts",
+            _ => "off",
+        },
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::InvalidData
+                    | io::ErrorKind::InvalidInput
+                    | io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            "settings_invalid"
+        }
+        Err(_) => "settings_unavailable",
+    }
+}
