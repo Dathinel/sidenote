@@ -1,0 +1,11 @@
+Sidenote 0.0.1-dev.30
+
+What the built-in engine does not do yet: it writes your notes from Hex's own transcript only. The extra Telugu and Hindi passes and the translation step, which the meeting scripts ran on every meeting up to dev.27, do not run on the built-in engine yet. Until they do, switch to Scripts in Settings before a meeting in Telugu or Hindi. The confirmation shown before "Switch to built-in meeting summaries" now says this too.
+
+Installing an update no longer leaves the meeting recorder stopped, and it always brings the meeting scripts up to date. If the recorder cannot be restarted, Sidenote now shows an error instead of failing quietly.
+
+When Sync preview pairing fails (Labs, off by default), the reason now names the step and file that failed, so a "file in use" failure can be traced. The failure itself is not fixed: it has not happened again in 51 test runs.
+
+Groundwork, switched off: Sidenote now keeps a record of each meeting's progress through its steps so a restart can continue where it stopped, and it has settings for every step the meeting scripts use, ready for the settings screen that comes next. There is still no Linux download.
+
+Needs on your laptop: nothing
