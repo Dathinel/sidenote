@@ -95,7 +95,7 @@ fn probe(address: &str) -> Result<(), ProbeError> {
     Ok(())
 }
 fn begin(root: &Path, address: &str, force: bool) -> io::Result<Option<u64>> {
-    let mut entries = health().lock().map_err(failed)?;
+    let mut entries = health().lock().map_err(|_| failed("mutex"))?;
     if let Some(h) = entries.get(root)
         && h.address == address
         && !force
@@ -182,7 +182,7 @@ impl Preview {
             let (root, address) = (self.root.clone(), settings.address.clone());
             std::thread::spawn(move || finish(&root, &address, generation));
         }
-        let entries = health().lock().map_err(failed)?;
+        let entries = health().lock().map_err(|_| failed("mutex"))?;
         let entry = entries
             .get(&self.root)
             .filter(|h| h.address == settings.address);

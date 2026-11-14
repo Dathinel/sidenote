@@ -5,6 +5,29 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::{fs, io, io::Write, path::Path};
 
 #[derive(Debug)]
+pub(crate) struct RelayFailure(pub &'static str, pub Option<i32>);
+impl std::fmt::Display for RelayFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for RelayFailure {}
+pub(crate) fn relay_reason(error: &io::Error) -> Option<&'static str> {
+    let reason = error.get_ref()?.downcast_ref::<RelayFailure>()?.0;
+    match reason {
+        "relay_lock" | "relay_database" | "relay_decode" | "relay_setup" | "relay_io" => {
+            Some(reason)
+        }
+        _ => None,
+    }
+}
+pub(crate) fn os_code(error: &io::Error) -> Option<i32> {
+    error
+        .raw_os_error()
+        .or_else(|| error.get_ref()?.downcast_ref::<RelayFailure>()?.1)
+}
+
+#[derive(Debug)]
 pub(crate) struct UserMessage(pub String);
 impl std::fmt::Display for UserMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

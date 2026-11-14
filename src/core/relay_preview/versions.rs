@@ -216,7 +216,7 @@ impl Preview {
             tx.commit();
             Ok(())
         };
-        let connection = self.connection.lock().map_err(failed)?;
+        let connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         if let Some(connection) = connection.as_ref() {
             connection.client.edit("tasks", operation).map_err(failed)
         } else {

@@ -1,17 +1,46 @@
 //! Device-local user choices. Only state/** is synchronized.
 use super::{StateStore, TaskStore, memory::MemoryStore, state_dir, store_io};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, io, path::Path};
+use std::{collections::BTreeMap, io, path::Path, sync::Mutex, time::Instant};
 
 fn operation<T>(result: io::Result<T>, operation: &str, path_kind: &str) -> io::Result<T> {
-    result.inspect_err(|error| crate::listener::log(&diagnostic(operation, path_kind, error)))
+    let log_busy = if path_kind == "relay_profile" {
+        static BUSY: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+        let mut state = BUSY.lock().unwrap_or_else(|e| e.into_inner());
+        let busy = result.as_ref().err().and_then(store_io::relay_reason) == Some("relay_lock");
+        relay_busy(&mut state, busy, Instant::now())
+    } else {
+        false
+    };
+    result.inspect_err(|error| {
+        if error.kind() != io::ErrorKind::WouldBlock || log_busy {
+            crate::listener::log(&diagnostic(operation, path_kind, error));
+        }
+    })
 }
-fn diagnostic(operation: &str, path_kind: &str, error: &io::Error) -> String {
-    format!(
+fn relay_busy(state: &mut Option<(Instant, bool)>, busy: bool, now: Instant) -> bool {
+    if !busy {
+        *state = None;
+        return false;
+    }
+    let (since, reported) = state.get_or_insert((now, false));
+    let log = !*reported && now.duration_since(*since).as_secs() >= 120;
+    *reported |= log;
+    log
+}
+pub(super) fn diagnostic(operation: &str, path_kind: &str, error: &io::Error) -> String {
+    let mut line = format!(
         "config operation={operation} path_kind={path_kind} kind={:?} os={:?}",
         error.kind(),
-        error.raw_os_error()
-    )
+        store_io::os_code(error)
+    );
+    if let Some(reason) = store_io::relay_reason(error) {
+        line.push_str(&format!(" reason={reason}"));
+    }
+    if error.kind() == io::ErrorKind::WouldBlock {
+        line.push_str(" status=busy");
+    }
+    line
 }
 pub(super) fn read(root: &Path) -> io::Result<Vec<u8>> {
     let path = root.join("config.json");
@@ -545,6 +574,86 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn relay_busy_reports_once_after_bound_and_resets() {
+        let mut state = None;
+        let now = Instant::now();
+        assert!(!relay_busy(&mut state, true, now));
+        let almost = now + std::time::Duration::from_secs(119);
+        assert!(!relay_busy(&mut state, true, almost));
+        let later = now + std::time::Duration::from_secs(120);
+        assert!(relay_busy(&mut state, true, later));
+        assert!(!relay_busy(&mut state, true, later));
+        assert!(!relay_busy(&mut state, false, later));
+        assert!(!relay_busy(&mut state, true, later));
+    }
+    #[cfg(windows)]
+    fn relay_fixture(root: &Path) {
+        std::fs::create_dir_all(root.join("local/relay")).unwrap();
+        store_io::write(
+            &root.join("local/relay/settings.json"),
+            &super::super::relay_preview::Settings {
+                enabled: true,
+                backup: "synthetic".into(),
+                shared_backup: "synthetic".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn held_replica_lock_defers_notes_overlay_then_retries() {
+        let root = tempfile::tempdir().unwrap();
+        relay_fixture(root.path());
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.path().join("local/relay/replica.sqlite.sync-lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let mut config = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Default::default()
+        };
+        let error = config.overlay_profile(root.path()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(
+            store_io::defer_busy(config.overlay_profile(root.path()))
+                .unwrap()
+                .is_none()
+        );
+        drop(lock);
+        assert!(
+            store_io::defer_busy(config.overlay_profile(root.path()))
+                .unwrap()
+                .is_some()
+        );
+        super::super::relay_preview::disconnect(root.path()).unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn corrupt_replica_does_not_defer_or_use_stale_notes_name() {
+        let root = tempfile::tempdir().unwrap();
+        relay_fixture(root.path());
+        std::fs::write(
+            root.path().join("local/relay/replica.sqlite"),
+            b"synthetic corrupt database",
+        )
+        .unwrap();
+        let mut config = Config {
+            notes: Some(super::super::notes::NotesSettings::default()),
+            ..Default::default()
+        };
+        let error = store_io::defer_busy(config.overlay_profile(root.path())).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "relay_database");
+        std::fs::write(root.path().join("local/relay/settings.json"), b"{").unwrap();
+        let error = config.overlay_profile(root.path()).unwrap_err();
+        assert_eq!(store_io::relay_reason(&error), Some("relay_decode"));
+    }
     #[test]
     fn diagnostics_keep_only_operation_path_kind_and_os_code() {
         let error = io::Error::new(

@@ -158,7 +158,7 @@ try {
             $stamp = $parsed
             $dated = $true
         }
-        if ($line -notmatch '(?i)\b(error|failed|failure|exception|timeout|timed out)\b') { continue }
+        if ($line -notmatch '(?i)\b(error|failed|failure|exception|timeout|timed out)\b|\bkind\s*=|(?-i:\b[A-Z][A-Z0-9_]*_[A-Z0-9_]+\s*\([A-Za-z][A-Za-z0-9]*(?:,\s*os\s+-?\d+)?\))') { continue }
         if ($stamp.UtcDateTime -lt $installTime) { continue }
         $count++
         if (-not $dated) { $undated++ }
