@@ -948,6 +948,31 @@ fn prepared_chunks(
     (!chunks.is_empty()).then_some(chunks)
 }
 
+// These fixtures mutate process-wide paths/config and drain every queued job.
+#[cfg(test)]
+fn isolated_test() -> bool {
+    const FLAG: &str = "SIDENOTE_ISOLATED_ROUTER_TEST";
+    let thread = thread::current();
+    let name = thread.name().unwrap();
+    if std::env::var(FLAG).ok().as_deref() == Some(name) {
+        return false;
+    }
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture"])
+        .env(FLAG, name);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "isolated test failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 #[cfg(test)]
 mod recording_guard_tests {
     use super::*;
@@ -979,6 +1004,9 @@ mod recording_guard_tests {
     #[test]
     fn recording_source_reconnect_and_worker_recovery_reuse_completion() {
         use crate::core;
+        if isolated_test() {
+            return;
+        }
         const ID: &str = "9944771122-887768";
         let root = core::state_dir();
         let folder = core::meetings_dir().join(ID);
@@ -1029,6 +1057,9 @@ mod recording_guard_tests {
             self,
             recording_source::{CompletedMeeting, Error, Session, Source},
         };
+        if isolated_test() {
+            return;
+        }
         const ID: &str = "9944771122-887767";
         struct One;
         impl Source for One {
