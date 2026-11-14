@@ -11,6 +11,7 @@ pub mod ask_session;
 pub mod asr;
 pub mod check_state;
 pub mod config;
+pub mod engine_settings;
 pub mod export;
 pub(crate) mod failure;
 pub mod growing_wav;

@@ -50,7 +50,7 @@ pub(super) fn read(root: &Path) -> io::Result<Vec<u8>> {
     })
 }
 
-fn lock(root: &Path) -> io::Result<std::fs::File> {
+pub(super) fn lock(root: &Path) -> io::Result<std::fs::File> {
     operation(
         store_io::lock(&root.join("local/config.lock")).map_err(|error| {
             if cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33)) {
@@ -239,6 +239,8 @@ impl std::error::Error for KnowledgeBaseSaveError {}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub engine_settings: super::engine_settings::EngineSettings,
     pub version: u32,
     pub features: Features,
     #[serde(default)]
@@ -259,6 +261,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: 1,
+            engine_settings: super::engine_settings::EngineSettings::default(),
             features: Features::default(),
             labs: super::meeting_watch::Labs::default(),
             knowledge_base: KnowledgeBase::default(),
@@ -323,7 +326,7 @@ impl Config {
         Ok(config)
     }
 
-    fn read_config(root: &Path) -> io::Result<Option<Self>> {
+    pub(super) fn read_config(root: &Path) -> io::Result<Option<Self>> {
         match read(root) {
             Ok(bytes) => {
                 let config: Self = operation(
@@ -357,6 +360,7 @@ impl Config {
             .ok_or_else(|| store_io::invalid("Reload settings before saving"))?;
         let edited = serde_json::to_value(&*self)?;
         merge_edits(&mut latest, baseline, &edited);
+        super::engine_settings::prepare_save(&mut latest, baseline, &edited)?;
         let merged: Self = serde_json::from_value(latest.clone())?;
         if baseline.get("knowledge_base") != edited.get("knowledge_base")
             && !merged.knowledge_base.is_empty()
