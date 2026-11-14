@@ -87,6 +87,7 @@ fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     enqueue_with(root, meetings, id, false)
 }
 fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Result<()> {
+    let _update_activity = crate::updates::activity()?;
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }

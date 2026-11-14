@@ -20,6 +20,7 @@ const SETUP_STEPS: &str =
     "1. Install Claude Code. 2. Open a terminal, type claude, and sign in. 3. Press Check again.";
 pub const LOAD_ERROR: &str = "Sidenote could not load Meeting summary settings. Press Reload agent status. If it fails again, restart Sidenote.";
 pub const SAVE_ERROR: &str = "Sidenote could not save your instructions. Your text is still here. Try Save instructions again. If it fails twice, copy the text and restart Sidenote.";
+const SWITCH_CONFIRM: &str = "Built-in summaries use only Hex's own transcript. The extra Telugu and Hindi passes and the translation step from your scripts do not run yet. If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.";
 
 pub fn helper_fallback_message(helper: Helper) -> String {
     format!(
@@ -1042,11 +1043,30 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 }
                 helper_list = helper_list.child(r);
                 if a.switch_confirm == Some(h) {
-                    c = c.child(card(p)
-                        .child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.",p.warn))
-                        .child(row().flex_wrap().gap(8.0)
-                            .child(button("Switch to built-in meeting summaries","notes-confirm-switch",p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
-                            .child(button("Keep scripts","notes-cancel-switch",p).on_press(|s: &mut State| s.ai_notes.switch_confirm=None))));
+                    c = c.child(
+                        card(p)
+                            .child(roles::SMALL.wrap(SWITCH_CONFIRM, p.warn))
+                            .child(
+                                row()
+                                    .flex_wrap()
+                                    .gap(8.0)
+                                    .child(
+                                        button(
+                                            "Switch to built-in meeting summaries",
+                                            "notes-confirm-switch",
+                                            p,
+                                        )
+                                        .on_press(
+                                            move |s: &mut State| s.choose_notes_helper(index),
+                                        ),
+                                    )
+                                    .child(
+                                        button("Keep scripts", "notes-cancel-switch", p).on_press(
+                                            |s: &mut State| s.ai_notes.switch_confirm = None,
+                                        ),
+                                    ),
+                            ),
+                    );
                 }
                 continue;
             }
@@ -1141,10 +1161,23 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 });
             }
             if a.switch_confirm == Some(h) {
-                r = r.child(roles::SMALL.wrap("If your scripts also run from somewhere else, such as a scheduled task, turn that off, or both will write meeting summaries.", p.warn))
-                .child(row().flex_wrap().gaps(8.0, 8.0)
-                    .child(button("Switch to built-in meeting summaries", "notes-confirm-switch", p).on_press(move |s: &mut State| s.choose_notes_helper(index)))
-                    .child(button("Keep scripts", "notes-cancel-switch", p).on_press(|s: &mut State| s.ai_notes.switch_confirm = None)));
+                r = r.child(roles::SMALL.wrap(SWITCH_CONFIRM, p.warn)).child(
+                    row()
+                        .flex_wrap()
+                        .gaps(8.0, 8.0)
+                        .child(
+                            button(
+                                "Switch to built-in meeting summaries",
+                                "notes-confirm-switch",
+                                p,
+                            )
+                            .on_press(move |s: &mut State| s.choose_notes_helper(index)),
+                        )
+                        .child(
+                            button("Keep scripts", "notes-cancel-switch", p)
+                                .on_press(|s: &mut State| s.ai_notes.switch_confirm = None),
+                        ),
+                );
             }
             c = c.child(r);
         }

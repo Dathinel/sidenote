@@ -1,6 +1,8 @@
 #![cfg_attr(all(windows, feature = "desktop"), windows_subsystem = "windows")]
 #[cfg(windows)]
 mod hex_probe;
+#[cfg(all(windows, test))]
+mod install_hooks_tests;
 #[cfg(all(test, feature = "desktop"))]
 #[path = "../tests/common/mod.rs"]
 mod test_paths;
@@ -42,11 +44,18 @@ fn main() {
     {
         velopack::VelopackApp::build()
             .set_auto_apply_on_startup(false)
-            .on_after_install_fast_callback(|_| sidenote::updates::listener_installed())
-            .on_first_run(|_| sidenote::updates::listener_installed())
+            .on_after_install_fast_callback(|_| {
+                if sidenote::updates::after_update().is_err() {
+                    std::process::exit(1);
+                }
+            })
+            .on_first_run(|_| {
+                let _ = sidenote::updates::after_update();
+            })
             .on_after_update_fast_callback(|_| {
-                sidenote::updates::after_update();
-                sidenote::updates::listener_installed();
+                if sidenote::updates::after_update().is_err() {
+                    std::process::exit(1);
+                }
             })
             .on_restarted(|_| sidenote::updates::restarted())
             .run();

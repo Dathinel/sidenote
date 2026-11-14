@@ -173,6 +173,11 @@ def dryrun(profile):
     env = environment(profile)
     root = Path(env['USERPROFILE']) / '.config/hex/scripts'
     root.mkdir(parents=True)
+    with user_settings(env, {}) as isolated:
+        fresh = powershell(['-File', str(REPO / 'src/pipeline_install.ps1')], isolated, bundle())
+    require(fresh.returncode != 0, 'fresh profile silently claimed scripts were installed')
+    require(not list(root.iterdir()), 'fresh failure published incomplete scripts')
+    print('PASS fresh profile: missing script setup fails visibly without publishing files')
     for name, text in legacy_files().items():
         (root / name).write_text(text, encoding='utf-8')
     originals = {name: (root / name).read_bytes() for name in LEGACY_NAMES}
