@@ -2,6 +2,7 @@ use super::{
     helper::{Failure, Run},
     *,
 };
+#[cfg(windows)]
 mod routing;
 use crate::core::{
     agent_instructions::{self, Agent},

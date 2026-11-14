@@ -5,7 +5,6 @@ use std::{io, path::Path};
 #[derive(Deserialize)]
 struct Row {
     start_ms: f64,
-    end_ms: Option<f64>,
     text: String,
     #[serde(default)]
     source: String,
@@ -75,7 +74,7 @@ pub(super) fn chosen(
 ) -> io::Result<Option<(String, String)>> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
-    if chosen.is_none() && !router::jobs::notes_enabled(root)? {
+    if !router::jobs::notes_enabled(root)? {
         return Ok(None);
     }
     let baseline = if chosen.is_some() {
@@ -87,7 +86,12 @@ pub(super) fn chosen(
             .filter_map(|(i, line)| {
                 let r: Row = serde_json::from_str(line).ok()?;
                 let start = r.start_ms / 1000.0;
-                let end = r.end_ms.map_or(start + 0.1, |v| v / 1000.0);
+                let end = serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v["end_ms"].as_f64())
+                    .map(|v| v / 1000.0)
+                    .filter(|v| v.is_finite() && *v > start)
+                    .unwrap_or(start + 0.1);
                 (start.is_finite()
                     && end.is_finite()
                     && start >= 0.0
@@ -192,5 +196,39 @@ garbage
     #[test]
     fn blank_is_empty() {
         assert!(render("\n{}\ninvalid").is_empty());
+    }
+    #[test]
+    fn flag_off_keeps_legacy_end_shapes_and_existing_file_preference() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("meeting");
+        std::fs::create_dir_all(&folder).unwrap();
+        let raw = r#"{"start_ms":1000,"end_ms":"2000","text":"String end","source":"system"}
+{"start_ms":2000,"end_ms":{"old":true},"text":"Object end","source":"microphone"}
+{"start_ms":3000,"end_ms":null,"text":"Null end","speaker":"Guest"}
+{"start_ms":4000,"text":"Missing end"}
+{"start_ms":5000,"end_ms":-1,"text":"Negative end"}"#;
+        let expected = "[00:00:01.000] Them (English): String end\n[00:00:02.000] You (English): Object end\n[00:00:03.000] Guest (English): Null end\n[00:00:04.000] Them (English): Missing end\n[00:00:05.000] Them (English): Negative end\n";
+        std::fs::write(folder.join("transcript.ndjson"), raw).unwrap();
+        assert!(
+            chosen(
+                root.path(),
+                "123-4",
+                &folder,
+                Some("invalid stale pin"),
+                0,
+                0
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(write(&folder).unwrap(), expected);
+        std::fs::write(folder.join("english-transcript.md"), "Saved legacy text").unwrap();
+        std::fs::write(root.path().join("config.json"), b"invalid config").unwrap();
+        assert!(
+            chosen(root.path(), "123-4", &folder, None, 0, 0)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(write(&folder).unwrap(), "Saved legacy text");
     }
 }

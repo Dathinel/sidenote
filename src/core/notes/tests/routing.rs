@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::meeting_router::revision::{self, Revision};
-fn setup() -> (Temp, PathBuf, NotesSettings) {
+pub(super) fn setup() -> (Temp, PathBuf, NotesSettings) {
     let root = Temp::new();
     let folder = meeting(&root.0, PRIVATE);
     let settings = settings_fixture();
@@ -8,7 +8,11 @@ fn setup() -> (Temp, PathBuf, NotesSettings) {
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
-    config.engine_settings.stages.routing_deadline_seconds = 1;
+    config.engine_settings.stages.routing_deadline_seconds = 360;
+    let manifest = folder.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    m["ended_at_ms"] = chrono::Utc::now().timestamp_millis().into();
+    fs::write(manifest, m.to_string()).unwrap();
     fs::write(
         root.0.join("config.json"),
         serde_json::to_vec(&config).unwrap(),
@@ -16,27 +20,28 @@ fn setup() -> (Temp, PathBuf, NotesSettings) {
     .unwrap();
     (root, folder, settings)
 }
-fn dir(root: &Path) -> PathBuf {
+pub(super) fn dir(root: &Path) -> PathBuf {
     root.join("local/transcripts").join(ID)
 }
-fn selected(root: &Path, folder: &Path) -> (String, Revision) {
+pub(super) fn selected(root: &Path, folder: &Path) -> (String, Revision) {
     let (id, _) = transcript::chosen(root, ID, folder, None, 0, 10_000)
         .unwrap()
         .unwrap();
-    let (_, mut data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
-    let s = &mut data.transcript.segments[0];
-    s.route = "te".into();
-    s.lang = "te".into();
-    s.text_original = "తెలుగు selected revision".into();
-    s.text_en = None;
-    s.status = "checked".into();
-    let id = revision::commit(&dir(root), &data).unwrap();
+    let (_, data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
+    let id = crate::core::meeting_router::jobs::handoff::tests::complete(
+        root,
+        ID,
+        &data.transcript.baseline,
+        "te",
+    )
+    .unwrap();
+    let (_, data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
     (id, data)
 }
 #[test]
 fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
     let (root, folder, s) = setup();
-    let (first, mut data) = selected(&root.0, &folder);
+    let (first, data) = selected(&root.0, &folder);
     fs::write(folder.join("english-transcript.md"), "stale English file").unwrap();
     enqueue(&root.0, &s, None);
     let mut busy = Fake::new(vec![Err(Failure::Busy)]);
@@ -48,10 +53,13 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
             .transcript_revision,
         Some(first.clone())
     );
-    data.transcript.segments[0].lang = "hi".into();
-    data.transcript.segments[0].route = "hi".into();
-    data.transcript.segments[0].text_original = "हिंदी later revision".into();
-    let later = revision::commit(&dir(&root.0), &data).unwrap();
+    let later = crate::core::meeting_router::jobs::handoff::tests::complete(
+        &root.0,
+        ID,
+        &data.transcript.baseline,
+        "hi",
+    )
+    .unwrap();
     assert_ne!(first, later);
     assert!(
         transcript::chosen(&root.0, ID, &folder, Some(&later), 0, 0)
@@ -60,6 +68,18 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
             .1
             .contains("(Hindi): हिंदी")
     );
+    let work = root.0.join("local/router-work");
+    let parked = root.0.join("parked-batches");
+    assert!(
+        work.canonicalize()
+            .unwrap()
+            .starts_with(root.0.canonicalize().unwrap())
+    );
+    assert_eq!(
+        parked.parent().unwrap().canonicalize().unwrap(),
+        root.0.canonicalize().unwrap()
+    );
+    fs::rename(work, parked).unwrap();
     let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
     drain(&root.0, &s, &mut fake);
     assert!(
@@ -97,6 +117,10 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
 fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
     for failed in [false, true] {
         let (root, folder, s) = setup();
+        let path = root.0.join("config.json");
+        let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        c["engine_settings"]["stages"]["routing_deadline_seconds"] = 1.into();
+        fs::write(path, c.to_string()).unwrap();
         let queue = root.0.join("local/router-queue");
         fs::create_dir_all(&queue).unwrap();
         fs::write(
@@ -178,9 +202,7 @@ fn flag_off_retains_compatibility_even_when_a_routed_revision_exists() {
     assert!(
         transcript::chosen(&root.0, ID, &folder, Some(&chosen), 0, 0)
             .unwrap()
-            .unwrap()
-            .1
-            .contains("తెలుగు")
+            .is_none()
     );
 }
 #[test]

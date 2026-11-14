@@ -93,3 +93,6 @@ pub fn commit_batches(
     )?;
     Ok(chosen)
 }
+
+#[cfg(all(test, windows))]
+pub(crate) mod tests;

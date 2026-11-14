@@ -60,9 +60,11 @@ impl Job {
             transcript_revision: None,
         }
     }
-    fn ready(&self, time: i64) -> bool {
+    fn ready(&self, time: i64, root: &Path) -> bool {
         (matches!(self.state, JobState::Queued | JobState::Running)
-            && self.next_try_at.is_none_or(|at| at <= time))
+            && (self.message != "waiting for transcript revision"
+                || !core::meeting_router::jobs::notes_enabled(root).unwrap_or(false)
+                || self.next_try_at.is_none_or(|at| at <= time)))
             || matches!(self.state, JobState::BackendError {next_try_ms: Some(at), ..} if at <= time)
     }
 }
@@ -70,7 +72,9 @@ fn job_eligible(root: &Path, meetings: &Path, id: &str, job: &Job) -> io::Result
     let eligibility = core::recording_guard::eligibility(root, meetings, id)?;
     // Saved chosen revisions and explicit task redo survive missing Hex originals.
     Ok(eligibility == core::recording_guard::Eligibility::Eligible
-        || ((job.request == Some(Request::RedoTasks) || job.transcript_revision.is_some())
+        || ((job.request == Some(Request::RedoTasks)
+            || (job.transcript_revision.is_some()
+                && core::meeting_router::jobs::notes_enabled(root)?))
             && eligibility == core::recording_guard::Eligibility::Unknown))
 }
 fn now() -> i64 {
@@ -306,6 +310,9 @@ fn process(
     settings: &NotesSettings,
     run: &mut impl Run,
 ) -> io::Result<()> {
+    if !core::meeting_router::jobs::notes_enabled(root)? {
+        job.transcript_revision = None;
+    }
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     // Both engines hold this OS lock until publication finishes; a crash releases it immediately.
@@ -704,7 +711,7 @@ fn drain_locked(
                 continue;
             }
             match read(root, id) {
-                Ok(Some(job)) if job.ready(now()) => {
+                Ok(Some(job)) if job.ready(now(), root) => {
                     if job_eligible(root, meetings, id, &job)? {
                         ready.push(id.to_owned());
                     }
@@ -763,7 +770,7 @@ fn drain_locked(
         if !job_eligible(root, meetings, &id, &job)? {
             continue;
         }
-        if !job.ready(now()) {
+        if !job.ready(now(), root) {
             continue;
         }
         let mut before = job.clone();
