@@ -979,6 +979,10 @@ fn install_pipeline_scripts() -> Result<(), String> {
             include_str!("../scripts/meeting-pipeline/hex-pipeline-cli.ps1"),
         ),
         (
+            "job-contract.json",
+            include_str!("../scripts/meeting-pipeline/job-contract.json"),
+        ),
+        (
             "hex-pipeline-run.py",
             include_str!("../scripts/meeting-pipeline/hex-pipeline-run.py"),
         ),

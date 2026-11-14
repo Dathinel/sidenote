@@ -1148,7 +1148,18 @@ fn oldest_meeting_runs_first_and_running_jobs_recover_after_a_crash() {
     assert!(fake.calls[2].0.contains("Title: Delivery planning"));
     assert!(matches!(state(&root.0), JobState::Done { .. }));
     let calls = fake.calls.len();
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().stage,
+        crate::core::meeting_job::Stage::Tasks
+    );
     let summary = fs::read(folder.join("english-summary.json")).unwrap();
+    let mut interrupted = queue::read(&root.0, ID).unwrap().unwrap();
+    interrupted.state = JobState::Running;
+    store_io::write(
+        &root.0.join(format!("local/notes-jobs/{ID}.json")),
+        &interrupted,
+    )
+    .unwrap();
     enqueue(&root.0, &s, None);
     drain(&root.0, &s, &mut fake);
     assert_eq!(fake.calls.len(), calls);
@@ -1645,7 +1656,7 @@ fn scripts_claim_defers_app_without_consuming_attempt_then_releases() {
         &settings,
     )
     .unwrap();
-    let claim = store_io::lock(&folder.join(".notes-engine.lock")).unwrap();
+    let claim = crate::core::meeting_job::claim(&folder).unwrap();
     let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
     drain(&root.0, &settings, &mut fake);
     assert!(fake.calls.is_empty());
@@ -1654,4 +1665,25 @@ fn scripts_claim_defers_app_without_consuming_attempt_then_releases() {
     drop(claim);
     drain(&root.0, &settings, &mut fake);
     assert!(folder.join("english-summary.json").exists());
+}
+
+#[test]
+fn old_jobs_default_to_pipeline_and_failure_keeps_the_current_stage() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, None);
+    let path = root.0.join(format!("local/notes-jobs/{ID}.json"));
+    let mut old: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    old.as_object_mut().unwrap().remove("stage");
+    store_io::write(&path, &old).unwrap();
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().stage,
+        crate::core::meeting_job::Stage::Pipeline
+    );
+    let mut fake = Fake::new(vec![Err(Failure::Auth { exit: Some(1) })]);
+    drain(&root.0, &settings, &mut fake);
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.stage, crate::core::meeting_job::Stage::Notes);
+    assert!(matches!(job.state, JobState::HelperAuth { .. }));
 }

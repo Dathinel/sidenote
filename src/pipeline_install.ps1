@@ -70,7 +70,7 @@ try {
     }
     $names = @('hex-meeting-compare-delayed.ps1','hex-meeting-compare-granola.py','hex-meeting-english.ps1',
         'hex-meeting-notes.ps1','hex-meeting-publish.py','hex-meeting-quick-title.ps1','hex-meeting-render.py',
-        'hex-meeting-tasks.py','hex-meeting-watch.ps1','hex-pipeline-cli.ps1','hex-pipeline-run.py',
+        'hex-meeting-tasks.py','hex-meeting-watch.ps1','hex-pipeline-cli.ps1','hex-pipeline-run.py','job-contract.json',
         'meeting-audio.py','meeting-notes-prompt.md','meeting-translate-prompt.md')
     if (@($payload.files.PSObject.Properties).Count -ne $names.Count -or
         @($payload.hashes.PSObject.Properties).Count -ne $names.Count -or -not $payload.version -or -not $payload.entry) { throw 'Invalid bundle' }
