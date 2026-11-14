@@ -132,6 +132,7 @@ fn category(text: &str) -> &'static str {
         "authentication",
         "not logged in",
         "api key",
+        "invalid_api_key",
         "refresh token",
         "refresh_token",
         "invalid_token",
