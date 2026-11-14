@@ -66,7 +66,7 @@
   "src/core/memory_migration.rs": "4440677e7ebbc84d6ee21343e72f5b1ffd0cc6aeceda692f2e3f4b2e5153e3f5",
   "src/core/model_catalog.rs": "4a318ff0bee48f1102326a84fc2d37d6520dafe8af25a9d6d1d49bffc4f35704",
   "src/core/notes/draft.rs": "980d68b113713bc85803c3ae897be5457361c61d061f178f7c15def5ea33bd7d",
-  "src/core/notes/queue.rs": "d0e3157498f26972deb155f643bf20ed18093b43587d29a4c7c7c5a422c4b450",
+  "src/core/notes/queue.rs": "9c9c3b3f87520f6c5635ef40057b2810846dec39a8342d7c2f1c4895c8318c4e",
   "src/core/notes/tests.rs": "47ca52da6db97b37c4548106aad20e0c9f93c032f0a96b1edf2a3e82334ad4c8",
   "src/core/notes/transcript.rs": "1be76f83cb780bea56f7cc9f772a91e40abdebf9702b0ea517ef8a70967f6e1f",
   "src/core/people.rs": "8ac2f1d902ee71a380d1473de1b5d1c91a56415db2d478af0dac8af270cdfc6a",

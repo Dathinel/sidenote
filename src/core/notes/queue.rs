@@ -152,6 +152,13 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    // A running job holds the job lock for its whole run. An existing job that needs no
+    // change answers without taking that lock, so enqueue never waits on or fails at it.
+    if read(root, id)?.is_some_and(|job| {
+        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+    }) {
+        return Ok(());
+    }
     let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
     let previous = read(root, id)?;
     if previous.as_ref().is_some_and(|job| {
