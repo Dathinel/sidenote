@@ -1,19 +1,19 @@
 //! Shared completed-folder discovery. Configuration is explicit; no API credentials are read.
-use super::{BTreeSet, CompletedMeeting, Error, Source};
+use super::{BTreeSet, CatchUp, CompletedMeeting, Error, Source};
 use crate::core::meeting_router::inputs::MeetingScan;
 use std::{
     io,
     path::{Component, PathBuf},
 };
 
-pub struct Discovery(pub(crate) PathBuf, Option<BTreeSet<String>>);
+pub struct Discovery(pub(crate) PathBuf);
 impl Discovery {
     /// An explicitly selected meetings folder, e.g. Sidenote's --meetings-dir.
     pub fn new(meetings: PathBuf) -> Result<Self, Error> {
         if !meetings.is_absolute() || meetings.components().any(|c| c == Component::ParentDir) {
             return Err(Error::InvalidInput);
         }
-        Ok(Self(meetings, None))
+        Ok(Self(meetings))
     }
 
     /// Hex 7681742 stores meetings below its application support directory on both OSes.
@@ -25,6 +25,9 @@ impl Discovery {
 }
 impl Source for Discovery {
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error> {
+        self.catch_up().map(|(completed, _)| completed)
+    }
+    fn catch_up(&mut self) -> Result<CatchUp, Error> {
         let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
@@ -44,11 +47,7 @@ impl Source for Discovery {
             }
         }
         completed.sort_by(|a, b| a.id().cmp(b.id()));
-        self.1 = Some(ids);
-        Ok(completed)
-    }
-    fn retained_ids(&self) -> Option<&BTreeSet<String>> {
-        self.1.as_ref()
+        Ok((completed, Some(ids)))
     }
 }
 
@@ -62,7 +61,7 @@ mod tests {
     fn folder_scan_and_repeated_event_wakeups_share_the_durable_cursor() {
         let (root, meetings, cursor) = super::super::tests::fixture();
         fs::remove_file(meetings.join("99-1/transcript.ndjson")).unwrap();
-        let mut session = Session::open(Discovery(meetings.clone(), None), cursor.clone()).unwrap();
+        let mut session = Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
         let mut queued = Vec::new();
         for _ in 0..3 {
             session
@@ -78,7 +77,7 @@ mod tests {
             b"{\"text\":\"synthetic final\"}",
         )
         .unwrap();
-        let mut restarted = Session::open(Discovery(meetings, None), cursor).unwrap();
+        let mut restarted = Session::open(Discovery(meetings), cursor).unwrap();
         restarted
             .drain(|m| {
                 queued.push(m.id().to_owned());
@@ -92,7 +91,7 @@ mod tests {
     #[test]
     fn unavailable_root_is_typed_and_does_not_advance_the_cursor() {
         let (root, meetings, cursor) = super::super::tests::fixture();
-        let mut session = Session::open(Discovery(meetings.clone(), None), cursor.clone()).unwrap();
+        let mut session = Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
         fs::rename(&meetings, root.path().join("saved")).unwrap();
         assert_eq!(session.drain(|_| panic!("offline")), Err(Error::Offline));
         assert!(!cursor.exists());

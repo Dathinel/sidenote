@@ -247,21 +247,18 @@ impl super::Source for Events {
     }
 
     fn poll(&mut self) -> Result<Vec<super::CompletedMeeting>, super::Error> {
+        super::Source::catch_up(self).map(|(completed, _)| completed)
+    }
+
+    fn catch_up(&mut self) -> Result<super::CatchUp, super::Error> {
         if self.state == State::Stopped {
             return Err(super::Error::Stopped);
         }
         if self.state == State::OptedOut {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         self.tick();
-        super::Source::poll(&mut self.folders)
-    }
-
-    fn retained_ids(&self) -> Option<&super::BTreeSet<String>> {
-        if matches!(self.state, State::OptedOut | State::Stopped) {
-            return None;
-        }
-        super::Source::retained_ids(&self.folders)
+        super::Source::catch_up(&mut self.folders)
     }
 
     fn stop(&mut self) {

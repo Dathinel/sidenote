@@ -77,6 +77,9 @@ impl CompletedMeeting {
     }
 }
 
+/// Completed inputs and an optional full listing, including incomplete inputs, for receipt retention.
+pub type CatchUp = (Vec<CompletedMeeting>, Option<BTreeSet<String>>);
+
 /// Adapters subscribe before catch-up here. Poll must replay unacknowledged IDs;
 /// neither a timestamp high-water mark nor a transient event stream is sufficient.
 pub trait Source {
@@ -84,9 +87,8 @@ pub trait Source {
         Ok(())
     }
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error>;
-    /// Full listing from the last successful poll, including incomplete inputs; None preserves receipts.
-    fn retained_ids(&self) -> Option<&BTreeSet<String>> {
-        None
+    fn catch_up(&mut self) -> Result<CatchUp, Error> {
+        Ok((self.poll()?, None))
     }
     fn stop(&mut self) {}
 }
@@ -130,8 +132,8 @@ impl<S: Source> Session<S> {
             .map_err(|e| Error::Cursor(e.kind()))?;
         let mut cursor: Cursor =
             store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
-        let meetings = self.source.poll()?;
-        if let Some(ids) = self.source.retained_ids() {
+        let (meetings, retained) = self.source.catch_up()?;
+        if let Some(ids) = retained {
             let before = cursor.delivered.len();
             cursor.delivered.retain(|id| ids.contains(id));
             if cursor.delivered.len() != before {
