@@ -30,7 +30,8 @@ fn worker_child() {
         }
         store_io::write(
             &output.join("result.json"),
-            &serde_json::json!({"text":"fake"}),
+            &serde_json::json!({"text":"fake", "native_threads":
+                std::env::var("SIDENOTE_BATCH_THREADS").unwrap().parse::<usize>().unwrap()}),
         )
         .unwrap();
     }
@@ -141,4 +142,19 @@ fn start(mode: &str) -> Worker {
         Duration::from_secs(120),
     )
     .unwrap()
+}
+#[test]
+fn worker_thread_default_and_override_reach_child() {
+    let range = ranges(Path::new("unused.wav")).remove(1);
+    let mut default = start("ok");
+    assert_eq!(default.recognize(&range).unwrap()["native_threads"], 4);
+    drop(default);
+    let mut configured = Worker::spawn_with_threads(
+        command("ok"),
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(10),
+        NonZeroUsize::new(2).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(configured.recognize(&range).unwrap()["native_threads"], 2);
 }

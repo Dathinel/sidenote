@@ -134,6 +134,6 @@
   "src/ui/updates.rs": "a61731670c43cdf181206607b296db42c7d41fb38859bc830d3612890e292dea",
   "src/updates_windows.rs": "a58b97255666e35afcea6a2d643d1d778947e45820881017fc39fca09654c63a",
   "src/core/meeting_router/batches.rs": "733102cd74d65095556a4177399d1c3465fdce35f2556bf43fa635e045391c5f",
-  "src/core/meeting_router/batches/worker.rs": "5b3dce75a50bfc012435cd44d384462b7de30c864677c668f08481ba70da900a",
-  "src/core/meeting_router/batches/worker/tests.rs": "d3a9b9888cce8c4999e49e0134bcd87073fd78dea781c33500687dc30b16ec8c"
+  "src/core/meeting_router/batches/worker.rs": "ab487a1ea546d684c5c30a91d1d8d379c49b80455b45572ba30edb73c7aad7a6",
+  "src/core/meeting_router/batches/worker/tests.rs": "5eee541a4268b24e1a024eb20ab425d48f294ec1e267f6633cd756ba0b501366"
 }

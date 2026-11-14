@@ -2,6 +2,7 @@ use super::super::hex_bridge::HexFailure as Failure;
 use super::*;
 use std::{
     io::Write,
+    num::NonZeroUsize,
     process::{Child, Command, Stdio},
     sync::{
         Arc,
@@ -19,11 +20,21 @@ pub struct Worker {
 impl Worker {
     /// Command waits for `start\n` before model loads/spawns, then `range\n` per request.
     /// SIDENOTE_BATCH_OUTPUT contains range.json; publish result.json atomically.
-    pub fn spawn(mut command: Command, cancel: Arc<AtomicBool>, timeout: Duration) -> Result<Self> {
+    pub fn spawn(command: Command, cancel: Arc<AtomicBool>, timeout: Duration) -> Result<Self> {
+        Self::spawn_with_threads(command, cancel, timeout, NonZeroUsize::new(4).unwrap())
+    }
+    /// Child adapters must use SIDENOTE_BATCH_THREADS at session creation.
+    pub fn spawn_with_threads(
+        mut command: Command,
+        cancel: Arc<AtomicBool>,
+        timeout: Duration,
+        threads: NonZeroUsize,
+    ) -> Result<Self> {
         use std::os::windows::process::CommandExt;
         let output = tempfile::tempdir()?;
         command
             .env("SIDENOTE_BATCH_OUTPUT", output.path())
+            .env("SIDENOTE_BATCH_THREADS", threads.to_string())
             .creation_flags(0x08000000)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
