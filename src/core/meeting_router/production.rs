@@ -8,6 +8,8 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+#[cfg(feature = "asr-runtime")]
+mod plan;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
