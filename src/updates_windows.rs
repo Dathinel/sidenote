@@ -672,16 +672,6 @@ pub fn listener_status() -> ListenerStatus {
 pub fn listener_ready() -> bool {
     listener_status().ready
 }
-pub fn listener_installed() {
-    if installed()
-        && let Err(ListenerTaskError::Failed(error)) = checked_listener_task(false, true)
-    {
-        LISTENER
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .complete(&Err(error));
-    }
-}
 #[derive(Serialize, Deserialize)]
 struct StopMarker {
     pid: u32,
@@ -1046,15 +1036,22 @@ pub fn after_update() {
     if !installed() {
         return;
     }
-    let result = (|| {
-        fs::create_dir_all(directory()).map_err(|_| PIPELINE_INSTALL_ERROR)?;
-        fs::write(local("pipeline-install.pending"), VERSION.as_bytes())
-            .map_err(|_| PIPELINE_INSTALL_ERROR)?;
-        complete_pipeline_install()
-    })();
+    let result = reconcile_install(&directory(), complete_pipeline_install, || {
+        fs::remove_file(local("update-listener.stop"))
+            .or_else(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            })
+            .map_err(|_| "Could not clear the listener stop marker.")?;
+        checked_listener_task(true, true).map_err(ListenerTaskError::message)
+    });
     if let Err(error) = result {
         let _ = save(&Status {
             phase: Phase::Error,
+            version: VERSION.into(),
             error: Some(error),
             ..load()
         });
@@ -1065,6 +1062,40 @@ pub fn after_update() {
         load(),
         &local("pipeline-install.pending"),
     ));
+}
+fn reconcile_install(
+    directory: &Path,
+    pipeline: impl FnOnce() -> Result<(), String>,
+    listener: impl FnOnce() -> Result<(), String>,
+) -> Result<bool, String> {
+    fs::create_dir_all(directory).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+    // Hooks run in separate processes; serialize them before checking the receipt.
+    let _lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .share_mode(0)
+        .open(directory.join("install-hook.lock"))
+        .map_err(|_| "Another install hook is reconciling Sidenote. Try again.")?;
+    let receipt = directory.join("install-hook.complete");
+    let pending = directory.join("pipeline-install.pending");
+    if fs::read(&receipt).ok().as_deref() == Some(VERSION.as_bytes()) && !pending.exists() {
+        return Ok(false);
+    }
+    if receipt.exists() {
+        fs::remove_file(&receipt).map_err(|_| "Could not retire install hook completion.")?;
+    }
+    fs::write(&pending, VERSION).map_err(|_| PIPELINE_INSTALL_ERROR)?;
+    let pipeline_result = pipeline();
+    let listener_result = listener();
+    pipeline_result?;
+    listener_result?;
+    let resume = directory.join("update-listener.resume");
+    if resume.exists() {
+        fs::remove_file(resume).map_err(|_| "Could not clear listener restart state.")?;
+    }
+    fs::write(receipt, VERSION).map_err(|_| "Could not save install hook completion.")?;
+    Ok(true)
 }
 fn after_update_status(status: Status, marker: &Path) -> Status {
     let status = if status.version == VERSION && !marker.exists() {
@@ -1284,6 +1315,162 @@ mod window_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_and_update_hooks_reconcile_once_per_version() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("install-hook.complete"), "old version").unwrap();
+        fs::write(root.path().join("update-listener.resume"), "resume").unwrap();
+        let script = root.path().join("synthetic-script.ps1");
+        fs::write(&script, "old script").unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        for expected in [true, false, false] {
+            assert_eq!(
+                reconcile_install(
+                    root.path(),
+                    || {
+                        calls.borrow_mut().push("pipeline");
+                        install_pending_pipeline(
+                            &root.path().join("pipeline-install.pending"),
+                            || {
+                                fs::write(&script, "new script").unwrap();
+                                Ok(())
+                            },
+                            || Ok(()),
+                        )
+                        .map(|_| ())
+                    },
+                    || {
+                        assert_eq!(fs::read_to_string(&script).unwrap(), "new script");
+                        calls.borrow_mut().push("listener");
+                        Ok(())
+                    }
+                )
+                .unwrap(),
+                expected
+            );
+            assert!(!root.path().join("update-listener.resume").exists());
+        }
+        assert_eq!(*calls.borrow(), ["pipeline", "listener"]);
+    }
+
+    #[test]
+    fn failed_install_hook_remains_retryable() {
+        for failed_step in ["pipeline", "listener"] {
+            let root = tempfile::tempdir().unwrap();
+            let started = std::cell::Cell::new(false);
+            let pipeline = || {
+                install_pending_pipeline(
+                    &root.path().join("pipeline-install.pending"),
+                    || Ok(()),
+                    || Ok(()),
+                )
+                .map(|_| ())
+            };
+            assert!(
+                reconcile_install(
+                    root.path(),
+                    || {
+                        if failed_step == "pipeline" {
+                            Err(PIPELINE_INSTALL_ERROR.into())
+                        } else {
+                            pipeline()
+                        }
+                    },
+                    || {
+                        started.set(true);
+                        Err("listener failed".into())
+                    }
+                )
+                .is_err()
+            );
+            assert!(
+                started.get(),
+                "pipeline failure must not leave the listener stopped"
+            );
+            assert!(!root.path().join("install-hook.complete").exists());
+            assert_eq!(
+                root.path().join("pipeline-install.pending").exists(),
+                failed_step == "pipeline"
+            );
+            assert!(reconcile_install(root.path(), pipeline, || Ok(())).unwrap());
+            assert!(!root.path().join("pipeline-install.pending").exists());
+        }
+    }
+
+    #[test]
+    fn pending_pipeline_overrides_a_completed_hook_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("install-hook.complete"), VERSION).unwrap();
+        fs::write(
+            root.path().join("pipeline-install.pending"),
+            "older version",
+        )
+        .unwrap();
+        assert!(
+            reconcile_install(
+                root.path(),
+                || {
+                    install_pending_pipeline(
+                        &root.path().join("pipeline-install.pending"),
+                        || Ok(()),
+                        || Ok(()),
+                    )
+                    .map(|_| ())
+                },
+                || Err("listener failed".into())
+            )
+            .is_err()
+        );
+        assert!(!root.path().join("install-hook.complete").exists());
+        assert!(
+            reconcile_install(
+                root.path(),
+                || {
+                    install_pending_pipeline(
+                        &root.path().join("pipeline-install.pending"),
+                        || Ok(()),
+                        || Ok(()),
+                    )
+                    .map(|_| ())
+                },
+                || Ok(())
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn overlapping_hook_does_no_work_and_can_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .share_mode(0)
+            .open(root.path().join("install-hook.lock"))
+            .unwrap();
+        assert!(
+            reconcile_install(
+                root.path(),
+                || panic!("overlapping pipeline"),
+                || panic!("overlapping listener")
+            )
+            .is_err()
+        );
+        drop(lock);
+        assert!(
+            reconcile_install(
+                root.path(),
+                || {
+                    fs::remove_file(root.path().join("pipeline-install.pending")).unwrap();
+                    Ok(())
+                },
+                || Ok(())
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn pending_pipeline_survives_after_update_reset_and_restart() {
