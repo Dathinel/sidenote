@@ -306,11 +306,7 @@ impl Driver {
                 Ok(Value::Null)
             }
             "status" => {
-                let peers = if self.failure.is_some() {
-                    Vec::new()
-                } else {
-                    pairing::devices(root)?
-                };
+                let peers = pairing::devices(root)?;
                 Ok(
                     serde_json::json!({"phase":self.phase,"stage":self.failure.as_ref().map(|f|f.0),"category":self.failure.as_ref().map(|f|&f.1),"device":super::super::DeviceSettings::read_in(root).map(|d|d.name).unwrap_or_else(|_| "unknown".into()),"devices":peers.iter().map(|p|&p.name).collect::<Vec<_>>() }),
                 )
