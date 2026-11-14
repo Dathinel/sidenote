@@ -4,6 +4,10 @@ pub mod desktop;
 pub mod hex_engine;
 #[cfg(windows)]
 pub mod hex_install;
+#[cfg(not(windows))]
+#[path = "hex_install_unix.rs"]
+pub mod hex_install;
+mod hex_install_state;
 pub mod hex_labs;
 pub mod listener;
 pub mod mcp;
@@ -18,6 +22,7 @@ pub mod server_models;
 pub mod service;
 #[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
 pub mod sync_owner;
+mod update_state;
 pub mod updates;
 
 #[cfg(test)]

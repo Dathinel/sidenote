@@ -25,9 +25,21 @@ pub fn publish_file(from: &Path, to: &Path) -> io::Result<()> {
     fs::hard_link(from, to)?;
     fs::File::open(to.parent().ok_or(io::ErrorKind::InvalidInput)?)?.sync_all()
 }
-pub struct Instance;
+pub struct Instance {
+    _lock: fs::File,
+}
 pub fn single_instance() -> io::Result<Option<Instance>> {
-    Err(super::unavailable())
+    instance_at(&crate::core::state_dir().join("local/desktop.lock"))
+}
+fn instance_at(path: &Path) -> io::Result<Option<Instance>> {
+    match crate::core::store_io::lock(path) {
+        Ok(lock) => Ok(Some(Instance { _lock: lock })),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            eprintln!("SIDENOTE_ALREADY_OPEN");
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 #[cfg(target_os = "linux")]
 fn worker_executable(pid: u32) -> io::Result<PathBuf> {
@@ -98,6 +110,16 @@ pub fn copy_file(_path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::platform::CommandExt;
+    #[test]
+    fn desktop_instance_lock_releases_with_its_owner() -> io::Result<()> {
+        let root = tempfile::tempdir_in(crate::test_home())?;
+        let path = root.path().join("desktop.lock");
+        let first = instance_at(&path)?.expect("first instance");
+        assert!(instance_at(&path)?.is_none());
+        drop(first);
+        assert!(instance_at(&path)?.is_some());
+        Ok(())
+    }
     #[test]
     fn direct_process_limits_do_not_substitute_for_a_worker_scope() -> io::Result<()> {
         let mut child = std::process::Command::new("/bin/sleep")

@@ -1,3 +1,4 @@
+pub use crate::update_state::{CheckRequest, ListenerStatus, Phase, Status};
 use std::{fs::File, io};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn activity() -> io::Result<Option<File>> {
