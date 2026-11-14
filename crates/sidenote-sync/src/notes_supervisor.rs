@@ -33,15 +33,30 @@ pub type Job = (u128, Stage, Model);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Frame {
     Begin(Job),
-    Ready(u128),
-    Material(u128, String),
+    Ready(u128, u128),
+    Material(u128, Option<u128>, String),
+}
+struct Length(usize);
+impl std::io::Write for Length {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self.0.checked_add(bytes.len()).filter(|&n| n <= LIMIT);
+        self.0 = next.ok_or(std::io::ErrorKind::InvalidData)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn encoded_len(frame: &Frame) -> Result<usize, Failure> {
+    let mut length = Length(1);
+    serde_json::to_writer(&mut length, frame).map_err(|_| Failure::Oversized)?;
+    Ok(length.0)
 }
 fn encode(frame: &Frame) -> Result<Vec<u8>, Failure> {
-    let mut bytes = vec![1];
-    bytes.extend(serde_json::to_vec(frame).map_err(|_| Failure::InvalidFrame)?);
-    if bytes.len() > LIMIT {
-        return Err(Failure::Oversized);
-    }
+    let length = encoded_len(frame)?;
+    let mut bytes = Vec::with_capacity(length);
+    bytes.push(1);
+    serde_json::to_writer(&mut bytes, frame).map_err(|_| Failure::InvalidFrame)?;
     Ok(bytes)
 }
 fn io(e: std::io::Error) -> Failure {
@@ -97,11 +112,15 @@ impl Pipes {
         .map_err(|_| Failure::Deadline)?
     }
     pub async fn submit(&mut self, job: Job, text: String) -> Result<(), Failure> {
-        let material = Frame::Material(job.0, text);
-        encode(&material)?;
+        let mut material = Frame::Material(job.0, Some(u128::MAX), text);
+        encoded_len(&material)?;
         self.write(&Frame::Begin(job)).await?;
-        if self.read().await? != Frame::Ready(job.0) {
-            return Err(Failure::BeforeReady);
+        let token = match self.read().await? {
+            Frame::Ready(nonce, token) if nonce == job.0 => token,
+            _ => return Err(Failure::BeforeReady),
+        };
+        if let Frame::Material(_, proof, _) = &mut material {
+            *proof = Some(token);
         }
         self.write(&material).await
     }
@@ -141,23 +160,16 @@ impl Supervisor {
             }
             self.seen.insert(nonce);
             self.busy = true;
-            use std::os::fd::AsRawFd;
-            let check = || {
-                let mut pending = 0;
-                if unsafe { libc::ioctl(pipes.rx.as_raw_fd(), libc::FIONREAD, &mut pending) } != 0 {
-                    return Err(Failure::Io);
-                }
-                if pending != 0 {
-                    return Err(Failure::BeforeReady);
-                }
-                Ok(())
-            };
-            check()?;
             self.owned = setup(stage, model)?;
-            check()?;
-            pipes.write(&Frame::Ready(nonce)).await?;
+            let mut token = 0u128;
+            let pointer = std::ptr::addr_of_mut!(token).cast();
+            if unsafe { libc::getrandom(pointer, 16, libc::GRND_NONBLOCK) } != 16 {
+                return Err(Failure::Io);
+            }
+            pipes.write(&Frame::Ready(nonce, token)).await?;
             match pipes.read().await? {
-                Frame::Material(n, text) if n == nonce => Ok(text),
+                Frame::Material(n, Some(proof), text) if n == nonce && proof == token => Ok(text),
+                Frame::Material(..) => Err(Failure::BeforeReady),
                 Frame::Begin(..) => Err(Failure::Busy),
                 _ => Err(Failure::InvalidFrame),
             }
@@ -225,17 +237,32 @@ mod tests {
                 server.write(&begin).await.unwrap();
                 assert_eq!(s.run(&mut host, stub).await, Err(reason));
             }
+            s.seen = (0..1024).collect();
+            let next = Frame::Begin((1024, stage, Model::ClaudeSonnet55));
+            server.write(&next).await.unwrap();
+            assert_eq!(s.run(&mut host, deny).await, Err(Failure::Busy));
+            assert_eq!(s.seen, (0..1024).collect());
         }
+        let mut stale = None;
         for phase in 0usize..5 {
             let (mut host, mut server) = pair();
             let mut s = Supervisor::default();
             let client = async {
-                let frames = [begin.clone(), Frame::Material(1, "ok".into())];
-                for (index, frame) in frames.iter().take(phase.div_ceil(2)).enumerate() {
-                    let frame = if phase == 4 { &begin } else { frame };
-                    server.write(frame).await.unwrap();
-                    if index == 0 && phase > 1 {
-                        server.read().await.unwrap();
+                if phase > 0 {
+                    server.write(&begin).await.unwrap();
+                }
+                if phase > 1 {
+                    let Frame::Ready(_, token) = server.read().await.unwrap() else {
+                        panic!("Ready");
+                    };
+                    stale = Some(token);
+                    if phase > 2 {
+                        let frame = if phase == 4 {
+                            begin.clone()
+                        } else {
+                            Frame::Material(1, Some(token), "ok".into())
+                        };
+                        server.write(&frame).await.unwrap();
                     }
                 }
                 drop(server);
@@ -244,23 +271,45 @@ mod tests {
             assert_eq!(result.is_ok(), phase == 3);
             assert_eq!(s.run(&mut host, stub).await, Err(Failure::Eof));
         }
-        let (mut host, mut server) = pair();
+        for proof in [None, stale] {
+            let (mut host, mut server) = pair();
+            let mut s = Supervisor::default();
+            let mut command = tokio::process::Command::new("/bin/sleep");
+            let child = command.arg("30").spawn().unwrap();
+            let pid = child.id().unwrap();
+            let material = Frame::Material(1, proof, "early or stale".into());
+            server.write(&begin).await.unwrap();
+            if proof.is_none() {
+                server.write(&material).await.unwrap();
+            }
+            let client = async {
+                let Frame::Ready(_, token) = server.read().await.unwrap() else {
+                    panic!("Ready");
+                };
+                assert!(Some(token) != stale);
+                if proof.is_some() {
+                    server.write(&material).await.unwrap();
+                }
+            };
+            let (result, _) = tokio::join!(s.run(&mut host, |_, _| Ok(Some(child))), client);
+            assert_eq!(result, Err(Failure::BeforeReady));
+            assert_eq!(s.owned_pid(), None);
+            let reaped = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 1) };
+            assert_eq!(reaped, -1);
+        }
         let mut s = Supervisor::default();
-        server.write(&begin).await.unwrap();
-        let mut early = encode(&Frame::Material(1, "early".into())).unwrap();
-        early.splice(0..0, (early.len() as u32).to_be_bytes());
-        let setup = |_, _| server.tx.try_write(&early).map(|_| None).map_err(io);
-        assert_eq!(s.run(&mut host, setup).await, Err(Failure::BeforeReady));
         let (mut host, mut server) = pair();
         server.tx.write_u32((LIMIT + 1) as u32).await.unwrap();
         assert_eq!(s.run(&mut host, deny).await, Err(Failure::Oversized));
         assert_eq!(host.read().await, Err(Failure::Deadline));
-        let overhead = encode(&Frame::Material(1, String::new())).unwrap().len();
-        let material = |n| Frame::Material(1, "x".repeat(n));
+        let material = |n| Frame::Material(1, Some(1), "x".repeat(n));
+        let overhead = encoded_len(&material(0)).unwrap();
         let exact = material(LIMIT - overhead);
         assert_eq!(encode(&exact).unwrap().len(), LIMIT);
-        let over = encode(&material(LIMIT - overhead + 1));
-        assert_eq!(over, Err(Failure::Oversized));
+        assert!(std::io::Write::write(&mut Length(usize::MAX), b"x").is_err());
+        let oversized = material(LIMIT - overhead + 1);
+        assert_eq!(encoded_len(&oversized), Err(Failure::Oversized));
+        assert_eq!(encode(&oversized), Err(Failure::Oversized));
         let (read, sent) = tokio::join!(host.read(), server.write(&exact));
         assert_eq!((read, sent), (Ok(exact.clone()), Ok(())));
         assert_eq!(server.write(&exact).await, Err(Failure::Deadline));
