@@ -8,7 +8,7 @@ pub struct Speech<'a> {
     pub decision: &'a Decision,
     pub speaker_turn: Option<(&'a str, &'a str)>,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AsrRange {
     pub context: Span,
     pub members: Vec<(usize, Span)>,
