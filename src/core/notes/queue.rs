@@ -147,6 +147,7 @@ pub(super) fn enqueue_in(
     mode: Option<Request>,
     settings: &NotesSettings,
 ) -> io::Result<()> {
+    let _update_activity = crate::updates::activity()?;
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }

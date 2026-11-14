@@ -131,6 +131,61 @@ mod tests {
         }
     }
     #[test]
+    fn recordings_started_during_install_are_handed_off_after_restart_without_events() {
+        let f = Fixture::new();
+        let cursor = f.root.path().join("source.json");
+        let discovery = || core::recording_source::folders::Discovery(f.meetings.clone());
+        let mut before_install = Session::open(discovery(), cursor.clone()).unwrap();
+        before_install.drain(|_| Ok(())).unwrap();
+        drop(before_install);
+        for (id, status) in [("100-2", "recording"), ("100-3", "complete")] {
+            let folder = f.meetings.join(id);
+            fs::create_dir(&folder).unwrap();
+            store_io::write(
+                &folder.join("manifest.json"),
+                &serde_json::json!({"status":status,"duration_ms":30000}),
+            )
+            .unwrap();
+            fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"text":vec!["synthetic";25].join(" ")}).to_string(),
+            )
+            .unwrap();
+        }
+        let queued = std::cell::RefCell::new(Vec::new());
+        let handoff = |meeting: &CompletedMeeting| {
+            handoff_in(
+                f.root.path(),
+                &f.meetings,
+                meeting.id(),
+                Ok(f.config()),
+                || {
+                    queued.borrow_mut().push(meeting.id().to_owned());
+                    store_io::write(
+                        &f.meetings.join(meeting.id()).join("english-summary.json"),
+                        &serde_json::json!({"synthetic":"complete"}),
+                    )
+                },
+            )?
+            .acknowledge()
+        };
+        let mut restarted = Session::open(discovery(), cursor.clone()).unwrap();
+        restarted.drain(handoff).unwrap();
+        assert_eq!(*queued.borrow(), ["100-3"]);
+        store_io::write(
+            &f.meetings.join("100-2/manifest.json"),
+            &serde_json::json!({"status":"complete","duration_ms":30000}),
+        )
+        .unwrap();
+        restarted.drain(handoff).unwrap();
+        assert_eq!(*queued.borrow(), ["100-3", "100-2"]);
+        drop(restarted);
+        Session::open(discovery(), cursor)
+            .unwrap()
+            .drain(|_| panic!("accepted recording was replayed"))
+            .unwrap();
+    }
+    #[test]
     fn recording_source_busy_settings_script_contention_and_failed_spawn_do_not_acknowledge() {
         let f = Fixture::new();
         let settings_lock = store_io::lock(&f.root.path().join("local/config.lock")).unwrap();
