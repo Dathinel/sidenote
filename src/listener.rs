@@ -500,7 +500,12 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
             if valid {
                 let _ = finished.send(id.to_owned());
             }
+            #[cfg(not(windows))]
             continue_after_pipeline(pipeline(valid.then_some(id)), log);
+            #[cfg(windows)]
+            if !valid {
+                continue_after_pipeline(pipeline(None), log);
+            }
         }
     }
     Ok(())

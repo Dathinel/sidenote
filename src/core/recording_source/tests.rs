@@ -16,7 +16,7 @@ impl Source for Fixture {
         self.stopped.set(self.stopped.get() + 1);
     }
 }
-fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+pub(super) fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().unwrap();
     let meetings = root.path().join("meetings");
     for id in ["100-1", "99-1"] {
@@ -54,8 +54,11 @@ fn restart_deduplicates_and_retries_partial_older_meetings() {
         .unwrap();
     drop(first);
     assert_eq!(jobs, ["100-1"]);
-    fs::write(partial, b"{\"text\":\"Synthetic complete\"}\n").unwrap();
     let mut restarted = Session::open(source(&meetings), cursor).unwrap();
+    restarted
+        .drain(|_| panic!("partial input after restart"))
+        .unwrap();
+    fs::write(partial, b"{\"text\":\"Synthetic complete\"}\n").unwrap();
     for _ in 0..2 {
         restarted
             .drain(|m| {
@@ -89,6 +92,24 @@ fn crash_after_durable_enqueue_replays_without_duplicate_job() {
     restarted.drain(enqueue).unwrap();
     let jobs: BTreeSet<String> = store_io::read(&job).unwrap();
     assert_eq!(jobs, BTreeSet::from(["100-1".into(), "99-1".into()]));
+}
+
+#[test]
+fn sessions_opened_before_ack_reload_the_locked_cursor() {
+    let (_root, meetings, cursor) = fixture();
+    let mut first = Session::open(source(&meetings), cursor.clone()).unwrap();
+    let mut second = Session::open(source(&meetings), cursor).unwrap();
+    let mut calls = 0;
+    first
+        .drain(|_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap();
+    second
+        .drain(|_| panic!("stale cursor created a duplicate"))
+        .unwrap();
+    assert_eq!(calls, 2);
 }
 
 #[test]
