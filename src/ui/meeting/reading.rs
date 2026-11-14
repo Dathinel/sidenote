@@ -620,15 +620,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         );
     }
     let transcript = tasks::value_button(
-        row()
-            .gap(6.0)
-            .items_center()
-            .child(icons::draw(&icons::AUDIO_LINES, 16.0, p.soft))
-            .child(roles::CONTROL.line("Transcript", p.soft)),
+        icons::draw(&icons::AUDIO_LINES, 16.0, p.soft),
         "meeting-transcript",
         "Transcript".into(),
         p,
     )
+    .w(28.0)
+    .px(6.0)
+    .help("Transcript")
     .shrink()
     .on_press_tx(|s: &mut State, tx| {
         s.toggle_transcript();
