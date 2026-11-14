@@ -1,29 +1,24 @@
 $script:PipelineStages = @('pipeline', 'prepare', 'transcribe', 'translate', 'notes', 'render', 'publish', 'tasks', 'compare', 'title')
 
-function Format-PipelineFailure([string]$Stage, [string]$Category, [int]$DeadlineSeconds, [double]$ElapsedSeconds) {
+function Format-PipelineFailure([string]$Stage, [string]$Category, [int]$DeadlineSeconds, [double]$ElapsedSeconds, [string]$Kind = 'other', $ExitCode = $null) {
     if ($Stage -cnotin $script:PipelineStages) { $Stage = 'pipeline' }
-    if ($Category -cnotin @('timeout', 'exit', 'missing')) { $Category = 'exit' }
+    if ($Category -cnotin @('HELPER_LIMIT', 'HELPER_AUTH', 'timeout', 'other')) { $Category = 'other' }
+    if ($Kind -cnotin @('git','claude','codex','python','opencode','other')) { $Kind = 'other' }
+    $exitText = if ($ExitCode -is [int] -or $ExitCode -is [long]) { [string]$ExitCode } else { 'none' }
     $DeadlineSeconds = [Math]::Min(3600, [Math]::Max(0, $DeadlineSeconds))
     if ([double]::IsNaN($ElapsedSeconds) -or [double]::IsInfinity($ElapsedSeconds)) { $ElapsedSeconds = 0 }
     $elapsed = [Math]::Min(86400, [Math]::Max(0, $ElapsedSeconds)).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
-    "pipeline-failure stage=$Stage category=$Category deadline_seconds=$DeadlineSeconds elapsed_seconds=$elapsed"
+    "pipeline-failure stage=$Stage category=$Category kind=$Kind exit_code=$exitText deadline_seconds=$DeadlineSeconds elapsed_seconds=$elapsed"
 }
 
 function Get-PipelineFailure($Record, [string]$Stage = 'pipeline', [int]$DeadlineSeconds = 0, [double]$ElapsedSeconds = 0) {
     $message = [string]$Record.Exception.Message
-    $pattern = '\Apipeline-failure stage=(pipeline|prepare|transcribe|translate|notes|render|publish|tasks|compare|title) category=(timeout|exit|missing) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z'
+    $pattern = '\Apipeline-failure stage=(pipeline|prepare|transcribe|translate|notes|render|publish|tasks|compare|title) category=(HELPER_LIMIT|HELPER_AUTH|timeout|other) kind=(git|claude|codex|python|opencode|other) exit_code=(none|-?[0-9]{1,10}) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z'
     if ($message -cmatch $pattern) {
-        return Format-PipelineFailure $Matches[1] $Matches[2] ([int]$Matches[3]) ([double]::Parse($Matches[4], [Globalization.CultureInfo]::InvariantCulture))
+        $exitCode = if ($Matches[4] -ceq 'none') { $null } else { [long]$Matches[4] }
+        return Format-PipelineFailure $Matches[1] $Matches[2] ([int]$Matches[5]) ([double]::Parse($Matches[6], [Globalization.CultureInfo]::InvariantCulture)) $Matches[3] $exitCode
     }
-    $category = 'exit'; $exception = $Record.Exception
-    while ($exception) {
-        if ($exception -is [IO.FileNotFoundException] -or $exception -is [IO.DirectoryNotFoundException] -or
-            $exception -is [Management.Automation.CommandNotFoundException] -or $exception -is [Management.Automation.ItemNotFoundException]) {
-            $category = 'missing'; break
-        }
-        $exception = $exception.InnerException
-    }
-    Format-PipelineFailure $Stage $category $DeadlineSeconds $ElapsedSeconds
+    Format-PipelineFailure $Stage 'other' $DeadlineSeconds $ElapsedSeconds
 }
 
 function Invoke-HexCli {
@@ -53,14 +48,16 @@ function Invoke-HexCli {
             $code = $LASTEXITCODE
         } finally { $ErrorActionPreference = $old }
         if ($code -ne 0) {
-            $safe = Format-PipelineFailure $Stage 'exit' $TimeoutSeconds $clock.Elapsed.TotalSeconds
+            $safe = Format-PipelineFailure $Stage 'other' $TimeoutSeconds $clock.Elapsed.TotalSeconds
             if ((Test-Path -LiteralPath $diagnostic -PathType Leaf) -and (Get-Item -LiteralPath $diagnostic).Length -le 1024) {
                 try {
                     $data = [IO.File]::ReadAllText($diagnostic) | ConvertFrom-Json
-                    if (@($data.PSObject.Properties).Count -eq 4 -and $data.stage -ceq $Stage -and
-                        $data.category -cin @('timeout','exit','missing') -and $data.deadline_seconds -eq $TimeoutSeconds -and
+                    if (@($data.PSObject.Properties).Count -eq 6 -and $data.stage -ceq $Stage -and
+                        $data.kind -cin @('git','claude','codex','python','opencode','other') -and
+                        ($null -eq $data.exit_code -or $data.exit_code -is [int] -or $data.exit_code -is [long]) -and
+                        $data.category -cin @('HELPER_LIMIT','HELPER_AUTH','timeout','other') -and $data.deadline_seconds -eq $TimeoutSeconds -and
                         $data.elapsed_seconds -is [ValueType] -and $data.elapsed_seconds -ge 0 -and $data.elapsed_seconds -le 86400) {
-                        $safe = Format-PipelineFailure $Stage $data.category $TimeoutSeconds ([double]$data.elapsed_seconds)
+                        $safe = Format-PipelineFailure $Stage $data.category $TimeoutSeconds ([double]$data.elapsed_seconds) $data.kind $data.exit_code
                     }
                 } catch {} # Malformed diagnostics become fixed wrapper metadata, never raw text.
             }

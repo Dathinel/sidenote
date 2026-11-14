@@ -46,8 +46,8 @@ try {
         try {
             & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName *>&1 | ForEach-Object {
                 $line = "$_"
-                if ($line -cmatch '\Apipeline-failure stage=(pipeline|prepare|transcribe|translate|notes|render|publish|tasks|compare|title) category=(timeout|exit|missing) deadline_seconds=([0-9]{1,4}) elapsed_seconds=([0-9]{1,5}\.[0-9]{3})\z') {
-                    Log (Format-PipelineFailure $Matches[1] $Matches[2] ([int]$Matches[3]) ([double]::Parse($Matches[4], [Globalization.CultureInfo]::InvariantCulture)))
+                if ($line.StartsWith('pipeline-failure ')) {
+                    Log (Get-PipelineFailure ([Management.Automation.ErrorRecord]::new([Exception]::new($line), 'Pipeline', 'NotSpecified', $null)))
                 }
                 if ($line -match '^(Audio preparation|te transcription|hi transcription|Translation and notes|Total): ([0-9][0-9,.]*)s(?:;.*)?$') {
                     $label = $Matches[1]
