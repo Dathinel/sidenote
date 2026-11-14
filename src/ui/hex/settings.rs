@@ -36,6 +36,7 @@ pub struct Settings {
     kb_fields: [TextEdit; 5],
     kb_base: Option<sidenote::core::Config>,
     kb_error: Option<String>,
+    engine: engine::Engine,
 }
 
 struct ReturnTo {
@@ -194,6 +195,9 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     };
     if page == Page::Meetings && tab == 2 && s.hex.shell.kb_base.is_none() {
         load_kb(s);
+    }
+    if page == Page::Meetings && tab == 3 {
+        engine::load(s);
     }
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
@@ -2203,7 +2207,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
-        (Page::Meetings, 3) => engine::body(s, p),
+        (Page::Meetings, 3) => engine::body(s, k, p),
         (Page::Meetings, _) => col()
             .w_full()
             .child(card(
@@ -2601,7 +2605,7 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
-        "settings-engine" => (Page::Meetings, 3),
+        "settings-engine" | "settings-engine-invalid" => (Page::Meetings, 3),
         "settings-prompts"
         | "settings-prompts-edited"
         | "settings-prompts-diff"
@@ -2635,6 +2639,9 @@ pub fn scene(s: &mut State, name: &str) {
         super::super::updates::settings_fixture(s);
     }
     navigate(s, page, tab);
+    if name == "settings-engine-invalid" {
+        engine::scene_invalid(s);
+    }
     if page == Page::Prompts {
         super::super::prompt_library::scene(s, name);
     }
