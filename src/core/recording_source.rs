@@ -149,6 +149,7 @@ impl<S: Source> Drop for Session<S> {
     }
 }
 
+pub mod events;
 pub mod folders;
 #[cfg(test)]
 mod tests;
