@@ -10,7 +10,8 @@ pub fn run(
     config: &Config,
     work: &Path,
     input_revision: &str,
-) -> Result<Transcript> {
+    generation: u128,
+) -> Result<()> {
     #[cfg(feature = "asr-runtime")]
     {
         if !config.validate_engine_settings().is_empty() {
@@ -77,7 +78,7 @@ pub fn run(
         )?;
         clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
         let assemble_started = Instant::now();
-        let mut revision = revision::assemble(work, &plan, &pieces, baseline, 0)?;
+        let revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
         let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
             &work.join("coverage.json"),
             16 << 20,
@@ -88,15 +89,31 @@ pub fn run(
         {
             return Err("Speech lacks routed or explicit baseline coverage".into());
         }
-        revision.transcript.input_checksum = input_revision.to_owned();
         clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
         clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
         store_io::write(&work.join("clocks.json"), &clocks)?;
-        Ok(revision.transcript)
+        store_io::write(
+            &work.join("output.json"),
+            &jobs::BatchOutput {
+                generation: generation.to_string(),
+                source_revision: input_revision.to_owned(),
+                plan,
+                manifest: pieces,
+            },
+        )?;
+        Ok(())
     }
     #[cfg(not(feature = "asr-runtime"))]
     {
-        let _ = (folder, paths, baseline, config, work, input_revision);
+        let _ = (
+            folder,
+            paths,
+            baseline,
+            config,
+            work,
+            input_revision,
+            generation,
+        );
         Err("Production routing requires asr-runtime".into())
     }
 }
