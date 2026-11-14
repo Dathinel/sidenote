@@ -588,7 +588,7 @@ pub fn run_pending() -> Result<()> {
             if job.config.meeting_languages == ["en"]
                 && !matches!(
                     job.config.language_mode.as_str(),
-                    "forced:hi" | "forced:mixed"
+                    "forced:hi" | "forced:te" | "forced:mixed"
                 )
             {
                 let labs = notes::enabled(&root)?.is_some();

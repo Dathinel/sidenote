@@ -13,6 +13,8 @@ mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
 pub use pipeline::run;
+#[cfg(test)]
+mod public_tests;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
@@ -32,9 +34,9 @@ impl NativeLoader for Native<'_> {
         let mut command = Command::new(std::env::current_exe()?);
         command
             .args(["--routing-native", language, "--graph"])
-            .arg(&paths[0])
+            .arg(paths.first().ok_or("Native graph unavailable")?)
             .arg("--tokens")
-            .arg(&paths[1])
+            .arg(paths.get(1).ok_or("Native tokens unavailable")?)
             .arg("--runtime-dll")
             .arg(&config.pipeline.runtime_dll);
         Ok(Box::new(worker::Worker::spawn_with_threads(

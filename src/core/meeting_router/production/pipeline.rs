@@ -27,15 +27,7 @@ pub fn run(
         let mut origins = BTreeMap::new();
         for (track, path) in paths {
             fs::copy(path, normalized.join(format!("{track}.wav")))?;
-            // Hex's transcript contract floors first_arrival_us to meeting milliseconds.
-            let ms = manifest[track]["first_arrival_us"]
-                .as_u64()
-                .ok_or("Missing capture track origin")?
-                / 1000;
-            origins.insert(
-                track.clone(),
-                i64::try_from(ms.checked_mul(16).ok_or("Origin overflow")?)?,
-            );
+            origins.insert(track.clone(), origin(&manifest[track]["first_arrival_us"])?);
         }
         let (plan, pieces, _english_pin) = plan::produce(
             &normalized,
@@ -107,6 +99,19 @@ pub fn run(
         let _ = (folder, paths, baseline, config, work, input_revision);
         Err("Production routing requires asr-runtime".into())
     }
+}
+
+#[cfg(feature = "asr-runtime")]
+fn origin(value: &Value) -> Result<i64> {
+    // Match Hex's transcript contract, including empty/legacy tracks with no arrival.
+    let us = if value.is_null() {
+        0
+    } else {
+        value.as_u64().ok_or("Invalid capture track origin")?
+    };
+    Ok(i64::try_from(
+        (us / 1000).checked_mul(16).ok_or("Origin overflow")?,
+    )?)
 }
 
 #[cfg(feature = "asr-runtime")]
@@ -200,6 +205,13 @@ impl EnglishBridge for Reuse<'_> {
 #[cfg(all(test, feature = "asr-runtime"))]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_track_origin_matches_capture_contract_without_inferring_from_length() {
+        assert_eq!(origin(&Value::Null).unwrap(), 0);
+        assert_eq!(origin(&json!(1_234_567)).unwrap(), 19_744);
+        assert!(origin(&json!(-1)).is_err());
+        assert!(origin(&json!("unknown")).is_err());
+    }
     #[test]
     fn english_reuses_only_complete_matching_track_intervals() {
         let range: Range =
