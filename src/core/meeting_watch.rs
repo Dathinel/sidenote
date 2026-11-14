@@ -518,9 +518,7 @@ fn dispatch_completions(
             return;
         }
     };
-    if let Err(error) = result
-        && error != super::recording_source::Error::Dispatch(io::ErrorKind::WouldBlock)
-    {
+    if let Err(error) = result {
         log(&format!("recording source: {error:?}"));
     }
 }

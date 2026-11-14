@@ -167,7 +167,7 @@ mod tests {
                     Ok(())
                 })?
                 .acknowledge()),
-            Err(Error::Dispatch(io::ErrorKind::WouldBlock))
+            Ok(())
         );
         assert!(!cursor.exists());
         drop(session);
@@ -188,6 +188,59 @@ mod tests {
                 .unwrap(),
             Acceptance::AlreadyAccepted
         );
+    }
+    #[test]
+    fn recording_source_deferred_first_id_does_not_block_later_id() {
+        let f = Fixture::new();
+        let later = f.meetings.join("100-2");
+        fs::create_dir_all(&later).unwrap();
+        for name in ["manifest.json", "transcript.ndjson"] {
+            fs::copy(f.meetings.join("100-1").join(name), later.join(name)).unwrap();
+        }
+        store_io::write(
+            &f.meetings.join("100-1/manifest.json"),
+            &serde_json::json!({"status":"complete"}),
+        )
+        .unwrap();
+        let cursor = f.root.path().join("source.json");
+        let mut session = Session::open(
+            core::recording_source::legacy::Discovery(f.meetings.clone()),
+            cursor.clone(),
+        )
+        .unwrap();
+        let mut queued = Vec::new();
+        session
+            .drain(|meeting| {
+                handoff_in(
+                    f.root.path(),
+                    &f.meetings,
+                    meeting.id(),
+                    Ok(f.config()),
+                    || {
+                        queued.push(meeting.id().to_owned());
+                        store_io::write(
+                            &f.meetings.join(meeting.id()).join("english-summary.json"),
+                            &serde_json::json!({"synthetic":"complete"}),
+                        )
+                    },
+                )?
+                .acknowledge()
+            })
+            .unwrap();
+        assert_eq!(queued, ["100-2"]);
+        drop(session);
+        let saved: serde_json::Value = store_io::read(&cursor).unwrap();
+        assert_eq!(saved["delivered"], serde_json::json!(["100-2"]));
+        Session::open(
+            core::recording_source::legacy::Discovery(f.meetings.clone()),
+            cursor,
+        )
+        .unwrap()
+        .drain(|meeting| {
+            assert_eq!(meeting.id(), "100-1", "accepted later ID was replayed");
+            Err(io::ErrorKind::WouldBlock.into())
+        })
+        .unwrap();
     }
     #[test]
     fn recording_source_crash_before_acceptance_remains_replayable() {

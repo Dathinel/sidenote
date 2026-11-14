@@ -113,7 +113,11 @@ impl<S: Source> Session<S> {
             if cursor.delivered.contains(meeting.id()) {
                 continue;
             }
-            enqueue(&meeting).map_err(|e| Error::Dispatch(e.kind()))?;
+            match enqueue(&meeting) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(Error::Dispatch(e.kind())),
+            }
             cursor.delivered.insert(meeting.0);
             store_io::write(&self.cursor, &cursor).map_err(|e| Error::Cursor(e.kind()))?;
         }
