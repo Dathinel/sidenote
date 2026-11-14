@@ -1,7 +1,6 @@
 use super::*;
 use kaldi_fbank::{FbankOptions, OnlineFbank, WindowType};
 use ort::{session::Session, value::Tensor};
-#[cfg(windows)]
 use sha2::{Digest, Sha256};
 use std::{fs, sync::OnceLock, time::Instant};
 #[cfg(windows)]
@@ -112,17 +111,9 @@ impl Anuvani {
             load_seconds: start.elapsed().as_secs_f64(),
         })
     }
-}
-impl LanguageId for Anuvani {
-    fn identify(&mut self, samples: &[f32], declared: &[String]) -> Result<LanguageScores> {
-        if declared.iter().any(|s| !matches!(s.as_str(), "en" | "hi"))
-            || !declared.iter().any(|s| s == "en")
-            || !declared.iter().any(|s| s == "hi")
-        {
-            return Err(
-                "Anuvani routing currently supports the declared English/Hindi pair".into(),
-            );
-        }
+
+    /// Pinned 23-label inference before any declared-set decision.
+    pub fn logits(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         if samples.len() < 1600
             || samples.len() > SAMPLE_RATE as usize * 24
             || samples.iter().any(|s| !s.is_finite())
@@ -137,6 +128,20 @@ impl LanguageId for Anuvani {
         if logits.len() != 23 || logits.iter().any(|s| !s.is_finite()) {
             return Err("Invalid Anuvani scores".into());
         }
+        Ok(logits.to_vec())
+    }
+}
+impl LanguageId for Anuvani {
+    fn identify(&mut self, samples: &[f32], declared: &[String]) -> Result<LanguageScores> {
+        if declared.iter().any(|s| !matches!(s.as_str(), "en" | "hi"))
+            || !declared.iter().any(|s| s == "en")
+            || !declared.iter().any(|s| s == "hi")
+        {
+            return Err(
+                "Anuvani routing currently supports the declared English/Hindi pair".into(),
+            );
+        }
+        let logits = self.logits(samples)?;
         let peak = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let mut unrestricted: Vec<_> = logits.iter().map(|v| (v - peak).exp()).collect();
         let sum: f32 = unrestricted.iter().sum();
@@ -154,26 +159,119 @@ impl LanguageId for Anuvani {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum IndicError {
+    ModelHash,
+    Tokens,
+    Metadata,
+    Language,
+    Audio,
+    InvalidSampleRate(u32),
+    OutputShape,
+    RuntimeUnavailable,
+}
+impl std::fmt::Display for IndicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IndicConformer unavailable: {self:?}")
+    }
+}
+impl std::error::Error for IndicError {}
+
+fn indic_hash(bytes: &[u8], language: &str) -> Result<()> {
+    let expected = match language {
+        "hi" => "915c71e04dd7e5378a4057fdebb252b3a587188e4e99db6d7ce0909ad5ad05fa",
+        "te" => "710f176e33080f1be84b4f38bb5f33be3f522dcf4f191bf4d5cc89f7a85924f3",
+        _ => return Err(IndicError::Language.into()),
+    };
+    if hex::encode(Sha256::digest(bytes)) != expected {
+        return Err(IndicError::ModelHash.into());
+    }
+    Ok(())
+}
+fn indic_tokens(bytes: &[u8]) -> Result<&str> {
+    if hex::encode(Sha256::digest(bytes))
+        != "ee60967630213f31951817ac8b402b92ec18cce80718a24a49b388e56672dfb2"
+    {
+        return Err(IndicError::Tokens.into());
+    }
+    std::str::from_utf8(bytes).map_err(|_| IndicError::Tokens.into())
+}
+fn indic_metadata(values: &[Option<String>]) -> Result<()> {
+    let expected = ["ai4bharat", "per_feature", "4", "5633", "EncDecCTCModelBPE"];
+    if values.iter().map(|s| s.as_deref()).ne(expected.map(Some)) {
+        return Err(IndicError::Metadata.into());
+    }
+    Ok(())
+}
+fn indic_audio(samples: &[f32], sample_rate: u32, requested: &str, loaded: &str) -> Result<()> {
+    if sample_rate != SAMPLE_RATE {
+        return Err(IndicError::InvalidSampleRate(sample_rate).into());
+    }
+    if requested != loaded {
+        return Err(IndicError::Language.into());
+    }
+    if samples.len() < 1600
+        || samples.len() > SAMPLE_RATE as usize * 30
+        || samples.iter().any(|s| !s.is_finite())
+    {
+        return Err(IndicError::Audio.into());
+    }
+    Ok(())
+}
+
+const INDIC_SUBSAMPLING: usize = 4;
+fn indic_output(shape: &[i64], input_frames: usize, vocabulary: usize) -> Result<()> {
+    // Both pinned graphs use two padded stride-2 convolutions: ceil(feature frames / 4).
+    let frames = input_frames.div_ceil(INDIC_SUBSAMPLING);
+    if frames == 0 || vocabulary != 5633 || shape != [1, frames as i64, vocabulary as i64] {
+        return Err(IndicError::OutputShape.into());
+    }
+    Ok(())
+}
+
 pub struct IndicConformer {
     session: Session,
     tokens: Vec<String>,
     blank: usize,
+    language: String,
     pub load_seconds: f64,
 }
 impl IndicConformer {
     pub fn load(model: &Path, tokens: &Path) -> Result<Self> {
+        Self::load_for_language(model, tokens, "hi")
+    }
+
+    /// Explicit pack identity; never load a different language as fallback.
+    pub fn load_for_language(model: &Path, tokens: &Path, language: &str) -> Result<Self> {
         let start = Instant::now();
-        let session = session(model)?;
-        let meta = session.metadata()?;
-        if meta.custom("model_author")?.as_deref() != Some("ai4bharat")
-            || meta.custom("normalize_type")?.as_deref() != Some("per_feature")
-            || meta.custom("subsampling_factor")?.as_deref() != Some("4")
-        {
-            return Err("Expected the measured sherpa IndicConformer CTC pack".into());
+        if !cfg!(windows) || RUNTIME.get().is_none_or(|r| r.is_err()) {
+            return Err(IndicError::RuntimeUnavailable.into());
         }
+        let graph = fs::read(model)?;
+        indic_hash(&graph, language)?;
+        let token_bytes = fs::read(tokens)?;
+        let token_text = indic_tokens(&token_bytes)?;
+        // Infer from the exact verified bytes, even if the source path changes.
+        let session = Session::builder()?
+            .with_intra_threads(1)?
+            .with_inter_threads(1)?
+            .with_memory_pattern(false)?
+            .commit_from_memory(&graph)?;
+        let meta = session.metadata()?;
+        let values = [
+            "model_author",
+            "normalize_type",
+            "subsampling_factor",
+            "vocab_size",
+            "model_type",
+        ]
+        .map(|key| meta.custom(key))
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+        indic_metadata(&values)?;
         let mut table = vec![String::new(); 5633];
         let mut seen = vec![false; table.len()];
-        for line in fs::read_to_string(tokens)?.lines() {
+        for line in token_text.lines() {
             let (word, id) = line.rsplit_once(' ').ok_or("Invalid token table")?;
             let id: usize = id.parse()?;
             if id >= table.len() || seen[id] {
@@ -194,19 +292,14 @@ impl IndicConformer {
             session,
             tokens: table,
             blank,
+            language: language.to_owned(),
             load_seconds: start.elapsed().as_secs_f64(),
         })
     }
 }
 impl SpeechEngine for IndicConformer {
-    fn transcribe(&mut self, samples: &[f32], language: &str) -> Result<Reading> {
-        if language != "hi"
-            || samples.len() < 1600
-            || samples.len() > SAMPLE_RATE as usize * 24
-            || samples.iter().any(|s| !s.is_finite())
-        {
-            return Err("Hindi recognition needs 0.1 to 24 seconds of finite audio".into());
-        }
+    fn transcribe(&mut self, samples: &[f32], sample_rate: u32, language: &str) -> Result<Reading> {
+        indic_audio(samples, sample_rate, language, &self.language)?;
         let mut opts = FbankOptions::default();
         opts.frame_opts.dither = 0.0;
         opts.frame_opts.snip_edges = false;
@@ -247,14 +340,12 @@ impl SpeechEngine for IndicConformer {
             "length" => Tensor::from_array(([1], vec![n as i64]))?
         ])?;
         let (shape, probs) = out[0].try_extract_tensor::<f32>()?;
-        if shape.len() != 3 || shape[2] != self.tokens.len() as i64 {
-            return Err("Invalid CTC output shape".into());
-        }
+        indic_output(shape, n, self.tokens.len())?;
         let mut previous = self.blank;
         let mut tokens = Vec::new();
         for (frame, row) in probs
             .chunks_exact(self.tokens.len())
-            .take(n / 4)
+            .take(n / INDIC_SUBSAMPLING)
             .enumerate()
         {
             let id = row
@@ -299,3 +390,6 @@ mod linux_tests {
         assert!(error.to_string().contains("ONNX_RUNTIME_UNAVAILABLE"));
     }
 }
+
+#[cfg(test)]
+mod indic_tests;

@@ -2,6 +2,23 @@
 use super::model_catalog::{Model, ModelFile, Role, Runtime};
 pub static MODELS: &[Model] = &[
     Model {
+        id: "silero-vad",
+        name: "Silero VAD (S45)",
+        languages: &[],
+        runtime: Runtime::SherpaOnnx,
+        role: Role::VoiceActivity,
+        files: &[ModelFile {
+            name: "silero_vad.onnx",
+            url: "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052/src/silero_vad/data/silero_vad.onnx",
+            sha256: "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+            bytes: 2327524,
+        }],
+        licence: "MIT",
+        minimum_ram_mb: None,
+        source: "https://github.com/snakers4/silero-vad/tree/066409f3d9db45a30d21dfcbf9147826ffdd7052",
+        runtime_note: "Existing optional CPU ONNX runtime; explicit installation only.",
+    },
+    Model {
         id: "indicconformer-hi-ctc",
         name: "IndicConformer Hindi",
         languages: &["hi"],

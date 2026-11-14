@@ -5,8 +5,12 @@ mod cache;
 mod cli;
 mod config;
 mod hex;
+pub mod hex_bridge;
 pub(crate) mod inputs;
 pub mod jobs;
+pub mod pieces;
+pub mod ranges;
+pub mod vad;
 use super::{
     asr::{self, LanguageScores, Result},
     store_io,
@@ -14,7 +18,7 @@ use super::{
 pub use audio::Audio;
 pub use baseline::{english_fallback, reconcile};
 pub use cli::run_cli;
-pub use config::RoutingConfig;
+pub use config::{LanguageRoutes, ProviderRoute, RoutingConfig};
 pub use hex::HexSpeech;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -529,7 +533,7 @@ pub fn route(request: Request<'_>) -> Result<Transcript> {
                     if let Some(reading) = cache::get(cache_root, "transcribe", &key) {
                         return Ok(reading);
                     }
-                    let reading = engine.transcribe(&waveform, "hi")?;
+                    let reading = engine.transcribe(&waveform, asr::SAMPLE_RATE, "hi")?;
                     let _ = cache::put(cache_root, "transcribe", &key, &reading);
                     Ok(reading)
                 })();

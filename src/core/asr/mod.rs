@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "asr-runtime")]
 mod onnx;
 #[cfg(feature = "asr-runtime")]
-pub use onnx::{Anuvani, IndicConformer, initialize};
+pub use onnx::{Anuvani, IndicConformer, IndicError, initialize};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub const SAMPLE_RATE: u32 = 16000;
@@ -35,7 +35,7 @@ pub trait LanguageId {
 }
 
 pub trait SpeechEngine {
-    fn transcribe(&mut self, samples: &[f32], language: &str) -> Result<Reading>;
+    fn transcribe(&mut self, samples: &[f32], sample_rate: u32, language: &str) -> Result<Reading>;
 }
 
 /// Catalogue paths are snapshots. Constructors must still handle every file-open failure.

@@ -20,6 +20,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 #[serde(default)]
 pub struct Labs {
     pub language_detection: bool,
+    pub after_stop_language_routing: bool,
     pub language_detection_settings: super::lid::Settings,
     pub stop_forgotten_recordings: bool,
     pub silence_minutes: SilenceMinutes,

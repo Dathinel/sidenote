@@ -1,5 +1,7 @@
 //! Experimental, advisory-only language stage for explicitly prepared PCM chunks.
 mod anuvani;
+mod calibration;
+pub use calibration::{CALIBRATION_VERSION, CalibrationKey, Decision, Unsure, decide_logits};
 mod contract;
 #[cfg(test)]
 mod tests;
