@@ -1,5 +1,12 @@
 //! Durable per-meeting requests. The lock serializes drains, never enqueues.
 use super::*;
+pub(crate) mod handoff;
+mod notes;
+pub use handoff::{BatchOutput, commit_batches};
+pub(crate) use notes::notes_input;
+pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
+    Ok(notes::enabled(root).ok().flatten().is_some())
+}
 use crate::platform::CommandExt;
 use std::{
     collections::HashSet,
@@ -22,6 +29,8 @@ struct Job {
     config: RoutingConfig,
     languages: Vec<String>,
     input_revision: String,
+    #[serde(default)]
+    generation: u128,
     windows: serde_json::Value,
     #[serde(skip)]
     input: Option<super::inputs::Snapshot>,
@@ -116,11 +125,15 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
             _ => {}
         }
     }
+    let generation = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    if notes::enabled(root)?.is_some() {
+        revision::begin(destination(root, id).parent().unwrap(), generation)?;
+    }
     store_io::write(
         &queue(root).join(format!("{id}.json")),
         &Pending {
             id: id.into(),
-            generation: SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos(),
+            generation,
         },
     )?;
     Ok(())
@@ -158,7 +171,10 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
     }
 }
 fn completed(root: &Path, job: &Job) -> Result<bool> {
-    Ok(automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str()))
+    Ok(
+        automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str())
+            && (!notes_enabled(root)? || handoff::completed(root, &job.id, &job.input_revision)),
+    )
 }
 #[cfg(any(windows, test))]
 pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
@@ -239,6 +255,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
         languages: config.meeting_languages.clone(),
         config,
         input_revision: revision,
+        generation: 0,
         windows,
         input: Some(input),
     }))
@@ -382,6 +399,33 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
     outcome
 }
 
+// The Stop deadline belongs only to notes_input. Every attempt gets a fresh budget.
+fn run_worker(
+    command: Command,
+    duration: f64,
+    config: Option<&crate::core::Config>,
+    active: Option<&Path>,
+) -> Result<Outcome> {
+    let computed = (duration * 4.0 + 120.0).clamp(120.0, 86400.0);
+    let budget = if let Some(config) = config {
+        let value = config
+            .engine_settings
+            .stage_deadline_seconds
+            .filter(|&v| v != 0);
+        if value.is_some_and(|v| v > 3600) {
+            return Err("Invalid ASR attempt budget".into());
+        }
+        f64::from(value.unwrap_or(computed.min(3600.0) as u32))
+    } else {
+        computed
+    };
+    Ok(supervise(
+        command,
+        seconds_arg("--router-timeout-seconds").unwrap_or(budget),
+        active,
+    ))
+}
+
 struct Cleanup(Vec<PathBuf>);
 impl Drop for Cleanup {
     fn drop(&mut self) {
@@ -416,9 +460,23 @@ fn cleanup_work(work: &Path) {
 
 pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
-    let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
+    run_one_in(&request, &super::super::state_dir())
+}
+fn run_one_in(request: &Path, root: &Path) -> Result<()> {
+    let mut job: Job =
+        serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
+    if notes_enabled(root)? {
+        handoff::assembled(
+            root,
+            &job.id,
+            job.generation,
+            &job.input_revision,
+            &job.baseline,
+        )?;
+        return Ok(());
+    }
     let mut normalized = Cleanup(Vec::new());
     let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
     let mut paths = Vec::new();
@@ -487,6 +545,20 @@ pub fn run_one() -> Result<()> {
 }
 
 pub fn run_pending() -> Result<()> {
+    run_pending_with(|_, request| {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("--route-one")
+            .arg("--router-request")
+            .arg(request)
+            .arg("--data-dir")
+            .arg(super::super::state_dir())
+            .arg("--meetings-dir")
+            .arg(super::super::meetings_dir());
+        Ok(command)
+    })
+}
+fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -546,12 +618,13 @@ pub fn run_pending() -> Result<()> {
                             .join("local/router-work")
                             .join(&pending.id)
                             .join("attempt.json"),
-                        &serde_json::json!({"setup_failed":true,"pending_retained":true}),
+                        &serde_json::json!({"generation":pending.generation,"setup_failed":true,"pending_retained":true,"child":{"success":false,"exit_code":null,"timed_out":false,"error":"setup_failed"}}),
                     )?;
                     continue;
                 }
             };
             let destination = destination(&root, &job.id);
+            let labs = notes_enabled(&root)?;
             if completed(&root, &job)? {
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
@@ -559,7 +632,8 @@ pub fn run_pending() -> Result<()> {
             if automatic && !retry_ready(&root, &pending) {
                 continue;
             }
-            if job.config.meeting_languages == ["en"]
+            if !labs
+                && job.config.meeting_languages == ["en"]
                 && !matches!(
                     job.config.language_mode.as_str(),
                     "forced:hi" | "forced:mixed"
@@ -594,9 +668,10 @@ pub fn run_pending() -> Result<()> {
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
-            if let Some(old) = fs::read(&destination)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
+            if !labs
+                && let Some(old) = fs::read(&destination)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
                 && old.input_checksum == job.input_revision
                 && !old.degraded()
             {
@@ -614,28 +689,25 @@ pub fn run_pending() -> Result<()> {
                 .stage(&work)?;
             job.folder = staged.path().to_owned();
             let request = work.join("request.json");
+            job.generation = pending.generation;
             store_io::write(&request, &job)?;
             let _ = fs::remove_file(work.join("result.json"));
             let _ = fs::remove_file(work.join("normalization-outcome.json"));
             let _ = fs::remove_file(work.join("failure.json"));
-            let mut command = Command::new(std::env::current_exe()?);
-            command
-                .arg("--route-one")
-                .arg("--router-request")
-                .arg(&request)
-                .arg("--data-dir")
-                .arg(&root)
-                .arg("--meetings-dir")
-                .arg(super::super::meetings_dir());
+            let mut command = worker(&job, &request)?;
             for flag in ["--ffmpeg", "--normalization-timeout-seconds"] {
                 if let Some(value) = args.windows(2).find(|a| a[0] == flag).map(|a| &a[1]) {
                     command.args([flag, value]);
                 }
             }
             let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
-            let timeout = seconds_arg("--router-timeout-seconds")
-                .unwrap_or((duration * 4.0 + 120.0).clamp(120.0, 86400.0));
-            let mut outcome = supervise(command, timeout, Some(&work.join("active.json")));
+            let settings = if labs { notes::enabled(&root)? } else { None };
+            let mut outcome = run_worker(
+                command,
+                duration,
+                settings.as_ref(),
+                Some(&work.join("active.json")),
+            )?;
             if let Some(error) = fs::read(work.join("failure.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -657,7 +729,28 @@ pub fn run_pending() -> Result<()> {
                 }
                 _ => {}
             }
-            let result = if outcome.success {
+            let assembled = if labs && stable && outcome.success {
+                match commit_batches(
+                    &root,
+                    &job.id,
+                    pending.generation,
+                    &job.input_revision,
+                    &job.baseline,
+                ) {
+                    Ok(id) => revision::load(destination.parent().unwrap(), Some(&id))?
+                        .map(|(_, r)| r.transcript),
+                    Err(_) => {
+                        outcome.success = false;
+                        outcome.error = Some("batch assembly failed".into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let result = if labs {
+                assembled
+            } else if outcome.success {
                 fs::read(work.join("result.json"))
                     .ok()
                     .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
@@ -675,7 +768,7 @@ pub fn run_pending() -> Result<()> {
                     outcome.error = Some("routing output absent or invalid".into());
                 }
             }
-            let result = result.unwrap_or_else(|| {
+            let mut result = result.unwrap_or_else(|| {
                 english_fallback(
                     &job.baseline,
                     &job.config,
@@ -688,8 +781,15 @@ pub fn run_pending() -> Result<()> {
                     ),
                 )
             });
+            if labs {
+                super::baseline::reconcile_exact(&mut result, &job.baseline);
+            }
             let successful = stable && outcome.success && !result.degraded();
-            let published_fallback = publish_attempt(&destination, &result, successful, stable)?;
+            let published_fallback = if !labs {
+                publish_attempt(&destination, &result, successful, stable)?
+            } else {
+                false
+            };
             let normalization = fs::read(work.join("normalization-outcome.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());

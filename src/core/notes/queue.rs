@@ -31,6 +31,8 @@ pub(super) struct Job {
     pub request: Option<Request>,
     #[serde(default)]
     pub sorting_pending: bool,
+    #[serde(default)]
+    pub transcript_revision: Option<String>,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -55,18 +57,24 @@ impl Job {
             message: "queued".into(),
             request,
             sorting_pending: false,
+            transcript_revision: None,
         }
     }
-    fn ready(&self, time: i64) -> bool {
-        matches!(self.state, JobState::Queued | JobState::Running)
+    fn ready(&self, time: i64, root: &Path) -> bool {
+        (matches!(self.state, JobState::Queued | JobState::Running)
+            && (self.message != "waiting for transcript revision"
+                || !core::meeting_router::jobs::notes_enabled(root).unwrap_or(false)
+                || self.next_try_at.is_none_or(|at| at <= time)))
             || matches!(self.state, JobState::BackendError {next_try_ms: Some(at), ..} if at <= time)
     }
 }
 fn job_eligible(root: &Path, meetings: &Path, id: &str, job: &Job) -> io::Result<bool> {
     let eligibility = core::recording_guard::eligibility(root, meetings, id)?;
-    // Explicit task redo can use saved English when Hex's original is unavailable.
+    // Saved chosen revisions and explicit task redo survive missing Hex originals.
     Ok(eligibility == core::recording_guard::Eligibility::Eligible
-        || (job.request == Some(Request::RedoTasks)
+        || ((job.request == Some(Request::RedoTasks)
+            || (job.transcript_revision.is_some()
+                && core::meeting_router::jobs::notes_enabled(root)?))
             && eligibility == core::recording_guard::Eligibility::Unknown))
 }
 fn now() -> i64 {
@@ -210,6 +218,11 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
     let mut next = Job::new(mode, settings);
+    if core::meeting_router::jobs::notes_enabled(root)? {
+        next.transcript_revision = previous
+            .as_ref()
+            .and_then(|j| j.transcript_revision.clone());
+    }
     if !recovery && let Some(previous) = previous.filter(|job| job.helper.is_some()) {
         next.helper = previous.helper;
         next.model = previous.model;
@@ -298,6 +311,9 @@ fn process(
     settings: &NotesSettings,
     run: &mut impl Run,
 ) -> io::Result<()> {
+    if !core::meeting_router::jobs::notes_enabled(root)? {
+        job.transcript_revision = None;
+    }
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     // Both engines hold this OS lock until publication finishes; a crash releases it immediately.
@@ -373,7 +389,19 @@ fn process(
     pinned.model = job.model.clone();
     let settings = &pinned;
     stage(root, id, job, JobStage::Prepare)?;
-    let mut transcript = if job.request == Some(Request::RedoTasks) {
+    let routed = transcript::chosen(
+        root,
+        id,
+        &folder,
+        job.transcript_revision.as_deref(),
+        end.unwrap_or(job.updated_at),
+        now(),
+    )?;
+    let mut transcript = if let Some((revision, text)) = routed {
+        job.transcript_revision = Some(revision);
+        store_io::write(&job_path(root, id), job)?;
+        text
+    } else if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
             transcript::read(&folder)?
@@ -684,7 +712,7 @@ fn drain_locked(
                 continue;
             }
             match read(root, id) {
-                Ok(Some(job)) if job.ready(now()) => {
+                Ok(Some(job)) if job.ready(now(), root) => {
                     if job_eligible(root, meetings, id, &job)? {
                         ready.push(id.to_owned());
                     }
@@ -743,18 +771,29 @@ fn drain_locked(
         if !job_eligible(root, meetings, &id, &job)? {
             continue;
         }
-        if !job.ready(now()) {
+        if !job.ready(now(), root) {
             continue;
         }
         let mut before = job.clone();
         let result = process(root, meetings, &id, &mut job, &settings, run);
         if matches!(&result, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+            let routing_pending = result
+                .as_ref()
+                .is_err_and(|e| store_io::message(e) == Some("routing_pending"));
+            before.transcript_revision = job.transcript_revision;
+            if routing_pending {
+                before.next_try_at = Some(now().saturating_add(1000));
+                before.message = "waiting for transcript revision".into();
+            }
             if meetings.join(&id).join("english-summary.json").is_file()
                 && before.request != Some(Request::RedoTasks)
             {
                 before.sorting_pending = true;
             }
             store_io::write(&job_path(root, &id), &before)?;
+            if routing_pending {
+                continue;
+            }
             return Ok(());
         }
         if result.is_err() {

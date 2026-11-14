@@ -47,6 +47,9 @@ pub(super) fn render(raw: &str) -> String {
 }
 
 pub(super) fn read(folder: &Path) -> io::Result<String> {
+    Ok(render(&String::from_utf8_lossy(&captured(folder)?)))
+}
+fn captured(folder: &Path) -> io::Result<Vec<u8>> {
     let original = folder.join("hex-original/transcript.ndjson");
     let captured = match Snapshot::read_file(&original, file_reads::STORE_MAX) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -59,7 +62,94 @@ pub(super) fn read(folder: &Path) -> io::Result<String> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
-    Ok(render(&String::from_utf8_lossy(&bytes)))
+    Ok(bytes)
+}
+pub(super) fn chosen(
+    root: &Path,
+    id: &str,
+    folder: &Path,
+    chosen: Option<&str>,
+    ended_ms: i64,
+    now_ms: i64,
+) -> io::Result<Option<(String, String)>> {
+    use crate::core::meeting_router::{self as router, Chunk};
+    // With Labs off, retain the compatibility reader and its existing-file behavior.
+    if !router::jobs::notes_enabled(root)? {
+        return Ok(None);
+    }
+    let baseline = if chosen.is_some() {
+        Vec::new()
+    } else {
+        String::from_utf8_lossy(&captured(folder)?)
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let r: Row = serde_json::from_str(line).ok()?;
+                let start = r.start_ms / 1000.0;
+                let end = serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v["end_ms"].as_f64())
+                    .map(|v| v / 1000.0)
+                    .filter(|v| v.is_finite() && *v > start)
+                    .unwrap_or(start + 0.1);
+                (start.is_finite()
+                    && end.is_finite()
+                    && start >= 0.0
+                    && end > start
+                    && !r.text.trim().is_empty())
+                .then_some(Chunk {
+                    id: format!("english-{i}"),
+                    start,
+                    end,
+                    track: if r.source.is_empty() {
+                        "system".into()
+                    } else {
+                        r.source
+                    },
+                    speaker: r.speaker,
+                    turn: None,
+                    english: r.text,
+                    audio_start: None,
+                })
+            })
+            .collect()
+    };
+    router::jobs::notes_input(root, id, chosen, &baseline, ended_ms, now_ms)?
+        .map(|(id, t)| {
+            let mut text = String::new();
+            for s in t.segments {
+                let lang = match s.lang.as_str() {
+                    "en" => "English",
+                    "hi" => "Hindi",
+                    "te" => "Telugu",
+                    other => other,
+                };
+                let speaker = s
+                    .sources
+                    .first()
+                    .and_then(|o| o.chunk.speaker.as_deref())
+                    .unwrap_or(if s.track == "microphone" {
+                        "You"
+                    } else {
+                        "Them"
+                    });
+                let ms = (s.start * 1000.0).round() as u64;
+                text.push_str(&format!(
+                    "[{:02}:{:02}:{:02}.{:03}] {} ({lang}): {}\n",
+                    ms / 3_600_000,
+                    ms / 60_000 % 60,
+                    ms / 1000 % 60,
+                    ms % 1000,
+                    speaker.split_whitespace().collect::<Vec<_>>().join("_"),
+                    s.text_original
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            Ok((id, text))
+        })
+        .transpose()
 }
 pub(super) fn write(folder: &Path) -> io::Result<String> {
     let path = folder.join("english-transcript.md");
@@ -106,5 +196,39 @@ garbage
     #[test]
     fn blank_is_empty() {
         assert!(render("\n{}\ninvalid").is_empty());
+    }
+    #[test]
+    fn flag_off_keeps_legacy_end_shapes_and_existing_file_preference() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("meeting");
+        std::fs::create_dir_all(&folder).unwrap();
+        let raw = r#"{"start_ms":1000,"end_ms":"2000","text":"String end","source":"system"}
+{"start_ms":2000,"end_ms":{"old":true},"text":"Object end","source":"microphone"}
+{"start_ms":3000,"end_ms":null,"text":"Null end","speaker":"Guest"}
+{"start_ms":4000,"text":"Missing end"}
+{"start_ms":5000,"end_ms":-1,"text":"Negative end"}"#;
+        let expected = "[00:00:01.000] Them (English): String end\n[00:00:02.000] You (English): Object end\n[00:00:03.000] Guest (English): Null end\n[00:00:04.000] Them (English): Missing end\n[00:00:05.000] Them (English): Negative end\n";
+        std::fs::write(folder.join("transcript.ndjson"), raw).unwrap();
+        assert!(
+            chosen(
+                root.path(),
+                "123-4",
+                &folder,
+                Some("invalid stale pin"),
+                0,
+                0
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(write(&folder).unwrap(), expected);
+        std::fs::write(folder.join("english-transcript.md"), "Saved legacy text").unwrap();
+        std::fs::write(root.path().join("config.json"), b"invalid config").unwrap();
+        assert!(
+            chosen(root.path(), "123-4", &folder, None, 0, 0)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(write(&folder).unwrap(), "Saved legacy text");
     }
 }
