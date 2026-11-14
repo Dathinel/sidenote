@@ -17,6 +17,12 @@ fn main() {
     #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(windows)]
+    if args.iter().any(|a| a == "--routing-native") {
+        std::process::exit(i32::from(
+            sidenote::core::meeting_router::production::native_worker().is_err(),
+        ));
+    }
     if args.iter().any(|a| a == "--language-detect") {
         std::process::exit(sidenote::core::lid::run_cli(&args));
     }
