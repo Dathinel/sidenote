@@ -58,7 +58,11 @@ fn diagnosis(text: &str) -> &'static str {
         "unauthorized",
         "authentication",
         "not logged in",
+        "login required",
+        "authentication_error",
+        "please run /login",
         "api key",
+        "invalid_api_key",
         "sign in",
         "login",
     ]
@@ -112,6 +116,7 @@ fn category(text: &str) -> &'static str {
         "rate limit",
         "rate_limit",
         "quota",
+        "insufficient_quota",
         "limit reached",
         "hit your limit",
         "out of extra usage",
@@ -716,6 +721,25 @@ mod tests {
         );
         assert!(output.failed);
         assert_eq!(category(&output.plain), "HELPER_LIMIT");
+        for harness in ["claude", "codex"] {
+            for diagnostic in [
+                "invalid_api_key",
+                "authentication_error",
+                "login required",
+                "please run /login",
+            ] {
+                let mut failed = Output::default();
+                failed.line(
+                    &serde_json::json!({"type":"error", "message":diagnostic}).to_string(),
+                    harness,
+                    true,
+                    &|_| {},
+                );
+                assert!(failed.failed);
+                assert_eq!(category(&failed.plain), "HELPER_AUTH");
+            }
+        }
+        assert_eq!(category("insufficient_quota"), "HELPER_LIMIT");
         let mut plain = Output::default();
         plain.line("Invalid API key PRIVATE", "claude", true, &|_| {});
         assert_eq!(category(&plain.plain), "HELPER_AUTH");
