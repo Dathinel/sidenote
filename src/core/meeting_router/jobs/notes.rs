@@ -10,25 +10,6 @@ pub(super) fn enabled(root: &Path) -> io::Result<Option<Config>> {
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
     Ok((config.labs.after_stop_language_routing && config.pipeline.enabled()).then_some(config))
 }
-pub(super) fn release(root: &Path, pending: &Pending, result: &Transcript) -> Result<()> {
-    let _lock = pending_lock(root, &pending.id)?;
-    let current: Option<Pending> =
-        store_io::read(&queue(root).join(format!("{}.json", pending.id)))?;
-    if current.is_some_and(|p| p.generation == pending.generation) {
-        let mut transcript = result.clone();
-        super::super::baseline::reconcile_exact(&mut transcript, &result.baseline);
-        let data = revision::Revision {
-            generation: pending.generation.to_string(),
-            plan_revision: result.input_checksum.clone(),
-            transcript,
-            alternatives: Vec::new(),
-            evidence: Default::default(),
-            provenance: serde_json::Value::Null,
-        };
-        revision::commit(destination(root, &pending.id).parent().unwrap(), &data)?;
-    }
-    Ok(())
-}
 /// Resolve a durable dependency to immutable text. This function performs no audio work.
 pub(crate) fn notes_input(
     root: &Path,
