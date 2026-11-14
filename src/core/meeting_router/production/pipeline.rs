@@ -1,0 +1,210 @@
+use super::*;
+#[cfg(feature = "asr-runtime")]
+use std::collections::BTreeMap;
+
+/// Called only by the Labs job. The parent rechecks the captured input before publication.
+pub fn run(
+    folder: &Path,
+    paths: &[(String, PathBuf)],
+    baseline: &[Chunk],
+    config: &Config,
+    work: &Path,
+    input_revision: &str,
+) -> Result<Transcript> {
+    #[cfg(feature = "asr-runtime")]
+    {
+        if !config.validate_engine_settings().is_empty() {
+            return Err("Invalid engine settings".into());
+        }
+        let started = Instant::now();
+        let mut clocks = BTreeMap::new();
+        let normalized = work.join("normalized");
+        fs::create_dir_all(&normalized)?;
+        let input = inputs::Snapshot::capture(folder)?;
+        store_io::atomic_write(&normalized.join("manifest.json"), &input.manifest)?;
+        store_io::atomic_write(&normalized.join("transcript.ndjson"), &input.transcript)?;
+        let manifest: Value = serde_json::from_slice(&input.manifest)?;
+        let mut origins = BTreeMap::new();
+        for (track, path) in paths {
+            fs::copy(path, normalized.join(format!("{track}.wav")))?;
+            // Hex's transcript contract floors first_arrival_us to meeting milliseconds.
+            let ms = manifest[track]["first_arrival_us"]
+                .as_u64()
+                .ok_or("Missing capture track origin")?
+                / 1000;
+            origins.insert(
+                track.clone(),
+                i64::try_from(ms.checked_mul(16).ok_or("Origin overflow")?)?,
+            );
+        }
+        let (plan, pieces, _english_pin) = plan::produce(
+            &normalized,
+            work,
+            config,
+            &origins,
+            input_revision,
+            &mut clocks,
+        )?;
+        store_io::write(&work.join("batch-plan.json"), &plan)?;
+        let mut bridge = Reuse {
+            bridge: English(
+                HexBridge::new(hex_speech()).with_timeout(Duration::from_secs(u64::from(
+                    config.engine_settings.stages.asr_request_deadline_seconds,
+                ))),
+            ),
+            baseline,
+            origins: &origins,
+        };
+        let batches_started = Instant::now();
+        batches::run(work, &plan, &mut Native(config), &mut bridge)?;
+        clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
+        let assemble_started = Instant::now();
+        let mut revision = revision::assemble(work, &plan, &pieces, baseline, 0)?;
+        let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
+            &work.join("coverage.json"),
+            16 << 20,
+        )?)?;
+        if coverage
+            .iter()
+            .any(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
+        {
+            return Err("Speech lacks routed or explicit baseline coverage".into());
+        }
+        revision.transcript.input_checksum = input_revision.to_owned();
+        clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
+        clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
+        store_io::write(&work.join("clocks.json"), &clocks)?;
+        Ok(revision.transcript)
+    }
+    #[cfg(not(feature = "asr-runtime"))]
+    {
+        let _ = (folder, paths, baseline, config, work, input_revision);
+        Err("Production routing requires asr-runtime".into())
+    }
+}
+
+#[cfg(feature = "asr-runtime")]
+pub(super) fn english_pin(config: &Config) -> Result<(String, fs::File)> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let model = config.engine_model("en").ok_or("Missing English model")?;
+    let status = hex_speech().run_for(
+        &["model", "status", "--model", model, "--language", "en"],
+        None,
+        Duration::from_secs(2),
+    )?;
+    let fields: Vec<_> = status.trim().splitn(4, '\t').collect();
+    if fields.len() != 4 || fields[0] != "installed" {
+        return Err("English model identity unavailable".into());
+    }
+    let path = Path::new(fields[3]);
+    if !path.is_absolute() {
+        return Err("Invalid English model path".into());
+    }
+    let mut file = inputs::Snapshot::open_file(path)?;
+    if !(1..=(2u64 << 30)).contains(&file.metadata()?.len()) {
+        return Err("Invalid English model size".into());
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        digest.update(&buffer[..n]);
+    }
+    Ok((::hex::encode(digest.finalize()), file))
+}
+
+#[cfg(feature = "asr-runtime")]
+fn hex_speech() -> HexSpeech {
+    let args: Vec<_> = std::env::args_os().collect();
+    args.windows(2)
+        .find(|a| a[0] == "--hex-cli")
+        .map(|a| HexSpeech {
+            executable: PathBuf::from(&a[1]),
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "asr-runtime")]
+struct Reuse<'a> {
+    bridge: English,
+    baseline: &'a [Chunk],
+    origins: &'a BTreeMap<String, i64>,
+}
+#[cfg(feature = "asr-runtime")]
+impl EnglishBridge for Reuse<'_> {
+    fn transcribe(&mut self, range: &Range) -> Result<Value> {
+        let origin = self.origins[&range.track] as f64 / 16000.0;
+        let start = origin + range.range.context.0 as f64 / 16000.0;
+        let end = origin + range.range.context.1 as f64 / 16000.0;
+        let mut chunks: Vec<_> = self
+            .baseline
+            .iter()
+            .filter(|b| {
+                b.track == range.track
+                    && b.start >= start
+                    && b.end <= end
+                    && !b.english.trim().is_empty()
+            })
+            .collect();
+        chunks.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let mut cursor = start;
+        for chunk in &chunks {
+            if chunk.start > cursor {
+                break;
+            }
+            cursor = cursor.max(chunk.end);
+        }
+        if cursor >= end {
+            return Ok(
+                json!({"text":chunks.iter().map(|b| b.english.as_str()).collect::<Vec<_>>().join(" "),
+                "timing":"range", "reused_baseline":true, "start_sample":range.range.context.0,"end_sample":range.range.context.1}),
+            );
+        }
+        self.bridge.transcribe(range)
+    }
+}
+
+#[cfg(all(test, feature = "asr-runtime"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn english_reuses_only_complete_matching_track_intervals() {
+        let range: Range =
+            serde_json::from_value(json!({"track":"system","piece":"p","wav":"missing",
+            "range":{"context":[16000,48000],"members":[[0,[16000,48000]]],"language":"en"},
+            "model_id":"parakeet_unified_en","model_sha256":"0".repeat(64)}))
+            .unwrap();
+        let chunk = |start, end, track: &str, text: &str| Chunk {
+            id: text.into(),
+            start,
+            end,
+            track: track.into(),
+            speaker: None,
+            turn: None,
+            english: text.into(),
+            audio_start: None,
+        };
+        let baseline = [
+            chunk(1.5, 2.5, "system", "public one"),
+            chunk(2.5, 3.5, "system", "public two"),
+            chunk(0.0, 10.0, "microphone", "wrong track"),
+        ];
+        let origins = BTreeMap::from([("system".into(), 8000)]);
+        let mut bridge = Reuse {
+            bridge: English(HexBridge::new(HexSpeech {
+                executable: PathBuf::from("never-call"),
+            })),
+            baseline: &baseline,
+            origins: &origins,
+        };
+        let value = bridge.transcribe(&range).unwrap();
+        assert_eq!(value["text"], "public one public two");
+        assert_eq!(value["reused_baseline"], true);
+        bridge.baseline = &baseline[1..];
+        assert!(bridge.transcribe(&range).is_err());
+    }
+}

@@ -423,6 +423,7 @@ fn cleanup_work(work: &Path) {
 }
 
 pub fn run_one() -> Result<()> {
+    let normalization_started = Instant::now();
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
     job.config.meeting_languages = job.languages;
@@ -460,6 +461,23 @@ pub fn run_one() -> Result<()> {
         }
         Audio::open(&[(track.into(), output.clone())])?;
         paths.push((track.into(), output));
+    }
+    store_io::write(
+        &work.join("normalization.clock.json"),
+        &serde_json::json!({"seconds":normalization_started.elapsed().as_secs_f64()}),
+    )?;
+    #[cfg(windows)]
+    if let Some(mut config) = notes::enabled(&super::super::state_dir())? {
+        config.pipeline = job.config.clone();
+        let result = super::production::run(
+            &job.folder,
+            &paths,
+            &job.baseline,
+            &config,
+            work,
+            &job.input_revision,
+        )?;
+        return write_transcript(&work.join("result.json"), &result);
     }
     let mut audio = Audio::open(&paths)?;
     let detected = audio.speech_chunks()?;
@@ -648,7 +666,7 @@ pub fn run_pending() -> Result<()> {
                 .arg(&root)
                 .arg("--meetings-dir")
                 .arg(super::super::meetings_dir());
-            for flag in ["--ffmpeg", "--normalization-timeout-seconds"] {
+            for flag in ["--ffmpeg", "--normalization-timeout-seconds", "--hex-cli"] {
                 if let Some(value) = args.windows(2).find(|a| a[0] == flag).map(|a| &a[1]) {
                     command.args([flag, value]);
                 }

@@ -2,14 +2,17 @@
 use super::{batches::*, hex_bridge::*, *};
 use crate::core::{Config, model_catalog};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     num::NonZeroUsize,
     process::Command,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
+pub use pipeline::run;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
@@ -51,7 +54,7 @@ impl EnglishBridge for English {
         let reading = self.0.transcribe(
             &range.wav,
             &HexRequest {
-                range_id: range.piece.clone(),
+                range_id: ::hex::encode(Sha256::digest(serde_json::to_vec(range)?)),
                 model_id: range.model_id.clone(),
                 language: "en".into(),
             },
@@ -63,8 +66,21 @@ fn english_result(reading: HexReading, range: &Range) -> Result<Value> {
     let mut value = json!({"text":reading.text, "start_sample":range.range.context.0,
         "end_sample":range.range.context.1, "timing":"range"});
     if let Some(segments) = reading.json.and_then(|v| v.get("segments").cloned()) {
+        let mut tokens = Vec::new();
+        for segment in segments.as_array().ok_or("Invalid timed segments")? {
+            let start = (segment["start"].as_f64().ok_or("Missing segment start")? * 16000.0)
+                .round() as u64;
+            let end =
+                (segment["end"].as_f64().ok_or("Missing segment end")? * 16000.0).round() as u64;
+            if start >= end {
+                return Err("Empty timed segment".into());
+            }
+            tokens.push(json!({"text":format!("{} ",segment["text"].as_str().ok_or("Missing segment text")?),
+                "start_sample":start,"end_sample":end}));
+        }
         value["segments"] = segments;
-        value["timing"] = "segment-seconds".into();
+        value["tokens"] = tokens.into();
+        value["timing"] = "validated-samples".into();
     }
     Ok(value)
 }
@@ -154,5 +170,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(timed["segments"][0]["end"], 1.8);
+        assert_eq!(timed["tokens"][0]["start_sample"], 3200);
+        assert_eq!(timed["tokens"][0]["end_sample"], 28800);
     }
 }

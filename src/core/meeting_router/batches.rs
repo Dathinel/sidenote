@@ -1,4 +1,4 @@
-//! Unwired spool. Real adapters belong to layer 8c.
+//! Immutable sequential language batches with restart receipts.
 use super::{inputs::Snapshot, ranges::AsrRange};
 use crate::core::{asr::Result, store_io};
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,9 @@ fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
 }
 pub trait Recognizer {
     fn recognize(&mut self, range: &Range) -> Result<Value>;
+    fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 /// Validate the receipt before exposing a reading to reconciliation; no audio is opened.
 pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> {
@@ -174,6 +177,7 @@ fn run_windows(
         return Err("Stale plan revision".into());
     }
     for (lang, ranges) in &plan.batches {
+        let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
             .filter(|(id, _)| !cached(root, plan, id))
@@ -206,7 +210,14 @@ fn run_windows(
                 },
             )?;
         }
+        if let Some(s) = &mut session {
+            s.finish()?;
+        }
         drop(session);
+        store_io::write(
+            &root.join(format!("{lang}.clock.json")),
+            &serde_json::json!({"seconds":started.elapsed().as_secs_f64(),"revision":plan.revision}),
+        )?;
     }
     Ok(())
 }

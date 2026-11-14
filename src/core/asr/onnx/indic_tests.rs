@@ -9,6 +9,17 @@ fn typed<T: std::fmt::Debug>(result: Result<T>, expected: IndicError) {
 
 #[test]
 fn indic_rejects_untrusted_pack_and_input_without_runtime() {
+    for threads in [0, 257] {
+        let error = IndicConformer::load_with_threads(
+            Path::new("missing"),
+            Path::new("missing"),
+            "hi",
+            threads,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.to_string(), "Invalid ASR thread count");
+    }
     for language in ["hi", "te"] {
         typed(indic_hash(b"wrong graph", language), IndicError::ModelHash);
     }

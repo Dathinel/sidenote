@@ -29,7 +29,7 @@ pub(super) fn produce(
     origins: &BTreeMap<String, i64>,
     input_revision: &str,
     clocks: &mut BTreeMap<String, f64>,
-) -> Result<(Plan, pieces::PieceManifest)> {
+) -> Result<(Plan, pieces::PieceManifest, Option<fs::File>)> {
     let started = Instant::now();
     let mut manifest = pieces::plan(folder, origins, &config.pipeline)?;
     // Staging/normalization changes file identities. Cache against the parent's pinned input.
@@ -111,6 +111,8 @@ pub(super) fn produce(
     };
     let mut output = Vec::new();
     let mut coverage = Vec::new();
+    let mut english_identity = None;
+    let mut pin_seconds = 0.0;
     let mut detection_seconds = started.elapsed().as_secs_f64();
     let mut range_seconds = 0.0;
     for (track, (path, spans)) in manifest.tracks.iter().zip(tracks) {
@@ -167,6 +169,7 @@ pub(super) fn produce(
                 detection_seconds += started.elapsed().as_secs_f64();
             }
             let started = Instant::now();
+            let pin_before = pin_seconds;
             let speech: Vec<_> = intervals
                 .iter()
                 .zip(&decisions)
@@ -196,7 +199,16 @@ pub(super) fn produce(
                     .ok_or("Missing configured model")?
                     .to_owned();
                 let model_sha256 = if language == "en" && model_id == "parakeet_unified_en" {
-                    cache::key(&[], &model_id, "hex-explicit-model", "v1")
+                    if english_identity.is_none() {
+                        let pin_started = Instant::now();
+                        english_identity = Some(super::pipeline::english_pin(config)?);
+                        pin_seconds += pin_started.elapsed().as_secs_f64();
+                    }
+                    english_identity
+                        .as_ref()
+                        .ok_or("Missing English identity")?
+                        .0
+                        .clone()
                 } else {
                     model_catalog::model(&model_id)?.files[0].sha256.to_owned()
                 };
@@ -214,17 +226,18 @@ pub(super) fn produce(
                     model_sha256,
                 });
             }
-            range_seconds += started.elapsed().as_secs_f64();
+            range_seconds += started.elapsed().as_secs_f64() - (pin_seconds - pin_before);
         }
     }
     drop(detector);
     clocks.insert("detection".into(), detection_seconds);
     clocks.insert("ranges".into(), range_seconds);
+    clocks.insert("model_pin".into(), pin_seconds);
     store_io::write(&work.join("coverage.json"), &coverage)?;
     let started = Instant::now();
     let plan = spool(work, output)?;
     clocks.insert("spool".into(), started.elapsed().as_secs_f64());
-    Ok((plan, manifest))
+    Ok((plan, manifest, english_identity.map(|(_, file)| file)))
 }
 
 #[cfg(test)]

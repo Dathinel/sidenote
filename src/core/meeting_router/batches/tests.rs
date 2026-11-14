@@ -152,3 +152,30 @@ fn abrupt_death_artifacts_redo_only_incomplete_ranges() {
         ["load Hindi", "read a", "read b", "read c", "unload"]
     );
 }
+
+#[test]
+fn failed_native_shutdown_never_starts_the_next_language() {
+    struct FailFinish;
+    impl Recognizer for FailFinish {
+        fn recognize(&mut self, _: &Range) -> Result<Value> {
+            Ok(serde_json::json!({"text":"public"}))
+        }
+        fn finish(&mut self) -> Result<()> {
+            Err("worker cleanup failed".into())
+        }
+    }
+    struct Loader(Vec<String>);
+    impl NativeLoader for Loader {
+        fn load(&mut self, _: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+            self.0.push(range.range.language.clone().unwrap());
+            Ok(Box::new(FailFinish))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("public.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(dir.path(), ranges(&wav)).unwrap();
+    let mut loader = Loader(Vec::new());
+    assert!(run(dir.path(), &plan, &mut loader, &mut Fakes(Log::default())).is_err());
+    assert_eq!(loader.0, vec!["hi"]);
+}
