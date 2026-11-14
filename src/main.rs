@@ -12,6 +12,8 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 #[cfg(feature = "desktop")]
 mod ui;
 fn main() {
+    #[cfg(target_os = "linux")]
+    sidenote::platform::supervisor_entry();
     #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
