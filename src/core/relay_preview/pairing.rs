@@ -14,7 +14,7 @@ fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
     } else if let Some(error) = error.downcast_ref::<sidenote_sync::worker::WorkerLaunch>() {
         error.to_string()
     } else if let Some(error) = error.chain().find_map(|e| e.downcast_ref::<io::Error>()) {
-        error.raw_os_error().map_or_else(
+        store_io::os_code(error).map_or_else(
             || format!("io:{:?}", error.kind()),
             |code| format!("os:{code}"),
         )
@@ -26,7 +26,6 @@ fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
     {
         stage = marker.0;
     }
-    eprintln!("pairing failed at {stage} ({category})");
     Update::Failed { stage, category }
 }
 
@@ -57,8 +56,8 @@ async fn await_confirmation(
 ) -> bool {
     match confirmation_reply(attempt, replies).await {
         Ok(accepted) => accepted,
-        Err(error) => {
-            let _ = events.send(failure("timeout", &error.into()));
+        Err(_) => {
+            let _ = events.send(Update::TimedOut);
             let _ = cancel.send(true);
             false
         }
@@ -247,9 +246,11 @@ mod security_tests {
     fn failure_categories_suppress_private_error_text() {
         let io = io::Error::new(io::ErrorKind::PermissionDenied, "private path key");
         let launch = sidenote_sync::worker::WorkerLaunch(Some(5));
+        let wrapped = io::Error::other(store_io::RelayFailure("private path", Some(32)));
         for (error, expected) in [
             (anyhow::anyhow!("private code"), "protocol"),
             (io.into(), "io:PermissionDenied"),
+            (wrapped.into(), "os:32"),
             (launch.into(), "worker_launch:os:5"),
         ] {
             assert!(
@@ -264,9 +265,7 @@ mod security_tests {
         let (cancel, cancelled) = tokio::sync::watch::channel(false);
         assert!(!await_confirmation(1, &mut replies, &events, &cancel).await);
         assert!(*cancelled.borrow());
-        assert!(
-            matches!(updates.try_recv(), Ok(Update::Failed { stage: "timeout", category }) if category == "deadline")
-        );
+        assert!(matches!(updates.try_recv(), Ok(Update::TimedOut)));
         send.send(Reply {
             attempt: 1,
             accept: true,

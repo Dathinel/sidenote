@@ -604,9 +604,8 @@ mod platform {
             None,
         )
         .map_err(|e| {
-            let error = WorkerLaunch(e.raw_os_error());
-            eprintln!("sync {error}");
-            anyhow::Error::new(error).context(Failure(Reason::WorkerUnavailable))
+            anyhow::Error::new(WorkerLaunch(e.raw_os_error()))
+                .context(Failure(Reason::WorkerUnavailable))
         })?;
         let assigned =
             unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), handle.as_raw_handle()) };
