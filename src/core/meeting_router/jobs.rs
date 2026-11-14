@@ -1,9 +1,11 @@
 //! Durable per-meeting requests. The lock serializes drains, never enqueues.
 use super::*;
+pub(crate) mod handoff;
 mod notes;
+pub use handoff::{BatchOutput, commit_batches};
 pub(crate) use notes::notes_input;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
-    Ok(notes::enabled(root)?.is_some())
+    Ok(notes::enabled(root).ok().flatten().is_some())
 }
 use crate::platform::CommandExt;
 use std::{
@@ -27,6 +29,8 @@ struct Job {
     config: RoutingConfig,
     languages: Vec<String>,
     input_revision: String,
+    #[serde(default)]
+    generation: u128,
     windows: serde_json::Value,
     #[serde(skip)]
     input: Option<super::inputs::Snapshot>,
@@ -166,7 +170,10 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
     }
 }
 fn completed(root: &Path, job: &Job) -> Result<bool> {
-    Ok(automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str()))
+    Ok(
+        automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str())
+            && (!notes_enabled(root)? || handoff::completed(root, &job.id, &job.input_revision)),
+    )
 }
 #[cfg(any(windows, test))]
 pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
@@ -247,6 +254,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
         languages: config.meeting_languages.clone(),
         config,
         input_revision: revision,
+        generation: 0,
         windows,
         input: Some(input),
     }))
@@ -390,6 +398,33 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
     outcome
 }
 
+// The Stop deadline belongs only to notes_input. Every attempt gets a fresh budget.
+fn run_worker(
+    command: Command,
+    duration: f64,
+    config: Option<&crate::core::Config>,
+    active: Option<&Path>,
+) -> Result<Outcome> {
+    let computed = (duration * 4.0 + 120.0).clamp(120.0, 86400.0);
+    let budget = if let Some(config) = config {
+        let value = config
+            .engine_settings
+            .stage_deadline_seconds
+            .filter(|&v| v != 0);
+        if value.is_some_and(|v| v > 3600) {
+            return Err("Invalid ASR attempt budget".into());
+        }
+        f64::from(value.unwrap_or(computed.min(3600.0) as u32))
+    } else {
+        computed
+    };
+    Ok(supervise(
+        command,
+        seconds_arg("--router-timeout-seconds").unwrap_or(budget),
+        active,
+    ))
+}
+
 struct Cleanup(Vec<PathBuf>);
 impl Drop for Cleanup {
     fn drop(&mut self) {
@@ -423,11 +458,24 @@ fn cleanup_work(work: &Path) {
 }
 
 pub fn run_one() -> Result<()> {
-    let normalization_started = Instant::now();
     let request = path_arg("--router-request").ok_or("Missing router request")?;
-    let mut job: Job = serde_json::from_slice(&fs::read(&request)?)?;
+    run_one_in(&request, &super::super::state_dir())
+}
+fn run_one_in(request: &Path, root: &Path) -> Result<()> {
+    let mut job: Job =
+        serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
+    if notes_enabled(root)? {
+        handoff::assembled(
+            root,
+            &job.id,
+            job.generation,
+            &job.input_revision,
+            &job.baseline,
+        )?;
+        return Ok(());
+    }
     let mut normalized = Cleanup(Vec::new());
     let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
     let mut paths = Vec::new();
@@ -461,23 +509,6 @@ pub fn run_one() -> Result<()> {
         }
         Audio::open(&[(track.into(), output.clone())])?;
         paths.push((track.into(), output));
-    }
-    store_io::write(
-        &work.join("normalization.clock.json"),
-        &serde_json::json!({"seconds":normalization_started.elapsed().as_secs_f64()}),
-    )?;
-    #[cfg(windows)]
-    if let Some(mut config) = notes::enabled(&super::super::state_dir())? {
-        config.pipeline = job.config.clone();
-        let result = super::production::run(
-            &job.folder,
-            &paths,
-            &job.baseline,
-            &config,
-            work,
-            &job.input_revision,
-        )?;
-        return write_transcript(&work.join("result.json"), &result);
     }
     let mut audio = Audio::open(&paths)?;
     let detected = audio.speech_chunks()?;
@@ -513,6 +544,20 @@ pub fn run_one() -> Result<()> {
 }
 
 pub fn run_pending() -> Result<()> {
+    run_pending_with(|_, request| {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("--route-one")
+            .arg("--router-request")
+            .arg(request)
+            .arg("--data-dir")
+            .arg(super::super::state_dir())
+            .arg("--meetings-dir")
+            .arg(super::super::meetings_dir());
+        Ok(command)
+    })
+}
+fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -578,6 +623,7 @@ pub fn run_pending() -> Result<()> {
                 }
             };
             let destination = destination(&root, &job.id);
+            let labs = notes_enabled(&root)?;
             if completed(&root, &job)? {
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
@@ -585,14 +631,14 @@ pub fn run_pending() -> Result<()> {
             if automatic && !retry_ready(&root, &pending) {
                 continue;
             }
-            if job.config.meeting_languages == ["en"]
+            if !labs
+                && job.config.meeting_languages == ["en"]
                 && !matches!(
                     job.config.language_mode.as_str(),
                     "forced:hi" | "forced:te" | "forced:mixed"
                 )
             {
-                let labs = notes::enabled(&root)?.is_some();
-                if (destination.exists() || labs)
+                if destination.exists()
                     && !crate::service::stopping()
                     && snapshot(&root, &job.id).is_ok_and(|latest| {
                         latest.is_some_and(|latest| latest.input_revision == job.input_revision)
@@ -608,11 +654,7 @@ pub fn run_pending() -> Result<()> {
                         segment.status = "declared".into();
                     }
                     english.warnings.clear();
-                    if labs {
-                        notes::release(&root, &pending, &english)?;
-                    } else {
-                        write_transcript(&destination, &english)?;
-                    }
+                    write_transcript(&destination, &english)?;
                 }
                 if crate::service::stopping()
                     || !snapshot(&root, &job.id).is_ok_and(|latest| {
@@ -625,23 +667,16 @@ pub fn run_pending() -> Result<()> {
                 acknowledge(&root, &job.id, &path, &bytes)?;
                 continue;
             }
-            if let Some(mut old) = fs::read(&destination)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
+            if !labs
+                && let Some(old) = fs::read(&destination)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
                 && old.input_checksum == job.input_revision
+                && !old.degraded()
             {
-                let labs = notes::enabled(&root)?.is_some();
-                if labs {
-                    super::baseline::reconcile_exact(&mut old, &job.baseline);
-                }
-                if !old.degraded() {
-                    if labs {
-                        notes::release(&root, &pending, &old)?;
-                    }
-                    complete_automatic(&root, &job.id, &job.input_revision)?;
-                    acknowledge(&root, &job.id, &path, &bytes)?;
-                    continue;
-                }
+                complete_automatic(&root, &job.id, &job.input_revision)?;
+                acknowledge(&root, &job.id, &path, &bytes)?;
+                continue;
             }
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
@@ -653,59 +688,25 @@ pub fn run_pending() -> Result<()> {
                 .stage(&work)?;
             job.folder = staged.path().to_owned();
             let request = work.join("request.json");
+            job.generation = pending.generation;
             store_io::write(&request, &job)?;
             let _ = fs::remove_file(work.join("result.json"));
             let _ = fs::remove_file(work.join("normalization-outcome.json"));
             let _ = fs::remove_file(work.join("failure.json"));
-            let mut command = Command::new(std::env::current_exe()?);
-            command
-                .arg("--route-one")
-                .arg("--router-request")
-                .arg(&request)
-                .arg("--data-dir")
-                .arg(&root)
-                .arg("--meetings-dir")
-                .arg(super::super::meetings_dir());
+            let mut command = worker(&job, &request)?;
             for flag in ["--ffmpeg", "--normalization-timeout-seconds", "--hex-cli"] {
                 if let Some(value) = args.windows(2).find(|a| a[0] == flag).map(|a| &a[1]) {
                     command.args([flag, value]);
                 }
             }
             let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
-            let mut timeout = seconds_arg("--router-timeout-seconds")
-                .unwrap_or((duration * 4.0 + 120.0).clamp(120.0, 86400.0));
-            if let Some(config) = notes::enabled(&root)? {
-                let seconds = config.engine_settings.stages.routing_deadline_seconds;
-                if !(1..=3600).contains(&seconds) {
-                    return Err("Invalid routing deadline".into());
-                }
-                let manifest: serde_json::Value =
-                    serde_json::from_slice(&job.input.as_ref().ok_or("Missing input")?.manifest)?;
-                let end = manifest["ended_at_ms"].as_i64().or_else(|| {
-                    Some(
-                        manifest["created_at_ms"]
-                            .as_i64()?
-                            .saturating_add(manifest["duration_ms"].as_f64()? as i64),
-                    )
-                });
-                let remaining = end.map_or(f64::from(seconds), |end| {
-                    ((end
-                        .saturating_add(i64::from(seconds) * 1000)
-                        .saturating_sub(chrono::Utc::now().timestamp_millis()))
-                    .max(0) as f64)
-                        / 1000.0
-                });
-                timeout = timeout.min(remaining);
-            }
-            let mut outcome = if timeout <= 0.0 {
-                Outcome {
-                    timed_out: true,
-                    error: Some("routing dependency expired".into()),
-                    ..Outcome::default()
-                }
-            } else {
-                supervise(command, timeout, Some(&work.join("active.json")))
-            };
+            let settings = if labs { notes::enabled(&root)? } else { None };
+            let mut outcome = run_worker(
+                command,
+                duration,
+                settings.as_ref(),
+                Some(&work.join("active.json")),
+            )?;
             if let Some(error) = fs::read(work.join("failure.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -727,7 +728,28 @@ pub fn run_pending() -> Result<()> {
                 }
                 _ => {}
             }
-            let result = if outcome.success {
+            let assembled = if labs && stable && outcome.success {
+                match commit_batches(
+                    &root,
+                    &job.id,
+                    pending.generation,
+                    &job.input_revision,
+                    &job.baseline,
+                ) {
+                    Ok(id) => revision::load(destination.parent().unwrap(), Some(&id))?
+                        .map(|(_, r)| r.transcript),
+                    Err(_) => {
+                        outcome.success = false;
+                        outcome.error = Some("batch assembly failed".into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let result = if labs {
+                assembled
+            } else if outcome.success {
                 fs::read(work.join("result.json"))
                     .ok()
                     .and_then(|b| serde_json::from_slice::<Transcript>(&b).ok())
@@ -758,7 +780,6 @@ pub fn run_pending() -> Result<()> {
                     ),
                 )
             });
-            let labs = notes::enabled(&root)?.is_some();
             if labs {
                 super::baseline::reconcile_exact(&mut result, &job.baseline);
             }
@@ -768,9 +789,6 @@ pub fn run_pending() -> Result<()> {
             } else {
                 false
             };
-            if stable && labs {
-                notes::release(&root, &pending, &result)?;
-            }
             let normalization = fs::read(work.join("normalization-outcome.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
@@ -1112,44 +1130,6 @@ mod recording_guard_tests {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
-    #[test]
-    fn chosen_release_sorts_fallback_and_ignores_an_old_generation() {
-        let root = tempfile::tempdir().unwrap();
-        let pending = Pending {
-            id: "123-4".into(),
-            generation: 1,
-        };
-        store_io::write(&queue(root.path()).join("123-4.json"), &pending).unwrap();
-        let dest = destination(root.path(), "123-4");
-        let dir = dest.parent().unwrap();
-        revision::begin(dir, 1).unwrap();
-        let late:Chunk=serde_json::from_value(serde_json::json!({"id":"late","start":2.0,"end":3.0,"track":"system","english":"Later baseline"})).unwrap();
-        let mut early = late.clone();
-        early.id = "early".into();
-        early.start = 0.0;
-        early.end = 1.0;
-        let result = english_fallback(
-            &[late, early],
-            &Default::default(),
-            "input".into(),
-            "failed",
-        );
-        notes::release(root.path(), &pending, &result).unwrap();
-        let (id, chosen) = revision::load(dir, None).unwrap().unwrap();
-        assert_eq!(chosen.transcript.segments[0].start, 0.0);
-        assert!(chosen.transcript.degraded());
-        store_io::write(
-            &queue(root.path()).join("123-4.json"),
-            &Pending {
-                id: pending.id.clone(),
-                generation: 2,
-            },
-        )
-        .unwrap();
-        revision::begin(dir, 2).unwrap();
-        notes::release(root.path(), &pending, &result).unwrap();
-        assert_eq!(revision::load(dir, None).unwrap().unwrap().0, id);
-    }
     #[test]
     fn failure_timeout_instability_preserve_success_and_retry() {
         let root = tempfile::tempdir().unwrap();

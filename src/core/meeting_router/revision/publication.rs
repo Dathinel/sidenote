@@ -86,6 +86,13 @@ pub fn begin(dir: &Path, generation: u128) -> io::Result<()> {
 }
 /// Publish immutable bytes first, then atomically select. A failure never replaces success.
 pub fn commit(dir: &Path, data: &Revision) -> io::Result<String> {
+    write_revision(dir, data, true)
+}
+/// Preserve an unchosen fallback without reading or replacing a damaged selection.
+pub fn retain(dir: &Path, data: &Revision) -> io::Result<String> {
+    write_revision(dir, data, false)
+}
+fn write_revision(dir: &Path, data: &Revision, select: bool) -> io::Result<String> {
     let _lock = store_io::lock(&dir.join("revision.lock"))?;
     let current: u128 =
         serde_json::from_slice(&Snapshot::read_file(&dir.join("generation.json"), 128)?)?;
@@ -108,8 +115,17 @@ pub fn commit(dir: &Path, data: &Revision) -> io::Result<String> {
         }
         Err(e) => return Err(e),
     }
+    if !select {
+        return Ok(revision);
+    }
     let legacy = match Snapshot::read_file(&dir.join(SELECTED), MAX) {
-        Ok(bytes) if serde_json::from_slice::<Value>(&bytes)?["revision"].is_null() => Some(bytes),
+        Ok(bytes)
+            if serde_json::from_slice::<Value>(&bytes)
+                .map_or(true, |v| v["revision"].is_null())
+                || load(dir, None).is_err() =>
+        {
+            Some(bytes)
+        }
         Ok(_) => None,
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
