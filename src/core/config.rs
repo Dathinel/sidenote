@@ -691,31 +691,6 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn config_read_recovers_after_nonsharing_handle_is_released() {
-        use std::os::windows::fs::OpenOptionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("config.json");
-        let config = Config {
-            notes: Some(super::super::notes::NotesSettings::default()),
-            ..Config::default()
-        };
-        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
-        let held = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&path)
-            .unwrap();
-        assert_eq!(std::fs::read(&path).unwrap_err().raw_os_error(), Some(32));
-        std::thread::scope(|scope| {
-            scope.spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(75));
-                drop(held);
-            });
-            assert!(Config::load_in(root.path()).is_ok());
-        });
-    }
-    #[cfg(windows)]
-    #[test]
     fn config_read_contention_is_bounded_and_config_lock_returns_busy() {
         use std::os::windows::fs::OpenOptionsExt;
         let root = tempfile::tempdir().unwrap();

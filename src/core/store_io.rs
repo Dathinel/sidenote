@@ -398,4 +398,22 @@ mod retry_tests {
             assert_eq!(attempts, if matches!(code, 32 | 33) { 5 } else { 1 });
         }
     }
+    #[test]
+    fn sharing_retry_returns_the_first_success_after_a_released_handle() {
+        // Deterministic replacement for a thread that released a real handle after 75 ms,
+        // which raced the 200 ms retry budget on a loaded machine.
+        for code in [32, 33] {
+            let mut attempts = 0;
+            let value = retry_sharing_violation(|| {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(io::Error::from_raw_os_error(code))
+                } else {
+                    Ok(attempts)
+                }
+            })
+            .unwrap();
+            assert_eq!((value, attempts), (3, 3));
+        }
+    }
 }
