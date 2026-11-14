@@ -158,8 +158,8 @@ pub fn kit(p: &Palette) -> Kit {
 pub const BODY: f32 = 16.0;
 pub const BODY_LH: f32 = 27.0;
 
-/// The serif used for page titles. Windows ships Georgia; without it titles fall back to Inter.
-const DISPLAY: Family = Family::Named("Georgia");
+/// Bundled Inter keeps title metrics consistent on Windows and Linux.
+const DISPLAY: Family = Family::Named("Inter");
 
 pub fn display(size: f32) -> TextStyle {
     TextStyle::new(size, 400.0)
@@ -167,23 +167,13 @@ pub fn display(size: f32) -> TextStyle {
         .lh((size * 1.25).round())
 }
 
-/// Inter as before, plus Georgia from the Windows fonts folder for titles. Rune replaces its
-/// built-in Inter when an app passes any fonts, so Inter is bundled here too.
+/// All desktop text uses the repo's licensed Inter fonts, independent of OS font folders.
 pub fn fonts() -> &'static [&'static [u8]] {
-    let mut list: Vec<&'static [u8]> = vec![
+    &[
         include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
         include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
         include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
-    ];
-    let dir = std::env::var_os("WINDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "C:\\Windows".into())
-        .join("Fonts");
-    if let Ok(bytes) = std::fs::read(dir.join("georgia.ttf")) {
-        // Read once at startup and kept for the life of the process, as Rune requires.
-        list.push(Box::leak(bytes.into_boxed_slice()));
-    }
-    Box::leak(list.into_boxed_slice())
+    ]
 }
 
 #[cfg(test)]

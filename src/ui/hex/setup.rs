@@ -165,6 +165,11 @@ fn meetings_card(s: &State, p: Palette) -> Option<El> {
 
 pub(super) fn card(s: &State, p: Palette) -> Option<El> {
     let h = &s.hex;
+    if cfg!(target_os = "linux") && !h.running() {
+        return Some(col().w_full().gap(12.0).key("hex-setup-unavailable")
+            .child(roles::SECTION.wrap("Hex on Linux", p.ink))
+            .child(roles::SMALL.wrap("Hex installation and recording control are unavailable in this Linux desktop launch layer.", p.soft)));
+    }
     if h.running() && !h.install.busy() {
         return meetings_card(s, p);
     }

@@ -90,11 +90,29 @@ pub fn set_window_icon(_hwnd: isize) {}
 pub fn fit_to_work_area(_hwnd: isize, want: (f32, f32)) -> (f32, f32) {
     want
 }
-pub fn open_folder(_path: &Path) -> io::Result<()> {
-    Err(super::unavailable())
+pub fn open_folder(path: &Path) -> io::Result<()> {
+    if !crate::service::ui_allowed() {
+        return Err(super::unavailable());
+    }
+    let path = path.canonicalize()?;
+    if !path.is_dir() {
+        return Err(io::ErrorKind::NotADirectory.into());
+    }
+    let status = std::process::Command::new("xdg-open")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(super::unavailable())
+    }
 }
-pub fn reveal_file(_path: &Path) -> io::Result<()> {
-    Err(super::unavailable())
+pub fn reveal_file(path: &Path) -> io::Result<()> {
+    let path = path.canonicalize()?;
+    open_folder(path.parent().ok_or(io::ErrorKind::InvalidInput)?)
 }
 pub fn guard_window_close(_hwnd: isize, _request: impl Fn() + 'static) -> io::Result<()> {
     Err(super::unavailable())

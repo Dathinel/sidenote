@@ -71,9 +71,9 @@ relay-capability-v2 = []
 # Explicit opt-in for synthetic headless qualification in optimized builds.
 relay-qualification = []
 default = ["desktop", "ui-kit"]
-desktop = ["dep:rune", "dep:wgpu"]
+desktop = ["dep:rune", "dep:wgpu", "dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
 server = []
-ui-kit = ["desktop", "dep:rune-kit", "dep:rune-motion", "dep:rune-theme-opencode"]
+ui-kit = ["desktop"]
 
 [profile.dev]
 debug = "line-tables-only"

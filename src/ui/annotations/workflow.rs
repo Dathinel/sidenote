@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
 pub(super) fn hex_program() -> Result<PathBuf, String> {
     let status = HexEngine::new()
         .status()
@@ -27,6 +28,10 @@ pub(super) fn hex_program() -> Result<PathBuf, String> {
     exe.is_file()
         .then_some(exe)
         .ok_or_else(|| "The Hex Annotate command is unavailable. Update Hex and try again.".into())
+}
+#[cfg(not(windows))]
+pub(super) fn hex_program() -> Result<PathBuf, String> {
+    Err("Hex annotation recording is unavailable on Linux.".into())
 }
 pub(in crate::ui) fn new_button(s: &State, p: Palette) -> El {
     let enabled = s.annotations.can_record

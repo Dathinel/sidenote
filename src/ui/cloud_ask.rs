@@ -223,7 +223,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .child(setting_row(s, "ask-connection-model-row", "Model", "Exact server model ID. OpenRouter suggestions are editable; availability and cost depend on the provider.", model, true, p))
         .child(models)
         .child(action("Save connection", "ask-connection-save", p).on_press(|s: &mut State| s.save_ask_connection()))
-        .child(setting_row(s, "ask-connection-key-row", "API key (optional)", if c.key_saved { "A protected key is saved for this endpoint. Delete removes saved keys for every endpoint." } else { "Stored using Windows current-user DPAPI, outside config and sync. Delete removes keys for every endpoint." }, key, true, p))
+        .child(setting_row(s, "ask-connection-key-row", "API key (optional)", if c.key_saved { "A protected key is saved for this endpoint. Delete removes saved keys for every endpoint." } else { if cfg!(windows) { "Stored using Windows current-user DPAPI, outside config and sync. Delete removes keys for every endpoint." } else { "API key storage is unavailable on Linux." } }, key, true, p))
         .child(row().gap(8.0).flex_wrap()
             .child(action("Save key", "ask-connection-key-save", p).on_press(|s: &mut State| {
                 let result = if s.ask_settings.connection.draft() != s.ask_settings.connection.settings { Err("Save the endpoint and model before saving its key".into()) } else { provider::save_key(s.ask_settings.connection.key.text.as_bytes()) };

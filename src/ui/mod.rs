@@ -1668,6 +1668,10 @@ fn setup(s: &mut State, waker: Waker) {
         return;
     }
     s.waker = Some(waker.clone());
+    if cfg!(target_os = "linux") && isolated() {
+        hex::scene(s, false);
+        return;
+    }
     s.refresh_ai_notes();
     s.updates_start();
     s.hex_start(waker.clone());

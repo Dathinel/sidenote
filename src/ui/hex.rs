@@ -1079,7 +1079,9 @@ pub fn recording_start(s: &State) -> Option<(chrono::DateTime<chrono::Local>, bo
 /// Why a new recording cannot start right now, in words fit for a tooltip.
 pub fn start_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
-    if !super::updates::listener_ready(s) {
+    if cfg!(target_os = "linux") {
+        Some("Recording control is unavailable in this Linux desktop launch layer.")
+    } else if !super::updates::listener_ready(s) {
         Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
     } else if h.status.is_none() || h.caps_loading {
         Some("Checking for Hex. This takes a few seconds.")

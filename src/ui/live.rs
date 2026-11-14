@@ -1599,7 +1599,9 @@ mod writer_tests {
             core,
             hex_engine::{EngineState, HexError},
         };
-        use std::{fs, os::windows::process::CommandExt, process::Command};
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        use std::{fs, process::Command};
 
         // Give State and all of its workers private paths without changing other tests' env.
         if std::env::var_os("SIDENOTE_LIVE_TIMELINE_CHILD").is_none() {
@@ -1607,7 +1609,8 @@ mod writer_tests {
                 .join("artifacts")
                 .join(format!("live-timeline-{}", std::process::id()));
             fs::create_dir_all(&root).unwrap();
-            let status = Command::new(std::env::current_exe().unwrap())
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "ui::live::writer_tests::restart_and_late_summary_preserve_live_notes",
@@ -1620,10 +1623,10 @@ mod writer_tests {
                 .env("SIDENOTE_DATA_DIR", root.join("state"))
                 .env("SIDENOTE_STATE_DIR", root.join("state"))
                 .env("SIDENOTE_HEX_DIR", root.join("meetings"))
-                .env("SIDENOTE_PEERS_DIR", root.join("peers"))
-                .creation_flags(0x08000000)
-                .status()
-                .unwrap();
+                .env("SIDENOTE_PEERS_DIR", root.join("peers"));
+            #[cfg(windows)]
+            command.creation_flags(0x08000000);
+            let status = command.status().unwrap();
             assert!(status.success(), "isolated live timeline failed");
             return;
         }
