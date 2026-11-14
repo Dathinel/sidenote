@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Order and key numbering are fixed for journal version 1. Legacy wire stages stay intact.
 pub const STAGES: [Stage; 9] = [
     Stage::Discover,

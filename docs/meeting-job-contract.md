@@ -55,6 +55,8 @@ provide atomic publication or destination-side key deduplication before being wi
 An interrupted save reloads the journal before another call. Missing adapters return
 NotAvailable. No real processing, helper, UI, discovery or external effects are added here.
 
-Release tests cover competing claims, released claims, interrupted jobs, existing-output
-preservation, old journal decoding, stage attribution and allowlisted UI causes. They must
-run in the release check; no unit tests or installed-app acceptance run on the laptop here.
+Synthetic tests cover competing triggers, process exit at each completed boundary,
+recovery before/after stage commit, unavailable adapters, retained input identities,
+per-stage typed failures, invalid journals and failed checkpoint writes. The existing
+meeting-guards tests retain legacy lock interoperability and output preservation coverage.
+These tests do not qualify real stage adapters or installed-app acceptance.
