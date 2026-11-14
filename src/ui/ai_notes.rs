@@ -156,17 +156,8 @@ pub struct AiNotes {
     pub switch_confirm: Option<Helper>,
     pub generation: u64,
     pub scene: bool,
-    /// A Meeting summary settings save is running, so a failure puts the stored choice back.
-    pub settings_saving: bool,
 }
 impl AiNotes {
-    /// Show the stored model choice again, for a save that did not go through.
-    fn revert_models(&mut self) {
-        if let Some(settings) = &self.settings {
-            sync_models(&mut self.models, settings);
-            self.other_model = false;
-        }
-    }
     fn prepare_codex_recovery(&mut self, id: String) -> Option<NotesSettings> {
         let job = self.jobs.get(&id)?;
         if !super::notes_status::can_use_codex(job, &self.found) {
@@ -212,20 +203,7 @@ impl Default for AiNotes {
             switch_confirm: None,
             generation: 0,
             scene: false,
-            settings_saving: false,
         }
-    }
-}
-/// One model box per agent: the stored model for the chosen agent, the agent's own default for
-/// the others.
-fn sync_models(models: &mut [TextEdit; 3], settings: &NotesSettings) {
-    for (index, h) in HELPERS.iter().enumerate() {
-        let stored = settings.helper == Some(*h) && !settings.model.trim().is_empty();
-        models[index] = TextEdit::new(if stored {
-            &settings.model
-        } else {
-            h.default_model()
-        });
     }
 }
 pub struct Snapshot {
@@ -357,7 +335,6 @@ impl State {
             Work::Test(i, _) => Some(*i),
             _ => None,
         };
-        self.ai_notes.settings_saving = matches!(work, Work::Settings { .. });
         self.ai_notes.error = None;
         self.ai_notes.notice = None;
         self.ai_notes.generation += 1;
@@ -386,9 +363,6 @@ impl State {
         {
             self.ai_notes.pending = None;
             self.ai_notes.retry_after_save = None;
-            if std::mem::take(&mut self.ai_notes.settings_saving) {
-                self.ai_notes.revert_models();
-            }
             self.ai_notes.error =
                 Some("Could not start the Meeting summary worker. Try again.".into());
         }
@@ -448,15 +422,10 @@ impl State {
             return;
         }
         self.ai_notes.pending = None;
-        let saving = std::mem::take(&mut self.ai_notes.settings_saving);
         match result {
             Err(error) => {
                 self.ai_notes.retry_after_save = None;
                 self.ai_notes.error = Some(error);
-                if saving {
-                    // The choice on screen must be the one that is stored.
-                    self.ai_notes.revert_models();
-                }
             }
             Ok(Completion::Loaded(snapshot)) => {
                 let s = &mut self.ai_notes;
@@ -465,7 +434,17 @@ impl State {
                     .settings
                     .helper
                     .filter(|_| snapshot.settings.helper_reason().is_some());
-                sync_models(&mut s.models, &snapshot.settings);
+                for (index, h) in HELPERS.iter().enumerate() {
+                    s.models[index] = TextEdit::new(
+                        if snapshot.settings.helper == Some(*h)
+                            && !snapshot.settings.model.trim().is_empty()
+                        {
+                            &snapshot.settings.model
+                        } else {
+                            h.default_model()
+                        },
+                    );
+                }
                 s.name = TextEdit::new(&snapshot.settings.your_name);
                 s.settings = Some(snapshot.settings);
                 s.found = snapshot.found;
@@ -1359,7 +1338,7 @@ mod tests {
         assert_eq!(enqueues, [(id, Request::UseCodex)]);
     }
     #[test]
-    fn a_failed_model_save_puts_the_stored_choice_back_and_keeps_the_error() {
+    fn a_failed_model_save_keeps_what_was_typed_and_shows_the_error() {
         crate::test_paths::isolate();
         let mut s = State::new();
         let index = HELPERS.iter().position(|h| *h == Helper::Claude).unwrap();
@@ -1370,23 +1349,15 @@ mod tests {
             ..NotesSettings::default()
         });
         s.ai_notes.generation = 1;
-        // A save that fails: the typed model goes, the stored one returns, the error stays.
         s.ai_notes.models[index] = TextEdit::new("synthetic-typed");
         s.ai_notes.other_model = true;
         s.ai_notes.pending = Some("Saving Meeting summary...");
-        s.ai_notes.settings_saving = true;
         let failure = "Could not save Meeting summary settings. Your previous choice was kept.";
         s.notes_finished(1, Err(failure.into()));
-        assert_eq!(s.ai_notes.models[index].text, "synthetic-saved");
-        assert!(!s.ai_notes.other_model && s.ai_notes.pending.is_none());
-        assert_eq!(s.ai_notes.error.as_deref(), Some(failure));
-        assert!(!s.ai_notes.settings_saving);
-        // Any other failure leaves text the person is typing alone.
-        s.ai_notes.models[index] = TextEdit::new("synthetic-typed");
-        s.ai_notes.generation = 2;
-        s.ai_notes.settings_saving = false;
-        s.notes_finished(2, Err("The sample failed.".into()));
+        // The typed model stays for a retry, and the error is shown.
         assert_eq!(s.ai_notes.models[index].text, "synthetic-typed");
+        assert!(s.ai_notes.other_model && s.ai_notes.pending.is_none());
+        assert_eq!(s.ai_notes.error.as_deref(), Some(failure));
     }
     #[test]
     fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {

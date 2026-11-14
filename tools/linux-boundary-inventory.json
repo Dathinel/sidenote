@@ -128,7 +128,7 @@
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",
   "src/sync_owner/local.rs": "c231eda3c3f1a213381c3a1a0ca25486fe16146d20773bd22578e6955afec91c",
   "src/sync_owner/mcp.rs": "0f59d5b4431ac3b617b0621351e09005116e2d09492693abc47da3fbf614e724",
-  "src/ui/ai_notes.rs": "bfd3dfe3005e31d70172ebecbaafadd151587466d78dab28ceff6eb332f1a731",
+  "src/ui/ai_notes.rs": "85e1ebe7ebfec095eae61c336f20de8513009f6ae7afbaedb769bbe6284d3424",
   "src/ui/annotations.rs": "ae71adda33ddac8421b7615d35132575760e675045e9456f7f2c0b4996c13952",
   "src/ui/annotations/notebooks.rs": "05a4b68e8f09a2288e282b4d385207b8b517c5bac0ddbb262092dfea3e5567a7",
   "src/ui/annotations/workflow.rs": "0721106db04998abcfeba96ed6f4e4e297de1d60f503eadbbacd36a392ff1104",

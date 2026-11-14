@@ -404,7 +404,11 @@ pub(super) fn enter(s: &mut State) {
         .copied()
         .filter(|field| engine.dirty(&[*field]))
         .collect();
-    engine.error = (!kept.is_empty()).then_some(NOT_SAVED);
+    // The hints follow the drafts still held. A failed disk save is not a hint: it stays until a
+    // later save succeeds.
+    if engine.error != Some(SAVE_FAILED) {
+        engine.error = (!kept.is_empty()).then_some(NOT_SAVED);
+    }
     engine.bad = kept;
 }
 fn draft_mut(s: &mut State, index: usize) -> &mut TextEdit {
@@ -1235,6 +1239,16 @@ mod tests {
         type_into(&mut s, Field::Threads, "4");
         super::super::navigate(&mut s, Page::Meetings, 3);
         assert!(s.hex.shell.engine.bad.is_empty() && s.hex.shell.engine.error.is_none());
+    }
+    #[test]
+    fn pressing_the_tab_again_keeps_a_failed_disk_save_message() {
+        let (mut s, _root) = state_with(EMPTY);
+        type_into(&mut s, Field::Threads, "8");
+        s.hex.shell.engine.error = Some(SAVE_FAILED);
+        assert!(s.hex.shell.engine.bad.is_empty());
+        super::super::navigate(&mut s, Page::Meetings, 3);
+        assert_eq!(s.hex.shell.engine.error, Some(SAVE_FAILED));
+        assert_eq!(text(&s, Field::Threads), "8");
     }
     #[test]
     fn a_wrong_sibling_model_does_not_stop_the_edit_from_saving() {
