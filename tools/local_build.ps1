@@ -54,7 +54,16 @@ function Resolve-TargetDirectory {
     $target = if ($explicit) { $explicit } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR }
               elseif ($env:CARGO_BUILD_TARGET_DIR) { $env:CARGO_BUILD_TARGET_DIR } else { Join-Path (Get-Location) 'target' }
     if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Get-Location) $target }
-    return [IO.Path]::GetFullPath($target)
+    $target = [IO.Path]::GetFullPath($target)
+    # Cargo hashes path dependencies relative to the workspace, so another worktree's build in
+    # this directory looks fresh here and links stale code. Keep each target inside its own worktree.
+    $top = (& git rev-parse --show-toplevel 2>$null)
+    if (-not $top) { throw 'Run local_build from inside a git worktree.' }
+    $top = [IO.Path]::GetFullPath($top).TrimEnd('\') + '\'
+    if (-not $target.StartsWith($top, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Target directory $target is outside this worktree ($top); use a target inside it."
+    }
+    return $target
 }
 function Assert-TargetSpace {
     $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($targetDirectory))
