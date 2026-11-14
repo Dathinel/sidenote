@@ -239,6 +239,8 @@ impl std::error::Error for KnowledgeBaseSaveError {}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub engine_settings: super::engine_settings::EngineSettings,
     pub version: u32,
     pub features: Features,
     #[serde(default)]
@@ -259,6 +261,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: 1,
+            engine_settings: super::engine_settings::EngineSettings::default(),
             features: Features::default(),
             labs: super::meeting_watch::Labs::default(),
             knowledge_base: KnowledgeBase::default(),
