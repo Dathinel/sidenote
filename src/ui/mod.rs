@@ -2949,6 +2949,9 @@ pub fn spec() -> AppSpec<State> {
             ("settings-engine-invalid", |s| {
                 hex::settings::scene(s, "settings-engine-invalid")
             }),
+            ("settings-engine-notes-error", |s| {
+                hex::settings::scene(s, "settings-engine-notes-error")
+            }),
             ("settings-prompts", |s| {
                 hex::settings::scene(s, "settings-prompts")
             }),

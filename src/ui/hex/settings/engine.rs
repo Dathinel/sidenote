@@ -330,8 +330,9 @@ fn apply(base: &Config, edits: &[(Field, &str)]) -> Result<Option<Config>, Vec<F
         Err(bad)
     }
 }
-/// Source and validity in plain words, and whether the line needs attention.
-fn status_text(status: &FieldStatus) -> (String, bool) {
+/// Source and validity in plain words, and whether the line needs attention. The notes model
+/// passes the text checks, but nothing here has run it, so it says the name is not checked.
+fn status_text(key: &str, status: &FieldStatus) -> (String, bool) {
     let source = match status.source {
         Source::Default => "Default value",
         Source::Saved => "Saved on this PC",
@@ -340,6 +341,7 @@ fn status_text(status: &FieldStatus) -> (String, bool) {
     };
     let validity = match status.validation {
         Validation::Empty => "not set",
+        Validation::Valid if key == "notes.model" => "name not checked on this PC yet",
         Validation::Valid => "valid",
         Validation::Invalid => "not valid",
         Validation::Unavailable => "not available on this PC",
@@ -507,7 +509,7 @@ fn copy_column(
         .child(roles::NAME.wrap(text.0, p.ink))
         .child(roles::SMALL.wrap(text.1, p.soft));
     if let Some(status) = statuses.get(status_key) {
-        let (line, warn) = status_text(status);
+        let (line, warn) = status_text(status_key, status);
         let color = if warn { p.warn } else { p.soft };
         copy = copy.child(roles::META.wrap(line, color).key(format!("{key}-status")));
     }
@@ -831,7 +833,7 @@ fn notes_writer(s: &State, p: Palette, statuses: &BTreeMap<String, FieldStatus>)
         .child(roles::NAME.wrap("Notes writer", p.ink))
         .child(roles::SMALL.wrap(help, p.soft));
     if let Some(status) = statuses.get("notes.helper") {
-        let (line, warn) = status_text(status);
+        let (line, warn) = status_text("notes.helper", status);
         let color = if warn { p.warn } else { p.soft };
         let line = roles::META.wrap(line, color);
         copy = copy.child(line.key("engine-notes-writer-status"));
@@ -868,20 +870,45 @@ fn notes(
     layer: &mut Vec<El>,
     st: &BTreeMap<String, FieldStatus>,
 ) -> El {
-    let mut out = col()
+    let extras = notes_extras(s, p, st);
+    col()
         .w_full()
         .gap(8.0)
         .mt(18.0)
         .key("engine-notes")
         .child(roles::GROUP.wrap("Notes", p.soft))
         .child(notes_writer(s, p, st))
-        .child(ai_notes::summary_model(s, k, p, layer));
-    if let Some(status) = st.get("notes.model") {
-        let (line, warn) = status_text(status);
-        let line = roles::META.wrap(line, if warn { p.warn } else { p.soft });
-        out = out.child(line.key("engine-notes-model-status"));
+        .child(ai_notes::summary_model(s, k, p, layer, extras))
+}
+/// What the Summary model card says besides its picker: a save in progress and a failed save.
+/// The picker is the existing one, so its save reports through the existing notes state.
+fn notes_notices(a: &ai_notes::AiNotes) -> Vec<(&'static str, &'static str, String)> {
+    let mut out = Vec::new();
+    if let Some(pending) = a.pending {
+        out.push(("engine-notes-pending", "status", pending.to_owned()));
+    }
+    if let Some(error) = &a.error
+        && a.editor_target.is_none()
+    {
+        out.push(("engine-notes-error", "alert", error.clone()));
     }
     out
+}
+fn notes_extras(s: &State, p: Palette, st: &BTreeMap<String, FieldStatus>) -> Vec<El> {
+    let mut lines = col().w_full().gap(4.0).px(14.0).pb(14.0);
+    let mut any = false;
+    if let Some(status) = st.get("notes.model") {
+        let (line, warn) = status_text("notes.model", status);
+        let line = roles::META.wrap(line, if warn { p.warn } else { p.soft });
+        lines = lines.child(line.key("engine-notes-model-status"));
+        any = true;
+    }
+    for (key, role, text) in notes_notices(&s.ai_notes) {
+        let color = if role == "alert" { p.warn } else { p.soft };
+        lines = lines.child(roles::SMALL.wrap(text, color).role(role).key(key));
+        any = true;
+    }
+    any.then_some(lines).into_iter().collect()
 }
 
 pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
@@ -934,6 +961,11 @@ pub(super) fn scene_config(config: &mut Config) {
         supporting: vec!["en".into()],
         routes: [("hi".into(), route)].into(),
     });
+}
+/// A Summary model save that failed, as the existing notes state reports it. Render scene only.
+pub(super) fn scene_notes_error(s: &mut State) {
+    let message = "Could not save Meeting summary settings. Your previous choice was kept.";
+    s.ai_notes.error = Some(message.into());
 }
 /// Type values that cannot be saved and press Save, as the person would. Render scenes only.
 pub(super) fn scene_invalid(s: &mut State) {
@@ -1269,13 +1301,49 @@ mod tests {
                     conflict: false,
                     invalid_import: false,
                 };
-                let (line, warn) = status_text(&status);
+                let (line, warn) = status_text("worker_threads", &status);
                 assert!(line.contains(" \u{b7} "));
                 let attention = matches!(validation, Validation::Invalid | Validation::Unavailable);
                 assert_eq!(warn, attention);
             }
         }
         assert!(in_use("notes.model") && !in_use("worker_threads"));
+    }
+    #[test]
+    fn the_notes_model_is_never_called_valid_because_nothing_ran_it() {
+        let status = FieldStatus {
+            source: Source::Saved,
+            validation: Validation::Valid,
+            conflict: false,
+            invalid_import: false,
+        };
+        let (model, _) = status_text("notes.model", &status);
+        assert_eq!(
+            model,
+            "Saved on this PC \u{b7} name not checked on this PC yet"
+        );
+        let (threads, _) = status_text("worker_threads", &status);
+        assert!(threads.ends_with("valid") && !threads.contains("not checked"));
+    }
+    #[test]
+    fn a_pending_or_failed_summary_save_is_shown_on_this_tab() {
+        let mut notes = ai_notes::AiNotes::default();
+        assert!(notes_notices(&notes).is_empty());
+        notes.pending = Some("Saving Meeting summary...");
+        notes.error = Some("Could not save Meeting summary settings.".into());
+        let shown = notes_notices(&notes);
+        let roles: Vec<_> = shown.iter().map(|(key, role, _)| (*key, *role)).collect();
+        assert_eq!(
+            roles,
+            [
+                ("engine-notes-pending", "status"),
+                ("engine-notes-error", "alert")
+            ]
+        );
+        assert!(shown[1].2.contains("Could not save"));
+        // An error that belongs to a prompt editor elsewhere is not this card's.
+        notes.editor_target = Some(0);
+        assert_eq!(notes_notices(&notes).len(), 1);
     }
     #[test]
     fn a_failed_save_keeps_edited_drafts_and_refreshes_the_rest() {

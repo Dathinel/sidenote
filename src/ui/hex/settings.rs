@@ -2355,7 +2355,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(super::super::cloud_ask::section(s, k, p, layer))
             .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
-            .child(ai_notes::summary_model(s, k, p, layer))
+            .child(ai_notes::summary_model(s, k, p, layer, Vec::new()))
             .child(super::super::annotations::agents_section(s, k, p, layer)),
         (Page::Helpers, _) => col()
             .w_full()
@@ -2717,7 +2717,9 @@ pub fn scene(s: &mut State, name: &str) {
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
-        "settings-engine" | "settings-engine-invalid" => (Page::Meetings, 3),
+        "settings-engine" | "settings-engine-invalid" | "settings-engine-notes-error" => {
+            (Page::Meetings, 3)
+        }
         "settings-prompts"
         | "settings-prompts-edited"
         | "settings-prompts-diff"
@@ -2757,6 +2759,9 @@ pub fn scene(s: &mut State, name: &str) {
     navigate(s, page, tab);
     if name == "settings-engine-invalid" {
         engine::scene_invalid(s);
+    }
+    if name == "settings-engine-notes-error" {
+        engine::scene_notes_error(s);
     }
     if page == Page::Prompts {
         super::super::prompt_library::scene(s, name);

@@ -8,7 +8,7 @@ STATE=ROOT/'target/settings-build-render'
 EXE=Path(os.environ.get('CARGO_TARGET_DIR',str(ROOT/'target')))/'x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
 from prepare_people_fixture import prepare
-PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
+PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
@@ -45,6 +45,9 @@ def render(job):
   keys={n.get('key') for n in tree['elements']}
   need={'engine-transcription','engine-worker-threads-status','engine-worker-threads-usage','engine-worker-threads-input','engine-transcription-save','engine-model-te-status','engine-model-te-usage','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-translation-model-usage','engine-title-model-status','engine-step-tasks-switch','engine-step-comparison-switch','engine-step-comparison-usage','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-status','engine-prompt-translation-reset'}
   assert 'engine-model-hi-input' not in keys,'A routed language must be read only'
+  paths={n.get('key'):n.get('path','') for n in tree['elements']}
+  assert 'notes-model-card' in paths.get('engine-notes-model-status',''),'The Summary model status must sit inside its card'
+  if scene=='settings-engine-notes-error':assert 'notes-model-card' in paths.get('engine-notes-error',''),'A failed Summary model save must show its error in the card'
   assert need<=keys,(base.name,sorted(need-keys))
  if scene=='people-suggestion':
   elements=tree['elements']
