@@ -22,8 +22,9 @@ the job without consuming an attempt. A crashed process loses ownership immediat
 On restart, queued/running work may reacquire the lock; a stored stage never authorizes
 skipping validation or executing two producers. Recheck completed output under that lock.
 An existing `english-summary.json` completes automatic work and is preserved, even if a
-failure marker or running journal was left behind. No new journal or completion marker is
-introduced. Explicit script NotesOnly replay retains its existing transcript and output
+failure marker or running journal was left behind. This legacy/active-engine contract adds
+no journal or completion marker; the dormant coordinator below has its own journal.
+Explicit script NotesOnly replay retains its existing transcript and output
 backup rules; standalone notes invocation is an explicit replay. Built-in sorting/task
 replay retains its existing summary-preservation behavior. Typed user `notes.md` is input.
 This contract does not claim transactional render/export/task publication: those ports and
@@ -52,7 +53,8 @@ An adapter must reconcile a durable receipt for that key, returning committed re
 finishing uncommitted work idempotently. It must not repeat committed effects. Arbitrary
 external effects cannot be made exactly-once by a journal alone; later adapters must
 provide atomic publication or destination-side key deduplication before being wired in.
-An interrupted save reloads the journal before another call. Missing adapters return
+An interrupted save reloads the current journal before another call, bypassing refresh-scope
+read caches while retaining bounded, pinned-descriptor reads. Missing adapters return
 NotAvailable. No real processing, helper, UI, discovery or external effects are added here.
 
 Synthetic tests cover competing triggers, process exit at each completed boundary,

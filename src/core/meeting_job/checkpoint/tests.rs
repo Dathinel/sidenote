@@ -6,6 +6,48 @@ use std::sync::{
 
 const INPUTS: [u8; 32] = [7; 32];
 
+#[test]
+fn scoped_reads_never_repeat_a_completed_stage_or_regress_the_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut job = Job::open(temp.path(), INPUTS).unwrap();
+    let mut keys = std::collections::BTreeSet::new();
+    assert!(
+        job.advance(|stage, key, action| {
+            assert_eq!((stage, action), (Stage::Discover, Action::Start));
+            assert!(keys.insert(key.to_owned()));
+            Ok(Availability::Completed)
+        })
+        .unwrap()
+    );
+    let _scope = crate::core::file_reads::Scope::begin();
+    let cached = crate::core::file_reads::read(&job.path, 8192).unwrap();
+    for (index, expected) in STAGES.iter().copied().enumerate().skip(1) {
+        assert_eq!(job.completed().len(), index);
+        assert!(
+            job.advance(|stage, key, action| {
+                assert_eq!((stage, action), (expected, Action::Start));
+                assert!(keys.insert(key.to_owned()), "repeated stage key");
+                Ok(Availability::Completed)
+            })
+            .unwrap()
+        );
+        assert_eq!(job.completed().len(), index + 1);
+    }
+    assert_eq!(keys.len(), STAGES.len());
+    assert_eq!(
+        crate::core::file_reads::read(&job.path, 8192).unwrap(),
+        cached
+    );
+    drop(job);
+    let mut reopened = Job::open(temp.path(), INPUTS).unwrap();
+    assert_eq!(reopened.completed().len(), STAGES.len());
+    assert!(
+        !reopened
+            .advance(|_, _, _| panic!("repeated completed job"))
+            .unwrap()
+    );
+}
+
 fn finish(job: &mut Job) {
     while job.advance(|_, _, _| Ok(Availability::Completed)).unwrap() {}
     assert_eq!(job.completed().len(), STAGES.len());

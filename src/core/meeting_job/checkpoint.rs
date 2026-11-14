@@ -49,7 +49,10 @@ struct Journal {
 }
 impl Journal {
     fn read(path: &Path, inputs: [u8; 32]) -> io::Result<Self> {
-        let journal: Self = match store_io::read_bounded(path, 8192) {
+        // A refresh Scope caches old bytes across writes; decisions require current disk state.
+        let journal: Self = match store_io::retry_sharing_violation(|| {
+            crate::core::meeting_router::inputs::Snapshot::read_file(path, 8192)
+        }) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::from)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Self {
                 version: 1,
