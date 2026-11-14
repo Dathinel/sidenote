@@ -247,9 +247,11 @@ impl State {
                 self.request_refresh();
                 self.relay_ui.error = Some(core::pairing::UNCONFIRMED.into());
             }
-            Update::Failed => {
+            Update::Failed { stage, category } => {
                 self.relay_cancel();
-                self.relay_ui.error=Some("Pairing was refused, expired or interrupted. Check the code and both confirmations, then create a new code.".into());
+                self.relay_ui.error = Some(format!(
+                    "Pairing failed at {stage} ({category}). Create a new code on both devices."
+                ));
             }
         }
     }

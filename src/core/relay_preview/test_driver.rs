@@ -10,6 +10,7 @@ pub(super) struct Driver {
     job: Option<pairing::Pairing>,
     events: Option<mpsc::Receiver<pairing::Update>>,
     phase: &'static str,
+    failure: Option<(&'static str, String)>,
     attempt: u64,
     merge: Option<super::super::project_merge::MergePreview>,
 }
@@ -20,6 +21,7 @@ impl Driver {
             job: None,
             events: None,
             phase: "idle",
+            failure: None,
             attempt: 0,
             merge: None,
         }
@@ -28,6 +30,7 @@ impl Driver {
         self.job.take();
         self.events = None;
         self.phase = "idle";
+        self.failure = None;
     }
     fn poll(&mut self) -> io::Result<()> {
         let updates: Vec<_> = self
@@ -74,7 +77,8 @@ impl Driver {
                     self.job.take();
                     self.phase = "unconfirmed";
                 }
-                pairing::Update::Failed => {
+                pairing::Update::Failed { stage, category } => {
+                    self.failure = Some((stage, category));
                     self.job.take();
                     self.phase = "failed";
                 }
@@ -302,9 +306,13 @@ impl Driver {
                 Ok(Value::Null)
             }
             "status" => {
-                let peers = pairing::devices(root)?;
+                let peers = if self.failure.is_some() {
+                    Vec::new()
+                } else {
+                    pairing::devices(root)?
+                };
                 Ok(
-                    serde_json::json!({"phase":self.phase,"devices":peers.iter().map(|p|&p.name).collect::<Vec<_>>() }),
+                    serde_json::json!({"phase":self.phase,"stage":self.failure.as_ref().map(|f|f.0),"category":self.failure.as_ref().map(|f|&f.1),"device":super::super::DeviceSettings::read_in(root).map(|d|d.name).unwrap_or_else(|_| "unknown".into()),"devices":peers.iter().map(|p|&p.name).collect::<Vec<_>>() }),
                 )
             }
             "confirm" => {

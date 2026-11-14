@@ -77,6 +77,7 @@ pub(super) struct Pair {
     job: relay::pairing::Pairing,
     updates: mpsc::Receiver<relay::pairing::Update>,
     phase: &'static str,
+    failure: Option<(&'static str, String)>,
     code: Option<SecretCode>,
     expires: Instant,
     attempt: u64,
@@ -118,7 +119,10 @@ impl Controller {
                         relay::pairing::Update::Ready => "paired",
                         relay::pairing::Update::TimedOut => "timed-out",
                         relay::pairing::Update::Unconfirmed => "unconfirmed",
-                        relay::pairing::Update::Failed => "failed",
+                        relay::pairing::Update::Failed { stage, category } => {
+                            pair.failure = Some((stage, category));
+                            "failed"
+                        }
                         _ => unreachable!(),
                     };
                     pair.code = None;
@@ -143,6 +147,7 @@ impl Controller {
             job,
             updates,
             phase: "starting",
+            failure: None,
             code: None,
             expires: Instant::now() + Duration::from_secs(600),
             attempt: 0,
@@ -186,7 +191,7 @@ impl Controller {
                 };
                 // Only this explicit private control response contains pairing material.
                 Ok(json!({"phase":pair.phase,"code":pair.code.as_deref(),
-                    "attempt":pair.attempt,"phrase":pair.phrase.as_str()}))
+                    "attempt":pair.attempt,"phrase":pair.phrase.as_str(),"failure":pair.failure}))
             }
             Request::Confirm {
                 attempt,
