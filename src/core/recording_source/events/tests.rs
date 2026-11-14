@@ -1,7 +1,9 @@
 use super::*;
 use std::{fs, io::Read, net::TcpListener, thread};
 
-fn server(reply: &'static str) -> (tempfile::TempDir, std::thread::JoinHandle<()>) {
+fn server(
+    reply: impl AsRef<str> + Send + 'static,
+) -> (tempfile::TempDir, std::thread::JoinHandle<()>) {
     let root = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     fs::write(
@@ -31,7 +33,7 @@ fn server(reply: &'static str) -> (tempfile::TempDir, std::thread::JoinHandle<()
                 .windows(41)
                 .any(|s| s == b"Authorization: Bearer synthetic-fixture\r\n")
         );
-        socket.write_all(reply.as_bytes()).unwrap();
+        socket.write_all(reply.as_ref().as_bytes()).unwrap();
     });
     (root, task)
 }
@@ -92,5 +94,170 @@ fn missing_or_invalid_discovery_is_redacted() {
     ] {
         fs::write(&path, document).unwrap();
         assert!(Connection::connect(&path).err() == Some(State::InvalidInput));
+    }
+}
+
+#[test]
+fn oversized_lines_and_silent_peers_disconnect() {
+    let (root, task) = server(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n{}",
+        "x".repeat(1025)
+    ));
+    let mut connection = Connection::connect(&root.path().join("local-api.json")).unwrap();
+    task.join().unwrap();
+    assert_eq!(connection.poll(), Err(State::InvalidInput));
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    stream.set_nonblocking(true).unwrap();
+    let mut connection = Connection {
+        stream,
+        pending: Vec::new(),
+        last_read: Instant::now() - Duration::from_secs(46),
+    };
+    assert_eq!(connection.poll(), Err(State::Offline));
+}
+
+#[test]
+fn opt_out_never_connects_and_control_is_explicit() {
+    use super::super::{Source, folders::Discovery};
+    let (root, meetings, _) = super::super::tests::fixture();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let discovery = root.path().join("local-api.json");
+    fs::write(
+        &discovery,
+        serde_json::json!({"port":listener.local_addr().unwrap().port(),"token":"synthetic"})
+            .to_string(),
+    )
+    .unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut source = Events::new(Discovery::new(meetings).unwrap(), discovery, false).unwrap();
+    source.start().unwrap();
+    assert_eq!(source.poll().unwrap().len(), 2);
+    assert_eq!(source.state(), State::OptedOut);
+    assert_eq!(source.control_state(), ControlState::Unsupported);
+    assert_eq!(
+        listener.accept().err().unwrap().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    source.stop();
+    assert_eq!(source.state(), State::Stopped);
+    assert!(matches!(source.poll(), Err(super::super::Error::Stopped)));
+}
+
+#[test]
+fn subscribe_then_catch_up_deduplicates_reconnect_and_restart() {
+    use super::super::{Session, folders::Discovery};
+    let (_root, meetings, cursor) = super::super::tests::fixture();
+    fs::remove_file(meetings.join("99-1/transcript.ndjson")).unwrap();
+    let deleted = meetings.join("998-1");
+    fs::create_dir(&deleted).unwrap();
+    fs::write(deleted.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+    fs::write(
+        deleted.join("transcript.ndjson"),
+        b"{\"text\":\"synthetic\"}\n",
+    )
+    .unwrap();
+    fs::remove_dir_all(deleted).unwrap();
+    const FINISHED: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"type\":\"meeting.finished\",\"id\":\"100-1\"}\n\ndata: {\"type\":\"meeting.finished\",\"id\":\"998-1\"}\n\n";
+    let (api, task) = server(FINISHED);
+    let discovery = api.path().join("local-api.json");
+    let source = Events::new(
+        Discovery::new(meetings.clone()).unwrap(),
+        discovery.clone(),
+        true,
+    )
+    .unwrap();
+    let mut session = Session::open(source, cursor.clone()).unwrap();
+    assert_eq!(session.source().state(), State::Connected);
+    task.join().unwrap();
+    let mut queued = Vec::new();
+    session
+        .drain(|m| {
+            queued.push(m.id().to_owned());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(queued, ["100-1"]);
+    assert_eq!(session.source().state(), State::Offline);
+    let retry = Instant::now() + Duration::from_secs(3600);
+    session.source.retry_at = retry;
+    session
+        .drain(|_| panic!("duplicate during backoff"))
+        .unwrap();
+    assert_eq!(session.source.retry_at, retry);
+
+    let (replacement, task) = server(FINISHED);
+    fs::copy(replacement.path().join("local-api.json"), &discovery).unwrap();
+    fs::write(
+        meetings.join("99-1/transcript.ndjson"),
+        b"{\"text\":\"synthetic complete\"}\n",
+    )
+    .unwrap();
+    session.source.retry_at = Instant::now();
+    session
+        .drain(|m| {
+            queued.push(m.id().to_owned());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.source().state(), State::Connected);
+    assert_eq!(queued, ["100-1", "99-1"]);
+    task.join().unwrap();
+    session.stop();
+    assert_eq!(session.source().state(), State::Stopped);
+    drop(session);
+    let source = Events::new(Discovery::new(meetings).unwrap(), discovery, true).unwrap();
+    Session::open(source, cursor)
+        .unwrap()
+        .drain(|_| panic!("duplicate after restart"))
+        .unwrap();
+}
+
+#[test]
+fn lab_disabled_or_busy_still_catches_up_and_offline_backoff_is_capped() {
+    use super::super::{Session, Source, folders::Discovery};
+    for (reply, state) in [
+        ("HTTP/1.1 404 Not Found\r\n\r\nlabs-off", State::Disabled),
+        ("HTTP/1.1 409 Conflict\r\n\r\nsubscriber-busy", State::Busy),
+    ] {
+        let (_root, meetings, cursor) = super::super::tests::fixture();
+        let (api, task) = server(reply);
+        let source = Events::new(
+            Discovery::new(meetings).unwrap(),
+            api.path().join("local-api.json"),
+            true,
+        )
+        .unwrap();
+        let mut session = Session::open(source, cursor).unwrap();
+        assert_eq!(session.source().state(), state);
+        task.join().unwrap();
+        session.source.retry_at = Instant::now() + Duration::from_secs(3600);
+        let mut count = 0;
+        session
+            .drain(|_| {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(session.source().state(), state);
+    }
+    let (root, meetings, _) = super::super::tests::fixture();
+    let mut source = Events::new(
+        Discovery::new(meetings).unwrap(),
+        root.path().join("missing.json"),
+        true,
+    )
+    .unwrap();
+    for seconds in [2, 4, 8, 16, 30, 30] {
+        source.retry_at = Instant::now();
+        assert_eq!(source.poll().unwrap().len(), 2);
+        assert_eq!(source.state(), State::Offline);
+        assert_eq!(source.backoff, Duration::from_secs(seconds));
+        let retry = Instant::now() + Duration::from_secs(3600);
+        source.retry_at = retry;
+        source.poll().unwrap();
+        assert_eq!(source.retry_at, retry);
     }
 }

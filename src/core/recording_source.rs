@@ -77,7 +77,7 @@ impl CompletedMeeting {
     }
 }
 
-/// Future adapters may subscribe before catch-up here. Poll must replay unacknowledged IDs;
+/// Adapters subscribe before catch-up here. Poll must replay unacknowledged IDs;
 /// neither a timestamp high-water mark nor a transient event stream is sufficient.
 pub trait Source {
     fn start(&mut self) -> Result<(), Error> {
@@ -108,6 +108,11 @@ impl<S: Source> Session<S> {
             cursor,
             stopped: false,
         })
+    }
+
+    /// Subscription/control availability remains observable while folder fallback runs.
+    pub fn source(&self) -> &S {
+        &self.source
     }
 
     pub fn drain(

@@ -166,5 +166,99 @@ impl Connection {
     }
 }
 
+/// Opt-in SSE subscription with folder catch-up on every tick, including outages.
+/// Use inside Session so reconnects and restarts share its durable delivery receipts.
+pub struct Events {
+    folders: super::folders::Discovery,
+    discovery: std::path::PathBuf,
+    connection: Option<Connection>,
+    state: State,
+    retry_at: Instant,
+    backoff: Duration,
+}
+impl Events {
+    /// Resolve the discovery path at the platform edge; constructing this reads nothing.
+    pub fn new(
+        folders: super::folders::Discovery,
+        discovery: std::path::PathBuf,
+        opt_in: bool,
+    ) -> Result<Self, super::Error> {
+        if !discovery.is_absolute()
+            || discovery
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(super::Error::InvalidInput);
+        }
+        Ok(Self {
+            folders,
+            discovery,
+            connection: None,
+            state: if opt_in {
+                State::Offline
+            } else {
+                State::OptedOut
+            },
+            retry_at: Instant::now(),
+            backoff: Duration::from_secs(1),
+        })
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    /// No control request is attempted: pinned Windows/Linux control is unqualified.
+    pub fn control_state(&self) -> ControlState {
+        ControlState::Unsupported
+    }
+
+    fn failed(&mut self, state: State) {
+        self.connection = None;
+        self.state = state;
+        self.retry_at = Instant::now() + self.backoff;
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(30));
+    }
+
+    fn tick(&mut self) {
+        if matches!(self.state, State::OptedOut | State::Stopped) {
+            return;
+        }
+        if let Some(connection) = &mut self.connection {
+            if let Err(state) = connection.poll() {
+                self.failed(state);
+            }
+        } else if Instant::now() >= self.retry_at {
+            match Connection::connect(&self.discovery) {
+                Ok(connection) => {
+                    self.connection = Some(connection);
+                    self.state = State::Connected;
+                    self.backoff = Duration::from_secs(1);
+                }
+                Err(state) => self.failed(state),
+            }
+        }
+    }
+}
+impl super::Source for Events {
+    fn start(&mut self) -> Result<(), super::Error> {
+        self.tick(); // Subscribe before the first catch-up; failure still allows folder fallback.
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Result<Vec<super::CompletedMeeting>, super::Error> {
+        if self.state == State::Stopped {
+            return Err(super::Error::Stopped);
+        }
+        self.tick();
+        super::Source::poll(&mut self.folders)
+    }
+
+    fn stop(&mut self) {
+        self.connection = None;
+        self.state = State::Stopped;
+    }
+}
+
 #[cfg(test)]
 mod tests;
