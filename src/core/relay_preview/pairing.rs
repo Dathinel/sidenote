@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use sidenote_sync::pairing::{self as protocol, Confirmation, PairHost, Receipt, SecretCode};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
@@ -7,6 +8,15 @@ use std::{
 
 pub const TIMED_OUT: &str = "Pairing timed out. Start again on both devices.";
 pub const UNCONFIRMED: &str = "The other device may have joined. Check it. If you don't trust it, turn off relay sync on all devices and pair again.";
+#[derive(Debug)]
+pub(super) struct Operation(pub &'static str);
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for Operation {}
+
 fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
     let category = if error.is::<tokio::time::error::Elapsed>() {
         stage = "timeout";
@@ -20,6 +30,10 @@ fn failure(mut stage: &'static str, error: &anyhow::Error) -> Update {
         )
     } else {
         "protocol".into()
+    };
+    let category = match error.downcast_ref::<Operation>() {
+        Some(operation) => format!("{category}:{}", operation.0),
+        None => category,
     };
     if stage != "timeout"
         && let Some(marker) = error.downcast_ref::<protocol::FailureStage>()
@@ -211,9 +225,7 @@ pub fn start(
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("confirmation missing"))?;
                 stage = "adopt";
-                preview
-                    .adopt(&group, &peer, receipt)
-                    .map_err(anyhow::Error::from)?;
+                preview.adopt(&group, &peer, receipt)?;
                 Ok::<_, anyhow::Error>(())
             };
             let result = tokio::select! {_=cancelled.changed()=>return,result=operation=>result};
@@ -257,6 +269,13 @@ mod security_tests {
                 matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category } if category == expected)
             );
         }
+        let error = anyhow::Error::new(io::Error::from_raw_os_error(32))
+            .context("private path key")
+            .context(Operation("open mode.lock"));
+        assert!(
+            matches!(failure("adopt", &error), Update::Failed { stage: "adopt", category }
+            if category == "os:32:open mode.lock")
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn confirmation_timeout_ends_job_and_expired_replies_cannot_approve_next_prompt() {
@@ -387,14 +406,15 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
 }
 
 impl Preview {
-    fn adopt(&self, group: &Group, peer: &Confirmation, receipt: Receipt) -> io::Result<()> {
-        self.online(false)?;
+    fn adopt(&self, group: &Group, peer: &Confirmation, receipt: Receipt) -> anyhow::Result<()> {
+        self.online(false).context(Operation("stop sync session"))?;
         self.device
             .store(|s| s.check_compatible())
             .map_err(failed)?;
-        let mut settings = Settings::load(&self.root)?;
+        let mut settings =
+            Settings::load(&self.root).context(Operation("read relay settings.json"))?;
         if !settings.enabled {
-            return Err(store_io::invalid("Relay preview was turned off"));
+            return Err(store_io::invalid("Relay preview was turned off").into());
         }
         self.device
             .store(|s| s.check_group_active(&group.room()))
@@ -414,7 +434,9 @@ impl Preview {
         } else {
             settings.unconfirmed.remove(&token(&peer.peer));
         }
-        let local_name = super::super::DeviceSettings::read_in(&self.root)?.name;
+        let local_name = super::super::DeviceSettings::read_in(&self.root)
+            .context(Operation("read device.json"))?
+            .name;
         self.device
             .store(|s| {
                 s.edit("tasks", |doc| {
@@ -435,7 +457,7 @@ impl Preview {
             })
             .map_err(failed)?;
         settings.save_authority(&self.root, &self.device)?;
-        self.online(true)
+        self.online(true).context(Operation("start sync session"))
     }
     pub fn remove_device(&self, _target: &str) -> io::Result<()> {
         Err(store_io::invalid(

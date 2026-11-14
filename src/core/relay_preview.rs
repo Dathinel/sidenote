@@ -215,18 +215,22 @@ impl Settings {
         }
         Ok(())
     }
-    fn save_authority(&self, root: &Path, device: &Device) -> io::Result<()> {
-        let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
-        let mut current = Self::load(root)?;
+    fn save_authority(&self, root: &Path, device: &Device) -> anyhow::Result<()> {
+        use anyhow::Context;
+        use pairing::Operation;
+        let _mode = store_io::lock(&root.join("local/relay/mode.lock"))
+            .context(Operation("open mode.lock"))?;
+        let mut current = Self::load(root).context(Operation("read authority settings.json"))?;
         if !current.enabled {
-            return Err(store_io::invalid("Relay preview was turned off"));
+            return Err(store_io::invalid("Relay preview was turned off").into());
         }
         let previous_room = current.room.clone();
         current.room = self.room.clone();
         current.peers = self.peers.clone();
         current.unconfirmed = self.unconfirmed.clone();
         // Startup retires inactive groups if a crash interrupts this durable handoff.
-        store_io::write(&root.join("local/relay/settings.json"), &current)?;
+        store_io::write(&root.join("local/relay/settings.json"), &current)
+            .context(Operation("publish authority settings.json"))?;
         if previous_room != current.room {
             device
                 .store(|s| s.retire_group(&previous_room))
