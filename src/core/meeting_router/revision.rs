@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 mod publication;
-pub use publication::{begin, commit, load};
+pub use publication::{begin, commit, load, retain};
 
 #[derive(Serialize, Deserialize)]
 pub struct Revision {

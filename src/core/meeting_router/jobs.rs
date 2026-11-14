@@ -1,5 +1,7 @@
 //! Durable per-meeting requests. The lock serializes drains, never enqueues.
 use super::*;
+pub(crate) mod handoff;
+pub use handoff::{BatchOutput, commit_batches};
 mod notes;
 pub(crate) use notes::notes_input;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
@@ -166,7 +168,10 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
     }
 }
 fn completed(root: &Path, job: &Job) -> Result<bool> {
-    Ok(automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str()))
+    Ok(
+        automatic_revision(root, &job.id)?.as_deref() == Some(job.input_revision.as_str())
+            && (!notes_enabled(root)? || handoff::completed(root, &job.id, &job.input_revision)),
+    )
 }
 #[cfg(any(windows, test))]
 pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
