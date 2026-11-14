@@ -1,0 +1,25 @@
+Synthetic leading undated failure (ignored)
+2030-11-14T11:09:58+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+notes worker: NOTES_SETTINGS_READ (Other)
+2030-11-14T11:09:59+05:30 listener: synthetic operation failed
+continuation kind=Other os=None
+2030-11-14T11:10:00+05:30 listener: synthetic install boundary; ready
+benign continuation: ready
+2030-11-14T11:10:24+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:25+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:26+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:27+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:28+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:29+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:30+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:40+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:41+05:30 listener: config operation=overlay_read path_kind=relay_profile kind=Other os=None
+2030-11-14T11:10:32+05:30 listener: notes worker: NOTES_SETTINGS_READ (Other)
+2030-11-14T11:10:32+05:30 listener: catch-up: CATCH_UP_SETTINGS (Other)
+2030-11-14T11:10:42+05:30 listener: X_Y (Kind, os 5)
+continuation kind=InvalidData os=None
+2030-11-14T11:10:43+05:30 listener: synthetic scan complete
+benign synthetic_stage (Other)
+benign kindhearted=ready
+2030-11-14T11:09:59+05:30 listener: synthetic late-written failure before install
+continuation kind=Other os=None
