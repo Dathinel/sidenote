@@ -41,6 +41,43 @@ fn preserved_helper_and_legacy_invalid_fields_do_not_block_unrelated_saves() {
 }
 
 #[test]
+fn a_wrong_model_for_another_language_does_not_block_an_edit_to_one_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut raw: Value = serde_json::from_slice(&super::tests::fixture(root)).unwrap();
+    raw["engine_settings"]["models"] = serde_json::json!({"hi": "not a model"});
+    store_io::write(&root.join("config.json"), &raw).unwrap();
+    let mut config = Config::load_existing(root).unwrap();
+    config
+        .engine_settings
+        .models
+        .insert("en".into(), "synthetic-en".into());
+    config.save(root).unwrap();
+    let saved = Config::load_existing(root).unwrap();
+    assert_eq!(saved.engine_settings.models["en"], "synthetic-en");
+    assert_eq!(saved.engine_settings.models["hi"], "not a model");
+    // Removing the good entry is an edit to it alone, so it also saves.
+    let mut config = saved;
+    config.engine_settings.models.remove("en");
+    config.save(root).unwrap();
+    // Touching the wrong entry, or adding another wrong one, is still refused and writes nothing.
+    for (language, model) in [
+        ("hi", "still wrong"),
+        ("te", "bad model"),
+        ("zz", "synthetic"),
+    ] {
+        let prior = config::read(root).unwrap();
+        let mut config = Config::load_existing(root).unwrap();
+        config
+            .engine_settings
+            .models
+            .insert(language.into(), model.into());
+        assert!(config.save(root).is_err(), "{language}");
+        assert_eq!(config::read(root).unwrap(), prior);
+    }
+}
+
+#[test]
 fn resolving_authoritative_route_clears_only_its_migration_status() {
     for legacy in ["synthetic-conflicting-model", "invalid synthetic model"] {
         for action in ["model", "provider", "remove"] {
