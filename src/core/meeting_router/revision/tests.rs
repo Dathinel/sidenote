@@ -19,6 +19,7 @@ pub(super) fn range() -> Range {
 fn new_english_coverage_outside_baseline_is_selected() {
     let mut r = range();
     r.range.language = Some("en".into());
+    r.range.context = (16_000, 32_000);
     let b = Chunk {
         id: "other".into(),
         start: 3.0,
@@ -52,9 +53,17 @@ fn mapping_owns_tokens_and_keeps_segment_level_times() {
     assert_eq!((text.start, text.end), (6.0, 7.0));
     assert_eq!(
         (text.lang.as_str(), text.status.as_str()),
-        ("te", "segment-level")
+        ("te", "unresolved-context")
     );
     assert!(text.text_en.is_none());
+    let mut owned = range();
+    owned.range.context = (16_000, 32_000);
+    assert_eq!(
+        segment("r", &owned, 80_000, &json!({"text":"owned"}))
+            .unwrap()
+            .status,
+        "segment-level"
+    );
     let timed = json!({"text":"context native context", "timing":"validated-samples", "tokens":[
         {"start_sample":0,"end_sample":8000,"text":"context"},
         {"start_sample":8000,"end_sample":24000,"text":"నమస్కారం"},

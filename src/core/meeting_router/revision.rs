@@ -68,6 +68,16 @@ fn segment(id: &str, r: &super::batches::Range, origin: i64, value: &Value) -> R
         .trim()
         .to_owned();
     let mut status = "segment-level";
+    let mut owned_until = r.range.context.0;
+    for &(_, (start, end)) in &r.range.members {
+        if start != owned_until {
+            status = "unresolved-context";
+        }
+        owned_until = end;
+    }
+    if owned_until != r.range.context.1 {
+        status = "unresolved-context";
+    }
     // Only a producer with qualified sample timing may trim context tokens.
     if value["timing"] == "validated-samples" {
         let mut owned = Vec::new();
@@ -177,15 +187,16 @@ pub fn assemble(
     }
     let candidates = transcript.segments.clone();
     transcript.segments.retain(|a| {
-        !candidates.iter().any(|b| {
-            a.sources[0].chunk.id != b.sources[0].chunk.id
-                && a.track == b.track
-                && a.sources.iter().any(|x| {
-                    b.sources
-                        .iter()
-                        .any(|y| x.chunk.start < y.chunk.end && y.chunk.start < x.chunk.end)
-                })
-        })
+        a.status != "unresolved-context"
+            && !candidates.iter().any(|b| {
+                a.sources[0].chunk.id != b.sources[0].chunk.id
+                    && a.track == b.track
+                    && a.sources.iter().any(|x| {
+                        b.sources
+                            .iter()
+                            .any(|y| x.chunk.start < y.chunk.end && y.chunk.start < x.chunk.end)
+                    })
+            })
     });
     reconcile(&mut transcript, baseline);
     for range in plan.batches.values().flat_map(|b| b.values()) {

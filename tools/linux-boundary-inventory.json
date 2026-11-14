@@ -65,7 +65,7 @@
   "src/core/meeting_router/jobs.rs": "0677b3d99954728ecc5afe90d8240d4440751c3b64005e93dd48555ff4a2db54",
   "src/core/meeting_router/jobs/notes.rs": "b74798dcbedfa43dd733416abc5e435a80f604a65cfbbb20a2954abc410f9e72",
   "src/core/meeting_router/pieces.rs": "2a1b3919d047b09f87307726d029d9189b875a519c223911eb8312849018a8b8",
-  "src/core/meeting_router/revision.rs": "6c37c0e4c75b26064598e2d3724a1fafca4ca1afa88bed12632d0282035a3b27",
+  "src/core/meeting_router/revision.rs": "50dbdd568bedc881aad07a29d4c8e1124255b9a35011515cfec2df01358c20f1",
   "src/core/meeting_router/revision/publication.rs": "aba1b06bfb95a6ea2e9cdc235e07930c943e40305705c1110408c4d4222c34b0",
   "src/core/meeting_router/vad.rs": "3dc32a9e4eb31b5d5cd02d7459aded8dd1391a5ce8db3163f0bd37a84fc42c9a",
   "src/core/meeting_watch.rs": "d8f42439ad9649ad338f046b544292634947aaad8d6a42804009e8790743b117",
