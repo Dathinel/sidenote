@@ -278,17 +278,6 @@ fn process(
     settings: &NotesSettings,
     run: &mut impl Run,
 ) -> io::Result<()> {
-    // Global changes can revoke consent, but never select a different agent for this job.
-    let Some(helper) = job.helper.filter(|h| h.offered()) else {
-        return failure(root, id, job, Failure::Consent);
-    };
-    if settings.effective_helper() != Some(helper) {
-        return failure(root, id, job, Failure::Consent);
-    }
-    let mut pinned = settings.clone();
-    pinned.helper = Some(helper);
-    pinned.model = job.model.clone();
-    let settings = &pinned;
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     let m = manifest(&folder)?;
@@ -339,6 +328,17 @@ fn process(
             "notes need setup or an explicit click",
         );
     }
+    // Global changes can revoke consent, but never select a different agent for this job.
+    let Some(helper) = job.helper.filter(|h| h.offered()) else {
+        return failure(root, id, job, Failure::Consent);
+    };
+    if settings.effective_helper() != Some(helper) {
+        return failure(root, id, job, Failure::Consent);
+    }
+    let mut pinned = settings.clone();
+    pinned.helper = Some(helper);
+    pinned.model = job.model.clone();
+    let settings = &pinned;
     let mut transcript = if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
