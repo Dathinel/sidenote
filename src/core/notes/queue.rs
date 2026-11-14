@@ -200,8 +200,10 @@ pub(super) fn enqueue_in(
 fn failure(root: &Path, id: &str, job: &mut Job, error: Failure) -> io::Result<()> {
     let (state, message) = match error {
         Failure::Busy => return Err(io::ErrorKind::WouldBlock.into()),
-        #[cfg(target_os = "linux")]
-        Failure::NetworkUnavailable => (JobState::NoHelper, core::runners::NETWORK_UNAVAILABLE),
+        Failure::LinuxUnavailable => (
+            JobState::HelperUnavailableOnLinux,
+            "HELPER_UNAVAILABLE_LINUX",
+        ),
         Failure::Consent => (JobState::NoHelper, "notes permission changed"),
         Failure::Missing => (JobState::HelperMissing, "agent missing"),
         Failure::Limit { exit } => (JobState::HelperLimit { exit }, "HELPER_LIMIT"),

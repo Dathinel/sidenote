@@ -1614,3 +1614,20 @@ fn only_explicit_codex_recovery_retargets_one_job_and_preserves_first_part() {
         1
     );
 }
+
+#[test]
+fn unavailable_linux_execution_is_terminal_and_not_a_backend_or_setup_error() {
+    let root = Temp::new();
+    meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    enqueue(&root.0, &settings, Some(Request::MakeNotes));
+    drain(
+        &root.0,
+        &settings,
+        &mut Fake::new(vec![Err(Failure::LinuxUnavailable)]),
+    );
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.state, JobState::HelperUnavailableOnLinux);
+    assert_eq!(job.message, "HELPER_UNAVAILABLE_LINUX");
+    assert!(job.next_try_at.is_none());
+}

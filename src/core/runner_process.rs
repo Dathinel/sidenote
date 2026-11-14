@@ -386,7 +386,11 @@ pub(super) fn run_classified(
     runners::validate(runner)?;
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
-        return Err(runners::NETWORK_UNAVAILABLE.into());
+        return Err(RunnerFailure {
+            category: "HELPER_UNAVAILABLE_LINUX",
+            exit: None,
+            message: super::notes::LINUX_HELPER_UNAVAILABLE.into(),
+        });
     }
     let _update_activity = crate::updates::activity()
         .map_err(|_| "An update is being installed. Try again after restart.")?;
@@ -587,13 +591,13 @@ mod tests {
                     |_| {}
                 )
                 .unwrap_err(),
-                runners::NETWORK_UNAVAILABLE
+                super::super::notes::LINUX_HELPER_UNAVAILABLE
             );
         }
         assert_eq!(
             super::super::notes::test_helper(super::super::notes::Helper::Claude, "synthetic")
                 .unwrap_err(),
-            runners::NETWORK_UNAVAILABLE
+            super::super::notes::LINUX_HELPER_UNAVAILABLE
         );
     }
     use super::*;

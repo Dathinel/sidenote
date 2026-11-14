@@ -16,6 +16,9 @@ pub enum Helper {
     OpenCode,
 }
 
+pub const LINUX_HELPER_UNAVAILABLE: &str =
+    "Meeting summary agents are not available on Linux yet. Your transcript is saved.";
+
 pub const HELPER_NOT_OFFERED: &str = "helper_not_offered";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +40,7 @@ pub enum JobState {
     NoHelper,
     NeedsClick,
     HelperMissing,
+    HelperUnavailableOnLinux,
     BackendError {
         next_try_ms: Option<i64>,
         exit: Option<i32>,
@@ -205,8 +209,7 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
         .run(h, model, sample, helper::NOTES_TIMEOUT)
         .map_err(|e| {
             match e {
-                #[cfg(target_os = "linux")]
-                helper::Failure::NetworkUnavailable => crate::core::runners::NETWORK_UNAVAILABLE,
+                helper::Failure::LinuxUnavailable => LINUX_HELPER_UNAVAILABLE,
                 helper::Failure::Missing => "The agent was not found on this PC",
                 helper::Failure::TimedOut => "The agent test timed out",
                 _ => "The agent test failed; check its sign-in",

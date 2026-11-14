@@ -57,7 +57,8 @@ pub fn read(root: &Path, meetings: &[Meeting]) -> BTreeMap<String, Job> {
 pub fn is_failure(state: &JobState) -> bool {
     matches!(
         state,
-        JobState::HelperMissing
+        JobState::HelperUnavailableOnLinux
+            | JobState::HelperMissing
             | JobState::BackendError { .. }
             | JobState::HelperLimit { .. }
             | JobState::HelperAuth { .. }
@@ -85,6 +86,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
         JobState::Running => running_message(name, job.updated_at),
+        JobState::HelperUnavailableOnLinux => core::notes::LINUX_HELPER_UNAVAILABLE.into(),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
             let command = match helper { Some(Helper::Claude) => "claude", Some(Helper::Codex) => "codex", Some(Helper::OpenCode) => "opencode", None => "your agent" };
@@ -118,6 +120,7 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::NeedsClick => "Ready to write a summary",
         JobState::Queued => "Summary queued",
         JobState::Running => "Writing summary",
+        JobState::HelperUnavailableOnLinux => "Summaries not available on Linux yet",
         JobState::HelperMissing => "Agent not found",
         JobState::BackendError {
             next_try_ms: Some(_),
@@ -444,6 +447,18 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn linux_unavailable_has_specific_copy_in_both_shared_banners() {
+        let job = Job {
+            state: JobState::HelperUnavailableOnLinux,
+            helper: Some(Helper::Codex),
+            updated_at: 0,
+            request: None,
+        };
+        assert!(is_failure(&job.state));
+        assert!(message(&job, None).contains("not available on Linux yet"));
+        assert_eq!(label(&job.state), "Summaries not available on Linux yet");
+    }
     #[test]
     fn limit_recovery_requires_detected_codex_and_preserves_the_failed_request() {
         let mut job = Job {

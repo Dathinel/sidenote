@@ -98,21 +98,14 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
     Busy,
-    #[cfg(target_os = "linux")]
-    NetworkUnavailable,
+    LinuxUnavailable,
     Consent,
     Missing,
     TimedOut,
-    Backend {
-        exit: Option<i32>,
-    },
+    Backend { exit: Option<i32> },
     BadOutput,
-    Limit {
-        exit: Option<i32>,
-    },
-    Auth {
-        exit: Option<i32>,
-    },
+    Limit { exit: Option<i32> },
+    Auth { exit: Option<i32> },
 }
 
 /// The test seam never launches a CLI or inspects the host's helper installation.
@@ -195,7 +188,7 @@ impl Run for Cli {
         }
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
-            return Err(Failure::NetworkUnavailable);
+            return Err(Failure::LinuxUnavailable);
         }
         if let Some(root) = &self.root
             && !authorized(root, helper)?
@@ -210,6 +203,8 @@ impl Run for Cli {
             .map_err(|error| {
                 if error.category == "HELPER_TIMEOUT" {
                     Failure::TimedOut
+                } else if error.category == "HELPER_UNAVAILABLE_LINUX" {
+                    Failure::LinuxUnavailable
                 } else if error.category == "HELPER_LIMIT" {
                     Failure::Limit { exit: error.exit }
                 } else if error.category == "HELPER_AUTH" {
@@ -224,6 +219,14 @@ impl Run for Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_helper_stops_with_typed_unavailable_before_lookup_or_launch() {
+        assert_eq!(
+            Cli { root: None }.run(Helper::Codex, "", "synthetic".into(), Duration::ZERO),
+            Err(Failure::LinuxUnavailable)
+        );
+    }
     #[test]
     fn locked_commands_validate_and_never_load_runner_settings() {
         for helper in [Helper::Claude, Helper::Codex, Helper::OpenCode] {

@@ -604,6 +604,9 @@ impl State {
     }
 }
 pub(super) fn test_error(message: &str) -> String {
+    if message == notes::LINUX_HELPER_UNAVAILABLE {
+        return message.into();
+    }
     if message.to_ascii_lowercase().contains("json") {
         "Claude Code replied, but Sidenote could not read the sample. Press Send a sample again. If it fails again, choose the recommended model.".into()
     } else {
