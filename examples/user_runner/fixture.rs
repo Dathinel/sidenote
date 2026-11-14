@@ -1,7 +1,7 @@
 use sidenote::platform::UserRunner;
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     path::Path,
     process::Command,
     time::{Duration, Instant},
@@ -29,7 +29,7 @@ fn spawn(root: &Path) -> UserRunner {
         .arg(root)
         .current_dir(root)
         .env("SIDENOTE_FIXTURE", "inherited");
-    UserRunner::spawn(&mut command).unwrap()
+    UserRunner::spawn(&mut command, true).unwrap()
 }
 fn ready(root: &Path) -> Vec<i32> {
     let names = ["helper", "child", "grandchild"];
@@ -98,6 +98,21 @@ pub fn run() {
     }
     // Reap the supervisor orphaned by the deliberately crashed fixture parent.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
+    let mut smoke = UserRunner::spawn(
+        Command::new("/bin/sh").args(["-c", "printf synthetic"]),
+        true,
+    )
+    .unwrap();
+    let mut output = String::new();
+    smoke
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut output)
+        .unwrap();
+    assert!(smoke.wait().unwrap().success());
+    assert_eq!(output, "synthetic");
+    println!("PASS 8a smoke");
     for mode in [
         "completion",
         "timeout",
@@ -167,11 +182,12 @@ pub fn run() {
         ("printf 'authentication required' >&2; exit 7", 7),
         ("printf invalid-output", 0),
     ] {
-        let mut runner = UserRunner::spawn(Command::new("/bin/sh").args(["-c", script])).unwrap();
+        let mut runner =
+            UserRunner::spawn(Command::new("/bin/sh").args(["-c", script]), true).unwrap();
         assert_eq!(runner.wait().unwrap().code(), Some(code));
     }
     let mut missing =
-        UserRunner::spawn(&mut Command::new("/nonexistent/synthetic-helper")).unwrap();
+        UserRunner::spawn(&mut Command::new("/nonexistent/synthetic-helper"), true).unwrap();
     assert_eq!(missing.wait().unwrap().code(), Some(125));
     let mut diagnostic = String::new();
     missing
@@ -184,4 +200,29 @@ pub fn run() {
     println!(
         "PASS synthetic missing/auth/invalid-output status and missing-helper redaction; protocol validation belongs to layer 9"
     );
+    for piped in [true, false] {
+        let script = if piped {
+            "test -p /proc/self/fd/0 && cat"
+        } else {
+            "test -c /proc/self/fd/0 && cat"
+        };
+        let mut runner =
+            UserRunner::spawn(Command::new("/bin/sh").args(["-c", script]), piped).unwrap();
+        assert_eq!(runner.stdin.is_some(), piped);
+        if let Some(input) = runner.stdin.as_mut() {
+            input.write_all(b"synthetic EOF input").unwrap();
+        }
+        // wait must close the retained writer, allowing cat to observe EOF.
+        assert!(runner.wait().unwrap().success());
+        assert!(runner.stdin.is_none());
+        let mut output = String::new();
+        runner
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut output)
+            .unwrap();
+        assert_eq!(output, if piped { "synthetic EOF input" } else { "" });
+        println!("PASS EOF-reading helper: piped_stdin={piped}");
+    }
 }

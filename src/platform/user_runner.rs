@@ -14,9 +14,9 @@ pub struct UserRunner {
     job: Option<super::ProcessJob>,
 }
 impl UserRunner {
-    /// Inherits user identity/environment; all three standard streams are piped.
+    /// Inherits user context; stdin is piped or null, stdout/stderr are piped.
     /// Linux hosts must call `supervisor_entry` before application initialization.
-    pub fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub fn spawn(command: &mut Command, piped_stdin: bool) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         let mut command = {
             let mut host = Command::new(std::env::current_exe()?);
@@ -44,7 +44,11 @@ impl UserRunner {
         #[cfg(not(any(windows, target_os = "linux")))]
         return Err(super::unavailable());
         let mut child = command
-            .stdin(Stdio::piped())
+            .stdin(if piped_stdin {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -73,6 +77,7 @@ impl UserRunner {
         self.child.try_wait()
     }
     pub fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
+        drop(self.stdin.take());
         self.child.wait()
     }
     pub fn stop(&mut self) -> io::Result<()> {

@@ -434,6 +434,7 @@ pub(super) fn run_classified(
         std::process::Command::new(program)
             .args(&args)
             .current_dir(working_dir),
+        runner.stdin,
     )
     .map_err(|e| {
         format!(
@@ -442,9 +443,6 @@ pub(super) fn run_classified(
             e.raw_os_error().unwrap_or(0)
         )
     })?;
-    if !runner.stdin {
-        drop(child.stdin.take());
-    }
     let stdout = child
         .stdout
         .take()
