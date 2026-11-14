@@ -1,6 +1,6 @@
 //! Shared completed-folder discovery. Configuration is explicit; no API credentials are read.
 use super::{CompletedMeeting, Error, Source};
-use crate::core::meeting_router::inputs::Snapshot;
+use crate::core::meeting_router::inputs::MeetingScan;
 use std::{
     io,
     path::{Component, PathBuf},
@@ -25,16 +25,16 @@ impl Discovery {
 }
 impl Source for Discovery {
     fn poll(&mut self) -> Result<Vec<CompletedMeeting>, Error> {
-        let entries = Snapshot::meeting_names(&self.0).map_err(|e| match e.kind() {
+        let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
         })?;
         let mut completed = Vec::new();
-        for name in entries {
+        for name in &scan.names {
             let Some(id) = name.to_str() else {
                 continue;
             };
-            match CompletedMeeting::capture(&self.0, id) {
+            match CompletedMeeting::capture_in(&scan, id) {
                 Ok(meeting) => completed.push(meeting),
                 // A deleted, growing or temporarily locked folder cannot starve other meetings.
                 Err(Error::InvalidInput | Error::Incomplete | Error::Input(_)) => {}

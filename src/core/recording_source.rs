@@ -1,6 +1,9 @@
 //! Completion discovery only. Consumers must enqueue idempotently by meeting ID: a crash
 //! after enqueue but before cursor persistence deliberately replays the completion.
-use super::{meeting_router::inputs::Snapshot, store_io};
+use super::{
+    meeting_router::inputs::{MeetingScan, Snapshot},
+    store_io,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -29,6 +32,15 @@ impl CompletedMeeting {
     }
 
     pub fn capture(meetings: &Path, id: &str) -> Result<Self, Error> {
+        Self::capture_using(id, || Snapshot::capture(&meetings.join(id)))
+    }
+    pub(crate) fn capture_in(scan: &MeetingScan, id: &str) -> Result<Self, Error> {
+        Self::capture_using(id, || scan.capture(id))
+    }
+    fn capture_using(
+        id: &str,
+        capture: impl FnOnce() -> io::Result<Snapshot>,
+    ) -> Result<Self, Error> {
         if id.is_empty()
             || id.len() > 100
             || !id.bytes().any(|b| b.is_ascii_digit())
@@ -36,7 +48,7 @@ impl CompletedMeeting {
         {
             return Err(Error::InvalidInput);
         }
-        let input = Snapshot::capture(&meetings.join(id)).map_err(|e| Error::Input(e.kind()))?;
+        let input = capture().map_err(|e| Error::Input(e.kind()))?;
         let manifest: serde_json::Value = serde_json::from_slice(
             input
                 .manifest

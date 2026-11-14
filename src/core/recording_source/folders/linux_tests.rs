@@ -9,6 +9,45 @@ fn source(meetings: &std::path::Path) -> Discovery {
     Discovery::hex_support(meetings.parent().unwrap().into()).unwrap()
 }
 
+#[test]
+fn enumerated_root_survives_root_and_ancestor_replacement() {
+    for ancestor in [false, true] {
+        let (root, meetings, _cursor) = super::super::tests::fixture();
+        let support = root.path().join("support");
+        fs::create_dir(&support).unwrap();
+        fs::rename(&meetings, support.join("meetings")).unwrap();
+        let meetings = support.join("meetings");
+        fs::write(
+            meetings.join("99-1/manifest.json"),
+            br#"{"status":"transcribing"}"#,
+        )
+        .unwrap();
+        let scan = MeetingScan::open(&meetings).unwrap();
+        assert!(scan.names.iter().any(|name| name.to_str() == Some("99-1")));
+        let replaced = if ancestor { &support } else { &meetings };
+        fs::rename(replaced, root.path().join("original")).unwrap();
+        let replacement = meetings.join("99-1");
+        fs::create_dir_all(&replacement).unwrap();
+        fs::write(
+            replacement.join("manifest.json"),
+            br#"{"status":"complete"}"#,
+        )
+        .unwrap();
+        fs::write(
+            replacement.join("transcript.ndjson"),
+            br#"{"text":"replacement"}"#,
+        )
+        .unwrap();
+        let captured = scan.capture("99-1").unwrap();
+        assert_eq!(captured.transcript, b"{\"text\":\"Synthetic fixture\"}\n");
+        assert!(matches!(
+            CompletedMeeting::capture_in(&scan, "99-1"),
+            Err(Error::Incomplete)
+        ));
+        assert!(CompletedMeeting::capture(&meetings, "99-1").is_ok());
+    }
+}
+
 fn collect(session: &mut Session<Discovery>, queued: &mut Vec<String>) {
     session
         .drain(|m| {
