@@ -385,18 +385,39 @@ pub(super) fn load(s: &mut State) {
         ..Default::default()
     };
 }
+/// Come back to the tab, or press the tab you are on. Text the person typed stays, and what they
+/// did not touch follows what is stored now, so a visit never loses or invents an edit.
+pub(super) fn enter(s: &mut State) {
+    if s.hex.shell.engine.base.is_none() || s.hex.shell.engine.drafts.len() < Field::COUNT {
+        load(s);
+        return;
+    }
+    let fresh = s.config.clone();
+    let engine = &mut s.hex.shell.engine;
+    rebase(engine, fresh);
+    engine.confirm_reset = None;
+    let kept: Vec<Field> = engine
+        .bad
+        .iter()
+        .copied()
+        .filter(|field| engine.dirty(&[*field]))
+        .collect();
+    engine.error = (!kept.is_empty()).then_some(NOT_SAVED);
+    engine.bad = kept;
+}
 fn draft_mut(s: &mut State, index: usize) -> &mut TextEdit {
     if s.hex.shell.engine.drafts.len() < Field::COUNT {
         load(s);
     }
     &mut s.hex.shell.engine.drafts[index]
 }
-/// After a failed save: fields the person changed keep their text, the rest take what is stored.
+/// Fields the person changed keep their text. Every untouched field takes what is stored in
+/// `fresh`, so it can never turn into an edit that overwrites a newer setting.
 fn rebase(engine: &mut Engine, fresh: Config) {
     if let Some(old) = &engine.base {
         for field in Field::ALL {
             if let Some(draft) = engine.drafts.get_mut(field.index())
-                && draft.text == read(old, field)
+                && draft.text.trim() == read(old, field)
             {
                 *draft = TextEdit::new(read(&fresh, field));
             }
@@ -404,14 +425,15 @@ fn rebase(engine: &mut Engine, fresh: Config) {
     }
     engine.base = Some(fresh);
 }
-/// A save went through: its fields take the stored text, and drafts in other cards stay.
+/// A save went through: its fields take the stored text, other cards keep what was typed, and
+/// everything untouched follows the saved config, which may hold a newer setting from elsewhere.
 fn adopt(engine: &mut Engine, config: Config, fields: &[Field]) {
+    rebase(engine, config.clone());
     for field in fields {
         if let Some(draft) = engine.drafts.get_mut(field.index()) {
             *draft = TextEdit::new(read(&config, *field));
         }
     }
-    engine.base = Some(config);
 }
 /// Reset to default asks twice, because it throws away the person's own text.
 fn reset(s: &mut State, field: Field) {
@@ -555,7 +577,7 @@ fn toggle(s: &mut State, step: Step) {
     match config.save(&s.store.root) {
         Ok(()) => {
             s.config = config.clone();
-            s.hex.shell.engine.base = Some(config);
+            rebase(&mut s.hex.shell.engine, config);
             s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
         }
         Err(_) => s.hex.shell.engine.error = Some(SAVE_FAILED),
@@ -1127,6 +1149,102 @@ mod tests {
         );
         assert_eq!(engine.drafts[Field::Threads.index()].text, "7");
         assert!(engine.dirty(&[Field::Threads]) && !engine.dirty(&[Field::Title]));
+    }
+    const EMPTY: &str = r#"{"version":1,"features":{},"notes":{}}"#;
+    /// A State whose settings folder is a fresh temp dir, loaded as the tab would be.
+    fn state_with(raw: &str) -> (State, tempfile::TempDir) {
+        crate::test_paths::isolate();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("config.json"), raw).unwrap();
+        let mut s = State::new();
+        s.store.root = root.path().to_path_buf();
+        s.config = Config::load_in(root.path()).unwrap();
+        load(&mut s);
+        (s, root)
+    }
+    fn type_into(s: &mut State, field: Field, text: &str) {
+        *draft_mut(s, field.index()) = TextEdit::new(text);
+    }
+    fn text(s: &State, field: Field) -> String {
+        s.hex.shell.engine.drafts[field.index()].text.clone()
+    }
+    #[test]
+    fn visiting_the_tab_again_or_pressing_it_keeps_typed_text_and_refreshes_the_rest() {
+        let (mut s, _root) = state_with(EMPTY);
+        type_into(&mut s, Field::Threads, "8");
+        type_into(&mut s, Field::NotesPrompt, "Synthetic instructions");
+        s.config.engine_settings.stages.title_model = "stored-elsewhere".into();
+        for _ in 0..2 {
+            // The second pass is the active tab pressed again.
+            super::super::navigate(&mut s, Page::Meetings, 3);
+            assert_eq!(text(&s, Field::Threads), "8");
+            assert_eq!(text(&s, Field::NotesPrompt), "Synthetic instructions");
+            assert_eq!(text(&s, Field::Title), "stored-elsewhere");
+            assert!(
+                s.hex
+                    .shell
+                    .engine
+                    .dirty(&[Field::Threads, Field::NotesPrompt])
+            );
+            assert!(!s.hex.shell.engine.dirty(&[Field::Title]));
+        }
+    }
+    #[test]
+    fn leaving_a_rejected_edit_keeps_it_and_its_hint() {
+        let (mut s, _root) = state_with(EMPTY);
+        type_into(&mut s, Field::Threads, "0");
+        save(&mut s, &Field::TRANSCRIPTION);
+        assert_eq!(s.hex.shell.engine.bad, [Field::Threads]);
+        super::super::navigate(&mut s, Page::Meetings, 3);
+        assert_eq!(text(&s, Field::Threads), "0");
+        assert_eq!(s.hex.shell.engine.bad, [Field::Threads]);
+        assert_eq!(s.hex.shell.engine.error, Some(NOT_SAVED));
+        type_into(&mut s, Field::Threads, "4");
+        super::super::navigate(&mut s, Page::Meetings, 3);
+        assert!(s.hex.shell.engine.bad.is_empty() && s.hex.shell.engine.error.is_none());
+    }
+    #[test]
+    fn a_wrong_sibling_model_does_not_stop_the_edit_from_saving() {
+        let raw = r#"{"version":1,"features":{},"notes":{},"engine_settings":{"models":{"hi":"not a model"}}}"#;
+        let (mut s, root) = state_with(raw);
+        type_into(&mut s, Field::English, "synthetic-en");
+        save(&mut s, &Field::TRANSCRIPTION);
+        assert!(s.hex.shell.engine.bad.is_empty() && s.hex.shell.engine.error.is_none());
+        let loaded = Config::load_in(root.path()).unwrap();
+        assert_eq!(read(&loaded, Field::English), "synthetic-en");
+        assert_eq!(read(&loaded, Field::Hindi), "not a model");
+        assert!(!s.hex.shell.engine.dirty(&[Field::English]));
+    }
+    #[test]
+    fn a_save_never_turns_an_untouched_stale_field_into_an_overwrite() {
+        // Each kind of save in this tab is followed by a second, unrelated save.
+        for kind in ["toggle", "step model", "prompt reset"] {
+            let (mut s, root) = state_with(EMPTY);
+            let mut other = Config::load_in(root.path()).unwrap();
+            other.engine_settings.worker_threads = 8;
+            other.engine_settings.notes_prompt = Some("Synthetic other window".into());
+            other.save(root.path()).unwrap();
+            match kind {
+                "toggle" => toggle(&mut s, Step::Tasks),
+                "step model" => {
+                    type_into(&mut s, Field::Title, "synthetic-title");
+                    save(&mut s, &Field::STEP_MODELS);
+                }
+                _ => {
+                    reset(&mut s, Field::TranslationPrompt);
+                    reset(&mut s, Field::TranslationPrompt);
+                }
+            }
+            assert!(s.hex.shell.engine.error.is_none(), "{kind}");
+            assert_eq!(text(&s, Field::Threads), "8", "{kind}");
+            type_into(&mut s, Field::Deadline, "60");
+            save(&mut s, &Field::TRANSCRIPTION);
+            let loaded = Config::load_in(root.path()).unwrap();
+            assert_eq!(loaded.engine_settings.stage_deadline_seconds, Some(60));
+            assert_eq!(loaded.engine_settings.worker_threads, 8, "{kind}");
+            let prompt = loaded.engine_settings.notes_prompt.as_deref();
+            assert_eq!(prompt, Some("Synthetic other window"), "{kind}");
+        }
     }
     #[test]
     fn status_words_cover_every_state_without_a_value() {

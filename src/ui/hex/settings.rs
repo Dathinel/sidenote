@@ -197,7 +197,7 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
         load_kb(s);
     }
     if page == Page::Meetings && tab == 3 {
-        engine::load(s);
+        engine::enter(s);
     }
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
