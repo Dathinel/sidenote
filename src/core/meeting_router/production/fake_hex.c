@@ -12,8 +12,12 @@ static int count(const char *name) {
     f=fopen(name, "w"); fprintf(f, "%d", n+1); fclose(f); return n;
 }
 static void emit(const char *name, FILE *out) {
-    FILE *f = fopen(name, "rb"); int c;
-    if (f) { while ((c = fgetc(f)) != EOF) fputc(c, out); fclose(f); }
+    FILE *f = fopen(name, "rb");
+    if (f) {
+        unsigned char buffer[4096]; size_t n;
+        while ((n = fread(buffer, 1, sizeof(buffer), f)) != 0) fwrite(buffer, 1, n, out);
+        fclose(f);
+    }
 }
 int main(int argc, char **argv) {
     _setmode(_fileno(stdout), _O_BINARY);
