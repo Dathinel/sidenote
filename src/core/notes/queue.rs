@@ -494,6 +494,7 @@ fn process(
         .map(|d| d.with_timezone(&chrono::Local).date_naive())
         .ok_or_else(|| store_io::invalid("Missing meeting date"))?;
     if job.request == Some(Request::RedoTasks) {
+        // The automatic Tasks switch does not apply to an explicit redo.
         return redo_tasks(
             job,
             run,
@@ -626,6 +627,34 @@ fn process(
         }
         (summary, answer.fallback)
     };
+    let tasks_enabled = match core::Config::load_in(root) {
+        Ok(config) => config.engine_settings.steps.tasks,
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Err(e),
+        Err(_) => {
+            return write(
+                root,
+                id,
+                job,
+                JobState::Done {
+                    fallback,
+                    tasks_failed: true,
+                },
+                "task settings could not be read",
+            );
+        }
+    };
+    if !tasks_enabled {
+        return write(
+            root,
+            id,
+            job,
+            JobState::Done {
+                fallback,
+                tasks_failed: false,
+            },
+            "done",
+        );
+    }
     // Preserve the exact summary on a sorting retry; only tasks.json is replaced.
     let material = prompt::task_material(&summary, &projects)?;
     let call = prompt::Call {

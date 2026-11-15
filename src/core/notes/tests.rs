@@ -407,6 +407,45 @@ fn busy_task_authorization_retries_sorting_without_failing_the_job() {
 }
 
 #[test]
+fn unreadable_tasks_settings_after_publication_keep_notes_done() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(settings.clone());
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    enqueue(&root.0, &settings, None);
+    let mut first = Fake::new(vec![Ok(summary()), Err(Failure::Busy)]);
+    drain(&root.0, &settings, &mut first);
+    assert!(queue::read(&root.0, ID).unwrap().unwrap().sorting_pending);
+    let published = fs::read(folder.join("english-summary.json")).unwrap();
+
+    fs::write(root.0.join("config.json"), b"invalid synthetic config").unwrap();
+    let mut retry = Fake::new(vec![]);
+    drain(&root.0, &settings, &mut retry);
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: true
+        }
+    );
+    assert!(retry.calls.is_empty());
+    assert_eq!(
+        queue::read(&root.0, ID).unwrap().unwrap().message,
+        "task settings could not be read"
+    );
+    assert_eq!(
+        fs::read(folder.join("english-summary.json")).unwrap(),
+        published
+    );
+}
+
+#[test]
 fn busy_sorting_retry_still_requires_auto_consent() {
     let root = Temp::new();
     meeting(&root.0, PRIVATE);
@@ -563,6 +602,72 @@ fn explicit_click_allows_an_old_meeting_and_success_has_v2_and_mine() {
     assert_eq!(fake.calls.len(), 2);
     assert_eq!(fake.calls[0].1, helper::NOTES_TIMEOUT);
     assert_eq!(fake.calls[1].1, helper::TASKS_TIMEOUT);
+}
+#[test]
+fn disabled_tasks_step_skips_sorting() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(s.clone());
+    config.engine_settings.steps.tasks = false;
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fake.calls
+            .iter()
+            .filter(|(_, timeout)| *timeout == helper::TASKS_TIMEOUT)
+            .count(),
+        0
+    );
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+    assert!(folder.join("english-summary.json").exists());
+    assert!(!folder.join("tasks.json").exists());
+}
+
+#[test]
+fn enabled_tasks_step_runs_sorting() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(s.clone());
+    config.engine_settings.steps.tasks = true;
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fake.calls
+            .iter()
+            .filter(|(_, timeout)| *timeout == helper::TASKS_TIMEOUT)
+            .count(),
+        1
+    );
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+    assert!(folder.join("tasks.json").exists());
 }
 #[test]
 fn default_instructions_stop_after_two_invalid_answers() {
