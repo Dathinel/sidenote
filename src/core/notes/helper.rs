@@ -173,21 +173,29 @@ impl Run for Cli {
             return Err("helper_not_text_only");
         }
         let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
-        runner_process::run_classified(
-            runner_process::Invocation::Translation(&snapshot.model),
-            prompt,
-            &scratch.0,
-            Duration::from_secs(u64::from(snapshot.deadline_seconds)),
-            |_| {},
-        )
-        .map_err(|e| match e.category {
-            "HELPER_TOOL_USE" => "helper_tool_use",
-            "HELPER_TIMEOUT" => "translation_timed_out",
-            "HELPER_AUTH" => "helper_auth",
-            "HELPER_LIMIT" => "helper_limit",
-            "HELPER_UNAVAILABLE_LINUX" => "helper_unavailable_linux",
-            _ => "helper_unsupported",
-        })
+        let invoke = |capability, input| {
+            runner_process::run_classified(
+                runner_process::Invocation::Translation(&snapshot.model, capability),
+                input,
+                &scratch.0,
+                Duration::from_secs(u64::from(snapshot.deadline_seconds)),
+                |_| {},
+            )
+            .map_err(|e| match e.category {
+                "HELPER_TOOL_USE" => "helper_tool_use",
+                "HELPER_TIMEOUT" => "translation_timed_out",
+                "HELPER_AUTH" => "helper_auth",
+                "HELPER_LIMIT" => "helper_limit",
+                "HELPER_UNAVAILABLE_LINUX" => "helper_unavailable_linux",
+                "HELPER_UNQUALIFIED" => "helper_unqualified",
+                _ => "helper_unsupported",
+            })
+        };
+        let capability = invoke(
+            None,
+            serde_json::json!({"model":snapshot.model}).to_string(),
+        )?;
+        invoke(Some(capability.as_str()), prompt)
     }
     fn installed(&self, helper: Helper) -> bool {
         runners::installed(&runner(helper, ""))

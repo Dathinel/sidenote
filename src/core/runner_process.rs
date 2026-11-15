@@ -14,7 +14,7 @@ mod translation;
 #[derive(Clone, Copy)]
 pub(super) enum Invocation<'a> {
     General(&'a Runner),
-    Translation(&'a str),
+    Translation(&'a str, Option<&'a str>),
 }
 #[cfg(test)]
 type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
@@ -403,14 +403,17 @@ pub(super) fn run_classified(
     timeout: Duration,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
-    let prepared;
+    let mut prepared;
     let (runner, text_only) = match invocation {
         Invocation::General(r) => {
             runners::validate(r)?;
             (r, false)
         }
-        Invocation::Translation(model) => {
+        Invocation::Translation(model, capability) => {
             prepared = translation::runner(model)?;
+            if capability.is_none() {
+                prepared.args.push("--sidenote-capability".into());
+            }
             (&prepared, true)
         }
     };
@@ -426,6 +429,20 @@ pub(super) fn run_classified(
         .map_err(|_| "An update is being installed. Try again after restart.")?;
     let harness = runners::kind(runner)?;
     let program = runners::executable(runner)?;
+    let qualification = if text_only {
+        Some(translation::qualification::admit(&program, runner)?)
+    } else {
+        None
+    };
+    if let Invocation::Translation(model, Some(capability)) = invocation {
+        translation::qualification::capability(
+            capability,
+            model,
+            qualification
+                .as_ref()
+                .ok_or_else(translation::qualification::refusal)?,
+        )?;
+    }
     let scratch = if runner.args.iter().any(|a| a.contains("{prompt_file}")) {
         Some(Scratch::new()?)
     } else {

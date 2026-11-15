@@ -80,7 +80,11 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         }
         JobState::Empty => "Sidenote heard no speech in this meeting, so there is nothing to summarise.".into(),
     };
-    let routing = job.routing_message();
+    let routing = [job.routing_message(), job.translation_message().into()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if routing.is_empty() {
         standard
     } else if standard.is_empty() {
@@ -185,6 +189,7 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
                 request: None,
                 transcript_revision: None,
                 routing_fallbacks: Vec::new(),
+                translation: None,
             })
         })
         .map(|mut job| {
@@ -502,6 +507,7 @@ mod tests {
             request: None,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         };
         assert!(is_failure(&job.state));
         assert!(message(&job, None).contains("not available on Linux yet"));
@@ -516,6 +522,7 @@ mod tests {
             request: Some(Request::FirstPart),
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         };
         assert_eq!(job.retry_request(), Request::FirstPart);
         assert_eq!(
@@ -580,6 +587,7 @@ mod tests {
                 request: None,
                 transcript_revision: None,
                 routing_fallbacks: Vec::new(),
+                translation: None,
             };
             let text = message(&job, Some(Helper::Claude));
             assert!(!text.is_empty(), "{name}");
@@ -612,6 +620,7 @@ mod tests {
             request: None,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         };
         let text = message(&job, Some(Helper::Claude));
         assert!(text.contains("OpenCode did not finish"));
@@ -650,6 +659,7 @@ mod tests {
                 request: None,
                 transcript_revision: None,
                 routing_fallbacks: Vec::new(),
+                translation: None,
             };
             let text = message(&job, None);
             assert!(text.contains(name));

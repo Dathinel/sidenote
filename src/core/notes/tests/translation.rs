@@ -1,5 +1,6 @@
 use super::*;
 mod failed;
+mod qualification;
 use crate::core::meeting_router::{
     self as router,
     batches::{self, *},
@@ -53,6 +54,9 @@ fn fixture_child() {
     std::io::stdin().read_to_string(&mut input).unwrap();
     let (purpose, path) = mode.split_once('|').unwrap_or(("notes", &mode));
     let root = PathBuf::from(path);
+    if purpose == "capability" {
+        qualification::capability_child(&root, &input);
+    }
     if purpose == "translation" {
         assert!(
             std::env::var("OPENCODE_CONFIG_CONTENT")
@@ -155,7 +159,8 @@ fn boundary(root: &Path) -> Boundary {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         let translating = args.iter().any(|a| a == "--standalone");
-        if translating {
+        let capability = args.iter().any(|a| a == "--sidenote-capability");
+        if translating && !capability {
             let job = queue::read(&root, ID).unwrap().unwrap();
             let snapshot = job.translation.unwrap().snapshot.unwrap();
             assert_eq!(
@@ -197,7 +202,13 @@ fn boundary(root: &Path) -> Boundary {
         }
         let mode = format!(
             "{}|{}",
-            if translating { "translation" } else { "notes" },
+            if capability {
+                "capability"
+            } else if translating {
+                "translation"
+            } else {
+                "notes"
+            },
             root.display()
         );
         let mut result = child(&mode);
