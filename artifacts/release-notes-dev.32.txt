@@ -1,0 +1,9 @@
+Sidenote 0.0.1-dev.32
+
+What the built-in engine still does not do: it writes your notes from Hex's own transcript only. The Telugu and Hindi passes and translation do not run yet.
+
+New, switched off: the Telugu and Hindi passes that run by themselves after Stop are now in the app, off by default. They are not switched on because their first full-length test failed: on a 30-minute public recording the English part stopped partway and no Hindi or Telugu was transcribed. Notes were still written from Hex's transcript. The cause is being found. When the passes are on and one fails, Sidenote shows why in the notes status.
+
+Stops doing: nothing.
+
+Needs on your laptop: nothing
