@@ -8,6 +8,8 @@ pub struct BatchOutput {
     pub source_revision: String,
     pub plan: Plan,
     pub manifest: PieceManifest,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<super::super::fallback::RoutingFallback>,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct Released {
@@ -62,6 +64,7 @@ pub(super) fn assembled(
     data.transcript.input_checksum = source.into();
     data.provenance =
         serde_json::json!({"pieces":output.manifest,"plan":output.plan,"source_revision":source});
+    super::super::fallback::attach(&mut data, &output.fallbacks)?;
     Ok(data)
 }
 /// The app parent uses this after its owned worker and source-stability checks.

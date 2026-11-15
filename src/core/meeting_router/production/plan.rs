@@ -1,3 +1,4 @@
+use super::super::fallback::{Interval, Reason, RoutingFallback};
 use super::*;
 use crate::core::lid::{self, Decision};
 use std::collections::BTreeMap;
@@ -111,6 +112,7 @@ pub(super) fn produce(
     };
     let mut output = Vec::new();
     let mut coverage = Vec::new();
+    let mut uncertain: Vec<RoutingFallback> = Vec::new();
     let mut english_identity = None;
     let mut pin_seconds = 0.0;
     let mut detection_seconds = started.elapsed().as_secs_f64();
@@ -180,6 +182,18 @@ pub(super) fn produce(
                 })
                 .collect();
             for range in ranges::plan((0, track.sample_count), ownership, &speech)? {
+                let rejected: Vec<_> = range
+                    .members
+                    .iter()
+                    .filter_map(|(index, _)| match decisions.get(*index)? {
+                        Decision::Accepted { .. } => None,
+                        Decision::Unsure(reason) => Some(match reason {
+                            lid::Unsure::GuardRejected => Reason::GuardRejected,
+                            lid::Unsure::Uncalibrated => Reason::Uncalibrated,
+                            lid::Unsure::InvalidScores => Reason::InvalidScores,
+                        }),
+                    })
+                    .collect();
                 let range = own(range, ownership);
                 coverage.push(Chunk {
                     id: format!("{}-{}", piece.id, range.context.0),
@@ -192,6 +206,17 @@ pub(super) fn produce(
                     audio_start: None,
                 });
                 let Some(language) = &range.language else {
+                    let c = coverage.last().ok_or("Missing uncertain interval")?;
+                    for reason in rejected {
+                        uncertain.push(RoutingFallback {
+                            reason,
+                            interval: Some(Interval {
+                                track: c.track.clone(),
+                                start: c.start,
+                                end: c.end,
+                            }),
+                        });
+                    }
                     continue;
                 };
                 let model_id = config
@@ -235,6 +260,7 @@ pub(super) fn produce(
     clocks.insert("ranges".into(), range_seconds);
     clocks.insert("model_pin".into(), pin_seconds);
     store_io::write(&work.join("coverage.json"), &coverage)?;
+    store_io::write(&work.join("uncertainty.json"), &uncertain)?;
     let started = Instant::now();
     let plan = spool(work, output)?;
     clocks.insert("spool".into(), started.elapsed().as_secs_f64());

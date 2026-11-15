@@ -87,6 +87,7 @@ fn produce(root: &Path, id: &str, baseline: &[Chunk], language: &str) -> Result<
         source_revision: "fixture-input".into(),
         plan,
         manifest,
+        fallbacks: vec![],
     };
     store_io::write(&dir.join("output.json"), &output)?;
     batches::run(&dir, &output.plan, &mut Fake, &mut Fake)

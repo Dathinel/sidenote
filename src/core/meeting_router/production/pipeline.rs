@@ -1,3 +1,5 @@
+#[cfg(feature = "asr-runtime")]
+use super::super::fallback::RoutingFallback;
 use super::*;
 #[cfg(feature = "asr-runtime")]
 use std::collections::BTreeMap;
@@ -78,7 +80,11 @@ pub fn run(
         )?;
         clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
         let assemble_started = Instant::now();
-        let revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
+        let mut revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
+        let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
+            &inputs::Snapshot::read_file(&work.join("uncertainty.json"), 16 << 20)?,
+        )?;
+        super::super::fallback::attach(&mut revision, &fallbacks)?;
         let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
             &work.join("coverage.json"),
             16 << 20,
@@ -99,6 +105,7 @@ pub fn run(
                 source_revision: input_revision.to_owned(),
                 plan,
                 manifest: pieces,
+                fallbacks,
             },
         )?;
         Ok(())

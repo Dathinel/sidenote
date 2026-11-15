@@ -5,6 +5,7 @@ pub mod batches;
 mod cache;
 mod cli;
 mod config;
+pub mod fallback;
 mod hex;
 pub mod hex_bridge;
 pub(crate) mod inputs;

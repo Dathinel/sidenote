@@ -99,3 +99,35 @@ fn production_retry_repairs_damaged_derived_pcm() {
         source
     );
 }
+
+#[test]
+#[ignore = "requires SIDENOTE_ROUTING_R1_FIXTURE public audio/model fixture"]
+fn production_planner_persists_uncertain_interval_reasons() {
+    use crate::core::meeting_router::fallback::{Reason, RoutingFallback};
+    let mut f = Fixture::new();
+    f.config
+        .labs
+        .language_detection_settings
+        .confidence_threshold = 1.0;
+    f.config.labs.language_detection_settings.margin_threshold = 1.0;
+    let plan = f.produce();
+    assert!(plan.batches.is_empty());
+    let reasons: Vec<RoutingFallback> = serde_json::from_slice(
+        &inputs::Snapshot::read_file(&f.work.join("uncertainty.json"), 1 << 20).unwrap(),
+    )
+    .unwrap();
+    let coverage: Vec<Chunk> = serde_json::from_slice(
+        &inputs::Snapshot::read_file(&f.work.join("coverage.json"), 1 << 20).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !reasons.is_empty(),
+        "real VAD/LID decisions must retain their reason"
+    );
+    assert_eq!(reasons.len(), coverage.len());
+    for (reason, c) in reasons.iter().zip(coverage) {
+        assert_eq!(reason.reason, Reason::GuardRejected);
+        let i = reason.interval.as_ref().unwrap();
+        assert_eq!((&i.track, i.start, i.end), (&c.track, c.start, c.end));
+    }
+}
