@@ -70,6 +70,15 @@ pub(crate) fn log(message: &str) {
     }
     log_at(&crate::core::log_path(), message);
 }
+/// Record only non-sensitive diagnostics for a failed Areas worker.
+pub fn log_area_io_error(refresh: bool, error: &io::Error) {
+    let stage = if refresh { "refresh" } else { "operation" };
+    log(&format!(
+        "areas {stage} io_error kind={:?} raw_os_error={:?}",
+        error.kind(),
+        error.raw_os_error()
+    ));
+}
 /// Existing catch-up and queue drains, owned by the service instead of a window.
 pub(crate) fn service_tick() -> io::Result<()> {
     #[cfg(target_os = "linux")]

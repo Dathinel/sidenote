@@ -291,10 +291,13 @@ impl State {
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
-                .and_then(|r| r.map_err(|_| if has_snapshot {
-                    "Could not refresh Areas. Showing the last available data. Try reloading.".into()
-                } else {
-                    "Could not load Areas. Try reloading.".into()
+                .and_then(|r| r.map_err(|error| {
+                    sidenote::listener::log_area_io_error(true, &error);
+                    if has_snapshot {
+                        "Could not refresh Areas. Showing the last available data. Try reloading.".into()
+                    } else {
+                        "Could not load Areas. Try reloading.".into()
+                    }
                 }));
                 let _ = events.send(super::Event::Area {
                     generation,
@@ -419,7 +422,12 @@ impl State {
                     }
                 })
                 .map_err(|_| "Could not finish the area change. Reload before trying again.".into())
-                .and_then(|r| r.map_err(area_error));
+                .and_then(|r| {
+                    r.map_err(|error| {
+                        sidenote::listener::log_area_io_error(false, &error);
+                        area_error(error)
+                    })
+                });
                 let _ = events.send(super::Event::Area {
                     generation,
                     refresh: false,
@@ -1164,6 +1172,9 @@ mod refresh_error_tests {
         super::super::hex::SKIP_INSTALL_DETECT.set(false);
         wait(&mut s);
         s.config.features.projects = true;
+        let log_before = std::fs::read_to_string(core::log_path())
+            .unwrap_or_default()
+            .len();
         s.areas.has_snapshot = false;
         s.areas.test_refresh_error = Some(32);
         s.refresh_areas();
@@ -1172,6 +1183,16 @@ mod refresh_error_tests {
             s.areas.error.as_deref(),
             Some("Could not load Areas. Try reloading.")
         );
+        let log = std::fs::read_to_string(core::log_path()).unwrap();
+        let line = log[log_before..]
+            .lines()
+            .find(|line| line.contains("areas refresh io_error"))
+            .unwrap();
+        let error = std::io::Error::from_raw_os_error(32);
+        assert!(line.contains(&format!("kind={:?}", error.kind())));
+        assert!(line.contains("raw_os_error=Some(32)"));
+        assert!(!line.contains(&core::state_dir().to_string_lossy().to_string()));
+        assert!(!line.contains('/') && !line.contains('\\'));
         s.refresh_areas();
         wait(&mut s);
         assert!(s.areas.error.is_none());
