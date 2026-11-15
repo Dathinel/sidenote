@@ -55,7 +55,8 @@ impl Problem {
         }
     }
 }
-pub(crate) fn log(message: &str) {
+/// Append a content-free diagnostic to the existing app log.
+pub fn log(message: &str) {
     #[cfg(target_os = "linux")]
     if crate::service::role() != crate::service::DeviceRole::Full || crate::service::active() {
         let _ = crate::operations::record(
