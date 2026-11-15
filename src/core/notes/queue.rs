@@ -626,6 +626,18 @@ fn process(
         }
         (summary, answer.fallback)
     };
+    if !core::Config::load_in(root)?.engine_settings.steps.tasks {
+        return write(
+            root,
+            id,
+            job,
+            JobState::Done {
+                fallback,
+                tasks_failed: false,
+            },
+            "done",
+        );
+    }
     // Preserve the exact summary on a sorting retry; only tasks.json is replaced.
     let material = prompt::task_material(&summary, &projects)?;
     let call = prompt::Call {

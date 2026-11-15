@@ -565,6 +565,72 @@ fn explicit_click_allows_an_old_meeting_and_success_has_v2_and_mine() {
     assert_eq!(fake.calls[1].1, helper::TASKS_TIMEOUT);
 }
 #[test]
+fn disabled_tasks_step_skips_sorting() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(s.clone());
+    config.engine_settings.steps.tasks = false;
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fake.calls
+            .iter()
+            .filter(|(_, timeout)| *timeout == helper::TASKS_TIMEOUT)
+            .count(),
+        0
+    );
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+    assert!(folder.join("english-summary.json").exists());
+    assert!(!folder.join("tasks.json").exists());
+}
+
+#[test]
+fn enabled_tasks_step_runs_sorting() {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let s = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(s.clone());
+    config.engine_settings.steps.tasks = true;
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    enqueue(&root.0, &s, None);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert_eq!(
+        fake.calls
+            .iter()
+            .filter(|(_, timeout)| *timeout == helper::TASKS_TIMEOUT)
+            .count(),
+        1
+    );
+    assert_eq!(
+        state(&root.0),
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    );
+    assert!(folder.join("tasks.json").exists());
+}
+#[test]
 fn default_instructions_stop_after_two_invalid_answers() {
     let root = Temp::new();
     let folder = meeting(&root.0, PRIVATE);
