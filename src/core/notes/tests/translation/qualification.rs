@@ -50,6 +50,24 @@ fn unqualified_provider_never_receives_transcript() {
         );
         let status = crate::core::notes::status_record(&root.0, ID).unwrap();
         assert!(!status.translation_message().is_empty());
+
+        if case == "identity"
+            && let Some(path) = crate::env_var("SIDENOTE_TRANSLATION_STATUS_PROOF")
+        {
+            let proof = PathBuf::from(path);
+            assert!(crate::core::is_proof_path(
+                &proof,
+                "sidenote-translation-status-public"
+            ));
+            let jobs = proof.join("local/notes-jobs");
+            fs::create_dir_all(&jobs).unwrap();
+            fs::copy(
+                root.0.join("local/notes-jobs").join(format!("{ID}.json")),
+                jobs.join(format!("{ID}.json")),
+            )
+            .unwrap();
+            fs::write(proof.join("id.txt"), ID).unwrap();
+        }
         if !["identity", "binary", "invocation"].contains(&case) {
             let sent = fs::read_to_string(root.0.join("capability-input")).unwrap();
             assert!(!sent.contains("selected") && sent.contains(model));

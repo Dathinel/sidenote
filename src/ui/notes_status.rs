@@ -94,6 +94,9 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
     }
 }
 
+fn has_notice(job: &Job) -> bool {
+    !job.routing_message().is_empty() || !job.translation_message().is_empty()
+}
 fn label_for(job: &Job) -> &'static str {
     if !job.routing_message().is_empty()
         && matches!(
@@ -105,6 +108,16 @@ fn label_for(job: &Job) -> &'static str {
         )
     {
         "Summary used Hex coverage"
+    } else if !job.translation_message().is_empty()
+        && matches!(
+            job.state,
+            JobState::Done {
+                tasks_failed: false,
+                ..
+            }
+        )
+    {
+        "Summary used original text"
     } else {
         label(&job.state)
     }
@@ -123,7 +136,7 @@ pub fn visible_copy(
                     fallback: false,
                     ..
                 }
-            ) && job.routing_message().is_empty()))
+            ) && !has_notice(job)))
     {
         return None;
     }
@@ -205,7 +218,7 @@ pub fn list_label(s: &State, m: &Meeting) -> Option<&'static str> {
                 fallback: false,
                 tasks_failed: false
             }
-        ) && j.routing_message().is_empty()
+        ) && !has_notice(&j)
         {
             None
         } else {
@@ -457,6 +470,33 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires queue-produced synthetic translation receipt"]
+    fn queue_translation_refusal_remains_visible_after_done() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("SIDENOTE_TRANSLATION_STATUS_PROOF").unwrap(),
+        );
+        assert!(core::is_proof_path(
+            &root,
+            "sidenote-translation-status-public"
+        ));
+        let id = std::fs::read_to_string(root.join("id.txt")).unwrap();
+        let job = core::notes::status_record(&root, &id).unwrap();
+        assert!(matches!(
+            job.state,
+            JobState::Done {
+                fallback: false,
+                tasks_failed: false
+            }
+        ));
+        assert_eq!(job.helper, Some(Helper::Claude));
+        let (label, text) =
+            visible_copy(&job, None, false).expect("translation refusal must stay visible");
+        assert_eq!(label, "Summary used original text");
+        assert!(text.contains("provider is not qualified"));
+        assert!(!text.contains("default instructions"));
+    }
     #[test]
     #[ignore = "requires production corruption notes-job receipts"]
     fn production_corruption_status_remains_visible_after_success() {
