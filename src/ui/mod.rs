@@ -3003,6 +3003,8 @@ pub fn spec() -> AppSpec<State> {
                         helper: Some(core::notes::Helper::Claude),
                         updated_at: 1,
                         request: None,
+                        transcript_revision: None,
+                        routing_fallbacks: Vec::new(),
                     },
                 );
             }),

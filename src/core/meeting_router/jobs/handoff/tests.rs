@@ -186,7 +186,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     )
     .unwrap();
     revision::begin(destination(&root, id).parent().unwrap(), 7).unwrap();
-    let (fallback, reading) = notes_input(
+    let (fallback, reading, _) = notes_input(
         &root,
         id,
         None,
@@ -231,7 +231,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     assert_eq!(published.transcript.segments[0].lang, "te");
     assert_eq!(published.evidence.len(), 1);
     assert!(published.provenance["plan"]["batches"]["te"].is_object());
-    let (_, unpinned) = notes_input(
+    let (_, unpinned, _) = notes_input(
         &root,
         id,
         None,
@@ -242,7 +242,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     .unwrap()
     .unwrap();
     assert_eq!(unpinned.segments[0].lang, "en");
-    let (same, pinned) = notes_input(
+    let (same, pinned, _) = notes_input(
         &root,
         id,
         Some(&fallback),

@@ -71,7 +71,13 @@ pub(super) fn chosen(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<Option<(String, String)>> {
+) -> io::Result<
+    Option<(
+        String,
+        String,
+        Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    )>,
+> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
     if !router::jobs::notes_enabled(root)? {
@@ -114,7 +120,7 @@ pub(super) fn chosen(
             .collect())
     };
     router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
-        .map(|(id, t)| {
+        .map(|(id, t, reasons)| {
             let mut text = String::new();
             for s in t.segments {
                 let lang = match s.lang.as_str() {
@@ -146,7 +152,7 @@ pub(super) fn chosen(
                         .join(" ")
                 ));
             }
-            Ok((id, text))
+            Ok((id, text, reasons))
         })
         .transpose()
 }

@@ -6,7 +6,9 @@ mod helper;
 mod prompt;
 pub mod queue;
 mod schema;
+mod status_detail;
 mod transcript;
+pub use status_detail::{StatusDetail, status_record};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

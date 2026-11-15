@@ -1,3 +1,4 @@
+use super::super::fallback::{self, Reason, RoutingFallback};
 use super::*;
 use crate::core::{Config, file_reads};
 
@@ -18,7 +19,7 @@ pub(crate) fn notes_input(
     baseline: impl FnOnce() -> io::Result<Vec<Chunk>>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<Option<(String, Transcript)>> {
+) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
@@ -28,8 +29,9 @@ pub(crate) fn notes_input(
     };
     if let Some(chosen) = chosen
         && let Ok(Some((id, r))) = revision::load(&dir, Some(chosen))
+        && let Ok(reasons) = fallback::read(&r)
     {
-        return Ok(Some((id, r.transcript)));
+        return Ok(Some((id, r.transcript, reasons)));
     }
     let seconds = config.engine_settings.stages.routing_deadline_seconds;
     if !(1..=3600).contains(&seconds) {
@@ -60,7 +62,9 @@ pub(crate) fn notes_input(
     let same_baseline =
         |t: &Transcript| serde_json::to_vec(&t.baseline).ok() == serde_json::to_vec(&baseline).ok();
     // An unchosen damaged selection is optional input. Preserve its bytes and wait/fall back.
-    let latest = revision::load(&dir, None).ok().flatten();
+    let loaded = revision::load(&dir, None);
+    let latest_unavailable = loaded.is_err();
+    let latest = loaded.ok().flatten();
     let released = super::super::inputs::Snapshot::read_file(
         &handoff::work(root, id).join("released.json"),
         4096,
@@ -82,9 +86,11 @@ pub(crate) fn notes_input(
         && r.generation == released.generation
         && r.transcript.input_checksum == released.source_revision
         && same_baseline(&r.transcript)
+        && let Ok(reasons) = fallback::read(&r)
     {
-        return Ok(Some((chosen, r.transcript)));
+        return Ok(Some((chosen, r.transcript, reasons)));
     }
+    let mut failed_attempt = false;
     let generation = if let Some(p) = &pending {
         #[derive(Deserialize)]
         struct Attempt {
@@ -98,6 +104,7 @@ pub(crate) fn notes_input(
         .ok()
         .and_then(|b| serde_json::from_slice::<Attempt>(&b).ok())
         .is_some_and(|a| a.generation == p.generation && !a.child.success);
+        failed_attempt = failed;
         if !failed && now_ms < deadline {
             return Err(waiting());
         }
@@ -113,10 +120,27 @@ pub(crate) fn notes_input(
         "routing failed or deadline expired",
     );
     reconcile(&mut t, &baseline);
-    let data = revision::Revision {
+    let mut reasons = Vec::new();
+    if chosen.is_some() {
+        reasons.push(RoutingFallback::new(Reason::PinnedRevisionUnavailable));
+    }
+    if pending_unusable {
+        reasons.push(RoutingFallback::new(Reason::PendingRecordInvalid));
+    }
+    if latest_unavailable && chosen.is_none() {
+        reasons.push(RoutingFallback::new(Reason::SelectedRevisionUnavailable));
+    }
+    if reasons.is_empty() {
+        reasons.push(RoutingFallback::new(if failed_attempt {
+            Reason::RoutingFailed
+        } else {
+            Reason::DeadlineExpired
+        }));
+    }
+    let mut data = revision::Revision {
         generation: generation.to_string(),
         plan_revision: "compatibility".into(),
-        transcript: t.clone(),
+        transcript: t,
         alternatives: vec![],
         evidence: Default::default(),
         provenance: if require_hex {
@@ -125,6 +149,7 @@ pub(crate) fn notes_input(
             serde_json::Value::Null
         },
     };
+    fallback::attach(&mut data, &reasons)?;
     let id = revision::retain(&dir, &data)?;
-    Ok(Some((id, t)))
+    Ok(Some((id, data.transcript, reasons)))
 }

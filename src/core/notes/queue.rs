@@ -33,6 +33,8 @@ pub(super) struct Job {
     pub sorting_pending: bool,
     #[serde(default)]
     pub transcript_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routing_fallbacks: Vec<core::meeting_router::fallback::RoutingFallback>,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -58,6 +60,7 @@ impl Job {
             request,
             sorting_pending: false,
             transcript_revision: None,
+            routing_fallbacks: Vec::new(),
         }
     }
     fn ready(&self, time: i64, root: &Path) -> bool {
@@ -221,6 +224,10 @@ pub(super) fn enqueue_in(
         next.transcript_revision = previous
             .as_ref()
             .and_then(|j| j.transcript_revision.clone());
+        next.routing_fallbacks = previous
+            .as_ref()
+            .map(|j| j.routing_fallbacks.clone())
+            .unwrap_or_default();
     }
     if !recovery && let Some(previous) = previous.filter(|job| job.helper.is_some()) {
         next.helper = previous.helper;
@@ -312,6 +319,7 @@ fn process(
 ) -> io::Result<()> {
     if !core::meeting_router::jobs::notes_enabled(root)? {
         job.transcript_revision = None;
+        job.routing_fallbacks.clear();
     }
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
@@ -396,8 +404,9 @@ fn process(
         end.unwrap_or(job.updated_at),
         now(),
     )?;
-    let mut transcript = if let Some((revision, text)) = routed {
+    let mut transcript = if let Some((revision, text, reasons)) = routed {
         job.transcript_revision = Some(revision);
+        job.routing_fallbacks = reasons;
         store_io::write(&job_path(root, id), job)?;
         text
     } else if job.request == Some(Request::RedoTasks) {
@@ -780,6 +789,7 @@ fn drain_locked(
                 .as_ref()
                 .is_err_and(|e| store_io::message(e) == Some("routing_pending"));
             before.transcript_revision = job.transcript_revision;
+            before.routing_fallbacks = job.routing_fallbacks;
             if routing_pending {
                 before.next_try_at = Some(now().saturating_add(1000));
                 before.message = "waiting for transcript revision".into();

@@ -24,7 +24,7 @@ pub(super) fn dir(root: &Path) -> PathBuf {
     root.join("local/transcripts").join(ID)
 }
 pub(super) fn selected(root: &Path, folder: &Path) -> (String, Revision) {
-    let (id, _) = transcript::chosen(root, ID, folder, None, 0, 10_000)
+    let (id, _, _) = transcript::chosen(root, ID, folder, None, 0, 10_000)
         .unwrap()
         .unwrap();
     let (_, data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
@@ -144,7 +144,7 @@ fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
             )
             .unwrap();
         }
-        let (id, text) = transcript::chosen(
+        let (id, text, _) = transcript::chosen(
             &root.0,
             ID,
             &folder,

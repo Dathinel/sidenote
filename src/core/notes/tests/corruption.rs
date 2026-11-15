@@ -80,6 +80,12 @@ fn labs_on_busy_pin_corruption_waits_then_uses_hex_without_adopting_a_later_rout
             serde_json::from_slice(&fs::read(&release).unwrap()).unwrap();
         released["completed_ms"] = (ended + 1).into();
         fs::write(release, released.to_string()).unwrap();
+        drain(&root.0, &settings, &mut Fake::new(vec![Err(Failure::Busy)]));
+        let retained_pin = queue::read(&root.0, ID)
+            .unwrap()
+            .unwrap()
+            .transcript_revision
+            .unwrap();
         let mut helper = Fake::new(vec![Ok(summary()), Ok(sorted())]);
         drain(&root.0, &settings, &mut helper);
         assert!(helper.calls[0].0.contains(PRIVATE));
@@ -93,6 +99,29 @@ fn labs_on_busy_pin_corruption_waits_then_uses_hex_without_adopting_a_later_rout
             .unwrap();
         assert_ne!(fallback, pin);
         assert_ne!(fallback, later);
+        assert_eq!(
+            fallback, retained_pin,
+            "retry must retain the fallback selection"
+        );
+        export_status(&root.0, &folder, kind);
+        let status = crate::core::notes::status_record(&root.0, ID).unwrap();
+        assert_eq!(
+            status.transcript_revision.as_deref(),
+            Some(fallback.as_str())
+        );
+        assert!(matches!(
+            status.state,
+            JobState::Done {
+                fallback: false,
+                ..
+            }
+        ));
+        assert!(status.routing_message().contains("missing or damaged"));
+        assert_eq!(
+            status.routing_fallbacks[0].reason,
+            crate::core::meeting_router::fallback::Reason::PinnedRevisionUnavailable
+        );
+        assert!(!helper.calls[0].0.contains(&status.routing_message()));
         let (_, saved) = revision::load(&dir(&root.0), Some(&fallback))
             .unwrap()
             .unwrap();
@@ -130,6 +159,12 @@ fn labs_on_malformed_pending_waits_then_uses_hex_and_retains_the_record() {
         assert!(waiting.calls.is_empty());
         assert!(matches!(state(&root.0), JobState::Queued));
         expire(&root.0, &folder);
+        drain(&root.0, &settings, &mut Fake::new(vec![Err(Failure::Busy)]));
+        let retained_pin = queue::read(&root.0, ID)
+            .unwrap()
+            .unwrap()
+            .transcript_revision
+            .unwrap();
         let mut helper = Fake::new(vec![Ok(summary()), Ok(sorted())]);
         drain(&root.0, &settings, &mut helper);
         assert!(helper.calls[0].0.contains(PRIVATE));
@@ -142,6 +177,26 @@ fn labs_on_malformed_pending_waits_then_uses_hex_and_retains_the_record() {
             .transcript_revision
             .unwrap();
         let (_, saved) = revision::load(&dir(&root.0), Some(&pin)).unwrap().unwrap();
+        assert_eq!(pin, retained_pin);
+        export_status(&root.0, &folder, "pending");
+        let status = crate::core::notes::status_record(&root.0, ID).unwrap();
+        assert!(matches!(
+            status.state,
+            JobState::Done {
+                fallback: false,
+                ..
+            }
+        ));
+        assert!(
+            status
+                .routing_message()
+                .contains("request record was damaged")
+        );
+        assert_eq!(
+            status.routing_fallbacks[0].reason,
+            crate::core::meeting_router::fallback::Reason::PendingRecordInvalid
+        );
+        assert!(!helper.calls[0].0.contains(&status.routing_message()));
         assert_eq!(saved.provenance["pending_unusable"], true);
         assert!(saved.generation.parse::<u128>().unwrap() > 0);
         assert!(saved.transcript.segments.iter().all(|s| s.lang == "en"));
@@ -151,5 +206,29 @@ fn labs_on_malformed_pending_waits_then_uses_hex_and_retains_the_record() {
                 .labs
                 .after_stop_language_routing
         );
+    }
+}
+
+fn export_status(root: &Path, folder: &Path, case: &str) {
+    let Some(target) = std::env::var_os("SIDENOTE_ROUTING_R1_STATUS_OUT") else {
+        return;
+    };
+    let target = PathBuf::from(target);
+    assert!(crate::core::is_proof_path(
+        &target,
+        "sidenote-routing-r1-status-public"
+    ));
+    let out = target.join(case);
+    let job = out.join("local/notes-jobs").join(format!("{ID}.json"));
+    let meeting = out.join("meetings").join(ID);
+    fs::create_dir_all(job.parent().unwrap()).unwrap();
+    fs::create_dir_all(&meeting).unwrap();
+    fs::copy(
+        root.join("local/notes-jobs").join(format!("{ID}.json")),
+        job,
+    )
+    .unwrap();
+    for name in ["manifest.json", "transcript.ndjson", "english-summary.json"] {
+        fs::copy(folder.join(name), meeting.join(name)).unwrap();
     }
 }

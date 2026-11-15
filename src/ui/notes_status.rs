@@ -7,51 +7,18 @@ use super::{
     widgets::{self, BannerKind},
 };
 use rune::{El, row};
-use serde::Deserialize;
 use sidenote::core::{
     self, Meeting,
     notes::{Helper, JobState, Request},
 };
 use std::{collections::BTreeMap, path::Path};
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct Job {
-    #[serde(flatten)]
-    pub state: JobState,
-    #[serde(default)]
-    pub helper: Option<Helper>,
-    #[serde(default)]
-    pub updated_at: i64,
-    #[serde(default)]
-    pub request: Option<Request>,
-}
-impl Job {
-    pub fn retry_request(&self) -> Request {
-        self.request.unwrap_or(Request::TryAgain)
-    }
-    pub fn queued() -> Self {
-        Self {
-            state: JobState::Queued,
-            helper: None,
-            updated_at: 0,
-            request: None,
-        }
-    }
-}
+pub use sidenote::core::notes::StatusDetail as Job;
 pub fn read(root: &Path, meetings: &[Meeting]) -> BTreeMap<String, Job> {
     meetings
         .iter()
         .filter(|m| m.device.is_none())
-        .filter_map(|m| {
-            if !m.id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-                return None;
-            }
-            let path = root.join("local/notes-jobs").join(format!("{}.json", m.id));
-            core::file_reads::text(&path, core::file_reads::JOURNAL_MAX)
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
-                .map(|j| (m.id.clone(), j))
-        })
+        .filter_map(|m| core::notes::status_record(root, &m.id).map(|j| (m.id.clone(), j)))
         .collect()
 }
 pub fn is_failure(state: &JobState) -> bool {
@@ -81,7 +48,7 @@ pub fn running_message(name: &str, started_at: i64) -> String {
 pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
     let name = helper.map(Helper::name).unwrap_or("The agent");
-    match &job.state {
+    let standard: String = match &job.state {
         JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
@@ -112,8 +79,53 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
             format!("{input} over the 16,000 character limit. Shorten the input, then press Try again. Your transcript is saved.")
         }
         JobState::Empty => "Sidenote heard no speech in this meeting, so there is nothing to summarise.".into(),
+    };
+    let routing = job.routing_message();
+    if routing.is_empty() {
+        standard
+    } else if standard.is_empty() {
+        routing
+    } else {
+        format!("{routing} {standard}")
     }
 }
+
+fn label_for(job: &Job) -> &'static str {
+    if !job.routing_message().is_empty()
+        && matches!(
+            job.state,
+            JobState::Done {
+                tasks_failed: false,
+                ..
+            }
+        )
+    {
+        "Summary used Hex coverage"
+    } else {
+        label(&job.state)
+    }
+}
+
+pub fn visible_copy(
+    job: &Job,
+    selected: Option<Helper>,
+    dismissed: bool,
+) -> Option<(&'static str, String)> {
+    if matches!(job.state, JobState::Done { .. })
+        && (dismissed
+            || (matches!(
+                job.state,
+                JobState::Done {
+                    fallback: false,
+                    ..
+                }
+            ) && job.routing_message().is_empty()))
+    {
+        return None;
+    }
+    Some((label_for(job), message(job, selected)))
+}
+
 pub fn label(state: &JobState) -> &'static str {
     match state {
         JobState::NoHelper => "No summary yet",
@@ -171,6 +183,8 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
                 helper: None,
                 updated_at: 0,
                 request: None,
+                transcript_revision: None,
+                routing_fallbacks: Vec::new(),
             })
         })
         .map(|mut job| {
@@ -186,10 +200,11 @@ pub fn list_label(s: &State, m: &Meeting) -> Option<&'static str> {
                 fallback: false,
                 tasks_failed: false
             }
-        ) {
+        ) && j.routing_message().is_empty()
+        {
             None
         } else {
-            Some(label(&j.state))
+            Some(label_for(&j))
         }
     })
 }
@@ -229,21 +244,12 @@ pub(super) fn use_codex_button(
     )
 }
 pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
-    if matches!(
-        job.state,
-        JobState::Done {
-            fallback: false,
-            ..
-        }
-    ) || (matches!(job.state, JobState::Done { .. }) && s.ai_notes.dismissed.contains(id))
-    {
-        return None;
-    }
     let selected = s
         .ai_notes
         .settings
         .as_ref()
         .and_then(|n| n.effective_helper());
+    let (title, copy) = visible_copy(job, selected, s.ai_notes.dismissed.contains(id))?;
     let kind = if is_failure(&job.state) {
         BannerKind::Problem
     } else if matches!(job.state, JobState::Running | JobState::Queued) {
@@ -251,8 +257,7 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     } else {
         BannerKind::Info
     };
-    let mut c = widgets::banner(label(&job.state), message(job, selected), kind, p)
-        .key("notes-state-banner");
+    let mut c = widgets::banner(title, copy, kind, p).key("notes-state-banner");
     let mut buttons = row().w_full().flex_wrap().gaps(8.0, 8.0);
     match job.state {
         JobState::NoHelper => {
@@ -448,12 +453,55 @@ pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires production corruption notes-job receipts"]
+    fn production_corruption_status_remains_visible_after_success() {
+        let root =
+            std::path::PathBuf::from(std::env::var_os("SIDENOTE_ROUTING_R1_STATUS_OUT").unwrap());
+        assert!(core::is_proof_path(
+            &root,
+            "sidenote-routing-r1-status-public"
+        ));
+        for (case, reason) in [
+            ("missing", "missing or damaged"),
+            ("truncated", "missing or damaged"),
+            ("checksum", "missing or damaged"),
+            ("pending", "request record was damaged"),
+        ] {
+            let root = root.join(case);
+            let folder = std::fs::read_dir(root.join("meetings"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            let meeting = Meeting::load_pending(&folder).unwrap();
+            let jobs = read(&root, &[meeting]);
+            assert_eq!(jobs.len(), 1);
+            let job = jobs.values().next().unwrap();
+            assert!(matches!(
+                job.state,
+                JobState::Done {
+                    fallback: false,
+                    ..
+                }
+            ));
+            let (label, text) =
+                visible_copy(job, None, false).expect("routing warning must remain visible");
+            assert_eq!(label, "Summary used Hex coverage");
+            assert!(text.contains(reason), "{case}: {text}");
+            assert!(!text.contains("default instructions"));
+        }
+    }
+
+    #[test]
     fn linux_unavailable_has_specific_copy_in_both_shared_banners() {
         let job = Job {
             state: JobState::HelperUnavailableOnLinux,
             helper: Some(Helper::Codex),
             updated_at: 0,
             request: None,
+            transcript_revision: None,
+            routing_fallbacks: Vec::new(),
         };
         assert!(is_failure(&job.state));
         assert!(message(&job, None).contains("not available on Linux yet"));
@@ -466,6 +514,8 @@ mod tests {
             helper: Some(Helper::Claude),
             updated_at: 0,
             request: Some(Request::FirstPart),
+            transcript_revision: None,
+            routing_fallbacks: Vec::new(),
         };
         assert_eq!(job.retry_request(), Request::FirstPart);
         assert_eq!(
@@ -528,6 +578,8 @@ mod tests {
                 helper: Some(Helper::Codex),
                 updated_at: 0,
                 request: None,
+                transcript_revision: None,
+                routing_fallbacks: Vec::new(),
             };
             let text = message(&job, Some(Helper::Claude));
             assert!(!text.is_empty(), "{name}");
@@ -558,6 +610,8 @@ mod tests {
             helper: Some(Helper::OpenCode),
             updated_at: 0,
             request: None,
+            transcript_revision: None,
+            routing_fallbacks: Vec::new(),
         };
         let text = message(&job, Some(Helper::Claude));
         assert!(text.contains("OpenCode did not finish"));
@@ -594,6 +648,8 @@ mod tests {
                 helper: Some(Helper::Claude),
                 updated_at: 0,
                 request: None,
+                transcript_revision: None,
+                routing_fallbacks: Vec::new(),
             };
             let text = message(&job, None);
             assert!(text.contains(name));

@@ -33,7 +33,7 @@ fn public_revision_reaches_notes_without_audio() {
     let started = Instant::now();
     let now = chrono::Utc::now().timestamp_millis();
     for chosen in [None, Some(revision_id.as_str())] {
-        let (chosen_id, transcript) = jobs::notes_input(
+        let (chosen_id, transcript, _) = jobs::notes_input(
             &state,
             id,
             chosen,
