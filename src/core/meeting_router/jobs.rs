@@ -24,7 +24,7 @@ struct Pending {
     generation: u128,
 }
 #[derive(Serialize, Deserialize)]
-struct Job {
+pub(crate) struct Job {
     id: String,
     folder: PathBuf,
     baseline: Vec<Chunk>,
@@ -598,7 +598,9 @@ pub fn run_pending() -> Result<()> {
         Ok(command)
     })
 }
-fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
+pub(crate) fn run_pending_with(
+    mut worker: impl FnMut(&Job, &Path) -> Result<Command>,
+) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -997,7 +999,7 @@ fn prepared_chunks(
 
 // These fixtures mutate process-wide paths/config and drain every queued job.
 #[cfg(test)]
-fn isolated_test() -> bool {
+pub(crate) fn isolated_test() -> bool {
     const FLAG: &str = "SIDENOTE_ISOLATED_ROUTER_TEST";
     let thread = thread::current();
     let name = thread.name().unwrap();

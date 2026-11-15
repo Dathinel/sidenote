@@ -1,4 +1,5 @@
 use super::*;
+mod failed;
 use crate::core::meeting_router::{
     self as router,
     batches::{self, *},
@@ -26,6 +27,15 @@ fn fixture_child() {
     let Some(mode) = std::env::args().skip_while(|a| a != "--skip").nth(1) else {
         return;
     };
+    if mode == "recognizer-failed" {
+        let mut start = String::new();
+        std::io::stdin().read_line(&mut start).unwrap();
+        assert_eq!(start, "start\n");
+        std::process::exit(23);
+    }
+    if let Some(work) = mode.strip_prefix("router-failed|") {
+        failed::router_child(Path::new(work));
+    }
     if mode == "recognizer" {
         let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
         let mut lines = std::io::BufRead::lines(std::io::stdin().lock());
