@@ -82,6 +82,7 @@ pub enum Msg {
     Meetings(Result<EngineState, HexError>),
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
+    RecheckStart(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
         settings: Result<Vec<Setting>, HexError>,
@@ -233,6 +234,9 @@ impl HexState {
     }
 
     fn state(&self) -> Option<&EngineState> {
+        if self.connection.expired() {
+            return None;
+        }
         self.status
             .as_ref()
             .and_then(|r| r.as_ref().ok())
@@ -243,9 +247,12 @@ impl HexState {
         self.state().is_some()
     }
 
+    // A Stop target is an observation, not a claim that an expired recording is still live.
     fn recording(&self) -> Option<&Recording> {
-        self.state()
-            .and_then(|s| s.recording.as_ref())
+        self.status
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .and_then(|state| state.recording.as_ref())
             .or_else(|| self.connection.recording())
     }
 
@@ -274,6 +281,9 @@ impl HexState {
 
     /// Why nothing on the page can be read or changed right now.
     fn page_note(&self) -> Option<&'static str> {
+        if self.connection.expired() {
+            return Some(connection::UNKNOWN);
+        }
         match &self.status {
             None => Some("Checking Hex."),
             Some(Err(HexError::HexNotRunning)) => {
@@ -493,6 +503,28 @@ impl State {
                 self.hex.install = state;
             }
             Msg::Status(r) => self.hex_status(r),
+            Msg::RecheckStart(result) => {
+                self.hex.record_busy = false;
+                match result {
+                    Ok(status) => {
+                        let recording = status.recording.is_some();
+                        self.hex_status(Ok(status));
+                        if recording {
+                            self.hex.error =
+                                Some("Hex is already recording. No new meeting was started.");
+                        } else if let Some(reason) = start_blocked(self) {
+                            self.hex.error = Some(reason);
+                        } else {
+                            self.new_meeting();
+                        }
+                    }
+                    Err(error) => {
+                        self.hex_status(Err(error));
+                        self.hex.error =
+                            Some("Could not check Hex. New meeting was not started. Try again.");
+                    }
+                }
+            }
             Msg::Caps(version, r) => {
                 self.hex.caps_loading = false;
                 match r {
@@ -801,6 +833,18 @@ impl State {
         });
     }
 
+    pub fn hex_status_unknown(&self) -> bool {
+        self.hex.connection.expired()
+    }
+    pub(super) fn hex_connection_tick(&mut self, tx: &mut Tx) -> bool {
+        self.hex.connection.tick(tx)
+    }
+    pub(super) fn hex_recheck_start(&mut self) {
+        self.hex.record_busy = true;
+        self.hex.error = None;
+        self.hex_spawn(|engine| Msg::RecheckStart(engine.status_for_command()));
+    }
+
     pub fn hex_recording(&self) -> bool {
         self.hex.recording().is_some()
     }
@@ -816,6 +860,7 @@ impl State {
     pub fn hex_record_start(&mut self) {
         if !super::updates::listener_ready(self)
             || self.hex.record_busy
+            || self.hex.connection.slow(&self.hex.status)
             || !self.hex.can(Feature::RecordStart)
             || self.hex.recording().is_some()
             || self
@@ -827,7 +872,8 @@ impl State {
         }
         self.hex.record_busy = true;
         self.hex.error = None;
-        self.hex_spawn(|e| Msg::Done(Action::Start, e.record_start(None)));
+        let cached = self.hex.caps.clone().unwrap_or_default();
+        self.hex_spawn(move |e| Msg::Done(Action::Start, e.record_start(None, &cached)));
     }
 
     pub fn hex_record_stop(&mut self, displayed_id: Option<String>) {
@@ -1028,7 +1074,7 @@ impl State {
 
 /// The dot and words for the indicator, from the latest sample.
 fn indicator(s: &State, p: Palette) -> (Color, String) {
-    if s.hex.connection.slow(&s.hex.status) {
+    if s.hex.connection.expired() || s.hex.connection.slow(&s.hex.status) {
         return (p.warn, s.hex.connection.message());
     }
     match &s.hex.status {
@@ -1061,7 +1107,7 @@ pub fn short_status(s: &State, p: Palette) -> (Color, String) {
     if !super::updates::listener_ready(s) {
         return (p.warn, "Recording off".into());
     }
-    if s.hex.connection.slow(&s.hex.status) {
+    if s.hex.connection.expired() || s.hex.connection.slow(&s.hex.status) {
         return indicator(s, p);
     }
     match &s.hex.status {
@@ -1118,6 +1164,12 @@ fn start_block_reason(s: &State) -> Option<&'static str> {
         Some("Recording control is unavailable in this Linux desktop launch layer.")
     } else if !super::updates::listener_ready(s) {
         Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+    } else if h.connection.expired() {
+        if h.record_busy {
+            Some("Checking Hex before New meeting")
+        } else {
+            None
+        }
     } else if h.connection.slow(&h.status) {
         Some(connection::SLOW)
     } else if matches!(h.status, Some(Err(HexError::HexNotRunning)))

@@ -542,6 +542,14 @@ impl State {
         if hex::start_blocked(self).is_some() {
             return;
         }
+        if self.hex_status_unknown() {
+            self.hex_recheck_start();
+            return;
+        }
+        if !self.live_close() {
+            self.hex.error = Some("Save these notes before starting another meeting.");
+            return;
+        }
         self.go_home();
         self.live_begin(Phase::Starting, self.known_ids());
         self.live_open = true;
@@ -1122,7 +1130,14 @@ fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
         .pl(16.0)
         .pr(8.0)
         .py(8.0)
-        .child(spaced_caps("Live transcript", p))
+        .child(spaced_caps(
+            if s.hex_status_unknown() {
+                "Transcript (recording status unknown)"
+            } else {
+                "Live transcript"
+            },
+            p,
+        ))
         .child(
             quiet_button("Hide", "live-panel-hide", p)
                 .on_press(|s: &mut State| s.live_toggle_panel()),
@@ -1271,7 +1286,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .child(head);
     if let Some(Saving::Failed(_)) = saving {
         let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
-        let warning = save_warning(s.hex_recording(), recovered);
+        let warning = save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered);
         c = c.child(
             col()
                 .key("live-save-warning")
@@ -1587,7 +1602,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             roles::SMALL
                 .medium()
                 .wrap(
-                    "Hex is not answering. The recording may still be running in Hex.",
+                    if s.hex_status_unknown() { "Recording status unknown. Stop will check the recording before sending a request. New meeting can check Hex again." } else { "Hex is not answering. The recording may still be running in Hex." },
                     p.warn,
                 )
                 .role("alert"),

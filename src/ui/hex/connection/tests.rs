@@ -142,7 +142,12 @@ fn stale_bound_expires_availability_but_keeps_stop() {
         !state.hex_running(),
         "expired status must not claim availability"
     );
-    assert_eq!(hex::start_blocked(&state), Some(SLOW));
+    assert_eq!(hex::start_blocked(&state), None);
+    assert!(
+        hex::indicator(&state, theme::palette(false))
+            .1
+            .contains("status unknown")
+    );
     assert_eq!(hex::stop_blocked(&state), None);
     client.poll(&mut state);
     assert!(!state.hex_recording());

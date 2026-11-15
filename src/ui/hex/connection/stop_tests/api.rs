@@ -13,6 +13,7 @@ pub(super) struct Data {
     pub id: Option<&'static str>,
     pub delay: Duration,
     pub stops: usize,
+    pub starts: usize,
 }
 pub(super) struct Fixture {
     pub data: Arc<Mutex<Data>>,
@@ -29,6 +30,7 @@ impl Fixture {
             id: Some("100-1"),
             delay: Duration::ZERO,
             stops: 0,
+            starts: 0,
         }));
         let shutdown = Arc::new(AtomicBool::new(false));
         let shared = data.clone();
@@ -42,6 +44,8 @@ impl Fixture {
                 };
                 let shared = shared.clone();
                 clients.push(thread::spawn(move || {
+                // Only the accept loop is nonblocking; a client must wait for its HTTP request.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
@@ -77,6 +81,12 @@ impl Fixture {
                             "model":{},"capture":{"state":"idle"},"capabilities":{"meetings":true},
                             "features":{"meetings":true},
                             "meeting":{"state":if id.is_some() {"recording"} else {"idle"},"id":id,"elapsed_seconds":1}})
+                    }
+                    "meeting-record" => {
+                        let mut data = shared.lock().unwrap();
+                        data.starts += 1;
+                        data.id = Some("300-3");
+                        serde_json::json!({"version":4,"status":"done","changed":true})
                     }
                     "meeting-stop" => {
                         let mut data = shared.lock().unwrap();
@@ -133,12 +143,15 @@ impl Fixture {
     }
     pub fn stop(state: &mut State) {
         state.hex_record_stop(recording_id(state));
+        Self::finish(state);
+    }
+    pub fn finish(state: &mut State) {
         while state.hex.record_busy {
             let event = state
                 .events_rx
                 .recv_timeout(Duration::from_secs(15))
                 .expect("Stop completion");
-            if let Event::Hex(msg @ Msg::Done(_, _)) = event {
+            if let Event::Hex(msg) = event {
                 state.hex_apply(msg);
             }
         }

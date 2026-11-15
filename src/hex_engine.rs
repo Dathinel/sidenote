@@ -739,12 +739,19 @@ impl HexEngine {
     fn change(&self, feature: Feature, request: Value) -> Result<()> {
         self.call(feature, request, "done").map(|_| ())
     }
-    pub fn record_start(&self, title: Option<&str>) -> Result<()> {
+    pub fn record_start(&self, title: Option<&str>, cached: &Capabilities) -> Result<()> {
         let mut v = json!({"command":"meeting-record"});
         if let Some(title) = title {
             v["title"] = json!(title);
         }
-        self.change(Feature::RecordStart, v)
+        if cached.get(&Feature::RecordStart) != Some(&Support::Supported) {
+            return Err(HexError::Unsupported);
+        }
+        let reply = control(v, CALL_TIMEOUT)?;
+        if reply["status"] != "done" {
+            return Err(failed("unexpected start reply; values suppressed"));
+        }
+        Ok(())
     }
     pub fn record_stop(&self, expected_id: &str, cached: &Capabilities) -> Result<()> {
         let refused = |code: &str| HexError::Failed {

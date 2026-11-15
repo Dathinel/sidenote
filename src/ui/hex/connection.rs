@@ -1,14 +1,18 @@
-use super::{EngineState, HexError, Instant, Recording};
+use super::{EngineState, HexError, Instant, Recording, Tx};
 use std::{cell::Cell, time::Duration};
 
 // 10 s covers the lead's 2.694 s CLI delay and several 1.5 s + 750 ms status polls.
 const STALE_LIMIT: Duration = Duration::from_secs(10);
+pub(super) const UNKNOWN: &str =
+    "Hex recording status unknown. Try New meeting to check Hex again.";
 pub(super) const SLOW: &str = "Hex is slow to answer, trying again";
 
 #[derive(Default)]
 pub(super) struct Connection {
     good: Option<EngineState>,
     good_at: Option<Instant>,
+    slow_at: Option<Instant>,
+    expiry_shown: bool,
     sampled_at: Option<Instant>,
     phase: &'static str,
     blocked: Cell<Option<&'static str>>,
@@ -22,6 +26,24 @@ impl Connection {
         })
     }
 
+    fn limit_age(&self) -> Option<Duration> {
+        self.good_at.or(self.slow_at).map(|at| {
+            at.elapsed()
+                .max(self.sampled_at.unwrap_or(at).saturating_duration_since(at))
+        })
+    }
+    pub(super) fn expired(&self) -> bool {
+        self.limit_age().is_some_and(|age| age > STALE_LIMIT)
+    }
+    pub(super) fn tick(&mut self, tx: &mut Tx) -> bool {
+        let expired = self.expired();
+        if !expired && let Some(age) = self.limit_age() {
+            tx.wake_after(STALE_LIMIT.saturating_sub(age) + Duration::from_millis(1));
+        }
+        let changed = self.expiry_shown != expired;
+        self.expiry_shown = expired;
+        changed
+    }
     pub(super) fn state(&self) -> Option<&EngineState> {
         (self.phase == "stale" && self.age() <= STALE_LIMIT)
             .then_some(self.good.as_ref())
@@ -43,6 +65,9 @@ impl Connection {
     }
 
     pub(super) fn message(&self) -> String {
+        if self.expired() {
+            return UNKNOWN.into();
+        }
         match self.good_at {
             Some(_) => format!("{SLOW} (last answer {} s ago)", self.age().as_secs()),
             None => SLOW.into(),
@@ -59,6 +84,9 @@ impl Connection {
             .sampled_at
             .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
         self.sampled_at = Some(now);
+        if matches!(result, Err(HexError::Timeout | HexError::Failed { .. })) {
+            self.slow_at.get_or_insert(now);
+        }
         let (phase, reason) = match result {
             Ok(_) => ("ok", "answer"),
             Err(HexError::HexNotRunning) => ("not_running", "not_running"),
@@ -94,10 +122,12 @@ impl Connection {
             Ok(_) => {
                 self.good = None;
                 self.good_at = Some(now);
+                self.slow_at = None;
             }
             Err(HexError::HexNotRunning | HexError::Unsupported) => {
                 self.good = None;
                 self.good_at = None;
+                self.slow_at = None;
             }
             Err(_) => {}
         }
