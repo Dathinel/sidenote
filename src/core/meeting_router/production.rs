@@ -58,8 +58,8 @@ impl NativeLoader for Native<'_> {
     }
 }
 
-pub struct English(pub HexBridge<HexSpeech>);
-impl EnglishBridge for English {
+pub struct English<C = HexSpeech>(pub HexBridge<C>);
+impl<C: HexCommand> EnglishBridge for English<C> {
     fn limit(&mut self, remaining: Duration) {
         self.0.limit(remaining);
     }

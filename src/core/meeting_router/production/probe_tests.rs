@@ -3,6 +3,23 @@ use super::{
     *,
 };
 
+struct CountedStatus {
+    speech: HexSpeech,
+    attempts: std::rc::Rc<std::cell::Cell<usize>>,
+}
+impl HexCommand for CountedStatus {
+    fn call(
+        &mut self,
+        args: &[&str],
+        timeout: Duration,
+    ) -> std::result::Result<String, HexFailure> {
+        if args == ["status", "--json"] {
+            self.attempts.set(self.attempts.get() + 1);
+        }
+        self.speech.call(args, timeout)
+    }
+}
+
 fn fixture(sequence: &str) -> Fixture {
     let mut f = Fixture::new(b"public English", 0, b"");
     let mut ranges: Vec<Range> = std::mem::take(&mut f.plan.batches)
@@ -51,12 +68,20 @@ fn logged(before: &str, expected: usize) {
 }
 #[test]
 fn status_probe_timeout_once_continues_without_repeating_transcribe() {
-    let mut f = fixture("ITIII");
+    let f = fixture("ITIII");
     let before = log_before();
-    f.run(&mut NativeFake::default())
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut bridge = English(HexBridge::new(CountedStatus {
+        speech: HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        },
+        attempts: attempts.clone(),
+    }));
+    batches::run(&f.work, &f.plan, &mut NativeFake::default(), &mut bridge)
         .expect("one unknown status after idle must permit the next range");
     assert_eq!(count(&f, "calls"), 5);
-    assert_eq!(count(&f, "status-calls"), 5);
+    // A timed-out child may never reach its own counter write.
+    assert_eq!(attempts.get(), 5);
     assert_eq!(count(&f, "help-calls"), 1);
     logged(&before, 1);
     for id in f.plan.batches.values().flat_map(|b| b.keys()) {
