@@ -1,5 +1,5 @@
 use super::super::asr::{Result, write_wav};
-use super::hex_bridge::{HexFailure, reply_error};
+use super::hex_bridge::{ChildFailure, HexFailure, reply_error};
 use crate::platform::CommandExt;
 use serde_json::Value;
 use std::{
@@ -30,6 +30,18 @@ impl HexSpeech {
         wav: Option<&Path>,
         timeout: Duration,
     ) -> Result<String> {
+        self.run_command(args, wav, timeout, false)
+    }
+    pub(super) fn run_for_bridge(&self, args: &[&str], timeout: Duration) -> Result<String> {
+        self.run_command(args, None, timeout, true)
+    }
+    fn run_command(
+        &self,
+        args: &[&str],
+        wav: Option<&Path>,
+        timeout: Duration,
+        structured_errors: bool,
+    ) -> Result<String> {
         crate::platform::require_process_support()?;
         let mut command = crate::platform::worker_command(&self.executable)?;
         command
@@ -37,7 +49,7 @@ impl HexSpeech {
             .creation_flags(0x08000000)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         if let Some(path) = wav {
             command.arg(path);
         }
@@ -51,6 +63,16 @@ impl HexSpeech {
             }
         };
         let stdout = child.stdout.take().ok_or("Speech output unavailable")?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or("Speech diagnostics unavailable")?;
+        let diagnostics = thread::spawn(move || -> std::io::Result<_> {
+            let mut bytes = Vec::new();
+            stderr.by_ref().take(4096).read_to_end(&mut bytes)?;
+            let truncated = std::io::copy(&mut stderr, &mut std::io::sink())? > 0;
+            Ok((bytes, truncated))
+        });
         let reader = thread::spawn(move || {
             let mut bytes = Vec::new();
             stdout
@@ -71,15 +93,47 @@ impl HexSpeech {
             }
         };
         drop(job);
+        let (stderr, truncated) = diagnostics
+            .join()
+            .map_err(|_| "Speech diagnostics reader failed")??;
         let bytes = reader.join().map_err(|_| "Speech reader failed")??;
+        let status = status?;
+        let output = String::from_utf8_lossy(&bytes);
+        let failure = reply_error(&output);
+        if !status.success() || (structured_errors && failure.is_some()) {
+            let value: Value = serde_json::from_str(&output).unwrap_or_default();
+            let code = value["code"].as_str().map(|code| {
+                if code.len() <= 64
+                    && code
+                        .bytes()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"-_".contains(&c))
+                {
+                    code.to_owned()
+                } else {
+                    "[redacted]".into()
+                }
+            });
+            let reason = value["reason"]
+                .as_str()
+                .or_else(|| value["message"].as_str())
+                .map(diagnostic_excerpt);
+            let mut stderr = diagnostic_excerpt(&String::from_utf8_lossy(&stderr));
+            if truncated {
+                stderr.push_str(" [truncated]");
+            }
+            return Err(HexFailure::Child(Box::new(ChildFailure {
+                kind: failure.unwrap_or(HexFailure::Failed),
+                exit_code: status.code(),
+                code,
+                reason,
+                stderr,
+            }))
+            .into());
+        }
         if bytes.len() > 8 * 1024 * 1024 {
             return Err("Hex transcription failed; raw diagnostics suppressed".into());
         }
-        let output = String::from_utf8(bytes)?.trim().to_owned();
-        if !status?.success() {
-            return Err(reply_error(&output).unwrap_or(HexFailure::Failed).into());
-        }
-        Ok(output)
+        Ok(String::from_utf8(bytes)?.trim().to_owned())
     }
     pub fn selection(&self) -> Result<String> {
         let value: Value = serde_json::from_str(&self.run(&["model", "list", "--json"], None)?)?;
@@ -114,6 +168,33 @@ impl HexSpeech {
         write_wav(path, samples)?;
         self.transcribe(path, model)
     }
+}
+
+fn diagnostic_excerpt(text: &str) -> String {
+    // Child diagnostics may contain transcript text or private paths; retain only diagnostic vocabulary.
+    let mut out = String::new();
+    for word in text.split_whitespace() {
+        let word = word
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_ascii_lowercase();
+        let safe = match word.as_str() {
+            "recognizer" | "decoder" | "allocation" | "failed" | "failure" | "error" | "out"
+            | "of" | "memory" | "model" | "runtime" | "onnx" | "invalid" | "argument"
+            | "unsupported" | "busy" | "timeout" | "timed" | "no" | "speech" | "was" | "heard"
+            | "in" | "the" | "file" | "nothing" | "to" | "print" | "cannot" | "load" | "open"
+            | "read" | "write" | "device" | "unavailable" | "denied" | "permission" | "access"
+            | "not" | "found" | "status" | "code" | "assertion" | "panic" => word.as_str(),
+            _ => "[redacted]",
+        };
+        if out.len() + safe.len() + 1 > 512 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(safe);
+    }
+    out
 }
 
 fn default_executable() -> PathBuf {

@@ -8,7 +8,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HexFailure {
     Unsupported,
     Busy,
@@ -16,10 +16,60 @@ pub enum HexFailure {
     Failed,
     NoSpeech,
     InvalidRange,
+    Child(Box<ChildFailure>),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChildFailure {
+    pub(super) kind: HexFailure,
+    pub(super) exit_code: Option<i32>,
+    pub(super) code: Option<String>,
+    pub(super) reason: Option<String>,
+    pub(super) stderr: String,
+}
+impl HexFailure {
+    pub fn kind(&self) -> &Self {
+        match self {
+            Child(detail) => detail.kind.kind(),
+            kind => kind,
+        }
+    }
+    fn classify_as(self, kind: Self) -> Self {
+        match self {
+            Child(mut detail) => {
+                detail.kind = kind;
+                Child(detail)
+            }
+            _ => kind,
+        }
+    }
 }
 impl std::fmt::Display for HexFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            Unsupported => f.write_str("Hex command is unsupported"),
+            Busy => f.write_str("Hex is busy"),
+            Timeout => f.write_str("Hex request timed out"),
+            Failed => f.write_str("Hex recognition failed"),
+            NoSpeech => f.write_str("Hex recognized no speech"),
+            InvalidRange => f.write_str("Invalid Hex audio range"),
+            Child(detail) => {
+                write!(
+                    f,
+                    "{}; exit={}",
+                    detail.kind,
+                    detail
+                        .exit_code
+                        .map_or_else(|| "unavailable".into(), |c| c.to_string())
+                )?;
+                if let Some(code) = &detail.code {
+                    write!(f, "; code={code}")?;
+                }
+                if let Some(reason) = &detail.reason {
+                    write!(f, "; reason={reason}")?;
+                }
+                write!(f, "; stderr={}", detail.stderr)
+            }
+        }
     }
 }
 impl std::error::Error for HexFailure {}
@@ -43,8 +93,8 @@ impl HexCommand for HexSpeech {
     fn call(&mut self, args: &[&str], timeout: Duration) -> Result<String> {
         #[cfg(windows)]
         {
-            self.run_for(args, None, timeout)
-                .map_err(|e| e.downcast_ref::<HexFailure>().copied().unwrap_or(Failed))
+            self.run_for_bridge(args, timeout)
+                .map_err(|e| e.downcast_ref::<HexFailure>().cloned().unwrap_or(Failed))
         }
         #[cfg(not(windows))]
         {
@@ -140,9 +190,13 @@ impl<C: HexCommand> HexBridge<C> {
         let _serial = SERIAL.try_lock().map_err(|_| Busy)?;
         if self.json.is_none() {
             // ADR 0009:12; pinned Hex f5681bc control/cli.rs:593-601,638-651.
-            let help = self
-                .call(&["model", "transcribe", "--help"])
-                .map_err(|e| if e == Timeout { e } else { Unsupported })?;
+            let help = self.call(&["model", "transcribe", "--help"]).map_err(|e| {
+                if e.kind() == &Timeout {
+                    e
+                } else {
+                    e.classify_as(Unsupported)
+                }
+            })?;
             if !["--model", "--language"]
                 .iter()
                 .all(|flag| help.split_whitespace().any(|word| word == *flag))
@@ -152,9 +206,10 @@ impl<C: HexCommand> HexBridge<C> {
             self.json = Some(help.split_whitespace().any(|word| word == "--json"));
         }
         let started = Instant::now();
+        let mut last_busy = Busy;
         let out = loop {
             if started.elapsed() >= self.busy_wait {
-                return Err(Busy);
+                return Err(last_busy);
             }
             let status = self.status()?;
             let idle = status["meeting"]["state"] == "idle"
@@ -175,17 +230,19 @@ impl<C: HexCommand> HexBridge<C> {
                     args.push("--json");
                 }
                 if started.elapsed() >= self.busy_wait {
-                    return Err(Busy);
+                    return Err(last_busy);
                 }
                 let result = self.call(&args);
                 match result {
-                    Err(Busy) => {}
+                    Err(error) if error.kind() == &Busy => {
+                        last_busy = error;
+                    }
                     Err(e) => return Err(e),
                     Ok(out) => break out,
                 }
             }
             if started.elapsed() >= self.busy_wait {
-                return Err(Busy);
+                return Err(last_busy);
             }
             thread::sleep(
                 Duration::from_millis(100).min(self.busy_wait.saturating_sub(started.elapsed())),

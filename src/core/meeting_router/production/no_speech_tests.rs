@@ -197,3 +197,72 @@ fn production_structured_no_speech_keeps_baseline_and_remaining_languages() {
         4,
     );
 }
+
+fn fatal_with_cause(reply: &[u8], exit: i32) {
+    let mut stderr = b"recognizer allocation failed C:\\private\\owner.txt /private/owner.txt confidential_meeting_words\n".to_vec();
+    stderr.extend(vec![b'x'; 65_536]);
+    let mut f = Fixture::new(reply, exit, &stderr);
+    if exit == 0 {
+        let direct = HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        };
+        assert_eq!(
+            direct
+                .run_for(&["probe"], None, Duration::from_secs(2))
+                .unwrap()
+                .as_bytes(),
+            reply
+        );
+        std::fs::remove_file(f.work.join("calls")).unwrap();
+    }
+    let mut native = NativeFake::default();
+    let message = f.run(&mut native).unwrap_err().to_string();
+    assert!(
+        native.0.is_empty(),
+        "fatal English errors must stop the pass"
+    );
+    assert!(
+        message.contains(&format!("exit={exit}")),
+        "missing exit code: {message}"
+    );
+    assert!(
+        message.contains("allocation failed"),
+        "missing stderr excerpt: {message}"
+    );
+    if !reply.is_empty() {
+        assert!(
+            message.contains("unrecognized-code"),
+            "missing JSON code: {message}"
+        );
+        assert!(
+            message.contains("decoder failed"),
+            "missing JSON reason: {message}"
+        );
+    }
+    for private in [
+        "owner.txt",
+        "private",
+        "confidential_meeting_words",
+        "x".repeat(80).as_str(),
+    ] {
+        assert!(!message.contains(private), "unsanitized child diagnostic");
+    }
+    assert!(message.len() < 1400, "diagnostics must be bounded");
+    for id in f.plan.batches.values().flat_map(|b| b.keys()) {
+        assert!(
+            batches::read_result(&f.work, &f.plan, id)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+#[test]
+fn production_nonzero_exit_remains_fatal_with_cause() {
+    fatal_with_cause(b"", 7);
+}
+#[test]
+fn production_unknown_code_remains_fatal_with_cause() {
+    for exit in [0, 4] {
+        fatal_with_cause(br#"{"code":"unrecognized-code","reason":"decoder failed","text":"confidential_meeting_words"}"#, exit);
+    }
+}

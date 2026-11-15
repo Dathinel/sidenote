@@ -253,8 +253,11 @@ fn run_windows(
                 None => match bridge.transcribe(r) {
                     Ok(value) => value,
                     Err(error)
-                        if error.downcast_ref::<super::hex_bridge::HexFailure>()
-                            == Some(&super::hex_bridge::HexFailure::NoSpeech) =>
+                        if error
+                            .downcast_ref::<super::hex_bridge::HexFailure>()
+                            .is_some_and(|e| {
+                                e.kind() == &super::hex_bridge::HexFailure::NoSpeech
+                            }) =>
                     {
                         remaining(deadline)?;
                         store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
