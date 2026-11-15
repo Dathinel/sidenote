@@ -14,6 +14,9 @@ pub(super) struct Data {
     pub delay: Duration,
     pub stops: usize,
     pub starts: usize,
+    pub start_failure: bool,
+    pub start_records: bool,
+    pub start_release: Option<std::sync::mpsc::Receiver<()>>,
 }
 pub(super) struct Fixture {
     pub data: Arc<Mutex<Data>>,
@@ -31,6 +34,9 @@ impl Fixture {
             delay: Duration::ZERO,
             stops: 0,
             starts: 0,
+            start_failure: false,
+            start_records: true,
+            start_release: None,
         }));
         let shutdown = Arc::new(AtomicBool::new(false));
         let shared = data.clone();
@@ -83,10 +89,21 @@ impl Fixture {
                             "meeting":{"state":if id.is_some() {"recording"} else {"idle"},"id":id,"elapsed_seconds":1}})
                     }
                     "meeting-record" => {
+                        let release = {
+                            let mut data = shared.lock().unwrap();
+                            data.starts += 1;
+                            data.start_release.take()
+                        };
+                        if let Some(release) = release {
+                            release.recv_timeout(Duration::from_secs(5)).unwrap();
+                        }
                         let mut data = shared.lock().unwrap();
-                        data.starts += 1;
-                        data.id = Some("300-3");
-                        serde_json::json!({"version":4,"status":"done","changed":true})
+                        if data.start_failure {
+                            serde_json::json!({"version":4,"status":"error","code":"failed"})
+                        } else {
+                            if data.start_records { data.id = Some("300-3"); }
+                            serde_json::json!({"version":4,"status":"done","changed":true})
+                        }
                     }
                     "meeting-stop" => {
                         let mut data = shared.lock().unwrap();

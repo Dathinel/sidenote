@@ -127,6 +127,111 @@ fn active_recheck_replaces_empty_page() {
     assert!(!state.live.as_ref().unwrap().close_failed);
 }
 
+fn saved_removal_notes(text: &str) {
+    let recovery = sidenote::core::state_dir().join("unsaved-notes");
+    assert!(
+        std::fs::read_dir(recovery)
+            .unwrap()
+            .any(|entry| { std::fs::read_to_string(entry.unwrap().path()).unwrap() == text }),
+        "latest notes must be durable before removing or leaving the page"
+    );
+}
+
+fn start_removal_cases(failed_start: bool) {
+    use crate::ui::live::{Phase, Saving};
+    for (text, fail_save) in [
+        ("Synthetic pending Start notes", true),
+        ("Synthetic pending Start notes", false),
+        ("", false),
+    ] {
+        let (api, mut state, _) = Fixture::start();
+        let (release, wait) = std::sync::mpsc::channel();
+        {
+            let mut data = api.data.lock().unwrap();
+            data.id = None;
+            data.start_failure = failed_start;
+            data.start_records = false;
+            data.start_release = Some(wait);
+        }
+        let idle = state.hex.engine.status_for_command().unwrap();
+        state.hex_apply(Msg::Status(Ok(idle)));
+        state.new_meeting();
+        assert!(state.hex.record_busy);
+        assert_eq!(state.live.as_ref().unwrap().phase, Phase::Starting);
+        let page = state.live.as_ref().unwrap().recording_id;
+        if !failed_start {
+            release.send(()).unwrap();
+            Fixture::finish(&mut state);
+            assert!(state.hex.error.is_none());
+            assert!(
+                state.live.is_some(),
+                "idle before START_WAIT must keep the page"
+            );
+            // Exercise the real elapsed-time condition without altering a production clock.
+            thread::sleep(Duration::from_secs(26));
+        }
+        state.live_notes = rune::TextEdit::new(text);
+        state.live_tick();
+        if !text.is_empty() {
+            assert_eq!(state.live.as_ref().unwrap().saving, Saving::Pending);
+        }
+        let recovery = sidenote::core::state_dir().join("unsaved-notes");
+        if fail_save {
+            std::fs::create_dir_all(recovery.parent().unwrap()).unwrap();
+            std::fs::write(&recovery, "synthetic recovery blocker").unwrap();
+        }
+        if failed_start {
+            release.send(()).unwrap();
+            Fixture::finish(&mut state);
+            assert!(
+                state.hex.error.is_some(),
+                "apply the real failed Start reply"
+            );
+        } else {
+            let idle = state.hex.engine.status_for_command().unwrap();
+            assert!(idle.recording.is_none());
+            state.hex_apply(Msg::Status(Ok(idle)));
+        }
+        assert_eq!(api.data.lock().unwrap().starts, 1);
+        if fail_save {
+            let live = state.live.as_ref().expect("failed save must keep the page");
+            assert_eq!(live.recording_id, page);
+            assert_eq!(live.phase, Phase::Starting);
+            assert_eq!(state.live_notes.text, text);
+            assert!(live.close_failed);
+            assert!(matches!(live.saving, Saving::Failed(_)));
+            assert!(state.on_live());
+            std::fs::remove_file(&recovery).unwrap();
+            state.live_notes = rune::TextEdit::new("Synthetic notes edited after storage recovery");
+            state.leave_live();
+            assert!(!state.on_live(), "restored storage must permit navigation");
+            saved_removal_notes("Synthetic notes edited after storage recovery");
+        } else {
+            assert!(state.live.is_none(), "saved or empty page may be removed");
+            assert!(!state.on_live());
+            if !text.is_empty() {
+                saved_removal_notes(text);
+            }
+        }
+    }
+}
+
+#[test]
+fn start_timeout_preserves_pending_notes_before_removal() {
+    if isolated_notes_test("start_timeout_preserves_pending_notes_before_removal") {
+        return;
+    }
+    start_removal_cases(false);
+}
+
+#[test]
+fn failed_start_preserves_pending_notes_before_removal() {
+    if isolated_notes_test("failed_start_preserves_pending_notes_before_removal") {
+        return;
+    }
+    start_removal_cases(true);
+}
+
 #[test]
 fn stale_stop_refuses_replacement_recording_through_ui_and_engine() {
     let (api, mut state, _) = Fixture::start();
