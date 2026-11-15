@@ -19,6 +19,8 @@ mod no_speech_tests;
 mod public_tests;
 #[cfg(all(test, feature = "asr-runtime"))]
 pub(crate) mod regression;
+#[cfg(all(test, windows))]
+mod round2_tests;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {

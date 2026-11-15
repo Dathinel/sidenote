@@ -248,28 +248,32 @@ fn run_windows(
                     None => bridge.limit(left),
                 }
             }
-            let v = match &mut session {
-                Some(s) => s.recognize(r)?,
-                None => match bridge.transcribe(r) {
-                    Ok(value) => value,
-                    Err(error)
-                        if error
-                            .downcast_ref::<super::hex_bridge::HexFailure>()
-                            .is_some_and(|e| {
-                                e.kind() == &super::hex_bridge::HexFailure::NoSpeech
-                            }) =>
-                    {
-                        remaining(deadline)?;
-                        store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                },
+            let result = match &mut session {
+                Some(s) => s.recognize(r),
+                None => bridge.transcribe(r),
+            }
+            .and_then(|value| {
+                let text = value["text"].as_str().ok_or("Empty result")?;
+                if text.trim().is_empty() {
+                    Err(super::hex_bridge::HexFailure::NoSpeech.into())
+                } else {
+                    Ok(value)
+                }
+            });
+            let v = match result {
+                Ok(value) => value,
+                Err(error)
+                    if error
+                        .downcast_ref::<super::hex_bridge::HexFailure>()
+                        .is_some_and(|e| e.kind() == &super::hex_bridge::HexFailure::NoSpeech) =>
+                {
+                    remaining(deadline)?;
+                    store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             remaining(deadline)?;
-            if v["text"].as_str().is_none_or(|s| s.trim().is_empty()) {
-                return Err("Empty result".into());
-            }
             let bytes = serde_json::to_vec(&v)?;
             store_io::atomic_write(&path(root, plan, id, "result"), &bytes)?;
             store_io::write(
