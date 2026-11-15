@@ -1,0 +1,13 @@
+{
+  "id": "en-5904418145588789259",
+  "language": "en",
+  "duration": 12.42,
+  "dataset_revision": "70bb2e84b976b7e960aa89f1c648e09c59f894dd",
+  "archive_url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/en_us/audio/test.tar.gz",
+  "archive_member": "test/5904418145588789259.wav",
+  "pcm_sha256": "6de0488c5e9b9b58623e65d13ccb299bde8fc2746c308a2393baf6e48cbc454d",
+  "reference": "Congress began funding the obscenity initiative in fiscal 2005 and specified that the FBI must devote 10 agents to adult pornography.",
+  "hex_baseline": "Congress began funding the Obscenity Initiative in fiscal 2005 and specified that the FBI must devote ten agents to adult pornography.",
+  "baseline_source": "S45/parakeet.jsonl, full source explicit Hex pass",
+  "normalized_wav_sha256": "6de0488c5e9b9b58623e65d13ccb299bde8fc2746c308a2393baf6e48cbc454d"
+}

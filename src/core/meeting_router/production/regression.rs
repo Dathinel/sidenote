@@ -131,3 +131,42 @@ fn production_planner_persists_uncertain_interval_reasons() {
         assert_eq!((&i.track, i.start, i.end), (&c.track, c.start, c.end));
     }
 }
+
+#[test]
+#[ignore = "requires public audio and pinned Silero model"]
+fn production_planner_owns_real_speech_across_piece_seams() {
+    let mut f = Fixture::new();
+    f.force_hindi();
+    let mut samples = vec![0.0; 297 * 16000];
+    samples.extend(asr::read_wav(&f.folder.join("system.wav")).unwrap());
+    asr::write_wav(&f.folder.join("system.wav"), &samples).unwrap();
+    store_io::write(&f.folder.join("manifest.json"), &json!({"status":"complete","duration_ms":samples.len()/16,"system":{"first_arrival_us":1000000}})).unwrap();
+    let (plan, manifest, _) = plan::produce(
+        &f.folder,
+        &f.work,
+        &f.config,
+        &BTreeMap::from([("system".into(), 16000)]),
+        "public-seam",
+        &mut BTreeMap::new(),
+    )
+    .unwrap();
+    let track = &manifest.tracks[0];
+    assert_eq!(track.origin_sample, 16000);
+    assert_eq!(track.pieces.len(), 2);
+    let mut ranges: Vec<_> = plan.batches["hi"].values().collect();
+    ranges.sort_by_key(|r| r.range.context.0);
+    assert!(ranges.len() >= 2);
+    let mut previous = 0;
+    for r in ranges {
+        let piece = track.pieces.iter().find(|p| p.id == r.piece).unwrap();
+        assert!(piece.start_sample <= r.range.context.0 && r.range.context.1 <= piece.end_sample);
+        assert!(r.range.context.0 >= previous);
+        assert!(r.range.context.1 - r.range.context.0 <= 480000);
+        assert_eq!(
+            r.range.members,
+            vec![(0, r.range.context)],
+            "recognized padding must have a single owner"
+        );
+        previous = r.range.context.1;
+    }
+}
