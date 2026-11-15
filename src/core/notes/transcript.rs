@@ -11,6 +11,35 @@ struct Row {
     speaker: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Source {
+    Compatibility,
+    HexBaseline,
+    ReleasedRevision,
+}
+#[derive(Debug)]
+pub(super) struct Selection {
+    pub revision: String,
+    pub transcript: crate::core::meeting_router::Transcript,
+    pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    rendered: String,
+}
+impl Selection {
+    pub fn segment_key(&self, ordinal: usize) -> String {
+        format!("{}:{ordinal}", self.revision)
+    }
+    pub fn source(&self) -> Source {
+        if self.transcript.input_checksum == "compatibility" {
+            Source::HexBaseline
+        } else {
+            Source::ReleasedRevision
+        }
+    }
+    pub fn render(&self) -> String {
+        self.rendered.clone()
+    }
+}
 pub(super) fn render(raw: &str) -> String {
     let mut rows: Vec<Row> = raw
         .lines()
@@ -71,13 +100,7 @@ pub(super) fn chosen(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<
-    Option<(
-        String,
-        String,
-        Vec<crate::core::meeting_router::fallback::RoutingFallback>,
-    )>,
-> {
+) -> io::Result<Option<Selection>> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
     if !router::jobs::notes_enabled(root)? {
@@ -122,7 +145,7 @@ pub(super) fn chosen(
     router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
         .map(|(id, t, reasons)| {
             let mut text = String::new();
-            for s in t.segments {
+            for s in &t.segments {
                 let lang = match s.lang.as_str() {
                     "en" => "English",
                     "hi" => "Hindi",
@@ -152,7 +175,12 @@ pub(super) fn chosen(
                         .join(" ")
                 ));
             }
-            Ok((id, text, reasons))
+            Ok(Selection {
+                revision: id,
+                transcript: t,
+                reasons,
+                rendered: text,
+            })
         })
         .transpose()
 }

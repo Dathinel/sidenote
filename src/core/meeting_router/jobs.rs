@@ -94,7 +94,7 @@ pub fn enqueue(id: &str) -> Result<()> {
         id,
     )
 }
-fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
+pub(crate) fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     enqueue_with(root, meetings, id, false)
 }
 fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Result<()> {

@@ -1,7 +1,7 @@
 use super::{
     Engine, Helper, JobState, NotesSettings, Request,
     helper::{self, Failure, Run},
-    prompt, schema, transcript,
+    prompt, schema, transcript, translation,
 };
 use crate::core::failure::{AtStage, Stage};
 use crate::core::meeting_job::{self, Stage as JobStage};
@@ -35,6 +35,8 @@ pub(super) struct Job {
     pub transcript_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing_fallbacks: Vec<core::meeting_router::fallback::RoutingFallback>,
+    #[serde(default)]
+    pub translation: Option<translation::Disposition>,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -61,6 +63,7 @@ impl Job {
             sorting_pending: false,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         }
     }
     fn ready(&self, time: i64, root: &Path) -> bool {
@@ -405,9 +408,14 @@ fn process(
         end.unwrap_or(job.updated_at),
         now(),
     )?;
-    let mut transcript = if let Some((revision, text, reasons)) = routed {
-        job.transcript_revision = Some(revision);
-        job.routing_fallbacks = reasons;
+    if !sort_only {
+        job.translation = Some(translation::prepare(routed.as_ref()));
+        store_io::write(&job_path(root, id), job)?;
+    }
+    let mut transcript = if let Some(selection) = routed {
+        let text = selection.render();
+        job.transcript_revision = Some(selection.revision);
+        job.routing_fallbacks = selection.reasons;
         store_io::write(&job_path(root, id), job)?;
         text
     } else if job.request == Some(Request::RedoTasks) {

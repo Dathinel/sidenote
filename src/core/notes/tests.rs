@@ -8,6 +8,8 @@ mod corruption;
 mod review;
 #[cfg(windows)]
 mod routing;
+#[cfg(windows)]
+mod translation;
 use crate::core::{
     agent_instructions::{self, Agent},
     store_io,

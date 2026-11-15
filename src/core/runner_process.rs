@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_CHILD: std::cell::RefCell<Option<ChildFactory>> = const { std::cell::RefCell::new(None) };
+}
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Result<Self, String> {
@@ -430,19 +436,20 @@ pub(super) fn run_classified(
     progress(AskProgress::Started {
         runner: runner.name.clone(),
     });
-    let mut child = crate::platform::UserRunner::spawn(
-        std::process::Command::new(program)
-            .args(&args)
-            .current_dir(working_dir),
-        runner.stdin,
-    )
-    .map_err(|e| {
-        format!(
-            "Could not start {} (OS error {})",
-            runner.name,
-            e.raw_os_error().unwrap_or(0)
-        )
-    })?;
+    let mut command = std::process::Command::new(program);
+    command.args(&args).current_dir(working_dir);
+    #[cfg(test)]
+    let mut command = TEST_CHILD
+        .with(|c| c.borrow().as_ref().map(|f| f(&command)))
+        .unwrap_or(command);
+    let mut child =
+        crate::platform::UserRunner::spawn(&mut command, runner.stdin).map_err(|e| {
+            format!(
+                "Could not start {} (OS error {})",
+                runner.name,
+                e.raw_os_error().unwrap_or(0)
+            )
+        })?;
     let stdout = child
         .stdout
         .take()

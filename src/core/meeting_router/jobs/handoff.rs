@@ -11,6 +11,28 @@ pub struct BatchOutput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallbacks: Vec<super::super::fallback::RoutingFallback>,
 }
+#[cfg(all(windows, any(feature = "asr-runtime", test)))]
+impl BatchOutput {
+    pub(crate) fn publish(
+        path: &Path,
+        generation: u128,
+        source_revision: &str,
+        plan: Plan,
+        manifest: PieceManifest,
+        fallbacks: Vec<super::super::fallback::RoutingFallback>,
+    ) -> io::Result<()> {
+        store_io::write(
+            path,
+            &Self {
+                generation: generation.to_string(),
+                source_revision: source_revision.into(),
+                plan,
+                manifest,
+                fallbacks,
+            },
+        )
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(super) struct Released {
     pub generation: String,

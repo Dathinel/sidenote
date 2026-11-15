@@ -98,15 +98,13 @@ pub fn run(
         clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
         clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
         store_io::write(&work.join("clocks.json"), &clocks)?;
-        store_io::write(
+        jobs::BatchOutput::publish(
             &work.join("output.json"),
-            &jobs::BatchOutput {
-                generation: generation.to_string(),
-                source_revision: input_revision.to_owned(),
-                plan,
-                manifest: pieces,
-                fallbacks,
-            },
+            generation,
+            input_revision,
+            plan,
+            pieces,
+            fallbacks,
         )?;
         Ok(())
     }
