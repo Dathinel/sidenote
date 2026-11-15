@@ -19,6 +19,7 @@ pub(super) enum Invocation<'a> {
         capability: Option<&'a str>,
         location: &'a str,
         payment: &'a str,
+        authorize: &'a dyn Fn() -> bool,
     },
 }
 #[cfg(test)]
@@ -446,6 +447,7 @@ pub(super) fn run_classified(
         capability: Some(capability),
         location,
         payment,
+        ..
     } = invocation
     {
         let approved = qualification
@@ -508,6 +510,15 @@ pub(super) fn run_classified(
     let mut command = TEST_CHILD
         .with(|c| c.borrow().as_ref().map(|f| f(&command)))
         .unwrap_or(command);
+    if let Invocation::Translation { authorize, .. } = invocation
+        && !authorize()
+    {
+        return Err(RunnerFailure {
+            category: "HELPER_CONSENT",
+            exit: None,
+            message: "Translation permission changed.".into(),
+        });
+    }
     let mut child =
         crate::platform::UserRunner::spawn(&mut command, runner.stdin).map_err(|e| {
             format!(

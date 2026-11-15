@@ -173,6 +173,8 @@ impl Run for Cli {
             return Err("helper_not_text_only");
         }
         let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
+        let authorize =
+            || crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c));
         let invoke = |capability, input| {
             runner_process::run_classified(
                 runner_process::Invocation::Translation {
@@ -180,6 +182,7 @@ impl Run for Cli {
                     capability,
                     location: &snapshot.location,
                     payment: &snapshot.payment,
+                    authorize: &authorize,
                 },
                 input,
                 &scratch.0,
@@ -194,6 +197,7 @@ impl Run for Cli {
                 "HELPER_UNAVAILABLE_LINUX" => "helper_unavailable_linux",
                 "HELPER_UNQUALIFIED" => "helper_unqualified",
                 "HELPER_PAYMENT" => "translation_payment_route_unavailable",
+                "HELPER_CONSENT" => "translation_consent_changed",
                 _ => "helper_unsupported",
             })
         };

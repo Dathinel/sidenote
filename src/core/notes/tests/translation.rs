@@ -1,4 +1,5 @@
 use super::*;
+mod authorization;
 mod failed;
 mod payment;
 mod qualification;
@@ -220,6 +221,12 @@ fn boundary(root: &Path) -> Boundary {
                 serde_json::to_vec(&serde_json::json!({"args":args,"config":config})).unwrap(),
             )
             .unwrap();
+            if root.join("withdraw-before-spawn").exists() {
+                let mut config = crate::core::Config::load_in(&root).unwrap();
+                config.engine_settings.steps.translation = false;
+                config.save(&root).unwrap();
+                fs::write(root.join("withdrawal-fired"), "").unwrap();
+            }
         }
         let mode = format!(
             "{}|{}",
@@ -428,18 +435,6 @@ fn translation_uses_shared_text_only_child() {
                     process(&root.0, &settings);
                     assert!(!root.0.join("translation-input").exists());
                 }
-                config.engine_settings.steps.translation = false;
-                config.save(&root.0).unwrap();
-                let _ = fs::remove_file(root.0.join("translation-input"));
-                let _boundary = boundary(&root.0);
-                let mut cli = helper::Cli {
-                    root: Some(root.0.clone()),
-                };
-                assert_eq!(
-                    cli.translate(&disposition.snapshot.unwrap(), "synthetic probe".into()),
-                    Err("translation_consent_changed")
-                );
-                assert!(!root.0.join("translation-input").exists());
             }
         } else {
             assert!(!root.0.join("translation-input").exists());
