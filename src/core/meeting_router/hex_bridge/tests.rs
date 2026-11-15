@@ -71,7 +71,7 @@ fn fake_hex_contract() {
             (vec![h(), s(), ok(TEXT)], Ok(Some(TEXT))),
             (vec![h(), s(), ok(TIMED)], Ok(Some(TIMED))),
             (vec![h(), busy(), s(), ok(TEXT)], Ok(Some(TEXT))),
-            (vec![h(), s(), race(), s(), ok(TEXT)], Ok(Some(TEXT))),
+            (vec![h(), s(), race()], Err(Busy)),
             (vec![h(), s(), Err(Timeout)], Err(Timeout)),
             (vec![h(), status(selected, 0, 3)], Err(Unsupported)),
             (vec![ok("--model")], Err(Unsupported)),

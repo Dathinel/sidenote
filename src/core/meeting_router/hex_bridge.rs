@@ -16,6 +16,7 @@ pub enum HexFailure {
     Failed,
     NoSpeech,
     InvalidRange,
+    StatusUnknown { timeouts: u8, last_idle: bool },
     Child(Box<ChildFailure>),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +53,13 @@ impl std::fmt::Display for HexFailure {
             Failed => f.write_str("Hex recognition failed"),
             NoSpeech => f.write_str("Hex recognized no speech"),
             InvalidRange => f.write_str("Invalid Hex audio range"),
+            StatusUnknown {
+                timeouts,
+                last_idle,
+            } => write!(
+                f,
+                "Hex status unknown after {timeouts} consecutive probe timeouts; last known idle={last_idle}"
+            ),
             Child(detail) => {
                 write!(
                     f,
@@ -120,6 +128,8 @@ pub struct HexBridge<C> {
     busy_wait: Duration,
     request_timeout: Duration,
     deadline: Option<Instant>,
+    last_idle: bool,
+    status_timeouts: u8,
 }
 impl<C: HexCommand> HexBridge<C> {
     pub fn new(command: C) -> Self {
@@ -129,6 +139,8 @@ impl<C: HexCommand> HexBridge<C> {
             busy_wait: Duration::from_secs(15),
             request_timeout: Duration::from_secs(120),
             deadline: None,
+            last_idle: false,
+            status_timeouts: 0,
         }
     }
     fn call(&mut self, args: &[&str]) -> Result<String> {
@@ -172,6 +184,34 @@ impl<C: HexCommand> HexBridge<C> {
         }
         Ok(v)
     }
+    fn probe_idle(&mut self) -> Result<bool> {
+        match self.status() {
+            Ok(status) => {
+                self.status_timeouts = 0;
+                self.last_idle = status["meeting"]["state"] == "idle"
+                    && status["capture"]["state"] == "idle"
+                    && status["capture"]["pending_jobs"] == 0
+                    && status["model"]["preparing"].is_null();
+                Ok(self.last_idle)
+            }
+            Err(error) if error.kind() == &Timeout => {
+                self.status_timeouts = self.status_timeouts.saturating_add(1);
+                crate::listener::log(&format!(
+                    "Hex status probe timed out; consecutive={}; last_known_idle={}",
+                    self.status_timeouts, self.last_idle
+                ));
+                if self.last_idle && self.status_timeouts < 3 {
+                    Ok(true)
+                } else {
+                    Err(StatusUnknown {
+                        timeouts: self.status_timeouts,
+                        last_idle: self.last_idle,
+                    })
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
     pub fn transcribe(&mut self, wav: &Path, request: &HexRequest) -> Result<HexReading> {
         let reader = hound::WavReader::open(wav).map_err(|_| InvalidRange)?;
         let spec = reader.spec();
@@ -206,17 +246,12 @@ impl<C: HexCommand> HexBridge<C> {
             self.json = Some(help.split_whitespace().any(|word| word == "--json"));
         }
         let started = Instant::now();
-        let mut last_busy = Busy;
         let out = loop {
             if started.elapsed() >= self.busy_wait {
-                return Err(last_busy);
+                return Err(Busy);
             }
-            let status = self.status()?;
-            let idle = status["meeting"]["state"] == "idle"
-                && status["capture"]["state"] == "idle"
-                && status["capture"]["pending_jobs"] == 0
-                && status["model"]["preparing"].is_null();
-            if idle {
+            // Capture/preparation may change between ranges; the last idle observation only bounds unknown probes.
+            if self.probe_idle()? {
                 let mut args = vec![
                     "model",
                     "transcribe",
@@ -230,19 +265,12 @@ impl<C: HexCommand> HexBridge<C> {
                     args.push("--json");
                 }
                 if started.elapsed() >= self.busy_wait {
-                    return Err(last_busy);
+                    return Err(Busy);
                 }
-                let result = self.call(&args);
-                match result {
-                    Err(error) if error.kind() == &Busy => {
-                        last_busy = error;
-                    }
-                    Err(e) => return Err(e),
-                    Ok(out) => break out,
-                }
+                break self.call(&args)?;
             }
             if started.elapsed() >= self.busy_wait {
-                return Err(last_busy);
+                return Err(Busy);
             }
             thread::sleep(
                 Duration::from_millis(100).min(self.busy_wait.saturating_sub(started.elapsed())),
