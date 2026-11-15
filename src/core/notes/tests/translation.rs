@@ -184,3 +184,81 @@ fn translation_input_uses_released_selection() {
         );
     }
 }
+
+fn retry(root: &Path, folder: &Path, settings: &NotesSettings) {
+    fs::remove_file(folder.join("english-summary.json")).unwrap();
+    enqueue(root, settings, Some(Request::TryAgain));
+    process(root, settings);
+}
+#[test]
+fn translation_requires_explicit_activation_and_pins_settings() {
+    let (root, folder, settings) = fixture();
+    let mut config = crate::core::Config::load_in(&root.0).unwrap();
+    assert!(
+        config
+            .engine_settings
+            .stages
+            .translation_enabled_at_ms
+            .is_none()
+    );
+    config.engine_settings.steps.translation = true;
+    config.save(&root.0).unwrap();
+    enqueue(&root.0, &settings, None);
+    process(&root.0, &settings);
+    assert!(
+        queue::read(&root.0, ID)
+            .unwrap()
+            .unwrap()
+            .translation
+            .unwrap()
+            .snapshot
+            .is_none()
+    );
+    assert!(!root.0.join("translation-input").exists());
+    config.engine_settings.stages.translation_enabled_at_ms = Some(1);
+    config.engine_settings.stages.translation_model = "translation-original".into();
+    config.engine_settings.stages.translation_deadline_seconds = 17;
+    config.engine_settings.translation_prompt = Some("First translation instructions".into());
+    config.save(&root.0).unwrap();
+    retry(&root.0, &folder, &settings);
+    let first = queue::read(&root.0, ID).unwrap().unwrap();
+    let snapshot = first.translation.unwrap().snapshot.unwrap();
+    assert_eq!(snapshot.revision, first.transcript_revision.unwrap());
+    assert_eq!(snapshot.helper, Helper::OpenCode);
+    assert_eq!(snapshot.model, "translation-original");
+    assert_eq!(snapshot.deadline_seconds, 17);
+    assert_eq!(snapshot.prompt, "First translation instructions");
+    assert_eq!(snapshot.location, "hosted");
+    assert_eq!(snapshot.payment, "subscription");
+    config.engine_settings.stages.translation_model = "translation-edited".into();
+    config.engine_settings.stages.translation_deadline_seconds = 23;
+    config.engine_settings.translation_prompt = Some("Later instructions".into());
+    config.save(&root.0).unwrap();
+    retry(&root.0, &folder, &settings);
+    let again = queue::read(&root.0, ID).unwrap().unwrap();
+    let pinned = again.translation.unwrap().snapshot.unwrap();
+    assert_eq!(pinned.model, snapshot.model);
+    assert_eq!(pinned.deadline_seconds, snapshot.deadline_seconds);
+    assert_eq!(pinned.prompt, snapshot.prompt);
+    assert_eq!(again.model, first.model);
+    config.engine_settings.stages.translation_helper = Helper::Codex;
+    config.save(&root.0).unwrap();
+    retry(&root.0, &folder, &settings);
+    assert_eq!(
+        queue::read(&root.0, ID)
+            .unwrap()
+            .unwrap()
+            .translation
+            .unwrap()
+            .reason,
+        "translation_consent_changed"
+    );
+    config.engine_settings.steps.translation = false;
+    config.save(&root.0).unwrap();
+    let _ = fs::remove_file(root.0.join("translation-input"));
+    retry(&root.0, &folder, &settings);
+    let revoked = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(revoked.translation.unwrap().reason, "translation_off");
+    assert!(!root.0.join("translation-input").exists());
+    assert!(matches!(revoked.state, JobState::Done { .. }));
+}

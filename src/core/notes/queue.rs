@@ -224,6 +224,7 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
     let mut next = Job::new(mode, settings);
+    next.translation = previous.as_ref().and_then(|j| j.translation.clone());
     if core::meeting_router::jobs::notes_enabled(root)? {
         next.transcript_revision = previous
             .as_ref()
@@ -408,16 +409,21 @@ fn process(
         end.unwrap_or(job.updated_at),
         now(),
     )?;
-    if !sort_only {
-        job.translation = Some(translation::prepare(routed.as_ref()));
-        store_io::write(&job_path(root, id), job)?;
+    if let Some(selection) = &routed {
+        job.transcript_revision = Some(selection.revision.clone());
+        job.routing_fallbacks = selection.reasons.clone();
     }
+    if !sort_only {
+        job.translation = Some(translation::prepare(
+            root,
+            routed.as_ref(),
+            job.translation.as_ref(),
+            end.unwrap_or(job.updated_at),
+        )?);
+    }
+    store_io::write(&job_path(root, id), job)?;
     let mut transcript = if let Some(selection) = routed {
-        let text = selection.render();
-        job.transcript_revision = Some(selection.revision);
-        job.routing_fallbacks = selection.reasons;
-        store_io::write(&job_path(root, id), job)?;
-        text
+        selection.render()
     } else if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
