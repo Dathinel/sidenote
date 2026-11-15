@@ -173,9 +173,12 @@ fn control(request: Value, timeout: Duration) -> Result<Value> {
     }
     Ok(response)
 }
-fn control_response(mut request: Value, timeout: Duration) -> Result<Value> {
+fn control_response(request: Value, timeout: Duration) -> Result<Value> {
     let deadline = Instant::now() + timeout;
     let d = discovery()?;
+    control_response_at(request, &d, deadline)
+}
+fn control_response_at(mut request: Value, d: &Discovery, deadline: Instant) -> Result<Value> {
     request["version"] = json!(PROTOCOL);
     let body = request.to_string();
     if body.len() > 64 * 1024 {
@@ -446,7 +449,14 @@ impl HexEngine {
         Self::default()
     }
     pub fn status(&self) -> Result<EngineState> {
-        let v = control(json!({"command":"status"}), STATUS_TIMEOUT)?;
+        self.status_with_budget(STATUS_TIMEOUT)
+    }
+    /// An explicit user action may confirm state using the existing command budget.
+    pub fn status_for_command(&self) -> Result<EngineState> {
+        self.status_with_budget(CALL_TIMEOUT)
+    }
+    fn status_with_budget(&self, budget: Duration) -> Result<EngineState> {
+        let v = control(json!({"command":"status"}), budget)?;
         if v["status"] != "status" {
             return Err(failed("unexpected status reply"));
         }
@@ -736,8 +746,47 @@ impl HexEngine {
         }
         self.change(Feature::RecordStart, v)
     }
-    pub fn record_stop(&self) -> Result<()> {
-        self.change(Feature::RecordStop, json!({"command":"meeting-stop"}))
+    pub fn record_stop(&self, expected_id: &str, cached: &Capabilities) -> Result<()> {
+        let refused = |code: &str| HexError::Failed {
+            code: Some(code.into()),
+            stderr_summary: "Stop refused; values suppressed",
+        };
+        if expected_id.is_empty() {
+            return Err(refused("stop-unconfirmed"));
+        }
+        if cached.get(&Feature::RecordStop) != Some(&Support::Supported) {
+            return Err(HexError::Unsupported);
+        }
+        let deadline = Instant::now() + CALL_TIMEOUT;
+        // Pin both calls to one server lease; never rediscover a replacement between them.
+        let endpoint = discovery().map_err(|_| refused("stop-unconfirmed"))?;
+        let request = |command| {
+            let reply = control_response_at(json!({"command":command}), &endpoint, deadline)?;
+            if reply["version"].as_u64() != Some(PROTOCOL) {
+                return Err(HexError::Unsupported);
+            }
+            Ok(reply)
+        };
+        let current = request("status").map_err(|_| refused("stop-unconfirmed"))?;
+        if current["status"] != "status" {
+            return Err(refused("stop-unconfirmed"));
+        }
+        if !matches!(
+            current["meeting"]["state"].as_str(),
+            Some("recording" | "starting")
+        ) || current["meeting"]["id"].as_str() != Some(expected_id)
+        {
+            return Err(refused("recording-changed"));
+        }
+        if current["capabilities"]["meetings"] == false {
+            return Err(HexError::Unsupported);
+        }
+        // Hex has no atomic ID-scoped stop. This is the caller-requested status-check fallback.
+        let reply = request("meeting-stop")?;
+        if reply["status"] != "done" || reply["changed"] == false {
+            return Err(refused("stop-unconfirmed"));
+        }
+        Ok(())
     }
     pub fn dictation_stop(&self) -> Result<()> {
         self.change(

@@ -590,13 +590,14 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     .label(format!("{words}. Open the live meeting"))
     .help("Open the live meeting")
     .on_press(|s: &mut State| s.open_live());
+    let expected_id = hex::recording_id(s);
     let why = hex::stop_blocked(s);
     let stop = super::widgets::button("Stop", "hex-stop", super::widgets::ButtonRole::Secondary, p);
     let stop = match why {
         None => stop
             .label("Stop recording")
             .help("Stop recording and write the summary")
-            .on_press(|s: &mut State| s.hex_record_stop()),
+            .on_press(move |s: &mut State| s.hex_record_stop(expected_id.clone())),
         Some(reason) => stop
             .label(format!("Stop ({reason})"))
             .help(reason)

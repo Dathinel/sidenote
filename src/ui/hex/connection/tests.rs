@@ -32,7 +32,7 @@ fn setup(
         version: "test".into(),
         protocol: 4,
         recording: recording.then_some(Recording {
-            id: None,
+            id: Some("100-1".into()),
             title: None,
             since: None,
             elapsed_seconds: Some(1),

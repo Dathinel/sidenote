@@ -1838,7 +1838,7 @@ mod writer_tests {
         state.live.as_mut().unwrap().folder = Some(folder.clone());
         state.live_open = true;
         state.live_notes = TextEdit::new("Notes from the last Stop click");
-        state.hex_record_stop();
+        state.hex_record_stop(None);
         assert!(
             !state.on_live(),
             "Stop after Hex stopped should release the page"

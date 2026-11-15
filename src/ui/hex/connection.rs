@@ -117,3 +117,6 @@ impl Connection {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod stop_tests;

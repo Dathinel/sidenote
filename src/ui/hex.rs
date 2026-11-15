@@ -111,6 +111,12 @@ fn plain(e: &HexError) -> &'static str {
             Some("feature-off") => "That feature is off in Hex.",
             Some("not-ready") => "Hex is not ready yet.",
             Some("busy") => "Hex is busy.",
+            Some("recording-changed") => {
+                "Hex's active recording has changed or ended. Stop was not sent. Check Hex before trying again."
+            }
+            Some("stop-unconfirmed") => {
+                "Could not confirm this recording. Stop was not confirmed. Check Hex before trying again."
+            }
             Some("not-recording") => "No meeting is recording.",
             _ => "Hex could not do that.",
         },
@@ -824,7 +830,12 @@ impl State {
         self.hex_spawn(|e| Msg::Done(Action::Start, e.record_start(None)));
     }
 
-    pub fn hex_record_stop(&mut self) {
+    pub fn hex_record_stop(&mut self, displayed_id: Option<String>) {
+        if displayed_id != self.hex.recording().and_then(|r| r.id.clone()) {
+            self.hex.error =
+                Some("The recording changed before Stop was pressed. Stop was not sent.");
+            return;
+        }
         let pressed = Instant::now();
         // Notes typed on the live page reach the folder before the pipeline can start.
         self.live_flush();
@@ -841,9 +852,12 @@ impl State {
             }
             return;
         }
-        if stop_blocked(self).is_some() {
+        if let Some(reason) = stop_blocked(self) {
+            self.hex.error = Some(reason);
             return;
         }
+        let expected_id = displayed_id.unwrap_or_default();
+        let cached = self.hex.caps.clone().unwrap_or_default();
         self.hex.record_busy = true;
         self.hex.error = None;
         let engine = self.hex.engine.clone();
@@ -857,7 +871,7 @@ impl State {
         if !self.live_work(move || {
             let _ = events.send(Event::Hex(Msg::Done(
                 Action::Stop(recording),
-                engine.record_stop(),
+                engine.record_stop(&expected_id, &cached),
             )));
             if let Some(wake) = wake {
                 wake();
@@ -1145,6 +1159,12 @@ pub fn stop_blocked(s: &State) -> Option<&'static str> {
         })
     } else if h.recording().is_none() {
         Some("No meeting is recording")
+    } else if h
+        .recording()
+        .and_then(|r| r.id.as_deref())
+        .is_none_or(str::is_empty)
+    {
+        Some("Hex has not identified this recording. Check Hex before stopping.")
     } else if h.record_busy {
         Some("Working")
     } else if h.caps.as_ref().and_then(|c| c.get(&Feature::RecordStop)) != Some(&Support::Supported)
