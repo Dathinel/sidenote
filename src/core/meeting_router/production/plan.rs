@@ -214,9 +214,10 @@ pub(super) fn produce(
                 };
                 let id = cache::key(&[], &piece.id, &serde_json::to_string(&range)?, &model_id);
                 let wav = work.join(format!("{id}.wav"));
-                if !wav.exists() {
-                    asr::write_wav(&wav, &pcm(&path, range.context)?)?;
-                }
+                // Derived PCM is disposable: never bless cached damage into a new plan.
+                let slice = tempfile::NamedTempFile::new_in(work)?.into_temp_path();
+                asr::write_wav(&slice, &pcm(&path, range.context)?)?;
+                store_io::atomic_write(&wav, &inputs::Snapshot::read_file(&slice, 1 << 20)?)?;
                 output.push(Range {
                     track: track.track.clone(),
                     piece: piece.id.clone(),

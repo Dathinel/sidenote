@@ -15,6 +15,8 @@ mod plan;
 pub use pipeline::run;
 #[cfg(test)]
 mod public_tests;
+#[cfg(all(test, feature = "asr-runtime"))]
+pub(crate) mod regression;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
