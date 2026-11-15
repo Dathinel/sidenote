@@ -521,7 +521,10 @@ impl State {
     }
 
     /// Starts a live page with empty notes and, while a recording runs, the reader thread.
-    fn live_begin(&mut self, phase: Phase, known: HashSet<String>) {
+    fn live_begin(&mut self, phase: Phase, known: HashSet<String>) -> bool {
+        if !self.live_close() {
+            return false;
+        }
         let live = Live::new(phase, known);
         self.live_notes = TextEdit::new("");
         if let Some(waker) = self.waker.clone() {
@@ -535,6 +538,7 @@ impl State {
                 .spawn(move || feed_loop(&feed, &cancel, &watching, &waker));
         }
         self.live = Some(live);
+        true
     }
 
     /// The New meeting button: start Hex recording and show the live page.
@@ -546,12 +550,11 @@ impl State {
             self.hex_recheck_start();
             return;
         }
-        if !self.live_close() {
+        if !self.live_begin(Phase::Starting, self.known_ids()) {
             self.hex.error = Some("Save these notes before starting another meeting.");
             return;
         }
         self.go_home();
-        self.live_begin(Phase::Starting, self.known_ids());
         self.live_open = true;
         self.hex_record_start();
         self.nav_done();
@@ -623,15 +626,18 @@ impl State {
         match live.phase {
             Phase::Starting if recording => live.phase = Phase::Recording,
             Phase::Starting if running && !busy && live.began.elapsed() > START_WAIT => {
-                self.live = None;
-                self.live_open = false;
+                if self.live_close() {
+                    self.live = None;
+                    self.live_open = false;
+                }
             }
             Phase::Recording if running && !recording && !busy => self.live_stopped(),
             Phase::Making if recording => {
                 // Another recording began while the notes were still being made.
                 let known = self.known_ids();
-                self.live_begin(Phase::Recording, known);
-                self.live_sync_start();
+                if self.live_begin(Phase::Recording, known) {
+                    self.live_sync_start();
+                }
             }
             _ => {}
         }

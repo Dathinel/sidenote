@@ -747,8 +747,8 @@ impl State {
                         {
                             super::response_time::failed(live.take_notes_timing(recording));
                         }
-                        // A start that failed leaves nothing to show on the live page.
-                        if matches!(action, Action::Start) {
+                        // Even a failed start may have notes typed while waiting for Hex.
+                        if matches!(action, Action::Start) && self.live_close() {
                             self.live = None;
                             self.live_open = false;
                         }
