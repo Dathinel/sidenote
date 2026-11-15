@@ -534,8 +534,21 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         return super::annotations::new_button(s, p);
     }
     if s.hex_recording() {
-        return recording_pill(s, p, narrow);
+        let recording = recording_pill(s, p, narrow);
+        return if s.hex_status_unknown() {
+            row()
+                .gap(8.0)
+                .items_center()
+                .child(recording)
+                .child(new_meeting_button(s, p, narrow))
+        } else {
+            recording
+        };
     }
+    new_meeting_button(s, p, narrow)
+}
+
+fn new_meeting_button(s: &State, p: Palette, narrow: bool) -> El {
     let blocked = hex::start_blocked(s);
     let b = super::widgets::button(
         if narrow { "+ New" } else { "+ New meeting" },
@@ -566,13 +579,25 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
         }))
 }
 
-fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
+pub(super) fn recording_words(s: &State, narrow: bool) -> String {
+    if s.hex_status_unknown() {
+        return if narrow {
+            "Status unknown"
+        } else {
+            "Recording status unknown"
+        }
+        .into();
+    }
     let clock = hex::recording_clock(s);
-    let words = match (&clock, narrow) {
+    match (&clock, narrow) {
         (Some(c), true) => c.clone(),
         (Some(c), false) => format!("Recording {c}"),
         (None, _) => "Recording".into(),
-    };
+    }
+}
+
+fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
+    let words = recording_words(s, narrow);
     let open = super::widgets::button(
         "",
         "recording-open",
@@ -590,13 +615,14 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     .label(format!("{words}. Open the live meeting"))
     .help("Open the live meeting")
     .on_press(|s: &mut State| s.open_live());
+    let expected_id = hex::recording_id(s);
     let why = hex::stop_blocked(s);
     let stop = super::widgets::button("Stop", "hex-stop", super::widgets::ButtonRole::Secondary, p);
     let stop = match why {
         None => stop
             .label("Stop recording")
             .help("Stop recording and write the summary")
-            .on_press(|s: &mut State| s.hex_record_stop()),
+            .on_press(move |s: &mut State| s.hex_record_stop(expected_id.clone())),
         Some(reason) => stop
             .label(format!("Stop ({reason})"))
             .help(reason)

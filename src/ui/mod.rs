@@ -1736,6 +1736,7 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         *now = clock;
     }
     let (mut changed, _) = apply_pending(s, headless);
+    changed |= s.hex_connection_tick(tx);
     if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
         s.show_toast(message, tx);
         s.memory.settle_toast_action = Some((id, redo));

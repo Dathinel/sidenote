@@ -521,7 +521,10 @@ impl State {
     }
 
     /// Starts a live page with empty notes and, while a recording runs, the reader thread.
-    fn live_begin(&mut self, phase: Phase, known: HashSet<String>) {
+    fn live_begin(&mut self, phase: Phase, known: HashSet<String>) -> bool {
+        if !self.live_close() {
+            return false;
+        }
         let live = Live::new(phase, known);
         self.live_notes = TextEdit::new("");
         if let Some(waker) = self.waker.clone() {
@@ -535,6 +538,7 @@ impl State {
                 .spawn(move || feed_loop(&feed, &cancel, &watching, &waker));
         }
         self.live = Some(live);
+        true
     }
 
     /// The New meeting button: start Hex recording and show the live page.
@@ -542,8 +546,15 @@ impl State {
         if hex::start_blocked(self).is_some() {
             return;
         }
+        if self.hex_status_unknown() {
+            self.hex_recheck_start();
+            return;
+        }
+        if !self.live_begin(Phase::Starting, self.known_ids()) {
+            self.hex.error = Some("Save these notes before starting another meeting.");
+            return;
+        }
         self.go_home();
-        self.live_begin(Phase::Starting, self.known_ids());
         self.live_open = true;
         self.hex_record_start();
         self.nav_done();
@@ -615,15 +626,18 @@ impl State {
         match live.phase {
             Phase::Starting if recording => live.phase = Phase::Recording,
             Phase::Starting if running && !busy && live.began.elapsed() > START_WAIT => {
-                self.live = None;
-                self.live_open = false;
+                if self.live_close() {
+                    self.live = None;
+                    self.live_open = false;
+                }
             }
             Phase::Recording if running && !recording && !busy => self.live_stopped(),
             Phase::Making if recording => {
                 // Another recording began while the notes were still being made.
                 let known = self.known_ids();
-                self.live_begin(Phase::Recording, known);
-                self.live_sync_start();
+                if self.live_begin(Phase::Recording, known) {
+                    self.live_sync_start();
+                }
             }
             _ => {}
         }
@@ -1122,7 +1136,14 @@ fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
         .pl(16.0)
         .pr(8.0)
         .py(8.0)
-        .child(spaced_caps("Live transcript", p))
+        .child(spaced_caps(
+            if s.hex_status_unknown() {
+                "Transcript (recording status unknown)"
+            } else {
+                "Live transcript"
+            },
+            p,
+        ))
         .child(
             quiet_button("Hide", "live-panel-hide", p)
                 .on_press(|s: &mut State| s.live_toggle_panel()),
@@ -1271,7 +1292,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .child(head);
     if let Some(Saving::Failed(_)) = saving {
         let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
-        let warning = save_warning(s.hex_recording(), recovered);
+        let warning = save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered);
         c = c.child(
             col()
                 .key("live-save-warning")
@@ -1587,7 +1608,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             roles::SMALL
                 .medium()
                 .wrap(
-                    "Hex is not answering. The recording may still be running in Hex.",
+                    if s.hex_status_unknown() { "Recording status unknown. Stop will check the recording before sending a request. New meeting can check Hex again." } else { "Hex is not answering. The recording may still be running in Hex." },
                     p.warn,
                 )
                 .role("alert"),
@@ -1838,7 +1859,7 @@ mod writer_tests {
         state.live.as_mut().unwrap().folder = Some(folder.clone());
         state.live_open = true;
         state.live_notes = TextEdit::new("Notes from the last Stop click");
-        state.hex_record_stop();
+        state.hex_record_stop(None);
         assert!(
             !state.on_live(),
             "Stop after Hex stopped should release the page"
