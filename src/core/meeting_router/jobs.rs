@@ -2,6 +2,8 @@
 use super::*;
 pub(crate) mod handoff;
 mod notes;
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+pub(crate) mod r1_tests;
 pub use handoff::{BatchOutput, commit_batches};
 pub(crate) use notes::notes_input;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
@@ -518,11 +520,11 @@ fn run_one_in(request: &Path, root: &Path) -> Result<()> {
         Audio::open(&[(track.into(), output.clone())])?;
         paths.push((track.into(), output));
     }
-    store_io::write(
-        &work.join("normalization.clock.json"),
-        &serde_json::json!({"seconds":normalization_started.elapsed().as_secs_f64()}),
-    )?;
     if labs {
+        let _ = store_io::write(
+            &work.join("normalization.clock.json"),
+            &serde_json::json!({"seconds":normalization_started.elapsed().as_secs_f64()}),
+        );
         #[cfg(windows)]
         {
             let mut config = super::super::Config::load_in(root)?;
