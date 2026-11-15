@@ -163,9 +163,9 @@ impl RoutingConfig {
         }
         if !matches!(
             self.language_mode.as_str(),
-            "auto" | "off" | "forced:en" | "forced:hi" | "forced:mixed"
+            "auto" | "off" | "forced:en" | "forced:hi" | "forced:te" | "forced:mixed"
         ) {
-            return Err("Choose auto, off, forced:en, forced:hi or forced:mixed".into());
+            return Err("Choose auto, off, forced:en, forced:hi, forced:te or forced:mixed".into());
         }
         Ok(())
     }

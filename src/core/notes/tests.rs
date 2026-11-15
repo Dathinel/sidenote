@@ -3,6 +3,8 @@ use super::{
     *,
 };
 #[cfg(windows)]
+mod corruption;
+#[cfg(windows)]
 mod review;
 #[cfg(windows)]
 mod routing;
@@ -1755,4 +1757,38 @@ fn accidental_seventeen_second_call_has_no_job_and_a_terminal_skip() {
         summary_skip(eligibility, false, Some(&JobState::Queued)),
         None
     );
+}
+
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub(crate) fn publish_public_routed(
+    root: &Path,
+    meetings: &Path,
+    id: &str,
+    expected: &str,
+) -> StatusDetail {
+    let settings = settings_fixture();
+    save_fixture_settings(root, &settings).unwrap();
+    queue::enqueue_in(root, meetings, id, None, &settings).unwrap();
+    let summary = serde_json::json!({"title":"Public source regression","context":[],"topics":[],"todo":[],"to_settle":[]}).to_string();
+    let mut helper = Fake::new(vec![
+        Ok("Public English source".into()),
+        Ok(summary),
+        Ok(r#"{"meeting_project":null,"tasks":[]}"#.into()),
+    ]);
+    queue::drain(root, meetings, &mut helper, || Ok(settings.clone())).unwrap();
+    assert!(
+        meetings.join(id).join("english-summary.json").is_file(),
+        "notes must publish from complete Hex coverage"
+    );
+    assert!(helper.calls[1].0.contains(expected));
+    let status = status_record(root, id).unwrap();
+    assert!(matches!(
+        status.state,
+        JobState::Done {
+            fallback: false,
+            tasks_failed: false
+        }
+    ));
+    assert!(!helper.calls[1].0.contains(&status.routing_message()));
+    status
 }

@@ -1,4 +1,4 @@
-//! Unwired spool. Real adapters belong to layer 8c.
+//! Immutable sequential language batches with restart receipts.
 use super::{inputs::Snapshot, ranges::AsrRange};
 use crate::core::{asr::Result, store_io};
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,10 @@ fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
 }
 pub trait Recognizer {
     fn recognize(&mut self, range: &Range) -> Result<Value>;
+    fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn limit(&mut self, _remaining: std::time::Duration) {}
 }
 /// Validate the receipt before exposing a reading to reconciliation; no audio is opened.
 pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> {
@@ -134,6 +138,7 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
 }
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
+    fn limit(&mut self, _remaining: std::time::Duration) {}
 }
 #[derive(Clone, Copy, Debug)]
 pub enum NativeLanguage {
@@ -156,8 +161,34 @@ pub fn run(
     }
     #[cfg(windows)]
     {
-        run_windows(root, plan, native, bridge)
+        run_windows(root, plan, native, bridge, None)
     }
+}
+#[cfg(windows)]
+pub fn run_until(
+    root: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    bridge: &mut impl EnglishBridge,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    run_windows(
+        root,
+        plan,
+        native,
+        bridge,
+        Some(std::time::Instant::now() + timeout),
+    )
+}
+#[cfg(windows)]
+fn remaining(deadline: Option<std::time::Instant>) -> Result<Option<std::time::Duration>> {
+    deadline
+        .map(|d| {
+            d.checked_duration_since(std::time::Instant::now())
+                .filter(|d| !d.is_zero())
+                .ok_or_else(|| super::hex_bridge::HexFailure::Timeout.into())
+        })
+        .transpose()
 }
 #[cfg(windows)]
 fn run_windows(
@@ -165,6 +196,7 @@ fn run_windows(
     plan: &Plan,
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
+    deadline: Option<std::time::Instant>,
 ) -> Result<()> {
     let _lock = store_io::lock(&root.join("job.lock"))?;
     if revision(&plan.batches)? != plan.revision
@@ -174,6 +206,7 @@ fn run_windows(
         return Err("Stale plan revision".into());
     }
     for (lang, ranges) in &plan.batches {
+        let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
             .filter(|(id, _)| !cached(root, plan, id))
@@ -181,6 +214,7 @@ fn run_windows(
         let Some((_, first)) = pending.first() else {
             continue;
         };
+        remaining(deadline)?;
         let mut session = match lang.as_str() {
             "en" => None,
             "hi" => Some(native.load(NativeLanguage::Hindi, first)?),
@@ -188,10 +222,17 @@ fn run_windows(
             _ => return Err("Unknown language".into()),
         };
         for (id, r) in pending {
+            if let Some(left) = remaining(deadline)? {
+                match &mut session {
+                    Some(s) => s.limit(left),
+                    None => bridge.limit(left),
+                }
+            }
             let v = match &mut session {
                 Some(s) => s.recognize(r)?,
                 None => bridge.transcribe(r)?,
             };
+            remaining(deadline)?;
             if v["text"].as_str().is_none_or(|s| s.trim().is_empty()) {
                 return Err("Empty result".into());
             }
@@ -206,7 +247,14 @@ fn run_windows(
                 },
             )?;
         }
+        if let Some(s) = &mut session {
+            s.finish()?;
+        }
         drop(session);
+        store_io::write(
+            &root.join(format!("{lang}.clock.json")),
+            &serde_json::json!({"seconds":started.elapsed().as_secs_f64(),"revision":plan.revision}),
+        )?;
     }
     Ok(())
 }

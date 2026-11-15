@@ -87,6 +87,7 @@ fn produce(root: &Path, id: &str, baseline: &[Chunk], language: &str) -> Result<
         source_revision: "fixture-input".into(),
         plan,
         manifest,
+        fallbacks: vec![],
     };
     store_io::write(&dir.join("output.json"), &output)?;
     batches::run(&dir, &output.plan, &mut Fake, &mut Fake)
@@ -188,11 +189,11 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     )
     .unwrap();
     revision::begin(destination(&root, id).parent().unwrap(), 7).unwrap();
-    let (fallback, reading) = notes_input(
+    let (fallback, reading, _) = notes_input(
         &root,
         id,
         None,
-        &baseline,
+        || Ok(baseline.clone()),
         0,
         chrono::Utc::now().timestamp_millis(),
     )
@@ -233,22 +234,22 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     assert_eq!(published.transcript.segments[0].lang, "te");
     assert_eq!(published.evidence.len(), 1);
     assert!(published.provenance["plan"]["batches"]["te"].is_object());
-    let (_, unpinned) = notes_input(
+    let (_, unpinned, _) = notes_input(
         &root,
         id,
         None,
-        &baseline,
+        || Ok(baseline.clone()),
         0,
         chrono::Utc::now().timestamp_millis(),
     )
     .unwrap()
     .unwrap();
     assert_eq!(unpinned.segments[0].lang, "en");
-    let (same, pinned) = notes_input(
+    let (same, pinned, _) = notes_input(
         &root,
         id,
         Some(&fallback),
-        &[],
+        || panic!("healthy pin requested original Hex input"),
         0,
         chrono::Utc::now().timestamp_millis(),
     )

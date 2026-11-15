@@ -152,3 +152,55 @@ fn abrupt_death_artifacts_redo_only_incomplete_ranges() {
         ["load Hindi", "read a", "read b", "read c", "unload"]
     );
 }
+
+#[test]
+fn failed_native_shutdown_never_starts_the_next_language() {
+    struct FailFinish;
+    impl Recognizer for FailFinish {
+        fn recognize(&mut self, _: &Range) -> Result<Value> {
+            Ok(serde_json::json!({"text":"public"}))
+        }
+        fn finish(&mut self) -> Result<()> {
+            Err("worker cleanup failed".into())
+        }
+    }
+    struct Loader(Vec<String>);
+    impl NativeLoader for Loader {
+        fn load(&mut self, _: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+            self.0.push(range.range.language.clone().unwrap());
+            Ok(Box::new(FailFinish))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("public.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(dir.path(), ranges(&wav)).unwrap();
+    let mut loader = Loader(Vec::new());
+    assert!(run(dir.path(), &plan, &mut loader, &mut Fakes(Log::default())).is_err());
+    assert_eq!(loader.0, vec!["hi"]);
+}
+
+#[test]
+fn expired_budget_never_loads_or_publishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav = dir.path().join("public.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(dir.path(), ranges(&wav)).unwrap();
+    let log = Log::default();
+    let error = run_until(
+        dir.path(),
+        &plan,
+        &mut Fakes(log.clone()),
+        &mut Fakes(log.clone()),
+        std::time::Duration::ZERO,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<super::super::hex_bridge::HexFailure>(),
+        Some(&super::super::hex_bridge::HexFailure::Timeout)
+    );
+    assert!(log.borrow().is_empty());
+    for id in plan.batches.values().flat_map(|b| b.keys()) {
+        assert!(read_result(dir.path(), &plan, id).unwrap().is_none());
+    }
+}

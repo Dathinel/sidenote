@@ -243,6 +243,18 @@ impl IndicConformer {
 
     /// Explicit pack identity; never load a different language as fallback.
     pub fn load_for_language(model: &Path, tokens: &Path, language: &str) -> Result<Self> {
+        Self::load_with_threads(model, tokens, language, 1)
+    }
+
+    pub fn load_with_threads(
+        model: &Path,
+        tokens: &Path,
+        language: &str,
+        threads: usize,
+    ) -> Result<Self> {
+        if !(1..=256).contains(&threads) {
+            return Err("Invalid ASR thread count".into());
+        }
         let start = Instant::now();
         if !cfg!(windows) || RUNTIME.get().is_none_or(|r| r.is_err()) {
             return Err(IndicError::RuntimeUnavailable.into());
@@ -253,7 +265,7 @@ impl IndicConformer {
         let token_text = indic_tokens(&token_bytes)?;
         // Infer from the exact verified bytes, even if the source path changes.
         let session = Session::builder()?
-            .with_intra_threads(1)?
+            .with_intra_threads(threads)?
             .with_inter_threads(1)?
             .with_memory_pattern(false)?
             .commit_from_memory(&graph)?;

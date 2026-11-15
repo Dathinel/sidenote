@@ -71,16 +71,21 @@ pub(super) fn chosen(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<Option<(String, String)>> {
+) -> io::Result<
+    Option<(
+        String,
+        String,
+        Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    )>,
+> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
     if !router::jobs::notes_enabled(root)? {
         return Ok(None);
     }
-    let baseline = if chosen.is_some() {
-        Vec::new()
-    } else {
-        String::from_utf8_lossy(&captured(folder)?)
+    // Healthy pins never need originals; failed pins can request Hex at the deadline.
+    let baseline = || -> io::Result<Vec<Chunk>> {
+        Ok(String::from_utf8_lossy(&captured(folder)?)
             .lines()
             .enumerate()
             .filter_map(|(i, line)| {
@@ -112,10 +117,10 @@ pub(super) fn chosen(
                     audio_start: None,
                 })
             })
-            .collect()
+            .collect())
     };
-    router::jobs::notes_input(root, id, chosen, &baseline, ended_ms, now_ms)?
-        .map(|(id, t)| {
+    router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
+        .map(|(id, t, reasons)| {
             let mut text = String::new();
             for s in t.segments {
                 let lang = match s.lang.as_str() {
@@ -147,7 +152,7 @@ pub(super) fn chosen(
                         .join(" ")
                 ));
             }
-            Ok((id, text))
+            Ok((id, text, reasons))
         })
         .transpose()
 }

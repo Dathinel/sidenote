@@ -6,7 +6,9 @@ mod helper;
 mod prompt;
 pub mod queue;
 mod schema;
+mod status_detail;
 mod transcript;
+pub use status_detail::{StatusDetail, status_record};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -285,7 +287,7 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Fixed policy result for the independent scripts entry points; never migrate missing settings.
 pub fn scripts_policy() -> &'static str {

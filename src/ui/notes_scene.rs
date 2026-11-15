@@ -60,6 +60,8 @@ pub fn settings(s: &mut State, mode: &str) {
                     helper: Some(Helper::Claude),
                     updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
                     request: None,
+                    transcript_revision: None,
+                    routing_fallbacks: Vec::new(),
                 },
             );
         }
@@ -244,6 +246,8 @@ pub fn meeting(s: &mut State, name: &str) {
             helper: Some(Helper::Claude),
             updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
             request: None,
+            transcript_revision: None,
+            routing_fallbacks: Vec::new(),
         },
     );
     if name == "no-notes" {
@@ -304,6 +308,8 @@ pub fn list(s: &mut State) {
                     helper: Some(Helper::Claude),
                     updated_at: chrono::Utc::now().timestamp_millis() - 120_000,
                     request: None,
+                    transcript_revision: None,
+                    routing_fallbacks: Vec::new(),
                 },
             );
             m

@@ -1,8 +1,12 @@
 use super::*;
 use crate::core::asr::Result;
 
-pub(super) trait Detector {
+pub(crate) trait Detector {
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>>;
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    fn logits(&mut self, _samples: &[f32]) -> Result<Vec<f32>> {
+        Err("Raw language logits unavailable".into())
+    }
 }
 
 #[cfg(all(windows, feature = "asr-runtime"))]
@@ -14,6 +18,9 @@ struct Runtime {
 }
 #[cfg(all(windows, feature = "asr-runtime"))]
 impl Detector for Runtime {
+    fn logits(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
+        self.model.logits(samples)
+    }
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         let logits = self.model.logits(samples)?;
         let peak = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -27,7 +34,7 @@ impl Detector for Runtime {
 }
 
 #[cfg(all(windows, feature = "asr-runtime"))]
-pub(super) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
+pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
     use sha2::{Digest, Sha256};
     use std::{
         io::Read,
@@ -89,6 +96,6 @@ pub(super) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
 }
 
 #[cfg(not(all(windows, feature = "asr-runtime")))]
-pub(super) fn load(_settings: &Settings) -> Result<Box<dyn Detector>> {
+pub(crate) fn load(_settings: &Settings) -> Result<Box<dyn Detector>> {
     Err("Language model unavailable: requires Windows and the asr-runtime build".into())
 }

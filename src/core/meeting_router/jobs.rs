@@ -2,6 +2,8 @@
 use super::*;
 pub(crate) mod handoff;
 mod notes;
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+pub(crate) mod r1_tests;
 pub use handoff::{BatchOutput, commit_batches};
 pub(crate) use notes::notes_input;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
@@ -467,16 +469,24 @@ fn run_one_in(request: &Path, root: &Path) -> Result<()> {
         serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;
     let work = request.parent().ok_or("Missing work directory")?;
-    if notes_enabled(root)? {
-        handoff::assembled(
+    let labs = notes_enabled(root)?;
+    if labs
+        && handoff::assembled(
             root,
             &job.id,
             job.generation,
             &job.input_revision,
             &job.baseline,
-        )?;
+        )
+        .is_ok()
+    {
         return Ok(());
     }
+    #[cfg(not(windows))]
+    if labs {
+        return Err(super::hex_bridge::HexFailure::Unsupported.into());
+    }
+    let normalization_started = Instant::now();
     let mut normalized = Cleanup(Vec::new());
     let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
     let mut paths = Vec::new();
@@ -510,6 +520,36 @@ fn run_one_in(request: &Path, root: &Path) -> Result<()> {
         }
         Audio::open(&[(track.into(), output.clone())])?;
         paths.push((track.into(), output));
+    }
+    if labs {
+        let _ = store_io::write(
+            &work.join("normalization.clock.json"),
+            &serde_json::json!({"seconds":normalization_started.elapsed().as_secs_f64()}),
+        );
+        #[cfg(windows)]
+        {
+            let mut config = super::super::Config::load_in(root)?;
+            config.pipeline = job.config.clone();
+            let batches = work.join("batches");
+            fs::create_dir_all(&batches)?;
+            super::production::run(
+                &job.folder,
+                &paths,
+                &job.baseline,
+                &config,
+                &batches,
+                &job.input_revision,
+                job.generation,
+            )?;
+        }
+        handoff::assembled(
+            root,
+            &job.id,
+            job.generation,
+            &job.input_revision,
+            &job.baseline,
+        )?;
+        return Ok(());
     }
     let mut audio = Audio::open(&paths)?;
     let detected = audio.speech_chunks()?;
@@ -636,7 +676,7 @@ fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> R
                 && job.config.meeting_languages == ["en"]
                 && !matches!(
                     job.config.language_mode.as_str(),
-                    "forced:hi" | "forced:mixed"
+                    "forced:hi" | "forced:te" | "forced:mixed"
                 )
             {
                 if destination.exists()
@@ -695,7 +735,7 @@ fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> R
             let _ = fs::remove_file(work.join("normalization-outcome.json"));
             let _ = fs::remove_file(work.join("failure.json"));
             let mut command = worker(&job, &request)?;
-            for flag in ["--ffmpeg", "--normalization-timeout-seconds"] {
+            for flag in ["--ffmpeg", "--normalization-timeout-seconds", "--hex-cli"] {
                 if let Some(value) = args.windows(2).find(|a| a[0] == flag).map(|a| &a[1]) {
                     command.args([flag, value]);
                 }
@@ -730,13 +770,20 @@ fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> R
                 _ => {}
             }
             let assembled = if labs && stable && outcome.success {
-                match commit_batches(
+                let commit_started = Instant::now();
+                let committed = commit_batches(
                     &root,
                     &job.id,
                     pending.generation,
                     &job.input_revision,
                     &job.baseline,
-                ) {
+                );
+                // A timing receipt must not invalidate an already published revision.
+                let _ = store_io::write(
+                    &work.join("commit.clock.json"),
+                    &serde_json::json!({"seconds":commit_started.elapsed().as_secs_f64()}),
+                );
+                match committed {
                     Ok(id) => revision::load(destination.parent().unwrap(), Some(&id))?
                         .map(|(_, r)| r.transcript),
                     Err(_) => {

@@ -1,3 +1,4 @@
+use super::super::fallback::{self, Reason, RoutingFallback};
 use super::*;
 use crate::core::{Config, file_reads};
 
@@ -15,10 +16,10 @@ pub(crate) fn notes_input(
     root: &Path,
     id: &str,
     chosen: Option<&str>,
-    baseline: &[Chunk],
+    baseline: impl FnOnce() -> io::Result<Vec<Chunk>>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<Option<(String, Transcript)>> {
+) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
@@ -26,29 +27,52 @@ pub(crate) fn notes_input(
     let Some(config) = enabled(root).ok().flatten() else {
         return Ok(None);
     };
-    if let Some(chosen) = chosen {
-        let (id, r) = revision::load(&dir, Some(chosen))?
-            .ok_or_else(|| store_io::invalid("Chosen revision missing"))?;
-        return Ok(Some((id, r.transcript)));
+    if let Some(chosen) = chosen
+        && let Ok(Some((id, r))) = revision::load(&dir, Some(chosen))
+        && let Ok(reasons) = fallback::read(&r)
+    {
+        return Ok(Some((id, r.transcript, reasons)));
     }
-    let _lock = pending_lock(root, id)?;
-    let pending: Option<Pending> = store_io::read(&queue(root).join(format!("{id}.json")))?;
-    let same_baseline =
-        |t: &Transcript| serde_json::to_vec(&t.baseline).ok() == serde_json::to_vec(baseline).ok();
     let seconds = config.engine_settings.stages.routing_deadline_seconds;
     if !(1..=3600).contains(&seconds) {
         return Err(store_io::invalid("Invalid routing deadline"));
     }
     let deadline = ended_ms.saturating_add(i64::from(seconds) * 1000);
+    let _lock = pending_lock(root, id)?;
+    let dependency =
+        super::super::inputs::Snapshot::read_file(&queue(root).join(format!("{id}.json")), 4096)
+            .and_then(|bytes| serde_json::from_slice::<Pending>(&bytes).map_err(io::Error::from));
+    let (pending, pending_unusable) = match dependency {
+        Ok(p) if p.id == id && p.generation > 0 => (Some(p), false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (None, false),
+        _ => (None, true),
+    };
+    let waiting = || {
+        io::Error::new(
+            io::ErrorKind::WouldBlock,
+            store_io::UserMessage("routing_pending".into()),
+        )
+    };
+    // An unavailable pin must not switch to an unrelated routed revision.
+    let require_hex = chosen.is_some() || pending_unusable;
+    if require_hex && now_ms < deadline {
+        return Err(waiting());
+    }
+    let baseline = baseline()?;
+    let same_baseline =
+        |t: &Transcript| serde_json::to_vec(&t.baseline).ok() == serde_json::to_vec(&baseline).ok();
     // An unchosen damaged selection is optional input. Preserve its bytes and wait/fall back.
-    let latest = revision::load(&dir, None).ok().flatten();
+    let loaded = revision::load(&dir, None);
+    let latest_unavailable = loaded.is_err();
+    let latest = loaded.ok().flatten();
     let released = super::super::inputs::Snapshot::read_file(
         &handoff::work(root, id).join("released.json"),
         4096,
     )
     .ok()
     .and_then(|b| serde_json::from_slice::<handoff::Released>(&b).ok());
-    if latest.is_some()
+    if !require_hex
+        && latest.is_some()
         && let Some(released) = released
         && released.completed_ms >= 0
         && released.completed_ms <= deadline
@@ -62,9 +86,11 @@ pub(crate) fn notes_input(
         && r.generation == released.generation
         && r.transcript.input_checksum == released.source_revision
         && same_baseline(&r.transcript)
+        && let Ok(reasons) = fallback::read(&r)
     {
-        return Ok(Some((chosen, r.transcript)));
+        return Ok(Some((chosen, r.transcript, reasons)));
     }
+    let mut failed_attempt = false;
     let generation = if let Some(p) = &pending {
         #[derive(Deserialize)]
         struct Attempt {
@@ -78,11 +104,9 @@ pub(crate) fn notes_input(
         .ok()
         .and_then(|b| serde_json::from_slice::<Attempt>(&b).ok())
         .is_some_and(|a| a.generation == p.generation && !a.child.success);
+        failed_attempt = failed;
         if !failed && now_ms < deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                store_io::UserMessage("routing_pending".into()),
-            ));
+            return Err(waiting());
         }
         p.generation
     } else {
@@ -90,20 +114,42 @@ pub(crate) fn notes_input(
     };
     revision::begin(&dir, generation)?;
     let mut t = english_fallback(
-        baseline,
+        &baseline,
         &config.pipeline,
         "compatibility".into(),
         "routing failed or deadline expired",
     );
-    reconcile(&mut t, baseline);
-    let data = revision::Revision {
+    reconcile(&mut t, &baseline);
+    let mut reasons = Vec::new();
+    if chosen.is_some() {
+        reasons.push(RoutingFallback::new(Reason::PinnedRevisionUnavailable));
+    }
+    if pending_unusable {
+        reasons.push(RoutingFallback::new(Reason::PendingRecordInvalid));
+    }
+    if latest_unavailable && chosen.is_none() {
+        reasons.push(RoutingFallback::new(Reason::SelectedRevisionUnavailable));
+    }
+    if reasons.is_empty() {
+        reasons.push(RoutingFallback::new(if failed_attempt {
+            Reason::RoutingFailed
+        } else {
+            Reason::DeadlineExpired
+        }));
+    }
+    let mut data = revision::Revision {
         generation: generation.to_string(),
         plan_revision: "compatibility".into(),
-        transcript: t.clone(),
+        transcript: t,
         alternatives: vec![],
         evidence: Default::default(),
-        provenance: serde_json::Value::Null,
+        provenance: if require_hex {
+            serde_json::json!({"unavailable_revision":chosen,"pending_unusable":pending_unusable})
+        } else {
+            serde_json::Value::Null
+        },
     };
+    fallback::attach(&mut data, &reasons)?;
     let id = revision::retain(&dir, &data)?;
-    Ok(Some((id, t)))
+    Ok(Some((id, data.transcript, reasons)))
 }

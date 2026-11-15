@@ -5,11 +5,14 @@ pub mod batches;
 mod cache;
 mod cli;
 mod config;
+pub mod fallback;
 mod hex;
 pub mod hex_bridge;
 pub(crate) mod inputs;
 pub mod jobs;
 pub mod pieces;
+#[cfg(windows)]
+pub mod production;
 pub mod ranges;
 pub mod revision;
 pub mod vad;
