@@ -422,6 +422,10 @@ fn process(
         )?);
     }
     store_io::write(&job_path(root, id), job)?;
+    if !sort_only && let Some(state) = job.translation.as_mut() {
+        translation::invoke(routed.as_ref(), state, run);
+        store_io::write(&job_path(root, id), job)?;
+    }
     let mut transcript = if let Some(selection) = routed {
         selection.render()
     } else if job.request == Some(Request::RedoTasks) {

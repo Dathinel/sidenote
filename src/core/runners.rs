@@ -245,6 +245,12 @@ pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
         if windows_exe(&native) {
             return Ok(native);
         }
+        if runner.program == "opencode2" {
+            let native = dir.join("node_modules/@opencode/cli/bin/opencode.exe");
+            if windows_exe(&native) {
+                return Ok(native);
+            }
+        }
     }
     Err(format!("{} is not available on PATH", runner.program))
 }

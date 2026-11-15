@@ -41,7 +41,26 @@ fn fixture_child() {
     }
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
-    let root = PathBuf::from(mode);
+    let (purpose, path) = mode.split_once('|').unwrap_or(("notes", &mode));
+    let root = PathBuf::from(path);
+    if purpose == "translation" {
+        assert!(
+            std::env::var("OPENCODE_CONFIG_CONTENT")
+                .is_ok_and(|c| { fs::read_to_string("opencode.json").is_ok_and(|f| f == c) })
+        );
+        fs::write(root.join("translation-input"), input).unwrap();
+        if root.join("emit-tool").exists() {
+            println!(
+                "{}",
+                serde_json::json!({"type":"tool_use","part":{"tool":"read","callID":"forbidden"}})
+            );
+        }
+        println!(
+            "{}",
+            serde_json::json!({"type":"text","part":{"text":"valid-looking translation output"}})
+        );
+        std::process::exit(0);
+    }
     let tasks = input.contains("## Known projects");
     fs::write(
         root.join(if tasks { "tasks-input" } else { "notes-input" }),
@@ -120,8 +139,67 @@ impl Drop for Boundary {
 }
 fn boundary(root: &Path) -> Boundary {
     let root = root.to_owned();
-    let _ = crate::core::runner_process::TEST_CHILD
-        .with(|c| c.replace(Some(Box::new(move |_| child(root.to_str().unwrap())))));
+    let factory = move |command: &Command| {
+        let args: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let translating = args.iter().any(|a| a == "--standalone");
+        if translating {
+            let job = queue::read(&root, ID).unwrap().unwrap();
+            let snapshot = job.translation.unwrap().snapshot.unwrap();
+            assert_eq!(
+                job.transcript_revision.as_deref(),
+                Some(snapshot.revision.as_str())
+            );
+            assert_eq!(
+                args.join(" "),
+                format!(
+                    "run --standalone --agent sidenote-translation --model {} --format json",
+                    snapshot.model
+                )
+            );
+            let content = command
+                .get_envs()
+                .find(|(k, _)| *k == "OPENCODE_CONFIG_CONTENT")
+                .unwrap()
+                .1
+                .unwrap();
+            let config: serde_json::Value =
+                serde_json::from_str(content.to_str().unwrap()).unwrap();
+            assert_eq!(
+                fs::read_to_string(command.get_current_dir().unwrap().join("opencode.json"))
+                    .unwrap(),
+                content.to_str().unwrap()
+            );
+            assert_eq!(config["agents"]["sidenote-translation"]["steps"], 1);
+            let deny = serde_json::json!([{"action":"*","resource":"*","effect":"deny"}]);
+            assert_eq!(config["permissions"], deny);
+            assert_eq!(
+                config["agents"]["sidenote-translation"]["permissions"],
+                deny
+            );
+            fs::write(
+                root.join("translation-invocation.json"),
+                serde_json::to_vec(&serde_json::json!({"args":args,"config":config})).unwrap(),
+            )
+            .unwrap();
+        }
+        let mode = format!(
+            "{}|{}",
+            if translating { "translation" } else { "notes" },
+            root.display()
+        );
+        let mut result = child(&mode);
+        result.current_dir(command.get_current_dir().unwrap());
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value {
+                result.env(key, value);
+            }
+        }
+        result
+    };
+    let _ = crate::core::runner_process::TEST_CHILD.with(|c| c.replace(Some(Box::new(factory))));
     Boundary
 }
 fn process(root: &Path, settings: &NotesSettings) {
@@ -261,4 +339,68 @@ fn translation_requires_explicit_activation_and_pins_settings() {
     assert_eq!(revoked.translation.unwrap().reason, "translation_off");
     assert!(!root.0.join("translation-input").exists());
     assert!(matches!(revoked.state, JobState::Done { .. }));
+}
+
+#[test]
+fn translation_uses_shared_text_only_child() {
+    for (helper, reason) in [
+        (Helper::OpenCode, "translation_validation_not_available"),
+        (Helper::OpenCode, "helper_tool_use"),
+        (Helper::Codex, "helper_not_text_only"),
+    ] {
+        let tool = reason == "helper_tool_use";
+        let (root, folder, settings) = fixture();
+        let mut config = crate::core::Config::load_in(&root.0).unwrap();
+        config.engine_settings.steps.translation = true;
+        config.engine_settings.stages.translation_enabled_at_ms = Some(1);
+        config.engine_settings.stages.translation_helper = helper;
+        config.engine_settings.stages.translation_model = "translation-fixture".into();
+        config.engine_settings.translation_prompt =
+            Some("Distinctive translation instructions".into());
+        config.save(&root.0).unwrap();
+        if tool {
+            fs::write(root.0.join("emit-tool"), "").unwrap();
+        }
+        enqueue(&root.0, &settings, None);
+        process(&root.0, &settings);
+        let job = queue::read(&root.0, ID).unwrap().unwrap();
+        assert!(matches!(job.state, JobState::Done { .. }));
+        assert_eq!(job.helper, Some(Helper::Claude));
+        let disposition = job.translation.unwrap();
+        assert_eq!(disposition.reason, reason);
+        let input = fs::read_to_string(root.0.join("notes-input")).unwrap();
+        for lang in ["en", "hi", "te"] {
+            assert!(input.contains(&format!("selected {lang} words")));
+        }
+        assert!(!folder.join("english-transcript.md").exists());
+        if helper == Helper::OpenCode {
+            let sent = fs::read_to_string(root.0.join("translation-input")).unwrap();
+            assert!(sent.contains("Distinctive translation instructions"));
+            assert!(sent.contains("selected hi words") && sent.contains("selected te words"));
+            assert!(!sent.contains("selected en words"));
+            assert!(!helper::authorized(&root.0, Helper::OpenCode).unwrap());
+            if !tool {
+                fs::remove_file(root.0.join("translation-input")).unwrap();
+                for request in [None, Some(Request::SortAgain), Some(Request::RedoTasks)] {
+                    enqueue(&root.0, &settings, request);
+                    process(&root.0, &settings);
+                    assert!(!root.0.join("translation-input").exists());
+                }
+                config.engine_settings.steps.translation = false;
+                config.save(&root.0).unwrap();
+                let _ = fs::remove_file(root.0.join("translation-input"));
+                let _boundary = boundary(&root.0);
+                let mut cli = helper::Cli {
+                    root: Some(root.0.clone()),
+                };
+                assert_eq!(
+                    cli.translate(&disposition.snapshot.unwrap(), "synthetic probe".into()),
+                    Err("translation_consent_changed")
+                );
+                assert!(!root.0.join("translation-input").exists());
+            }
+        } else {
+            assert!(!root.0.join("translation-input").exists());
+        }
+    }
 }

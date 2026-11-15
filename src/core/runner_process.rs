@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+mod translation;
+#[derive(Clone, Copy)]
+pub(super) enum Invocation<'a> {
+    General(&'a Runner),
+    Translation(&'a str),
+}
 #[cfg(test)]
 type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
 #[cfg(test)]
@@ -97,7 +103,9 @@ pub(super) struct RunnerFailure {
 impl From<String> for RunnerFailure {
     fn from(message: String) -> Self {
         Self {
-            category: if message == "The runner exceeded its time limit." {
+            category: if message == "Translation helper used a tool." {
+                "HELPER_TOOL_USE"
+            } else if message == "The runner exceeded its time limit." {
                 "HELPER_TIMEOUT"
             } else {
                 "HELPER_BACKEND"
@@ -378,17 +386,34 @@ pub(super) fn run_runner_with_timeout(
     timeout: Duration,
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
-    run_classified(runner, prompt, working_dir, timeout, progress).map_err(|e| e.message)
+    run_classified(
+        Invocation::General(runner),
+        prompt,
+        working_dir,
+        timeout,
+        progress,
+    )
+    .map_err(|e| e.message)
 }
 
 pub(super) fn run_classified(
-    runner: &Runner,
+    invocation: Invocation<'_>,
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
-    runners::validate(runner)?;
+    let prepared;
+    let (runner, text_only) = match invocation {
+        Invocation::General(r) => {
+            runners::validate(r)?;
+            (r, false)
+        }
+        Invocation::Translation(model) => {
+            prepared = translation::runner(model)?;
+            (&prepared, true)
+        }
+    };
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
         return Err(RunnerFailure {
@@ -438,6 +463,9 @@ pub(super) fn run_classified(
     });
     let mut command = std::process::Command::new(program);
     command.args(&args).current_dir(working_dir);
+    if text_only {
+        translation::configure(&mut command, working_dir)?;
+    }
     #[cfg(test)]
     let mut command = TEST_CHILD
         .with(|c| c.borrow().as_ref().map(|f| f(&command)))
@@ -489,8 +517,11 @@ pub(super) fn run_classified(
     let mut done = false;
     let mut status = None;
     let mut too_large = false;
+    let mut tool_rejected = false;
     loop {
-        let stop = if too_large {
+        let stop = if tool_rejected {
+            Some("Translation helper used a tool.")
+        } else if too_large {
             Some("The runner exceeded its output limit.")
         } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
@@ -512,7 +543,20 @@ pub(super) fn run_classified(
             return Err(message.into());
         }
         match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Stream::Line(line)) => output.line(&line, harness, structured, &progress),
+            Ok(Stream::Line(line)) => {
+                tool_rejected = text_only
+                    && serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .is_some_and(|e| {
+                            e["type"] == "tool_use"
+                                || e.pointer("/part/tool")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some()
+                        });
+                if !tool_rejected {
+                    output.line(&line, harness, structured, &progress);
+                }
+            }
             Ok(Stream::TooLarge) => too_large = true,
             Ok(Stream::Done) | Err(mpsc::RecvTimeoutError::Disconnected) => done = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
