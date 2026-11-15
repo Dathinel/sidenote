@@ -117,6 +117,16 @@ foreach ($e in $entries) {
         $proc = Get-ProcessUnder $full
         if ($proc) { $skip = "running process $($proc.Name) (pid $($proc.ProcessId))" }
     }
+    if (-not $skip) {
+        # A lane branched from the release counts as merged before its first commit, and cargo
+        # runs from the global toolchain, so recent writes are the only sign it is still building.
+        $cutoff = (Get-Date).AddMinutes(-60)
+        $longTarget = Get-LongPath $target
+        $recent = @(Get-Item -LiteralPath $longTarget -Force) + @(Get-ChildItem -LiteralPath $longTarget -Directory -Force -ErrorAction SilentlyContinue) +
+            @(Get-ChildItem -LiteralPath $longTarget -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory -Force -ErrorAction SilentlyContinue }) |
+            Where-Object { $_.LastWriteTime -gt $cutoff } | Select-Object -First 1
+        if ($recent) { $skip = 'target written in the last 60 minutes' }
+    }
 
     if ($skip) { Write-Host ("SKIP   {0}: {1}" -f $name, $skip); continue }
     if ($WhatIf) { Write-Host ("WOULD DELETE {0}\target" -f $name); continue }

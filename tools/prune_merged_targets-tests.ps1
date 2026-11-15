@@ -20,6 +20,17 @@ function Add-Wt([string]$Name, [string]$Branch, [string]$Start) {
     New-Item -ItemType Directory -Force -Path $t | Out-Null
     Set-Content -LiteralPath (Join-Path $t 'a.bin') 'x'
 }
+function Age-Targets([string[]]$Except = @()) {
+    $old = (Get-Date).AddHours(-2)
+    foreach ($d in Get-ChildItem -LiteralPath $wt -Directory) {
+        if ($Except -contains $d.Name) { continue }
+        $t = Join-Path $d.FullName 'target'
+        if (-not (Test-Path -LiteralPath $t)) { continue }
+        foreach ($i in @(Get-Item -LiteralPath $t) + @(Get-ChildItem -LiteralPath $t -Directory) + @(Get-ChildItem -LiteralPath $t -Directory | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory })) {
+            $i.LastWriteTime = $old
+        }
+    }
+}
 function Run-Prune([string[]]$Extra) {
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Repo $repo -Release release/x @Extra
     $out | ForEach-Object { Write-Host "  | $_" }
@@ -49,6 +60,9 @@ try {
     [IO.File]::WriteAllText('\\?\' + (Join-Path $deep 'deep.bin'), 'x')
     Check "setup: deep path is over 260 chars ($($deep.Length))" ($deep.Length -gt 260)
 
+    Age-Targets
+    Add-Wt 'fresh' 'lane/fresh' 'main'   # merged and clean but just built: a lane before its first commit
+
     Write-Host '== -WhatIf'
     $rc = Run-Prune @('-Keep', (Join-Path $wt 'keep'), '-WhatIf')
     Check 'whatif exit 0' ($rc -eq 0)
@@ -62,6 +76,7 @@ try {
     Check 'dirty target kept' (Has 'dirty')
     Check 'unmerged target kept' (Has 'unmerged')
     Check '-Keep target kept' (Has 'keep')
+    Check 'recently written target kept' (Has 'fresh')
     Check 'worktree itself still there' (Test-Path -LiteralPath (Join-Path $wt 'merged\f.txt'))
 
     Write-Host '== release branch checked out, running process, locked file'
@@ -73,6 +88,7 @@ try {
     $p = Start-Process -FilePath $exe -ArgumentList '-n', '60', '127.0.0.1' -PassThru -WindowStyle Hidden
     Add-Wt 'locked' 'lane/locked' 'main'
     $held = [IO.File]::Open((Join-Path $wt 'locked\target\a.bin'), 'Open', 'Read', 'None')
+    Age-Targets -Except @('fresh')
     try {
         $rc = Run-Prune @('-Keep', (Join-Path $wt 'keep'))
         Check 'locked file: exit 1' ($rc -eq 1)
@@ -84,6 +100,7 @@ try {
         Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
         $p.WaitForExit()
     }
+    Age-Targets -Except @('fresh')
     $rc = Run-Prune @('-Keep', (Join-Path $wt 'keep'))
     Check 'after release: exit 0' ($rc -eq 0)
     Check 'locked and running now removed' ((-not (Has 'locked')) -and (-not (Has 'running')))
