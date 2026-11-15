@@ -1,5 +1,6 @@
 use super::*;
 mod failed;
+mod payment;
 mod qualification;
 use crate::core::meeting_router::{
     self as router,
@@ -63,6 +64,26 @@ fn fixture_child() {
                 .is_ok_and(|c| { fs::read_to_string("opencode.json").is_ok_and(|f| f == c) })
         );
         fs::write(root.join("translation-input"), input).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read("opencode.json").unwrap()).unwrap();
+        let binding = &config["sidenote_route"];
+        let expected_model = queue::read(&root, ID)
+            .unwrap()
+            .unwrap()
+            .translation
+            .unwrap()
+            .snapshot
+            .unwrap()
+            .model;
+        assert!(
+            binding["model"] == expected_model
+                && binding["provider"] == "fixture"
+                && binding["id"] == "subscription"
+                && binding["auth_mode"] == "subscription"
+                && binding["payment"] == "subscription"
+                && binding["location"] == "hosted"
+                && binding["automatic_fallback"] == false
+        );
         if root.join("emit-tool").exists() {
             println!(
                 "{}",

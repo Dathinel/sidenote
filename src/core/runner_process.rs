@@ -14,7 +14,12 @@ mod translation;
 #[derive(Clone, Copy)]
 pub(super) enum Invocation<'a> {
     General(&'a Runner),
-    Translation(&'a str, Option<&'a str>),
+    Translation {
+        model: &'a str,
+        capability: Option<&'a str>,
+        location: &'a str,
+        payment: &'a str,
+    },
 }
 #[cfg(test)]
 type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
@@ -409,7 +414,9 @@ pub(super) fn run_classified(
             runners::validate(r)?;
             (r, false)
         }
-        Invocation::Translation(model, capability) => {
+        Invocation::Translation {
+            model, capability, ..
+        } => {
             prepared = translation::runner(model)?;
             if capability.is_none() {
                 prepared.args.push("--sidenote-capability".into());
@@ -434,15 +441,24 @@ pub(super) fn run_classified(
     } else {
         None
     };
-    if let Invocation::Translation(model, Some(capability)) = invocation {
-        translation::qualification::capability(
-            capability,
-            model,
-            qualification
-                .as_ref()
-                .ok_or_else(translation::qualification::refusal)?,
-        )?;
-    }
+    let capability = if let Invocation::Translation {
+        model,
+        capability: Some(capability),
+        location,
+        payment,
+    } = invocation
+    {
+        let approved = qualification
+            .as_ref()
+            .ok_or_else(translation::qualification::refusal)?;
+        let cap = translation::qualification::capability(capability, model, approved)?;
+        if !translation::qualification::payment_allowed(&cap, approved, location, payment) {
+            return Err(translation::qualification::payment_refusal());
+        }
+        Some(cap)
+    } else {
+        None
+    };
     let scratch = if runner.args.iter().any(|a| a.contains("{prompt_file}")) {
         Some(Scratch::new()?)
     } else {
@@ -481,7 +497,12 @@ pub(super) fn run_classified(
     let mut command = std::process::Command::new(program);
     command.args(&args).current_dir(working_dir);
     if text_only {
-        translation::configure(&mut command, working_dir)?;
+        translation::configure(
+            &mut command,
+            working_dir,
+            capability.as_ref().and_then(|c| c.route.as_ref()),
+            runner.model.as_deref().unwrap_or(""),
+        )?;
     }
     #[cfg(test)]
     let mut command = TEST_CHILD

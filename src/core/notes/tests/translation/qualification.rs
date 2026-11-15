@@ -62,12 +62,21 @@ pub(super) fn capability_child(root: &Path, input: &str) -> ! {
     let request: serde_json::Value = serde_json::from_str(input).unwrap();
     let case = fs::read_to_string(root.join("capability-case")).unwrap_or_default();
     let mut cap = serde_json::json!({"version":"native-fixture-v1","model":request["model"],
-        "tools":[],"isolated":true,"retains_content":false});
+        "tools":[],"isolated":true,"retains_content":false,
+        "route":{"provider":"fixture","id":"subscription","auth_mode":"subscription","location":"hosted","payment":"subscription","automatic_fallback":false}});
     match case.as_str() {
         "version" => cap["version"] = "unknown".into(),
         "tools" => cap["tools"] = serde_json::json!(["read"]),
         "isolation" => cap["isolated"] = false.into(),
         "retention" => cap["retains_content"] = true.into(),
+        "metered" => {
+            cap["route"]["id"] = "api".into();
+            cap["route"]["auth_mode"] = "api_key".into();
+            cap["route"]["payment"] = "metered".into();
+        }
+        "unknown" => cap["route"] = serde_json::Value::Null,
+        "automatic_fallback" => cap["route"]["automatic_fallback"] = true.into(),
+        "wrong_auth" => cap["route"]["auth_mode"] = "api_key".into(),
         _ => {}
     }
     println!(

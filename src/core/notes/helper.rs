@@ -175,7 +175,12 @@ impl Run for Cli {
         let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
         let invoke = |capability, input| {
             runner_process::run_classified(
-                runner_process::Invocation::Translation(&snapshot.model, capability),
+                runner_process::Invocation::Translation {
+                    model: &snapshot.model,
+                    capability,
+                    location: &snapshot.location,
+                    payment: &snapshot.payment,
+                },
                 input,
                 &scratch.0,
                 Duration::from_secs(u64::from(snapshot.deadline_seconds)),
@@ -188,6 +193,7 @@ impl Run for Cli {
                 "HELPER_LIMIT" => "helper_limit",
                 "HELPER_UNAVAILABLE_LINUX" => "helper_unavailable_linux",
                 "HELPER_UNQUALIFIED" => "helper_unqualified",
+                "HELPER_PAYMENT" => "translation_payment_route_unavailable",
                 _ => "helper_unsupported",
             })
         };

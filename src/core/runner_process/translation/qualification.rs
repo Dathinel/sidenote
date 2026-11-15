@@ -5,16 +5,20 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
     executable: String,
     model: String,
     version: String,
+    provider: String,
+    auth_route: String,
     invocations: Vec<String>,
 }
 pub(in crate::core::runner_process) struct Qualified {
     pub version: String,
+    pub provider: String,
+    pub auth_route: String,
     _pin: fs::File,
 }
 pub(in crate::core::runner_process) fn refusal() -> RunnerFailure {
@@ -77,39 +81,49 @@ pub(in crate::core::runner_process) fn admit(
         .ok_or_else(refusal)?;
     Ok(Qualified {
         version: record.version,
+        provider: record.provider,
+        auth_route: record.auth_route,
         _pin: pin,
     })
 }
 #[cfg(test)]
 fn fixture_receipts() -> Vec<Receipt> {
-    let fixture = hash(&mut fs::File::open(std::env::current_exe().unwrap()).unwrap()).unwrap();
-    [
-        "translation-fixture",
-        "translation-original",
-        "translation-stale-binary",
-        "translation-stale-invocation",
-    ]
-    .into_iter()
-    .map(|model| {
-        let mut runner = super::runner(model).unwrap();
-        let normal = fingerprint(&runner);
-        runner.args.push("--sidenote-capability".into());
-        Receipt {
-            executable: if model == "translation-stale-binary" {
-                "0".repeat(64)
-            } else {
-                fixture.clone()
-            },
-            model: model.into(),
-            version: "native-fixture-v1".into(),
-            invocations: if model == "translation-stale-invocation" {
-                vec!["0".repeat(64)]
-            } else {
-                vec![normal, fingerprint(&runner)]
-            },
-        }
-    })
-    .collect()
+    static RECORDS: std::sync::OnceLock<Vec<Receipt>> = std::sync::OnceLock::new();
+    RECORDS
+        .get_or_init(|| {
+            let fixture =
+                hash(&mut fs::File::open(std::env::current_exe().unwrap()).unwrap()).unwrap();
+            [
+                "translation-fixture",
+                "translation-original",
+                "translation-stale-binary",
+                "translation-stale-invocation",
+            ]
+            .into_iter()
+            .map(|model| {
+                let mut runner = super::runner(model).unwrap();
+                let normal = fingerprint(&runner);
+                runner.args.push("--sidenote-capability".into());
+                Receipt {
+                    executable: if model == "translation-stale-binary" {
+                        "0".repeat(64)
+                    } else {
+                        fixture.clone()
+                    },
+                    model: model.into(),
+                    version: "native-fixture-v1".into(),
+                    provider: "fixture".into(),
+                    auth_route: "subscription".into(),
+                    invocations: if model == "translation-stale-invocation" {
+                        vec!["0".repeat(64)]
+                    } else {
+                        vec![normal, fingerprint(&runner)]
+                    },
+                }
+            })
+            .collect()
+        })
+        .clone()
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,6 +133,7 @@ pub(in crate::core::runner_process) struct Capability {
     tools: Vec<String>,
     isolated: bool,
     retains_content: bool,
+    pub route: Option<Route>,
 }
 pub(in crate::core::runner_process) fn capability(
     text: &str,
@@ -138,4 +153,38 @@ pub(in crate::core::runner_process) fn capability(
         return Err(refusal());
     }
     Ok(cap)
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::core::runner_process) struct Route {
+    pub provider: String,
+    pub id: String,
+    pub auth_mode: String,
+    pub location: String,
+    pub payment: String,
+    pub automatic_fallback: bool,
+}
+pub(in crate::core::runner_process) fn payment_allowed(
+    cap: &Capability,
+    qualified: &Qualified,
+    location: &str,
+    payment: &str,
+) -> bool {
+    cap.route.as_ref().is_some_and(|route| {
+        route.provider == qualified.provider
+            && route.id == qualified.auth_route
+            && route.auth_mode == "subscription"
+            && route.location == location
+            && route.payment == payment
+            && payment == "subscription"
+            && !route.automatic_fallback
+    })
+}
+pub(in crate::core::runner_process) fn payment_refusal() -> RunnerFailure {
+    RunnerFailure {
+        category: "HELPER_PAYMENT",
+        exit: None,
+        message: "Translation subscription route is unavailable.".into(),
+    }
 }

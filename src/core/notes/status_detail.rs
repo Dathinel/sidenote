@@ -62,6 +62,9 @@ impl StatusDetail {
             Some("translation_consent_changed") => {
                 "Translation permission changed. Notes use the original transcript."
             }
+            Some("translation_payment_route_unavailable") => {
+                "Translation subscription route could not be verified. Notes use the original transcript."
+            }
             Some(_) => "Translation is unavailable. Notes use the original transcript.",
         }
     }
