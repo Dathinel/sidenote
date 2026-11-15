@@ -27,6 +27,12 @@ pub struct AreaUi {
     pub editor: Option<Editor>,
     pub preview: Option<Preview>,
     pub error: Option<String>,
+    error_is_refresh: bool,
+    has_snapshot: bool,
+    #[cfg(test)]
+    test_refresh_error: Option<i32>,
+    #[cfg(test)]
+    test_operation_error: Option<i32>,
     pub pending: Option<&'static str>,
     pub generation: u64,
     pub refresh_generation: u64,
@@ -88,6 +94,7 @@ impl State {
         self.areas.refresh_generation += 1;
         self.areas.refresh_pending = true;
         let generation = self.areas.refresh_generation;
+        let has_snapshot = self.areas.has_snapshot;
         let mutation_generation = core::mutation_generation();
         let (projects, meetings, pipeline, overrides, checked, cutoff, show_cleared) = (
             self.tasks.projects.clone(),
@@ -139,10 +146,14 @@ impl State {
             .editor
             .as_ref()
             .is_some_and(|e| matches!(e.action, Action::Migrate { .. }));
+        #[cfg(test)]
+        let test_error = self.areas.test_refresh_error.take();
         let result = std::thread::Builder::new()
             .name("area-activity".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| -> std::io::Result<Completion> {
+                    #[cfg(test)]
+                    if let Some(code) = test_error { return Err(std::io::Error::from_raw_os_error(code)); }
                     let mut running = running;
                     core::area_ops::proof_boundary(&store.root, "activity-worker")?;
                     running.extend(core::areas::running_meetings(&store.root).unwrap_or_default());
@@ -280,7 +291,11 @@ impl State {
                     })))
                 })
                 .map_err(|_| "Could not refresh Areas. Reload to try again.".into())
-                .and_then(|r| r.map_err(area_error));
+                .and_then(|r| r.map_err(|_| if has_snapshot {
+                    "Could not refresh Areas. Showing the last available data. Try reloading.".into()
+                } else {
+                    "Could not load Areas. Try reloading.".into()
+                }));
                 let _ = events.send(super::Event::Area {
                     generation,
                     refresh: true,
@@ -295,8 +310,11 @@ impl State {
             self.areas.refresh_pending = false;
             self.task_detail_response_time = None;
             super::response_time::failed(std::mem::take(&mut self.tasks_response_time));
-            self.areas.error =
-                Some("Could not start the Areas worker. Reload to try again.".into());
+            if self.areas.error.is_none() || self.areas.error_is_refresh {
+                self.areas.error_is_refresh = true;
+                self.areas.error =
+                    Some("Could not start the Areas worker. Reload to try again.".into());
+            }
         }
     }
     pub fn start_area(&mut self, action: Action) {
@@ -309,6 +327,7 @@ impl State {
         }
         self.areas.editor = Some(Editor::new(action));
         self.areas.preview = None;
+        self.areas.error_is_refresh = false;
         self.areas.error = None;
         if self
             .areas
@@ -337,6 +356,7 @@ impl State {
                 .is_none_or(|e| e.action() != preview.action)
         {
             self.areas.preview = None;
+            self.areas.error_is_refresh = false;
             self.areas.error =
                 Some("The mapping changed. Review it again before confirming.".into());
             return;
@@ -352,6 +372,7 @@ impl State {
         }
         self.areas.editor = None;
         self.areas.preview = None;
+        self.areas.error_is_refresh = false;
         self.areas.error = None;
     }
     pub fn undo_area(&mut self, id: String) {
@@ -365,6 +386,7 @@ impl State {
         if let Some(e) = &mut self.areas.editor {
             e.picker = None;
         }
+        self.areas.error_is_refresh = false;
         self.areas.error = None;
         self.areas.notice = None;
         self.areas.generation += 1;
@@ -374,10 +396,16 @@ impl State {
             self.events_tx.clone(),
             self.waker.clone(),
         );
+        #[cfg(test)]
+        let test_error = self.areas.test_operation_error.take();
         if std::thread::Builder::new()
             .name("area-operation".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(|| -> std::io::Result<Completion> {
+                    #[cfg(test)]
+                    if let Some(code) = test_error {
+                        return Err(std::io::Error::from_raw_os_error(code));
+                    }
                     core::area_ops::proof_boundary(&store.root, "operation-worker")?;
                     match job {
                         Job::Inventory => store.area_references().map(Completion::Inventory),
@@ -405,6 +433,7 @@ impl State {
             .is_err()
         {
             self.areas.pending = None;
+            self.areas.error_is_refresh = false;
             self.areas.error =
                 Some("Could not start the Areas worker. Reload to try again.".into());
         }
@@ -434,6 +463,11 @@ impl State {
                     self.areas.refresh_again = false;
                     self.refresh_areas();
                     return;
+                }
+                self.areas.has_snapshot = true;
+                if self.areas.error_is_refresh {
+                    self.areas.error = None;
+                    self.areas.error_is_refresh = false;
                 }
                 if self.areas.catalog_revision != snapshot.revision {
                     if let Some(e) = &mut self.areas.editor {
@@ -513,6 +547,7 @@ impl State {
                     .as_ref()
                     .is_none_or(|e| e.action() != preview.action)
                 {
+                    self.areas.error_is_refresh = false;
                     self.areas.error =
                         Some("The mapping changed while reviewing. Review it again.".into());
                     return;
@@ -562,7 +597,10 @@ impl State {
                     super::response_time::failed(std::mem::take(&mut self.tasks_response_time));
                 }
                 self.areas.preview = None;
-                self.areas.error = Some(error);
+                if !refresh || self.areas.error.is_none() || self.areas.error_is_refresh {
+                    self.areas.error_is_refresh = refresh;
+                    self.areas.error = Some(error);
+                }
             }
         }
         if refresh && self.areas.refresh_again {
@@ -1105,4 +1143,63 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             col().w_full().items_center().child(doc),
             "area-scroll",
         ))
+}
+
+#[cfg(test)]
+mod refresh_error_tests {
+    use super::*;
+    fn wait(s: &mut State) {
+        while s.areas.refresh_pending || s.areas.pending.is_some() {
+            let event = s
+                .events_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap();
+            s.apply_event(event);
+        }
+    }
+    #[test]
+    fn refresh_failure_and_recovery_preserve_operation_errors() {
+        super::super::hex::SKIP_INSTALL_DETECT.set(true);
+        let mut s = State::new();
+        super::super::hex::SKIP_INSTALL_DETECT.set(false);
+        wait(&mut s);
+        s.config.features.projects = true;
+        s.areas.has_snapshot = false;
+        s.areas.test_refresh_error = Some(32);
+        s.refresh_areas();
+        wait(&mut s);
+        assert_eq!(
+            s.areas.error.as_deref(),
+            Some("Could not load Areas. Try reloading.")
+        );
+        s.refresh_areas();
+        wait(&mut s);
+        assert!(s.areas.error.is_none());
+        s.areas.test_refresh_error = Some(32);
+        s.refresh_areas();
+        wait(&mut s);
+        assert_eq!(
+            s.areas.error.as_deref(),
+            Some("Could not refresh Areas. Showing the last available data. Try reloading.")
+        );
+        s.refresh_areas();
+        wait(&mut s);
+        assert!(s.areas.error.is_none());
+        s.areas.test_operation_error = Some(32);
+        s.launch_area(Job::Inventory, "test");
+        wait(&mut s);
+        assert_eq!(
+            s.areas.error.as_deref(),
+            Some("Could not finish the area change. Your data was kept. Reload and try again.")
+        );
+        s.areas.test_refresh_error = Some(32);
+        s.refresh_areas();
+        wait(&mut s);
+        s.refresh_areas();
+        wait(&mut s);
+        assert_eq!(
+            s.areas.error.as_deref(),
+            Some("Could not finish the area change. Your data was kept. Reload and try again.")
+        );
+    }
 }

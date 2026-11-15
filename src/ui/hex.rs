@@ -162,11 +162,21 @@ pub struct HexState {
     open_groups: HashSet<&'static str>,
 }
 
+#[cfg(test)]
+thread_local! { pub(super) static SKIP_INSTALL_DETECT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
 impl Default for HexState {
     fn default() -> Self {
         Self {
             meetings_setup_checked: false,
+            #[cfg(not(test))]
             installation: sidenote::hex_install::detect(),
+            #[cfg(test)]
+            installation: if SKIP_INSTALL_DETECT.get() {
+                sidenote::hex_install::Installation::Incomplete
+            } else {
+                sidenote::hex_install::detect()
+            },
             install: sidenote::hex_install::State::default(),
             engine: HexEngine::new(),
             visibility: None,
