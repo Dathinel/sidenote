@@ -136,6 +136,26 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
         Ok(None)
     }
 }
+#[cfg(windows)]
+fn no_speech(plan: &Plan, id: &str) -> Value {
+    serde_json::json!({"revision":plan.revision,"range":id,"reason":"no-speech",
+        "source":"captured-hex-baseline"})
+}
+pub(super) fn read_no_speech(root: &Path, plan: &Plan, id: &str) -> Option<Value> {
+    #[cfg(windows)]
+    {
+        let value: Value = serde_json::from_slice(
+            &Snapshot::read_file(&path(root, plan, id, "fallback"), 4096).ok()?,
+        )
+        .ok()?;
+        (value == no_speech(plan, id)).then_some(value)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (root, plan, id);
+        None
+    }
+}
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
     fn limit(&mut self, _remaining: std::time::Duration) {}
@@ -230,7 +250,18 @@ fn run_windows(
             }
             let v = match &mut session {
                 Some(s) => s.recognize(r)?,
-                None => bridge.transcribe(r)?,
+                None => match bridge.transcribe(r) {
+                    Ok(value) => value,
+                    Err(error)
+                        if error.downcast_ref::<super::hex_bridge::HexFailure>()
+                            == Some(&super::hex_bridge::HexFailure::NoSpeech) =>
+                    {
+                        remaining(deadline)?;
+                        store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                },
             };
             remaining(deadline)?;
             if v["text"].as_str().is_none_or(|s| s.trim().is_empty()) {

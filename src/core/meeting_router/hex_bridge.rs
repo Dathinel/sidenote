@@ -14,6 +14,7 @@ pub enum HexFailure {
     Busy,
     Timeout,
     Failed,
+    NoSpeech,
     InvalidRange,
 }
 impl std::fmt::Display for HexFailure {
@@ -56,6 +57,7 @@ pub(super) fn reply_error(output: &str) -> Option<HexFailure> {
     let v: Value = serde_json::from_str(output).ok()?;
     match v["code"].as_str()? {
         "busy" => Some(Busy),
+        "no-speech" => Some(NoSpeech),
         "unsupported" | "unknown-command" | "version-mismatch" => Some(Unsupported),
         _ => Some(Failed),
     }
@@ -189,6 +191,9 @@ impl<C: HexCommand> HexBridge<C> {
                 Duration::from_millis(100).min(self.busy_wait.saturating_sub(started.elapsed())),
             );
         };
+        if out.trim().is_empty() {
+            return Err(NoSpeech);
+        }
         let json = if self.json == Some(true) {
             Some(serde_json::from_str::<Value>(&out).map_err(|_| Failed)?)
         } else {
@@ -225,7 +230,7 @@ impl<C: HexCommand> HexBridge<C> {
             None => out.trim(),
         };
         if text.trim().is_empty() {
-            return Err(Failed);
+            return Err(NoSpeech);
         }
         Ok(HexReading {
             request: request.clone(),

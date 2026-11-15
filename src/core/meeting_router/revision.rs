@@ -153,8 +153,14 @@ pub fn assemble(
     transcript.input_checksum = manifest.source_revision.clone();
     transcript.config_checksum = manifest.config_checksum.clone();
     let mut evidence = BTreeMap::new();
+    let mut no_speech = BTreeMap::new();
     for (id, range) in plan.batches.values().flat_map(|b| b.iter()) {
         let reading = super::batches::read_result(root, plan, id)?;
+        if reading.is_none()
+            && let Some(reason) = super::batches::read_no_speech(root, plan, id)
+        {
+            no_speech.insert(id.clone(), reason);
+        }
         let track = manifest
             .tracks
             .iter()
@@ -227,13 +233,15 @@ pub fn assemble(
             .then(a.track.cmp(&b.track))
             .then(a.sources[0].chunk.id.cmp(&b.sources[0].chunk.id))
     });
+    let mut provenance = serde_json::to_value(manifest)?;
+    provenance["no_speech"] = serde_json::to_value(no_speech)?;
     Ok(Revision {
         generation: generation.to_string(),
         plan_revision: plan.revision.clone(),
         transcript,
         alternatives: candidates,
         evidence,
-        provenance: serde_json::to_value(manifest)?,
+        provenance,
     })
 }
 

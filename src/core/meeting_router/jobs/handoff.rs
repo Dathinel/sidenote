@@ -62,8 +62,8 @@ pub(super) fn assembled(
         generation,
     )?;
     data.transcript.input_checksum = source.into();
-    data.provenance =
-        serde_json::json!({"pieces":output.manifest,"plan":output.plan,"source_revision":source});
+    data.provenance = serde_json::json!({"pieces":output.manifest,"plan":output.plan,"source_revision":source,
+            "no_speech":data.provenance["no_speech"]});
     super::super::fallback::attach(&mut data, &output.fallbacks)?;
     Ok(data)
 }

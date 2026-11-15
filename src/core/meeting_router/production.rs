@@ -13,6 +13,8 @@ mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
 pub use pipeline::run;
+#[cfg(all(test, windows))]
+mod no_speech_tests;
 #[cfg(test)]
 mod public_tests;
 #[cfg(all(test, feature = "asr-runtime"))]
