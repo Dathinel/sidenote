@@ -1,0 +1,15 @@
+Sidenote 0.0.1-dev.31
+
+What the built-in engine still does not do: it writes your notes from Hex's own transcript only. The extra Telugu and Hindi passes and the translation step do not run on it yet. Switch to Scripts in Settings before a meeting in Telugu or Hindi.
+
+New: Settings > Meetings > Engine shows every step of the meeting engine and its settings in one place: the speech model for English, Hindi and Telugu parts, transcription workers and deadlines, the translation, title and task models, the summary agent and model, and the summary and translation instructions. Each row says whether the built-in engine uses it yet. Today only the summary agent and model are used; every other row says "Not used by the built-in engine yet". Your choices are saved on this PC. The summary model card is the same one as in Models and agents.
+
+A wrong value is refused with a reason and nothing is written. A wrong value saved earlier for one language no longer blocks saving a different setting. Text you typed but did not save survives switching tabs, and a "Could not save" message stays until a later save works.
+
+Telugu and Hindi text in prompts and settings now displays as letters on Windows, using the Nirmala UI font that ships with Windows.
+
+Stops doing: nothing.
+
+Groundwork, switched off: more of the step record that lets a restarted meeting continue where it stopped. There is still no Linux download.
+
+Needs on your laptop: nothing
