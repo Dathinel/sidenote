@@ -50,7 +50,6 @@ pub fn run(
             baseline,
             origins: &origins,
         };
-        let batches_started = Instant::now();
         let stages = &config.engine_settings.stages;
         let audio_seconds: f64 = plan
             .batches
@@ -71,14 +70,15 @@ pub fn run(
                     .clamp(30.0, 7200.0),
             );
         clocks.insert("asr_budget_seconds".into(), seconds);
-        batches::run_until(
+        run_batches(
             work,
             &plan,
             &mut Native(config),
             &mut bridge,
             Duration::from_secs_f64(seconds),
+            &mut clocks,
+            started,
         )?;
-        clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
         let assemble_started = Instant::now();
         let mut revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
         let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
@@ -123,6 +123,33 @@ pub fn run(
         );
         Err("Production routing requires asr-runtime".into())
     }
+}
+
+#[cfg(feature = "asr-runtime")]
+fn run_batches(
+    work: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    bridge: &mut impl EnglishBridge,
+    timeout: Duration,
+    clocks: &mut BTreeMap<String, f64>,
+    started: Instant,
+) -> Result<()> {
+    let batches_started = Instant::now();
+    let result = batches::run_until(work, plan, native, bridge, timeout);
+    clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
+    if let Err(error) = result {
+        clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
+        let mut partial = serde_json::to_value(clocks)?;
+        partial["partial"] = true.into();
+        if let Err(clock_error) = store_io::write(&work.join("clocks.json"), &partial) {
+            return Err(
+                format!("{error}; partial clocks could not be written: {clock_error}").into(),
+            );
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "asr-runtime")]
@@ -229,6 +256,44 @@ impl EnglishBridge for Reuse<'_> {
 #[cfg(all(test, feature = "asr-runtime"))]
 mod tests {
     use super::*;
+    #[test]
+    fn production_failed_batch_persists_partial_clocks() {
+        use super::super::no_speech_tests::{Fixture, NativeFake};
+        let mut f = Fixture::new(b"", 7, b"recognizer allocation failed");
+        let mut native = NativeFake::default();
+        let previous = BTreeMap::from([
+            ("pieces".into(), 0.1),
+            ("vad".into(), 0.2),
+            ("detection".into(), 0.3),
+            ("asr_budget_seconds".into(), 120.0),
+        ]);
+        let mut clocks = previous.clone();
+        let error = run_batches(
+            &f.work,
+            &f.plan,
+            &mut native,
+            &mut f.bridge,
+            Duration::from_secs(120),
+            &mut clocks,
+            Instant::now(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exit=7"));
+        assert!(native.0.is_empty());
+        let saved: Value = serde_json::from_slice(
+            &store_io::read_bounded(&f.work.join("clocks.json"), 65536)
+                .expect("failed run must persist partial clocks"),
+        )
+        .unwrap();
+        assert_eq!(saved["partial"], true);
+        for (name, seconds) in previous {
+            assert_eq!(saved[&name], seconds);
+        }
+        assert!(saved["batches"].as_f64().unwrap() >= 0.0);
+        assert!(saved["worker_total"].as_f64().unwrap() >= saved["batches"].as_f64().unwrap());
+        assert!(saved.get("assembly").is_none());
+        assert!(!f.work.join("output.json").exists());
+    }
     #[test]
     fn empty_track_origin_matches_capture_contract_without_inferring_from_length() {
         assert_eq!(origin(&Value::Null).unwrap(), 0);
