@@ -290,9 +290,9 @@ pub(super) fn enqueue_in(
             .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
             || (previous.is_none() && core::recording_source::input_changed(root, id, &revision)));
     let replace_summary = changed
-        || previous.as_ref().is_some_and(|job| {
-            job.replace_summary && !matches!(job.state, JobState::Done { .. })
-        });
+        || previous
+            .as_ref()
+            .is_some_and(|job| job.replace_summary && !matches!(job.state, JobState::Done { .. }));
     if meeting_job::preserve_summary(&folder, sorting || replace_summary) {
         let mut preserved = Job::new(None, settings);
         preserved.input_revision = Some(revision);
@@ -1006,7 +1006,7 @@ pub(super) fn start_worker_in(
     launch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
     store_io::reject_reparse(&jobs(root))?;
-    if !fs::read_dir(jobs(&root)).is_ok_and(|entries| {
+    if !fs::read_dir(jobs(root)).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             let path = e.path();
             if path.extension().is_none_or(|s| s != "json") {

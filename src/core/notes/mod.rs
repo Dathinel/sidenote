@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf, time::Duration};
 pub mod draft;
 mod helper;
+#[cfg(feature = "idle-cpu-proof")]
+pub mod idle_fixture;
 mod prompt;
 pub mod queue;
 mod schema;
 mod status_detail;
 mod transcript;
-#[cfg(feature = "idle-cpu-proof")]
-pub mod idle_fixture;
 pub use status_detail::{StatusDetail, status_record, status_records};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
