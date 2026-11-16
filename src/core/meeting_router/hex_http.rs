@@ -98,13 +98,13 @@ impl Service {
         wav: &Path,
         model: &str,
         timeout: Duration,
-    ) -> Result<String, &'static str> {
+    ) -> Result<String, String> {
         let endpoint = self.endpoint.as_ref().ok_or("service-closed")?;
         let mut url = url::Url::parse(&endpoint.url).map_err(|_| "service-endpoint")?;
         if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
             || !owns_port(endpoint.pid, url.port().unwrap())
         {
-            return Err("service-owner-changed");
+            return Err("service-owner-changed".into());
         }
         url.set_path("/transcriptions");
         url.query_pairs_mut()
@@ -138,14 +138,14 @@ impl Service {
             .read_to_string()
             .map_err(|_| "service-response")?;
         if status != 200 {
-            return Err("service-http-status");
+            return Err(format!("service-http-status-{status}"));
         }
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| "service-json")?;
         let transcript = value["transcript"].as_str().ok_or("service-transcript")?;
         if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
             || !owns_port(endpoint.pid, url.port().unwrap())
         {
-            return Err("service-owner-changed");
+            return Err("service-owner-changed".into());
         }
         // Empty success retains the existing NoSpeech disposition without restarting inference.
         Ok(transcript.to_owned())

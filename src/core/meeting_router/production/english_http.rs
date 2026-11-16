@@ -91,7 +91,7 @@ impl HexCommand for RunHex {
                         Ok(text)
                     };
                 }
-                Err(reason) => self.fallback(reason),
+                Err(reason) => self.fallback(&reason),
             }
         }
         // Retry this failed piece, then keep every later piece on the top-level command.
