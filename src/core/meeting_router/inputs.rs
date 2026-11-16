@@ -183,6 +183,17 @@ pub(crate) struct MeetingScan {
     pub names: Vec<std::ffi::OsString>,
 }
 impl MeetingScan {
+    pub(crate) fn root_matches(&self, path: &Path) -> io::Result<bool> {
+        let current = Directory::open(path)?;
+        #[cfg(windows)]
+        {
+            Ok(directory_id(&current.base)? == directory_id(&self.directory.base)?)
+        }
+        #[cfg(unix)]
+        {
+            Ok(stamp(&current.base, true)? == stamp(&self.directory.base, true)?)
+        }
+    }
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let directory = Directory::open(path)?;
         // Linux enumeration follows the pinned descriptor, not a replaceable root pathname.

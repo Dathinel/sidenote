@@ -854,7 +854,8 @@ pub fn catch_up() -> io::Result<()> {
         let id = entry.file_name().to_string_lossy().into_owned();
         #[cfg(windows)]
         if valid_id(&id)
-            && delivered.contains(&id)
+            && core::recording_source::revision::input(&entry.path())
+                .is_ok_and(|revision| delivered.get(&id) == Some(&revision))
             && ((entry
                 .metadata()
                 .is_ok_and(|meta| meta.is_dir() && !crate::platform::linked(&meta))
