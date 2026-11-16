@@ -16,6 +16,13 @@ use std::{
 
 const JSON_MAX: u64 = 16 * 1024 * 1024;
 const AUDIO_MAX: u64 = 2 * 1024 * 1024 * 1024;
+#[cfg(test)]
+thread_local! {static BODY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };}
+#[cfg(test)]
+pub(crate) fn body_reads() -> usize {
+    BODY_READS.get()
+}
+
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "UNSAFE_MEETING_INPUT")
 }
@@ -347,6 +354,8 @@ impl Snapshot {
         Ok(Some(self.files.len() - 1))
     }
     fn bytes(&mut self, index: usize) -> io::Result<Vec<u8>> {
+        #[cfg(test)]
+        BODY_READS.set(BODY_READS.get() + 1);
         let mut read = crate::core::idle_pass::Span::begin("file_reads");
         let input = &mut self.files[index];
         let mut bytes = Vec::new();

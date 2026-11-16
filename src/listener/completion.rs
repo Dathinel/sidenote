@@ -135,7 +135,8 @@ mod tests {
     fn recordings_started_during_install_are_handed_off_after_restart_without_events() {
         let f = Fixture::new();
         let cursor = f.root.path().join("source.json");
-        let discovery = || core::recording_source::folders::Discovery(f.meetings.clone());
+        let discovery =
+            || core::recording_source::folders::Discovery::configured(f.meetings.clone());
         let mut before_install = Session::open(discovery(), cursor.clone()).unwrap();
         before_install.drain(|_| Ok(())).unwrap();
         drop(before_install);
@@ -260,7 +261,7 @@ mod tests {
         .unwrap();
         let cursor = f.root.path().join("source.json");
         let mut session = Session::open(
-            core::recording_source::folders::Discovery(f.meetings.clone()),
+            core::recording_source::folders::Discovery::configured(f.meetings.clone()),
             cursor.clone(),
         )
         .unwrap();
@@ -288,7 +289,7 @@ mod tests {
         let saved: serde_json::Value = store_io::read(&cursor).unwrap();
         assert_eq!(saved["delivered"], serde_json::json!(["100-2"]));
         Session::open(
-            core::recording_source::folders::Discovery(f.meetings.clone()),
+            core::recording_source::folders::Discovery::configured(f.meetings.clone()),
             cursor,
         )
         .unwrap()

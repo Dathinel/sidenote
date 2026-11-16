@@ -1,5 +1,6 @@
 //! Device-local recording decisions. Hex recordings are always read-only here.
-use super::store_io;
+use super::{recording_source::revision, store_io};
+thread_local! {static UNKNOWN: std::cell::RefCell<std::collections::BTreeMap<PathBuf, (String, String)>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };}
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,11 +39,15 @@ fn state_path(root: &Path, id: &str) -> PathBuf {
         .join(format!("{id}.json"))
 }
 fn classify(folder: &Path) -> Eligibility {
+    classify_input(folder).unwrap_or(Eligibility::Unknown)
+}
+fn classify_input(folder: &Path) -> io::Result<Eligibility> {
     let _stage = super::idle_pass::Span::begin("eligibility");
-    super::meeting_router::inputs::Snapshot::capture(folder)
-        .ok()
-        .and_then(|input| classify_reader(&input.manifest, &mut io::Cursor::new(&input.transcript)))
-        .unwrap_or(Eligibility::Unknown)
+    let input = super::meeting_router::inputs::Snapshot::capture(folder)?;
+    Ok(
+        classify_reader(&input.manifest, &mut io::Cursor::new(&input.transcript))
+            .unwrap_or(Eligibility::Unknown),
+    )
 }
 fn classify_reader(raw: &[u8], reader: &mut impl BufRead) -> Option<Eligibility> {
     let manifest: serde_json::Value =
@@ -100,6 +105,13 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     }
     let revision = super::recording_source::revision::input(&meetings.join(id)).ok();
     let path = state_path(root, id);
+    let unknown_key = revision.clone().zip(revision::file(&path).ok());
+    if unknown_key
+        .as_ref()
+        .is_some_and(|key| UNKNOWN.with(|cache| cache.borrow().get(&path) == Some(key)))
+    {
+        return Ok(Eligibility::Unknown);
+    }
     let state: State = store_io::read(&path)?;
     if super::paths::read_only() && state.input_revision != revision {
         let result = classify(&meetings.join(id));
@@ -116,7 +128,9 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
         state.input_revision = revision.clone();
         store_io::write(&path, &state)?;
     }
-    let result = apply_eligibility(root, id, classify(&meetings.join(id)))?;
+    let classification = classify_input(&meetings.join(id));
+    let cacheable = classification.is_ok();
+    let result = apply_eligibility(root, id, classification.unwrap_or(Eligibility::Unknown))?;
     if result == Eligibility::Short
         && state.input_revision != revision
         && !super::paths::read_only()
@@ -125,6 +139,18 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
         let mut state: State = store_io::read(&path)?;
         state.input_revision = revision;
         store_io::write(&path, &state)?;
+    }
+    if cacheable
+        && result == Eligibility::Unknown
+        && let Some(key) = unknown_key
+    {
+        UNKNOWN.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= super::file_reads::ENTRIES_MAX {
+                cache.clear();
+            }
+            cache.insert(path, key);
+        });
     }
     Ok(result)
 }
@@ -313,6 +339,63 @@ mod tests {
         fs::create_dir_all(root.join("meetings").join(ID)).unwrap();
         root
     }
+    #[test]
+    fn unchanged_unknown_guard_does_not_reread_inputs() {
+        let root = fixture();
+        let meetings = root.join("meetings");
+        let text = "Synthetic ".repeat(25);
+        write(&root, serde_json::Value::Null, &text);
+        assert_eq!(
+            eligibility(&root, &meetings, ID).unwrap(),
+            Eligibility::Unknown
+        );
+        let reads = super::super::meeting_router::inputs::body_reads();
+        assert_eq!(
+            eligibility(&root, &meetings, ID).unwrap(),
+            Eligibility::Unknown
+        );
+        assert_eq!(super::super::meeting_router::inputs::body_reads(), reads);
+        let receipt = state_path(&root, ID);
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, b"invalid synthetic receipt").unwrap();
+        assert!(eligibility(&root, &meetings, ID).is_err());
+        fs::remove_file(receipt).unwrap();
+        write(&root, serde_json::json!(30000), &text);
+        assert_eq!(
+            eligibility(&root, &meetings, ID).unwrap(),
+            Eligibility::Eligible
+        );
+        fs::write(
+            meetings.join(ID).join("transcript.ndjson"),
+            b"invalid synthetic JSON",
+        )
+        .unwrap();
+        assert_eq!(
+            eligibility(&root, &meetings, ID).unwrap(),
+            Eligibility::Unknown
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            write(&root, serde_json::json!(30000), &text);
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(meetings.join(ID).join("transcript.ndjson"))
+                .unwrap();
+            assert_eq!(
+                eligibility(&root, &meetings, ID).unwrap(),
+                Eligibility::Unknown
+            );
+            drop(lock);
+            assert_eq!(
+                eligibility(&root, &meetings, ID).unwrap(),
+                Eligibility::Eligible
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn write(root: &Path, duration: serde_json::Value, text: &str) {
         let folder = root.join("meetings").join(ID);
         fs::write(folder.join("manifest.json"), serde_json::json!({"status":"complete", "duration_ms":duration,"created_at_ms":1793946600000_i64}).to_string()).unwrap();
