@@ -37,8 +37,8 @@ int main(int argc,char **argv){
  received=used-(int)(end-buf)-4;int total=atoi(size+15);
  while(received<total){int n=recv(s,buf,sizeof(buf),0);if(n<=0)break;received+=n;}
  count("http-calls");if(mode()==3||mode()==9){Sleep(30000);return 0;}
- char body[8192];int size=read_reply(mode()==1?"http-error":"http-reply",body,sizeof(body));
- char reply[16384];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",mode()==1?"409 Conflict":"200 OK",size,body);
+ char body[8192];int body_size=read_reply(mode()==1?"http-error":"http-reply",body,sizeof(body));
+ char reply[16384];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",mode()==1?"409 Conflict":"200 OK",body_size,body);
  send(s,reply,n,0);closesocket(s);
  }
  }
