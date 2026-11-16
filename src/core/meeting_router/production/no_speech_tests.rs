@@ -3,11 +3,35 @@ use super::*;
 use crate::core::meeting_router::{pieces, ranges::AsrRange};
 use std::collections::BTreeMap;
 
+pub(super) struct FixtureCommand {
+    speech: HexSpeech,
+    real_controls: bool,
+}
+impl HexCommand for FixtureCommand {
+    fn call(
+        &mut self,
+        args: &[&str],
+        timeout: Duration,
+    ) -> std::result::Result<String, HexFailure> {
+        // Recognition stays in a real child; status tests opt into real control children too.
+        if !self.real_controls && (args == ["status", "--json"] || args.contains(&"--help")) {
+            let captured: Value =
+                serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap();
+            return Ok(if args.contains(&"--help") {
+                captured["help"].as_str().unwrap().to_owned()
+            } else {
+                captured["status_fields"].to_string()
+            });
+        }
+        self.speech.call(args, timeout)
+    }
+}
+
 pub(super) struct Fixture {
     pub root: tempfile::TempDir,
     pub work: PathBuf,
     pub plan: Plan,
-    pub bridge: English,
+    pub bridge: English<FixtureCommand>,
     pub manifest: pieces::PieceManifest,
     pub baseline: Vec<Chunk>,
     _dispatch: std::sync::MutexGuard<'static, ()>,
@@ -84,7 +108,10 @@ impl Fixture {
             root,
             work,
             plan,
-            bridge: English(HexBridge::new(HexSpeech { executable })),
+            bridge: English(HexBridge::new(FixtureCommand {
+                speech: HexSpeech { executable },
+                real_controls: false,
+            })),
             manifest,
             baseline,
             _dispatch: dispatch,
@@ -92,6 +119,14 @@ impl Fixture {
     }
     pub fn run(&mut self, native: &mut impl NativeLoader) -> Result<()> {
         batches::run(&self.work, &self.plan, native, &mut self.bridge)
+    }
+    pub fn real_controls(&mut self) {
+        self.bridge = English(HexBridge::new(FixtureCommand {
+            speech: HexSpeech {
+                executable: self.work.join("fake-hex.exe"),
+            },
+            real_controls: true,
+        }));
     }
 }
 #[derive(Default)]

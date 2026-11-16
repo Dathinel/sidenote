@@ -22,6 +22,7 @@ impl HexCommand for CountedStatus {
 
 fn fixture(sequence: &str) -> Fixture {
     let mut f = Fixture::new(b"public English", 0, b"");
+    f.real_controls();
     let mut ranges: Vec<Range> = std::mem::take(&mut f.plan.batches)
         .into_values()
         .flat_map(|b| b.into_values())
