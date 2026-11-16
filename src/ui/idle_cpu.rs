@@ -1,6 +1,37 @@
 //! No native window or GPU: the production view, poll and background status workers.
 use super::*;
 use rune::{Env, Runtime, text::TextSystem};
+#[cfg(windows)]
+mod measurement;
+
+#[cfg(all(windows, feature = "idle-cpu-proof"))]
+pub(super) fn run_proof() -> bool {
+    if std::env::args().any(|a| a == "--measure") {
+        measurement::idle_cpu_real_thirty_seconds();
+        return true;
+    }
+    let checks: [(&str, fn()); 4] = [
+        ("delayed empty poll", idle_cpu_delayed_empty_poll_sleeps),
+        (
+            "Hex state and meeting progress",
+            idle_cpu_hex_state_changes_reach_the_view,
+        ),
+        ("simulated 30 s idle", idle_cpu_simulated_thirty_seconds),
+        (
+            "unchanged refresh",
+            idle_cpu_unchanged_refresh_does_not_rebuild,
+        ),
+    ];
+    let mut failed = 0;
+    for (name, run) in checks {
+        let passed = std::panic::catch_unwind(run).is_ok();
+        println!("{name}: {}", if passed { "PASS" } else { "FAIL" });
+        failed += usize::from(!passed);
+    }
+    println!("idle CPU proof: {} passed; {failed} failed", 4 - failed);
+    failed == 0
+}
+
 fn runtime() -> Runtime<State> {
     #[cfg(test)]
     crate::test_paths::isolate();
@@ -39,7 +70,7 @@ fn runtime() -> Runtime<State> {
     rt
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn idle_cpu_simulated_thirty_seconds() {
     let mut rt = runtime();
     let engine = sidenote::hex_engine::HexEngine::new();
@@ -70,7 +101,7 @@ fn idle_cpu_simulated_thirty_seconds() {
     assert!(wakeups <= 30, "idle UI keeps waking");
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn idle_cpu_unchanged_refresh_does_not_rebuild() {
     let (mut rt, receive) = refreshed_runtime();
     let before = rt.stats.commits;
@@ -104,7 +135,7 @@ fn refreshed_runtime() -> (Runtime<State>, Receiver<()>) {
     (rt, receive)
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn idle_cpu_delayed_empty_poll_sleeps() {
     use std::sync::{
         Arc,
@@ -139,7 +170,7 @@ fn idle_cpu_delayed_empty_poll_sleeps() {
     );
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn idle_cpu_hex_state_changes_reach_the_view() {
     use std::{
         io::{BufRead, Read, Write},

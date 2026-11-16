@@ -292,7 +292,7 @@ pub(super) struct Handle {
     dirty: Arc<AtomicBool>,
 }
 impl Handle {
-    #[cfg(test)]
+    #[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
     pub(super) fn pause_take(
         &self,
         acquired: mpsc::SyncSender<()>,

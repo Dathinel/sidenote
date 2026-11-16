@@ -19,7 +19,7 @@ mod edit_worker;
 mod finder;
 mod hex;
 mod icons;
-#[cfg(test)]
+#[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
 mod idle_cpu;
 mod list;
 mod live;
@@ -4185,6 +4185,31 @@ pub fn spec() -> AppSpec<State> {
         ],
         ..AppSpec::new("Sidenote", DEFAULT_SIZE, State::new, view)
     }
+}
+
+#[cfg(all(windows, feature = "idle-cpu-proof"))]
+pub fn idle_cpu_proof() -> bool {
+    let parent = std::env::temp_dir().join("idle-cpu-proof");
+    std::fs::create_dir_all(&parent).unwrap();
+    let root = tempfile::tempdir_in(parent).unwrap();
+    let mut args = Vec::new();
+    for (flag, name) in [
+        ("--data-dir", "data"),
+        ("--meetings-dir", "hex/meetings"),
+        ("--peers-dir", "peers"),
+    ] {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        args.extend([std::ffi::OsString::from(flag), path.into_os_string()]);
+    }
+    let appdata = root.path().join("appdata");
+    std::fs::create_dir_all(&appdata).unwrap();
+    // This opt-in entry runs before any application worker or native window starts.
+    unsafe {
+        std::env::set_var("APPDATA", appdata);
+    }
+    core::configure_paths(&args).unwrap();
+    idle_cpu::run_proof()
 }
 
 pub fn run() {
