@@ -41,7 +41,11 @@ fn fixture() -> (
     let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")).unwrap();
     // Hex 1040's actual replies for public windows 22 and 26; schema version 4.
     let replies = gaps::capture(include_bytes!("baseline_no_speech_fixture.ndjson")).unwrap();
-    std::fs::write(root.join("baseline-no-speech.json"), serde_json::to_vec(&replies).unwrap()).unwrap();
+    std::fs::write(
+        root.join("baseline-no-speech.json"),
+        serde_json::to_vec(&replies).unwrap(),
+    )
+    .unwrap();
     (temp, plan, pieces, baseline)
 }
 
@@ -196,31 +200,69 @@ fn saved_public_lid_uncertain_overlap_is_recorded_and_publishes() {
 #[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_full_guard_marks_exact_four_missing_baseline_intervals() {
     let (temp, plan, pieces, baseline) = fixture();
-    let revision = super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
+    let revision =
+        super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)
+            .unwrap();
     let gaps = revision.provenance["marked_gaps"].as_array().unwrap();
-    let actual: Vec<_> = gaps.iter().map(|g| (g["start"].as_f64().unwrap(),g["end"].as_f64().unwrap())).collect();
-    assert_eq!(actual, [(665.964,668.944),(782.752,784.560),(784.560,785.780),(793.040,794.128)]);
+    let actual: Vec<_> = gaps
+        .iter()
+        .map(|g| (g["start"].as_f64().unwrap(), g["end"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (665.964, 668.944),
+            (782.752, 784.560),
+            (784.560, 785.780),
+            (793.040, 794.128)
+        ]
+    );
     for gap in gaps {
         assert_eq!(gap["reasons"][0]["reason"], "guard_rejected");
         assert_eq!(gap["baseline"]["code"], "no-speech");
-        assert!(revision.transcript.segments.iter().any(|s| s.status == "marked-gap"
-            && s.start == gap["start"].as_f64().unwrap() && s.end == gap["end"].as_f64().unwrap()
-            && s.text_original.starts_with("[Speech unavailable:")));
+        assert!(
+            revision
+                .transcript
+                .segments
+                .iter()
+                .any(|s| s.status == "marked-gap"
+                    && s.start == gap["start"].as_f64().unwrap()
+                    && s.end == gap["end"].as_f64().unwrap()
+                    && s.text_original.starts_with("[Speech unavailable:"))
+        );
     }
     let dest = temp.path().join("published");
     begin(&dest, 1).unwrap();
     let chosen = commit(&dest, &revision).unwrap();
     let saved = load(&dest, Some(&chosen)).unwrap().unwrap().1;
-    assert_eq!(saved.provenance["marked_gaps"], revision.provenance["marked_gaps"]);
+    assert_eq!(
+        saved.provenance["marked_gaps"],
+        revision.provenance["marked_gaps"]
+    );
     let mut tampered = revision.clone();
-    tampered.transcript.segments.retain(|s| s.status != "marked-gap");
+    tampered
+        .transcript
+        .segments
+        .retain(|s| s.status != "marked-gap");
     assert!(commit(&dest, &tampered).is_err());
     std::fs::remove_file(temp.path().join("baseline-no-speech.json")).unwrap();
-    assert!(super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1).is_err());
-    std::fs::write(temp.path().join("baseline-no-speech.json"),
-        serde_json::to_vec(&gaps::capture(include_bytes!("baseline_no_speech_fixture.ndjson")).unwrap()).unwrap()).unwrap();
+    assert!(
+        super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)
+            .is_err()
+    );
+    std::fs::write(
+        temp.path().join("baseline-no-speech.json"),
+        serde_json::to_vec(
+            &gaps::capture(include_bytes!("baseline_no_speech_fixture.ndjson")).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     std::fs::write(temp.path().join("uncertainty.json"), b"[]").unwrap();
-    assert!(super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1).is_err());
+    assert!(
+        super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)
+            .is_err()
+    );
 }
 
 #[test]

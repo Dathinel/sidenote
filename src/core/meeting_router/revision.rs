@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, path::Path};
 mod publication;
 pub use publication::{begin, commit, load, retain};
 
-mod reconciliation;
 pub(crate) mod gaps;
+mod reconciliation;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Revision {
