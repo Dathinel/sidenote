@@ -13,10 +13,16 @@ mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
 pub use pipeline::run;
+#[cfg(all(test, windows))]
+mod no_speech_tests;
+#[cfg(all(test, windows))]
+mod probe_tests;
 #[cfg(test)]
 mod public_tests;
 #[cfg(all(test, feature = "asr-runtime"))]
 pub(crate) mod regression;
+#[cfg(all(test, windows))]
+mod round2_tests;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
@@ -52,8 +58,8 @@ impl NativeLoader for Native<'_> {
     }
 }
 
-pub struct English(pub HexBridge<HexSpeech>);
-impl EnglishBridge for English {
+pub struct English<C = HexSpeech>(pub HexBridge<C>);
+impl<C: HexCommand> EnglishBridge for English<C> {
     fn limit(&mut self, remaining: Duration) {
         self.0.limit(remaining);
     }

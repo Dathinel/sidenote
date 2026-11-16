@@ -136,6 +136,26 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
         Ok(None)
     }
 }
+#[cfg(windows)]
+fn no_speech(plan: &Plan, id: &str) -> Value {
+    serde_json::json!({"revision":plan.revision,"range":id,"reason":"no-speech",
+        "source":"captured-hex-baseline"})
+}
+pub(super) fn read_no_speech(root: &Path, plan: &Plan, id: &str) -> Option<Value> {
+    #[cfg(windows)]
+    {
+        let value: Value = serde_json::from_slice(
+            &Snapshot::read_file(&path(root, plan, id, "fallback"), 4096).ok()?,
+        )
+        .ok()?;
+        (value == no_speech(plan, id)).then_some(value)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (root, plan, id);
+        None
+    }
+}
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
     fn limit(&mut self, _remaining: std::time::Duration) {}
@@ -228,14 +248,32 @@ fn run_windows(
                     None => bridge.limit(left),
                 }
             }
-            let v = match &mut session {
-                Some(s) => s.recognize(r)?,
-                None => bridge.transcribe(r)?,
+            let result = match &mut session {
+                Some(s) => s.recognize(r),
+                None => bridge.transcribe(r),
+            }
+            .and_then(|value| {
+                let text = value["text"].as_str().ok_or("Empty result")?;
+                if text.trim().is_empty() {
+                    Err(super::hex_bridge::HexFailure::NoSpeech.into())
+                } else {
+                    Ok(value)
+                }
+            });
+            let v = match result {
+                Ok(value) => value,
+                Err(error)
+                    if error
+                        .downcast_ref::<super::hex_bridge::HexFailure>()
+                        .is_some_and(|e| e.kind() == &super::hex_bridge::HexFailure::NoSpeech) =>
+                {
+                    remaining(deadline)?;
+                    store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             remaining(deadline)?;
-            if v["text"].as_str().is_none_or(|s| s.trim().is_empty()) {
-                return Err("Empty result".into());
-            }
             let bytes = serde_json::to_vec(&v)?;
             store_io::atomic_write(&path(root, plan, id, "result"), &bytes)?;
             store_io::write(
