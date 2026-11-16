@@ -846,6 +846,8 @@ pub fn catch_up() -> io::Result<()> {
     let delivered =
         core::recording_source::delivered(&core::state_dir().join("local/recording-source.json"))
             .unwrap_or_default();
+    #[cfg(windows)]
+    store_io::reject_reparse(&core::meetings_dir())?;
     let mut failure = None;
     for entry in fs::read_dir(core::meetings_dir()).at(Stage::CatchUpMeetings)? {
         let entry = entry.at(Stage::CatchUpMeetings)?;
@@ -853,11 +855,12 @@ pub fn catch_up() -> io::Result<()> {
         #[cfg(windows)]
         if valid_id(&id)
             && delivered.contains(&id)
-            && (core::recording_guard::receipt(&core::state_dir(), &id)
-                == core::recording_guard::Eligibility::Short
-                || (store_io::reject_reparse(&entry.path()).is_ok()
-                    && meeting_job::preserve_summary(&entry.path(), false)
-                    && read(&core::state_dir(), &id).is_ok()))
+            && ((entry
+                .metadata()
+                .is_ok_and(|meta| meta.is_dir() && !crate::platform::linked(&meta))
+                && meeting_job::preserve_summary(&entry.path(), false))
+                || core::recording_guard::receipt(&core::state_dir(), &id)
+                    == core::recording_guard::Eligibility::Short)
         {
             continue;
         }
