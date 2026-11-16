@@ -4,11 +4,11 @@ use super::{
 };
 #[cfg(windows)]
 mod corruption;
+mod idle;
 #[cfg(windows)]
 mod review;
 #[cfg(windows)]
 mod routing;
-mod idle;
 use crate::core::{
     agent_instructions::{self, Agent},
     store_io,
