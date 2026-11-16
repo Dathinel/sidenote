@@ -39,7 +39,6 @@ fn fixture() -> (
     .unwrap();
     let pieces = serde_json::from_slice(&read("pieces.json")).unwrap();
     let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")).unwrap();
-    // Hex 1040's actual replies for public windows 22 and 26; schema version 4.
     let replies = gaps::capture(include_bytes!("baseline_no_speech_fixture.ndjson")).unwrap();
     std::fs::write(
         root.join("baseline-no-speech.json"),

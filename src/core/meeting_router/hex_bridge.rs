@@ -130,7 +130,6 @@ pub(super) fn reply_error(output: &str) -> Option<HexFailure> {
 static SERIAL: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 pub(super) fn test_dispatch_guard() -> std::sync::MutexGuard<'static, ()> {
-    // Production deliberately refuses concurrent dispatch; independent test cases share that lock.
     static TEST: Mutex<()> = Mutex::new(());
     TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -262,7 +261,6 @@ impl<C: HexCommand> HexBridge<C> {
             if started.elapsed() >= self.busy_wait {
                 return Err(Busy);
             }
-            // Only a current successful idle probe authorizes dispatch.
             if self.probe_idle()? {
                 let mut args = vec![
                     "model",

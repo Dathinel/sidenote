@@ -109,7 +109,6 @@ impl HexCommand for RunHex {
         if self.state["service_starts"] == 0 {
             self.state["service_starts"] = 1.into();
             self.save()?;
-            // Bound startup within the existing range deadline.
             let started = Instant::now();
             let service = Service::start(&self.hex, timeout / 4);
             self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();

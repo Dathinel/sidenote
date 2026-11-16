@@ -13,7 +13,6 @@ impl HexCommand for FixtureCommand {
         args: &[&str],
         timeout: Duration,
     ) -> std::result::Result<String, HexFailure> {
-        // Recognition stays in a real child; status tests opt into real control children too.
         if !self.real_controls && (args == ["status", "--json"] || args.contains(&"--help")) {
             let captured: Value =
                 serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap();

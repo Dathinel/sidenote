@@ -1,4 +1,3 @@
-//! Bounded children and one compiled executable per process fixture.
 use super::*;
 use crate::platform::{CommandExt, ProcessJob};
 use std::{

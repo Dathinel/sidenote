@@ -147,7 +147,6 @@ impl Service {
             .header("Authorization", authorization)
             .header("Content-Type", "audio/wav")
             .send(&audio);
-        // Keep observing the owner through body reads as well as model inference.
         let result = (|| {
             let mut response = response.map_err(|_| "service-request")?;
             let status = response.status().as_u16();
@@ -171,7 +170,6 @@ impl Service {
             {
                 return Err("service-owner-changed".into());
             }
-            // Empty success retains the existing NoSpeech disposition without restarting inference.
             Ok(Reply {
                 text: transcript.to_owned(),
                 identity: self.last_reply.clone(),
@@ -216,8 +214,6 @@ impl Service {
         self.job.empty().unwrap_or(false)
     }
 }
-// The private model has no shared admission queue with the owner's app.
-// Unknown status therefore releases the model just like known owner activity.
 struct OwnerWatch {
     stop: mpsc::Sender<()>,
     active: Arc<AtomicBool>,

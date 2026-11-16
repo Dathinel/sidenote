@@ -1,4 +1,3 @@
-//! Missing speech is visible only with recorded router and baseline dispositions.
 use super::super::fallback::{Interval, RoutingFallback};
 use super::*;
 #[cfg(all(windows, feature = "asr-runtime"))]
