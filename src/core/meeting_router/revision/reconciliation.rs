@@ -81,15 +81,17 @@ pub(super) fn from_router_records(
                 .find(|t| t.track == r.track)
                 .ok_or("Missing fallback track")?
                 .origin_sample;
-            coverage.fallback_required.push(RequiredFallback {
-                reason: FallbackKind::HelperFailed,
-                interval: Interval {
-                    track: r.track.clone(),
-                    start: meeting(origin, r.range.context.0)?,
-                    end: meeting(origin, r.range.context.1)?,
-                },
-                record: serde_json::json!({"revision":plan.revision,"range":id,"transport":record}),
-            });
+            for &(_, (start, end)) in &r.range.members {
+                coverage.fallback_required.push(RequiredFallback {
+                    reason: FallbackKind::HelperFailed,
+                    interval: Interval {
+                        track: r.track.clone(),
+                        start: meeting(origin, start)?,
+                        end: meeting(origin, end)?,
+                    },
+                    record: serde_json::json!({"revision":plan.revision,"range":id,"transport":record}),
+                });
+            }
         }
     }
     for recorded in routing {

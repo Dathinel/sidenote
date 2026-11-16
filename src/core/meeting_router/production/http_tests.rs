@@ -354,6 +354,11 @@ fn publish(f: &Fixture, assembled: &revision::Revision) -> revision::Revision {
 
 #[test]
 fn production_http_failure_preserves_baseline_crossing_native_reading() {
+    for padded in [false, true] {
+        crossing_native_reading(padded);
+    }
+}
+fn crossing_native_reading(padded: bool) {
     let mut f = fixture(1);
     let mut ranges = Vec::new();
     for (lang, context) in [("en", (0, 1600)), ("hi", (1600, 4800))] {
@@ -363,8 +368,15 @@ fn production_http_failure_preserves_baseline_crossing_native_reading() {
         .unwrap();
         r.range.context = context;
         r.range.members = vec![(0, context)];
+        if padded && lang == "en" {
+            r.range.context.1 = 4000;
+        }
         r.wav = f.work.join(format!("crossing-{lang}.wav"));
-        asr::write_wav(&r.wav, &vec![0.0; (context.1 - context.0) as usize]).unwrap();
+        asr::write_wav(
+            &r.wav,
+            &vec![0.0; (r.range.context.1 - r.range.context.0) as usize],
+        )
+        .unwrap();
         ranges.push(r);
     }
     f.plan = batches::spool(&f.work, ranges).unwrap();
