@@ -1,6 +1,7 @@
 //! Replay frozen public receipts without opening audio or loading a speech model.
+#[cfg(all(windows, feature = "asr-runtime"))]
 fn main() -> sidenote::core::asr::Result<()> {
-    use sidenote::core::meeting_router::{Chunk, batches::Plan, revision};
+    use sidenote::core::meeting_router::{Chunk, batches::Plan, production, revision};
     use std::{fs, path::PathBuf, time::Instant};
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 2 {
@@ -22,7 +23,7 @@ fn main() -> sidenote::core::asr::Result<()> {
     let pieces = serde_json::from_slice(&read("pieces.json")?)?;
     let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")?)?;
     let started = Instant::now();
-    let data = revision::assemble(temp.path(), &plan, &pieces, &baseline, 1)?;
+    let data = production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)?;
     let assembly_seconds = started.elapsed().as_secs_f64();
     let dest = temp.path().join("published");
     revision::begin(&dest, 1)?;
@@ -48,4 +49,10 @@ fn main() -> sidenote::core::asr::Result<()> {
     )?;
     println!("{summary}");
     Ok(())
+}
+
+#[cfg(not(all(windows, feature = "asr-runtime")))]
+fn main() {
+    eprintln!("assembly_replay requires Windows and asr-runtime");
+    std::process::exit(2);
 }

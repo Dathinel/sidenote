@@ -16,6 +16,8 @@ mod http_tests;
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
+#[cfg(feature = "asr-runtime")]
+pub use pipeline::assemble_saved;
 pub use pipeline::run;
 #[cfg(all(test, windows))]
 mod no_speech_tests;

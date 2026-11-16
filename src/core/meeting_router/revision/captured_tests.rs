@@ -32,7 +32,8 @@ fn fixture() -> (
 fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
     let (temp, plan, pieces, baseline) = fixture();
     let root = temp.path();
-    let revision = assemble(root, &plan, &pieces, &baseline, 1).unwrap();
+    let revision =
+        super::super::production::assemble_saved(root, &plan, &pieces, &baseline, 1).unwrap();
     assert_eq!(revision.evidence.len(), 291);
     assert_eq!(
         revision.provenance["no_speech"].as_object().unwrap().len(),

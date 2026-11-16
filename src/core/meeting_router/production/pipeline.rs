@@ -153,26 +153,10 @@ pub fn run(
                 started,
             )?;
             let assemble_started = Instant::now();
-            let assembled = revision::assemble(work, &plan, &pieces, baseline, generation);
+            let assembled = assemble_saved(work, &plan, &pieces, baseline, generation);
             clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
-            let mut revision = assembled?;
-            revision.provenance["english_transport"] = serde_json::from_slice(
-                &store_io::read_bounded(&work.join("english-transport.json"), 65536)?,
-            )?;
-            let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
-                &inputs::Snapshot::read_file(&work.join("uncertainty.json"), 16 << 20)?,
-            )?;
-            super::super::fallback::attach(&mut revision, &fallbacks)?;
-            let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
-                &work.join("coverage.json"),
-                16 << 20,
-            )?)?;
-            if coverage
-                .iter()
-                .any(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
-            {
-                return Err("Speech lacks routed or explicit baseline coverage".into());
-            }
+            let revision = assembled?;
+            let fallbacks = super::super::fallback::read(&revision)?;
             store_io::write(
                 &work.join("output.json"),
                 &jobs::BatchOutput {
@@ -199,6 +183,42 @@ pub fn run(
         );
         Err("Production routing requires asr-runtime".into())
     }
+}
+
+/// The same assembly and full-speech guard used after live recognition; opens no audio.
+#[cfg(feature = "asr-runtime")]
+pub fn assemble_saved(
+    work: &Path,
+    plan: &Plan,
+    pieces: &pieces::PieceManifest,
+    baseline: &[Chunk],
+    generation: u128,
+) -> Result<revision::Revision> {
+    let mut revision = revision::assemble(work, plan, pieces, baseline, generation)?;
+    revision.provenance["english_transport"] = serde_json::from_slice(&store_io::read_bounded(
+        &work.join("english-transport.json"),
+        65536,
+    )?)?;
+    let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(&inputs::Snapshot::read_file(
+        &work.join("uncertainty.json"),
+        16 << 20,
+    )?)?;
+    super::super::fallback::attach(&mut revision, &fallbacks)?;
+    let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
+        &work.join("coverage.json"),
+        16 << 20,
+    )?)?;
+    if let Some(c) = coverage
+        .iter()
+        .find(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
+    {
+        return Err(format!(
+            "Speech lacks routed or explicit baseline coverage: id={} track={} seconds=[{},{}]",
+            c.id, c.track, c.start, c.end
+        )
+        .into());
+    }
+    Ok(revision)
 }
 
 #[cfg(feature = "asr-runtime")]
