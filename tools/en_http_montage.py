@@ -59,6 +59,10 @@ def preflight():
         source='lengths-paper.json: 20 actual production spans per language; calls*a + audio*b plus measured setup',
         joining_assumption=paper['joining_assumption'],owner_stop_to_notes_target_seconds=[180,240],
         notes='not measured',audio_seconds=1800,profile='release',attempts=1))
+
+def stop_owned(p):
+    for child in psutil.Process(p.pid).children(recursive=True): child.kill()
+    p.kill();p.wait(timeout=5)
 def run(pilot):
     f = read(OUT/'fixture.json');root = Path(f['root']);name = 'pilot' if pilot else 'b'
     assert not (OUT/(name+'-started.json')).exists(), 'one attempt only'
@@ -125,8 +129,7 @@ def run(pilot):
             try: p.wait(timeout=1)
             except subprocess.TimeoutExpired: pass
             if time.perf_counter()-start > 3700:
-                for child in psutil.Process(p.pid).children(recursive=True): child.kill()
-                p.kill();p.wait();break
+                stop_owned(p);break
     transport=state/'local/router-work'/ident/'batches/english-transport.json'
     survivors=[]
     for pid, child in owned.items():
