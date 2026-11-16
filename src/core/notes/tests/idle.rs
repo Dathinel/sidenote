@@ -250,3 +250,28 @@ fn read_bytes() -> u64 {
         0
     }
 }
+
+#[test]
+fn retained_done_status_batch_is_idle_and_observes_requeued_work() {
+    let root = Temp::new();
+    let s = settings_fixture();
+    meeting(&root.0, "Synthetic status fixture");
+    enqueue(&root.0, &s, None);
+    drain(
+        &root.0,
+        &s,
+        &mut Fake::new(vec![Ok(summary()), Ok(sorted())]),
+    );
+    assert!(matches!(
+        status_records(&root.0, [ID])[ID].state,
+        JobState::Done { .. }
+    ));
+    let before = read_bytes();
+    let status = status_records(&root.0, [ID]);
+    let bytes = read_bytes() - before;
+    println!("retained Done status: read_bytes={bytes}");
+    assert!(matches!(status[ID].state, JobState::Done { .. }));
+    assert_eq!(bytes, 0, "unchanged status batch reread the Done job");
+    enqueue(&root.0, &s, Some(Request::SortAgain));
+    assert_eq!(status_records(&root.0, [ID])[ID].state, JobState::Queued);
+}

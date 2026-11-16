@@ -2,9 +2,21 @@
 use std::{fs, io, path::Path};
 
 pub(crate) fn input(folder: &Path) -> io::Result<String> {
+    let root = fs::metadata(folder.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
+    input_with_root(folder, &root)
+}
+
+pub(crate) fn input_with_root(folder: &Path, root: &fs::Metadata) -> io::Result<String> {
+    input_with_metadata(folder, root, &fs::metadata(folder)?)
+}
+
+pub(crate) fn input_with_metadata(
+    folder: &Path,
+    root: &fs::Metadata,
+    directory: &fs::Metadata,
+) -> io::Result<String> {
     let mut hash = blake3::Hasher::new();
-    for directory in [folder.parent().ok_or(io::ErrorKind::InvalidInput)?, folder] {
-        let meta = fs::metadata(directory)?;
+    for meta in [root, directory] {
         if !meta.is_dir() {
             return Err(io::ErrorKind::InvalidInput.into());
         }

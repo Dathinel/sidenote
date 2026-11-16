@@ -939,17 +939,27 @@ pub fn catch_up() -> io::Result<()> {
             .unwrap_or_default();
     #[cfg(windows)]
     store_io::reject_reparse(&core::meetings_dir())?;
+    #[cfg(windows)]
+    let root_meta = fs::metadata(core::meetings_dir())?;
     let mut failure = None;
     for entry in fs::read_dir(core::meetings_dir()).at(Stage::CatchUpMeetings)? {
         let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
         #[cfg(windows)]
+        let directory_meta = entry.metadata().ok();
+        #[cfg(windows)]
         if valid_id(&id)
-            && core::recording_source::revision::input(&entry.path())
+            && directory_meta.as_ref().is_some_and(|meta| {
+                core::recording_source::revision::input_with_metadata(
+                    &entry.path(),
+                    &root_meta,
+                    meta,
+                )
                 .is_ok_and(|revision| delivered.get(&id) == Some(&revision))
-            && ((entry
-                .metadata()
-                .is_ok_and(|meta| meta.is_dir() && !crate::platform::linked(&meta))
+            })
+            && ((directory_meta
+                .as_ref()
+                .is_some_and(|meta| meta.is_dir() && !crate::platform::linked(meta))
                 && meeting_job::preserve_summary(&entry.path(), false))
                 || core::recording_guard::receipt(&core::state_dir(), &id)
                     == core::recording_guard::Eligibility::Short)

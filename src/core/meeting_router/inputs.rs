@@ -181,6 +181,7 @@ struct Input {
 pub(crate) struct MeetingScan {
     directory: Directory,
     pub names: Vec<std::ffi::OsString>,
+    pub metadata: std::collections::BTreeMap<std::ffi::OsString, fs::Metadata>,
 }
 impl MeetingScan {
     pub(crate) fn root_matches(&self, path: &Path) -> io::Result<bool> {
@@ -204,10 +205,21 @@ impl MeetingScan {
         let enumeration = &directory.path;
         #[cfg(all(unix, not(target_os = "linux")))]
         let enumeration = path;
-        let names = fs::read_dir(enumeration)?
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<io::Result<_>>()?;
-        Ok(Self { directory, names })
+        let mut names = Vec::new();
+        let mut metadata = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(enumeration)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if let Ok(meta) = entry.metadata() {
+                metadata.insert(name.clone(), meta);
+            }
+            names.push(name);
+        }
+        Ok(Self {
+            directory,
+            names,
+            metadata,
+        })
     }
     pub(crate) fn capture(&self, id: &str) -> io::Result<Snapshot> {
         let name = std::ffi::OsStr::new(id);
