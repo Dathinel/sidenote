@@ -67,52 +67,19 @@ fn logged(before: &str, expected: usize) {
     );
 }
 #[test]
-fn status_probe_timeout_once_continues_without_repeating_transcribe() {
+fn status_probe_timeout_after_idle_never_authorizes_dispatch() {
     let f = fixture("ITIII");
-    let before = log_before();
     let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
     let mut bridge = English(HexBridge::new(CountedStatus {
-        speech: HexSpeech {
-            executable: f.work.join("fake-hex.exe"),
-        },
+        speech: HexSpeech { executable: f.work.join("fake-hex.exe") },
         attempts: attempts.clone(),
     }));
-    batches::run(&f.work, &f.plan, &mut NativeFake::default(), &mut bridge)
-        .expect("one unknown status after idle must permit the next range");
-    assert_eq!(count(&f, "calls"), 5);
-    // A timed-out child may never reach its own counter write.
-    assert_eq!(attempts.get(), 5);
+    let error = batches::run(&f.work, &f.plan, &mut NativeFake::default(), &mut bridge)
+        .unwrap_err().to_string();
+    assert!(error.contains("status unknown") && error.contains("1 consecutive"), "{error}");
+    assert_eq!(count(&f, "calls"), 1);
+    assert_eq!(attempts.get(), 2);
     assert_eq!(count(&f, "help-calls"), 1);
-    logged(&before, 1);
-    for id in f.plan.batches.values().flat_map(|b| b.keys()) {
-        assert!(
-            batches::read_result(&f.work, &f.plan, id)
-                .unwrap()
-                .is_some()
-        );
-    }
-}
-#[test]
-fn status_probe_three_consecutive_timeouts_fail_with_cause() {
-    let mut f = fixture("ITTTI");
-    let before = log_before();
-    let mut native = NativeFake::default();
-    let error = f.run(&mut native).unwrap_err().to_string();
-    assert!(
-        error.contains("status unknown")
-            && error.contains("3 consecutive")
-            && error.contains("last known idle=true"),
-        "wrong cause: {error}"
-    );
-    assert_eq!(
-        count(&f, "calls"),
-        3,
-        "failed status must not launch the fourth transcribe"
-    );
-    assert_eq!(count(&f, "status-calls"), 4);
-    assert_eq!(count(&f, "help-calls"), 1);
-    assert!(native.0.is_empty());
-    logged(&before, 3);
 }
 #[test]
 fn status_probe_without_known_idle_fails_on_first_timeout() {
@@ -125,14 +92,6 @@ fn status_probe_without_known_idle_fails_on_first_timeout() {
     );
     assert_eq!(count(&f, "calls"), 0);
     logged(&before, 1);
-}
-#[test]
-fn status_probe_success_resets_the_consecutive_timeout_count() {
-    let mut f = fixture("ITTIT");
-    let before = log_before();
-    f.run(&mut NativeFake::default()).unwrap();
-    assert_eq!(count(&f, "calls"), 5);
-    logged(&before, 3);
 }
 #[test]
 fn recognizer_busy_error_is_fatal_and_never_retried() {

@@ -55,7 +55,15 @@ impl HexCommand for RunHex {
             || args.first() != Some(&"model")
             || args.get(1) != Some(&"transcribe")
         {
-            return self.hex.call(args, timeout);
+            let result = self.hex.call(args, timeout);
+            if args.first() == Some(&"status") {
+                let idle = result.as_ref().ok().and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .is_some_and(|v| v["meeting"]["state"] == "idle"
+                        && v["capture"]["state"] == "idle" && v["capture"]["pending_jobs"] == 0
+                        && v["model"]["preparing"].is_null());
+                if !idle { self.stop_service(false); }
+            }
+            return result;
         }
         let deadline = Instant::now() + timeout;
         if self.state["service_starts"] == 0 {
@@ -67,6 +75,11 @@ impl HexCommand for RunHex {
             self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();
             match service {
                 Ok(service) => self.service = Some(service),
+                Err("service-owner-active-or-unknown") => {
+                    self.fallback("service-owner-active-or-unknown");
+                    self.save()?;
+                    return Err(HexFailure::Busy);
+                }
                 Err(reason) => self.fallback(reason),
             }
         }
@@ -80,7 +93,7 @@ impl HexCommand for RunHex {
                 .windows(2)
                 .find(|a| a[0] == "--model")
                 .ok_or(HexFailure::InvalidRange)?[1];
-            match service.call(Path::new(args[2]), model, remaining()? / 2) {
+            match service.call(&self.hex, Path::new(args[2]), model, remaining()? / 2) {
                 Ok(text) => {
                     self.state["http_pieces"] =
                         (self.state["http_pieces"].as_u64().unwrap() + 1).into();
@@ -90,6 +103,11 @@ impl HexCommand for RunHex {
                     } else {
                         Ok(text)
                     };
+                }
+                Err(reason) if reason == "service-owner-active-or-unknown" => {
+                    self.fallback(&reason);
+                    self.save()?;
+                    return Err(HexFailure::Busy);
                 }
                 Err(reason) => self.fallback(&reason),
             }

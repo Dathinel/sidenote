@@ -290,6 +290,8 @@ fn run_windows(
         }
         if let Some(s) = &mut session {
             s.finish()?;
+        } else {
+            bridge.finish()?;
         }
         drop(session);
         store_io::write(

@@ -190,7 +190,7 @@ impl<C: HexCommand> HexBridge<C> {
         }
         Ok(v)
     }
-    fn probe_idle(&mut self) -> Result<bool> {
+    pub(super) fn probe_idle(&mut self) -> Result<bool> {
         match self.status() {
             Ok(status) => {
                 self.status_timeouts = 0;
@@ -206,14 +206,10 @@ impl<C: HexCommand> HexBridge<C> {
                     "Hex status probe timed out; consecutive={}; last_known_idle={}",
                     self.status_timeouts, self.last_idle
                 ));
-                if self.last_idle && self.status_timeouts < 3 {
-                    Ok(true)
-                } else {
-                    Err(StatusUnknown {
-                        timeouts: self.status_timeouts,
-                        last_idle: self.last_idle,
-                    })
-                }
+                Err(StatusUnknown {
+                    timeouts: self.status_timeouts,
+                    last_idle: self.last_idle,
+                })
             }
             Err(error) => Err(error),
         }
@@ -256,7 +252,7 @@ impl<C: HexCommand> HexBridge<C> {
             if started.elapsed() >= self.busy_wait {
                 return Err(Busy);
             }
-            // Capture/preparation may change between ranges; the last idle observation only bounds unknown probes.
+            // Only a current successful idle probe authorizes dispatch.
             if self.probe_idle()? {
                 let mut args = vec![
                     "model",

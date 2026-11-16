@@ -217,3 +217,36 @@ fn production_http_cancel_drop_reaps_service() {
     reaped(&f);
     assert_eq!(receipt(&f)["service_reaped"], true);
 }
+
+#[test]
+fn production_http_owner_activity_cancels_startup_and_inference() {
+    for mode in [10, 11] {
+        let f = fixture(mode);
+        let start = Instant::now();
+        assert!(run(&f, Duration::from_secs(20)).is_err());
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(count(&f, "starts"), 1);
+        assert_eq!(count(&f, "command-calls"), 0);
+        assert_eq!(receipt(&f)["fallback_reason"], "service-owner-active-or-unknown");
+        for id in f.plan.batches["en"].keys() {
+            assert!(batches::read_result(&f.work, &f.plan, id).unwrap().is_none());
+        }
+        reaped(&f);
+    }
+}
+
+#[test]
+fn production_http_releases_model_before_native_load() {
+    struct Check<'a>(&'a Fixture);
+    impl NativeLoader for Check<'_> {
+        fn load(&mut self, language: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+            assert_eq!(receipt(self.0)["service_reaped"], true);
+            reaped(self.0);
+            NativeFake::default().load(language, range)
+        }
+    }
+    let f = fixture(0);
+    let mut bridge = english_http::bridge(HexSpeech { executable: f.work.join("fake-hex.exe") }, &f.work, Duration::from_secs(10));
+    pipeline::run_batches(&f.work, &f.plan, &mut Check(&f), &mut bridge,
+        Duration::from_secs(20), &mut Default::default(), Instant::now()).unwrap();
+}

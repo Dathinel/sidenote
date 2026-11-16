@@ -16,12 +16,14 @@ static DWORD WINAPI lease(void *unused){char b;DWORD n;(void)unused;while(ReadFi
 int main(int argc,char **argv){
  char *slash=strrchr(argv[0],'\\');if(slash){*slash=0;_chdir(argv[0]);}
  if(argc>1&&!strcmp(argv[1],"status")){
+ FILE *active=fopen("owner-active","r");if(active){fclose(active);puts("{\"version\":4,\"model\":{\"preparing\":null},\"capture\":{\"state\":\"recording\",\"pending_jobs\":1},\"meeting\":{\"state\":\"idle\"}}");return 0;}
  emit_reply("status-reply");return 0;}
  for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--help")){emit_reply("help-reply");return 0;}
  if(argc>1&&!strcmp(argv[1],"service")){
  count("starts");FILE *p=fopen("service-pid","w");fprintf(p,"%lu",GetCurrentProcessId());fclose(p);
  if(mode()==2)return 42;
  if(mode()==4){Sleep(30000);return 0;}
+ if(mode()==10){FILE *a=fopen("owner-active","w");fclose(a);Sleep(30000);return 0;}
  WSADATA w;WSAStartup(MAKEWORD(2,2),&w);SOCKET listener=socket(AF_INET,SOCK_STREAM,0);
  struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
  if(bind(listener,(struct sockaddr*)&addr,sizeof(addr))||listen(listener,4))return 91;
@@ -37,6 +39,7 @@ int main(int argc,char **argv){
  received=used-(int)(end-buf)-4;int total=atoi(size+15);
  while(received<total){int n=recv(s,buf,sizeof(buf),0);if(n<=0)break;received+=n;}
  count("http-calls");if(mode()==3||mode()==9){Sleep(30000);return 0;}
+ if(mode()==11){FILE *a=fopen("owner-active","w");fclose(a);Sleep(30000);return 0;}
  char body[8192];int body_size=read_reply(mode()==1?"http-error":"http-reply",body,sizeof(body));
  char reply[16384];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",mode()==1?"409 Conflict":"200 OK",body_size,body);
  send(s,reply,n,0);closesocket(s);

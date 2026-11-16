@@ -7,7 +7,7 @@ use std::{
     os::windows::io::AsRawHandle,
     path::Path,
     process::Command,
-    sync::mpsc,
+    sync::{Arc, mpsc, atomic::{AtomicBool, Ordering}},
     thread,
     time::{Duration, Instant},
 };
@@ -28,12 +28,12 @@ impl Drop for Endpoint {
 }
 pub(super) struct Service {
     process: Option<JobProcess>,
-    job: ProcessJob,
+    job: Arc<ProcessJob>,
     endpoint: Option<Endpoint>,
 }
 impl Service {
     pub(super) fn start(hex: &HexSpeech, timeout: Duration) -> Result<Self, &'static str> {
-        let job = ProcessJob::new().map_err(|_| "service-containment")?;
+        let job = Arc::new(ProcessJob::new().map_err(|_| "service-containment")?);
         let (output, writer) = std::io::pipe().map_err(|_| "service-pipe")?;
         let mut command = Command::new(&hex.executable);
         command
@@ -49,6 +49,7 @@ impl Service {
             job,
             endpoint: None,
         };
+        let watch = OwnerWatch::start(hex, &service.job);
         let (tx, rx) = mpsc::sync_channel(1);
         let reader = thread::spawn(move || {
             let mut line = Zeroizing::new(Vec::new());
@@ -69,6 +70,10 @@ impl Service {
         }
         // Closing the job also closes descendant copies of stdout on a failed handshake.
         let _ = reader.join();
+        if watch.finish() {
+            service.abort();
+            return Err("service-owner-active-or-unknown");
+        }
         let endpoint = endpoint.ok_or("service-handshake")?;
         let url = url::Url::parse(&endpoint.url).map_err(|_| "service-endpoint")?;
         if url.scheme() != "http"
@@ -95,6 +100,7 @@ impl Service {
     }
     pub(super) fn call(
         &mut self,
+        hex: &HexSpeech,
         wav: &Path,
         model: &str,
         timeout: Duration,
@@ -124,12 +130,15 @@ impl Service {
         )))
         .map_err(|_| "service-auth")?;
         authorization.set_sensitive(true);
-        let mut response = agent
+        let watch = OwnerWatch::start(hex, &self.job);
+        let response = agent
             .post(url.as_str())
             .header("Authorization", authorization)
             .header("Content-Type", "audio/wav")
-            .send(&audio)
-            .map_err(|_| "service-request")?;
+            .send(&audio);
+        // Keep observing the owner through body reads as well as model inference.
+        let result = (|| {
+        let mut response = response.map_err(|_| "service-request")?;
         let status = response.status().as_u16();
         let text = response
             .body_mut()
@@ -149,6 +158,12 @@ impl Service {
         }
         // Empty success retains the existing NoSpeech disposition without restarting inference.
         Ok(transcript.to_owned())
+        })();
+        if watch.finish() {
+            self.abort();
+            return Err("service-owner-active-or-unknown".into());
+        }
+        result
     }
     pub(super) fn close(&mut self) -> bool {
         self.stop(Duration::from_secs(3))
@@ -182,6 +197,51 @@ impl Service {
         }
         self.job.empty().unwrap_or(false)
     }
+}
+// The private model has no shared admission queue with the owner's app.
+// Unknown status therefore releases the model just like known owner activity.
+struct OwnerWatch {
+    stop: mpsc::Sender<()>,
+    active: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+impl OwnerWatch {
+    fn start(hex: &HexSpeech, job: &Arc<ProcessJob>) -> Self {
+        let hex = HexSpeech { executable: hex.executable.clone() };
+        let job = Arc::clone(job);
+        let active = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&active);
+        let (stop, rx) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            let mut status = super::hex_bridge::HexBridge::new(hex)
+                .with_timeout(Duration::from_millis(250));
+            loop {
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Err(mpsc::RecvTimeoutError::Timeout) => {},
+                    _ => break,
+                }
+                if status.probe_idle() != Ok(true) {
+                    observed.store(true, Ordering::Release);
+                    let _ = job.terminate();
+                    break;
+                }
+            }
+        });
+        Self { stop, active, thread: Some(thread) }
+    }
+    fn finish(mut self) -> bool {
+        self.join();
+        self.active.load(Ordering::Acquire)
+    }
+    fn join(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+impl Drop for OwnerWatch {
+    fn drop(&mut self) { self.join(); }
 }
 impl Drop for Service {
     fn drop(&mut self) {
