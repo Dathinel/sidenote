@@ -1,7 +1,6 @@
 //! Enter through the production bridge factory and batch executor, with real child HTTP I/O.
 use super::no_speech_tests::{Fixture, NativeFake};
 use super::*;
-use crate::platform::CommandExt;
 fn captured() -> Value {
     serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap()
 }
@@ -16,20 +15,7 @@ fn expected_text(top: bool) -> String {
 
 fn fixture(mode: u8) -> Fixture {
     let f = Fixture::new(b"public", 0, b"");
-    let source = f.work.join("http.c");
-    fs::write(&source, include_str!("http_fake.c")).unwrap();
-    assert!(
-        Command::new("gcc.exe")
-            .creation_flags(0x08000000)
-            .args(["-Os", "-static", "-s"])
-            .arg(source)
-            .arg("-o")
-            .arg(f.work.join("fake-hex.exe"))
-            .arg("-lws2_32")
-            .status()
-            .unwrap()
-            .success()
-    );
+    fs::copy(super::fixture_tools::executable(true), f.work.join("fake-hex.exe")).unwrap();
     fs::write(f.work.join("mode"), mode.to_string()).unwrap();
     let c = captured();
     let mut body = c["transcription"].clone();

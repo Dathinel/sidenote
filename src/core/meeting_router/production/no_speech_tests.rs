@@ -1,7 +1,6 @@
 //! Synthetic process replies through the production English adapter and batch entry.
 use super::*;
 use crate::core::meeting_router::{pieces, ranges::AsrRange};
-use crate::platform::CommandExt;
 use std::collections::BTreeMap;
 
 pub(super) struct Fixture {
@@ -19,28 +18,14 @@ impl Fixture {
         std::fs::create_dir_all(&work).unwrap();
         let dir = &work;
         let executable = dir.join("fake-hex.exe");
-        let source = dir.join("fake.c");
-        std::fs::write(&source, include_str!("fake_hex.c")).unwrap();
-        assert!(
-            Command::new("gcc.exe")
-                .creation_flags(0x08000000)
-                .args(["-Os", "-static", "-s"])
-                .arg(&source)
-                .arg("-o")
-                .arg(&executable)
-                .status()
-                .unwrap()
-                .success()
-        );
+        fs::copy(super::fixture_tools::executable(false), &executable).unwrap();
         for (name, bytes) in [("reply", reply), ("stderr", stderr)] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         std::fs::write(dir.join("exit"), exit.to_string()).unwrap();
-        let probe = Command::new(&executable)
-            .creation_flags(0x08000000)
-            .arg("probe")
-            .output()
-            .unwrap();
+        let mut command = Command::new(&executable);
+        command.arg("probe");
+        let probe = super::fixture_tools::output(command, Duration::from_secs(5)).unwrap();
         assert_eq!(probe.status.code(), Some(exit));
         assert_eq!(
             probe.stdout, reply,

@@ -22,6 +22,8 @@ pub use pipeline::run;
 #[cfg(all(test, windows))]
 mod no_speech_tests;
 #[cfg(all(test, windows))]
+mod fixture_tools;
+#[cfg(all(test, windows))]
 mod probe_tests;
 #[cfg(test)]
 mod public_tests;
