@@ -126,8 +126,9 @@ def score():
     spec=importlib.util.spec_from_file_location('frozen_score',path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.ROOT=OUT;module.main()
 if __name__ == '__main__':
+    mode=argparse.ArgumentParser();mode.add_argument('mode',choices=['prepare','preflight','pilot','run','score'])
+    mode.add_argument('--out',type=Path,default=OUT);args=mode.parse_args();OUT=args.out
     OUT.mkdir(parents=True,exist_ok=True)
-    mode=argparse.ArgumentParser();mode.add_argument('mode',choices=['prepare','preflight','pilot','run','score']);args=mode.parse_args()
     if args.mode=='prepare': prepare()
     elif args.mode=='preflight': preflight()
     elif args.mode=='score': score()
