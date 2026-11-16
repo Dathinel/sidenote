@@ -113,12 +113,12 @@ fn plain(e: &HexError) -> &'static str {
             Some("not-ready") => "Hex is not ready yet.",
             Some("busy") => "Hex is busy.",
             Some("recording-changed") => {
-                "Hex's active recording has changed or ended. Stop was not sent. Check Hex before trying again."
+                "Hex's active recording has changed or ended. Stop was not sent. Stop it from Hex."
             }
             Some("stop-unconfirmed") => {
-                "Could not confirm this recording. Stop was not confirmed. Check Hex before trying again."
+                "Could not confirm this recording. Stop was not confirmed. Stop it from Hex."
             }
-            Some("not-recording") => "No meeting is recording.",
+            Some("not-recording") => "Hex says no meeting is recording.",
             _ => "Hex could not do that.",
         },
     }
@@ -741,7 +741,22 @@ impl State {
                         self.hex_spawn(|e| Msg::Status(e.status()));
                     }
                     Err(e) => {
-                        self.hex.error = Some(plain(&e));
+                        self.hex.error = Some(match (&action, &e) {
+                            (
+                                Action::Stop(_),
+                                HexError::Failed {
+                                    code: Some(code), ..
+                                },
+                            ) if matches!(
+                                code.as_str(),
+                                "recording-changed" | "stop-unconfirmed" | "not-recording"
+                            ) =>
+                            {
+                                plain(&e)
+                            }
+                            (Action::Stop(_), _) => "Could not stop recording. Stop it from Hex.",
+                            _ => plain(&e),
+                        });
                         if let Action::Stop(recording) = action
                             && let Some(live) = &mut self.live
                         {
@@ -878,8 +893,9 @@ impl State {
 
     pub fn hex_record_stop(&mut self, displayed_id: Option<String>) {
         if displayed_id != self.hex.recording().and_then(|r| r.id.clone()) {
-            self.hex.error =
-                Some("The recording changed before Stop was pressed. Stop was not sent.");
+            self.hex.error = Some(
+                "The recording changed before Stop was pressed. Stop was not sent. Stop it from Hex.",
+            );
             return;
         }
         let pressed = Instant::now();
@@ -896,6 +912,7 @@ impl State {
             {
                 self.leave_live();
             }
+            self.hex.error = stop_blocked(self);
             return;
         }
         if let Some(reason) = stop_blocked(self) {
@@ -1205,23 +1222,17 @@ pub fn stop_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
     if !h.running() && h.recording().is_none() {
         Some(if h.connection.slow(&h.status) {
-            connection::SLOW
+            "Hex is slow to answer. Stop it from Hex."
         } else {
-            "Hex is not running"
+            "Hex is not running. Stop it from Hex if it is recording."
         })
     } else if h.recording().is_none() {
-        Some("No meeting is recording")
-    } else if h
-        .recording()
-        .and_then(|r| r.id.as_deref())
-        .is_none_or(str::is_empty)
-    {
-        Some("Hex has not identified this recording. Check Hex before stopping.")
+        Some("Hex says no meeting is recording.")
     } else if h.record_busy {
-        Some("Working")
+        Some("Stop is already in progress. Stop it from Hex if needed.")
     } else if h.caps.as_ref().and_then(|c| c.get(&Feature::RecordStop)) != Some(&Support::Supported)
     {
-        Some("This Hex build cannot stop")
+        Some("This Hex build cannot stop. Stop it from Hex.")
     } else {
         None
     }

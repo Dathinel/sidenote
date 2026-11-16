@@ -758,9 +758,6 @@ impl HexEngine {
             code: Some(code.into()),
             stderr_summary: "Stop refused; values suppressed",
         };
-        if expected_id.is_empty() {
-            return Err(refused("stop-unconfirmed"));
-        }
         if cached.get(&Feature::RecordStop) != Some(&Support::Supported) {
             return Err(HexError::Unsupported);
         }
@@ -778,10 +775,14 @@ impl HexEngine {
         if current["status"] != "status" {
             return Err(refused("stop-unconfirmed"));
         }
+        if current["meeting"]["state"] == "idle" {
+            return Err(refused("not-recording"));
+        }
         if !matches!(
             current["meeting"]["state"].as_str(),
             Some("recording" | "starting")
-        ) || current["meeting"]["id"].as_str() != Some(expected_id)
+        ) || (!current["meeting"]["id"].is_null()
+            && current["meeting"]["id"].as_str() != Some(expected_id))
         {
             return Err(refused("recording-changed"));
         }
@@ -790,8 +791,11 @@ impl HexEngine {
         }
         // Hex has no atomic ID-scoped stop. This is the caller-requested status-check fallback.
         let reply = request("meeting-stop")?;
-        if reply["status"] != "done" || reply["changed"] == false {
+        if reply["status"] != "done" {
             return Err(refused("stop-unconfirmed"));
+        }
+        if reply["changed"] == false {
+            return Err(refused("not-recording"));
         }
         Ok(())
     }

@@ -232,6 +232,88 @@ fn failed_start_preserves_pending_notes_before_removal() {
     start_removal_cases(true);
 }
 
+fn no_id_stop(phase: &'static str) {
+    let (api, mut state, _) = Fixture::start();
+    {
+        let mut data = api.data.lock().unwrap();
+        data.omit_id = true;
+        data.meeting_state = Some(phase);
+    }
+    let status = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(status)));
+    assert_eq!(recording_id(&state), None);
+    {
+        let mut data = api.data.lock().unwrap();
+        data.commands.clear();
+        data.delay = Duration::from_millis(1000);
+    }
+    Fixture::stop(&mut state);
+    let data = api.data.lock().unwrap();
+    assert_eq!(data.stops, 1, "no-ID {phase} must send exactly one Stop");
+    assert!(
+        data.commands
+            .starts_with(&["status".into(), "meeting-stop".into()])
+    );
+    assert_eq!(data.id, None);
+    assert!(state.hex.error.is_none());
+}
+
+#[test]
+fn no_id_hex_stops_after_confirming_recording_through_ui_and_engine() {
+    if isolated_api_test("no_id_hex_stops_after_confirming_recording_through_ui_and_engine") {
+        return;
+    }
+    no_id_stop("recording");
+}
+
+#[test]
+fn no_id_hex_stops_after_confirming_starting_through_ui_and_engine() {
+    if isolated_api_test("no_id_hex_stops_after_confirming_starting_through_ui_and_engine") {
+        return;
+    }
+    no_id_stop("starting");
+}
+
+#[test]
+fn no_id_hex_idle_or_transcribing_does_not_stop_through_ui_and_engine() {
+    if isolated_api_test("no_id_hex_idle_or_transcribing_does_not_stop_through_ui_and_engine") {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start();
+    api.data.lock().unwrap().omit_id = true;
+    let status = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(status)));
+    for phase in ["idle", "transcribing"] {
+        api.data.lock().unwrap().meeting_state = Some(phase);
+        Fixture::stop(&mut state);
+        assert_eq!(api.data.lock().unwrap().stops, 0);
+        let message = state.hex.error.unwrap();
+        if phase == "idle" {
+            assert_eq!(message, "Hex says no meeting is recording.");
+        } else {
+            assert!(message.contains("Stop it from Hex"));
+        }
+    }
+    api.data.lock().unwrap().meeting_state = Some("idle");
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(idle)));
+    Fixture::stop(&mut state);
+    assert_eq!(api.data.lock().unwrap().stops, 0);
+    assert_eq!(state.hex.error, Some("Hex says no meeting is recording."));
+}
+
+#[test]
+fn unchanged_stop_reply_shows_hex_idle_message_through_ui_and_engine() {
+    if isolated_api_test("unchanged_stop_reply_shows_hex_idle_message_through_ui_and_engine") {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start();
+    api.data.lock().unwrap().stop_changed = false;
+    Fixture::stop(&mut state);
+    assert_eq!(api.data.lock().unwrap().stops, 1);
+    assert_eq!(state.hex.error, Some("Hex says no meeting is recording."));
+}
+
 #[test]
 fn stale_stop_refuses_replacement_recording_through_ui_and_engine() {
     if isolated_api_test("stale_stop_refuses_replacement_recording_through_ui_and_engine") {
@@ -247,6 +329,7 @@ fn stale_stop_refuses_replacement_recording_through_ui_and_engine() {
     assert_eq!(stops, 0, "must not send generic Stop for replacement B");
     assert_eq!(id, Some("200-2"), "B must keep recording");
     assert!(state.hex.error.unwrap().contains("changed or ended"));
+    assert!(state.hex.error.unwrap().contains("Stop it from Hex"));
 }
 
 #[test]
@@ -284,6 +367,7 @@ fn stop_keeps_the_identity_captured_by_the_rendered_button() {
     assert_eq!(stops, 0);
     assert_eq!(id, Some("200-2"));
     assert!(state.hex.error.unwrap().contains("changed before Stop"));
+    assert!(state.hex.error.unwrap().contains("Stop it from Hex"));
 }
 
 #[test]
