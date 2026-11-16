@@ -71,7 +71,7 @@ fn saved_public_assembly_failure_retains_phase_clocks() {
     .unwrap_err()
     .to_string();
     assert!(
-        error.contains("Owned interval lacks routed or baseline coverage"),
+        error.contains("Speech lacks routed or explicit baseline coverage or marked gap"),
         "{error}"
     );
     let clocks: Value = serde_json::from_slice(&read("clocks.json")).unwrap();
@@ -101,6 +101,8 @@ pub fn run(
             let normalized = work.join("normalized");
             fs::create_dir_all(&normalized)?;
             let input = inputs::Snapshot::capture(folder)?;
+            store_io::write(&work.join("baseline-no-speech.json"),
+                &revision::gaps::capture(&input.transcript)?)?;
             store_io::atomic_write(&normalized.join("manifest.json"), &input.manifest)?;
             store_io::atomic_write(&normalized.join("transcript.ndjson"), &input.transcript)?;
             let manifest: Value = serde_json::from_slice(&input.manifest)?;
@@ -196,6 +198,9 @@ pub fn assemble_saved(
     generation: u128,
 ) -> Result<revision::Revision> {
     let mut revision = revision::assemble(work, plan, pieces, baseline, generation)?;
+    if revision.provenance.get("speech_coverage").is_none() {
+        return Err("Missing speech coverage record".into());
+    }
     revision.provenance["english_transport"] = serde_json::from_slice(&store_io::read_bounded(
         &work.join("english-transport.json"),
         16 << 20,
@@ -205,25 +210,6 @@ pub fn assemble_saved(
         16 << 20,
     )?)?;
     super::super::fallback::attach(&mut revision, &fallbacks)?;
-    let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
-        &work.join("coverage.json"),
-        16 << 20,
-    )?)?;
-    let missing: Vec<_> = coverage
-        .iter()
-        .filter(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
-        .collect();
-    if let Some(c) = missing.first() {
-        let intervals: Vec<_> = missing
-            .iter()
-            .map(|c| serde_json::json!({"id":c.id,"track":c.track,"start":c.start,"end":c.end}))
-            .collect();
-        return Err(format!(
-            "Speech lacks routed or explicit baseline coverage: id={} track={} seconds=[{},{}]; uncovered={}",
-            c.id, c.track, c.start, c.end, serde_json::to_string(&intervals)?
-        )
-        .into());
-    }
     Ok(revision)
 }
 

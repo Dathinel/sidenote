@@ -252,7 +252,9 @@ fn production_http_mixed_transport_survives_parent_commit_and_load() {
     let f = fixture(12);
     run(&f, Duration::from_secs(20)).unwrap();
     store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
-    store_io::write(&f.work.join("coverage.json"), &f.baseline).unwrap();
+    let mut coverage = f.baseline.clone();
+    for c in &mut coverage { c.english.clear(); }
+    store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
     let assembled = pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
     let output = jobs::BatchOutput {
         generation: "1".into(), source_revision: "public".into(),

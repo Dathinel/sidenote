@@ -12,6 +12,7 @@ mod publication;
 pub use publication::{begin, commit, load, retain};
 
 mod reconciliation;
+pub(crate) mod gaps;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Revision {
@@ -202,28 +203,6 @@ pub fn assemble(
         };
     let mut coverage = reconciliation::from_router_records(plan, manifest, &no_speech, &routing)?;
     reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
-    for range in plan.batches.values().flat_map(|b| b.values()) {
-        let track = manifest
-            .tracks
-            .iter()
-            .find(|t| t.track == range.track)
-            .ok_or("Missing track origin")?;
-        for &(_, (start, end)) in &range.range.members {
-            let owned = Chunk {
-                id: String::new(),
-                start: meeting(track.origin_sample, start)?,
-                end: meeting(track.origin_sample, end)?,
-                track: range.track.clone(),
-                speaker: None,
-                turn: None,
-                english: String::new(),
-                audio_start: None,
-            };
-            if !super::baseline::source_covered(&owned, &transcript.segments) {
-                return Err(format!("Owned interval lacks routed or baseline coverage: track={} language={:?} samples=[{start},{end}] seconds=[{},{}]", range.track, range.range.language, owned.start, owned.end).into());
-            }
-        }
-    }
     transcript.segments.sort_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -243,6 +222,29 @@ pub fn assemble(
         provenance,
     };
     super::fallback::attach(&mut revision, &routing)?;
+    gaps::from_files(root, &mut revision)?;
+    for range in plan.batches.values().flat_map(|b| b.values()) {
+        let track = manifest
+            .tracks
+            .iter()
+            .find(|t| t.track == range.track)
+            .ok_or("Missing track origin")?;
+        for &(_, (start, end)) in &range.range.members {
+            let owned = Chunk {
+                id: String::new(),
+                start: meeting(track.origin_sample, start)?,
+                end: meeting(track.origin_sample, end)?,
+                track: range.track.clone(),
+                speaker: None,
+                turn: None,
+                english: String::new(),
+                audio_start: None,
+            };
+            if !super::baseline::source_covered(&owned, &revision.transcript.segments) {
+                return Err(format!("Owned interval lacks routed or baseline coverage: track={} language={:?} samples=[{start},{end}] seconds=[{},{}]", range.track, range.range.language, owned.start, owned.end).into());
+            }
+        }
+    }
     Ok(revision)
 }
 

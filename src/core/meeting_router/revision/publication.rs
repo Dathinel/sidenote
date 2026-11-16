@@ -100,6 +100,8 @@ fn validate(data: &Revision) -> io::Result<()> {
         if serde_json::to_value(coverage)? != recorded {
             return Err(store_io::invalid("Invalid overlap receipt"));
         }
+        super::gaps::validate(data, &mut expected)
+            .map_err(|_| store_io::invalid("Invalid marked gap evidence"))?;
         check = expected.transcript;
     } else {
         reconcile(&mut check, &t.baseline);
