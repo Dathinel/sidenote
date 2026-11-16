@@ -11,6 +11,8 @@ use std::{
 };
 #[cfg(feature = "asr-runtime")]
 mod english_http;
+#[cfg(all(test, feature = "asr-runtime"))]
+mod http_tests;
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;

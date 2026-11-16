@@ -1,0 +1,163 @@
+//! Enter through the production bridge factory and batch executor, with real child HTTP I/O.
+use super::no_speech_tests::{Fixture, NativeFake};
+use super::*;
+use crate::platform::CommandExt;
+
+fn fixture(mode: u8) -> Fixture {
+    let f = Fixture::new(b"public", 0, b"");
+    let source = f.work.join("http.c");
+    fs::write(&source, include_str!("http_fake.c")).unwrap();
+    assert!(
+        Command::new("gcc.exe")
+            .creation_flags(0x08000000)
+            .args(["-Os", "-static", "-s"])
+            .arg(source)
+            .arg("-o")
+            .arg(f.work.join("fake-hex.exe"))
+            .arg("-lws2_32")
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(f.work.join("mode"), mode.to_string()).unwrap();
+    f
+}
+fn run(f: &Fixture, timeout: Duration) -> Result<()> {
+    let mut bridge = english_http::bridge(
+        HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        },
+        &f.work,
+        Duration::from_secs(10),
+    );
+    let result = pipeline::run_batches(
+        &f.work,
+        &f.plan,
+        &mut NativeFake::default(),
+        &mut bridge,
+        timeout,
+        &mut Default::default(),
+        Instant::now(),
+    );
+    drop(bridge);
+    result
+}
+fn count(f: &Fixture, name: &str) -> u32 {
+    fs::read_to_string(f.work.join(name))
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or(0)
+}
+fn receipt(f: &Fixture) -> Value {
+    serde_json::from_slice(&fs::read(f.work.join("english-transport.json")).unwrap()).unwrap()
+}
+fn reaped(f: &Fixture) {
+    use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
+    let pid: u32 = fs::read_to_string(f.work.join("service-pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if !handle.is_null() {
+            let mut code = 0;
+            assert_ne!(GetExitCodeProcess(handle, &mut code), 0);
+            CloseHandle(handle);
+            assert_ne!(code, 259, "owned service must have exited");
+        } else {
+            assert_eq!(windows_sys::Win32::Foundation::GetLastError(), 87);
+        }
+    }
+}
+#[test]
+fn production_http_reuses_service_across_english_pieces() {
+    let f = fixture(0);
+    run(&f, Duration::from_secs(20)).unwrap();
+    assert_eq!(count(&f, "starts"), 1);
+    assert_eq!(count(&f, "http-calls"), 2);
+    assert_eq!(count(&f, "command-calls"), 0);
+    let r = receipt(&f);
+    assert_eq!(r["http_pieces"], 2);
+    assert_eq!(r["service_reaped"], true);
+    assert!(r["fallback_reason"].is_null());
+    for id in f.plan.batches["en"].keys() {
+        assert_eq!(
+            batches::read_result(&f.work, &f.plan, id).unwrap().unwrap()["text"],
+            "public HTTP"
+        );
+    }
+    reaped(&f);
+}
+#[test]
+fn production_http_failure_falls_back_for_failed_and_remaining_pieces() {
+    for mode in [1, 2, 5] {
+        let f = fixture(mode);
+        run(&f, Duration::from_secs(20)).unwrap();
+        assert_eq!(count(&f, "starts"), 1);
+        assert_eq!(count(&f, "http-calls"), if mode == 1 { 1 } else { 0 });
+        assert_eq!(count(&f, "command-calls"), 2);
+        let r = receipt(&f);
+        assert!(r["fallback_reason"].is_string());
+        assert_eq!(r["command_pieces"], 2);
+        for id in f.plan.batches["en"].keys() {
+            assert_eq!(
+                batches::read_result(&f.work, &f.plan, id).unwrap().unwrap()["text"],
+                "public fallback"
+            );
+        }
+        reaped(&f);
+    }
+}
+#[test]
+fn production_http_timeout_reaps_request_and_handshake_children() {
+    for mode in [3, 4] {
+        let f = fixture(mode);
+        let start = Instant::now();
+        assert!(run(&f, Duration::from_millis(600)).is_err());
+        assert!(start.elapsed() < Duration::from_secs(8));
+        assert_eq!(count(&f, "starts"), 1);
+        reaped(&f);
+        assert!(receipt(&f)["fallback_reason"].is_string());
+    }
+}
+#[test]
+fn production_http_empty_success_keeps_no_speech_and_later_languages() {
+    let f = fixture(6);
+    run(&f, Duration::from_secs(20)).unwrap();
+    assert_eq!(count(&f, "http-calls"), 2);
+    assert_eq!(count(&f, "command-calls"), 0);
+    assert!(f.work.join("hi.clock.json").exists());
+    assert!(f.work.join("te.clock.json").exists());
+    for id in f.plan.batches["en"].keys() {
+        assert!(
+            batches::read_result(&f.work, &f.plan, id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            f.work
+                .join(format!("{}-{id}.fallback", f.plan.revision))
+                .exists()
+        );
+    }
+    reaped(&f);
+}
+
+#[test]
+fn production_http_cancel_drop_reaps_service() {
+    let f = fixture(0);
+    let mut bridge = english_http::bridge(
+        HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        },
+        &f.work,
+        Duration::from_secs(10),
+    );
+    bridge
+        .transcribe(f.plan.batches["en"].values().next().unwrap())
+        .unwrap();
+    // Cancellation/unwinding drops the same owner even without the normal finish hook.
+    drop(bridge);
+    reaped(&f);
+    assert_eq!(receipt(&f)["service_reaped"], true);
+}
