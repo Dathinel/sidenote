@@ -137,6 +137,12 @@ fn production_http_failure_falls_back_for_failed_and_remaining_pieces() {
         assert_eq!(count(&f, "command-calls"), 2);
         let r = receipt(&f);
         assert!(r["fallback_reason"].is_string());
+        if mode == 1 {
+            assert_eq!(
+                r["fallback_reason"],
+                format!("service-http-status-{}", captured()["http_error"]["status"])
+            );
+        }
         assert_eq!(r["command_pieces"], 2);
         for id in f.plan.batches["en"].keys() {
             assert_eq!(
