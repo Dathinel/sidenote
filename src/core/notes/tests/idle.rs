@@ -156,6 +156,9 @@ fn changed_same_name_input_replaces_production_done_notes_after_restart() {
 
 #[test]
 fn worker_skips_production_done_jobs_without_capture_or_launch() {
+    if isolated_test() {
+        return;
+    }
     let root = Temp::new();
     let s = settings_fixture();
     meeting(&root.0, &"Synthetic ".repeat(20_000));
@@ -304,6 +307,34 @@ fn worker_keeps_queued_and_due_failure_retries_but_defers_future_retry() {
     assert!(matches!(state(&root.0), JobState::Done { .. }));
 }
 
+// Process I/O and the scheduling/status caches must not include sibling test roots.
+fn isolated_test() -> bool {
+    const FLAG: &str = "SIDENOTE_IDLE_NOTES_TEST";
+    let thread = std::thread::current();
+    let name = thread.name().unwrap();
+    if std::env::var(FLAG).ok().as_deref() == Some(name) {
+        return false;
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture"])
+        .env(FLAG, name);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "isolated idle notes test failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    true
+}
+
 fn read_bytes() -> u64 {
     #[cfg(windows)]
     unsafe {
@@ -320,6 +351,9 @@ fn read_bytes() -> u64 {
 
 #[test]
 fn retained_done_status_batch_is_idle_and_observes_requeued_work() {
+    if isolated_test() {
+        return;
+    }
     let root = Temp::new();
     let s = settings_fixture();
     meeting(&root.0, "Synthetic status fixture");

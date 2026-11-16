@@ -32,6 +32,35 @@ pub(super) fn run_proof() -> bool {
     failed == 0
 }
 
+// Each fixture owns its paths and fake Hex discovery for its whole worker lifetime.
+#[cfg(test)]
+fn isolated_test() -> bool {
+    const FLAG: &str = "SIDENOTE_IDLE_UI_TEST";
+    let thread = std::thread::current();
+    let name = thread.name().unwrap();
+    if std::env::var(FLAG).ok().as_deref() == Some(name) {
+        return false;
+    }
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture"])
+        .env(FLAG, name);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "isolated idle UI test failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    true
+}
+
 fn runtime() -> Runtime<State> {
     #[cfg(test)]
     crate::test_paths::isolate();
@@ -95,6 +124,10 @@ fn runtime() -> Runtime<State> {
 
 #[cfg_attr(test, test)]
 fn idle_cpu_simulated_thirty_seconds() {
+    #[cfg(test)]
+    if isolated_test() {
+        return;
+    }
     let mut rt = runtime();
     let engine = sidenote::hex_engine::HexEngine::new();
     rt.settle_all();
@@ -126,6 +159,10 @@ fn idle_cpu_simulated_thirty_seconds() {
 
 #[cfg_attr(test, test)]
 fn idle_cpu_unchanged_refresh_does_not_rebuild() {
+    #[cfg(test)]
+    if isolated_test() {
+        return;
+    }
     let (mut rt, receive) = refreshed_runtime();
     let before = rt.stats.commits;
     let handle = rt.state.scan_tx.as_ref().unwrap();
@@ -174,6 +211,10 @@ fn refreshed_runtime() -> (Runtime<State>, Receiver<()>) {
 
 #[cfg_attr(test, test)]
 fn idle_cpu_delayed_empty_poll_sleeps() {
+    #[cfg(test)]
+    if isolated_test() {
+        return;
+    }
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -209,6 +250,10 @@ fn idle_cpu_delayed_empty_poll_sleeps() {
 
 #[cfg_attr(test, test)]
 fn idle_cpu_hex_state_changes_reach_the_view() {
+    #[cfg(test)]
+    if isolated_test() {
+        return;
+    }
     use std::{
         io::{BufRead, Read, Write},
         net::{TcpListener, TcpStream},
