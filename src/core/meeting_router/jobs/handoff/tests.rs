@@ -88,6 +88,7 @@ fn produce(root: &Path, id: &str, baseline: &[Chunk], language: &str) -> Result<
         plan,
         manifest,
         fallbacks: vec![],
+        english_transport: serde_json::Value::Null,
     };
     store_io::write(&dir.join("output.json"), &output)?;
     batches::run(&dir, &output.plan, &mut Fake, &mut Fake)

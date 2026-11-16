@@ -10,6 +10,8 @@ pub struct BatchOutput {
     pub manifest: PieceManifest,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallbacks: Vec<super::super::fallback::RoutingFallback>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub english_transport: serde_json::Value,
 }
 #[derive(Serialize, Deserialize)]
 pub(super) struct Released {
@@ -64,7 +66,8 @@ pub(super) fn assembled(
     data.transcript.input_checksum = source.into();
     data.provenance = serde_json::json!({"pieces":output.manifest,"plan":output.plan,"source_revision":source,
             "no_speech":data.provenance["no_speech"],
-            "assembly_coverage":data.provenance["assembly_coverage"]});
+            "assembly_coverage":data.provenance["assembly_coverage"],
+            "english_transport":output.english_transport});
     super::super::fallback::attach(&mut data, &output.fallbacks)?;
     Ok(data)
 }

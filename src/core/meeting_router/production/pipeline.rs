@@ -165,6 +165,7 @@ pub fn run(
                     plan,
                     manifest: pieces,
                     fallbacks,
+                    english_transport: revision.provenance["english_transport"].clone(),
                 },
             )?;
             Ok(())
@@ -197,7 +198,7 @@ pub fn assemble_saved(
     let mut revision = revision::assemble(work, plan, pieces, baseline, generation)?;
     revision.provenance["english_transport"] = serde_json::from_slice(&store_io::read_bounded(
         &work.join("english-transport.json"),
-        65536,
+        16 << 20,
     )?)?;
     let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(&inputs::Snapshot::read_file(
         &work.join("uncertainty.json"),

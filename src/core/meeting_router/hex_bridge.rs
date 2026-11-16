@@ -98,6 +98,7 @@ pub struct HexRequest {
 }
 pub trait HexCommand {
     fn call(&mut self, args: &[&str], timeout: Duration) -> Result<String>;
+    fn begin(&mut self, _request: &HexRequest) {}
     fn finish(&mut self) -> Result<()> {
         Ok(())
     }
@@ -232,6 +233,7 @@ impl<C: HexCommand> HexBridge<C> {
         }
         let wav = wav.to_str().ok_or(InvalidRange)?;
         let _serial = SERIAL.try_lock().map_err(|_| Busy)?;
+        self.command.begin(request);
         if self.json.is_none() {
             // ADR 0009:12; pinned Hex f5681bc control/cli.rs:593-601,638-651.
             let help = self.call(&["model", "transcribe", "--help"]).map_err(|e| {

@@ -260,3 +260,44 @@ fn production_http_releases_model_before_native_load() {
     pipeline::run_batches(&f.work, &f.plan, &mut Check(&f), &mut bridge,
         Duration::from_secs(20), &mut Default::default(), Instant::now()).unwrap();
 }
+
+#[test]
+fn production_http_mixed_transport_survives_parent_commit_and_load() {
+    let f = fixture(12);
+    run(&f, Duration::from_secs(20)).unwrap();
+    store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
+    store_io::write(&f.work.join("coverage.json"), &f.baseline).unwrap();
+    let assembled = pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let output = jobs::BatchOutput {
+        generation: "1".into(), source_revision: "public".into(),
+        plan: serde_json::from_value(serde_json::to_value(&f.plan).unwrap()).unwrap(),
+        manifest: serde_json::from_value(serde_json::to_value(&f.manifest).unwrap()).unwrap(), fallbacks: vec![],
+        english_transport: assembled.provenance["english_transport"].clone(),
+    };
+    store_io::write(&f.work.join("output.json"), &output).unwrap();
+    store_io::write(&f.root.path().join("local/router-queue/123-4.json"),
+        &json!({"id":"123-4","generation":1})).unwrap();
+    let published = f.root.path().join("local/transcripts/123-4");
+    revision::begin(&published, 1).unwrap();
+    let id = jobs::commit_batches(f.root.path(), "123-4", 1, "public", &f.baseline).unwrap();
+    let saved = revision::load(&published, Some(&id)).unwrap().unwrap().1;
+    let transport = &saved.provenance["english_transport"];
+    assert_eq!(transport, &assembled.provenance["english_transport"]);
+    let ranges = transport["ranges"].as_object().unwrap();
+    assert_eq!(ranges.len(), 2);
+    assert_eq!(ranges.values().filter(|r| r["transport"] == "http").count(), 1);
+    assert_eq!(ranges.values().filter(|r| r["transport"] == "failed").count(), 1);
+    for (id, entry) in ranges {
+        assert!(f.plan.batches["en"].contains_key(id));
+        assert_eq!(entry["cleanup_reason"], "service-http-status-409");
+        assert_eq!(entry["service_reaped"], true);
+        if entry["transport"] == "http" {
+            assert_eq!(entry["reply"]["body_sha256"].as_str().unwrap().len(), 64);
+            assert_eq!(entry["reply"]["api_version"], "2");
+        } else {
+            assert_eq!(entry["fallback"], "captured-hex-baseline");
+            assert_eq!(entry["failure_reason"], "service-http-status-409");
+        }
+    }
+    assert!(!serde_json::to_string(transport).unwrap().contains("token"));
+}

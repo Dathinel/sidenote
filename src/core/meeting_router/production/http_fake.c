@@ -38,10 +38,11 @@ int main(int argc,char **argv){
  if(!end||!size||!strstr(buf,"Bearer fixture")||!strstr(buf,"/transcriptions?model=parakeet_unified_en&language=en"))return 93;
  received=used-(int)(end-buf)-4;int total=atoi(size+15);
  while(received<total){int n=recv(s,buf,sizeof(buf),0);if(n<=0)break;received+=n;}
- count("http-calls");if(mode()==3||mode()==9){Sleep(30000);return 0;}
+ int request=count("http-calls");if(mode()==3||mode()==9){Sleep(30000);return 0;}
  if(mode()==11){FILE *a=fopen("owner-active","w");fclose(a);Sleep(30000);return 0;}
- char body[8192];int body_size=read_reply(mode()==1?"http-error":"http-reply",body,sizeof(body));
- char reply[16384];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",mode()==1?"409 Conflict":"200 OK",body_size,body);
+ int fail=mode()==1||(mode()==12&&request>0);
+ char body[8192];int body_size=read_reply(fail?"http-error":"http-reply",body,sizeof(body));
+ char reply[16384];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",fail?"409 Conflict":"200 OK",body_size,body);
  send(s,reply,n,0);closesocket(s);
  }
  }

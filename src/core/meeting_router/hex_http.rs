@@ -30,6 +30,11 @@ pub(super) struct Service {
     process: Option<JobProcess>,
     job: Arc<ProcessJob>,
     endpoint: Option<Endpoint>,
+    pub(super) last_reply: serde_json::Value,
+}
+pub(super) struct Reply {
+    pub text: String,
+    pub identity: serde_json::Value,
 }
 impl Service {
     pub(super) fn start(hex: &HexSpeech, timeout: Duration) -> Result<Self, &'static str> {
@@ -48,6 +53,7 @@ impl Service {
             process: Some(process),
             job,
             endpoint: None,
+            last_reply: serde_json::Value::Null,
         };
         let watch = OwnerWatch::start(hex, &service.job);
         let (tx, rx) = mpsc::sync_channel(1);
@@ -104,7 +110,8 @@ impl Service {
         wav: &Path,
         model: &str,
         timeout: Duration,
-    ) -> Result<String, String> {
+    ) -> Result<Reply, String> {
+        self.last_reply = serde_json::Value::Null;
         let endpoint = self.endpoint.as_ref().ok_or("service-closed")?;
         let mut url = url::Url::parse(&endpoint.url).map_err(|_| "service-endpoint")?;
         if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
@@ -146,6 +153,9 @@ impl Service {
             .limit(8 << 20)
             .read_to_string()
             .map_err(|_| "service-response")?;
+        use sha2::{Digest, Sha256};
+        self.last_reply = serde_json::json!({"http_status":status,"api_version":endpoint.api_version,
+                "service_pid":endpoint.pid,"body_sha256":hex::encode(Sha256::digest(text.as_bytes()))});
         if status != 200 {
             return Err(format!("service-http-status-{status}"));
         }
@@ -157,7 +167,10 @@ impl Service {
             return Err("service-owner-changed".into());
         }
         // Empty success retains the existing NoSpeech disposition without restarting inference.
-        Ok(transcript.to_owned())
+        Ok(Reply {
+            text: transcript.to_owned(),
+            identity: self.last_reply.clone(),
+        })
         })();
         if watch.finish() {
             self.abort();

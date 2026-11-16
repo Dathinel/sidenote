@@ -6,6 +6,7 @@ pub(super) struct RunHex {
     service: Option<Service>,
     receipt: PathBuf,
     state: Value,
+    current: Option<HexRequest>,
 }
 impl RunHex {
     pub(super) fn new(hex: HexSpeech, work: &Path) -> Self {
@@ -13,8 +14,9 @@ impl RunHex {
             hex,
             service: None,
             receipt: work.join("english-transport.json"),
+            current: None,
             state: json!({"service_starts":0,"http_pieces":0,"command_pieces":0,
-                "fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0,"service_close_seconds":0.0}),
+                "ranges":{},"cleanup_reason":null,"fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0,"service_close_seconds":0.0}),
         }
     }
     fn save(&self) -> std::result::Result<(), HexFailure> {
@@ -30,16 +32,35 @@ impl RunHex {
             }
             .into();
             self.state["service_close_seconds"] = started.elapsed().as_secs_f64().into();
+            self.state["cleanup_reason"] = if graceful { "english-batch-finished" } else { "helper-aborted" }.into();
         }
     }
     fn fallback(&mut self, reason: &str) {
         self.stop_service(false);
         self.state["fallback_reason"] = reason.into();
+        self.state["cleanup_reason"] = reason.into();
+    }
+    fn record(&mut self, transport: &str, reply: Value) {
+        if let Some(r) = &self.current {
+            self.state["ranges"][&r.range_id] = json!({"transport":transport,
+                "model":r.model_id,"language":r.language,"reply":reply,
+                "fallback":if transport == "failed" { json!("captured-hex-baseline") } else { Value::Null },
+                "failure_reason":self.state["fallback_reason"]});
+        }
     }
 }
 impl HexCommand for RunHex {
+    fn begin(&mut self, request: &HexRequest) {
+        self.current = Some(request.clone());
+    }
     fn finish(&mut self) -> std::result::Result<(), HexFailure> {
         self.stop_service(true);
+        let reason = self.state["cleanup_reason"].clone();
+        let reaped = self.state["service_reaped"].clone();
+        for range in self.state["ranges"].as_object_mut().unwrap().values_mut() {
+            range["cleanup_reason"] = reason.clone();
+            range["service_reaped"] = reaped.clone();
+        }
         self.save()?;
         if self.state["service_reaped"] == false {
             return Err(HexFailure::Failed);
@@ -77,6 +98,7 @@ impl HexCommand for RunHex {
                 Ok(service) => self.service = Some(service),
                 Err("service-owner-active-or-unknown") => {
                     self.fallback("service-owner-active-or-unknown");
+                    self.record("failed", Value::Null);
                     self.save()?;
                     return Err(HexFailure::Busy);
                 }
@@ -93,25 +115,35 @@ impl HexCommand for RunHex {
                 .windows(2)
                 .find(|a| a[0] == "--model")
                 .ok_or(HexFailure::InvalidRange)?[1];
-            match service.call(&self.hex, Path::new(args[2]), model, remaining()? / 2) {
-                Ok(text) => {
+            let outcome = service.call(&self.hex, Path::new(args[2]), model, remaining()? / 2);
+            let identity = service.last_reply.clone();
+            match outcome {
+                Ok(reply) => {
                     self.state["http_pieces"] =
                         (self.state["http_pieces"].as_u64().unwrap() + 1).into();
+                    self.record("http", reply.identity);
                     self.save()?;
                     return if args.contains(&"--json") {
-                        Ok(json!({"transcript":text,"model":model}).to_string())
+                        Ok(json!({"transcript":reply.text,"model":model}).to_string())
                     } else {
-                        Ok(text)
+                        Ok(reply.text)
                     };
                 }
                 Err(reason) if reason == "service-owner-active-or-unknown" => {
                     self.fallback(&reason);
+                    self.record("failed", Value::Null);
                     self.save()?;
                     return Err(HexFailure::Busy);
                 }
-                Err(reason) => self.fallback(&reason),
+                Err(reason) => {
+                    self.fallback(&reason);
+                    self.record("failed", identity);
+                    self.save()?;
+                    return Err(HexFailure::HelperFailed);
+                }
             }
         }
+        self.record("failed", Value::Null);
         self.save()?;
         Err(HexFailure::HelperFailed)
     }
