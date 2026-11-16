@@ -31,12 +31,12 @@ int main(int argc,char **argv){
  if(!end||!size||!strstr(buf,"Bearer fixture")||!strstr(buf,"/transcriptions?model=parakeet_unified_en&language=en"))return 93;
  received=used-(int)(end-buf)-4;int total=atoi(size+15);
  while(received<total){int n=recv(s,buf,sizeof(buf),0);if(n<=0)break;received+=n;}
- count("http-calls");if(mode()==3){Sleep(30000);return 0;}
+ count("http-calls");if(mode()==3||mode()==9){Sleep(30000);return 0;}
  const char *body=mode()==6?"{\"transcript\":\"\"}":"{\"transcript\":\"public HTTP\"}";
  char reply[512];int n=sprintf(reply,"HTTP/1.1 %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",mode()==1?"503 Unavailable":"200 OK",(int)strlen(body),body);
  send(s,reply,n,0);closesocket(s);
  }
  }
- count("command-calls");if(strcmp(argv[1],"transcribe"))return 94;
+ count("command-calls");if(mode()==9)Sleep(30000);if(strcmp(argv[1],"transcribe"))return 94;
  puts("{\"transcript\":\"public fallback\"}");return 0;
 }

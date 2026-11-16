@@ -23,12 +23,19 @@ fn fixture(mode: u8) -> Fixture {
     f
 }
 fn run(f: &Fixture, timeout: Duration) -> Result<()> {
+    run_with_request_timeout(f, timeout, Duration::from_secs(10))
+}
+fn run_with_request_timeout(
+    f: &Fixture,
+    timeout: Duration,
+    request_timeout: Duration,
+) -> Result<()> {
     let mut bridge = english_http::bridge(
         HexSpeech {
             executable: f.work.join("fake-hex.exe"),
         },
         &f.work,
-        Duration::from_secs(10),
+        request_timeout,
     );
     let result = pipeline::run_batches(
         &f.work,
@@ -113,12 +120,23 @@ fn production_http_timeout_reaps_request_and_handshake_children() {
     for mode in [3, 4] {
         let f = fixture(mode);
         let start = Instant::now();
-        assert!(run(&f, Duration::from_millis(600)).is_err());
+        run_with_request_timeout(&f, Duration::from_secs(20), Duration::from_secs(2)).unwrap();
         assert!(start.elapsed() < Duration::from_secs(8));
         assert_eq!(count(&f, "starts"), 1);
+        assert_eq!(count(&f, "command-calls"), 2);
         reaped(&f);
         assert!(receipt(&f)["fallback_reason"].is_string());
     }
+}
+#[test]
+fn production_http_whole_run_deadline_still_reaps_and_fails() {
+    let f = fixture(9);
+    let start = Instant::now();
+    assert!(run(&f, Duration::from_millis(900)).is_err());
+    assert!(start.elapsed() < Duration::from_secs(8));
+    assert_eq!(count(&f, "starts"), 1);
+    reaped(&f);
+    assert!(receipt(&f)["fallback_reason"].is_string());
 }
 #[test]
 fn production_http_empty_success_keeps_no_speech_and_later_languages() {

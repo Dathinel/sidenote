@@ -54,7 +54,8 @@ impl HexCommand for RunHex {
         if self.state["service_starts"] == 0 {
             self.state["service_starts"] = 1.into();
             self.save()?;
-            match Service::start(&self.hex, timeout) {
+            // Preserve time for the command if startup hangs or HTTP exhausts its allowance.
+            match Service::start(&self.hex, timeout / 4) {
                 Ok(service) => self.service = Some(service),
                 Err(reason) => self.fallback(reason),
             }
@@ -69,7 +70,7 @@ impl HexCommand for RunHex {
                 .windows(2)
                 .find(|a| a[0] == "--model")
                 .ok_or(HexFailure::InvalidRange)?[1];
-            match service.call(Path::new(args[2]), model, remaining()?) {
+            match service.call(Path::new(args[2]), model, remaining()? / 2) {
                 Ok(text) => {
                     self.state["http_pieces"] =
                         (self.state["http_pieces"].as_u64().unwrap() + 1).into();
