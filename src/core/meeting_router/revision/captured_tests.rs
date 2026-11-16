@@ -1,6 +1,21 @@
 //! Frozen public replay enters through the production receipt reader and assembler.
 use super::*;
 
+fn numeric_difference(a: &Value, b: &Value, path: &str) -> Option<String> {
+    match (a, b) {
+        (Value::Object(a), Value::Object(b)) => a
+            .iter()
+            .find_map(|(k, v)| numeric_difference(v, b.get(k)?, &format!("{path}.{k}"))),
+        (Value::Array(a), Value::Array(b)) => a
+            .iter()
+            .zip(b)
+            .enumerate()
+            .find_map(|(i, (a, b))| numeric_difference(a, b, &format!("{path}[{i}]"))),
+        (Value::Number(a), Value::Number(b)) if a != b => Some(format!("{path}: {a} -> {b}")),
+        _ => None,
+    }
+}
+
 fn fixture() -> (
     tempfile::TempDir,
     Plan,
@@ -41,6 +56,17 @@ fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
     let dest = root.join("published");
     begin(&dest, 1).unwrap();
     let chosen = commit(&dest, &revision).unwrap();
+    let bytes = std::fs::read(dest.join("revisions").join(format!("{chosen}.json"))).unwrap();
+    let decoded: Revision = serde_json::from_slice(&bytes).unwrap();
+    let difference = numeric_difference(
+        &serde_json::to_value(&revision).unwrap(),
+        &serde_json::to_value(&decoded).unwrap(),
+        "revision",
+    );
+    assert!(
+        bytes == serde_json::to_vec(&decoded).unwrap(),
+        "revision numeric roundtrip changed: {difference:?}"
+    );
     assert_eq!(load(&dest, None).unwrap().unwrap().0, chosen);
     let policy = &revision.provenance["assembly_coverage"];
     assert!(!policy["overlaps"].as_array().unwrap().is_empty());
