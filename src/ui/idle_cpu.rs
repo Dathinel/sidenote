@@ -109,6 +109,7 @@ fn idle_cpu_unchanged_refresh_does_not_rebuild() {
     // A real scan request, with no filesystem mutation.
     handle.request(rt.state.refresh_options());
     receive.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(handle.unchanged_snapshot_ready(), "fixture was not idle");
     rt.frame(1.0);
     assert_eq!(
         rt.stats.commits, before,
@@ -132,7 +133,20 @@ fn refreshed_runtime() -> (Runtime<State>, Receiver<()>) {
     for _ in 0..3 {
         rt.frame(0.1);
     }
-    (rt, receive)
+    // Applying initial data can change refresh options or create local state. Complete those
+    // real scans before measuring an unchanged one; never fabricate a refresh result.
+    for scans in 1..=4 {
+        let handle = rt.state.scan_tx.as_ref().unwrap();
+        handle.request(rt.state.refresh_options());
+        receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        let unchanged = handle.unchanged_snapshot_ready();
+        rt.frame(0.1);
+        if unchanged {
+            println!("refresh initialization scans={scans}; unchanged snapshot verified");
+            return (rt, receive);
+        }
+    }
+    panic!("refresh fixture did not become idle");
 }
 
 #[cfg_attr(test, test)]

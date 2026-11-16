@@ -293,6 +293,15 @@ pub(super) struct Handle {
 }
 impl Handle {
     #[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
+    pub(super) fn unchanged_snapshot_ready(&self) -> bool {
+        self.slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|result| result.data.is_none())
+    }
+
+    #[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
     pub(super) fn pause_take(
         &self,
         acquired: mpsc::SyncSender<()>,
