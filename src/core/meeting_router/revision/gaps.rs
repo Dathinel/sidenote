@@ -41,10 +41,16 @@ fn intersects(c: &Chunk, track: &str, start: f64, end: f64) -> bool {
 
 pub(crate) fn attach(data: &mut Revision, coverage: &[Chunk], replies: &[NoSpeech]) -> Result<()> {
     let routing = super::super::fallback::read(data)?;
+    let manifest: super::super::pieces::PieceManifest = serde_json::from_value(
+        if data.provenance["pieces"].is_object() { data.provenance["pieces"].clone() } else { data.provenance.clone() })?;
     let mut gaps = Vec::new();
     for c in coverage {
         if !c.start.is_finite() || !c.end.is_finite() || c.start < 0.0 || c.start >= c.end
-            || !c.english.is_empty() { return Err("Invalid speech coverage interval".into()); }
+            || !c.english.is_empty() || !manifest.tracks.iter().any(|t| t.track == c.track
+                && t.origin_sample as f64 / 16000.0 <= c.start
+                && c.end <= (t.origin_sample as f64 + t.sample_count as f64) / 16000.0) {
+            return Err("Invalid speech coverage interval".into());
+        }
         if super::super::baseline::source_covered(c, &data.transcript.segments) { continue; }
         if data.transcript.baseline.iter().any(|b| intersects(c, &b.track, b.start, b.end))
             || data.alternatives.iter().flat_map(|s| &s.sources)

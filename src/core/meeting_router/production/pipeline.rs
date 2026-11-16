@@ -372,6 +372,23 @@ impl EnglishBridge for Reuse<'_> {
 mod tests {
     use super::*;
     #[test]
+    fn production_assembly_failure_retains_completed_clocks() {
+        use super::super::no_speech_tests::Fixture;
+        let f = Fixture::new(b"public", 0, b"");
+        let error = with_clocks(&f.work, |clocks, _| {
+            clocks.insert("pieces".into(), 0.125);
+            clocks.insert("batches".into(), 0.25);
+            assemble_saved(&f.work, &f.plan, &f.manifest, &[], 1).map(|_| ())
+        }).unwrap_err().to_string();
+        assert!(error.contains("Owned interval lacks routed or baseline coverage"), "{error}");
+        let clocks: Value = serde_json::from_slice(&fs::read(f.work.join("clocks.json")).unwrap()).unwrap();
+        assert_eq!(clocks["pieces"], 0.125);
+        assert_eq!(clocks["batches"], 0.25);
+        assert_eq!(clocks["partial"], true);
+        assert!(clocks["worker_total"].as_f64().unwrap() >= 0.0);
+        assert!(!f.work.join("output.json").exists());
+    }
+    #[test]
     fn production_failed_batch_persists_partial_clocks() {
         use super::super::no_speech_tests::{Fixture, NativeFake};
         let mut f = Fixture::new(b"", 7, b"recognizer allocation failed");

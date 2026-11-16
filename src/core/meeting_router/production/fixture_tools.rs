@@ -11,6 +11,10 @@ pub(super) fn output(mut command: Command, timeout: Duration) -> std::io::Result
         Ok(job) => job,
         Err(error) => {
             let _ = child.kill();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while child.try_wait()?.is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             return Err(error);
         }
     };
