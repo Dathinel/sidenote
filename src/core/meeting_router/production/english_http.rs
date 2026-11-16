@@ -7,16 +7,51 @@ pub(super) struct RunHex {
     receipt: PathBuf,
     state: Value,
     current: Option<HexRequest>,
+    current_ranges: std::collections::BTreeSet<String>,
 }
 impl RunHex {
     pub(super) fn new(hex: HexSpeech, work: &Path) -> Self {
+        let previous: Value =
+            store_io::read_bounded(&work.join("english-transport.json"), 16 << 20)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(Value::Null);
+        let mut ranges = serde_json::Map::new();
+        if let Some(records) = previous["ranges"].as_object() {
+            for (id, record) in records {
+                if !matches!(record["transport"].as_str(), Some("http" | "failed")) {
+                    continue;
+                }
+                let mut safe = json!({});
+                for key in [
+                    "transport",
+                    "model",
+                    "language",
+                    "fallback",
+                    "failure_reason",
+                    "cleanup_reason",
+                    "service_reaped",
+                ] {
+                    safe[key] = record[key].clone();
+                }
+                safe["reply"] = Value::Null;
+                if record["reply"].is_object() {
+                    safe["reply"] = json!({});
+                    for key in ["http_status", "api_version", "service_pid", "body_sha256"] {
+                        safe["reply"][key] = record["reply"][key].clone();
+                    }
+                }
+                ranges.insert(id.clone(), safe);
+            }
+        }
         Self {
             hex,
             service: None,
             receipt: work.join("english-transport.json"),
             current: None,
+            current_ranges: Default::default(),
             state: json!({"service_starts":0,"http_pieces":0,"command_pieces":0,
-                "ranges":{},"cleanup_reason":null,"fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0,"service_close_seconds":0.0}),
+                "ranges":ranges,"cleanup_reason":null,"fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0,"service_close_seconds":0.0}),
         }
     }
     fn save(&self) -> std::result::Result<(), HexFailure> {
@@ -42,7 +77,8 @@ impl RunHex {
     fn cleanup(&mut self, reason: &str) {
         self.state["cleanup_reason"] = reason.into();
         let reaped = self.state["service_reaped"].clone();
-        for range in self.state["ranges"].as_object_mut().unwrap().values_mut() {
+        for id in &self.current_ranges {
+            let range = &mut self.state["ranges"][id];
             range["cleanup_reason"] = reason.into();
             range["service_reaped"] = reaped.clone();
         }
@@ -54,6 +90,7 @@ impl RunHex {
     }
     fn record(&mut self, transport: &str, reply: Value) {
         if let Some(r) = &self.current {
+            self.current_ranges.insert(r.range_id.clone());
             self.state["ranges"][&r.range_id] = json!({"transport":transport,
                 "model":r.model_id,"language":r.language,"reply":reply,
                 "fallback":if transport == "failed" { json!("captured-hex-baseline") } else { Value::Null },

@@ -300,24 +300,7 @@ fn production_http_mixed_transport_survives_parent_commit_and_load() {
     store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
     let assembled =
         pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
-    let output = jobs::BatchOutput {
-        generation: "1".into(),
-        source_revision: "public".into(),
-        plan: serde_json::from_value(serde_json::to_value(&f.plan).unwrap()).unwrap(),
-        manifest: serde_json::from_value(serde_json::to_value(&f.manifest).unwrap()).unwrap(),
-        fallbacks: vec![],
-        english_transport: assembled.provenance["english_transport"].clone(),
-    };
-    store_io::write(&f.work.join("output.json"), &output).unwrap();
-    store_io::write(
-        &f.root.path().join("local/router-queue/123-4.json"),
-        &json!({"id":"123-4","generation":1}),
-    )
-    .unwrap();
-    let published = f.root.path().join("local/transcripts/123-4");
-    revision::begin(&published, 1).unwrap();
-    let id = jobs::commit_batches(f.root.path(), "123-4", 1, "public", &f.baseline).unwrap();
-    let saved = revision::load(&published, Some(&id)).unwrap().unwrap().1;
+    let saved = publish(&f, &assembled);
     let transport = &saved.provenance["english_transport"];
     assert_eq!(transport, &assembled.provenance["english_transport"]);
     let ranges = transport["ranges"].as_object().unwrap();
@@ -346,4 +329,106 @@ fn production_http_mixed_transport_survives_parent_commit_and_load() {
         }
     }
     assert!(!serde_json::to_string(transport).unwrap().contains("token"));
+}
+
+fn publish(f: &Fixture, assembled: &revision::Revision) -> revision::Revision {
+    let output = jobs::BatchOutput {
+        generation: "1".into(),
+        source_revision: "public".into(),
+        plan: serde_json::from_value(serde_json::to_value(&f.plan).unwrap()).unwrap(),
+        manifest: serde_json::from_value(serde_json::to_value(&f.manifest).unwrap()).unwrap(),
+        fallbacks: vec![],
+        english_transport: assembled.provenance["english_transport"].clone(),
+    };
+    store_io::write(&f.work.join("output.json"), &output).unwrap();
+    store_io::write(
+        &f.root.path().join("local/router-queue/123-4.json"),
+        &json!({"id":"123-4","generation":1}),
+    )
+    .unwrap();
+    let published = f.root.path().join("local/transcripts/123-4");
+    revision::begin(&published, 1).unwrap();
+    let id = jobs::commit_batches(f.root.path(), "123-4", 1, "public", &f.baseline).unwrap();
+    revision::load(&published, Some(&id)).unwrap().unwrap().1
+}
+
+#[test]
+fn production_http_failure_preserves_baseline_crossing_native_reading() {
+    let mut f = fixture(1);
+    let mut ranges = Vec::new();
+    for (lang, context) in [("en", (0, 1600)), ("hi", (1600, 4800))] {
+        let mut r: Range = serde_json::from_value(
+            serde_json::to_value(f.plan.batches[lang].values().next().unwrap()).unwrap(),
+        )
+        .unwrap();
+        r.range.context = context;
+        r.range.members = vec![(0, context)];
+        r.wav = f.work.join(format!("crossing-{lang}.wav"));
+        asr::write_wav(&r.wav, &vec![0.0; (context.1 - context.0) as usize]).unwrap();
+        ranges.push(r);
+    }
+    f.plan = batches::spool(&f.work, ranges).unwrap();
+    f.baseline.truncate(1);
+    f.baseline[0].end = 0.2;
+    run(&f, Duration::from_secs(20)).unwrap();
+    store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
+    let coverage: Vec<_> = [(0.0, 0.1), (0.1, 0.3)]
+        .into_iter()
+        .map(|(start, end)| {
+            let mut c = f.baseline[0].clone();
+            c.start = start;
+            c.end = end;
+            c.english.clear();
+            c
+        })
+        .collect();
+    store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let saved = publish(&f, &assembled);
+    assert!(
+        saved
+            .transcript
+            .segments
+            .iter()
+            .any(|s| s.text_original == f.baseline[0].english)
+    );
+    assert!(
+        saved
+            .transcript
+            .segments
+            .iter()
+            .any(|s| s.text_original == "public native")
+    );
+    assert_eq!(
+        saved.provenance["assembly_coverage"]["fallback_required"][0]["reason"],
+        "helper-failed"
+    );
+    let mut invalid = saved.clone();
+    invalid.provenance["english_transport"]["ranges"] = json!({});
+    assert!(revision::commit(&f.root.path().join("local/transcripts/123-4"), &invalid).is_err());
+    assert_eq!(count(&f, "command-calls"), 0);
+}
+
+#[test]
+fn production_http_cached_batch_retains_reply_identity_and_cleanup() {
+    let f = fixture(0);
+    run(&f, Duration::from_secs(20)).unwrap();
+    let first = receipt(&f)["ranges"].clone();
+    run(&f, Duration::from_secs(20)).unwrap();
+    assert_eq!(count(&f, "starts"), 1);
+    assert_eq!(count(&f, "http-calls"), 2);
+    assert_eq!(receipt(&f)["ranges"], first);
+    store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
+    let mut coverage = f.baseline.clone();
+    for c in &mut coverage {
+        c.english.clear();
+    }
+    store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    assert_eq!(
+        publish(&f, &assembled).provenance["english_transport"]["ranges"],
+        first
+    );
 }

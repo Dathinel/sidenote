@@ -7,6 +7,7 @@ use super::*;
 pub(super) enum FallbackKind {
     NoSpeech,
     LidUncertain,
+    HelperFailed,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +28,7 @@ pub(super) fn from_router_records(
     manifest: &super::super::pieces::PieceManifest,
     markers: &BTreeMap<String, Value>,
     routing: &[RoutingFallback],
+    transport: &Value,
 ) -> Result<Coverage> {
     let mut coverage = Coverage::default();
     for (id, record) in markers {
@@ -56,6 +58,39 @@ pub(super) fn from_router_records(
             },
             record: record.clone(),
         });
+    }
+    if let Some(ranges) = transport["ranges"].as_object() {
+        for (id, record) in ranges.iter().filter(|(_, r)| r["transport"] == "failed") {
+            let r = plan
+                .batches
+                .get("en")
+                .and_then(|b| b.get(id))
+                .ok_or("Missing failed helper range")?;
+            if record["model"] != r.model_id
+                || record["language"] != "en"
+                || record["fallback"] != "captured-hex-baseline"
+                || !record["failure_reason"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+            {
+                return Err("Invalid failed helper record".into());
+            }
+            let origin = manifest
+                .tracks
+                .iter()
+                .find(|t| t.track == r.track)
+                .ok_or("Missing fallback track")?
+                .origin_sample;
+            coverage.fallback_required.push(RequiredFallback {
+                reason: FallbackKind::HelperFailed,
+                interval: Interval {
+                    track: r.track.clone(),
+                    start: meeting(origin, r.range.context.0)?,
+                    end: meeting(origin, r.range.context.1)?,
+                },
+                record: serde_json::json!({"revision":plan.revision,"range":id,"transport":record}),
+            });
+        }
     }
     for recorded in routing {
         if !matches!(
@@ -101,6 +136,13 @@ pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<(
         serde_json::from_value(data.provenance["no_speech"].clone())?;
     if plan.revision != data.plan_revision
         || markers.keys().any(|id| data.evidence.contains_key(id))
+        || data.provenance["english_transport"]["ranges"]
+            .as_object()
+            .is_some_and(|ranges| {
+                ranges
+                    .iter()
+                    .any(|(id, r)| r["transport"] == "failed" && data.evidence.contains_key(id))
+            })
     {
         return Err("Invalid fallback coverage evidence".into());
     }
@@ -109,6 +151,7 @@ pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<(
         &manifest,
         &markers,
         &super::super::fallback::read(data)?,
+        &data.provenance["english_transport"],
     )?;
     if serde_json::to_value(expected.fallback_required)?
         != serde_json::to_value(&coverage.fallback_required)?
@@ -201,14 +244,11 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
     let eligible = t.segments.clone();
     super::super::baseline::reconcile_exact(t, baseline);
     // Restore whole, untimed readings; never trim their text or manufacture ownership.
-    loop {
-        let Some(candidate) = eligible.iter().find(|s| {
-            s.sources
-                .iter()
-                .any(|o| !super::super::baseline::source_covered(&o.chunk, &t.segments))
-        }) else {
-            break;
-        };
+    while let Some(candidate) = eligible.iter().find(|s| {
+        s.sources
+            .iter()
+            .any(|o| !super::super::baseline::source_covered(&o.chunk, &t.segments))
+    }) {
         t.segments.retain(|s| {
             let Some(unit) = baseline_of(s, baseline) else {
                 return true;

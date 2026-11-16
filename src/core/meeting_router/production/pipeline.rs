@@ -203,10 +203,9 @@ pub fn assemble_saved(
     if revision.provenance.get("speech_coverage").is_none() {
         return Err("Missing speech coverage record".into());
     }
-    revision.provenance["english_transport"] = serde_json::from_slice(&store_io::read_bounded(
-        &work.join("english-transport.json"),
-        16 << 20,
-    )?)?;
+    if !revision.provenance["english_transport"].is_object() {
+        return Err("Missing English transport record".into());
+    }
     let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(&inputs::Snapshot::read_file(
         &work.join("uncertainty.json"),
         16 << 20,

@@ -201,7 +201,17 @@ pub fn assemble(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(error.into()),
         };
-    let mut coverage = reconciliation::from_router_records(plan, manifest, &no_speech, &routing)?;
+    let mut transport: Value =
+        match super::inputs::Snapshot::read_file(&root.join("english-transport.json"), 16 << 20) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
+            Err(e) => return Err(e.into()),
+        };
+    if let Some(ranges) = transport.get_mut("ranges").and_then(Value::as_object_mut) {
+        ranges.retain(|id, _| plan.batches.get("en").is_some_and(|b| b.contains_key(id)));
+    }
+    let mut coverage =
+        reconciliation::from_router_records(plan, manifest, &no_speech, &routing, &transport)?;
     reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
     transcript.segments.sort_by(|a, b| {
         a.start
@@ -213,6 +223,7 @@ pub fn assemble(
     provenance["no_speech"] = serde_json::to_value(no_speech)?;
     provenance["plan"] = serde_json::to_value(plan)?;
     provenance["assembly_coverage"] = serde_json::to_value(coverage)?;
+    provenance["english_transport"] = transport;
     let mut revision = Revision {
         generation: generation.to_string(),
         plan_revision: plan.revision.clone(),
