@@ -19,6 +19,8 @@ mod edit_worker;
 mod finder;
 mod hex;
 mod icons;
+#[cfg(test)]
+mod idle_cpu;
 mod list;
 mod live;
 mod mcp_connect;
@@ -1684,19 +1686,24 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
     if !s.edit_busy
         && let Some(snapshot) = s.scan_tx.as_ref().and_then(|h| h.take())
     {
+        changed |= snapshot.data.is_some();
         s.apply_event(Event::Refreshed(snapshot));
-        changed = true;
     }
     let mut events = 0;
     for _ in 0..8 {
-        if !headless && Instant::now() >= deadline {
+        if !headless && events > 0 && Instant::now() >= deadline {
             break;
         }
         match s.events_rx.try_recv() {
             Ok(event) => {
-                s.apply_event(event);
+                changed |= match event {
+                    Event::Hex(hex::Msg::Status(status)) => s.hex_status_event(status),
+                    event => {
+                        s.apply_event(event);
+                        true
+                    }
+                };
                 events += 1;
-                changed = true;
             }
             // A headless render has no event loop to wake, so it waits for a running Ask.
             Err(_)
@@ -1718,7 +1725,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_) => break,
         }
     }
-    if (events == 8 || Instant::now() >= deadline)
+    if (events == 8 || (events > 0 && Instant::now() >= deadline))
         && let Some(waker) = &s.waker
     {
         waker();

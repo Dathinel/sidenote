@@ -292,6 +292,19 @@ pub(super) struct Handle {
     dirty: Arc<AtomicBool>,
 }
 impl Handle {
+    #[cfg(test)]
+    pub(super) fn pause_take(
+        &self,
+        acquired: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        let slot = self.slot.clone();
+        std::thread::spawn(move || {
+            let _guard = slot.lock().unwrap();
+            acquired.send(()).unwrap();
+            let _ = release.recv();
+        })
+    }
     pub fn request(&self, options: Options) {
         let mut current = self.options.lock().unwrap();
         if *current != options {
