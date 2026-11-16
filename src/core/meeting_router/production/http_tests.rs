@@ -2,6 +2,17 @@
 use super::no_speech_tests::{Fixture, NativeFake};
 use super::*;
 use crate::platform::CommandExt;
+fn captured() -> Value {
+    serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap()
+}
+fn expected_text(top: bool) -> String {
+    let c = captured();
+    if top {
+        c["top_level"]["text"].as_str().unwrap().into()
+    } else {
+        c["transcription"]["transcript"].as_str().unwrap().into()
+    }
+}
 
 fn fixture(mode: u8) -> Fixture {
     let f = Fixture::new(b"public", 0, b"");
@@ -20,6 +31,27 @@ fn fixture(mode: u8) -> Fixture {
             .success()
     );
     fs::write(f.work.join("mode"), mode.to_string()).unwrap();
+    let c = captured();
+    let mut body = c["transcription"].clone();
+    body["durationMs"] = 200.into();
+    if mode == 6 {
+        body["transcript"] = "".into();
+    }
+    for (name, value) in [
+        ("http-reply", body),
+        ("top-reply", c["top_level"].clone()),
+        ("status-reply", c["status_fields"].clone()),
+        ("http-error", c["http_error"]["reply"].clone()),
+    ] {
+        fs::write(f.work.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    for (name, value) in [
+        ("api-version", c["ready"]["apiVersion"].as_str().unwrap()),
+        ("ready-type", c["ready"]["type"].as_str().unwrap()),
+        ("help-reply", c["help"].as_str().unwrap()),
+    ] {
+        fs::write(f.work.join(name), value).unwrap();
+    }
     f
 }
 fn run(f: &Fixture, timeout: Duration) -> Result<()> {
@@ -90,7 +122,7 @@ fn production_http_reuses_service_across_english_pieces() {
     for id in f.plan.batches["en"].keys() {
         assert_eq!(
             batches::read_result(&f.work, &f.plan, id).unwrap().unwrap()["text"],
-            "public HTTP"
+            expected_text(false)
         );
     }
     reaped(&f);
@@ -109,7 +141,7 @@ fn production_http_failure_falls_back_for_failed_and_remaining_pieces() {
         for id in f.plan.batches["en"].keys() {
             assert_eq!(
                 batches::read_result(&f.work, &f.plan, id).unwrap().unwrap()["text"],
-                "public fallback"
+                expected_text(true)
             );
         }
         reaped(&f);
