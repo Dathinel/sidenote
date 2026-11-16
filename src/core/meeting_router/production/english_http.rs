@@ -32,25 +32,33 @@ impl RunHex {
             }
             .into();
             self.state["service_close_seconds"] = started.elapsed().as_secs_f64().into();
-            self.state["cleanup_reason"] = if graceful {
+            self.cleanup(if graceful {
                 "english-batch-finished"
             } else {
                 "helper-aborted"
-            }
-            .into();
+            });
+        }
+    }
+    fn cleanup(&mut self, reason: &str) {
+        self.state["cleanup_reason"] = reason.into();
+        let reaped = self.state["service_reaped"].clone();
+        for range in self.state["ranges"].as_object_mut().unwrap().values_mut() {
+            range["cleanup_reason"] = reason.into();
+            range["service_reaped"] = reaped.clone();
         }
     }
     fn fallback(&mut self, reason: &str) {
         self.stop_service(false);
         self.state["fallback_reason"] = reason.into();
-        self.state["cleanup_reason"] = reason.into();
+        self.cleanup(reason);
     }
     fn record(&mut self, transport: &str, reply: Value) {
         if let Some(r) = &self.current {
             self.state["ranges"][&r.range_id] = json!({"transport":transport,
                 "model":r.model_id,"language":r.language,"reply":reply,
                 "fallback":if transport == "failed" { json!("captured-hex-baseline") } else { Value::Null },
-                "failure_reason":self.state["fallback_reason"]});
+                "failure_reason":self.state["fallback_reason"],"cleanup_reason":self.state["cleanup_reason"],
+                "service_reaped":self.state["service_reaped"]});
         }
     }
 }
@@ -60,12 +68,6 @@ impl HexCommand for RunHex {
     }
     fn finish(&mut self) -> std::result::Result<(), HexFailure> {
         self.stop_service(true);
-        let reason = self.state["cleanup_reason"].clone();
-        let reaped = self.state["service_reaped"].clone();
-        for range in self.state["ranges"].as_object_mut().unwrap().values_mut() {
-            range["cleanup_reason"] = reason.clone();
-            range["service_reaped"] = reaped.clone();
-        }
         self.save()?;
         if self.state["service_reaped"] == false {
             return Err(HexFailure::Failed);

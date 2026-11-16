@@ -235,11 +235,10 @@ impl OwnerWatch {
         let thread = thread::spawn(move || {
             let mut status =
                 super::hex_bridge::HexBridge::new(hex).with_timeout(Duration::from_secs(2));
-            loop {
-                match rx.recv_timeout(Duration::from_millis(100)) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    _ => break,
-                }
+            while matches!(
+                rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
                 if status.probe_idle() != Ok(true) {
                     observed.store(true, Ordering::Release);
                     let _ = job.terminate();

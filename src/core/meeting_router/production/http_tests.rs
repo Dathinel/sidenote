@@ -223,6 +223,10 @@ fn production_http_cancel_drop_reaps_service() {
     drop(bridge);
     reaped(&f);
     assert_eq!(receipt(&f)["service_reaped"], true);
+    for range in receipt(&f)["ranges"].as_object().unwrap().values() {
+        assert_eq!(range["cleanup_reason"], "helper-aborted");
+        assert_eq!(range["service_reaped"], true);
+    }
 }
 
 #[test]
