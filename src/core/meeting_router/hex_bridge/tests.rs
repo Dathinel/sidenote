@@ -53,6 +53,7 @@ fn status(id: &str, pending: u32, version: u32) -> Result<String> {
 }
 #[test]
 fn fake_hex_contract() {
+    let _guard = test_dispatch_guard();
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("range.wav");
     crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();

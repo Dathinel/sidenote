@@ -227,7 +227,7 @@ impl OwnerWatch {
         let (stop, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
             let mut status = super::hex_bridge::HexBridge::new(hex)
-                .with_timeout(Duration::from_millis(250));
+                .with_timeout(Duration::from_secs(2));
             loop {
                 match rx.recv_timeout(Duration::from_millis(100)) {
                     Err(mpsc::RecvTimeoutError::Timeout) => {},

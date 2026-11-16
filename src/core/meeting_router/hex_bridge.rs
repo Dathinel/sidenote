@@ -128,6 +128,12 @@ pub(super) fn reply_error(output: &str) -> Option<HexFailure> {
 }
 // Hex supplies no request id: hold this lock through dispatch, parsing and attribution.
 static SERIAL: Mutex<()> = Mutex::new(());
+#[cfg(test)]
+pub(super) fn test_dispatch_guard() -> std::sync::MutexGuard<'static, ()> {
+    // Production deliberately refuses concurrent dispatch; independent test cases share that lock.
+    static TEST: Mutex<()> = Mutex::new(());
+    TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 pub struct HexBridge<C> {
     command: C,
     json: Option<bool>,

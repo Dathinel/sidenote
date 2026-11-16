@@ -10,9 +10,11 @@ pub(super) struct Fixture {
     pub bridge: English,
     pub manifest: pieces::PieceManifest,
     pub baseline: Vec<Chunk>,
+    _dispatch: std::sync::MutexGuard<'static, ()>,
 }
 impl Fixture {
     pub fn new(reply: &[u8], exit: i32, stderr: &[u8]) -> Self {
+        let dispatch = super::super::hex_bridge::test_dispatch_guard();
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("local/router-work/123-4/batches");
         std::fs::create_dir_all(&work).unwrap();
@@ -85,6 +87,7 @@ impl Fixture {
             bridge: English(HexBridge::new(HexSpeech { executable })),
             manifest,
             baseline,
+            _dispatch: dispatch,
         }
     }
     pub fn run(&mut self, native: &mut impl NativeLoader) -> Result<()> {

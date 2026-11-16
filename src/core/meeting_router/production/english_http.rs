@@ -79,10 +79,15 @@ impl HexCommand for RunHex {
             let result = self.hex.call(args, timeout);
             if args.first() == Some(&"status") {
                 let idle = result.as_ref().ok().and_then(|s| serde_json::from_str::<Value>(s).ok())
-                    .is_some_and(|v| v["meeting"]["state"] == "idle"
+                    .is_some_and(|v| v["version"] == 4 && v["model"].get("preparing").is_some()
+                        && v["meeting"]["state"] == "idle"
                         && v["capture"]["state"] == "idle" && v["capture"]["pending_jobs"] == 0
                         && v["model"]["preparing"].is_null());
-                if !idle { self.stop_service(false); }
+                if !idle {
+                    self.fallback("owner-status-active-or-unknown");
+                    self.record("failed", Value::Null);
+                    self.save()?;
+                }
             }
             return result;
         }
