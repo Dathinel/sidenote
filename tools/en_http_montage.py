@@ -87,6 +87,9 @@ def run(pilot):
     status = json.loads(status.stdout)
     assert status['meeting']['state'] == status['capture']['state'] == 'idle'
     assert status['capture']['pending_jobs'] == 0 and status['model']['preparing'] is None
+    save(OUT/(name+'-status-reply.json'),dict(version=status['version'],
+        capture=dict(state=status['capture']['state'],pending_jobs=status['capture']['pending_jobs']),
+        meeting=dict(state=status['meeting']['state']),model=dict(preparing=status['model']['preparing'])))
     version = command(['hex.com','--version']).stdout.decode().strip()
     stopped = int(time.time()*1000);duration = 30 if pilot else 1800
     save(folder/'manifest.json',dict(status='complete',created_at_ms=stopped-duration*1000,
@@ -99,9 +102,20 @@ def run(pilot):
         binary_sha256=sha(EXE),config_sha256=sha(state/'config.json')))
     start=time.perf_counter();p=subprocess.Popen(list(map(str,argv)),env=env,stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,creationflags=FLAGS)
-    owned={}
-    with (OUT/(name+'-load.jsonl')).open('w') as log:
+    owned={};last_status=0;owner_observations=[]
+    with (OUT/(name+'-load.jsonl')).open('w') as log, (OUT/(name+'-owner-status.jsonl')).open('w') as owner_log:
         while p.poll() is None:
+            if time.monotonic()-last_status >= 5:
+                last_status=time.monotonic();observation=dict(utc=time.time(),known=False)
+                try:
+                    response=command(['hex.com','status','--json'],timeout=2)
+                    value=json.loads(response.stdout)
+                    if response.returncode == 0 and value['version'] == 4:
+                        observation.update(known=True,capture_active=value['capture']['state']!='idle',
+                            meeting_active=value['meeting']['state']!='idle',pending_jobs=value['capture']['pending_jobs'],
+                            model_preparing=value['model']['preparing'] is not None)
+                except (subprocess.TimeoutExpired,ValueError,KeyError,TypeError): pass
+                owner_observations.append(observation);owner_log.write(json.dumps(observation)+'\n');owner_log.flush()
             try:
                 for child in psutil.Process(p.pid).children(recursive=True):
                     if child.name().lower() in ['hex.exe','hex.com']:
@@ -123,6 +137,7 @@ def run(pilot):
     save(OUT/(name+'-run.json'),dict(id=ident,root=str(case),stopped_ms=stopped,seconds=time.perf_counter()-start,
         argv=list(map(str,argv)),hex_version_after=version_after,english_transport=read(transport) if transport.exists() else None,
         observed_owned_hex=list(owned.values()),surviving_owned_hex=survivors,
+        owner_status_observations=owner_observations,
         exit_code=p.returncode,hex_version=version,binary_sha256=sha(EXE),audio_seconds=duration,profile='release',
         omitted=['physical Stop/listener dispatch','pre-Stop capture','notes','translation','title','tasks','export','external comparison','install/download/login']))
     print(name,'exit',p.returncode,flush=True)
