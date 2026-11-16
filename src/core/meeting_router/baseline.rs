@@ -60,6 +60,13 @@ fn covered(baseline: &Chunk, segments: &[Segment], valid: &[bool], tolerance: f6
     let mut until = baseline.start;
     for (start, end) in spans {
         if start > until + tolerance {
+            #[cfg(test)]
+            if std::env::var_os("SIDENOTE_ASSEMBLY_TRACE").is_some() {
+                eprintln!(
+                    "baseline incomplete: id={} interval=[{},{}] first_gap=[{},{}] tolerance={tolerance}",
+                    baseline.id, baseline.start, baseline.end, until, start
+                );
+            }
             return false;
         }
         until = until.max(end);
@@ -104,6 +111,23 @@ fn reconcile_with_tolerance(
                     .zip(&complete)
                     .any(|(b, done)| overlaps(s, b) && !done)
             {
+                #[cfg(test)]
+                if std::env::var_os("SIDENOTE_ASSEMBLY_TRACE").is_some() {
+                    for (b, done) in baseline.iter().zip(&complete) {
+                        if overlaps(s, b) && !done {
+                            eprintln!(
+                                "reconcile drop: source={} route={} interval=[{},{}] baseline={} interval=[{},{}] complete=false",
+                                s.sources[0].chunk.id,
+                                s.route,
+                                s.start,
+                                s.end,
+                                b.id,
+                                b.start,
+                                b.end
+                            );
+                        }
+                    }
+                }
                 valid[i] = false;
                 changed = true;
             }

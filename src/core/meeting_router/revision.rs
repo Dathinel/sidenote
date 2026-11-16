@@ -223,7 +223,7 @@ pub fn assemble(
                 audio_start: None,
             };
             if !super::baseline::source_covered(&owned, &transcript.segments) {
-                return Err("Owned interval lacks routed or baseline coverage".into());
+                return Err(format!("Owned interval lacks routed or baseline coverage: track={} language={:?} samples=[{start},{end}] seconds=[{},{}]", range.track, range.range.language, owned.start, owned.end).into());
             }
         }
     }
@@ -247,6 +247,9 @@ pub fn assemble(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod captured_tests;
 
 #[cfg(all(test, windows))]
 mod receipts;
