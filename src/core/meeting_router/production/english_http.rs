@@ -14,25 +14,32 @@ impl RunHex {
             service: None,
             receipt: work.join("english-transport.json"),
             state: json!({"service_starts":0,"http_pieces":0,"command_pieces":0,
-                "fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0}),
+                "fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0,"service_close_seconds":0.0}),
         }
     }
     fn save(&self) -> std::result::Result<(), HexFailure> {
         store_io::write(&self.receipt, &self.state).map_err(|_| HexFailure::Failed)
     }
-    fn stop_service(&mut self) {
+    fn stop_service(&mut self, graceful: bool) {
         if let Some(mut service) = self.service.take() {
-            self.state["service_reaped"] = service.close().into();
+            let started = Instant::now();
+            self.state["service_reaped"] = if graceful {
+                service.close()
+            } else {
+                service.abort()
+            }
+            .into();
+            self.state["service_close_seconds"] = started.elapsed().as_secs_f64().into();
         }
     }
     fn fallback(&mut self, reason: &str) {
-        self.stop_service();
+        self.stop_service(false);
         self.state["fallback_reason"] = reason.into();
     }
 }
 impl HexCommand for RunHex {
     fn finish(&mut self) -> std::result::Result<(), HexFailure> {
-        self.stop_service();
+        self.stop_service(true);
         self.save()?;
         if self.state["service_reaped"] == false {
             return Err(HexFailure::Failed);
@@ -109,7 +116,7 @@ impl HexCommand for RunHex {
 }
 impl Drop for RunHex {
     fn drop(&mut self) {
-        self.stop_service();
+        self.stop_service(false);
         let _ = self.save();
     }
 }

@@ -4,6 +4,7 @@ use crate::platform::{JobProcess, ProcessJob};
 use serde::Deserialize;
 use std::{
     io::{BufRead, BufReader, Read},
+    os::windows::io::AsRawHandle,
     path::Path,
     process::Command,
     sync::mpsc,
@@ -64,7 +65,7 @@ impl Service {
             .ok()
             .flatten();
         if endpoint.is_none() {
-            service.close();
+            service.abort();
         }
         // Closing the job also closes descendant copies of stdout on a failed handshake.
         let _ = reader.join();
@@ -150,11 +151,28 @@ impl Service {
         Ok(transcript.to_owned())
     }
     pub(super) fn close(&mut self) -> bool {
+        self.stop(Duration::from_secs(3))
+    }
+    pub(super) fn abort(&mut self) -> bool {
+        self.stop(Duration::ZERO)
+    }
+    fn stop(&mut self, grace: Duration) -> bool {
         if let Some(process) = self.process.take() {
-            // Never wait for an in-flight decoder after cancellation or a request timeout.
-            let _ = self.job.terminate().or_else(|_| process.kill());
+            let handle = process.handle;
             drop(process.input);
-            if !matches!(JobProcess::wait_handle(&process.handle, 5000), Ok(Some(_))) {
+            // Normal exits honor the SDK's stdin lease; faults and cancellation skip the grace.
+            if !grace.is_zero() {
+                let _ = JobProcess::wait_handle(&handle, grace.as_millis() as u32);
+            }
+            if self.job.terminate().is_err() {
+                unsafe {
+                    windows_sys::Win32::System::Threading::TerminateProcess(
+                        handle.as_raw_handle(),
+                        1,
+                    );
+                }
+            }
+            if !matches!(JobProcess::wait_handle(&handle, 5000), Ok(Some(_))) {
                 return false;
             }
             let started = Instant::now();
@@ -167,7 +185,7 @@ impl Service {
 }
 impl Drop for Service {
     fn drop(&mut self) {
-        self.close();
+        self.abort();
     }
 }
 fn owns_port(pid: u32, port: u16) -> bool {
