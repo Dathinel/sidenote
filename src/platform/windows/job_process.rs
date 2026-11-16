@@ -16,6 +16,7 @@ pub struct JobProcess {
     pub input: std::io::PipeWriter,
 }
 impl ProcessJob {
+    #[cfg(feature = "asr-runtime")]
     pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
         use windows_sys::Win32::System::JobObjects::IsProcessInJob;
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };

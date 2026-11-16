@@ -1,6 +1,7 @@
 //! Missing speech is visible only with recorded router and baseline dispositions.
 use super::super::fallback::{Interval, RoutingFallback};
 use super::*;
+#[cfg(all(windows, feature = "asr-runtime"))]
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -10,6 +11,7 @@ pub(crate) struct NoSpeech {
     code: String,
 }
 
+#[cfg(all(windows, feature = "asr-runtime"))]
 pub(crate) fn capture(transcript: &[u8]) -> Result<Vec<NoSpeech>> {
     let mut records = Vec::new();
     for line in std::str::from_utf8(transcript)?

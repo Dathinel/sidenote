@@ -251,7 +251,7 @@ pub fn assemble(
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, windows, feature = "asr-runtime"))]
 mod captured_tests;
 
 #[cfg(all(test, windows))]
