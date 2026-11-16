@@ -1,5 +1,5 @@
 //! Shared completed-folder discovery. Configuration is explicit; no API credentials are read.
-use super::{BTreeSet, CatchUp, CompletedMeeting, Error, Source};
+use super::{BTreeMap, BTreeSet, CatchUp, CompletedMeeting, Error, Source, revision};
 use crate::core::meeting_router::inputs::MeetingScan;
 use std::{
     io,
@@ -28,10 +28,17 @@ impl Source for Discovery {
         self.catch_up().map(|(completed, _)| completed)
     }
     fn catch_up(&mut self) -> Result<CatchUp, Error> {
+        self.catch_up_excluding(&BTreeMap::new())
+    }
+    fn catch_up_excluding(
+        &mut self,
+        delivered: &BTreeMap<String, String>,
+    ) -> Result<CatchUp, Error> {
         let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
         })?;
+        let root_meta = std::fs::metadata(&self.0).map_err(|e| Error::Input(e.kind()))?;
         let mut completed = Vec::new();
         let mut ids = BTreeSet::new();
         for name in &scan.names {
@@ -39,12 +46,36 @@ impl Source for Discovery {
                 continue;
             };
             ids.insert(id.to_owned());
+            let before = if let Some(directory) = scan.metadata.get(name) {
+                revision::input_with_metadata(&self.0.join(id), &root_meta, directory)
+            } else {
+                revision::input_with_root(&self.0.join(id), &root_meta)
+            };
+            let Ok(before) = before else {
+                continue;
+            };
+            if delivered.get(id) == Some(&before) {
+                continue;
+            }
             match CompletedMeeting::capture_in(&scan, id) {
-                Ok(meeting) => completed.push(meeting),
+                Ok(mut meeting) => {
+                    if revision::input_with_root(&self.0.join(id), &root_meta)
+                        .is_ok_and(|after| after == before)
+                    {
+                        meeting.1 = before;
+                        completed.push(meeting);
+                    }
+                }
                 // A deleted, growing or temporarily locked folder cannot starve other meetings.
                 Err(Error::InvalidInput | Error::Incomplete | Error::Input(_)) => {}
                 Err(error) => return Err(error),
             }
+        }
+        if !scan
+            .root_matches(&self.0)
+            .map_err(|e| Error::Input(e.kind()))?
+        {
+            return Err(Error::Input(io::ErrorKind::Interrupted));
         }
         completed.sort_by(|a, b| a.id().cmp(b.id()));
         Ok((completed, Some(ids)))
@@ -56,6 +87,45 @@ mod tests {
     use super::*;
     use crate::core::recording_source::Session;
     use std::fs;
+
+    #[test]
+    fn same_name_rewrite_and_restore_are_delivered_after_restart() {
+        let (root, meetings, cursor) = super::super::tests::fixture();
+        let open = || Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
+        open().drain(|_| Ok(())).unwrap();
+        for restore in [false, true] {
+            if restore {
+                fs::rename(meetings.join("100-1"), root.path().join("saved")).unwrap();
+                fs::create_dir(meetings.join("100-1")).unwrap();
+                fs::copy(
+                    root.path().join("saved/manifest.json"),
+                    meetings.join("100-1/manifest.json"),
+                )
+                .unwrap();
+            }
+            fs::write(
+                meetings.join("100-1/transcript.ndjson"),
+                serde_json::json!({"text":format!("Synthetic replacement {restore}")}).to_string(),
+            )
+            .unwrap();
+            let mut delivered = Vec::new();
+            let mut restarted = open();
+            restarted
+                .drain(|m| {
+                    delivered.push(m.id().to_owned());
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                delivered,
+                ["100-1"],
+                "same-name input skipped, restore={restore}"
+            );
+            restarted
+                .drain(|_| panic!("unchanged input replayed"))
+                .unwrap();
+        }
+    }
 
     #[test]
     fn folder_scan_and_repeated_event_wakeups_share_the_durable_cursor() {

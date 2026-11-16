@@ -19,6 +19,8 @@ mod edit_worker;
 mod finder;
 mod hex;
 mod icons;
+#[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
+mod idle_cpu;
 mod list;
 mod live;
 mod mcp_connect;
@@ -1684,19 +1686,24 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
     if !s.edit_busy
         && let Some(snapshot) = s.scan_tx.as_ref().and_then(|h| h.take())
     {
+        changed |= snapshot.data.is_some();
         s.apply_event(Event::Refreshed(snapshot));
-        changed = true;
     }
     let mut events = 0;
     for _ in 0..8 {
-        if !headless && Instant::now() >= deadline {
+        if !headless && events > 0 && Instant::now() >= deadline {
             break;
         }
         match s.events_rx.try_recv() {
             Ok(event) => {
-                s.apply_event(event);
+                changed |= match event {
+                    Event::Hex(hex::Msg::Status(status)) => s.hex_status_event(status),
+                    event => {
+                        s.apply_event(event);
+                        true
+                    }
+                };
                 events += 1;
-                changed = true;
             }
             // A headless render has no event loop to wake, so it waits for a running Ask.
             Err(_)
@@ -1718,7 +1725,7 @@ fn apply_pending(s: &mut State, headless: bool) -> (bool, usize) {
             Err(_) => break,
         }
     }
-    if (events == 8 || Instant::now() >= deadline)
+    if (events == 8 || (events > 0 && Instant::now() >= deadline))
         && let Some(waker) = &s.waker
     {
         waker();
@@ -4179,6 +4186,31 @@ pub fn spec() -> AppSpec<State> {
         ],
         ..AppSpec::new("Sidenote", DEFAULT_SIZE, State::new, view)
     }
+}
+
+#[cfg(all(windows, feature = "idle-cpu-proof"))]
+pub fn idle_cpu_proof() -> bool {
+    let parent = std::env::temp_dir().join("idle-cpu-proof");
+    std::fs::create_dir_all(&parent).unwrap();
+    let root = tempfile::tempdir_in(parent).unwrap();
+    let mut args = Vec::new();
+    for (flag, name) in [
+        ("--data-dir", "data"),
+        ("--meetings-dir", "hex/meetings"),
+        ("--peers-dir", "peers"),
+    ] {
+        let path = root.path().join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        args.extend([std::ffi::OsString::from(flag), path.into_os_string()]);
+    }
+    let appdata = root.path().join("appdata");
+    std::fs::create_dir_all(&appdata).unwrap();
+    // This opt-in entry runs before any application worker or native window starts.
+    unsafe {
+        std::env::set_var("APPDATA", appdata);
+    }
+    core::configure_paths(&args).unwrap();
+    idle_cpu::run_proof()
 }
 
 pub fn run() {

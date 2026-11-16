@@ -15,11 +15,13 @@ use std::{collections::BTreeMap, path::Path};
 
 pub use sidenote::core::notes::StatusDetail as Job;
 pub fn read(root: &Path, meetings: &[Meeting]) -> BTreeMap<String, Job> {
-    meetings
-        .iter()
-        .filter(|m| m.device.is_none())
-        .filter_map(|m| core::notes::status_record(root, &m.id).map(|j| (m.id.clone(), j)))
-        .collect()
+    core::notes::status_records(
+        root,
+        meetings
+            .iter()
+            .filter(|m| m.device.is_none())
+            .map(|m| m.id.as_str()),
+    )
 }
 pub fn is_failure(state: &JobState) -> bool {
     matches!(

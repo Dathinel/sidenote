@@ -42,7 +42,7 @@ fn summary(folder: &Path) -> io::Result<bool> {
         Err(e) => Err(e),
     }
 }
-fn handoff_in(
+pub(crate) fn handoff_in(
     state: &Path,
     meetings: &Path,
     id: &str,
@@ -62,7 +62,7 @@ fn handoff_in(
         .ok_or_else(|| io::Error::other("Missing notes settings"))?;
     let accepted = || -> io::Result<bool> {
         let notes = match settings.engine() {
-            Engine::App => notes::queue::accepted(state, id)? || summary(&meetings.join(id))?,
+            Engine::App => notes::queue::accepted(state, meetings, id)?,
             Engine::Scripts(_) => summary(&meetings.join(id))?,
             Engine::Off => false,
         };

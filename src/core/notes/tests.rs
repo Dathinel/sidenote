@@ -8,6 +8,7 @@ mod corruption;
 mod review;
 #[cfg(windows)]
 mod routing;
+mod idle;
 use crate::core::{
     agent_instructions::{self, Agent},
     store_io,
@@ -764,7 +765,11 @@ fn summary_is_never_overwritten_or_requeued_automatically() {
     fs::write(folder.join("english-summary.json"), b"keep existing").unwrap();
     let s = settings_fixture();
     enqueue(&root.0, &s, None);
-    assert!(queue::read(&root.0, ID).unwrap().is_none());
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert!(matches!(job.state, JobState::Done { .. }));
+    assert_eq!(job.attempts, 0);
+    assert!(job.input_revision.is_some());
+    drain(&root.0, &s, &mut Fake::new(vec![]));
     assert_eq!(
         fs::read(folder.join("english-summary.json")).unwrap(),
         b"keep existing"

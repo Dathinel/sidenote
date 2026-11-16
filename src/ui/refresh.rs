@@ -183,16 +183,20 @@ pub(super) struct Metadata {
     relay_revision: Option<String>,
 }
 fn walk(path: &Path, out: &mut Metadata, depth: usize) {
-    #[cfg(windows)]
-    use std::os::windows::fs::MetadataExt;
-    if depth > 8 {
-        out.skipped += 1;
-        return;
-    }
     if !core::file_reads::directory(path) {
         if path.exists() {
             out.skipped += 1;
         }
+        return;
+    }
+    walk_checked(path, out, depth);
+}
+// Roots are checked above; every child is checked in its parent's enumeration.
+fn walk_checked(path: &Path, out: &mut Metadata, depth: usize) {
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
+    if depth > 8 {
+        out.skipped += 1;
         return;
     }
     let entries = match std::fs::read_dir(path) {
@@ -216,7 +220,7 @@ fn walk(path: &Path, out: &mut Metadata, depth: usize) {
             }
         };
         let path = e.path();
-        let m = match std::fs::symlink_metadata(&path) {
+        let m = match e.metadata() {
             Ok(m) => m,
             Err(_) => {
                 out.skipped += 1;
@@ -236,7 +240,7 @@ fn walk(path: &Path, out: &mut Metadata, depth: usize) {
                 out.skipped += 1;
                 continue;
             }
-            walk(&path, out, depth + 1);
+            walk_checked(&path, out, depth + 1);
         } else if core::file_reads::regular(&m)
             && path
                 .extension()
@@ -292,6 +296,28 @@ pub(super) struct Handle {
     dirty: Arc<AtomicBool>,
 }
 impl Handle {
+    #[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
+    pub(super) fn unchanged_snapshot_ready(&self) -> bool {
+        self.slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|result| result.data.is_none())
+    }
+
+    #[cfg(any(test, all(windows, feature = "idle-cpu-proof")))]
+    pub(super) fn pause_take(
+        &self,
+        acquired: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        let slot = self.slot.clone();
+        std::thread::spawn(move || {
+            let _guard = slot.lock().unwrap();
+            acquired.send(()).unwrap();
+            let _ = release.recv();
+        })
+    }
     pub fn request(&self, options: Options) {
         let mut current = self.options.lock().unwrap();
         if *current != options {

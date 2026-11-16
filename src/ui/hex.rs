@@ -597,6 +597,29 @@ impl State {
         }
     }
 
+    pub(super) fn hex_status_event(&mut self, r: Result<EngineState, HexError>) -> bool {
+        let changed = self.hex.status.as_ref() != Some(&r) || self.live.is_some();
+        let before = (
+            self.hex.installation.clone(),
+            self.hex.caps.clone(),
+            self.hex.caps_loading,
+            self.hex.data_loading,
+            self.ask_settings.recording,
+        );
+        // Keep capability retries, install detection and visibility handling on every sample.
+        self.hex_status(r);
+        changed
+            || self.live.is_some()
+            || before
+                != (
+                    self.hex.installation.clone(),
+                    self.hex.caps.clone(),
+                    self.hex.caps_loading,
+                    self.hex.data_loading,
+                    self.ask_settings.recording,
+                )
+    }
+
     fn hex_status(&mut self, r: Result<EngineState, HexError>) {
         self.hex_status_at(r, Instant::now());
     }

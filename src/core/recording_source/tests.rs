@@ -200,8 +200,13 @@ fn full_listing_prunes_only_absent_receipts_and_preserves_partial_inputs_on_rest
     fs::rename(root.path().join("hidden"), &meetings).unwrap();
     fs::write(transcript, b"{\"text\":\"synthetic restored\"}\n").unwrap();
     drop(session);
+    let mut restored = Vec::new();
     Session::open(discovery(), cursor)
         .unwrap()
-        .drain(|_| panic!("retained input replayed after restart"))
+        .drain(|m| {
+            restored.push(m.id().to_owned());
+            Ok(())
+        })
         .unwrap();
+    assert_eq!(restored, ["100-1"]);
 }

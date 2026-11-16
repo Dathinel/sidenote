@@ -9,10 +9,13 @@ use crate::core::{self, agent_instructions::Agent, file_reads, store_io};
 use crate::platform::CommandExt;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex, OnceLock},
+    time::SystemTime,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -35,6 +38,10 @@ pub(super) struct Job {
     pub transcript_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing_fallbacks: Vec<core::meeting_router::fallback::RoutingFallback>,
+    #[serde(default)]
+    pub input_revision: Option<String>,
+    #[serde(default)]
+    pub replace_summary: bool,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -61,6 +68,8 @@ impl Job {
             sorting_pending: false,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            input_revision: None,
+            replace_summary: false,
         }
     }
     fn ready(&self, time: i64, root: &Path) -> bool {
@@ -107,9 +116,62 @@ pub(super) fn read(root: &Path, id: &str) -> io::Result<Option<Job>> {
         Err(e) => Err(e),
     }
 }
+
+type JobStamp = (u64, SystemTime, Option<SystemTime>);
+#[derive(Default)]
+struct ScheduleCache {
+    root: PathBuf,
+    jobs: BTreeMap<String, (JobStamp, Arc<Job>)>,
+}
+fn job_stamp(path: &Path) -> io::Result<JobStamp> {
+    let meta = fs::symlink_metadata(path)?;
+    if !file_reads::regular(&meta) {
+        return Err(store_io::invalid("Unsafe notes job"));
+    }
+    Ok((meta.len(), meta.modified()?, meta.created().ok()))
+}
+// Only scheduling uses this cache; claiming work still rereads the locked job.
+fn scheduled_job(root: &Path, id: &str) -> io::Result<Option<Arc<Job>>> {
+    static CACHE: OnceLock<Mutex<ScheduleCache>> = OnceLock::new();
+    let path = job_path(root, id);
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            let mut cache = poisoned.into_inner();
+            cache.jobs.clear();
+            cache
+        });
+    if cache.root != root {
+        cache.root = root.to_owned();
+        cache.jobs.clear();
+    }
+    let before = match job_stamp(&path) {
+        Ok(stamp) => stamp,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            cache.jobs.remove(id);
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    if let Some((stamp, job)) = cache.jobs.get(id)
+        && *stamp == before
+    {
+        return Ok(Some(job.clone()));
+    }
+    cache.jobs.remove(id);
+    let job = read(root, id)?.map(Arc::new);
+    if let Some(job) = &job
+        && job_stamp(&path).is_ok_and(|after| after == before)
+    {
+        cache.jobs.insert(id.to_owned(), (before, job.clone()));
+    }
+    Ok(job)
+}
 #[cfg(any(windows, test))]
-pub(crate) fn accepted(root: &Path, id: &str) -> io::Result<bool> {
-    Ok(read(root, id)?.is_some())
+pub(crate) fn accepted(root: &Path, meetings: &Path, id: &str) -> io::Result<bool> {
+    let revision = core::recording_source::revision::input(&meetings.join(id))?;
+    Ok(read(root, id)?.is_some_and(|job| job.input_revision.as_ref() == Some(&revision)))
 }
 fn write(root: &Path, id: &str, job: &mut Job, state: JobState, message: &str) -> io::Result<()> {
     job.state = state;
@@ -176,17 +238,25 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    let revision = core::recording_source::revision::input(&meetings.join(id))?;
+    let unchanged = |job: &Job| {
+        job.input_revision.as_ref() == Some(&revision)
+            && (!matches!(job.state, JobState::Done { .. })
+                || meetings.join(id).join("english-summary.json").is_file())
+    };
     // A running job holds the job lock for its whole run. An existing job that needs no
     // change answers without taking that lock, so enqueue never waits on or fails at it.
     if read(root, id)?.is_some_and(|job| {
-        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+        (mode.is_none() && unchanged(&job))
+            || (mode.is_some() && matches!(job.state, JobState::Running | JobState::Queued))
     }) {
         return Ok(());
     }
     let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
     let previous = read(root, id)?;
     if previous.as_ref().is_some_and(|job| {
-        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+        (mode.is_none() && unchanged(job))
+            || (mode.is_some() && matches!(job.state, JobState::Running | JobState::Queued))
     }) {
         return Ok(());
     }
@@ -214,14 +284,32 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Meeting is not complete"));
     }
     let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
-    if meeting_job::preserve_summary(&folder, sorting) {
+    let changed = mode.is_none()
+        && (previous
+            .as_ref()
+            .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
+            || (previous.is_none() && core::recording_source::input_changed(root, id, &revision)));
+    let replace_summary = changed
+        || previous.as_ref().is_some_and(|job| {
+            job.replace_summary && !matches!(job.state, JobState::Done { .. })
+        });
+    if meeting_job::preserve_summary(&folder, sorting || replace_summary) {
+        let mut preserved = Job::new(None, settings);
+        preserved.input_revision = Some(revision);
+        preserved.state = JobState::Done {
+            fallback: false,
+            tasks_failed: !folder.join("tasks.json").is_file(),
+        };
+        store_io::write(&job_path(root, id), &preserved)?;
         return Ok(());
     }
     if sorting && !folder.join("english-summary.json").is_file() {
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
     let mut next = Job::new(mode, settings);
-    if core::meeting_router::jobs::notes_enabled(root)? {
+    next.input_revision = Some(revision);
+    next.replace_summary = replace_summary;
+    if !changed && core::meeting_router::jobs::notes_enabled(root)? {
         next.transcript_revision = previous
             .as_ref()
             .and_then(|j| j.transcript_revision.clone());
@@ -349,7 +437,8 @@ fn process(
     }
     let sort_only =
         job.sorting_pending || matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
-    if meeting_job::preserve_summary(&folder, sort_only) {
+    job.input_revision = core::recording_source::revision::input(&folder).ok();
+    if meeting_job::preserve_summary(&folder, sort_only || job.replace_summary) {
         return write(
             root,
             id,
@@ -417,6 +506,10 @@ fn process(
         } else {
             existing
         }
+    } else if job.replace_summary {
+        let fresh = transcript::read(&folder)?;
+        store_io::atomic_write(&folder.join("english-transcript.md"), fresh.as_bytes())?;
+        fresh
     } else {
         transcript::write(&folder)?
     };
@@ -609,7 +702,7 @@ fn process(
                 .to_owned(),
         );
         stage(root, id, job, JobStage::Publish)?;
-        match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, true) {
+        match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, !job.replace_summary) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return write(
@@ -719,7 +812,7 @@ pub(super) fn drain(
     };
     drain_locked(root, meetings, run, load)
 }
-fn drain_locked(
+pub(super) fn drain_locked(
     root: &Path,
     meetings: &Path,
     run: &mut impl Run,
@@ -737,6 +830,7 @@ fn drain_locked(
         }
         let mut ready = Vec::new();
         let mut missing = Vec::new();
+        store_io::reject_reparse(&jobs(root))?;
         for entry in fs::read_dir(jobs(root))? {
             let entry = entry?;
             let path = entry.path();
@@ -749,14 +843,14 @@ fn drain_locked(
             if !valid_id(id) {
                 continue;
             }
-            match read(root, id) {
+            match scheduled_job(root, id) {
                 Ok(Some(job)) if job.ready(now(), root) => {
                     if job_eligible(root, meetings, id, &job)? {
                         ready.push(id.to_owned());
                     }
                 }
                 Ok(Some(job)) if job.state == JobState::HelperMissing => {
-                    missing.push((id.to_owned(), job))
+                    missing.push((id.to_owned(), job.as_ref().clone()))
                 }
                 Err(_) => {
                     let target = path.with_extension(format!(
@@ -826,6 +920,7 @@ fn drain_locked(
             }
             if meetings.join(&id).join("english-summary.json").is_file()
                 && before.request != Some(Request::RedoTasks)
+                && !before.replace_summary
             {
                 before.sorting_pending = true;
             }
@@ -871,10 +966,39 @@ pub fn catch_up() -> io::Result<()> {
     if settings.engine() != Engine::App {
         return Ok(());
     }
+    #[cfg(windows)]
+    let delivered =
+        core::recording_source::delivered(&core::state_dir().join("local/recording-source.json"))
+            .unwrap_or_default();
+    #[cfg(windows)]
+    store_io::reject_reparse(&core::meetings_dir())?;
+    #[cfg(windows)]
+    let root_meta = fs::metadata(core::meetings_dir())?;
     let mut failure = None;
     for entry in fs::read_dir(core::meetings_dir()).at(Stage::CatchUpMeetings)? {
         let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
+        #[cfg(windows)]
+        let directory_meta = entry.metadata().ok();
+        #[cfg(windows)]
+        if valid_id(&id)
+            && directory_meta.as_ref().is_some_and(|meta| {
+                core::recording_source::revision::input_with_metadata(
+                    &entry.path(),
+                    &root_meta,
+                    meta,
+                )
+                .is_ok_and(|revision| delivered.get(&id) == Some(&revision))
+            })
+            && ((directory_meta
+                .as_ref()
+                .is_some_and(|meta| meta.is_dir() && !crate::platform::linked(meta))
+                && meeting_job::preserve_summary(&entry.path(), false))
+                || core::recording_guard::receipt(&core::state_dir(), &id)
+                    == core::recording_guard::Eligibility::Short)
+        {
+            continue;
+        }
         if valid_id(&id)
             && let Err(error) = enqueue_in(
                 &core::state_dir(),
@@ -901,6 +1025,16 @@ pub fn start_worker() -> io::Result<()> {
     }
     let root = core::state_dir();
     let meetings = core::meetings_dir();
+    start_worker_in(&root, &meetings, now(), launch_worker)
+}
+
+pub(super) fn start_worker_in(
+    root: &Path,
+    meetings: &Path,
+    time: i64,
+    launch: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    store_io::reject_reparse(&jobs(root))?;
     if !fs::read_dir(jobs(&root)).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             let path = e.path();
@@ -910,8 +1044,10 @@ pub fn start_worker() -> io::Result<()> {
             let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
                 return false;
             };
-            match read(&root, id) {
-                Ok(Some(job)) => job_eligible(&root, &meetings, id, &job).unwrap_or(false),
+            match scheduled_job(root, id) {
+                Ok(Some(job)) => {
+                    job.ready(time, root) && job_eligible(root, meetings, id, &job).unwrap_or(false)
+                }
                 Err(_) => true,
                 Ok(None) => false,
             }
@@ -919,6 +1055,10 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
+    launch()
+}
+
+fn launch_worker() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     if crate::service::active() {
         return crate::service::workers::start("notes", || {

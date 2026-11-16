@@ -19,6 +19,16 @@ fn main() {
     #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(all(windows, feature = "idle-cpu-proof"))]
+    if args.iter().any(|a| a == "--idle-cpu-seed-notes") {
+        let result = sidenote::core::configure_paths(&args)
+            .and_then(|_| sidenote::core::notes::idle_fixture::seed().map_err(|e| e.to_string()));
+        std::process::exit(i32::from(result.is_err()));
+    }
+    #[cfg(all(windows, feature = "idle-cpu-proof"))]
+    if args.iter().any(|a| a == "--idle-cpu-proof") {
+        std::process::exit(i32::from(!ui::idle_cpu_proof()));
+    }
     #[cfg(windows)]
     if args.iter().any(|a| a == "--routing-native") {
         std::process::exit(i32::from(

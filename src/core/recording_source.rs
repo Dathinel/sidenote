@@ -6,7 +6,7 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io,
     path::{Path, PathBuf},
 };
@@ -25,14 +25,24 @@ pub enum Error {
 }
 
 /// Carries identity, never paths or audio. The queue independently captures its inputs.
-pub struct CompletedMeeting(String);
+pub struct CompletedMeeting(String, String);
 impl CompletedMeeting {
     pub fn id(&self) -> &str {
         &self.0
     }
 
     pub fn capture(meetings: &Path, id: &str) -> Result<Self, Error> {
-        Self::capture_using(id, || Snapshot::capture(&meetings.join(id)))
+        if !valid_id(id) {
+            return Err(Error::InvalidInput);
+        }
+        let folder = meetings.join(id);
+        let before = revision::input(&folder).map_err(|e| Error::Input(e.kind()))?;
+        let mut meeting = Self::capture_using(id, || Snapshot::capture(&folder))?;
+        if revision::input(&folder).map_err(|e| Error::Input(e.kind()))? != before {
+            return Err(Error::Incomplete);
+        }
+        meeting.1 = before;
+        Ok(meeting)
     }
     pub(crate) fn capture_in(scan: &MeetingScan, id: &str) -> Result<Self, Error> {
         Self::capture_using(id, || scan.capture(id))
@@ -41,11 +51,7 @@ impl CompletedMeeting {
         id: &str,
         capture: impl FnOnce() -> io::Result<Snapshot>,
     ) -> Result<Self, Error> {
-        if id.is_empty()
-            || id.len() > 100
-            || !id.bytes().any(|b| b.is_ascii_digit())
-            || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-        {
+        if !valid_id(id) {
             return Err(Error::InvalidInput);
         }
         let input = capture().map_err(|e| Error::Input(e.kind()))?;
@@ -73,8 +79,15 @@ impl CompletedMeeting {
         {
             serde_json::from_str::<Segment>(line).map_err(|_| Error::Incomplete)?;
         }
-        Ok(Self(id.into()))
+        Ok(Self(id.into(), String::new()))
     }
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 100
+        && id.bytes().any(|b| b.is_ascii_digit())
+        && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
 }
 
 /// Completed inputs and an optional full listing, including incomplete inputs, for receipt retention.
@@ -90,6 +103,13 @@ pub trait Source {
     fn catch_up(&mut self) -> Result<CatchUp, Error> {
         Ok((self.poll()?, None))
     }
+    /// Adapters may avoid rereading inputs the session has already acknowledged.
+    fn catch_up_excluding(
+        &mut self,
+        _delivered: &BTreeMap<String, String>,
+    ) -> Result<CatchUp, Error> {
+        self.catch_up()
+    }
     fn stop(&mut self) {}
 }
 
@@ -97,6 +117,24 @@ pub trait Source {
 #[serde(deny_unknown_fields)]
 struct Cursor {
     delivered: BTreeSet<String>,
+    #[serde(default)]
+    revisions: BTreeMap<String, String>,
+}
+
+#[cfg(windows)]
+pub(crate) fn delivered(cursor: &Path) -> io::Result<BTreeMap<String, String>> {
+    Ok(store_io::read::<Cursor>(cursor)?.revisions)
+}
+
+pub(crate) mod revision;
+
+pub(crate) fn input_changed(root: &Path, id: &str, revision: &str) -> bool {
+    store_io::read::<Cursor>(&root.join("local/recording-source.json"))
+        .map(|cursor| {
+            cursor.delivered.contains(id)
+                && cursor.revisions.get(id).map(String::as_str) != Some(revision)
+        })
+        .unwrap_or(true)
 }
 
 pub struct Session<S: Source> {
@@ -132,16 +170,17 @@ impl<S: Source> Session<S> {
             .map_err(|e| Error::Cursor(e.kind()))?;
         let mut cursor: Cursor =
             store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
-        let (meetings, retained) = self.source.catch_up()?;
+        let (meetings, retained) = self.source.catch_up_excluding(&cursor.revisions)?;
         if let Some(ids) = retained {
             let before = cursor.delivered.len();
             cursor.delivered.retain(|id| ids.contains(id));
+            cursor.revisions.retain(|id, _| ids.contains(id));
             if cursor.delivered.len() != before {
                 store_io::write(&self.cursor, &cursor).map_err(|e| Error::Cursor(e.kind()))?;
             }
         }
         for meeting in meetings {
-            if cursor.delivered.contains(meeting.id()) {
+            if cursor.revisions.get(meeting.id()) == Some(&meeting.1) {
                 continue;
             }
             match enqueue(&meeting) {
@@ -149,6 +188,7 @@ impl<S: Source> Session<S> {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
                 Err(e) => return Err(Error::Dispatch(e.kind())),
             }
+            cursor.revisions.insert(meeting.0.clone(), meeting.1);
             cursor.delivered.insert(meeting.0);
             store_io::write(&self.cursor, &cursor).map_err(|e| Error::Cursor(e.kind()))?;
         }

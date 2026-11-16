@@ -8,7 +8,9 @@ pub mod queue;
 mod schema;
 mod status_detail;
 mod transcript;
-pub use status_detail::{StatusDetail, status_record};
+#[cfg(feature = "idle-cpu-proof")]
+pub mod idle_fixture;
+pub use status_detail::{StatusDetail, status_record, status_records};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

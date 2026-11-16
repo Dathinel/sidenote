@@ -20,6 +20,32 @@ function Safe-Version($Value) {
     if ($Value -is [string] -and $Value -cmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$') { return $Value }
     return 'missing or invalid'
 }
+function Measure-IdleCpu([string]$Exe) {
+    $samples = @()
+    try {
+        foreach ($item in @(Get-CimInstance Win32_Process -Filter "Name = 'sidenote.exe'")) {
+            if (-not $item.ExecutablePath -or $item.ExecutablePath -ine $Exe) { continue }
+            $kind = if ($item.CommandLine -match '(?i)(?:^|\s)"?--listen"?(?=\s|$)') { 'recorder' }
+                elseif ($item.CommandLine -match '(?i)\.exe"?\s*$') { 'window' } else { continue }
+            $process = Get-Process -Id $item.ProcessId -ErrorAction Stop
+            $samples += [pscustomobject]@{ Kind = $kind; Process = $process; Start = $process.StartTime; Cpu = $process.TotalProcessorTime.TotalSeconds }
+        }
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        Start-Sleep -Seconds 10
+        $parts = foreach ($kind in @('window', 'recorder')) {
+            $values = foreach ($sample in @($samples | Where-Object Kind -eq $kind)) {
+                try {
+                    $sample.Process.Refresh()
+                    if ($sample.Process.HasExited -or $sample.Process.StartTime -ne $sample.Start) { continue }
+                    100 * ($sample.Process.TotalProcessorTime.TotalSeconds - $sample.Cpu) / $clock.Elapsed.TotalSeconds
+                } catch { } # A process exiting during the sample is unavailable, not zero.
+            }
+            if (@($values).Count) { "$kind=$((@($values | ForEach-Object { '{0:F2}%' -f $_ })) -join ',')" }
+            else { "$kind=unavailable" }
+        }
+        return "10 s idle observation; % of one core; $($parts -join '; '); activity not checked"
+    } catch { return '10 s idle CPU sample unavailable (informational only)' }
+}
 function Invoke-ListenerCheck([string]$Exe) {
     $saved = @{}
     $flags = @{ SIDENOTE_TASK_NAME = 'Sidenote meeting listener'; SIDENOTE_TASK_EXE = $Exe
@@ -176,6 +202,7 @@ try {
     Add-Check 'Errors since install' ($count -eq 0) "count=$count; kinds=$names; undated-error-lines=$undated"
 } catch { Add-Check 'Errors since install' $false 'count=unknown; kinds=unavailable' }
 
+$rows.Add([pscustomobject]@{ Check = 'Idle CPU (informational)'; Result = 'INFO'; Observed = (Measure-IdleCpu $exe) })
 $rows | Format-Table -AutoSize | Out-String -Width 320 | Write-Output
 if (@($rows | Where-Object Result -eq 'FAIL').Count) { exit 1 }
 exit 0

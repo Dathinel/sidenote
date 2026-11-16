@@ -181,8 +181,20 @@ struct Input {
 pub(crate) struct MeetingScan {
     directory: Directory,
     pub names: Vec<std::ffi::OsString>,
+    pub metadata: std::collections::BTreeMap<std::ffi::OsString, fs::Metadata>,
 }
 impl MeetingScan {
+    pub(crate) fn root_matches(&self, path: &Path) -> io::Result<bool> {
+        let current = Directory::open(path)?;
+        #[cfg(windows)]
+        {
+            Ok(directory_id(&current.base)? == directory_id(&self.directory.base)?)
+        }
+        #[cfg(unix)]
+        {
+            Ok(stamp(&current.base, true)? == stamp(&self.directory.base, true)?)
+        }
+    }
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let directory = Directory::open(path)?;
         // Linux enumeration follows the pinned descriptor, not a replaceable root pathname.
@@ -193,10 +205,21 @@ impl MeetingScan {
         let enumeration = &directory.path;
         #[cfg(all(unix, not(target_os = "linux")))]
         let enumeration = path;
-        let names = fs::read_dir(enumeration)?
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<io::Result<_>>()?;
-        Ok(Self { directory, names })
+        let mut names = Vec::new();
+        let mut metadata = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(enumeration)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if let Ok(meta) = entry.metadata() {
+                metadata.insert(name.clone(), meta);
+            }
+            names.push(name);
+        }
+        Ok(Self {
+            directory,
+            names,
+            metadata,
+        })
     }
     pub(crate) fn capture(&self, id: &str) -> io::Result<Snapshot> {
         let name = std::ffi::OsStr::new(id);
