@@ -75,6 +75,12 @@ def run(pilot):
     else:
         shutil.copyfile(f['audio'],folder/'system.wav');assert sha(folder/'system.wav') == f['sha256']
     rows = read(root/'baseline.json');rows = rows[:1] if pilot else rows
+    capture = Path(read(OLD/'fixture.json')['root'])
+    for i, row in enumerate(rows):
+        if row['text'].strip(): continue
+        reply = read(capture/f'baseline-{i:02}-response.json')
+        assert reply.get('version') == 4 and reply.get('status') == 'error' and reply.get('code') == 'no-speech'
+        row['baseline_reply'] = reply
     (folder/'transcript.ndjson').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),encoding='utf-8')
     save(folder/'quick-title.json',dict(title='Public montage'))
     status = command(['hex.com','status','--json']);assert status.returncode == 0
