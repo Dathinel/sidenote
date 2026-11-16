@@ -88,7 +88,8 @@ def run(pilot):
     env = dict(os.environ, SIDENOTE_DATA_DIR=str(state),SIDENOTE_STATE_DIR=str(state),
         SIDENOTE_HEX_DIR=str(meetings),EN_HTTP_SUPPORT_DIR=f['support'])
     for key in ['OMP_NUM_THREADS','OMP_THREAD_LIMIT','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','NUMEXPR_NUM_THREADS']: env[key]='1'
-    argv = [EXE,'--route-pending','--automatic','--meeting-id',ident,'--data-dir',state,'--meetings-dir',meetings]
+    argv = [EXE,'--route-pending','--automatic','--meeting-id',ident,'--data-dir',state,'--meetings-dir',meetings,
+        '--hex-cli',case/'bin/hex.com']
     save(OUT/(name+'-started.json'),dict(argv=list(map(str,argv)),stopped_ms=stopped,
         binary_sha256=sha(EXE),config_sha256=sha(state/'config.json')))
     start=time.perf_counter();p=subprocess.Popen(list(map(str,argv)),env=env,stdout=subprocess.DEVNULL,
