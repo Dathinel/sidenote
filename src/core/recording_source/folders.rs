@@ -28,6 +28,9 @@ impl Source for Discovery {
         self.catch_up().map(|(completed, _)| completed)
     }
     fn catch_up(&mut self) -> Result<CatchUp, Error> {
+        self.catch_up_excluding(&BTreeSet::new())
+    }
+    fn catch_up_excluding(&mut self, delivered: &BTreeSet<String>) -> Result<CatchUp, Error> {
         let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
@@ -39,6 +42,9 @@ impl Source for Discovery {
                 continue;
             };
             ids.insert(id.to_owned());
+            if delivered.contains(id) {
+                continue;
+            }
             match CompletedMeeting::capture_in(&scan, id) {
                 Ok(meeting) => completed.push(meeting),
                 // A deleted, growing or temporarily locked folder cannot starve other meetings.

@@ -842,10 +842,25 @@ pub fn catch_up() -> io::Result<()> {
     if settings.engine() != Engine::App {
         return Ok(());
     }
+    #[cfg(windows)]
+    let delivered =
+        core::recording_source::delivered(&core::state_dir().join("local/recording-source.json"))
+            .unwrap_or_default();
     let mut failure = None;
     for entry in fs::read_dir(core::meetings_dir()).at(Stage::CatchUpMeetings)? {
         let entry = entry.at(Stage::CatchUpMeetings)?;
         let id = entry.file_name().to_string_lossy().into_owned();
+        #[cfg(windows)]
+        if valid_id(&id)
+            && delivered.contains(&id)
+            && (core::recording_guard::receipt(&core::state_dir(), &id)
+                == core::recording_guard::Eligibility::Short
+                || (store_io::reject_reparse(&entry.path()).is_ok()
+                    && meeting_job::preserve_summary(&entry.path(), false)
+                    && read(&core::state_dir(), &id).is_ok()))
+        {
+            continue;
+        }
         if valid_id(&id)
             && let Err(error) = enqueue_in(
                 &core::state_dir(),

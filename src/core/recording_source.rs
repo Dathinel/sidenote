@@ -90,6 +90,10 @@ pub trait Source {
     fn catch_up(&mut self) -> Result<CatchUp, Error> {
         Ok((self.poll()?, None))
     }
+    /// Adapters may avoid rereading inputs the session has already acknowledged.
+    fn catch_up_excluding(&mut self, _delivered: &BTreeSet<String>) -> Result<CatchUp, Error> {
+        self.catch_up()
+    }
     fn stop(&mut self) {}
 }
 
@@ -97,6 +101,11 @@ pub trait Source {
 #[serde(deny_unknown_fields)]
 struct Cursor {
     delivered: BTreeSet<String>,
+}
+
+#[cfg(windows)]
+pub(crate) fn delivered(cursor: &Path) -> io::Result<BTreeSet<String>> {
+    Ok(store_io::read::<Cursor>(cursor)?.delivered)
 }
 
 pub struct Session<S: Source> {
@@ -132,7 +141,7 @@ impl<S: Source> Session<S> {
             .map_err(|e| Error::Cursor(e.kind()))?;
         let mut cursor: Cursor =
             store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
-        let (meetings, retained) = self.source.catch_up()?;
+        let (meetings, retained) = self.source.catch_up_excluding(&cursor.delivered)?;
         if let Some(ids) = retained {
             let before = cursor.delivered.len();
             cursor.delivered.retain(|id| ids.contains(id));
