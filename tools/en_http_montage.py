@@ -53,14 +53,16 @@ int wmain(int argc,wchar_t **argv){
     assert command([gcc,'-municode','-Os','-static','-s',source,'-o',root/'hex.com'],env).returncode == 0
     save(OUT/'fixture.json', dict(root=str(root), audio=manifest['path'], sha256=manifest['sha256'],
         model_sha256=sha(model), manifest_sha256=sha(MANIFEST), support=str(support)))
-    save(OUT/'preflight.json', dict(speech_limit=378.67, english=73*(6.705/10),
-        hindi=132*(42.741/35)+1.670, telugu=89*(39.258/34)+1.244,
-        expected=73*(6.705/10)+132*(42.741/35)+1.670+89*(39.258/34)+1.244,
-        omitted_from_estimate=['service startup','status probes','pinning','spooling','VAD/LID','assembly/publication'],
-        audio_seconds=1800, profile='release', attempts=1))
+def preflight():
+    paper=read(OUT/'lengths-paper.json')
+    save(OUT/'preflight.json',dict(speech_limit=378.67,expected=paper['http_expected_seconds'],
+        source='lengths-paper.json: 20 actual production spans per language; calls*a + audio*b plus measured setup',
+        joining_assumption=paper['joining_assumption'],owner_stop_to_notes_target_seconds=[180,240],
+        notes='not measured',audio_seconds=1800,profile='release',attempts=1))
 def run(pilot):
     f = read(OUT/'fixture.json');root = Path(f['root']);name = 'pilot' if pilot else 'b'
     assert not (OUT/(name+'-started.json')).exists(), 'one attempt only'
+    assert read(OUT/'preflight.json')['expected'] == read(OUT/'lengths-paper.json')['http_expected_seconds']
     assert read(OUT/'preflight.json')['expected'] < 378.67
     case = root/name;state = case/'state';meetings = case/'meetings'
     state.mkdir(parents=True);(case/'bin').mkdir();shutil.copyfile(root/'hex.com',case/'bin/hex.com')
@@ -125,7 +127,8 @@ def score():
     module.ROOT=OUT;module.main()
 if __name__ == '__main__':
     OUT.mkdir(parents=True,exist_ok=True)
-    mode=argparse.ArgumentParser();mode.add_argument('mode',choices=['prepare','pilot','run','score']);args=mode.parse_args()
+    mode=argparse.ArgumentParser();mode.add_argument('mode',choices=['prepare','preflight','pilot','run','score']);args=mode.parse_args()
     if args.mode=='prepare': prepare()
+    elif args.mode=='preflight': preflight()
     elif args.mode=='score': score()
     else: run(args.mode=='pilot')
