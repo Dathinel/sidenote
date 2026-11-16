@@ -41,7 +41,6 @@ pub fn run(
             &mut clocks,
         )?;
         store_io::write(&work.join("batch-plan.json"), &plan)?;
-        let transport = tempfile::tempdir().unwrap();
         let mut bridge = Reuse {
             bridge: english_http::bridge(
                 hex_speech(),

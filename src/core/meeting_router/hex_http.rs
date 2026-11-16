@@ -141,15 +141,22 @@ impl Service {
         }
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| "service-json")?;
         let transcript = value["transcript"].as_str().ok_or("service-transcript")?;
+        if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
+            || !owns_port(endpoint.pid, url.port().unwrap())
+        {
+            return Err("service-owner-changed");
+        }
         // Empty success retains the existing NoSpeech disposition without restarting inference.
         Ok(transcript.to_owned())
     }
     pub(super) fn close(&mut self) -> bool {
         if let Some(process) = self.process.take() {
-            drop(process.input);
             // Never wait for an in-flight decoder after cancellation or a request timeout.
-            let _ = self.job.terminate();
-            let _ = JobProcess::wait_handle(&process.handle, u32::MAX);
+            let _ = self.job.terminate().or_else(|_| process.kill());
+            drop(process.input);
+            if !matches!(JobProcess::wait_handle(&process.handle, 5000), Ok(Some(_))) {
+                return false;
+            }
             let started = Instant::now();
             while !self.job.empty().unwrap_or(false) && started.elapsed() < Duration::from_secs(5) {
                 thread::sleep(Duration::from_millis(10));
