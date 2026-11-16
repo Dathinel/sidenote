@@ -36,104 +36,97 @@ pub fn run(
 ) -> Result<()> {
     #[cfg(feature = "asr-runtime")]
     {
-        if !config.validate_engine_settings().is_empty() {
-            return Err("Invalid engine settings".into());
-        }
-        let started = Instant::now();
-        let mut clocks = BTreeMap::new();
-        let normalized = work.join("normalized");
-        fs::create_dir_all(&normalized)?;
-        let input = inputs::Snapshot::capture(folder)?;
-        store_io::atomic_write(&normalized.join("manifest.json"), &input.manifest)?;
-        store_io::atomic_write(&normalized.join("transcript.ndjson"), &input.transcript)?;
-        let manifest: Value = serde_json::from_slice(&input.manifest)?;
-        let mut origins = BTreeMap::new();
-        for (track, path) in paths {
-            fs::copy(path, normalized.join(format!("{track}.wav")))?;
-            origins.insert(track.clone(), origin(&manifest[track]["first_arrival_us"])?);
-        }
-        let (plan, pieces, _english_pin) = plan::produce(
-            &normalized,
-            work,
-            config,
-            &origins,
-            input_revision,
-            &mut clocks,
-        )?;
-        store_io::write(&work.join("batch-plan.json"), &plan)?;
-        let mut bridge = Reuse {
-            bridge: english_http::bridge(
-                hex_speech(),
+        with_clocks(work, |clocks, started| {
+            if !config.validate_engine_settings().is_empty() {
+                return Err("Invalid engine settings".into());
+            }
+            let normalized = work.join("normalized");
+            fs::create_dir_all(&normalized)?;
+            let input = inputs::Snapshot::capture(folder)?;
+            store_io::atomic_write(&normalized.join("manifest.json"), &input.manifest)?;
+            store_io::atomic_write(&normalized.join("transcript.ndjson"), &input.transcript)?;
+            let manifest: Value = serde_json::from_slice(&input.manifest)?;
+            let mut origins = BTreeMap::new();
+            for (track, path) in paths {
+                fs::copy(path, normalized.join(format!("{track}.wav")))?;
+                origins.insert(track.clone(), origin(&manifest[track]["first_arrival_us"])?);
+            }
+            let (plan, pieces, _english_pin) =
+                plan::produce(&normalized, work, config, &origins, input_revision, clocks)?;
+            store_io::write(&work.join("batch-plan.json"), &plan)?;
+            let mut bridge = Reuse {
+                bridge: english_http::bridge(
+                    hex_speech(),
+                    work,
+                    Duration::from_secs(u64::from(
+                        config.engine_settings.stages.asr_request_deadline_seconds,
+                    )),
+                ),
+                baseline,
+                origins: &origins,
+            };
+            let stages = &config.engine_settings.stages;
+            let audio_seconds: f64 = plan
+                .batches
+                .values()
+                .flat_map(|b| b.values())
+                .map(|r| (r.range.context.1 - r.range.context.0) as f64 / 16000.0)
+                .sum();
+            let seconds = config
+                .engine_settings
+                .stage_deadline_seconds
+                .filter(|s| *s > 0)
+                .map(f64::from)
+                .unwrap_or(
+                    (audio_seconds
+                        * stages.asr_seconds_per_audio_second_per_pass
+                        * stages.asr_deadline_headroom
+                        + 15.0)
+                        .clamp(30.0, 7200.0),
+                );
+            clocks.insert("asr_budget_seconds".into(), seconds);
+            run_batches(
                 work,
-                Duration::from_secs(u64::from(
-                    config.engine_settings.stages.asr_request_deadline_seconds,
-                )),
-            ),
-            baseline,
-            origins: &origins,
-        };
-        let stages = &config.engine_settings.stages;
-        let audio_seconds: f64 = plan
-            .batches
-            .values()
-            .flat_map(|b| b.values())
-            .map(|r| (r.range.context.1 - r.range.context.0) as f64 / 16000.0)
-            .sum();
-        let seconds = config
-            .engine_settings
-            .stage_deadline_seconds
-            .filter(|s| *s > 0)
-            .map(f64::from)
-            .unwrap_or(
-                (audio_seconds
-                    * stages.asr_seconds_per_audio_second_per_pass
-                    * stages.asr_deadline_headroom
-                    + 15.0)
-                    .clamp(30.0, 7200.0),
-            );
-        clocks.insert("asr_budget_seconds".into(), seconds);
-        run_batches(
-            work,
-            &plan,
-            &mut Native(config),
-            &mut bridge,
-            Duration::from_secs_f64(seconds),
-            &mut clocks,
-            started,
-        )?;
-        let assemble_started = Instant::now();
-        let mut revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
-        revision.provenance["english_transport"] = serde_json::from_slice(
-            &store_io::read_bounded(&work.join("english-transport.json"), 65536)?,
-        )?;
-        let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
-            &inputs::Snapshot::read_file(&work.join("uncertainty.json"), 16 << 20)?,
-        )?;
-        super::super::fallback::attach(&mut revision, &fallbacks)?;
-        let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
-            &work.join("coverage.json"),
-            16 << 20,
-        )?)?;
-        if coverage
-            .iter()
-            .any(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
-        {
-            return Err("Speech lacks routed or explicit baseline coverage".into());
-        }
-        clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
-        clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
-        store_io::write(&work.join("clocks.json"), &clocks)?;
-        store_io::write(
-            &work.join("output.json"),
-            &jobs::BatchOutput {
-                generation: generation.to_string(),
-                source_revision: input_revision.to_owned(),
-                plan,
-                manifest: pieces,
-                fallbacks,
-            },
-        )?;
-        Ok(())
+                &plan,
+                &mut Native(config),
+                &mut bridge,
+                Duration::from_secs_f64(seconds),
+                clocks,
+                started,
+            )?;
+            let assemble_started = Instant::now();
+            let assembled = revision::assemble(work, &plan, &pieces, baseline, generation);
+            clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
+            let mut revision = assembled?;
+            revision.provenance["english_transport"] = serde_json::from_slice(
+                &store_io::read_bounded(&work.join("english-transport.json"), 65536)?,
+            )?;
+            let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
+                &inputs::Snapshot::read_file(&work.join("uncertainty.json"), 16 << 20)?,
+            )?;
+            super::super::fallback::attach(&mut revision, &fallbacks)?;
+            let coverage: Vec<Chunk> = serde_json::from_slice(&store_io::read_bounded(
+                &work.join("coverage.json"),
+                16 << 20,
+            )?)?;
+            if coverage
+                .iter()
+                .any(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
+            {
+                return Err("Speech lacks routed or explicit baseline coverage".into());
+            }
+            store_io::write(
+                &work.join("output.json"),
+                &jobs::BatchOutput {
+                    generation: generation.to_string(),
+                    source_revision: input_revision.to_owned(),
+                    plan,
+                    manifest: pieces,
+                    fallbacks,
+                },
+            )?;
+            Ok(())
+        })
     }
     #[cfg(not(feature = "asr-runtime"))]
     {
@@ -147,6 +140,28 @@ pub fn run(
             generation,
         );
         Err("Production routing requires asr-runtime".into())
+    }
+}
+
+#[cfg(feature = "asr-runtime")]
+fn with_clocks(
+    work: &Path,
+    run: impl FnOnce(&mut BTreeMap<String, f64>, Instant) -> Result<()>,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut clocks = BTreeMap::new();
+    let result = run(&mut clocks, started);
+    clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
+    let mut value = serde_json::to_value(clocks)?;
+    if result.is_err() {
+        value["partial"] = true.into();
+    }
+    match (result, store_io::write(&work.join("clocks.json"), &value)) {
+        (Err(error), Err(clock_error)) => {
+            Err(format!("{error}; clocks could not be written: {clock_error}").into())
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), saved) => Ok(saved?),
     }
 }
 
