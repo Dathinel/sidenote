@@ -809,6 +809,7 @@ fn drain_locked(
                 .is_err_and(|e| store_io::message(e) == Some("routing_pending"));
             before.transcript_revision = job.transcript_revision;
             before.routing_fallbacks = job.routing_fallbacks;
+            before.translation = job.translation;
             if routing_pending {
                 before.next_try_at = Some(now().saturating_add(1000));
                 before.message = "waiting for transcript revision".into();
