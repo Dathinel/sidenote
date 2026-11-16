@@ -185,6 +185,16 @@ fn baseline_of<'a>(s: &Segment, baseline: &'a [Chunk]) -> Option<&'a Chunk> {
     })
 }
 
+fn fallback_intersection(required: &RequiredFallback, unit: &Chunk) -> Option<Interval> {
+    let start = required.interval.start.max(unit.start);
+    let end = required.interval.end.min(unit.end);
+    (required.interval.track == unit.track && start < end).then(|| Interval {
+        track: unit.track.clone(),
+        start,
+        end,
+    })
+}
+
 pub(super) fn receipt(
     a: &Segment,
     b: &Segment,
@@ -212,11 +222,7 @@ pub(super) fn receipt(
     let required: Vec<_> = coverage
         .fallback_required
         .iter()
-        .filter(|r| {
-            r.interval.track == unit.track
-                && unit.start <= r.interval.start
-                && r.interval.end <= unit.end
-        })
+        .filter(|r| fallback_intersection(r, unit).is_some())
         .collect();
     if required.is_empty() {
         return None;
@@ -256,11 +262,10 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
                 return true;
             };
             !overlaps(s, candidate)
-                || coverage.fallback_required.iter().any(|r| {
-                    r.interval.track == unit.track
-                        && r.interval.start < unit.end
-                        && unit.start < r.interval.end
-                })
+                || coverage
+                    .fallback_required
+                    .iter()
+                    .any(|r| fallback_intersection(r, unit).is_some())
         });
         let mut selected = candidate.clone();
         selected.english_reading = baseline

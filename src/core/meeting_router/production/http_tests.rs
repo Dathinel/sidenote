@@ -444,3 +444,78 @@ fn production_http_cached_batch_retains_reply_identity_and_cleanup() {
         first
     );
 }
+
+#[test]
+fn saved_fallback_crossing_two_baseline_sentences_publishes_exact_bounds() {
+    let mut f = fixture(0);
+    let mut ranges = Vec::new();
+    for (lang, context) in [("en", (0, 8000)), ("hi", (24000, 40000))] {
+        let mut r: Range = serde_json::from_value(
+            serde_json::to_value(f.plan.batches[lang].values().next().unwrap()).unwrap(),
+        )
+        .unwrap();
+        r.range.context = context;
+        r.range.members = vec![(0, context)];
+        r.wav = f.work.join(format!("boundary-{lang}.wav"));
+        asr::write_wav(&r.wav, &vec![0.0; (context.1 - context.0) as usize]).unwrap();
+        ranges.push(r);
+    }
+    f.plan = batches::spool(&f.work, ranges).unwrap();
+    f.baseline.truncate(2);
+    run(&f, Duration::from_secs(20)).unwrap();
+    let record = json!({"reason":"guard_rejected",
+        "interval":{"track":"system","start":0.5,"end":1.5}});
+    store_io::write(&f.work.join("uncertainty.json"), &json!([record])).unwrap();
+    let coverage: Vec<_> = [(0.0, 0.5), (0.5, 1.5), (1.5, 2.5)]
+        .into_iter()
+        .map(|(start, end)| {
+            let mut c = f.baseline[0].clone();
+            c.start = start;
+            c.end = end;
+            c.english.clear();
+            c
+        })
+        .collect();
+    store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let saved = publish(&f, &assembled);
+    for unit in &f.baseline {
+        let s = saved
+            .transcript
+            .segments
+            .iter()
+            .find(|s| s.text_original == unit.english)
+            .unwrap();
+        assert_eq!((s.start, s.end), (unit.start, unit.end));
+    }
+    let native = saved
+        .transcript
+        .segments
+        .iter()
+        .find(|s| s.route == "hi")
+        .unwrap();
+    assert_eq!((native.start, native.end), (1.5, 2.5));
+    let receipt = &saved.provenance["assembly_coverage"]["overlaps"][0];
+    assert_eq!(receipt["fallback_required"][0]["record"], record);
+    assert_eq!(
+        receipt["fallback_required"][0]["interval"],
+        record["interval"]
+    );
+    let dest = f.root.path().join("local/transcripts/123-4");
+    let mut invalid = saved.clone();
+    invalid.transcript.segments.push(native.clone());
+    assert!(revision::commit(&dest, &invalid).is_err());
+    let mut invalid = saved.clone();
+    let expanded = invalid
+        .transcript
+        .segments
+        .iter_mut()
+        .find(|s| s.text_original == f.baseline[1].english)
+        .unwrap();
+    expanded.end += 1.0;
+    expanded.sources[0].chunk.end += 1.0;
+    assert!(revision::commit(&dest, &invalid).is_err());
+    store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
+    assert!(pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).is_err());
+}
