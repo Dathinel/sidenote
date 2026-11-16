@@ -289,7 +289,11 @@ pub(super) fn enqueue_in(
             .as_ref()
             .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
             || (previous.is_none() && core::recording_source::input_changed(root, id, &revision)));
-    if meeting_job::preserve_summary(&folder, sorting || changed) {
+    let replace_summary = changed
+        || previous.as_ref().is_some_and(|job| {
+            job.replace_summary && !matches!(job.state, JobState::Done { .. })
+        });
+    if meeting_job::preserve_summary(&folder, sorting || replace_summary) {
         let mut preserved = Job::new(None, settings);
         preserved.input_revision = Some(revision);
         preserved.state = JobState::Done {
@@ -304,7 +308,7 @@ pub(super) fn enqueue_in(
     }
     let mut next = Job::new(mode, settings);
     next.input_revision = Some(revision);
-    next.replace_summary = changed;
+    next.replace_summary = replace_summary;
     if !changed && core::meeting_router::jobs::notes_enabled(root)? {
         next.transcript_revision = previous
             .as_ref()

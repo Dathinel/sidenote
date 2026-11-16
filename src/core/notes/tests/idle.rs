@@ -2,6 +2,73 @@ use super::*;
 use crate::core::recording_source::{Session, folders::Discovery};
 
 #[test]
+fn explicit_retry_of_failed_replacement_keeps_old_summary_until_new_notes_publish() {
+    for recovery in [false, true] {
+        let root = Temp::new();
+        let mut s = settings_fixture();
+        let folder = meeting(&root.0, "Synthetic generation A");
+        enqueue(&root.0, &s, None);
+        drain(
+            &root.0,
+            &s,
+            &mut Fake::new(vec![Ok(summary()), Ok(sorted())]),
+        );
+        let old = fs::read(folder.join("english-summary.json")).unwrap();
+        meeting(&root.0, "Synthetic replacement generation B");
+        enqueue(&root.0, &s, None);
+        drain(
+            &root.0,
+            &s,
+            &mut Fake::new(vec![Err(Failure::Limit { exit: Some(1) })]),
+        );
+        assert!(matches!(state(&root.0), JobState::HelperLimit { .. }));
+        assert!(queue::read(&root.0, ID).unwrap().unwrap().replace_summary);
+        let retry = if recovery {
+            s.helper = Some(Helper::Codex);
+            Request::UseCodex
+        } else {
+            status_record(&root.0, ID).unwrap().retry_request()
+        };
+        enqueue(&root.0, &s, Some(retry));
+        assert_eq!(
+            state(&root.0),
+            JobState::Queued,
+            "retry accepted the old summary"
+        );
+        assert!(queue::read(&root.0, ID).unwrap().unwrap().replace_summary);
+        drain(&root.0, &s, &mut Fake::new(vec![Err(Failure::TimedOut)]));
+        assert_eq!(state(&root.0), JobState::TimedOut);
+        assert_eq!(fs::read(folder.join("english-summary.json")).unwrap(), old);
+        enqueue(
+            &root.0,
+            &s,
+            Some(status_record(&root.0, ID).unwrap().retry_request()),
+        );
+        let mut run = Fake::new(vec![
+            Ok(summary().replace("Plan the delivery", "Generation B notes")),
+            Ok(sorted()),
+        ]);
+        drain(&root.0, &s, &mut run);
+        assert_eq!(run.calls.len(), 2);
+        assert!(
+            run.calls[0]
+                .0
+                .contains("Synthetic replacement generation B")
+        );
+        assert_eq!(run.selections[0].0, s.helper.unwrap());
+        assert!(matches!(state(&root.0), JobState::Done { .. }));
+        assert!(
+            fs::read_to_string(folder.join("english-summary.json"))
+                .unwrap()
+                .contains("Generation B notes")
+        );
+        println!(
+            "replacement explicit retry: recovery={recovery}, old summary retained on failure, generation B published"
+        );
+    }
+}
+
+#[test]
 fn changed_same_name_input_replaces_production_done_notes_after_restart() {
     let root = Temp::new();
     let settings = settings_fixture();

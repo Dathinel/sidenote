@@ -375,3 +375,24 @@ This report is a separate documentation-only layer, force-added because artifact
 Not verified: installed recorder/window CPU, native rendering/GPU, real Hex latency/accuracy or Ctrl+Space behavior, a real recording or re-recording, connected SSE, all-feature release check, Linux boundary check, packaging or installation. Metadata-only identity does not detect deliberate content edits preserving every tracked metadata field. No owner setting, installed app, scheduled task, Hex state/priority or owner recorder log was changed. Only the required build wrapper read its permitted recorder-log gate.
 
 Work buckets: orientation read the supplied rules/review/source; edits cover only the two findings and their qualification; verification covers reversion tests, whole binaries and process-tree CPU; rework covers the stale rendering path, retry-pin/input-stamp compatibility, seed-CLI type conversion, retained-job payload cost and metadata/status history cost; waiting is dominated by compilation and wrapper queues. Largest avoidable waste: starting the first opt-in optimized build before type-checking the new seed CLI. The CPU failures were kept and used to select the next fix, not repeated until a pass appeared.
+
+## Final narrow retry fix after round 2
+
+Decisions needed: none. The final-review replacement-retry defect is fixed here; the delayed-empty-poll wake remains the documented open item above. This layer starts at 7ed6f56; its final head and shortstat are supplied in the handoff. No other production path was edited.
+
+Enqueue carries an unfinished job's replace_summary flag into its explicit retry, including Codex recovery, while leaving fresh-input detection and transcript-pin copying separate. A successfully completed replacement does not force subsequent requests to replace its completed summary. The production-path test creates A's notes through enqueue/drain, rewrites the synthetic transcript to B, triggers HelperLimit, and explicitly retries with A's summary present. Both Try again and UseCodex then survive a second TimedOut failure with A's bytes unchanged and the failure visible; another retry invokes notes and task steps and publishes B. Input is synthetic transcript.ndjson; English rendering and synthetic summary/task helpers run, with no audio, ASR or translation service.
+
+The sibling-path search covered preserve_summary/replace_summary in notes and meeting_job: enqueue, processing, rendering and publication use the same persisted flag; the retry defect is corrected at shared enqueue. Rung 4 red/green output:
+
+```text
+RED (original production code): retry accepted the old summary
+left: Done { fallback: false, tasks_failed: false }; right: Queued
+test result: FAILED. 0 passed; 1 failed; exit 101
+GREEN: replacement explicit retry: recovery=false, old summary retained on failure, generation B published
+GREEN: replacement explicit retry: recovery=true, old summary retained on failure, generation B published
+test result: ok. 1 passed; 0 failed; exit 0
+```
+
+Commands use the prescribed GNU PATH and isolated temporary data/meetings/peers/APPDATA. Through tools/local_build.ps1: `test -p sidenote --target x86_64-pc-windows-gnu --lib <selector> --no-fail-fast -- --nocapture --test-threads=1`, selector explicit_retry_of_failed_replacement for red/green, core::notes::tests for the changed module, and omitted for the whole library binary. Logs: replacement-retry-red.log, replacement-retry-green.log, replacement-retry-notes.log, replacement-retry-whole.log. Ordinary unoptimized test build, no audio; runtime is verification cost.
+
+Changed notes module: 70 passed / 0 failed, exit 0. Whole library binary: 559 passed / 0 failed / 1 ignored, exit 0, 300.68 seconds. Installed behavior, real helpers, release/CPU qualification on this final layer and release/Linux/packaging checks were not rerun; the prior CPU results identify the earlier executable. No installation, Hex/owner-state change, push or GitHub write occurred.
