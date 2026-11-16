@@ -11,6 +11,10 @@ use std::{
 
 pub(super) struct Data {
     pub id: Option<&'static str>,
+    pub omit_id: bool,
+    pub meeting_state: Option<&'static str>,
+    pub stop_changed: bool,
+    pub commands: Vec<String>,
     pub delay: Duration,
     pub stops: usize,
     pub starts: usize,
@@ -38,6 +42,10 @@ impl Fixture {
         let port = listener.local_addr().unwrap().port();
         let data = Arc::new(Mutex::new(Data {
             id: Some("100-1"),
+            omit_id: false,
+            meeting_state: None,
+            stop_changed: true,
+            commands: Vec::new(),
             delay: Duration::ZERO,
             stops: 0,
             starts: 0,
@@ -85,15 +93,18 @@ impl Fixture {
                     return;
                 }
                 let request: Value = serde_json::from_slice(&body).unwrap();
+                shared.lock().unwrap().commands.push(request["command"].as_str().unwrap().into());
                 let reply = match request["command"].as_str().unwrap() {
                     "status" => {
                         let delay = shared.lock().unwrap().delay;
                         thread::sleep(delay);
-                        let id = shared.lock().unwrap().id;
-                        serde_json::json!({"version":4,"status":"status","app_version":"test",
+                        let data = shared.lock().unwrap();
+                        let mut reply = serde_json::json!({"version":4,"status":"status","app_version":"test",
                             "model":{},"capture":{"state":"idle"},"capabilities":{"meetings":true},
                             "features":{"meetings":true},
-                            "meeting":{"state":if id.is_some() {"recording"} else {"idle"},"id":id,"elapsed_seconds":1}})
+                            "meeting":{"state":data.meeting_state.unwrap_or(if data.id.is_some() {"recording"} else {"idle"}),"id":data.id,"elapsed_seconds":1}});
+                        if data.omit_id { reply["meeting"].as_object_mut().unwrap().remove("id"); }
+                        reply
                     }
                     "meeting-record" => {
                         let release = {
@@ -116,7 +127,8 @@ impl Fixture {
                         let mut data = shared.lock().unwrap();
                         data.stops += 1;
                         data.id = None;
-                        serde_json::json!({"version":4,"status":"done","changed":true})
+                        data.meeting_state = None;
+                        serde_json::json!({"version":4,"status":"done","changed":data.stop_changed})
                     }
                     other => panic!("unexpected fake API command: {other}"),
                 }.to_string();
