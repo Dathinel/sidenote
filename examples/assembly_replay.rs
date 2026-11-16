@@ -23,8 +23,23 @@ fn main() -> sidenote::core::asr::Result<()> {
     let pieces = serde_json::from_slice(&read("pieces.json")?)?;
     let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")?)?;
     let started = Instant::now();
-    let data = production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)?;
+    let assembled = production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1);
     let assembly_seconds = started.elapsed().as_secs_f64();
+    let data = match assembled {
+        Ok(data) => data,
+        Err(error) => {
+            fs::create_dir_all(&out)?;
+            let summary = serde_json::json!({"success":false,"assembly_seconds":assembly_seconds,
+                "publication_seconds":null,"profile":if cfg!(debug_assertions) {"debug"} else {"release"},
+                "audio_seconds":1800,"planned":plan.batches.values().map(|b| b.len()).sum::<usize>(),
+                "error":error.to_string(),"omitted":"all audio inference, physical Stop, normalization, planning, notes; publication refused"});
+            fs::write(
+                out.join("summary.json"),
+                serde_json::to_vec_pretty(&summary)?,
+            )?;
+            return Err(error);
+        }
+    };
     let dest = temp.path().join("published");
     revision::begin(&dest, 1)?;
     let started = Instant::now();
