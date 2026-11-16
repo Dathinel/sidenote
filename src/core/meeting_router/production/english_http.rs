@@ -100,6 +100,21 @@ impl RunHex {
     }
 }
 impl HexCommand for RunHex {
+    fn can_reuse(&self, request: &HexRequest) -> bool {
+        let record = &self.state["ranges"][&request.range_id];
+        record["transport"] == "http"
+            && record["model"] == request.model_id
+            && record["language"] == request.language
+            && record["service_reaped"] == true
+            && record["reply"]["http_status"] == 200
+            && record["reply"]["api_version"] == "2"
+            && record["reply"]["service_pid"]
+                .as_u64()
+                .is_some_and(|pid| pid > 0)
+            && record["reply"]["body_sha256"]
+                .as_str()
+                .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+    }
     fn begin(&mut self, request: &HexRequest) {
         self.current = Some(request.clone());
     }

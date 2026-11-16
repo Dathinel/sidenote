@@ -158,6 +158,9 @@ pub(super) fn read_no_speech(root: &Path, plan: &Plan, id: &str) -> Option<Value
 }
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
+    fn can_reuse(&self, _id: &str, _range: &Range) -> bool {
+        true
+    }
     fn limit(&mut self, _remaining: std::time::Duration) {}
     fn finish(&mut self) -> Result<()> {
         Ok(())
@@ -232,7 +235,7 @@ fn run_windows(
         let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
-            .filter(|(id, _)| !cached(root, plan, id))
+            .filter(|(id, r)| !cached(root, plan, id) || (lang == "en" && !bridge.can_reuse(id, r)))
             .collect();
         let Some((_, first)) = pending.first() else {
             continue;
@@ -245,6 +248,13 @@ fn run_windows(
             _ => return Err("Unknown language".into()),
         };
         for (id, r) in pending {
+            if lang == "en" && !bridge.can_reuse(id, r) {
+                match std::fs::remove_file(path(root, plan, id, "receipt")) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
             if let Some(left) = remaining(deadline)? {
                 match &mut session {
                     Some(s) => s.limit(left),

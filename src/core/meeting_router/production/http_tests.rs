@@ -446,6 +446,76 @@ fn production_http_cached_batch_retains_reply_identity_and_cleanup() {
 }
 
 #[test]
+fn production_http_legacy_cache_is_reread_before_publication() {
+    let f = fixture(0);
+    run(&f, Duration::from_secs(20)).unwrap();
+    store_io::write(
+        &f.work.join("english-transport.json"),
+        &json!({"service_starts":1,"http_pieces":1,"command_pieces":1,
+            "fallback_reason":"service-http-status-409","service_reaped":true}),
+    )
+    .unwrap();
+    run(&f, Duration::from_secs(20)).unwrap();
+    store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
+    let mut coverage = f.baseline.clone();
+    for c in &mut coverage {
+        c.english.clear();
+    }
+    store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let saved = publish(&f, &assembled);
+    let ranges = saved.provenance["english_transport"]["ranges"]
+        .as_object()
+        .unwrap();
+    assert_eq!(
+        ranges.len(),
+        f.plan.batches["en"].len(),
+        "cached English must have per-range identity"
+    );
+    assert_eq!(count(&f, "http-calls"), 4);
+    assert_eq!(count(&f, "command-calls"), 0);
+    for id in f.plan.batches["en"].keys() {
+        let r = &ranges[id];
+        assert_eq!(r["transport"], "http");
+        assert_eq!(r["model"], f.plan.batches["en"][id].model_id);
+        assert_eq!(r["language"], "en");
+        assert_eq!(r["reply"]["http_status"], 200);
+        assert_eq!(r["reply"]["body_sha256"].as_str().unwrap().len(), 64);
+        assert!(saved.evidence.contains_key(id));
+    }
+}
+
+#[test]
+fn production_http_unverified_cache_cannot_survive_failed_reread() {
+    for prior in [
+        None,
+        Some(b"not json".as_slice()),
+        Some(b"{\"ranges\":{}}".as_slice()),
+    ] {
+        let f = fixture(0);
+        run(&f, Duration::from_secs(20)).unwrap();
+        let transport = f.work.join("english-transport.json");
+        if let Some(bytes) = prior {
+            fs::write(&transport, bytes).unwrap();
+        } else {
+            fs::remove_file(&transport).unwrap();
+        }
+        fs::write(f.work.join("mode"), "1").unwrap();
+        run(&f, Duration::from_secs(20)).unwrap();
+        for id in f.plan.batches["en"].keys() {
+            assert!(
+                batches::read_result(&f.work, &f.plan, id)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(receipt(&f)["ranges"][id]["transport"], "failed");
+        }
+        assert_eq!(count(&f, "command-calls"), 0);
+    }
+}
+
+#[test]
 fn saved_fallback_crossing_two_baseline_sentences_publishes_exact_bounds() {
     let mut f = fixture(0);
     let mut ranges = Vec::new();

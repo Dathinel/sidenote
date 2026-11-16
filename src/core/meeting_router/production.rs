@@ -70,6 +70,13 @@ impl NativeLoader for Native<'_> {
 
 pub struct English<C = HexSpeech>(pub HexBridge<C>);
 impl<C: HexCommand> EnglishBridge for English<C> {
+    fn can_reuse(&self, id: &str, range: &Range) -> bool {
+        self.0.can_reuse(&HexRequest {
+            range_id: id.into(),
+            model_id: range.model_id.clone(),
+            language: "en".into(),
+        })
+    }
     fn finish(&mut self) -> Result<()> {
         Ok(self.0.finish()?)
     }

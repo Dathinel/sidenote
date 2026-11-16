@@ -98,6 +98,9 @@ pub struct HexRequest {
 }
 pub trait HexCommand {
     fn call(&mut self, args: &[&str], timeout: Duration) -> Result<String>;
+    fn can_reuse(&self, _request: &HexRequest) -> bool {
+        true
+    }
     fn begin(&mut self, _request: &HexRequest) {}
     fn finish(&mut self) -> Result<()> {
         Ok(())
@@ -143,6 +146,9 @@ pub struct HexBridge<C> {
     status_timeouts: u8,
 }
 impl<C: HexCommand> HexBridge<C> {
+    pub(super) fn can_reuse(&self, request: &HexRequest) -> bool {
+        self.command.can_reuse(request)
+    }
     pub fn finish(&mut self) -> Result<()> {
         self.command.finish()
     }
