@@ -229,28 +229,33 @@ fn production_http_cancel_drop_reaps_service() {
     }
 }
 
-#[test]
-fn production_http_owner_activity_cancels_startup_and_inference() {
-    for mode in [10, 11] {
-        let f = fixture(mode);
-        let start = Instant::now();
-        assert!(run(&f, Duration::from_secs(20)).is_err());
-        assert!(start.elapsed() < Duration::from_secs(5));
-        assert_eq!(count(&f, "starts"), 1);
-        assert_eq!(count(&f, "command-calls"), 0);
-        assert_eq!(
-            receipt(&f)["fallback_reason"],
-            "service-owner-active-or-unknown"
+fn owner_activity(mode: u8) {
+    let f = fixture(mode);
+    let start = Instant::now();
+    assert!(run(&f, Duration::from_secs(20)).is_err());
+    assert!(start.elapsed() < Duration::from_secs(5));
+    assert_eq!(count(&f, "starts"), 1);
+    assert_eq!(count(&f, "command-calls"), 0);
+    assert_eq!(
+        receipt(&f)["fallback_reason"],
+        "service-owner-active-or-unknown"
+    );
+    for id in f.plan.batches["en"].keys() {
+        assert!(
+            batches::read_result(&f.work, &f.plan, id)
+                .unwrap()
+                .is_none()
         );
-        for id in f.plan.batches["en"].keys() {
-            assert!(
-                batches::read_result(&f.work, &f.plan, id)
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        reaped(&f);
     }
+    reaped(&f);
+}
+#[test]
+fn production_http_owner_activity_cancels_startup() {
+    owner_activity(10);
+}
+#[test]
+fn production_http_owner_activity_cancels_inference() {
+    owner_activity(11);
 }
 
 #[test]
