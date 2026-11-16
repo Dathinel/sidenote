@@ -14,7 +14,7 @@ impl RunHex {
             service: None,
             receipt: work.join("english-transport.json"),
             state: json!({"service_starts":0,"http_pieces":0,"command_pieces":0,
-                "fallback_reason":null,"service_reaped":null}),
+                "fallback_reason":null,"service_reaped":null,"service_start_seconds":0.0}),
         }
     }
     fn save(&self) -> std::result::Result<(), HexFailure> {
@@ -55,7 +55,10 @@ impl HexCommand for RunHex {
             self.state["service_starts"] = 1.into();
             self.save()?;
             // Preserve time for the command if startup hangs or HTTP exhausts its allowance.
-            match Service::start(&self.hex, timeout / 4) {
+            let started = Instant::now();
+            let service = Service::start(&self.hex, timeout / 4);
+            self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();
+            match service {
                 Ok(service) => self.service = Some(service),
                 Err(reason) => self.fallback(reason),
             }
