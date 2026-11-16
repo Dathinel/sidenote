@@ -7,6 +7,8 @@ mod cli;
 mod config;
 pub mod fallback;
 mod hex;
+#[cfg(windows)]
+mod hex_http;
 pub mod hex_bridge;
 pub(crate) mod inputs;
 pub mod jobs;
