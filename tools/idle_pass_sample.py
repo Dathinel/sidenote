@@ -34,7 +34,7 @@ def measurement_self_test():
     print('measurement self-test PASS', flush=True)
 
 
-def seed(root):
+def seed(root, create_inputs=True):
     data, meetings = root / 'data', root / 'hex/meetings'
     for path in [data / 'local/notes-jobs', data / 'local/source-notes', meetings, root / 'peers', root / 'appdata']:
         path.mkdir(parents=True, exist_ok=True)
@@ -44,18 +44,19 @@ def seed(root):
     audio_sizes = [20, 40, 80, 150]
     for i, name in enumerate(ids):
         folder = meetings / name
-        folder.mkdir()
-        manifest = {'status': 'complete', 'created_at_ms': 1800000000000}
-        if i < 16:
-            manifest['duration_ms'] = 1000
-        (folder / 'manifest.json').write_text(json.dumps(manifest))
-        line = json.dumps({'start_ms': 0, 'text': 'Synthetic words only. ' * 20}).encode() + b'\n'
-        (folder / 'transcript.ndjson').write_bytes(line * max(1, transcript_sizes[i % 4] // len(line)))
-        size = audio_sizes[i % 4] * 1024 * 1024
-        with (folder / 'system.wav').open('wb') as output:
-            output.write(struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', size - 8, b'WAVE', b'fmt ', 16, 1, 1, 16000, 32000, 2, 16, b'data', size - 44))
-            output.seek(size - 1)
-            output.write(b'\0')
+        if create_inputs:
+            folder.mkdir()
+            manifest = {'status': 'complete', 'created_at_ms': 1800000000000}
+            if i < 16:
+                manifest['duration_ms'] = 1000
+            (folder / 'manifest.json').write_text(json.dumps(manifest))
+            line = json.dumps({'start_ms': 0, 'text': 'Synthetic words only. ' * 20}).encode() + b'\n'
+            (folder / 'transcript.ndjson').write_bytes(line * max(1, transcript_sizes[i % 4] // len(line)))
+            size = audio_sizes[i % 4] * 1024 * 1024
+            with (folder / 'system.wav').open('wb') as output:
+                output.write(struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', size - 8, b'WAVE', b'fmt ', 16, 1, 1, 16000, 32000, 2, 16, b'data', size - 44))
+                output.seek(size - 1)
+                output.write(b'\0')
         if i < 19:
             job = dict(state='done', fallback=False, tasks_failed=False, attempts=1, next_try_at=None,
                        helper=None, model='', instructions='default', updated_at=0, message='synthetic', request=None)
@@ -75,8 +76,21 @@ def run(args):
     if args.self_test:
         return
     assert args.seconds >= 600
-    root = Path(tempfile.mkdtemp(prefix='trial-', dir=Path(tempfile.gettempdir()) / 'sidenote-idle-pass'))
-    fixture_bytes = seed(root)
+    proof = (Path(tempfile.gettempdir()) / 'sidenote-idle-pass').resolve()
+    if args.fixture:
+        root = Path(args.fixture).resolve(strict=True)
+        assert root.parent == proof and root.name.startswith('trial-')
+        data = root / 'data'
+        saved = root / ('saved-data-' + Path(args.output).stem)
+        assert data.resolve().parent == root and not saved.exists()
+        inventory = [(p, p.stat().st_size, p.stat().st_mtime_ns) for p in (root / 'hex/meetings').rglob('*') if p.is_file()]
+        data.rename(saved)
+        fixture_bytes = seed(root, create_inputs=False)
+        assert all(p.stat().st_size == size and p.stat().st_mtime_ns == modified for p, size, modified in inventory)
+        print(json.dumps(dict(reused_fixture=str(root), saved_prior_data=str(saved), unchanged_input_files=len(inventory))), flush=True)
+    else:
+        root = Path(tempfile.mkdtemp(prefix='trial-', dir=proof))
+        fixture_bytes = seed(root)
     stopping = threading.Event()
     calls = {'sse_connections': 0, 'sse_keepalives': 0, 'status': 0}
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -160,6 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('--seconds', type=int, default=600)
     parser.add_argument('--output', default='idle-pass-result.json')
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--fixture')
     args = parser.parse_args()
     (Path(tempfile.gettempdir()) / 'sidenote-idle-pass').mkdir(exist_ok=True)
     run(args)
