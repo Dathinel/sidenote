@@ -1,5 +1,5 @@
 """Alternating public comparison at actual production span lengths; no recording controls."""
-import argparse, concurrent.futures, json, os, queue, shutil, subprocess, sys, threading, time, urllib.request
+import argparse, concurrent.futures, hashlib, json, os, queue, shutil, subprocess, sys, tempfile, threading, time, urllib.request, urllib.error
 from pathlib import Path
 import psutil
 from en_http_costs import OUT, read, save
@@ -35,8 +35,12 @@ class Service:
         request=urllib.request.Request(e['url']+'/transcriptions?model=parakeet_unified_en&language=en',
             data=Path(wav).read_bytes(),headers={'Authorization':'Bearer '+e['token'],'Content-Type':'audio/wav'})
         # No discovery credential is opened. Proxy and redirect handlers are disabled.
-        with self.opener.open(request,timeout=180) as response:
-            value=json.loads(response.read(8*1024*1024+1))
+        try:
+            with self.opener.open(request,timeout=180) as response:
+                value=json.loads(response.read(8*1024*1024+1))
+        except urllib.error.HTTPError as error:
+            save(OUT/'real-http-error.json',dict(version=self.version,status=error.code,reply=json.loads(error.read())))
+            raise
         seconds=time.perf_counter()-started
         assert isinstance(value['transcript'],str)
         if value['transcript'].strip() and not capture.exists():
@@ -95,6 +99,26 @@ def build_host(root):
     gcc=Path('E:/Personal-Projects/tools/hex-meetings-gnu/w64devkit/bin/gcc.exe');env=dict(os.environ,PATH=str(gcc.parent)+os.pathsep+os.environ['PATH'])
     p=run([gcc,'-municode','-Os','-static','-s',source,'-o',root/'host.exe'],env)
     assert p.returncode==0,'contained SDK host compile failed';return root/'host.exe'
+def prepare_fixture_model():
+    f=read(OUT/'lengths-fixture.json');root=Path(f['root']);support=Path(f['support']).resolve()
+    assert support.is_relative_to(Path(tempfile.gettempdir()).resolve())
+    expected=read(OUT/'fixture.json')['model_sha256'];weights=None
+    for path in (support/'models').glob('parakeet-unified-en-*.gguf'):
+        if hashlib.sha256(path.read_bytes()).hexdigest()==expected:weights=path;break
+    assert weights is not None,'Only the existing pinned public copy may be prepared'
+    env=dict(os.environ,HEX_APPLICATION_SUPPORT_DIR=str(support),SIDENOTE_DATA_DIR=str(root/'state'))
+    service=Service(build_host(root),env,run([HEX,'--version']).stdout.decode().strip())
+    try:
+        e=service.endpoint;request=urllib.request.Request(e['url']+'/models/parakeet_unified_en/prepare?language=en',
+            data=b'',headers={'Authorization':'Bearer '+e['token']})
+        started=time.perf_counter()
+        with service.opener.open(request,timeout=180) as reply:body=reply.read(1048576).decode()
+        events=[json.loads(line[5:].strip()) for line in body.splitlines() if line.startswith('data:')]
+        assert events and events[-1]['type']=='ok'
+        assert hashlib.sha256(weights.read_bytes()).hexdigest()==expected
+        save(OUT/'fixture-model-preparation.json',dict(version=service.version,seconds=time.perf_counter()-started,
+            model_sha256=expected,weights_unchanged=True,events=events,scope='temporary public support directory only'))
+    finally:service.close()
 def main(pilot):
     fixture=read(OUT/'lengths-fixture.json');root=Path(fixture['root']);name='lengths-pilot' if pilot else 'lengths'
     assert not (OUT/(name+'-started.json')).exists(),'preserve prior attempts'
@@ -131,7 +155,6 @@ def main(pilot):
                     rows.extend([dict(path='http_overlap',index=i,seconds=elapsed,empty=empty,ok=True,audio_seconds=audio),
                         dict(path='top_app_overlap',index=i,seconds=v['seconds'],empty=v['empty'],ok=True,audio_seconds=audio)]);checkpoint()
             top.close();top=None
-        t=time.perf_counter();service.close();result['close']=time.perf_counter()-t;service=None
         for lang in ['hi','te']:
             driver=Driver(root,lang,env,OUT/('real-'+lang+'-reply.json'));native[lang]=dict(load_seconds=driver.load)
             try:
@@ -141,6 +164,7 @@ def main(pilot):
             finally:
                 if driver:
                     driver.abort()
+        t=time.perf_counter();service.close();result['close']=time.perf_counter()-t;service=None
         checkpoint()
     finally:
         if top:
@@ -154,4 +178,5 @@ def main(pilot):
         data['hex_version_after']=run([HEX,'--version']).stdout.decode().strip();save(OUT/(name+'-results.json'),data);save(OUT/(name+'-load.json'),samples)
     print(name,'completed',len(rows),'public calls; accuracy not measured',flush=True)
 if __name__=='__main__':
-    sys.stdout.reconfigure(encoding='utf-8');p=argparse.ArgumentParser();p.add_argument('--pilot',action='store_true');main(p.parse_args().pilot)
+    sys.stdout.reconfigure(encoding='utf-8');p=argparse.ArgumentParser();p.add_argument('--pilot',action='store_true');p.add_argument('--prepare-model',action='store_true');a=p.parse_args()
+    prepare_fixture_model() if a.prepare_model else main(a.pilot)
