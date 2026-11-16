@@ -51,6 +51,25 @@ fn runtime() -> Runtime<State> {
     for index in 0..300 {
         let folder = core::meetings_dir().join(format!("1800000000000-{index}"));
         std::fs::create_dir_all(&folder).unwrap();
+        #[cfg(feature = "idle-cpu-proof")]
+        if std::env::args().any(|a| a == "--retained-done") {
+            std::fs::write(
+                folder.join("manifest.json"),
+                r#"{"status":"complete","duration_ms":30000}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                folder.join("quick-title.json"),
+                r#"{"title":"Synthetic completion"}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                folder.join("transcript.ndjson"),
+                serde_json::json!({"start_ms":0,"text":"Synthetic ".repeat(25)}).to_string(),
+            )
+            .unwrap();
+            continue;
+        }
         std::fs::write(
             folder.join("english-summary.json"),
             format!(
@@ -58,6 +77,10 @@ fn runtime() -> Runtime<State> {
             ),
         )
         .unwrap();
+    }
+    #[cfg(feature = "idle-cpu-proof")]
+    if std::env::args().any(|a| a == "--retained-done") {
+        sidenote::core::notes::idle_fixture::seed().unwrap();
     }
     let mut rt = Runtime::with_text(
         State::new(),
