@@ -101,8 +101,10 @@ pub fn run(
             let normalized = work.join("normalized");
             fs::create_dir_all(&normalized)?;
             let input = inputs::Snapshot::capture(folder)?;
-            store_io::write(&work.join("baseline-no-speech.json"),
-                &revision::gaps::capture(&input.transcript)?)?;
+            store_io::write(
+                &work.join("baseline-no-speech.json"),
+                &revision::gaps::capture(&input.transcript)?,
+            )?;
             store_io::atomic_write(&normalized.join("manifest.json"), &input.manifest)?;
             store_io::atomic_write(&normalized.join("transcript.ndjson"), &input.transcript)?;
             let manifest: Value = serde_json::from_slice(&input.manifest)?;
@@ -379,9 +381,15 @@ mod tests {
             clocks.insert("pieces".into(), 0.125);
             clocks.insert("batches".into(), 0.25);
             assemble_saved(&f.work, &f.plan, &f.manifest, &[], 1).map(|_| ())
-        }).unwrap_err().to_string();
-        assert!(error.contains("Owned interval lacks routed or baseline coverage"), "{error}");
-        let clocks: Value = serde_json::from_slice(&fs::read(f.work.join("clocks.json")).unwrap()).unwrap();
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("Owned interval lacks routed or baseline coverage"),
+            "{error}"
+        );
+        let clocks: Value =
+            serde_json::from_slice(&fs::read(f.work.join("clocks.json")).unwrap()).unwrap();
         assert_eq!(clocks["pieces"], 0.125);
         assert_eq!(clocks["batches"], 0.25);
         assert_eq!(clocks["partial"], true);
