@@ -32,8 +32,7 @@ fn fixture() -> (
 fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
     let (temp, plan, pieces, baseline) = fixture();
     let root = temp.path();
-    let revision =
-        super::super::production::assemble_saved(root, &plan, &pieces, &baseline, 1).unwrap();
+    let revision = assemble(root, &plan, &pieces, &baseline, 1).unwrap();
     assert_eq!(revision.evidence.len(), 291);
     assert_eq!(
         revision.provenance["no_speech"].as_object().unwrap().len(),
@@ -45,6 +44,13 @@ fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
     assert_eq!(load(&dest, None).unwrap().unwrap().0, chosen);
     let policy = &revision.provenance["assembly_coverage"];
     assert!(!policy["overlaps"].as_array().unwrap().is_empty());
+    assert!(policy["overlaps"].as_array().unwrap().iter().any(|o| {
+        o["fallback_required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["reason"] == "no-speech")
+    }));
     eprintln!(
         "accepted production overlap receipts: {}",
         policy["overlaps"]
@@ -132,5 +138,88 @@ fn saved_public_overlap_requires_no_speech_evidence() {
         .unwrap();
     marker["reason"] = "unverified".into();
     assert!(commit(&dest, &revision).is_err());
+    assert_eq!(load(&dest, None).unwrap().unwrap().0, chosen);
+}
+
+#[test]
+#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
+fn saved_public_lid_uncertain_overlap_is_recorded_and_publishes() {
+    let (temp, plan, pieces, baseline) = fixture();
+    let revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
+    let records = revision.provenance["routing_fallbacks"].as_array().unwrap();
+    let overlaps = revision.provenance["assembly_coverage"]["overlaps"]
+        .as_array()
+        .unwrap();
+    assert!(overlaps.iter().any(|o| {
+        o["fallback_required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["reason"] == "lid-uncertain" && records.contains(&r["record"]))
+    }));
+    let dest = temp.path().join("published");
+    begin(&dest, 1).unwrap();
+    let chosen = commit(&dest, &revision).unwrap();
+    assert_eq!(load(&dest, None).unwrap().unwrap().0, chosen);
+}
+
+#[test]
+#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
+fn saved_public_full_guard_refuses_missing_baseline_text() {
+    let (temp, plan, pieces, baseline) = fixture();
+    let error = super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("Speech lacks routed or explicit baseline coverage"),
+        "{error}"
+    );
+    assert!(error.contains("665.964,668.944"), "{error}");
+}
+
+#[test]
+#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
+fn saved_public_fallback_overlap_without_router_reason_is_refused() {
+    let (temp, plan, pieces, baseline) = fixture();
+    let mut revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
+    let dest = temp.path().join("published");
+    begin(&dest, 1).unwrap();
+    let chosen = commit(&dest, &revision).unwrap();
+    let id = revision.provenance["assembly_coverage"]["overlaps"][0]["baseline"]
+        .as_str()
+        .unwrap();
+    let unit = baseline.iter().find(|b| b.id == id).unwrap();
+    let required = revision.provenance["assembly_coverage"]["fallback_required"]
+        .as_array()
+        .unwrap();
+    let removed: Vec<Value> = required
+        .iter()
+        .filter(|r| {
+            r["interval"]["track"] == unit.track
+                && r["interval"]["start"].as_f64().unwrap() < unit.end
+                && unit.start < r["interval"]["end"].as_f64().unwrap()
+        })
+        .map(|r| r["record"].clone())
+        .collect();
+    assert!(!removed.is_empty());
+    revision.provenance["no_speech"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|_, r| !removed.contains(r));
+    revision.provenance["routing_fallbacks"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| !removed.contains(r));
+    revision.provenance["assembly_coverage"]["fallback_required"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| !removed.contains(&r["record"]));
+    assert!(
+        commit(&dest, &revision)
+            .unwrap_err()
+            .to_string()
+            .contains("Competing selected readings")
+    );
     assert_eq!(load(&dest, None).unwrap().unwrap().0, chosen);
 }

@@ -208,13 +208,18 @@ pub fn assemble_saved(
         &work.join("coverage.json"),
         16 << 20,
     )?)?;
-    if let Some(c) = coverage
+    let missing: Vec<_> = coverage
         .iter()
-        .find(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
-    {
+        .filter(|c| !super::super::baseline::source_covered(c, &revision.transcript.segments))
+        .collect();
+    if let Some(c) = missing.first() {
+        let intervals: Vec<_> = missing
+            .iter()
+            .map(|c| serde_json::json!({"id":c.id,"track":c.track,"start":c.start,"end":c.end}))
+            .collect();
         return Err(format!(
-            "Speech lacks routed or explicit baseline coverage: id={} track={} seconds=[{},{}]",
-            c.id, c.track, c.start, c.end
+            "Speech lacks routed or explicit baseline coverage: id={} track={} seconds=[{},{}]; uncovered={}",
+            c.id, c.track, c.start, c.end, serde_json::to_string(&intervals)?
         )
         .into());
     }
