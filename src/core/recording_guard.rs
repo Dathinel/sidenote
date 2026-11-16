@@ -1,14 +1,16 @@
 //! Device-local recording decisions. Hex recordings are always read-only here.
 use super::{recording_source::revision, store_io};
-thread_local! {static UNKNOWN: std::cell::RefCell<std::collections::BTreeMap<PathBuf, (String, String)>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };}
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, BufRead, Read},
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
 };
+
+static UNKNOWN: Mutex<BTreeMap<PathBuf, (String, String)>> = Mutex::new(BTreeMap::new());
 
 pub const EXPLANATION: &str =
     "Short recordings (under 30 seconds or 25 words) are hidden and not processed.";
@@ -108,7 +110,7 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     let unknown_key = revision.clone().zip(revision::file(&path).ok());
     if unknown_key
         .as_ref()
-        .is_some_and(|key| UNKNOWN.with(|cache| cache.borrow().get(&path) == Some(key)))
+        .is_some_and(|key| UNKNOWN.lock().unwrap().get(&path) == Some(key))
     {
         return Ok(Eligibility::Unknown);
     }
@@ -144,13 +146,11 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
         && result == Eligibility::Unknown
         && let Some(key) = unknown_key
     {
-        UNKNOWN.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if cache.len() >= super::file_reads::ENTRIES_MAX {
-                cache.clear();
-            }
-            cache.insert(path, key);
-        });
+        let mut cache = UNKNOWN.lock().unwrap();
+        if cache.len() >= super::file_reads::ENTRIES_MAX {
+            cache.clear();
+        }
+        cache.insert(path, key);
     }
     Ok(result)
 }
@@ -393,6 +393,29 @@ mod tests {
                 Eligibility::Eligible
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_idle_retry_is_shared_between_workers() {
+        let root = fixture();
+        write(&root, serde_json::Value::Null, &"Synthetic ".repeat(25));
+        assert_eq!(
+            eligibility(&root, &root.join("meetings"), ID).unwrap(),
+            Eligibility::Unknown
+        );
+        let worker_root = root.clone();
+        let reads = std::thread::spawn(move || {
+            let before = super::super::meeting_router::inputs::body_reads();
+            assert_eq!(
+                eligibility(&worker_root, &worker_root.join("meetings"), ID).unwrap(),
+                Eligibility::Unknown
+            );
+            super::super::meeting_router::inputs::body_reads() - before
+        })
+        .join()
+        .unwrap();
+        assert_eq!(reads, 0);
         fs::remove_dir_all(root).unwrap();
     }
 

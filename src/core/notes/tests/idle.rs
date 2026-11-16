@@ -85,7 +85,7 @@ fn changed_same_name_input_replaces_production_done_notes_after_restart() {
                     &root.0,
                     &meetings,
                     m.id(),
-                    Ok(config.clone()),
+                    || Ok(config.clone()),
                     || queue::enqueue_in(&root.0, &meetings, m.id(), None, &settings),
                 )?
                 .acknowledge()

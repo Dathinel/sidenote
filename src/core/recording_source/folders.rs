@@ -85,9 +85,10 @@ impl Source for Discovery {
                     Err(error) => return Err(error),
                 },
             };
-            if revision::input_with_root(&folder, &root_meta).is_ok_and(|after| after == before)
-                && (cached.is_some()
-                    || revision::validation(&folder, &before).is_ok_and(|after| after == key))
+            if cached.is_some()
+                || (revision::input_with_root(&folder, &root_meta)
+                    .is_ok_and(|after| after == before)
+                    && revision::validation(&folder, &before).is_ok_and(|after| after == key))
             {
                 if self.validated.len() < crate::core::file_reads::ENTRIES_MAX
                     || self.validated.contains_key(id)

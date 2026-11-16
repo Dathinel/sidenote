@@ -26,7 +26,7 @@ impl Acceptance {
 pub(crate) fn handoff(id: &str) -> io::Result<Acceptance> {
     let state = core::state_dir();
     let meetings = core::meetings_dir();
-    handoff_in(&state, &meetings, id, Config::load(), || {
+    handoff_in(&state, &meetings, id, Config::load, || {
         super::pipeline_with(&state, &meetings, Some(id), true)
     })
 }
@@ -46,17 +46,19 @@ pub(crate) fn handoff_in(
     state: &Path,
     meetings: &Path,
     id: &str,
-    config: io::Result<Config>,
+    config: impl FnOnce() -> io::Result<Config>,
     dispatch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Acceptance> {
     let _stage = core::idle_pass::Span::begin("completion_handoff");
-    let Some(config) = store_io::defer_busy(config)? else {
+    let eligibility = recording_guard::eligibility(state, meetings, id)?;
+    if eligibility == Eligibility::Unknown {
+        return Ok(Acceptance::Deferred);
+    }
+    let Some(config) = store_io::defer_busy(config())? else {
         return Ok(Acceptance::Deferred);
     };
-    match recording_guard::eligibility(state, meetings, id)? {
-        Eligibility::Short => return Ok(Acceptance::AlreadyAccepted), // The guard persists this policy decision.
-        Eligibility::Unknown => return Ok(Acceptance::Deferred),
-        Eligibility::Eligible => {}
+    if eligibility == Eligibility::Short {
+        return Ok(Acceptance::AlreadyAccepted);
     }
     let settings = config
         .notes
@@ -122,7 +124,13 @@ mod tests {
             config: io::Result<Config>,
             dispatch: impl FnOnce() -> io::Result<()>,
         ) -> io::Result<Acceptance> {
-            handoff_in(self.root.path(), &self.meetings, "100-1", config, dispatch)
+            handoff_in(
+                self.root.path(),
+                &self.meetings,
+                "100-1",
+                || config,
+                dispatch,
+            )
         }
     }
     struct One(std::path::PathBuf);
@@ -131,6 +139,34 @@ mod tests {
             Ok(vec![CompletedMeeting::capture(&self.0, "100-1")?])
         }
     }
+    #[test]
+    fn unknown_idle_retry_does_not_load_settings() {
+        let f = Fixture::new();
+        fs::write(
+            f.meetings.join("100-1/manifest.json"),
+            br#"{"status":"complete"}"#,
+        )
+        .unwrap();
+        fs::write(
+            f.root.path().join("config.json"),
+            b"invalid synthetic settings",
+        )
+        .unwrap();
+        let loads = std::cell::Cell::new(0);
+        let result = handoff_in(
+            f.root.path(),
+            &f.meetings,
+            "100-1",
+            || {
+                loads.set(loads.get() + 1);
+                Config::load_in(f.root.path())
+            },
+            || panic!("unknown input dispatched"),
+        );
+        assert_eq!(result.unwrap(), Acceptance::Deferred);
+        assert_eq!(loads.get(), 0);
+    }
+
     #[test]
     fn recordings_started_during_install_are_handed_off_after_restart_without_events() {
         let f = Fixture::new();
@@ -160,7 +196,7 @@ mod tests {
                 f.root.path(),
                 &f.meetings,
                 meeting.id(),
-                Ok(f.config()),
+                || Ok(f.config()),
                 || {
                     queued.borrow_mut().push(meeting.id().to_owned());
                     store_io::write(
@@ -272,7 +308,7 @@ mod tests {
                     f.root.path(),
                     &f.meetings,
                     meeting.id(),
-                    Ok(f.config()),
+                    || Ok(f.config()),
                     || {
                         queued.push(meeting.id().to_owned());
                         store_io::write(
