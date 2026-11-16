@@ -58,8 +58,8 @@ fn validate(data: &Revision) -> io::Result<()> {
         .map(|value| serde_json::from_value::<super::reconciliation::Coverage>(value.clone()))
         .transpose()?;
     if let Some(coverage) = &coverage {
-        super::reconciliation::validate_markers(data, coverage)
-            .map_err(|_| store_io::invalid("Invalid NoSpeech overlap evidence"))?;
+        super::reconciliation::validate_records(data, coverage)
+            .map_err(|_| store_io::invalid("Invalid recorded fallback overlap evidence"))?;
         if data.alternatives.iter().any(|s| s.sources.is_empty()) {
             return Err(store_io::invalid("Invalid routed alternatives"));
         }

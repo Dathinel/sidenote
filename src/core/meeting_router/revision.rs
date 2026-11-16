@@ -156,16 +156,11 @@ pub fn assemble(
     transcript.config_checksum = manifest.config_checksum.clone();
     let mut evidence = BTreeMap::new();
     let mut no_speech = BTreeMap::new();
-    let mut coverage = reconciliation::Coverage::default();
     for (id, range) in plan.batches.values().flat_map(|b| b.iter()) {
         let reading = super::batches::read_result(root, plan, id)?;
         if reading.is_none()
             && let Some(reason) = super::batches::read_no_speech(root, plan, id)
         {
-            coverage.no_speech.insert(
-                id.clone(),
-                reconciliation::no_speech_chunk(id, range, manifest)?,
-            );
             no_speech.insert(id.clone(), reason);
         }
         let track = manifest
@@ -199,6 +194,13 @@ pub fn assemble(
         }
     }
     let candidates = transcript.segments.clone();
+    let routing: Vec<super::fallback::RoutingFallback> =
+        match super::inputs::Snapshot::read_file(&root.join("uncertainty.json"), 16 << 20) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+    let mut coverage = reconciliation::from_router_records(plan, manifest, &no_speech, &routing)?;
     reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
     for range in plan.batches.values().flat_map(|b| b.values()) {
         let track = manifest
@@ -232,14 +234,16 @@ pub fn assemble(
     provenance["no_speech"] = serde_json::to_value(no_speech)?;
     provenance["plan"] = serde_json::to_value(plan)?;
     provenance["assembly_coverage"] = serde_json::to_value(coverage)?;
-    Ok(Revision {
+    let mut revision = Revision {
         generation: generation.to_string(),
         plan_revision: plan.revision.clone(),
         transcript,
         alternatives: candidates,
         evidence,
         provenance,
-    })
+    };
+    super::fallback::attach(&mut revision, &routing)?;
+    Ok(revision)
 }
 
 #[cfg(test)]

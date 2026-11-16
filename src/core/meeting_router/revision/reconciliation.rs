@@ -1,63 +1,119 @@
 //! Preserve owned readings that whole-sentence fallback cannot cover.
+use super::super::fallback::{Interval, Reason as RouterReason, RoutingFallback};
 use super::*;
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum FallbackKind {
+    NoSpeech,
+    LidUncertain,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct RequiredFallback {
+    reason: FallbackKind,
+    interval: Interval,
+    record: Value,
+}
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Coverage {
-    pub no_speech: BTreeMap<String, Chunk>,
+    pub fallback_required: Vec<RequiredFallback>,
     pub overlaps: Vec<Value>,
 }
 
-pub(super) fn no_speech_chunk(
-    id: &str,
-    r: &super::super::batches::Range,
+pub(super) fn from_router_records(
+    plan: &Plan,
     manifest: &super::super::pieces::PieceManifest,
-) -> Result<Chunk> {
-    let origin = manifest
-        .tracks
-        .iter()
-        .find(|t| t.track == r.track)
-        .ok_or("Missing NoSpeech track")?
-        .origin_sample;
-    Ok(Chunk {
-        id: id.into(),
-        track: r.track.clone(),
-        start: meeting(origin, r.range.context.0)?,
-        end: meeting(origin, r.range.context.1)?,
-        speaker: None,
-        turn: None,
-        english: String::new(),
-        audio_start: None,
-    })
+    markers: &BTreeMap<String, Value>,
+    routing: &[RoutingFallback],
+) -> Result<Coverage> {
+    let mut coverage = Coverage::default();
+    for (id, record) in markers {
+        let r = plan
+            .batches
+            .values()
+            .find_map(|b| b.get(id))
+            .ok_or("Missing NoSpeech range")?;
+        if record
+            != &serde_json::json!({"revision":plan.revision,"range":id,
+            "reason":"no-speech","source":"captured-hex-baseline"})
+        {
+            return Err("Invalid NoSpeech record".into());
+        }
+        let origin = manifest
+            .tracks
+            .iter()
+            .find(|t| t.track == r.track)
+            .ok_or("Missing fallback track")?
+            .origin_sample;
+        coverage.fallback_required.push(RequiredFallback {
+            reason: FallbackKind::NoSpeech,
+            interval: Interval {
+                track: r.track.clone(),
+                start: meeting(origin, r.range.context.0)?,
+                end: meeting(origin, r.range.context.1)?,
+            },
+            record: record.clone(),
+        });
+    }
+    for recorded in routing {
+        if !matches!(
+            recorded.reason,
+            RouterReason::GuardRejected | RouterReason::Uncalibrated | RouterReason::InvalidScores
+        ) {
+            continue;
+        }
+        let interval = recorded
+            .interval
+            .as_ref()
+            .ok_or("Missing recorded fallback interval")?;
+        let track = manifest
+            .tracks
+            .iter()
+            .find(|t| t.track == interval.track)
+            .ok_or("Missing fallback track")?;
+        if !interval.start.is_finite()
+            || !interval.end.is_finite()
+            || interval.start >= interval.end
+            || interval.start < meeting(track.origin_sample, 0)?
+            || interval.end > meeting(track.origin_sample, track.sample_count)?
+        {
+            return Err("Invalid recorded fallback interval".into());
+        }
+        coverage.fallback_required.push(RequiredFallback {
+            reason: FallbackKind::LidUncertain,
+            interval: interval.clone(),
+            record: serde_json::to_value(recorded)?,
+        });
+    }
+    Ok(coverage)
 }
 
-pub(super) fn validate_markers(data: &Revision, coverage: &Coverage) -> Result<()> {
+pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<()> {
     let plan: Plan = serde_json::from_value(data.provenance["plan"].clone())?;
     let manifest = serde_json::from_value(if data.provenance["pieces"].is_object() {
         data.provenance["pieces"].clone()
     } else {
         data.provenance.clone()
     })?;
-    let markers = data.provenance["no_speech"]
-        .as_object()
-        .ok_or("Missing NoSpeech evidence")?;
-    if plan.revision != data.plan_revision || markers.len() != coverage.no_speech.len() {
-        return Err("Invalid NoSpeech coverage evidence".into());
+    let markers: BTreeMap<String, Value> =
+        serde_json::from_value(data.provenance["no_speech"].clone())?;
+    if plan.revision != data.plan_revision
+        || markers.keys().any(|id| data.evidence.contains_key(id))
+    {
+        return Err("Invalid fallback coverage evidence".into());
     }
-    for (id, chunk) in &coverage.no_speech {
-        let range = plan
-            .batches
-            .values()
-            .find_map(|b| b.get(id))
-            .ok_or("Missing NoSpeech range")?;
-        let expected = no_speech_chunk(id, range, &manifest)?;
-        if data.evidence.contains_key(id)
-            || serde_json::to_value(chunk)? != serde_json::to_value(expected)?
-            || markers.get(id)
-                != Some(&serde_json::json!({"revision":plan.revision,"range":id,
-                "reason":"no-speech","source":"captured-hex-baseline"}))
-        {
-            return Err("Invalid NoSpeech coverage evidence".into());
-        }
+    let expected = from_router_records(
+        &plan,
+        &manifest,
+        &markers,
+        &super::super::fallback::read(data)?,
+    )?;
+    if serde_json::to_value(expected.fallback_required)?
+        != serde_json::to_value(&coverage.fallback_required)?
+    {
+        return Err("Fallback reason was not recorded by the router".into());
     }
     Ok(())
 }
@@ -108,13 +164,16 @@ pub(super) fn receipt(
     {
         return None;
     }
-    let markers: Vec<_> = coverage
-        .no_speech
+    let required: Vec<_> = coverage
+        .fallback_required
         .iter()
-        .filter(|(_, c)| super::super::baseline::source_covered(c, std::slice::from_ref(fallback)))
-        .map(|(id, _)| id)
+        .filter(|r| {
+            r.interval.track == unit.track
+                && unit.start <= r.interval.start
+                && r.interval.end <= unit.end
+        })
         .collect();
-    if markers.is_empty() {
+    if required.is_empty() {
         return None;
     }
     let intervals: Vec<_> = native
@@ -127,7 +186,7 @@ pub(super) fn receipt(
     let seconds: f64 = intervals.iter().map(|(start, end)| end - start).sum();
     Some(
         serde_json::json!({"baseline":unit.id,"native_source":native.sources.first()?.chunk.id,
-        "track":unit.track,"intervals":intervals,"seconds":seconds,"no_speech":markers}),
+        "track":unit.track,"intervals":intervals,"seconds":seconds,"fallback_required":required}),
     )
 }
 
@@ -155,10 +214,11 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
                 return true;
             };
             !overlaps(s, candidate)
-                || coverage
-                    .no_speech
-                    .values()
-                    .any(|c| c.track == unit.track && c.start < unit.end && unit.start < c.end)
+                || coverage.fallback_required.iter().any(|r| {
+                    r.interval.track == unit.track
+                        && r.interval.start < unit.end
+                        && unit.start < r.interval.end
+                })
         });
         let mut selected = candidate.clone();
         selected.english_reading = baseline
