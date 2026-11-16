@@ -41,11 +41,14 @@ pub fn run(
             &mut clocks,
         )?;
         store_io::write(&work.join("batch-plan.json"), &plan)?;
+        let transport = tempfile::tempdir().unwrap();
         let mut bridge = Reuse {
-            bridge: English(
-                HexBridge::new(hex_speech()).with_timeout(Duration::from_secs(u64::from(
+            bridge: english_http::bridge(
+                hex_speech(),
+                work,
+                Duration::from_secs(u64::from(
                     config.engine_settings.stages.asr_request_deadline_seconds,
-                ))),
+                )),
             ),
             baseline,
             origins: &origins,
@@ -81,6 +84,9 @@ pub fn run(
         )?;
         let assemble_started = Instant::now();
         let mut revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
+        revision.provenance["english_transport"] = serde_json::from_slice(
+            &store_io::read_bounded(&work.join("english-transport.json"), 65536)?,
+        )?;
         let fallbacks: Vec<RoutingFallback> = serde_json::from_slice(
             &inputs::Snapshot::read_file(&work.join("uncertainty.json"), 16 << 20)?,
         )?;
@@ -126,7 +132,7 @@ pub fn run(
 }
 
 #[cfg(feature = "asr-runtime")]
-fn run_batches(
+pub(super) fn run_batches(
     work: &Path,
     plan: &Plan,
     native: &mut impl NativeLoader,
@@ -137,6 +143,8 @@ fn run_batches(
 ) -> Result<()> {
     let batches_started = Instant::now();
     let result = batches::run_until(work, plan, native, bridge, timeout);
+    let cleanup = bridge.finish();
+    let result = result.and(cleanup);
     clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
     if let Err(error) = result {
         clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
@@ -212,12 +220,15 @@ fn hex_speech() -> HexSpeech {
 
 #[cfg(feature = "asr-runtime")]
 struct Reuse<'a> {
-    bridge: English,
+    bridge: English<english_http::RunHex>,
     baseline: &'a [Chunk],
     origins: &'a BTreeMap<String, i64>,
 }
 #[cfg(feature = "asr-runtime")]
 impl EnglishBridge for Reuse<'_> {
+    fn finish(&mut self) -> Result<()> {
+        self.bridge.finish()
+    }
     fn limit(&mut self, remaining: Duration) {
         self.bridge.limit(remaining);
     }
@@ -324,10 +335,15 @@ mod tests {
             chunk(0.0, 10.0, "microphone", "wrong track"),
         ];
         let origins = BTreeMap::from([("system".into(), 8000)]);
+        let transport = tempfile::tempdir().unwrap();
         let mut bridge = Reuse {
-            bridge: English(HexBridge::new(HexSpeech {
-                executable: PathBuf::from("never-call"),
-            })),
+            bridge: english_http::bridge(
+                HexSpeech {
+                    executable: PathBuf::from("never-call"),
+                },
+                transport.path(),
+                Duration::from_secs(1),
+            ),
             baseline: &baseline,
             origins: &origins,
         };

@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+#[cfg(feature = "asr-runtime")]
+mod english_http;
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
@@ -60,6 +62,9 @@ impl NativeLoader for Native<'_> {
 
 pub struct English<C = HexSpeech>(pub HexBridge<C>);
 impl<C: HexCommand> EnglishBridge for English<C> {
+    fn finish(&mut self) -> Result<()> {
+        Ok(self.0.finish()?)
+    }
     fn limit(&mut self, remaining: Duration) {
         self.0.limit(remaining);
     }

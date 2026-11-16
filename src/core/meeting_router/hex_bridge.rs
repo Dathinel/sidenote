@@ -96,6 +96,9 @@ pub struct HexRequest {
 }
 pub trait HexCommand {
     fn call(&mut self, args: &[&str], timeout: Duration) -> Result<String>;
+    fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 impl HexCommand for HexSpeech {
     fn call(&mut self, args: &[&str], timeout: Duration) -> Result<String> {
@@ -132,6 +135,9 @@ pub struct HexBridge<C> {
     status_timeouts: u8,
 }
 impl<C: HexCommand> HexBridge<C> {
+    pub fn finish(&mut self) -> Result<()> {
+        self.command.finish()
+    }
     pub fn new(command: C) -> Self {
         Self {
             command,

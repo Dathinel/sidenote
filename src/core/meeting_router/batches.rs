@@ -159,6 +159,9 @@ pub(super) fn read_no_speech(root: &Path, plan: &Plan, id: &str) -> Option<Value
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
     fn limit(&mut self, _remaining: std::time::Duration) {}
+    fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum NativeLanguage {
