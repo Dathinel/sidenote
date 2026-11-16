@@ -24,6 +24,8 @@ struct State {
     kept: bool,
     #[serde(default)]
     work_queued: bool,
+    #[serde(default)]
+    input_revision: Option<String>,
 }
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -95,7 +97,35 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
-    apply_eligibility(root, id, classify(&meetings.join(id)))
+    let revision = super::recording_source::revision::input(&meetings.join(id)).ok();
+    let path = state_path(root, id);
+    let state: State = store_io::read(&path)?;
+    if super::paths::read_only() && state.input_revision != revision {
+        let result = classify(&meetings.join(id));
+        return Ok(if state.kept && result != Eligibility::Unknown {
+            Eligibility::Eligible
+        } else {
+            result
+        });
+    }
+    if state.short && state.input_revision != revision {
+        let _lock = store_io::lock(&path.with_extension("lock"))?;
+        let mut state: State = store_io::read(&path)?;
+        state.short = false;
+        state.input_revision = revision.clone();
+        store_io::write(&path, &state)?;
+    }
+    let result = apply_eligibility(root, id, classify(&meetings.join(id)))?;
+    if result == Eligibility::Short
+        && state.input_revision != revision
+        && !super::paths::read_only()
+    {
+        let _lock = store_io::lock(&path.with_extension("lock"))?;
+        let mut state: State = store_io::read(&path)?;
+        state.input_revision = revision;
+        store_io::write(&path, &state)?;
+    }
+    Ok(result)
 }
 pub(crate) fn eligibility_captured(
     root: &Path,

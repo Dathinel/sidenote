@@ -35,6 +35,10 @@ pub(super) struct Job {
     pub transcript_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing_fallbacks: Vec<core::meeting_router::fallback::RoutingFallback>,
+    #[serde(default)]
+    pub input_revision: Option<String>,
+    #[serde(default)]
+    pub replace_summary: bool,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -61,6 +65,8 @@ impl Job {
             sorting_pending: false,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            input_revision: None,
+            replace_summary: false,
         }
     }
     fn ready(&self, time: i64, root: &Path) -> bool {
@@ -108,8 +114,9 @@ pub(super) fn read(root: &Path, id: &str) -> io::Result<Option<Job>> {
     }
 }
 #[cfg(any(windows, test))]
-pub(crate) fn accepted(root: &Path, id: &str) -> io::Result<bool> {
-    Ok(read(root, id)?.is_some())
+pub(crate) fn accepted(root: &Path, meetings: &Path, id: &str) -> io::Result<bool> {
+    let revision = core::recording_source::revision::input(&meetings.join(id))?;
+    Ok(read(root, id)?.is_some_and(|job| job.input_revision.as_ref() == Some(&revision)))
 }
 fn write(root: &Path, id: &str, job: &mut Job, state: JobState, message: &str) -> io::Result<()> {
     job.state = state;
@@ -176,17 +183,25 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    let revision = core::recording_source::revision::input(&meetings.join(id))?;
+    let unchanged = |job: &Job| {
+        job.input_revision.as_ref() == Some(&revision)
+            && (!matches!(job.state, JobState::Done { .. })
+                || meetings.join(id).join("english-summary.json").is_file())
+    };
     // A running job holds the job lock for its whole run. An existing job that needs no
     // change answers without taking that lock, so enqueue never waits on or fails at it.
     if read(root, id)?.is_some_and(|job| {
-        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+        (mode.is_none() && unchanged(&job))
+            || (mode.is_some() && matches!(job.state, JobState::Running | JobState::Queued))
     }) {
         return Ok(());
     }
     let _lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
     let previous = read(root, id)?;
     if previous.as_ref().is_some_and(|job| {
-        mode.is_none() || matches!(job.state, JobState::Running | JobState::Queued)
+        (mode.is_none() && unchanged(job))
+            || (mode.is_some() && matches!(job.state, JobState::Running | JobState::Queued))
     }) {
         return Ok(());
     }
@@ -214,14 +229,28 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Meeting is not complete"));
     }
     let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
-    if meeting_job::preserve_summary(&folder, sorting) {
+    let changed = mode.is_none()
+        && (previous
+            .as_ref()
+            .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
+            || (previous.is_none() && core::recording_source::input_changed(root, id, &revision)));
+    if meeting_job::preserve_summary(&folder, sorting || changed) {
+        let mut preserved = Job::new(None, settings);
+        preserved.input_revision = Some(revision);
+        preserved.state = JobState::Done {
+            fallback: false,
+            tasks_failed: !folder.join("tasks.json").is_file(),
+        };
+        store_io::write(&job_path(root, id), &preserved)?;
         return Ok(());
     }
     if sorting && !folder.join("english-summary.json").is_file() {
         return Err(store_io::invalid("Make notes before sorting tasks"));
     }
     let mut next = Job::new(mode, settings);
-    if core::meeting_router::jobs::notes_enabled(root)? {
+    next.input_revision = Some(revision);
+    next.replace_summary = changed;
+    if !changed && core::meeting_router::jobs::notes_enabled(root)? {
         next.transcript_revision = previous
             .as_ref()
             .and_then(|j| j.transcript_revision.clone());
@@ -349,7 +378,8 @@ fn process(
     }
     let sort_only =
         job.sorting_pending || matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
-    if meeting_job::preserve_summary(&folder, sort_only) {
+    job.input_revision = core::recording_source::revision::input(&folder).ok();
+    if meeting_job::preserve_summary(&folder, sort_only || job.replace_summary) {
         return write(
             root,
             id,
@@ -417,6 +447,10 @@ fn process(
         } else {
             existing
         }
+    } else if job.replace_summary {
+        let fresh = transcript::read(&folder)?;
+        store_io::atomic_write(&folder.join("english-transcript.md"), fresh.as_bytes())?;
+        fresh
     } else {
         transcript::write(&folder)?
     };
@@ -608,7 +642,7 @@ fn process(
                 .to_owned(),
         );
         stage(root, id, job, JobStage::Publish)?;
-        match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, true) {
+        match settle.publish_summary(id, &serde_json::from_slice(&bytes)?, !job.replace_summary) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return write(
@@ -690,7 +724,7 @@ pub(super) fn drain(
     };
     drain_locked(root, meetings, run, load)
 }
-fn drain_locked(
+pub(super) fn drain_locked(
     root: &Path,
     meetings: &Path,
     run: &mut impl Run,
@@ -797,6 +831,7 @@ fn drain_locked(
             }
             if meetings.join(&id).join("english-summary.json").is_file()
                 && before.request != Some(Request::RedoTasks)
+                && !before.replace_summary
             {
                 before.sorting_pending = true;
             }
@@ -891,6 +926,14 @@ pub fn start_worker() -> io::Result<()> {
     }
     let root = core::state_dir();
     let meetings = core::meetings_dir();
+    start_worker_in(&root, &meetings, launch_worker)
+}
+
+pub(super) fn start_worker_in(
+    root: &Path,
+    meetings: &Path,
+    launch: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     if !fs::read_dir(jobs(&root)).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             let path = e.path();
@@ -901,7 +944,10 @@ pub fn start_worker() -> io::Result<()> {
                 return false;
             };
             match read(&root, id) {
-                Ok(Some(job)) => job_eligible(&root, &meetings, id, &job).unwrap_or(false),
+                Ok(Some(job)) => {
+                    job.ready(now(), root)
+                        && job_eligible(root, meetings, id, &job).unwrap_or(false)
+                }
                 Err(_) => true,
                 Ok(None) => false,
             }
@@ -909,6 +955,10 @@ pub fn start_worker() -> io::Result<()> {
     }) {
         return Ok(());
     }
+    launch()
+}
+
+fn launch_worker() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     if crate::service::active() {
         return crate::service::workers::start("notes", || {
