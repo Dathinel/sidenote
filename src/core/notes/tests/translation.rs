@@ -3,6 +3,8 @@ mod authorization;
 mod busy;
 mod failed;
 mod payment;
+#[cfg(feature = "asr-runtime")]
+mod producer;
 mod qualification;
 use crate::core::meeting_router::{
     self as router,
@@ -39,6 +41,10 @@ fn fixture_child() {
     }
     if let Some(work) = mode.strip_prefix("router-failed|") {
         failed::router_child(Path::new(work));
+    }
+    #[cfg(feature = "asr-runtime")]
+    if let Some(work) = mode.strip_prefix("router-produced|") {
+        producer::router_child(Path::new(work));
     }
     if mode == "recognizer" {
         let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());

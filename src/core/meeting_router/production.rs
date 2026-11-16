@@ -19,8 +19,20 @@ mod public_tests;
 pub(crate) mod regression;
 
 pub struct Native<'a>(pub &'a Config);
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_NATIVE: std::cell::Cell<Option<fn() -> Command>> = const { std::cell::Cell::new(None) };
+}
 impl NativeLoader for Native<'_> {
     fn load(&mut self, language: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+        #[cfg(test)]
+        if let Some(command) = TEST_NATIVE.with(|f| f.get().map(|f| f())) {
+            return Ok(Box::new(worker::Worker::spawn(
+                command,
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(10),
+            )?));
+        }
         let language = match language {
             NativeLanguage::Hindi => "hi",
             NativeLanguage::Telugu => "te",

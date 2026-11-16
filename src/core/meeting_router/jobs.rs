@@ -464,7 +464,7 @@ pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     run_one_in(&request, &super::super::state_dir())
 }
-fn run_one_in(request: &Path, root: &Path) -> Result<()> {
+pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
     let mut job: Job =
         serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;

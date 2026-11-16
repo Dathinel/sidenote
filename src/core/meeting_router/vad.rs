@@ -13,6 +13,10 @@ pub enum Error {
     Unavailable,
 }
 pub type Span = (u64, u64);
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_PROBABILITY: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
 /// Persist with the piece receipt; create a fresh checkpoint for independent runs.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -112,11 +116,15 @@ impl Checkpoint {
 }
 pub struct Silero {
     #[cfg(all(windows, feature = "asr-runtime"))]
-    session: ort::session::Session,
+    session: Option<ort::session::Session>,
 }
 impl Silero {
     /// Only reads an explicitly installed pack; failures leave baseline coverage to the caller.
     pub fn load(store: &model_catalog::ModelStore, dll: &Path) -> Result<Self, Unavailable> {
+        #[cfg(all(test, windows, feature = "asr-runtime"))]
+        if TEST_PROBABILITY.with(|p| p.get().is_some()) {
+            return Ok(Self { session: None });
+        }
         #[cfg(all(windows, feature = "asr-runtime"))]
         {
             use sha2::{Digest, Sha256};
@@ -134,11 +142,13 @@ impl Silero {
                 }
                 asr::initialize(dll)?;
                 Ok(Self {
-                    session: ort::session::Session::builder()?
-                        .with_intra_threads(1)?
-                        .with_inter_threads(1)?
-                        .with_parallel_execution(false)?
-                        .commit_from_memory(&bytes)?,
+                    session: Some(
+                        ort::session::Session::builder()?
+                            .with_intra_threads(1)?
+                            .with_inter_threads(1)?
+                            .with_parallel_execution(false)?
+                            .commit_from_memory(&bytes)?,
+                    ),
                 })
             };
             load().map_err(|_| Unavailable)
@@ -160,32 +170,39 @@ impl Silero {
         last: bool,
     ) -> Result<Vec<Span>, Error> {
         state.push(identity, start, sample_rate, audio, last, |state, frame| {
+            #[cfg(test)]
+            if let Some(probability) = TEST_PROBABILITY.with(|p| p.get()) {
+                return Ok(probability);
+            }
             #[cfg(all(windows, feature = "asr-runtime"))]
             {
                 use ort::value::Tensor;
-                let mut run = || -> asr::Result<f32> {
-                    if state.memory.is_empty() {
-                        state.memory = vec![0.0; 256];
-                        state.context = vec![0.0; 64];
-                    }
-                    if state.memory.len() != 256 || state.context.len() != 64 {
-                        return Err("Invalid VAD state".into());
-                    }
-                    let input: Vec<_> = state.context.iter().chain(frame).copied().collect();
-                    let out = self.session.run(ort::inputs![
-                        "input" => Tensor::from_array(([1, 576], input))?,
-                        "state" => Tensor::from_array(([2, 1, 128], state.memory.clone()))?,
-                        "sr" => Tensor::from_array((Vec::<usize>::new(), vec![16000i64]))?
-                    ])?;
-                    let (_, probability) = out[0].try_extract_tensor::<f32>()?;
-                    let (_, memory) = out[1].try_extract_tensor::<f32>()?;
-                    if probability.len() != 1 || memory.len() != 256 {
-                        return Err("Invalid VAD output".into());
-                    }
-                    state.memory = memory.to_vec();
-                    state.context = frame[448..].to_vec();
-                    Ok(probability[0])
-                };
+                let mut run =
+                    || -> asr::Result<f32> {
+                        if state.memory.is_empty() {
+                            state.memory = vec![0.0; 256];
+                            state.context = vec![0.0; 64];
+                        }
+                        if state.memory.len() != 256 || state.context.len() != 64 {
+                            return Err("Invalid VAD state".into());
+                        }
+                        let input: Vec<_> = state.context.iter().chain(frame).copied().collect();
+                        let out = self.session.as_mut().ok_or("VAD unavailable")?.run(
+                            ort::inputs![
+                                "input" => Tensor::from_array(([1, 576], input))?,
+                                "state" => Tensor::from_array(([2, 1, 128], state.memory.clone()))?,
+                                "sr" => Tensor::from_array((Vec::<usize>::new(), vec![16000i64]))?
+                            ],
+                        )?;
+                        let (_, probability) = out[0].try_extract_tensor::<f32>()?;
+                        let (_, memory) = out[1].try_extract_tensor::<f32>()?;
+                        if probability.len() != 1 || memory.len() != 256 {
+                            return Err("Invalid VAD output".into());
+                        }
+                        state.memory = memory.to_vec();
+                        state.context = frame[448..].to_vec();
+                        Ok(probability[0])
+                    };
                 run().map_err(|_| Unavailable)
             }
             #[cfg(not(all(windows, feature = "asr-runtime")))]
