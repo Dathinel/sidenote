@@ -49,6 +49,7 @@ pub(crate) fn handoff_in(
     config: io::Result<Config>,
     dispatch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Acceptance> {
+    let _stage = core::idle_pass::Span::begin("completion_handoff");
     let Some(config) = store_io::defer_busy(config)? else {
         return Ok(Acceptance::Deferred);
     };

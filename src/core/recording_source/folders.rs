@@ -34,6 +34,7 @@ impl Source for Discovery {
         &mut self,
         delivered: &BTreeMap<String, String>,
     ) -> Result<CatchUp, Error> {
+        let _stage = crate::core::idle_pass::Span::begin("source_discovery");
         let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),

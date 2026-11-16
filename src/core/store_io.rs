@@ -238,6 +238,7 @@ pub(super) fn reject_reparse(path: &Path) -> io::Result<()> {
     Ok(())
 }
 pub(crate) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    let _read = super::idle_pass::Span::begin("store_reads");
     reject_reparse(path)?;
     let read = || super::file_reads::read(path, cap).map(|bytes| bytes.to_vec());
     if super::file_reads::refreshing() {

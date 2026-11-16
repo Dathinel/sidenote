@@ -38,6 +38,7 @@ fn state_path(root: &Path, id: &str) -> PathBuf {
         .join(format!("{id}.json"))
 }
 fn classify(folder: &Path) -> Eligibility {
+    let _stage = super::idle_pass::Span::begin("eligibility");
     super::meeting_router::inputs::Snapshot::capture(folder)
         .ok()
         .and_then(|input| classify_reader(&input.manifest, &mut io::Cursor::new(&input.transcript)))

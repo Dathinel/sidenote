@@ -196,6 +196,7 @@ impl MeetingScan {
         }
     }
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
+        let _scan = crate::core::idle_pass::Span::begin("folder_scan");
         let directory = Directory::open(path)?;
         // Linux enumeration follows the pinned descriptor, not a replaceable root pathname.
         #[cfg(target_os = "linux")]
@@ -282,6 +283,7 @@ impl Snapshot {
             .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
     pub(crate) fn read_file(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+        let mut read = crate::core::idle_pass::Span::begin("file_reads");
         let mut file = Self::open_file(path)?;
         if file.metadata()?.len() > cap {
             return Err(invalid());
@@ -289,6 +291,7 @@ impl Snapshot {
         let before = stamp(&file, false)?;
         let mut bytes = Vec::new();
         (&mut file).take(cap + 1).read_to_end(&mut bytes)?;
+        read.bytes(bytes.len());
         if bytes.len() as u64 > cap || stamp(&file, false)? != before {
             return Err(invalid());
         }
@@ -344,11 +347,13 @@ impl Snapshot {
         Ok(Some(self.files.len() - 1))
     }
     fn bytes(&mut self, index: usize) -> io::Result<Vec<u8>> {
+        let mut read = crate::core::idle_pass::Span::begin("file_reads");
         let input = &mut self.files[index];
         let mut bytes = Vec::new();
         (&mut input.file)
             .take(input.cap + 1)
             .read_to_end(&mut bytes)?;
+        read.bytes(bytes.len());
         if bytes.len() as u64 > input.cap || stamp(&input.file, false)? != input.stamp {
             return Err(invalid());
         }
