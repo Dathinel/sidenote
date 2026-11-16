@@ -215,22 +215,32 @@ impl Service {
     }
 }
 struct OwnerWatch {
+    job: Arc<ProcessJob>,
     stop: mpsc::Sender<()>,
     active: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl OwnerWatch {
     fn start(hex: &HexSpeech, job: &Arc<ProcessJob>) -> Self {
-        let hex = HexSpeech {
-            executable: hex.executable.clone(),
-        };
+        Self::start_command(
+            HexSpeech {
+                executable: hex.executable.clone(),
+            },
+            job,
+        )
+    }
+    fn start_command(
+        command: impl super::hex_bridge::HexCommand + Send + 'static,
+        job: &Arc<ProcessJob>,
+    ) -> Self {
+        let owned_job = Arc::clone(job);
         let job = Arc::clone(job);
         let active = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&active);
         let (stop, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
             let mut status =
-                super::hex_bridge::HexBridge::new(hex).with_timeout(Duration::from_secs(2));
+                super::hex_bridge::HexBridge::new(command).with_timeout(Duration::from_secs(2));
             while matches!(
                 rx.recv_timeout(Duration::from_millis(100)),
                 Err(mpsc::RecvTimeoutError::Timeout)
@@ -243,6 +253,7 @@ impl OwnerWatch {
             }
         });
         Self {
+            job: owned_job,
             stop,
             active,
             thread: Some(thread),
@@ -254,8 +265,11 @@ impl OwnerWatch {
     }
     fn join(&mut self) {
         let _ = self.stop.send(());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.thread.take()
+            && super::hex::finish_thread(thread, Instant::now() + Duration::from_secs(3)).is_err()
+        {
+            self.active.store(true, Ordering::Release);
+            let _ = self.job.terminate();
         }
     }
 }
@@ -312,3 +326,6 @@ fn owns_port(pid: u32, port: u16) -> bool {
             && u16::from_be(row.dwLocalPort as u16) == port
     })
 }
+
+#[cfg(test)]
+mod status_tests;

@@ -57,47 +57,19 @@ impl HexSpeech {
         let job = match crate::platform::ProcessJob::attach(&child) {
             Ok(job) => job,
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                if !stop_child(&mut child) {
+                    return Err(HexFailure::Timeout.into());
+                }
                 return Err("Cannot contain speech process".into());
             }
         };
         let stdout = child.stdout.take().ok_or("Speech output unavailable")?;
-        let mut stderr = child
+        let stderr = child
             .stderr
             .take()
             .ok_or("Speech diagnostics unavailable")?;
-        let diagnostics = thread::spawn(move || -> std::io::Result<_> {
-            let mut bytes = Vec::new();
-            stderr.by_ref().take(4096).read_to_end(&mut bytes)?;
-            let truncated = std::io::copy(&mut stderr, &mut std::io::sink())? > 0;
-            Ok((bytes, truncated))
-        });
-        let reader = thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stdout
-                .take(8 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .map(|_| bytes)
-        });
-        let start = Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Ok(status),
-                Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(50)),
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break Err(HexFailure::Timeout);
-                }
-            }
-        };
-        drop(job);
-        let (stderr, truncated) = diagnostics
-            .join()
-            .map_err(|_| "Speech diagnostics reader failed")??;
-        let bytes = reader.join().map_err(|_| "Speech reader failed")??;
-        let status = status?;
+        let (status, bytes, stderr, truncated) =
+            collect_child(&mut child, stdout, stderr, timeout, || drop(job))?;
         let output = String::from_utf8_lossy(&bytes);
         let failure = reply_error(&output);
         if !status.success() || (structured_errors && failure.is_some()) {
@@ -209,4 +181,78 @@ fn default_executable() -> PathBuf {
     {
         PathBuf::new()
     }
+}
+
+pub(super) trait SpeechChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>>;
+    fn kill(&mut self) -> std::io::Result<()>;
+}
+impl SpeechChild for std::process::Child {
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.try_wait()
+    }
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.kill()
+    }
+}
+pub(super) fn collect_child(
+    child: &mut impl SpeechChild,
+    stdout: impl Read + Send + 'static,
+    mut stderr: impl Read + Send + 'static,
+    timeout: Duration,
+    cleanup: impl FnOnce(),
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+    let diagnostics = thread::spawn(move || -> std::io::Result<_> {
+        let mut bytes = Vec::new();
+        stderr.by_ref().take(4096).read_to_end(&mut bytes)?;
+        let truncated = std::io::copy(&mut stderr, &mut std::io::sink())? > 0;
+        Ok((bytes, truncated))
+    });
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(50)),
+            _ => {
+                stop_child(child);
+                break Err(HexFailure::Timeout);
+            }
+        }
+    };
+    cleanup();
+    let status = status?;
+    let deadline = Instant::now() + PIPE_DRAIN_LIMIT;
+    let (stderr, truncated) = finish_thread(diagnostics, deadline)??;
+    let bytes = finish_thread(reader, deadline)??;
+    Ok((status, bytes, stderr, truncated))
+}
+
+const CHILD_CLEANUP_LIMIT: Duration = Duration::from_millis(250);
+const PIPE_DRAIN_LIMIT: Duration = Duration::from_millis(250);
+fn stop_child(child: &mut impl SpeechChild) -> bool {
+    let _ = child.kill();
+    let deadline = Instant::now() + CHILD_CLEANUP_LIMIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            _ => return false,
+        }
+    }
+}
+pub(super) fn finish_thread<T>(thread: thread::JoinHandle<T>, deadline: Instant) -> Result<T> {
+    while !thread.is_finished() {
+        if Instant::now() >= deadline {
+            return Err(HexFailure::Timeout.into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread.join().map_err(|_| HexFailure::Failed.into())
 }
