@@ -15,6 +15,7 @@ pub enum HexFailure {
     Timeout,
     Failed,
     NoSpeech,
+    HelperFailed,
     InvalidRange,
     StatusUnknown { timeouts: u8, last_idle: bool },
     Child(Box<ChildFailure>),
@@ -52,6 +53,7 @@ impl std::fmt::Display for HexFailure {
             Timeout => f.write_str("Hex request timed out"),
             Failed => f.write_str("Hex recognition failed"),
             NoSpeech => f.write_str("Hex recognized no speech"),
+            HelperFailed => f.write_str("Private Hex helper failed; captured baseline required"),
             InvalidRange => f.write_str("Invalid Hex audio range"),
             StatusUnknown {
                 timeouts,

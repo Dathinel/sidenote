@@ -69,7 +69,7 @@ impl HexCommand for RunHex {
         if self.state["service_starts"] == 0 {
             self.state["service_starts"] = 1.into();
             self.save()?;
-            // Preserve time for the command if startup hangs or HTTP exhausts its allowance.
+            // Bound startup within the existing range deadline.
             let started = Instant::now();
             let service = Service::start(&self.hex, timeout / 4);
             self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();
@@ -112,24 +112,8 @@ impl HexCommand for RunHex {
                 Err(reason) => self.fallback(&reason),
             }
         }
-        // Retry this failed piece, then keep every later piece on the top-level command.
-        self.state["command_pieces"] = (self.state["command_pieces"].as_u64().unwrap() + 1).into();
         self.save()?;
-        let mut fallback = vec!["transcribe"];
-        fallback.extend_from_slice(&args[2..]);
-        if !fallback.contains(&"--json") {
-            fallback.push("--json");
-        }
-        let output = self.hex.call(&fallback, remaining()?)?;
-        if args.contains(&"--json") {
-            return Ok(output);
-        }
-        let value: Value = serde_json::from_str(&output).map_err(|_| HexFailure::Failed)?;
-        value["transcript"]
-            .as_str()
-            .or_else(|| value["text"].as_str())
-            .map(str::to_owned)
-            .ok_or(HexFailure::Failed)
+        Err(HexFailure::HelperFailed)
     }
 }
 impl Drop for RunHex {

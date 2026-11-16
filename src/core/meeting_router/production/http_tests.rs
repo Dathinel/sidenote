@@ -128,13 +128,13 @@ fn production_http_reuses_service_across_english_pieces() {
     reaped(&f);
 }
 #[test]
-fn production_http_failure_falls_back_for_failed_and_remaining_pieces() {
+fn production_http_failure_retains_baseline_without_owner_command() {
     for mode in [1, 2, 5] {
         let f = fixture(mode);
         run(&f, Duration::from_secs(20)).unwrap();
         assert_eq!(count(&f, "starts"), 1);
         assert_eq!(count(&f, "http-calls"), if mode == 1 { 1 } else { 0 });
-        assert_eq!(count(&f, "command-calls"), 2);
+        assert_eq!(count(&f, "command-calls"), 0);
         let r = receipt(&f);
         assert!(r["fallback_reason"].is_string());
         if mode == 1 {
@@ -143,13 +143,15 @@ fn production_http_failure_falls_back_for_failed_and_remaining_pieces() {
                 format!("service-http-status-{}", captured()["http_error"]["status"])
             );
         }
-        assert_eq!(r["command_pieces"], 2);
+        assert_eq!(r["command_pieces"], 0);
         for id in f.plan.batches["en"].keys() {
-            assert_eq!(
-                batches::read_result(&f.work, &f.plan, id).unwrap().unwrap()["text"],
-                expected_text(true)
-            );
+            assert!(batches::read_result(&f.work, &f.plan, id).unwrap().is_none());
         }
+        let assembled = revision::assemble(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+        for unit in &f.baseline {
+            assert!(super::super::baseline::source_covered(unit, &assembled.transcript.segments));
+        }
+        assert!(revision::assemble(&f.work, &f.plan, &f.manifest, &[], 1).is_err());
         reaped(&f);
     }
 }
@@ -161,20 +163,28 @@ fn production_http_timeout_reaps_request_and_handshake_children() {
         run_with_request_timeout(&f, Duration::from_secs(20), Duration::from_secs(2)).unwrap();
         assert!(start.elapsed() < Duration::from_secs(8));
         assert_eq!(count(&f, "starts"), 1);
-        assert_eq!(count(&f, "command-calls"), 2);
+        assert_eq!(count(&f, "command-calls"), 0);
         reaped(&f);
         assert!(receipt(&f)["fallback_reason"].is_string());
     }
 }
 #[test]
-fn production_http_whole_run_deadline_still_reaps_and_fails() {
+fn production_http_request_failure_preserves_whole_run_budget() {
     let f = fixture(9);
     let start = Instant::now();
-    assert!(run(&f, Duration::from_millis(900)).is_err());
+    run(&f, Duration::from_millis(900)).unwrap();
     assert!(start.elapsed() < Duration::from_secs(8));
     assert_eq!(count(&f, "starts"), 1);
     reaped(&f);
     assert!(receipt(&f)["fallback_reason"].is_string());
+}
+
+#[test]
+fn production_http_expired_whole_run_fails_without_dispatch() {
+    let f = fixture(0);
+    assert!(run(&f, Duration::ZERO).is_err());
+    assert_eq!(count(&f, "starts"), 0);
+    assert_eq!(count(&f, "command-calls"), 0);
 }
 #[test]
 fn production_http_empty_success_keeps_no_speech_and_later_languages() {
