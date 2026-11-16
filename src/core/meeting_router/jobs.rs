@@ -795,6 +795,7 @@ fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> R
             } else {
                 None
             };
+            let published_labs = assembled.is_some();
             let result = if labs {
                 assembled
             } else if outcome.success {
@@ -828,7 +829,7 @@ fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> R
                     ),
                 )
             });
-            if labs {
+            if labs && !published_labs {
                 super::baseline::reconcile_exact(&mut result, &job.baseline);
             }
             let successful = stable && outcome.success && !result.degraded();

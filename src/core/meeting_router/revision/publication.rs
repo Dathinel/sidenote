@@ -52,8 +52,26 @@ fn validate(data: &Revision) -> io::Result<()> {
         return Err(store_io::invalid("Invalid transcript revision"));
     }
     let mut check = t.clone();
+    let coverage = data
+        .provenance
+        .get("assembly_coverage")
+        .map(|value| serde_json::from_value::<super::reconciliation::Coverage>(value.clone()))
+        .transpose()?;
+    if let Some(coverage) = &coverage {
+        super::reconciliation::validate_markers(data, coverage)
+            .map_err(|_| store_io::invalid("Invalid NoSpeech overlap evidence"))?;
+        if data.alternatives.iter().any(|s| s.sources.is_empty()) {
+            return Err(store_io::invalid("Invalid routed alternatives"));
+        }
+    }
     for (i, a) in t.segments.iter().enumerate() {
         if t.segments[i + 1..].iter().any(|b| {
+            if coverage.as_ref().is_some_and(|c| {
+                super::reconciliation::receipt(a, b, &t.baseline, c)
+                    .is_some_and(|receipt| c.overlaps.contains(&receipt))
+            }) {
+                return false;
+            }
             if a.route == "en"
                 && b.route == "en"
                 && ![a.status.as_str(), b.status.as_str()]
@@ -73,7 +91,19 @@ fn validate(data: &Revision) -> io::Result<()> {
             return Err(store_io::invalid("Competing selected readings"));
         }
     }
-    reconcile(&mut check, &t.baseline);
+    if let Some(mut coverage) = coverage {
+        let recorded = serde_json::to_value(&coverage)?;
+        let mut expected = data.clone();
+        expected.transcript.segments = data.alternatives.clone();
+        super::reconciliation::reconcile(&mut expected.transcript, &t.baseline, &mut coverage);
+        super::super::fallback::attach(&mut expected, &super::super::fallback::read(data)?)?;
+        if serde_json::to_value(coverage)? != recorded {
+            return Err(store_io::invalid("Invalid overlap receipt"));
+        }
+        check = expected.transcript;
+    } else {
+        reconcile(&mut check, &t.baseline);
+    }
     if serde_json::to_vec(&check.segments)? != serde_json::to_vec(&t.segments)? {
         return Err(store_io::invalid("Incomplete transcript coverage"));
     }
