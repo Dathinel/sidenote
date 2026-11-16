@@ -11,7 +11,9 @@ use std::{collections::BTreeMap, path::Path};
 mod publication;
 pub use publication::{begin, commit, load, retain};
 
-#[derive(Serialize, Deserialize)]
+mod reconciliation;
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Revision {
     pub generation: String,
     pub plan_revision: String,
@@ -154,11 +156,16 @@ pub fn assemble(
     transcript.config_checksum = manifest.config_checksum.clone();
     let mut evidence = BTreeMap::new();
     let mut no_speech = BTreeMap::new();
+    let mut coverage = reconciliation::Coverage::default();
     for (id, range) in plan.batches.values().flat_map(|b| b.iter()) {
         let reading = super::batches::read_result(root, plan, id)?;
         if reading.is_none()
             && let Some(reason) = super::batches::read_no_speech(root, plan, id)
         {
+            coverage.no_speech.insert(
+                id.clone(),
+                reconciliation::no_speech_chunk(id, range, manifest)?,
+            );
             no_speech.insert(id.clone(), reason);
         }
         let track = manifest
@@ -192,19 +199,7 @@ pub fn assemble(
         }
     }
     let candidates = transcript.segments.clone();
-    transcript.segments.retain(|a| {
-        a.status != "unresolved-context"
-            && !candidates.iter().any(|b| {
-                a.sources[0].chunk.id != b.sources[0].chunk.id
-                    && a.track == b.track
-                    && a.sources.iter().any(|x| {
-                        b.sources
-                            .iter()
-                            .any(|y| x.chunk.start < y.chunk.end && y.chunk.start < x.chunk.end)
-                    })
-            })
-    });
-    reconcile(&mut transcript, baseline);
+    reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
     for range in plan.batches.values().flat_map(|b| b.values()) {
         let track = manifest
             .tracks
@@ -235,6 +230,8 @@ pub fn assemble(
     });
     let mut provenance = serde_json::to_value(manifest)?;
     provenance["no_speech"] = serde_json::to_value(no_speech)?;
+    provenance["plan"] = serde_json::to_value(plan)?;
+    provenance["assembly_coverage"] = serde_json::to_value(coverage)?;
     Ok(Revision {
         generation: generation.to_string(),
         plan_revision: plan.revision.clone(),
