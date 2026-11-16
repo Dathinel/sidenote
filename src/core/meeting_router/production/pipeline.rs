@@ -4,6 +4,26 @@ use super::*;
 #[cfg(feature = "asr-runtime")]
 use std::collections::BTreeMap;
 
+#[cfg(all(test, feature = "asr-runtime"))]
+#[test]
+fn production_input_failure_retains_partial_clocks() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("public-missing-input");
+    let work = root.path().join("work");
+    fs::create_dir_all(&folder).unwrap();
+    fs::create_dir_all(&work).unwrap();
+    let error = run(&folder, &[], &[], &Config::default(), &work, "public", 1)
+        .unwrap_err()
+        .to_string();
+    let value: Value = serde_json::from_slice(
+        &fs::read(work.join("clocks.json")).expect("failed production run must retain its clocks"),
+    )
+    .unwrap();
+    assert_eq!(value["partial"], true);
+    assert!(value["worker_total"].as_f64().unwrap() >= 0.0);
+    assert!(!work.join("output.json").exists(), "{error}");
+}
+
 /// Called only by the Labs job. The parent rechecks the captured input before publication.
 pub fn run(
     folder: &Path,
