@@ -99,12 +99,21 @@ fn worker_skips_production_done_jobs_without_capture_or_launch() {
         &mut Fake::new(vec![Ok(summary()), Ok(sorted())]),
     );
     assert!(matches!(state(&root.0), JobState::Done { .. }));
+    queue::start_worker_in(&root.0, &root.0.join("meetings"), 0, || {
+        panic!("terminal warmup launched")
+    })
+    .unwrap();
     let before = read_bytes();
     let mut launches = 0;
-    queue::start_worker_in(&root.0, &root.0.join("meetings"), || {
-        launches += 1;
-        Ok(())
-    })
+    queue::start_worker_in(
+        &root.0,
+        &root.0.join("meetings"),
+        chrono::Utc::now().timestamp_millis(),
+        || {
+            launches += 1;
+            Ok(())
+        },
+    )
     .unwrap();
     let bytes = read_bytes() - before;
     println!("retained Done: read_bytes={bytes}, launches={launches}");
@@ -113,6 +122,21 @@ fn worker_skips_production_done_jobs_without_capture_or_launch() {
         bytes < 64 * 1024,
         "terminal notes captured transcript: {bytes}"
     );
+    assert_eq!(bytes, 0, "unchanged terminal job was reread");
+    queue::enqueue_in(
+        &root.0,
+        &root.0.join("meetings"),
+        ID,
+        Some(Request::SortAgain),
+        &s,
+    )
+    .unwrap();
+    queue::start_worker_in(&root.0, &root.0.join("meetings"), 0, || {
+        launches += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(launches, 1, "cached terminal job hid newly queued work");
 }
 
 #[test]
@@ -164,10 +188,15 @@ fn worker_keeps_queued_and_due_failure_retries_but_defers_future_retry() {
     meeting(&root.0, "Synthetic retry");
     enqueue(&root.0, &s, None);
     let mut launches = 0;
-    queue::start_worker_in(&root.0, &root.0.join("meetings"), || {
-        launches += 1;
-        Ok(())
-    })
+    queue::start_worker_in(
+        &root.0,
+        &root.0.join("meetings"),
+        chrono::Utc::now().timestamp_millis(),
+        || {
+            launches += 1;
+            Ok(())
+        },
+    )
     .unwrap();
     assert_eq!(launches, 1);
     drain(
@@ -175,25 +204,31 @@ fn worker_keeps_queued_and_due_failure_retries_but_defers_future_retry() {
         &s,
         &mut Fake::new(vec![Err(Failure::Backend { exit: None })]),
     );
-    queue::start_worker_in(&root.0, &root.0.join("meetings"), || {
+    queue::start_worker_in(
+        &root.0,
+        &root.0.join("meetings"),
+        chrono::Utc::now().timestamp_millis(),
+        || {
+            launches += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(launches, 1, "future retry launched early");
+    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    let due = job.next_try_at.unwrap();
+    queue::start_worker_in(&root.0, &root.0.join("meetings"), due, || {
         launches += 1;
         Ok(())
     })
     .unwrap();
-    assert_eq!(launches, 1, "future retry launched early");
-    let mut job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(launches, 2, "due retry was lost");
     job.state = JobState::BackendError {
         next_try_ms: Some(0),
         exit: None,
     };
     job.next_try_at = Some(0);
     store_io::write(&root.0.join(format!("local/notes-jobs/{ID}.json")), &job).unwrap();
-    queue::start_worker_in(&root.0, &root.0.join("meetings"), || {
-        launches += 1;
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(launches, 2, "due retry was lost");
     drain(
         &root.0,
         &s,

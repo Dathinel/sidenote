@@ -9,10 +9,13 @@ use crate::core::{self, agent_instructions::Agent, file_reads, store_io};
 use crate::platform::CommandExt;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex, OnceLock},
+    time::SystemTime,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -112,6 +115,58 @@ pub(super) fn read(root: &Path, id: &str) -> io::Result<Option<Job>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+type JobStamp = (u64, SystemTime, Option<SystemTime>);
+#[derive(Default)]
+struct ScheduleCache {
+    root: PathBuf,
+    jobs: BTreeMap<String, (JobStamp, Arc<Job>)>,
+}
+fn job_stamp(path: &Path) -> io::Result<JobStamp> {
+    let meta = fs::symlink_metadata(path)?;
+    if !file_reads::regular(&meta) {
+        return Err(store_io::invalid("Unsafe notes job"));
+    }
+    Ok((meta.len(), meta.modified()?, meta.created().ok()))
+}
+// Only scheduling uses this cache; claiming work still rereads the locked job.
+fn scheduled_job(root: &Path, id: &str) -> io::Result<Option<Arc<Job>>> {
+    static CACHE: OnceLock<Mutex<ScheduleCache>> = OnceLock::new();
+    let path = job_path(root, id);
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            let mut cache = poisoned.into_inner();
+            cache.jobs.clear();
+            cache
+        });
+    if cache.root != root {
+        cache.root = root.to_owned();
+        cache.jobs.clear();
+    }
+    let before = match job_stamp(&path) {
+        Ok(stamp) => stamp,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            cache.jobs.remove(id);
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    if let Some((stamp, job)) = cache.jobs.get(id)
+        && *stamp == before
+    {
+        return Ok(Some(job.clone()));
+    }
+    cache.jobs.remove(id);
+    let job = read(root, id)?.map(Arc::new);
+    if let Some(job) = &job
+        && job_stamp(&path).is_ok_and(|after| after == before)
+    {
+        cache.jobs.insert(id.to_owned(), (before, job.clone()));
+    }
+    Ok(job)
 }
 #[cfg(any(windows, test))]
 pub(crate) fn accepted(root: &Path, meetings: &Path, id: &str) -> io::Result<bool> {
@@ -742,6 +797,7 @@ pub(super) fn drain_locked(
         }
         let mut ready = Vec::new();
         let mut missing = Vec::new();
+        store_io::reject_reparse(&jobs(root))?;
         for entry in fs::read_dir(jobs(root))? {
             let entry = entry?;
             let path = entry.path();
@@ -754,14 +810,14 @@ pub(super) fn drain_locked(
             if !valid_id(id) {
                 continue;
             }
-            match read(root, id) {
+            match scheduled_job(root, id) {
                 Ok(Some(job)) if job.ready(now(), root) => {
                     if job_eligible(root, meetings, id, &job)? {
                         ready.push(id.to_owned());
                     }
                 }
                 Ok(Some(job)) if job.state == JobState::HelperMissing => {
-                    missing.push((id.to_owned(), job))
+                    missing.push((id.to_owned(), job.as_ref().clone()))
                 }
                 Err(_) => {
                     let target = path.with_extension(format!(
@@ -926,14 +982,16 @@ pub fn start_worker() -> io::Result<()> {
     }
     let root = core::state_dir();
     let meetings = core::meetings_dir();
-    start_worker_in(&root, &meetings, launch_worker)
+    start_worker_in(&root, &meetings, now(), launch_worker)
 }
 
 pub(super) fn start_worker_in(
     root: &Path,
     meetings: &Path,
+    time: i64,
     launch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
+    store_io::reject_reparse(&jobs(root))?;
     if !fs::read_dir(jobs(&root)).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             let path = e.path();
@@ -943,10 +1001,9 @@ pub(super) fn start_worker_in(
             let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
                 return false;
             };
-            match read(&root, id) {
+            match scheduled_job(root, id) {
                 Ok(Some(job)) => {
-                    job.ready(now(), root)
-                        && job_eligible(root, meetings, id, &job).unwrap_or(false)
+                    job.ready(time, root) && job_eligible(root, meetings, id, &job).unwrap_or(false)
                 }
                 Err(_) => true,
                 Ok(None) => false,
