@@ -2,8 +2,8 @@ use super::super::*;
 mod api;
 use api::Fixture;
 
-fn isolated_notes_test(name: &str) -> bool {
-    if std::env::var("SIDENOTE_REPLACEMENT_TEST").as_deref() == Ok(name) {
+fn isolated_api_test(name: &str) -> bool {
+    if std::env::var("SIDENOTE_HEX_API_TEST").as_deref() == Ok(name) {
         return false;
     }
     let root = tempfile::Builder::new()
@@ -17,7 +17,7 @@ fn isolated_notes_test(name: &str) -> bool {
             &format!("ui::hex::connection::stop_tests::{name}"),
             "--nocapture",
         ])
-        .env("SIDENOTE_REPLACEMENT_TEST", name)
+        .env("SIDENOTE_HEX_API_TEST", name)
         .env("SIDENOTE_DATA_DIR", root.path().join("data"))
         .env("SIDENOTE_STATE_DIR", root.path().join("state"))
         .env("SIDENOTE_HEX_DIR", root.path().join("hex"))
@@ -29,7 +29,7 @@ fn isolated_notes_test(name: &str) -> bool {
     }
     assert!(
         command.status().unwrap().success(),
-        "isolated notes test failed"
+        "isolated Hex API test failed"
     );
     true
 }
@@ -55,7 +55,7 @@ fn pending_notes(state: &mut State, api: &Fixture, text: &str) -> u64 {
 
 #[test]
 fn active_recheck_preserves_pending_notes() {
-    if isolated_notes_test("active_recheck_preserves_pending_notes") {
+    if isolated_api_test("active_recheck_preserves_pending_notes") {
         return;
     }
     let (api, mut state, _) = Fixture::start();
@@ -89,7 +89,7 @@ fn active_recheck_preserves_pending_notes() {
 
 #[test]
 fn active_recheck_failed_save_keeps_pending_notes() {
-    if isolated_notes_test("active_recheck_failed_save_keeps_pending_notes") {
+    if isolated_api_test("active_recheck_failed_save_keeps_pending_notes") {
         return;
     }
     let (api, mut state, _) = Fixture::start();
@@ -111,7 +111,7 @@ fn active_recheck_failed_save_keeps_pending_notes() {
 
 #[test]
 fn active_recheck_replaces_empty_page() {
-    if isolated_notes_test("active_recheck_replaces_empty_page") {
+    if isolated_api_test("active_recheck_replaces_empty_page") {
         return;
     }
     let (api, mut state, _) = Fixture::start();
@@ -218,7 +218,7 @@ fn start_removal_cases(failed_start: bool) {
 
 #[test]
 fn start_timeout_preserves_pending_notes_before_removal() {
-    if isolated_notes_test("start_timeout_preserves_pending_notes_before_removal") {
+    if isolated_api_test("start_timeout_preserves_pending_notes_before_removal") {
         return;
     }
     start_removal_cases(false);
@@ -226,7 +226,7 @@ fn start_timeout_preserves_pending_notes_before_removal() {
 
 #[test]
 fn failed_start_preserves_pending_notes_before_removal() {
-    if isolated_notes_test("failed_start_preserves_pending_notes_before_removal") {
+    if isolated_api_test("failed_start_preserves_pending_notes_before_removal") {
         return;
     }
     start_removal_cases(true);
@@ -234,6 +234,9 @@ fn failed_start_preserves_pending_notes_before_removal() {
 
 #[test]
 fn stale_stop_refuses_replacement_recording_through_ui_and_engine() {
+    if isolated_api_test("stale_stop_refuses_replacement_recording_through_ui_and_engine") {
+        return;
+    }
     let (api, mut state, _) = Fixture::start();
     api.data.lock().unwrap().id = Some("200-2");
     Fixture::stop(&mut state);
@@ -248,6 +251,9 @@ fn stale_stop_refuses_replacement_recording_through_ui_and_engine() {
 
 #[test]
 fn stale_stop_uses_command_budget_with_cached_capabilities() {
+    if isolated_api_test("stale_stop_uses_command_budget_with_cached_capabilities") {
+        return;
+    }
     let (api, mut state, _) = Fixture::start();
     api.data.lock().unwrap().delay = Duration::from_millis(1000);
     Fixture::stop(&mut state);
@@ -262,6 +268,9 @@ fn stale_stop_uses_command_budget_with_cached_capabilities() {
 
 #[test]
 fn stop_keeps_the_identity_captured_by_the_rendered_button() {
+    if isolated_api_test("stop_keeps_the_identity_captured_by_the_rendered_button") {
+        return;
+    }
     let (api, mut state, _) = Fixture::start();
     let displayed = recording_id(&state);
     api.data.lock().unwrap().id = Some("200-2");
@@ -279,6 +288,9 @@ fn stop_keeps_the_identity_captured_by_the_rendered_button() {
 
 #[test]
 fn expired_recording_is_unknown_and_new_meeting_rechecks_then_starts() {
+    if isolated_api_test("expired_recording_is_unknown_and_new_meeting_rechecks_then_starts") {
+        return;
+    }
     let (api, mut state, now) = Fixture::start();
     state.hex_status_at(Err(HexError::Timeout), now + Duration::from_secs(11));
     assert_eq!(
@@ -313,6 +325,9 @@ fn expired_recording_is_unknown_and_new_meeting_rechecks_then_starts() {
 
 #[test]
 fn successful_snapshot_expires_without_another_poll() {
+    if isolated_api_test("successful_snapshot_expires_without_another_poll") {
+        return;
+    }
     let (_api, mut state, _) = Fixture::start();
     let good = state.hex.engine.status_for_command().unwrap();
     state.hex_status_at(Ok(good), Instant::now() - Duration::from_secs(11));

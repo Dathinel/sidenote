@@ -25,6 +25,13 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub fn start() -> (Self, State, Instant) {
+        // Discovery and worker paths are process-wide, so each API test needs its own process.
+        let current = thread::current();
+        assert_eq!(
+            std::env::var("SIDENOTE_HEX_API_TEST").ok().as_deref(),
+            current.name().and_then(|name| name.rsplit("::").next()),
+            "use isolated_api_test before starting a loopback Hex API"
+        );
         let mut state = State::new();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
