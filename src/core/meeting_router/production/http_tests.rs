@@ -15,7 +15,11 @@ fn expected_text(top: bool) -> String {
 
 fn fixture(mode: u8) -> Fixture {
     let f = Fixture::new(b"public", 0, b"");
-    fs::copy(super::fixture_tools::executable(true), f.work.join("fake-hex.exe")).unwrap();
+    fs::copy(
+        super::fixture_tools::executable(true),
+        f.work.join("fake-hex.exe"),
+    )
+    .unwrap();
     fs::write(f.work.join("mode"), mode.to_string()).unwrap();
     let c = captured();
     let mut body = c["transcription"].clone();
@@ -131,11 +135,18 @@ fn production_http_failure_retains_baseline_without_owner_command() {
         }
         assert_eq!(r["command_pieces"], 0);
         for id in f.plan.batches["en"].keys() {
-            assert!(batches::read_result(&f.work, &f.plan, id).unwrap().is_none());
+            assert!(
+                batches::read_result(&f.work, &f.plan, id)
+                    .unwrap()
+                    .is_none()
+            );
         }
         let assembled = revision::assemble(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
         for unit in &f.baseline {
-            assert!(super::super::baseline::source_covered(unit, &assembled.transcript.segments));
+            assert!(super::super::baseline::source_covered(
+                unit,
+                &assembled.transcript.segments
+            ));
         }
         assert!(revision::assemble(&f.work, &f.plan, &f.manifest, &[], 1).is_err());
         reaped(&f);
@@ -223,9 +234,16 @@ fn production_http_owner_activity_cancels_startup_and_inference() {
         assert!(start.elapsed() < Duration::from_secs(5));
         assert_eq!(count(&f, "starts"), 1);
         assert_eq!(count(&f, "command-calls"), 0);
-        assert_eq!(receipt(&f)["fallback_reason"], "service-owner-active-or-unknown");
+        assert_eq!(
+            receipt(&f)["fallback_reason"],
+            "service-owner-active-or-unknown"
+        );
         for id in f.plan.batches["en"].keys() {
-            assert!(batches::read_result(&f.work, &f.plan, id).unwrap().is_none());
+            assert!(
+                batches::read_result(&f.work, &f.plan, id)
+                    .unwrap()
+                    .is_none()
+            );
         }
         reaped(&f);
     }
@@ -242,9 +260,23 @@ fn production_http_releases_model_before_native_load() {
         }
     }
     let f = fixture(0);
-    let mut bridge = english_http::bridge(HexSpeech { executable: f.work.join("fake-hex.exe") }, &f.work, Duration::from_secs(10));
-    pipeline::run_batches(&f.work, &f.plan, &mut Check(&f), &mut bridge,
-        Duration::from_secs(20), &mut Default::default(), Instant::now()).unwrap();
+    let mut bridge = english_http::bridge(
+        HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        },
+        &f.work,
+        Duration::from_secs(10),
+    );
+    pipeline::run_batches(
+        &f.work,
+        &f.plan,
+        &mut Check(&f),
+        &mut bridge,
+        Duration::from_secs(20),
+        &mut Default::default(),
+        Instant::now(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -253,18 +285,26 @@ fn production_http_mixed_transport_survives_parent_commit_and_load() {
     run(&f, Duration::from_secs(20)).unwrap();
     store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
     let mut coverage = f.baseline.clone();
-    for c in &mut coverage { c.english.clear(); }
+    for c in &mut coverage {
+        c.english.clear();
+    }
     store_io::write(&f.work.join("coverage.json"), &coverage).unwrap();
-    let assembled = pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
     let output = jobs::BatchOutput {
-        generation: "1".into(), source_revision: "public".into(),
+        generation: "1".into(),
+        source_revision: "public".into(),
         plan: serde_json::from_value(serde_json::to_value(&f.plan).unwrap()).unwrap(),
-        manifest: serde_json::from_value(serde_json::to_value(&f.manifest).unwrap()).unwrap(), fallbacks: vec![],
+        manifest: serde_json::from_value(serde_json::to_value(&f.manifest).unwrap()).unwrap(),
+        fallbacks: vec![],
         english_transport: assembled.provenance["english_transport"].clone(),
     };
     store_io::write(&f.work.join("output.json"), &output).unwrap();
-    store_io::write(&f.root.path().join("local/router-queue/123-4.json"),
-        &json!({"id":"123-4","generation":1})).unwrap();
+    store_io::write(
+        &f.root.path().join("local/router-queue/123-4.json"),
+        &json!({"id":"123-4","generation":1}),
+    )
+    .unwrap();
     let published = f.root.path().join("local/transcripts/123-4");
     revision::begin(&published, 1).unwrap();
     let id = jobs::commit_batches(f.root.path(), "123-4", 1, "public", &f.baseline).unwrap();
@@ -273,8 +313,17 @@ fn production_http_mixed_transport_survives_parent_commit_and_load() {
     assert_eq!(transport, &assembled.provenance["english_transport"]);
     let ranges = transport["ranges"].as_object().unwrap();
     assert_eq!(ranges.len(), 2);
-    assert_eq!(ranges.values().filter(|r| r["transport"] == "http").count(), 1);
-    assert_eq!(ranges.values().filter(|r| r["transport"] == "failed").count(), 1);
+    assert_eq!(
+        ranges.values().filter(|r| r["transport"] == "http").count(),
+        1
+    );
+    assert_eq!(
+        ranges
+            .values()
+            .filter(|r| r["transport"] == "failed")
+            .count(),
+        1
+    );
     for (id, entry) in ranges {
         assert!(f.plan.batches["en"].contains_key(id));
         assert_eq!(entry["cleanup_reason"], "service-http-status-409");

@@ -12,9 +12,9 @@ use std::{
 #[cfg(feature = "asr-runtime")]
 mod english_http;
 #[cfg(all(test, feature = "asr-runtime"))]
-mod http_tests;
-#[cfg(all(test, feature = "asr-runtime"))]
 mod gap_tests;
+#[cfg(all(test, feature = "asr-runtime"))]
+mod http_tests;
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
@@ -22,9 +22,9 @@ mod plan;
 pub use pipeline::assemble_saved;
 pub use pipeline::run;
 #[cfg(all(test, windows))]
-mod no_speech_tests;
-#[cfg(all(test, windows))]
 mod fixture_tools;
+#[cfg(all(test, windows))]
+mod no_speech_tests;
 #[cfg(all(test, windows))]
 mod probe_tests;
 #[cfg(test)]

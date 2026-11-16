@@ -274,8 +274,13 @@ fn run_windows(
                     store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
                     continue;
                 }
-                Err(error) if error.downcast_ref::<super::hex_bridge::HexFailure>()
-                    .is_some_and(|e| e.kind() == &super::hex_bridge::HexFailure::HelperFailed) => {
+                Err(error)
+                    if error
+                        .downcast_ref::<super::hex_bridge::HexFailure>()
+                        .is_some_and(|e| {
+                            e.kind() == &super::hex_bridge::HexFailure::HelperFailed
+                        }) =>
+                {
                     remaining(deadline)?;
                     continue;
                 }

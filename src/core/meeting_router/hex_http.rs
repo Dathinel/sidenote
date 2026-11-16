@@ -7,7 +7,11 @@ use std::{
     os::windows::io::AsRawHandle,
     path::Path,
     process::Command,
-    sync::{Arc, mpsc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -145,32 +149,33 @@ impl Service {
             .send(&audio);
         // Keep observing the owner through body reads as well as model inference.
         let result = (|| {
-        let mut response = response.map_err(|_| "service-request")?;
-        let status = response.status().as_u16();
-        let text = response
-            .body_mut()
-            .with_config()
-            .limit(8 << 20)
-            .read_to_string()
-            .map_err(|_| "service-response")?;
-        use sha2::{Digest, Sha256};
-        self.last_reply = serde_json::json!({"http_status":status,"api_version":endpoint.api_version,
+            let mut response = response.map_err(|_| "service-request")?;
+            let status = response.status().as_u16();
+            let text = response
+                .body_mut()
+                .with_config()
+                .limit(8 << 20)
+                .read_to_string()
+                .map_err(|_| "service-response")?;
+            use sha2::{Digest, Sha256};
+            self.last_reply = serde_json::json!({"http_status":status,"api_version":endpoint.api_version,
                 "service_pid":endpoint.pid,"body_sha256":hex::encode(Sha256::digest(text.as_bytes()))});
-        if status != 200 {
-            return Err(format!("service-http-status-{status}"));
-        }
-        let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| "service-json")?;
-        let transcript = value["transcript"].as_str().ok_or("service-transcript")?;
-        if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
-            || !owns_port(endpoint.pid, url.port().unwrap())
-        {
-            return Err("service-owner-changed".into());
-        }
-        // Empty success retains the existing NoSpeech disposition without restarting inference.
-        Ok(Reply {
-            text: transcript.to_owned(),
-            identity: self.last_reply.clone(),
-        })
+            if status != 200 {
+                return Err(format!("service-http-status-{status}"));
+            }
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|_| "service-json")?;
+            let transcript = value["transcript"].as_str().ok_or("service-transcript")?;
+            if !self.job.contains_pid(endpoint.pid).unwrap_or(false)
+                || !owns_port(endpoint.pid, url.port().unwrap())
+            {
+                return Err("service-owner-changed".into());
+            }
+            // Empty success retains the existing NoSpeech disposition without restarting inference.
+            Ok(Reply {
+                text: transcript.to_owned(),
+                identity: self.last_reply.clone(),
+            })
         })();
         if watch.finish() {
             self.abort();
@@ -220,17 +225,19 @@ struct OwnerWatch {
 }
 impl OwnerWatch {
     fn start(hex: &HexSpeech, job: &Arc<ProcessJob>) -> Self {
-        let hex = HexSpeech { executable: hex.executable.clone() };
+        let hex = HexSpeech {
+            executable: hex.executable.clone(),
+        };
         let job = Arc::clone(job);
         let active = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&active);
         let (stop, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
-            let mut status = super::hex_bridge::HexBridge::new(hex)
-                .with_timeout(Duration::from_secs(2));
+            let mut status =
+                super::hex_bridge::HexBridge::new(hex).with_timeout(Duration::from_secs(2));
             loop {
                 match rx.recv_timeout(Duration::from_millis(100)) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => {},
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
                     _ => break,
                 }
                 if status.probe_idle() != Ok(true) {
@@ -240,7 +247,11 @@ impl OwnerWatch {
                 }
             }
         });
-        Self { stop, active, thread: Some(thread) }
+        Self {
+            stop,
+            active,
+            thread: Some(thread),
+        }
     }
     fn finish(mut self) -> bool {
         self.join();
@@ -254,7 +265,9 @@ impl OwnerWatch {
     }
 }
 impl Drop for OwnerWatch {
-    fn drop(&mut self) { self.join(); }
+    fn drop(&mut self) {
+        self.join();
+    }
 }
 impl Drop for Service {
     fn drop(&mut self) {

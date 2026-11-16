@@ -71,12 +71,18 @@ fn status_probe_timeout_after_idle_never_authorizes_dispatch() {
     let f = fixture("ITIII");
     let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
     let mut bridge = English(HexBridge::new(CountedStatus {
-        speech: HexSpeech { executable: f.work.join("fake-hex.exe") },
+        speech: HexSpeech {
+            executable: f.work.join("fake-hex.exe"),
+        },
         attempts: attempts.clone(),
     }));
     let error = batches::run(&f.work, &f.plan, &mut NativeFake::default(), &mut bridge)
-        .unwrap_err().to_string();
-    assert!(error.contains("status unknown") && error.contains("1 consecutive"), "{error}");
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("status unknown") && error.contains("1 consecutive"),
+        "{error}"
+    );
     assert_eq!(count(&f, "calls"), 1);
     assert_eq!(attempts.get(), 2);
     assert_eq!(count(&f, "help-calls"), 1);
