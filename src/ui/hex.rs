@@ -79,6 +79,7 @@ pub enum Action {
 }
 
 pub enum Msg {
+    NotesRequested(Result<(), HexError>),
     Meetings(Result<EngineState, HexError>),
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
@@ -128,6 +129,7 @@ fn plain(e: &HexError) -> &'static str {
 // ---- state ----------------------------------------------------------------------------------
 
 pub struct HexState {
+    pub(super) parts_restore_checked: bool,
     meetings_setup_checked: bool,
     installation: sidenote::hex_install::Installation,
     install: sidenote::hex_install::State,
@@ -180,6 +182,7 @@ thread_local! { pub(super) static SKIP_INSTALL_DETECT: std::cell::Cell<bool> = c
 impl Default for HexState {
     fn default() -> Self {
         Self {
+            parts_restore_checked: false,
             meetings_setup_checked: false,
             #[cfg(not(test))]
             installation: sidenote::hex_install::detect(),
@@ -525,6 +528,14 @@ impl State {
                 self.hex.settings_status_pending = false;
                 self.hex.settings_status_at = Some(Instant::now());
                 self.hex_status(result);
+            }
+            Msg::NotesRequested(result) => {
+                if result.is_err() {
+                    self.parts_notes_failed();
+                    self.hex.error = Some(
+                        "Notes could not start. Check the notes engine and try Generate notes again.",
+                    );
+                }
             }
             Msg::RecheckStart(result) => {
                 self.hex.record_busy = false;
@@ -1194,6 +1205,13 @@ pub fn short_status(s: &State, p: Palette) -> (Color, String) {
 /// The id Hex gives the running recording, which is the name of its meeting folder.
 pub fn recording_id(s: &State) -> Option<String> {
     s.hex.recording().and_then(|r| r.id.clone())
+}
+
+pub(super) fn part_elapsed_ms(s: &State) -> Option<u64> {
+    s.hex
+        .recording()?
+        .elapsed_seconds
+        .map(|s| s.saturating_mul(1000))
 }
 
 /// The elapsed time of the running recording, as `12:34`.

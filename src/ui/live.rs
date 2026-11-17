@@ -86,6 +86,7 @@ pub enum Phase {
     /// Hex was asked to record and has not said so yet.
     Starting,
     Recording,
+    Paused,
     /// Stopped; waiting for the pipeline to write the meeting.
     Making,
 }
@@ -264,6 +265,10 @@ pub enum Saving {
 static NEXT_RECORDING_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct Live {
+    pub(super) session: Option<sidenote::core::meeting_parts::Meeting>,
+    pub(super) generate_after_pause: bool,
+    recovering_part: bool,
+    parts_checked: Option<Instant>,
     // Session-local recording identity; never included in timing records.
     pub(super) recording_id: u64,
     pub(super) notes_response_time: u64,
@@ -334,6 +339,10 @@ impl Live {
             phase,
             known,
             began: Instant::now(),
+            session: None,
+            generate_after_pause: false,
+            recovering_part: false,
+            parts_checked: None,
             stopped: (phase == Phase::Making).then(Instant::now),
             wall_start: Local::now(),
             exact: false,
@@ -1589,6 +1598,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     } else {
         match phase {
             Phase::Making => making_view(s, p, narrow),
+            Phase::Paused => notes_view(s, k, p, narrow, false),
             Phase::Starting => notes_view(s, k, p, narrow, true),
             Phase::Recording => notes_view(s, k, p, narrow, false),
         }
@@ -1990,3 +2000,6 @@ mod writer_tests {
         );
     }
 }
+
+#[path = "live/parts.rs"]
+mod parts;

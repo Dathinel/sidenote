@@ -1,0 +1,331 @@
+use super::*;
+use crate::ui::Event;
+use sidenote::core::{
+    self,
+    meeting_parts::{self, Meeting, Phase as SavedPhase},
+};
+impl State {
+    pub(in crate::ui) fn parts_sync(&mut self) {
+        if self.live.as_ref().is_some_and(|l| l.scene) {
+            return;
+        }
+        let root = core::state_dir();
+        let hex = core::meetings_dir();
+        if self.live.is_none() && !self.hex.parts_restore_checked {
+            self.hex.parts_restore_checked = true;
+            match meeting_parts::list(&root) {
+                Ok(all) => {
+                    if let Some(m) = all
+                        .into_iter()
+                        .filter(|m| m.phase != SavedPhase::Ended)
+                        .max_by_key(|m| m.parts.first().map(|p| p.started_ms))
+                    {
+                        match m.restore(&root, &hex) {
+                            Ok(m) => {
+                                let mut live = Live::new(Phase::Paused, self.known_ids());
+                                live.folder = Some(meeting_parts::inputs(&root).join(&m.id));
+                                self.live_notes = TextEdit::new(&feed_io::read_notes(
+                                    live.folder.as_ref().unwrap(),
+                                ));
+                                if let Some(at) = m
+                                    .parts
+                                    .first()
+                                    .and_then(|p| DateTime::from_timestamp_millis(p.started_ms))
+                                {
+                                    live.wall_start = at.with_timezone(&Local);
+                                    live.exact = true;
+                                }
+                                live.recovering_part = true;
+                                live.saved = self.live_notes.text.clone();
+                                live.seen = live.saved.clone();
+                                live.notes_loaded = true;
+                                live.session = Some(m);
+                                self.live = Some(live);
+                                self.go_home();
+                                self.live_open = true;
+                            }
+                            Err(_) => {
+                                self.hex.parts_restore_checked = false;
+                                self.hex.error = Some("Could not restore the paused meeting.");
+                                return;
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.hex.parts_restore_checked = false;
+                    self.hex.error = Some("Could not read meeting parts.");
+                    return;
+                }
+            }
+        }
+        let hint = hex::recording_id(self);
+        let elapsed = hex::part_elapsed_ms(self);
+        let active_id = hint.clone();
+        let start = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+        if live.scene {
+            return;
+        }
+        if let Some(m) = &mut live.session
+            && m.pending_start_ms.is_some()
+            && let Ok(Some(saved)) = meeting_parts::read(&root, &m.id)
+            && saved.parts.len() > m.parts.len()
+        {
+            *m = saved;
+            if active_id.is_none() {
+                let _ = m.pause(&root);
+                live.phase = Phase::Paused;
+            }
+        }
+        if let (Some(id), Some(start)) = (hint, start) {
+            if live.session.is_none()
+                && hex.join(&id).join("manifest.json").is_file()
+                && matches!(live.phase, Phase::Starting | Phase::Recording)
+            {
+                match Meeting::begin(&root, &id, start) {
+                    Ok(m) => {
+                        live.folder = Some(meeting_parts::inputs(&root).join(&m.id));
+                        live.session = Some(m);
+                        live.notes_loaded = true;
+                    }
+                    Err(_) => {
+                        self.hex.error =
+                            Some("Could not save meeting parts. Pause is unavailable.");
+                    }
+                }
+            } else if let Some(m) = &mut live.session
+                && m.pending_start_ms.is_some()
+                && !m.parts.iter().any(|p| p.id == id)
+            {
+                if m.resume(&root, &id, start).is_ok() {
+                    live.phase = Phase::Recording;
+                }
+            }
+        }
+        live.parts_checked = Some(Instant::now());
+        if let Some(m) = &mut live.session {
+            if m.requested_parts > m.notes_parts && m.notes_ready(&root).unwrap_or(false) {
+                m.notes_parts = m.requested_parts;
+                let _ = m.save(&root);
+            }
+            let _ = m.refresh(&hex);
+            if m.phase == SavedPhase::Recording
+                && let Some(part) = m.parts.last_mut()
+                && active_id.as_deref() == Some(&part.id)
+                && let Some(elapsed) = elapsed
+            {
+                part.duration_ms = elapsed;
+            }
+            let lines = m.live_lines(&hex);
+            let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(saved) = self.meetings.iter_mut().find(|saved| saved.id == m.id) {
+                saved.minutes = Some(m.elapsed_ms().div_ceil(60_000));
+                saved.lines = lines
+                    .iter()
+                    .filter(|line| line.text != "Recording resumed")
+                    .map(|line| core::Line {
+                        at: stamp(line.seconds),
+                        seconds: Some(line.seconds),
+                        who: if line.you { "You" } else { "Others" }.into(),
+                        language: "English".into(),
+                        text: line.text.clone(),
+                    })
+                    .collect();
+                saved.transcript_raw = saved
+                    .lines
+                    .iter()
+                    .map(|line| {
+                        let seconds = line.seconds.unwrap_or(0);
+                        format!(
+                            "[{:02}:{:02}:{:02}.000] {} (English): {}\n",
+                            seconds / 3600,
+                            seconds / 60 % 60,
+                            seconds % 60,
+                            line.who,
+                            line.text
+                        )
+                    })
+                    .collect();
+            }
+            feed.lines = lines;
+            feed.version += 1;
+        }
+        if live.recovering_part
+            && active_id.is_some()
+            && live
+                .session
+                .as_ref()
+                .and_then(|m| m.parts.last())
+                .is_some_and(|p| Some(&p.id) == active_id.as_ref())
+        {
+            live.recovering_part = false;
+            self.hex_record_stop(active_id);
+        }
+    }
+    pub(in crate::ui) fn parts_notes_failed(&mut self) {
+        if let Some(live) = &mut self.live {
+            live.phase = Phase::Paused;
+            if let Some(m) = &mut live.session {
+                let _ = m.pause(&core::state_dir());
+            }
+        }
+    }
+    pub(in crate::ui) fn parts_start_failed(&mut self) {
+        if let Some(live) = &mut self.live {
+            live.phase = Phase::Paused;
+        }
+        if let Some(m) = self.live.as_mut().and_then(|l| l.session.as_mut()) {
+            m.pending_start_ms = None;
+            let _ = m.save(&core::state_dir());
+        }
+    }
+    pub(in crate::ui) fn parts_paused(&mut self) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(m) = &mut live.session else {
+            return;
+        };
+        let _ = m.refresh(&core::meetings_dir());
+        if m.pause(&core::state_dir()).is_err() {
+            self.hex.error = Some("Could not save paused meeting.");
+            return;
+        }
+        live.phase = Phase::Paused;
+        live.stopped = Some(Instant::now());
+        self.request_refresh();
+    }
+    pub(in crate::ui) fn meeting_pause(&mut self) {
+        // Persist ownership before Stop can produce a completion event.
+        self.parts_sync();
+        if self
+            .live
+            .as_ref()
+            .and_then(|l| l.session.as_ref())
+            .is_none()
+        {
+            return;
+        }
+        self.hex_record_stop(hex::recording_id(self));
+    }
+    fn parts_select(&mut self) -> bool {
+        if let Some(live) = &self.live {
+            if self
+                .selected
+                .as_ref()
+                .is_none_or(|id| live.session.as_ref().is_some_and(|m| &m.id == id))
+            {
+                return true;
+            }
+            if self.hex_recording() || !self.live_close() {
+                return false;
+            }
+        }
+        let Some(id) = self.selected.clone() else {
+            return false;
+        };
+        let root = core::state_dir();
+        let Ok(Some(m)) = meeting_parts::read(&root, &id) else {
+            return false;
+        };
+        let mut live = Live::new(Phase::Paused, self.known_ids());
+        if let Some(at) = m
+            .parts
+            .first()
+            .and_then(|p| DateTime::from_timestamp_millis(p.started_ms))
+        {
+            live.wall_start = at.with_timezone(&Local);
+            live.exact = true;
+        }
+        if let Some(saved) = self.meetings.iter().find(|saved| saved.id == id) {
+            *live.quick_title.lock().unwrap_or_else(|e| e.into_inner()) = Some(saved.title.clone());
+        }
+        live.folder = Some(meeting_parts::inputs(&root).join(&id));
+        self.live_notes = TextEdit::new(&feed_io::read_notes(live.folder.as_ref().unwrap()));
+        live.saved = self.live_notes.text.clone();
+        live.seen = live.saved.clone();
+        live.notes_loaded = true;
+        let mut m = m;
+        if m.phase == SavedPhase::Ended && m.notes_ready(&root).unwrap_or(false) {
+            m.notes_parts = m.requested_parts;
+        }
+        live.session = Some(m);
+        self.live = Some(live);
+        true
+    }
+    pub(in crate::ui) fn meeting_resume(&mut self) {
+        if let Some(reason) = hex::start_blocked(self) {
+            self.hex.error = Some(reason);
+            return;
+        }
+        let root = core::state_dir();
+        if !self.parts_select() {
+            return;
+        }
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(m) = &mut live.session else {
+            return;
+        };
+        if m.pending_start_ms.is_some() {
+            return;
+        }
+        m.pending_start_ms = Some(chrono::Utc::now().timestamp_millis());
+        if m.save(&root).is_err() {
+            self.hex.error = Some("Could not save meeting before Resume.");
+            return;
+        }
+        // Keep the page and its notes; the next status supplies the new Hex part id.
+        self.hex_record_start();
+    }
+    pub(in crate::ui) fn meeting_generate(&mut self) {
+        if !self.parts_select() {
+            return;
+        }
+        if self.hex_recording() {
+            if let Some(live) = &mut self.live {
+                live.generate_after_pause = true;
+            }
+            self.meeting_pause();
+            return;
+        }
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(m) = &mut live.session else {
+            return;
+        };
+        if m.phase == SavedPhase::Ended {
+            return;
+        }
+        let root = core::state_dir();
+        match m.prepare_notes(&root, &core::meetings_dir()) {
+            Ok(folder) => {
+                live.folder = Some(folder);
+                live.phase = Phase::Making;
+                live.generate_after_pause = false;
+                let id = m.id.clone();
+                self.live_flush();
+                let events = self.events_tx.clone();
+                let wake = self.waker.clone();
+                self.live_work(move || {
+                    let result = sidenote::listener::generate_meeting(&id)
+                        .map_err(|_| sidenote::hex_engine::HexError::Unsupported);
+                    let _ = events.send(Event::Hex(hex::Msg::NotesRequested(result)));
+                    if let Some(wake) = wake {
+                        wake();
+                    }
+                });
+                self.request_refresh();
+            }
+            Err(_) => {
+                self.hex.error =
+                    Some("Wait for Hex to finish all parts, then Generate notes again.")
+            }
+        }
+    }
+}
