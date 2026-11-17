@@ -14,15 +14,23 @@ fn main() {
         match result {
             Ok(state) => println!(
                 "attempt={attempt} budget_ms={budget_ms} elapsed_ms={} running={} version={} protocol={} meeting_state={} capture_state={}",
-                start.elapsed().as_millis(), state.running, state.version, state.protocol,
-                known(&state.meeting_state), known(&state.capture_state)
+                start.elapsed().as_millis(),
+                state.running,
+                state.version,
+                state.protocol,
+                known(&state.meeting_state),
+                known(&state.capture_state)
             ),
-            Err(error) => println!("attempt={attempt} budget_ms={budget_ms} elapsed_ms={} error={}", start.elapsed().as_millis(), match error {
-                HexError::HexNotRunning => "not-running",
-                HexError::Unsupported => "unsupported",
-                HexError::Timeout => "timeout",
-                HexError::Failed { stderr_summary, .. } => stderr_summary,
-            }),
+            Err(error) => println!(
+                "attempt={attempt} budget_ms={budget_ms} elapsed_ms={} error={}",
+                start.elapsed().as_millis(),
+                match error {
+                    HexError::HexNotRunning => "not-running",
+                    HexError::Unsupported => "unsupported",
+                    HexError::Timeout => "timeout",
+                    HexError::Failed { stderr_summary, .. } => stderr_summary,
+                }
+            ),
         }
     }
 }
