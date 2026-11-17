@@ -173,6 +173,13 @@ pub(super) fn card(s: &State, p: Palette) -> Option<El> {
     if h.running() && !h.install.busy() {
         return meetings_card(s, p);
     }
+    // Without a fresh answer Hex may well be running; the page note says so instead.
+    if !h.stopped()
+        && matches!(h.install, InstallState::Idle)
+        && matches!(h.installation, Installation::Installed { .. })
+    {
+        return None;
+    }
     let (title, message) = match (&h.install, &h.installation) {
         (InstallState::Idle, Installation::Installed { version, .. }) => (
             "Open Hex", format!("Hex {version} is installed. Open Hex to record and transcribe."),
@@ -200,7 +207,7 @@ pub(super) fn card(s: &State, p: Palette) -> Option<El> {
             .disabled(h.install.busy())
             .on_press(|s: &mut State| s.install_hex()),
         );
-    } else if matches!(h.installation, Installation::Installed { .. }) && !h.running() {
+    } else if matches!(h.installation, Installation::Installed { .. }) && h.stopped() {
         actions = actions.child(
             button("Open Hex", "hex-setup-open", ButtonRole::Primary, p)
                 .disabled(h.install.busy())

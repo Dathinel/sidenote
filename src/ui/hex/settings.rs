@@ -2574,9 +2574,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(problem) = &s.feature_error {
         doc = doc.child(roles::SMALL.wrap(problem, p.warn).role("alert"));
     }
-    if page != Page::Hex || (s.hex.running() && !s.hex.install.busy()) {
-        doc = doc.child(body(s, k, p, layer, page, tab));
-    }
+    // The section controls above always need their sections, so the body shows in every state.
+    // Its controls stay disabled and the notes above say why while Hex is not confirmed.
+    doc = doc.child(body(s, k, p, layer, page, tab));
     col()
         .key("hex-pane")
         .w_full()
