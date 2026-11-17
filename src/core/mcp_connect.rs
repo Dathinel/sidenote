@@ -113,6 +113,23 @@ pub fn add_to_claude(exe: &Path) -> Result<String, String> {
     let cli = claude()?;
     register(exe, |args| run(&cli, args))
 }
+fn missing(output: &std::process::Output) -> bool {
+    if output.status.code() != Some(1) {
+        return false;
+    }
+    [&output.stdout, &output.stderr].iter().any(|bytes| {
+        let text = String::from_utf8_lossy(bytes).to_lowercase();
+        let old = "no mcp server found with name: sidenote";
+        text.match_indices(old).any(|(i, _)| {
+            text[i + old.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == '.')
+        }) || text.contains("no mcp server named \"sidenote\"")
+            || text.contains("no mcp server named 'sidenote'")
+    })
+}
+
 fn register(
     exe: &Path,
     mut command: impl FnMut(&[&std::ffi::OsStr]) -> Result<std::process::Output, String>,
@@ -121,12 +138,7 @@ fn register(
     if check.status.success() {
         return Err("Claude Code already has a sidenote connection. Nothing was replaced. Check it with claude mcp get sidenote.".into());
     }
-    let absent = String::from_utf8_lossy(&check.stderr)
-        .to_lowercase()
-        .contains("no mcp server found with name")
-        || String::from_utf8_lossy(&check.stdout)
-            .to_lowercase()
-            .contains("no mcp server found with name");
+    let absent = missing(&check);
     if !absent {
         return Err("Could not check existing Claude Code connections. Nothing was added. Run claude mcp get sidenote to check.".into());
     }
@@ -192,10 +204,66 @@ mod registration_tests {
     use std::os::windows::process::ExitStatusExt;
     fn output(ok: bool, stderr: &str) -> std::process::Output {
         std::process::Output {
-            status: std::process::ExitStatus::from_raw(if ok { 0 } else { 1 }),
+            status: std::process::ExitStatus::from_raw(if ok {
+                0
+            } else if cfg!(windows) {
+                1
+            } else {
+                1 << 8
+            }),
             stdout: vec![],
             stderr: stderr.as_bytes().to_vec(),
         }
+    }
+    #[test]
+    fn known_missing_replies_allow_add_but_other_failures_do_not() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("sidenote.exe");
+        let missing_replies = [
+            "No MCP server found with name: sidenote",
+            "No MCP server named \"sidenote\". Configured servers: ...",
+            "Error: No MCP server named 'sidenote' found.",
+        ];
+        for text in missing_replies {
+            for text in [text.to_string(), text.to_uppercase()] {
+                let mut calls = 0;
+                assert!(
+                    register(&exe, |_| {
+                        calls += 1;
+                        Ok(if calls == 1 {
+                            output(false, &text)
+                        } else {
+                            output(true, "")
+                        })
+                    })
+                    .is_ok()
+                );
+                assert_eq!(calls, 3);
+            }
+        }
+        for text in [
+            "No MCP server named 'another' found.",
+            "No MCP server named sidenote",
+            "No MCP server found with name: sidenote-other",
+            "config unreadable",
+        ] {
+            let mut calls = 0;
+            assert!(
+                register(&exe, |_| {
+                    calls += 1;
+                    Ok(output(false, text))
+                })
+                .is_err()
+            );
+            assert_eq!(calls, 1);
+        }
+        let mut wrong_exit = output(false, missing_replies[1]);
+        wrong_exit.status = std::process::ExitStatus::from_raw(if cfg!(windows) {
+            2
+        } else {
+            2 << 8
+        });
+        assert!(!missing(&wrong_exit));
     }
     #[test]
     fn existing_entry_or_inconclusive_check_never_adds() {
