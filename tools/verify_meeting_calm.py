@@ -113,6 +113,19 @@ def main():
         nodes,k=finished('ask-settings',events=[native.tap(f'more-meeting-{ID}-button'),native.tap(menus['Ask model and effort'],.7)])
         check('ask-agent-row' in k and 'ask-settings-model-trigger' in k,'Ask settings: model and effort destination')
 
+    if not args.record_only:
+        state=Path(tempfile.mkdtemp(prefix='template-save-',dir=out));source=meeting.prepare(state,'finished')
+        (state/'agent-instructions.json').write_text(json.dumps(dict(notes=dict(
+            text='Keep the synthetic workshop notes brief.',based_on=1,edited_at='2026-11-10T10:00:00Z'))))
+        summary=source/ID/'english-summary.json';original=summary.read_bytes()
+        nodes,k=render('template-choices',events=[native.tap(f'more-meeting-{ID}-button')],state=state,meetings=source)
+        choices={n.get('label'):n['key'] for n in nodes if n.get('role','').startswith('menuitem')}
+        for label,value in [('Your instructions','custom'),('Standard','standard')]:
+            render('template-'+value,events=[native.tap(f'more-meeting-{ID}-button'),native.tap(choices[label],.7)],state=state,meetings=source)
+            prefs=json.loads((state/'local/ui.json').read_text())
+            check(prefs['meeting_summary_templates'][ID]==value,'summary template persists: '+value)
+            check(summary.read_bytes()==original,'changing template preserves the current notes: '+value)
+
     for kind, stamp in [('citation','01:02.520'),('missing-citation','0:01')]:
         state=Path(tempfile.mkdtemp(prefix=kind+'-',dir=out));source=fixture(state)
         folder=source/ID
