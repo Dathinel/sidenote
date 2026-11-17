@@ -462,7 +462,14 @@ impl Meeting {
                 if e.kind() == io::ErrorKind::NotFound
                     && (pending || folder.join(super::live::NOTES_FILE).is_file()) =>
             {
-                None
+                match super::file_reads::text(
+                    &folder.join("previous-summary.json"),
+                    super::file_reads::SUMMARY_MAX,
+                ) {
+                    Ok(raw) => Some(raw),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e.into()),
+                }
             }
             Err(e) => return Err(e.into()),
         };
@@ -635,7 +642,22 @@ impl Meeting {
     }
 }
 pub fn scan() -> (Vec<Meeting>, Vec<String>) {
-    let (meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
+    let (mut meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
+    match super::meeting_parts::list(&state_dir()) {
+        Ok(parts) => {
+            meetings.retain(|m| {
+                m.device.is_some() || !parts.iter().any(|s| s.parts.iter().any(|p| p.id == m.id))
+            });
+            for session in parts {
+                let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
+                if let Ok(m) = Meeting::load_pending(&folder) {
+                    meetings.push(m);
+                }
+            }
+            meetings.sort_by(|a, b| b.started.cmp(&a.started));
+        }
+        Err(_) => errors.push("Could not read meeting parts".into()),
+    }
     if !super::file_reads::refreshing() {
         errors.extend(super::sync_state::reconcile(&state_dir()));
     }

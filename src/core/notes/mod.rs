@@ -253,7 +253,7 @@ pub fn request(meeting_id: &str, mode: Request) -> io::Result<()> {
     }
     queue::enqueue_in(
         &super::state_dir(),
-        &super::meetings_dir(),
+        &super::meeting_parts::source(&super::state_dir(), &super::meetings_dir(), meeting_id),
         meeting_id,
         Some(mode),
         &settings,
@@ -311,4 +311,8 @@ pub fn scripts_policy() -> &'static str {
         }
         Err(_) => "settings_unavailable",
     }
+}
+
+pub(crate) fn render_joined_transcript(raw: &str) -> String {
+    transcript::render(raw)
 }

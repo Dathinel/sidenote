@@ -75,3 +75,58 @@ fn notes_wait_for_all_parts_and_resume_marks_previous_notes_stale() {
         2
     );
 }
+
+#[test]
+fn pending_start_holds_completion_before_first_status() {
+    let root = tempfile::tempdir().unwrap();
+    let hex = root.path().join("hex");
+    let pending = Meeting::pending(root.path(), 100).unwrap();
+    part(&hex, "105-1", 30000, "complete");
+    assert!(held_in(root.path(), &hex, "105-1").unwrap());
+    let joined = read(root.path(), &pending.id).unwrap().unwrap();
+    assert_eq!(joined.parts.len(), 1);
+    assert_eq!(joined.parts[0].id, "105-1");
+    assert_eq!(joined.notes_parts, 0);
+    assert!(
+        !inputs(root.path())
+            .join(&pending.id)
+            .join("transcript.ndjson")
+            .exists()
+    );
+}
+
+#[test]
+fn duration_accepts_hex_numeric_milliseconds_without_wall_clock_gaps() {
+    let root = tempfile::tempdir().unwrap();
+    let hex = root.path().join("hex");
+    part(&hex, "100-1", 12000, "complete");
+    store_io::write(
+        &hex.join("100-1/manifest.json"),
+        &serde_json::json!({"status":"complete","duration_ms":12000.0}),
+    )
+    .unwrap();
+    let mut m = Meeting::begin(root.path(), "100-1", 100).unwrap();
+    m.refresh(&hex).unwrap();
+    m.pause(root.path()).unwrap();
+    assert_eq!(m.elapsed_ms(), 12000);
+}
+
+#[test]
+fn script_update_retains_the_previous_notes_until_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let hex = root.path().join("hex");
+    part(&hex, "100-1", 42000, "complete");
+    let mut m = Meeting::begin(root.path(), "100-1", 100).unwrap();
+    let folder = m.prepare_notes(root.path(), &hex).unwrap();
+    store_io::write(
+        &folder.join("english-summary.json"),
+        &serde_json::json!({"title":"Previous notes"}),
+    )
+    .unwrap();
+    prepare_script_update(root.path(), "100-1").unwrap();
+    assert!(!folder.join("english-summary.json").exists());
+    assert_eq!(
+        super::super::Meeting::load_pending(&folder).unwrap().title,
+        "Previous notes"
+    );
+}

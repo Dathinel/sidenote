@@ -80,7 +80,8 @@ pub(super) fn chosen(
 > {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
-    if !router::jobs::notes_enabled(root)? {
+    if crate::core::meeting_parts::read(root, id)?.is_some() || !router::jobs::notes_enabled(root)?
+    {
         return Ok(None);
     }
     // Healthy pins never need originals; failed pins can request Hex at the deadline.

@@ -2,6 +2,9 @@ use super::*;
 impl Meeting {
     /// Snapshot all finished parts, retaining the previous notes until replacement succeeds.
     pub fn prepare_notes(&mut self, root: &Path, hex: &Path) -> io::Result<PathBuf> {
+        if self.parts.is_empty() {
+            return Err(store_io::invalid("No recording part yet"));
+        }
         self.refresh(hex)?;
         let folder = inputs(root).join(&self.id);
         let mut transcript = String::new();
@@ -39,6 +42,11 @@ impl Meeting {
             "ended_at_ms": self.parts.last().map(|p| p.started_ms.saturating_add(p.duration_ms as i64))});
         store_io::atomic_write(&folder.join("transcript.ndjson"), transcript.as_bytes())?;
         store_io::write(&folder.join("manifest.json"), &manifest)?;
+        store_io::write(&folder.join("sidenote-parts.json"), &self.parts)?;
+        store_io::atomic_write(
+            &folder.join("english-transcript.md"),
+            super::super::notes::render_joined_transcript(&transcript).as_bytes(),
+        )?;
         self.phase = Phase::Ended;
         self.requested_parts = self.parts.len();
         self.save(root)?;
@@ -85,7 +93,7 @@ impl Meeting {
                 line.seconds += offset / 1000;
             }
             lines.extend(part_lines);
-            offset += part.duration_ms;
+            offset = offset.saturating_add(part.duration_ms);
         }
         lines
     }

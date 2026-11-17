@@ -46,7 +46,7 @@ pub fn read(root: &Path, id: &str) -> io::Result<Option<Meeting>> {
     match file_reads::read(&path, file_reads::SUMMARY_MAX) {
         Ok(raw) => {
             let m: Meeting = serde_json::from_slice(&raw)?;
-            if m.id != id || m.parts.is_empty() || m.parts.iter().any(|p| !valid(&p.id)) {
+            if m.id != id || m.parts.iter().any(|p| !valid(&p.id)) {
                 return Err(store_io::invalid("Invalid meeting parts"));
             }
             Ok(Some(m))
@@ -56,7 +56,8 @@ pub fn read(root: &Path, id: &str) -> io::Result<Option<Meeting>> {
     }
 }
 pub fn list(root: &Path) -> io::Result<Vec<Meeting>> {
-    let entries = match file_reads::dir_iter(&root.join("local/meeting-parts")) {
+    let directory = root.join("local/meeting-parts");
+    let entries = match file_reads::dir_iter(&directory) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
@@ -94,11 +95,37 @@ impl Meeting {
         store_io::write(
             &folder.join("manifest.json"),
             &serde_json::json!({"schema_version":1,
-            "status":"complete","created_at_ms":self.parts[0].started_ms,"duration_ms":self.elapsed_ms()}),
+            "status":"complete","created_at_ms":self.parts.first().map(|p|p.started_ms).or(self.pending_start_ms),"duration_ms":self.elapsed_ms()}),
         )
     }
     pub fn save(&self, root: &Path) -> io::Result<()> {
-        store_io::write(&path(root, &self.id)?, self)
+        let path = path(root, &self.id)?;
+        let _lock = store_io::lock(&path.with_extension("lock"))?;
+        let mut next = self.clone();
+        if let Some(saved) = read(root, &self.id)? {
+            let mut parts = saved.parts;
+            for part in &next.parts {
+                if let Some(old) = parts.iter_mut().find(|p| p.id == part.id) {
+                    *old = part.clone();
+                } else {
+                    parts.push(part.clone());
+                }
+            }
+            next.parts = parts;
+            next.notes_parts = next.notes_parts.max(saved.notes_parts);
+        }
+        store_io::write(&path, &next)
+    }
+    pub fn pending(root: &Path, started_ms: i64) -> io::Result<Self> {
+        let id = format!("{started_ms}-{}", std::process::id());
+        let m = Self {
+            id,
+            pending_start_ms: Some(started_ms),
+            ..Default::default()
+        };
+        m.save(root)?;
+        m.write_view(root)?;
+        Ok(m)
     }
     pub fn begin(root: &Path, id: &str, started_ms: i64) -> io::Result<Self> {
         if let Some(m) = read(root, id)? {
@@ -138,18 +165,50 @@ impl Meeting {
         self.save(root)?;
         self.write_view(root)
     }
+    pub fn notes_ready(&self, root: &Path) -> io::Result<bool> {
+        let folder = inputs(root).join(&self.id);
+        if !folder.join("english-summary.json").is_file() {
+            return Ok(false);
+        }
+        if matches!(
+            super::Config::load_in(root)?
+                .notes
+                .unwrap_or_default()
+                .engine(),
+            super::notes::Engine::Scripts(_)
+        ) {
+            let summary =
+                super::file_reads::checked_metadata(&folder.join("english-summary.json"))?
+                    .modified()?;
+            let manifest =
+                super::file_reads::checked_metadata(&folder.join("manifest.json"))?.modified()?;
+            let transcript =
+                super::file_reads::checked_metadata(&folder.join("transcript.ndjson"))?
+                    .modified()?;
+            return Ok(summary >= manifest && summary >= transcript);
+        }
+        super::notes::queue::input_finished(root, &folder, &self.id)
+    }
     pub fn stale(&self) -> bool {
         self.notes_parts > 0 && self.parts.len() > self.notes_parts
     }
     pub fn elapsed_ms(&self) -> u64 {
-        self.parts.iter().map(|p| p.duration_ms).sum()
+        self.parts
+            .iter()
+            .fold(0u64, |total, p| total.saturating_add(p.duration_ms))
     }
     pub fn refresh(&mut self, hex: &Path) -> io::Result<()> {
         for part in &mut self.parts {
             let raw = file_reads::read(&hex.join(&part.id).join("manifest.json"), 1024 * 1024)?;
             let m: serde_json::Value = serde_json::from_slice(&raw)?;
-            if let Some(duration) = m["duration_ms"].as_u64() {
-                part.duration_ms = duration;
+            if let Some(duration) = m["duration_ms"]
+                .as_f64()
+                .filter(|d| d.is_finite() && *d >= 0.0)
+            {
+                let duration = duration.min(u64::MAX as f64) as u64;
+                if m["status"] == "complete" || duration > part.duration_ms {
+                    part.duration_ms = duration;
+                }
             }
         }
         Ok(())
@@ -160,6 +219,9 @@ impl Meeting {
             let mut found = Vec::new();
             for entry in file_reads::dir_iter(hex)?.take(file_reads::ENTRIES_MAX) {
                 let entry = entry?;
+                if !file_reads::directory(&entry.path()) {
+                    continue;
+                }
                 let id = entry.file_name().to_string_lossy().into_owned();
                 if !valid(&id) || self.parts.iter().any(|p| p.id == id) {
                     continue;
@@ -202,3 +264,41 @@ mod input;
 #[cfg(test)]
 #[path = "meeting_parts_tests.rs"]
 mod tests;
+
+/// A finished notification can beat the UI's first status reply after Start.
+pub fn held_in(root: &Path, hex: &Path, id: &str) -> io::Result<bool> {
+    path(root, id)?;
+    if held(root, id)? {
+        return Ok(true);
+    }
+    for mut m in list(root)? {
+        let Some(since) = m.pending_start_ms else {
+            continue;
+        };
+        let raw = file_reads::read(&hex.join(id).join("manifest.json"), 1024 * 1024)?;
+        let v: serde_json::Value = serde_json::from_slice(&raw)?;
+        if let Some(at) = v["created_at_ms"]
+            .as_i64()
+            .filter(|at| *at >= since && *at <= since.saturating_add(25_000))
+        {
+            m.resume(root, id, at)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Preserve the old notes while the script writes the replacement for a joined input.
+pub fn prepare_script_update(root: &Path, id: &str) -> io::Result<()> {
+    path(root, id)?;
+    let folder = inputs(root).join(id);
+    let summary = folder.join("english-summary.json");
+    if summary.is_file() {
+        store_io::atomic_write(
+            &folder.join("previous-summary.json"),
+            &file_reads::read(&summary, file_reads::SUMMARY_MAX)?,
+        )?;
+        std::fs::remove_file(summary)?;
+    }
+    Ok(())
+}
