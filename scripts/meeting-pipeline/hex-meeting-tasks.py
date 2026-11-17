@@ -12,17 +12,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-import importlib.util
-_spec = importlib.util.spec_from_file_location("hex_pipeline_run", Path(__file__).with_name("hex-pipeline-run.py"))
-pipeline = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pipeline)
 
 MEETINGS = Path(os.environ["APPDATA"]) / "hex" / "meetings"
 APP = Path(os.environ["APPDATA"]) / "hex-meetings"
 KNOWN = APP / "projects.json"
 KB = os.environ.get("HEX_MEETING_KB_REPO", "")
-MODEL = "gpt-6.1-sol"
+MODEL = "claude-sonnet-5-5"
 ME = [os.environ.get("HEX_MEETING_OWNER_NAME", "You")] + os.environ.get("HEX_MEETING_OWNER_ALIASES", "You").split(";")
 
 PROMPT = """You sort the to-dos from one meeting into projects for the recorder's own task list.
@@ -80,9 +77,13 @@ def classify(folder, force=False):
     brief["todo"] = [{"i": i, **t} for i, t in enumerate(todo)]
     prompt = PROMPT.format(owner=", ".join(ME), projects="\n".join(f"- {n}" for n in names) or "- (none yet)",
                            summary=json.dumps(brief, ensure_ascii=False, indent=1))
-    text = pipeline.codex(prompt, MODEL, 300)
-    if "{" not in text:
-        raise RuntimeError("Invalid task response")
+    with tempfile.TemporaryDirectory(prefix="hex-tasks-") as work:
+        run = subprocess.run(["claude", "-p", "--model", MODEL, "--strict-mcp-config", "--tools", "", "--no-session-persistence", "--disable-slash-commands", "--output-format", "text"],
+                             input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=300,
+                             creationflags=subprocess.CREATE_NO_WINDOW, cwd=work)
+    text = run.stdout
+    if run.returncode != 0 or "{" not in text:
+        raise RuntimeError(f"claude exited {run.returncode}; captured bytes={len((run.stdout + run.stderr).encode('utf-8'))}")
     result = json.loads(text[text.index("{"):text.rindex("}") + 1])
     tasks = {t["i"]: t for t in result.get("tasks", []) if isinstance(t.get("i"), int) and 0 <= t["i"] < len(todo)}
     # Every to-do gets an entry; a missing one falls back to the meeting's project.
@@ -103,8 +104,6 @@ if __name__ == "__main__":
             print(f"{Path(f).name}: {classify(f, force)}")
         except Exception as error:
             failed = True
-            if isinstance(error, pipeline.PipelineFailure):
-                print(str(error), file=sys.stderr)
             print(f"{Path(f).name}: failed ({type(error).__name__}; detail bytes={len(str(error).encode())})")
     if failed:
         sys.exit(1)

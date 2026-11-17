@@ -3,7 +3,7 @@ param(
     [string]$Model = 'openai/gpt-6.1-terra-fast',
     [string]$NotesFile,
     [ValidateScript({ $_ -in @('auto', 'other', $env:HEX_MEETING_PROJECT) })][string]$Project = 'auto',
-    [string]$NotesModel = 'gpt-6.1-sol',
+    [string]$NotesModel = 'claude-sonnet-5-5',
     [int]$LlmTimeoutSeconds = 240,
     [ValidateRange(0,3600)][int]$TranscriptionTimeoutSeconds = $(if ($env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS) { [int]$env:HEX_TRANSCRIPTION_TIMEOUT_SECONDS } else { 0 }),
     [ValidateRange(0.01,10.0)][double]$AsrSecondsPerAudioSecondPerPass = 0.20,
@@ -223,7 +223,7 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     $workingTitleSection = if ($workingTitle) { "## Working title`n$workingTitle`n`n" } else { '' }
     $workingTitleRule = if ($workingTitle) { "`nThe Input may include a Working title: a quick guess from the start and end of the transcript. Treat it only as a hint, and write the title from the whole meeting." } else { '' }
     $notesRule = (Read-HexPrompt (Join-Path $promptDir 'meeting-notes-prompt.md')) + "`n## Glossary`n$glossary`n`nThe Context, My notes and Transcript are in the Input section.$workingTitleRule"
-    # Notes run in Codex from the meeting's own context; see hex-meeting-notes.ps1.
+    # Notes run in Claude Code from the meeting's own context; see hex-meeting-notes.ps1.
     $notesIn = Join-Path $temp 'notes-input.txt'
     $notesOut = Join-Path $temp 'notes-output.json'
     [IO.File]::WriteAllText($notesIn, "# Instructions`n`n$notesRule`n`n# Input`n`n## Context`n$context`n`n$workingTitleSection## My notes`n$myNotes`n`n## Transcript`n$transcript", $utf8)

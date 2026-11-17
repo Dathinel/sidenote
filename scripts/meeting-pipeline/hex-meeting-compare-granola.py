@@ -5,11 +5,6 @@ ROOT = Path(os.environ['APPDATA']) / 'hex' / 'meetings'
 BASE = Path(os.environ['APPDATA']) / 'hex-meetings'
 SCRIPTS = Path(__file__).resolve().parent
 FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-import importlib.util
-_spec = importlib.util.spec_from_file_location("hex_pipeline_run", Path(__file__).with_name("hex-pipeline-run.py"))
-pipeline = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pipeline)
-
 
 
 def run(args, input=None, timeout=300):
@@ -17,17 +12,24 @@ def run(args, input=None, timeout=300):
         return subprocess.run(args, input=input, text=True, encoding='utf-8', errors='replace', capture_output=True, timeout=timeout, creationflags=FLAGS, cwd=work)
 
 
-def codex(prompt, live=False):
+def claude(prompt, live=False):
     if live:
         raise RuntimeError('Live Granola model tools are disabled; supply a Granola CSV export')
+    cmd = [shutil.which('claude'), '-p', '--model', 'sonnet', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--output-format', 'json']
     start = time.monotonic()
-    result = pipeline.codex(prompt, 'gpt-6.1-sol', 600).strip()
-    if result.startswith('```'):
-        result = re.sub(r'^```(?:json)?\s*', '', result, count=1).split('```', 1)[0]
+    p = run(cmd, prompt, 600)
+    if p.returncode:
+        raise RuntimeError(f'Claude exit {p.returncode}; captured bytes={len((p.stdout + p.stderr).encode())}')
     try:
+        envelope = json.loads(p.stdout)
+        if envelope.get('is_error'):
+            raise ValueError('Model error')
+        result = envelope.get('result', '').strip()
+        if result.startswith('```'):
+            result = re.sub(r'^```(?:json)?\s*', '', result, count=1).split('```', 1)[0]
         return json.loads(result), round(time.monotonic()-start, 1)
     except (ValueError, TypeError):
-        raise RuntimeError('Invalid model response') from None
+        raise RuntimeError(f'Invalid model response; captured bytes={len((p.stdout + p.stderr).encode())}') from None
 
 
 
@@ -144,17 +146,17 @@ def compare(folder, rows, rules):
     if row.get('_source'):
         prompt=('Summary only mode: use the Hex transcript as ground truth to judge both summaries. Granola transcript is unavailable; do not compare transcripts. Mark a claim uncertain if the transcript does not establish it; mark it wrong only when the transcript contradicts it. Return transcription_differences as an empty array. Cite only Hex transcript quotes with timestamps. Copy each quote as a short, exact, continuous substring of the transcript, preserving punctuation and wording. Do not use Granola citations. Do not treat Granola summary or notes as transcript evidence.\n\n'+prompt)
         prompt=prompt.replace('Compare only the portion of the call captured in both transcripts; do not count material outside the overlapping portion as a missed item. The two transcripts are evidence, not infallible: where they conflict or cannot establish a fact, mark uncertain and request audio verification.', 'If the Hex transcript cannot establish a fact, mark it uncertain.').replace('Cite supporting exact transcript quotes: for Hex give timestamp; for Granola give a short exact quote or speaker if no timestamp. Report transcript differences with references to both sides.', 'Cite short exact Hex transcript quotes with timestamps. Do not report transcript differences.')
-    data,seconds=codex(prompt)
+    data,seconds=claude(prompt)
     for attempt in range(4 if row.get('_source') else 2):
         try:
             validate(data,transcript,row)
             break
         except ValueError as e:
             if attempt==(3 if row.get('_source') else 1): raise
-            data,extra=codex(prompt+'\n\nYour prior response failed validation: '+str(e)+'. Repair the JSON and include all required fields. Prior response:\n'+json.dumps(data,ensure_ascii=False))
+            data,extra=claude(prompt+'\n\nYour prior response failed validation: '+str(e)+'. Repair the JSON and include all required fields. Prior response:\n'+json.dumps(data,ensure_ascii=False))
             seconds+=extra
     data['match']={'id':row['document_id'],'title':row['document_title'],'created':row['document_created'],'source':row.get('_source','CSV'),**score}
-    data['model']={'name':'gpt-6.1-sol','seconds':seconds}; data['meeting_id']=folder.name
+    data['model']={'name':'sonnet','seconds':seconds}; data['meeting_id']=folder.name
     (folder/'granola-compare.json').write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     (folder/'granola-compare.md').write_text(render(data),encoding='utf-8')
     save_lessons(folder.name,data['lessons']); print(f'Compared in {seconds}s',flush=True); return True
@@ -184,11 +186,7 @@ def main():
     failed=False
     for folder in folders:
         try: compare(folder,rows,rules)
-        except Exception as e:
-            if isinstance(e, pipeline.PipelineFailure):
-                print(str(e), file=sys.stderr)
-            print(f'{folder.name}: failed ({type(e).__name__}); detail bytes={len(str(e).encode())}',file=sys.stderr)
-            failed=True
+        except Exception as e: print(f'{folder.name}: failed ({type(e).__name__}); detail bytes={len(str(e).encode())}',file=sys.stderr); failed=True
     if failed: sys.exit(1)
 
 if __name__=='__main__': main()

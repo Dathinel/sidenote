@@ -6,7 +6,7 @@
 # Skips a meeting that already has quick-title.json (use -Force to write a new one).
 param(
     [Parameter(Mandatory)][string]$MeetingDir,
-    [string]$Model = 'gpt-6.1-sol',
+    [string]$Model = 'claude-haiku-5-5',
     [int]$TimeoutSeconds = 60,
     # Another output path (checks and timing runs), instead of quick-title.json in the meeting folder.
     [string]$OutFile,
@@ -57,17 +57,39 @@ $sample
 </transcript>
 "@
 
-    . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
-    $work = Join-Path ([IO.Path]::GetTempPath()) ('hex-quick-title-' + [guid]::NewGuid().ToString('N'))
+    $claude = Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $claude) { Write-Host 'quick-title: claude CLI not found, skipped'; exit 0 }
+
+    # No tools, no MCP servers, no saved session, no slash commands. The prompt goes in on stdin.
+    # Started from an empty folder so no project files or CLAUDE.md are picked up.
+    # ProcessStartInfo (not &) because Windows PowerShell 5.1 drops an empty "" argument.
+    $work = Join-Path ([IO.Path]::GetTempPath()) ('hex-quick-title-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Path $work | Out-Null
-    $inputFile = Join-Path $work 'prompt.txt'
-    $outputFile = Join-Path $work 'answer.txt'
-    [IO.File]::WriteAllText($inputFile, $prompt, $utf8)
-    Invoke-HexCli -Kind codex -InputFile $inputFile -OutputFile $outputFile -Model $Model -TimeoutSeconds $TimeoutSeconds -Stage title
-    $answerText = [IO.File]::ReadAllText($outputFile, $utf8)
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = $claude.Source
+    $psi.Arguments = "-p --model $Model --tools `"`" --strict-mcp-config --no-session-persistence --disable-slash-commands --output-format text"
+    $psi.WorkingDirectory = $work
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $utf8
+    $psi.StandardErrorEncoding = $utf8
+    $proc = [Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEndAsync()
+    $bytes = $utf8.GetBytes($prompt)
+    try { $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length); $proc.StandardInput.Close() } catch {}
+    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        & taskkill.exe /PID $proc.Id /T /F 2>$null | Out-Null
+        Write-Host "quick-title: no answer from $Model in $TimeoutSeconds s, skipped"
+        exit 0
+    }
+    if ($proc.ExitCode -ne 0) { Write-Host "quick-title: claude exited $($proc.ExitCode), skipped"; exit 0 }
 
     # First non-empty line, without markdown, a "Title:" label, quotes or a trailing full stop.
-    $answer = ([string]$answerText -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+    $answer = ([string]$stdout.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
     $title = if ($answer) { $answer.Trim() } else { '' }
     $title = $title -replace '^[#*>\s-]+', '' -replace '(?i)^title\s*:\s*', '' -replace '[*`]', ''
     $title = $title.Trim().Trim('"', "'", [char]0x201C, [char]0x201D, [char]0x2018, [char]0x2019).Trim().TrimEnd('.')

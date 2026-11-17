@@ -33,9 +33,6 @@ class PipelineFailure(Exception):
         self.kind = kind if kind in KINDS else "other"
         self.exit_code = exit_code
 
-    def __str__(self):
-        return f"pipeline-failure category={self.category} kind={self.kind} exit_code={self.exit_code}"
-
 
 def child_kind(args):
     name = Path(args[0]).stem.lower() if args else ""
@@ -47,8 +44,8 @@ def child_kind(args):
 def category(stderr):
     # Match fixed diagnostic phrases; never copy any part of the child output.
     for code, pattern in (
-        ("HELPER_LIMIT", r"helper_limit|usage limit|quota exceeded|rate limit|too many requests|insufficient_quota|hit your limit|usage_limit_reached|rate_limit_exceeded"),
-        ("HELPER_AUTH", r"helper_auth|authentication failed|unauthorized|invalid api key|not logged in|login required|authentication_error|invalid_api_key|please run /login|codex login|refresh.token|token.{0,20}expired|sign.in"),
+        ("HELPER_LIMIT", r"usage limit|quota exceeded|rate limit|too many requests|insufficient_quota|hit your limit|usage_limit_reached|rate_limit_exceeded"),
+        ("HELPER_AUTH", r"authentication failed|unauthorized|invalid api key|not logged in|login required|authentication_error|invalid_api_key|please run /login"),
     ):
         if re.search(pattern, stderr, re.IGNORECASE):
             return code
@@ -91,7 +88,7 @@ def execute(args, cwd, timeout, input_text=None, env=None):
         finally:
             raise PipelineFailure("timeout", kind, process.poll()) from None
     if process.returncode:
-        raise PipelineFailure(category(error + "\n" + output), kind, process.returncode)
+        raise PipelineFailure(category(error), kind, process.returncode)
     return output
 
 
@@ -100,46 +97,6 @@ def claude(text, model, timeout):
         return execute([shutil.which("claude") or "claude", "-p", "--model", model,
                         "--tools", "", "--strict-mcp-config", "--no-session-persistence",
                         "--disable-slash-commands", "--output-format", "text"], work, timeout, text)
-
-
-def codex_executable():
-    exe = shutil.which("codex.exe") if os.name == "nt" else shutil.which("codex")
-    if not exe and os.name == "nt":
-        shim = shutil.which("codex.cmd")
-        if shim:
-            native = Path(shim).parent / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
-            if native.is_file():
-                exe = str(native)
-    if not exe:
-        raise PipelineFailure(kind="codex")
-    return exe
-
-
-def codex(text, model, timeout):
-    with tempfile.TemporaryDirectory(prefix="hex-codex-") as work:
-        # The answer file is outside the empty working root and is written by the CLI, not a tool.
-        with tempfile.TemporaryDirectory(prefix="hex-answer-") as result:
-            answer = Path(result) / "answer.txt"
-            args = [codex_executable(), "exec",
-                    "--ignore-user-config", "--ephemeral", "--skip-git-repo-check",
-                    "--sandbox", "read-only", "--model", model,
-                    "-c", 'approval_policy="never"', "-c", "mcp_servers={}",
-                    "-c", "features.hooks=false", "-c", "features.shell_tool=false",
-                    "-c", "features.apply_patch_freeform=false", "-c", "features.view_image=false",
-                    "-c", "features.unified_exec=false", "-c", "features.apps=false",
-                    "-c", "features.plugins=false", "-c", "features.multi_agent=false",
-                    "-c", 'web_search="disabled"', "--json", "--output-last-message", str(answer), "-"]
-            events = execute(args, work, timeout, text)
-            for line in events.splitlines():
-                event = json.loads(line)
-                item = event.get("item", {})
-                if event.get("type") in ("error", "turn.failed"):
-                    raise PipelineFailure(category(line), "codex")
-                if item and item.get("type") not in ("agent_message", "reasoning"):
-                    raise PipelineFailure(kind="codex")
-            if not answer.is_file() or not answer.read_text(encoding="utf-8").strip():
-                raise PipelineFailure(kind="codex")
-            return answer.read_text(encoding="utf-8")
 
 
 def translate(text, model, timeout):
@@ -208,8 +165,6 @@ def run_request(path):
         output = translate(text, request["model"], timeout)
     elif kind == "claude":
         output = claude(text, request["model"], timeout)
-    elif kind == "codex":
-        output = codex(text, request.get("model") or "gpt-6.1-sol", timeout)
     elif kind == "native":
         output = execute(request["args"], request.get("cwd") or None, timeout, text)
     else:
