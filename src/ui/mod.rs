@@ -4216,7 +4216,14 @@ pub fn idle_cpu_proof() -> bool {
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // encoded (a display proxy). The file gets Unix microseconds. Nothing is written otherwise.
-    let mut app = benchmark::configure(rune::App::new(spec()));
+    // Preserve the pre-update font smoothing defaults.
+    let mut app = benchmark::configure(rune::App::new(spec()).font_smoothing(
+        if cfg!(target_os = "macos") {
+            rune::FontSmoothing::On
+        } else {
+            rune::FontSmoothing::Off
+        },
+    ));
     let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
     let refresh_handle = app.handle();
     let mut first_frame = false;
