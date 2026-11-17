@@ -135,7 +135,7 @@ def codex(text, model, timeout):
                 item = event.get("item", {})
                 if event.get("type") in ("error", "turn.failed"):
                     raise PipelineFailure(category(line), "codex")
-                if item.get("type") in ("command_execution", "mcp_tool_call", "file_change", "web_search"):
+                if item and item.get("type") not in ("agent_message", "reasoning"):
                     raise PipelineFailure(kind="codex")
             if not answer.is_file() or not answer.read_text(encoding="utf-8").strip():
                 raise PipelineFailure(kind="codex")

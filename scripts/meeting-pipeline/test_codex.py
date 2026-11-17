@@ -98,7 +98,7 @@ class Fake {
         with patch.dict(os.environ, self.env, clear=True), patch.object(runner, 'execute', return_value=''):
             with self.assertRaises(runner.PipelineFailure):
                 runner.codex('Synthetic input', 'gpt-6.1-sol', 5)
-            for item in ['command_execution', 'mcp_tool_call', 'file_change', 'web_search']:
+            for item in ['command_execution', 'mcp_tool_call', 'file_change', 'web_search', 'todo_list', 'unknown_tool']:
                 events = json.dumps(dict(type='item.started', item=dict(type=item)))
                 with patch.object(runner, 'execute', return_value=events):
                     with self.assertRaises(runner.PipelineFailure):

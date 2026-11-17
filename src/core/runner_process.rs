@@ -305,10 +305,15 @@ impl Output {
                 if kind == "item.started" || kind == "item.completed" {
                     let name = match item_type {
                         "command_execution" => Some("Command"),
-                        "mcp_tool_call" => item.get("tool").and_then(|v| v.as_str()),
+                        "mcp_tool_call" => Some(
+                            item.get("tool")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("MCP tool"),
+                        ),
                         "web_search" => Some("Web search"),
                         "file_change" => Some("File edit"),
-                        _ => None,
+                        "agent_message" | "reasoning" | "" => None,
+                        _ => Some("Tool"),
                     };
                     if let Some(name) = name {
                         let id = item.get("id").and_then(|v| v.as_str()).unwrap_or(name);
@@ -555,6 +560,24 @@ pub(super) fn run_classified(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn background_codex_recognizes_every_non_text_item_as_a_tool() {
+        for item in [
+            "command_execution",
+            "mcp_tool_call",
+            "file_change",
+            "web_search",
+            "todo_list",
+            "unknown_tool",
+        ] {
+            let mut output = super::Output::default();
+            let event =
+                serde_json::json!({"type":"item.started", "item":{"id":"synthetic", "type":item}});
+            output.line(&event.to_string(), "codex", true, &|_| {});
+            assert!(!output.tool_seen.is_empty(), "unrecognized tool {item}");
+            assert_eq!(output.failed, item == "file_change");
+        }
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_agent_runners_fail_before_executable_lookup_or_launch() {
