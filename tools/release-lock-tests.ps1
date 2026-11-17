@@ -66,7 +66,13 @@ Exit-ReleaseLock $lock.Stream $path
     $lockFile = Join-Path $repo '.git\sidenote-release-gate.lock'
 
     Add-Type -OutputAssembly (Join-Path $temp 'cargo.exe') -OutputType ConsoleApplication -TypeDefinition @'
-class FakeCargo { static void Main(string[] args) { System.Console.WriteLine("fake-cargo-ran " + string.Join(" ", args)); } }
+class FakeCargo {
+    static void Main(string[] args) {
+        System.Console.WriteLine("fake-cargo-ran " + string.Join(" ", args));
+        if (args.Length == 2 && args[0] == "hold-until-removed")
+            while (System.IO.File.Exists(args[1])) System.Threading.Thread.Sleep(200);
+    }
+}
 '@
     $env:PATH = "$temp;" + $env:PATH
     $env:LOCALAPPDATA = $temp
@@ -78,7 +84,9 @@ class FakeCargo { static void Main(string[] args) { System.Console.WriteLine("fa
     Start-Sleep -Seconds 3
     if ($build.HasExited) { throw 'local_build did not wait for the live release check.' }
     if ((Read-Text (Join-Path $temp 'build1.out')) -match 'fake-cargo-ran') { throw 'cargo started while the lock was held.' }
-    Write-Output "PASS: local_build waits while a live release check (PID $($holder.Process.Id)) holds the lock, and cargo has not started."
+    $markerDirectory = Join-Path $repo '.git\sidenote-builds'
+    if (@(Get-ChildItem -LiteralPath $markerDirectory -Filter '*.build' -ErrorAction SilentlyContinue).Count) { throw 'A build waiting for the lock registered itself as running.' }
+    Write-Output "PASS: local_build waits while a live release check (PID $($holder.Process.Id)) holds the lock, and cargo has not started; the waiting build is not registered as running."
     New-Item -ItemType File -Path $holder.Stop | Out-Null
     Wait-Until { $build.HasExited } 30 'local_build to proceed'
     if ($build.ExitCode -ne 0 -or (Read-Text (Join-Path $temp 'build1.out')) -notmatch 'fake-cargo-ran --version') { throw "local_build did not run cargo after the lock was released (exit $($build.ExitCode)): $(Read-Text (Join-Path $temp 'build1.out')) $(Read-Text (Join-Path $temp 'build1.err'))" }
@@ -117,6 +125,44 @@ class FakeCargo { static void Main(string[] args) { System.Console.WriteLine("fa
     if ($gate.ExitCode -ne 0 -or $text -notmatch 'stale release lock' -or $text -notmatch 'preflight passed') { throw "release_gate did not take over the stale lock: $text" }
     if (Test-Path -LiteralPath $lockFile) { throw 'release_gate left its lock file behind.' }
     Write-Output 'PASS: release_gate reported and took over a stale lock, then removed its own lock on exit.'
+
+    $hold = Join-Path $temp 'build.hold'
+    New-Item -ItemType File -Path $hold | Out-Null
+    $running = Start-Hidden @('-File', (Join-Path $repo 'tools\local_build.ps1'), 'hold-until-removed', $hold) 'build-running'
+    Wait-Until { @(Get-ChildItem -LiteralPath $markerDirectory -Filter '*.build' -ErrorAction SilentlyContinue).Count -eq 1 } 30 'the running build marker'
+    Wait-Until { (Read-Text (Join-Path $temp 'build-running.out')) -match 'fake-cargo-ran' } 30 'the fake cargo to start'
+    $gate = Start-Hidden @('-File', (Join-Path $repo 'tools\release_gate.ps1'), '-PreflightOnly') 'gate-waits'
+    Wait-Until { (Read-Text (Join-Path $temp 'gate-waits.out')) -match 'waiting for 1 running local build' } 60 'the gate wait line'
+    Start-Sleep -Seconds 3
+    if ($gate.HasExited) { throw 'release_gate did not wait for a build that started before it.' }
+    Push-Location $repo
+    try {
+        $threw = $null
+        try { Wait-RunningBuilds 0.05 60 1 } catch { $threw = $_.Exception.Message }
+    } finally { Pop-Location }
+    if (-not $threw -or $threw -notmatch 'the release check did not start') { throw 'The bounded build wait did not give up with an error.' }
+    Write-Output "PASS: release_gate waits while a build that started first (PID $($running.Id)) is running, and the bounded build wait gives up with: $threw"
+    Remove-Item -LiteralPath $hold -Force
+    Wait-Until { $gate.HasExited } 60 'the gate to proceed'
+    $text = Read-Text (Join-Path $temp 'gate-waits.out')
+    if ($gate.ExitCode -ne 0 -or $text -notmatch 'preflight passed') { throw "release_gate did not proceed after the build ended: $text" }
+    Wait-Until { $running.HasExited } 30 'the build to end'
+    if (@(Get-ChildItem -LiteralPath $markerDirectory -Filter '*.build' -ErrorAction SilentlyContinue).Count) { throw 'A finished build left its marker behind.' }
+    Write-Output 'PASS: when that build ended, release_gate proceeded (exit 0) and the build removed its marker.'
+
+    $deadProcess = Start-Hidden @('-Command', 'Start-Sleep -Seconds 60') 'dead'
+    $deadIdentity = "$($deadProcess.Id)-$($deadProcess.StartTime.ToUniversalTime().Ticks)"
+    Stop-Process -Id $deadProcess.Id -Force
+    Wait-Until { $deadProcess.HasExited } 10 'the dead marker process'
+    $deadMarker = Join-Path $markerDirectory "$deadIdentity.build"
+    New-Item -ItemType Directory -Force -Path $markerDirectory | Out-Null
+    Set-Content -LiteralPath $deadMarker -Value @($deadIdentity, 'dead')
+    $gate = Start-Hidden @('-File', (Join-Path $repo 'tools\release_gate.ps1'), '-PreflightOnly') 'gate-dead-marker'
+    Wait-Until { $gate.HasExited } 30 'release_gate with a dead marker'
+    $text = Read-Text (Join-Path $temp 'gate-dead-marker.out')
+    if ($gate.ExitCode -ne 0 -or $text -match 'waiting for' -or $text -notmatch 'preflight passed') { throw "A dead build marker was not ignored: $text" }
+    if (Test-Path -LiteralPath $deadMarker) { throw 'The dead build marker was not cleaned.' }
+    Write-Output 'PASS: a marker whose PID is dead is ignored by release_gate and removed.'
 
     $source = [IO.File]::ReadAllText((Join-Path $repo 'tools\release_gate.ps1'))
     if ($source -notmatch '(?m)^\$MinFreeGb = 60\r?$') { throw 'The 60 GB constant is not where the test expects it.' }

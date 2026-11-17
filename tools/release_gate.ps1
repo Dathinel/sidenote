@@ -51,8 +51,13 @@ if ($lock.Busy) {
 }
 try {
 $env:SIDENOTE_RELEASE_GATE_PID = [string]$PID
+try { Wait-RunningBuilds $RunningBuildWaitMinutes $ReleaseLockReportSeconds $ReleaseLockPollSeconds }
+catch {
+    Write-Output "release_gate: $($_.Exception.Message)"
+    exit 2
+}
 if ($PreflightOnly) {
-    Write-Output ('release_gate: preflight passed ({0:N1} GB free, {1} GB needed, lock held); stopping because -PreflightOnly was given.' -f $freeGb, $MinFreeGb)
+    Write-Output ('release_gate: preflight passed ({0:N1} GB free, {1} GB needed, lock held, no other local build running); stopping because -PreflightOnly was given.' -f $freeGb, $MinFreeGb)
     exit 0
 }
 if (Test-Path $GnuBin) { $env:PATH = "$GnuBin;" + $env:PATH }

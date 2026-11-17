@@ -17,7 +17,7 @@ Limit: the process check sees only processes whose ExecutablePath this user can 
 #>
 [CmdletBinding()]
 param(
-    [string]$Repo = (Split-Path -Parent $PSScriptRoot),
+    [string]$Repo = '',
     [Parameter(Mandatory)][string]$Release,
     [string[]]$Keep = @(),
     [switch]$WhatIf
@@ -65,6 +65,7 @@ function Get-ProcessUnder([string]$Full) {
     return $null
 }
 
+if (-not $Repo) { $Repo = Split-Path -Parent $PSScriptRoot }
 $Repo = Get-FullPath $Repo
 $releaseName = $Release -replace '^refs/heads/', ''
 $releaseRef = "refs/heads/$releaseName"
