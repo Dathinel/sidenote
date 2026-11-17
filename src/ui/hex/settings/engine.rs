@@ -1052,11 +1052,11 @@ mod tests {
     #[test]
     fn step_models_read_defaults_edit_alone_and_reject_empty_or_odd_names() {
         let base = Config::default();
-        assert_eq!(read(&base, Field::Title), "claude-haiku-5-5");
-        assert_eq!(read(&base, Field::Comparison), "sonnet");
+        assert_eq!(read(&base, Field::Title), "gpt-6.1-sol");
+        assert_eq!(read(&base, Field::Comparison), "gpt-6.1-sol");
         let edits = [
             (Field::Tasks, " synthetic-tasks-model "),
-            (Field::Title, "claude-haiku-5-5"),
+            (Field::Title, "gpt-6.1-sol"),
         ];
         let edited = apply(&base, &edits).unwrap().unwrap();
         assert_eq!(
