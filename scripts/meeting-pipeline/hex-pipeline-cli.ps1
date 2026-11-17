@@ -26,13 +26,13 @@ function Get-PipelineFailure($Record, [string]$Stage = 'pipeline', [int]$Deadlin
 }
 
 function Invoke-HexCli {
-    param([ValidateSet('native','translate','claude')][string]$Kind = 'native', [string[]]$CliArgs, [string]$InputFile,
+    param([ValidateSet('native','translate','claude','codex')][string]$Kind = 'native', [string[]]$CliArgs, [string]$InputFile,
           [string]$OutputFile, [string]$Model, [ValidateRange(1,3600)][int]$TimeoutSeconds = 240, [string]$WorkingDirectory,
           [string]$Stage = 'pipeline')
     if ($Stage -cnotin $script:PipelineStages) { throw 'Invalid meeting job stage' }
     if ($Stage -eq 'pipeline') {
         if ($Kind -eq 'translate') { $Stage = 'translate' }
-        elseif ($Kind -eq 'claude') { $Stage = 'notes' }
+        elseif ($Kind -in @('claude','codex')) { $Stage = 'notes' }
     }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $requestDir = Join-Path ([IO.Path]::GetTempPath()) ('hex-cli-' + [guid]::NewGuid().ToString('N'))

@@ -7,7 +7,7 @@ param(
     [string]$MeetingDir,
     [IO.FileStream]$NotesClaim,
     [ValidateScript({ $_ -in @('auto', 'other', $env:HEX_MEETING_PROJECT) })][string]$Project = 'auto',
-    [string]$Model = 'claude-sonnet-5-5',
+    [string]$Model = 'gpt-6.1-sol',
     [string]$RepoDir = $env:HEX_MEETING_KB_REPO,
     [ValidateRange(1,3600)][int]$TimeoutSeconds = 600
 )
@@ -74,13 +74,13 @@ $promptFile = Join-Path $work 'meeting.md'
 [IO.File]::WriteAllText($promptFile, $full, $utf8)
 try {
     $responseFile = Join-Path $work 'answer.json'
-    Invoke-HexCli -Kind claude -InputFile $promptFile -OutputFile $responseFile -Model $Model -TimeoutSeconds $TimeoutSeconds -Stage notes
+    Invoke-HexCli -Kind codex -InputFile $promptFile -OutputFile $responseFile -Model $Model -TimeoutSeconds $TimeoutSeconds -Stage notes
     $out = [IO.File]::ReadAllText($responseFile, $utf8)
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force
 }
 $result = ($out -join "`n").Trim()
-if (-not $result) { throw 'Empty notes from claude' }
+if (-not $result) { throw 'Empty notes from Codex' }
 # The notes are one JSON object; drop a code fence or stray text around it, then check its shape.
 $start = $result.IndexOf('{'); $end = $result.LastIndexOf('}')
 if ($start -lt 0 -or $end -le $start) { throw "Notes are not a JSON object; response bytes=$([Text.Encoding]::UTF8.GetByteCount($result))" }
