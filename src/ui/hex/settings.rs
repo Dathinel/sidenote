@@ -66,6 +66,7 @@ pub enum Page {
     People,
     Hex,
     Helpers,
+    ConnectedApps,
     Appearance,
     Sync,
     Privacy,
@@ -73,13 +74,14 @@ pub enum Page {
     Diagnostics,
 }
 impl Page {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::General,
         Self::Meetings,
         Self::Prompts,
         Self::People,
         Self::Hex,
         Self::Helpers,
+        Self::ConnectedApps,
         Self::Appearance,
         Self::Sync,
         Self::Privacy,
@@ -94,6 +96,7 @@ impl Page {
             Self::People => "People",
             Self::Hex => "Hex and dictation",
             Self::Helpers => "Models and agents",
+            Self::ConnectedApps => "Connected apps",
             Self::Appearance => "Appearance and startup",
             Self::Sync => "Sync",
             Self::Privacy => "Privacy and data",
@@ -126,6 +129,7 @@ impl Page {
                 2 => Section::HelpersAdvanced,
                 _ => Section::Connect,
             },
+            Self::ConnectedApps => Section::ConnectedApps,
             Self::Appearance => Section::General,
             Self::Sync => Section::Sync,
             Self::Privacy => Section::Privacy,
@@ -141,6 +145,7 @@ impl Page {
             Self::People => &icons::PEOPLE,
             Self::Hex => &icons::MIC,
             Self::Helpers => &icons::BRAIN,
+            Self::ConnectedApps => &icons::CONNECTED,
             Self::Appearance => &icons::PALETTE,
             Self::Sync => &icons::DEVICE,
             Self::Privacy => &icons::SHIELD_CHECK,
@@ -162,6 +167,7 @@ fn current(section: Section) -> (Page, usize) {
         Section::Model => (Page::Hex, 0),
         Section::MeetingModels => (Page::Helpers, 1),
         Section::Connect => (Page::Helpers, 0),
+        Section::ConnectedApps => (Page::ConnectedApps, 0),
         Section::HelpersAdvanced => (Page::Diagnostics, 0),
         Section::Privacy => (Page::Privacy, 0),
         Section::Diagnostics => (Page::Diagnostics, 0),
@@ -186,6 +192,9 @@ fn active(s: &State) -> (Page, usize) {
 }
 
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
+    if page == Page::ConnectedApps && !super::super::isolated() {
+        s.connect_agents(false, None);
+    }
     let changed =
         !s.on_hex() || s.hex.section != page.section(tab.min(page.tabs().len().saturating_sub(1)));
     let timing = if changed {
@@ -994,9 +1003,9 @@ fn app_index() -> Vec<Destination> {
         ),
         entry(
             "mcp-connect",
-            "Connect AI apps",
-            "MCP Claude Desktop Cursor",
-            Page::Privacy,
+            "Connected apps",
+            "MCP connect Claude Codex Cursor OpenCode Desktop",
+            Page::ConnectedApps,
             0,
             false,
         ),
@@ -1318,7 +1327,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
     } else {
         let (active, _) = active(s);
         for (i, page) in Page::ALL.into_iter().enumerate() {
-            if i == 0 || i == 4 || i == 8 {
+            if i == 0 || i == 4 || i == 9 {
                 list = list.child(
                     roles::GROUP
                         .line(
@@ -2459,16 +2468,12 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .w_full()
             .child(sync_page(s, k, p))
             .child(named_folder(s, k, p)),
+        (Page::ConnectedApps, _) => card("Connected apps", super::super::mcp_connect::section(s, p).key("mcp-connect").fill(highlight(s, "mcp-connect", p)), p),
         (Page::Privacy, _) => col()
             .w_full()
             .child(privacy(s, k, p))
-            .child(card(
-                "Connected AI apps",
-                super::super::mcp_connect::section(s, p)
-                    .key("mcp-connect")
-                    .fill(highlight(s, "mcp-connect", p)),
-                p,
-            ))
+            .child(roles::SMALL.wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft))
+            .child(tasks::button("Manage connected apps", "privacy-connected-apps", false, p).on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)))
             .child(card(
                 "Hex · Retention and files",
                 hex_rows(s, k, p, layer, page, 0, false),
@@ -2778,6 +2783,9 @@ pub fn scene(s: &mut State, name: &str) {
         | "settings-hex-meetings-off"
         | "settings-hex-meetings-enable" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
+        "settings-mcp-added" | "settings-mcp-mixed" | "settings-mcp-none" => {
+            (Page::ConnectedApps, 0)
+        }
         "settings-speech" => (Page::Helpers, 1),
         "settings-helper-advanced" => (Page::Diagnostics, 0),
         "settings-privacy" => (Page::Privacy, 0),
@@ -2796,6 +2804,9 @@ pub fn scene(s: &mut State, name: &str) {
         s.config.notes = s.ai_notes.settings.clone();
     }
     navigate(s, page, tab);
+    if name.starts_with("settings-mcp-") {
+        super::super::mcp_connect::scene(s, name);
+    }
     if name.starts_with("settings-engine") {
         s.hex.shell.engine.unused_open = true;
     }
@@ -3049,6 +3060,22 @@ mod tests {
             assert!(tab < page.tabs().len().max(1), "{}", setting.key);
             assert_eq!(current(page.section(tab)), (page, tab));
         }
+    }
+    #[test]
+    fn connected_apps_search_and_navigation() {
+        let entries = app_index();
+        let destination = entries.iter().find(|d| d.key == "mcp-connect").unwrap();
+        for query in ["MCP", "connect", "Claude", "Codex", "Cursor", "OpenCode"] {
+            assert!(matches(destination, query), "{query}");
+        }
+        assert_eq!(destination.page, Page::ConnectedApps);
+        assert_eq!(
+            current(Page::ConnectedApps.section(0)),
+            (Page::ConnectedApps, 0)
+        );
+        let pages: Vec<_> = Page::ALL.into_iter().collect();
+        let index = pages.iter().position(|p| *p == Page::Helpers).unwrap();
+        assert_eq!(pages[index + 1], Page::ConnectedApps);
     }
     #[test]
     fn legacy_search_words_find_the_new_destinations() {

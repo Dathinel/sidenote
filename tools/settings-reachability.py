@@ -27,7 +27,7 @@ def main():
                for key, controls in manifest["keys"].items()}
     missing = {key: controls for key, controls in missing.items() if controls}
     assert not missing, f"Unreachable legacy settings: {missing}"
-    for name in ("General", "Meetings", "Prompt library", "People", "Hex and dictation", "Models and agents", "Appearance and startup", "Sync", "Privacy and data", "Updates", "Diagnostics"):
+    for name in ("General", "Meetings", "Prompt library", "People", "Hex and dictation", "Models and agents", "Connected apps", "Appearance and startup", "Sync", "Privacy and data", "Updates", "Diagnostics"):
         assert f"settings-page-{name}" in keys, name
     search = json.loads((folder / "settings-search-1280-light.json").read_text(encoding="utf-8-sig"))
     search_nodes = list(nodes(search))
@@ -75,7 +75,15 @@ def main():
                     assert controls[key]["focusable"], (path, key)
                     x, y, w, h = controls[key]["rect"]
                     assert 0 <= x < x + w <= width and 0 <= y < y + h <= 900, (path, key)
-    print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; eleven pages and search reveal verified in {len(trees)} render trees.")
+    connected = json.loads((folder / "settings-connected-apps-1280-light.json").read_text(encoding="utf-8-sig"))
+    assert any(n.get("key") == "mcp-connect" for n in nodes(connected))
+    privacy = json.loads((folder / "settings-privacy-data-1280-light.json").read_text(encoding="utf-8-sig"))
+    assert any(n.get("key") == "privacy-connected-apps" for n in nodes(privacy))
+    assert not any(n.get("key") == "mcp-connect" for n in nodes(privacy))
+    for query in ("MCP", "connect", "Claude", "Codex", "Cursor", "OpenCode"):
+        tree = json.loads((folder / f"settings-mcp-search-{query}-1280-light.json").read_text(encoding="utf-8-sig"))
+        assert any(n.get("key") == "find-setting-mcp-connect" for n in nodes(tree)), query
+    print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; twelve pages and search reveal verified in {len(trees)} render trees.")
     print("PASS: all 16 Hex setup renders show the expected copy, controls, busy state and visible actions.")
     print("PASS: all 8 Meetings-off renders show instructions, re-check and only supported enable actions.")
 

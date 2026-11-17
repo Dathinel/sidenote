@@ -1584,6 +1584,7 @@ fn vocabulary_section(s: &State, k: &Kit, p: Palette) -> El {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
     Connect,
+    ConnectedApps,
     Teams,
     AiNotes,
     Updates,
@@ -1606,13 +1607,14 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 11] = [
+const SECTIONS: [Section; 12] = [
     Section::Identity,
     Section::Meetings,
     Section::PromptLibrary,
     Section::Teams,
     Section::Dictation,
     Section::Connect,
+    Section::ConnectedApps,
     Section::General,
     Section::Sync,
     Section::Privacy,
@@ -1622,7 +1624,7 @@ const SECTIONS: [Section; 11] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 11] = SECTIONS;
+    pub const ALL: [Section; 12] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -1633,6 +1635,7 @@ impl Section {
             Self::Sync => "Sync",
             Self::HelpersAdvanced => "Models and agents advanced",
             Self::Connect => "Models and agents",
+            Self::ConnectedApps => "Connected apps",
             Self::Teams => "People",
             Self::AiNotes => "Meeting summary",
             Self::Updates => "Updates",
@@ -1658,6 +1661,7 @@ impl Section {
             Self::Sync => "This PC and other devices.",
             Self::HelpersAdvanced => "Agent models and language handling.",
             Self::Connect => "Connect an AI app to your local meeting knowledge.",
+            Self::ConnectedApps => "Add Sidenote to your installed AI apps.",
             Self::Teams => "Group tasks by the people who own them.",
             Self::AiNotes => {
                 "Choose an agent and the instructions it uses to write meeting summaries."
