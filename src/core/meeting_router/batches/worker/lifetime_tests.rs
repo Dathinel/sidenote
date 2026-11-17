@@ -34,7 +34,11 @@ pub(super) fn drive(mode: &str, output: &Path) {
             let error = worker
                 .recognize(&ranges(Path::new("unused.wav")).remove(1))
                 .unwrap_err();
-            assert_eq!(error.downcast_ref::<Failure>(), Some(&Failure::Timeout));
+            assert_eq!(
+                error.downcast_ref::<Failure>(),
+                Some(&Failure::Timeout),
+                "{error:#}"
+            );
         }
         "deadline-drop" => drop(worker),
         "deadline-cleanup" => {
