@@ -19,7 +19,7 @@ impl Default for Schedule {
             enabled: false,
             hour: 8,
             minute: 30,
-            runner: "Daily check (Opus)".into(),
+            runner: "Codex Sol".into(),
         }
     }
 }

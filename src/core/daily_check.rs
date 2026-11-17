@@ -19,7 +19,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DEFAULT_RUNNER: &str = "Daily check (Opus)";
+const DEFAULT_RUNNER: &str = "Codex Sol";
+
+#[cfg(all(test, windows))]
+#[path = "background_tests.rs"]
+mod background_tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -818,10 +822,42 @@ fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> 
         .into_iter()
         .find(|r| r.name == name)
         .ok_or("Daily runner name not found")?;
-    // Rebuild capability flags so a selected tools-enabled runner cannot gain write tools or MCP.
-    if super::runners::kind(&runner)? != "claude" {
-        return Err("Daily checks currently require a Claude runner for verified read-only tool restrictions".into());
+    let kind = super::runners::kind(&runner)?;
+    if !matches!(kind, "claude" | "codex") {
+        return Err("Daily checks require a Claude or Codex runner".into());
     }
+    if kind == "codex" {
+        runner.args = [
+            "exec",
+            "--model",
+            "{model}",
+            "--sandbox",
+            "read-only",
+            "-c",
+            "approval_policy=\"never\"",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-c",
+            "mcp_servers={}",
+            "-c",
+            "features.apps=false",
+            "-c",
+            "features.plugins=false",
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "web_search=\"disabled\"",
+            "--json",
+            "-",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        runner.tools = true;
+        runner.stdin = true;
+        return Ok(runner);
+    }
+    // Preserve Claude's existing read-only tool list and MCP restrictions.
     runner.args = vec![
         "-p",
         "--model",
@@ -856,6 +892,42 @@ fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> 
         runner.args.push(path.to_string_lossy().into_owned());
     }
     Ok(runner)
+}
+
+#[cfg(test)]
+#[test]
+fn background_daily_runners_keep_codex_and_claude_selectable() {
+    let root = tempfile::tempdir().unwrap();
+    let runner = daily_runner(DEFAULT_RUNNER, root.path(), root.path()).unwrap();
+    assert_eq!(super::runners::kind(&runner).unwrap(), "codex");
+    assert!(
+        runner
+            .args
+            .windows(2)
+            .any(|a| a == ["--sandbox", "read-only"])
+    );
+    assert!(!runner.args.iter().any(|a| a == "--ignore-user-config"));
+    assert!(!runner.args.iter().any(|a| a.contains("features.hooks")));
+    assert!(!runner.args.iter().any(|a| a == "--add-dir"));
+    super::runners::validate(&runner).unwrap();
+    let claude = daily_runner("Claude Sonnet", root.path(), root.path()).unwrap();
+    assert_eq!(super::runners::kind(&claude).unwrap(), "claude");
+    assert!(
+        claude
+            .args
+            .windows(2)
+            .any(|a| a == ["--tools", "Read,Grep,Glob"])
+    );
+    super::runners::validate(&claude).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn daily_codex_validator_rejects_ignored_user_config() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runner = daily_runner("Codex Sol", root.path(), root.path()).unwrap();
+    runner.args.push("--ignore-user-config".into());
+    assert!(super::runners::validate(&runner).is_err());
 }
 fn log_line(message: &str) {
     let path = super::log_path();
@@ -1047,6 +1119,7 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
                 prompt.to_owned(),
                 &memory_dir,
                 Duration::from_secs(900),
+                true,
                 |_| {},
             )
             .map_err(|e| Stage::CheckRunner.error(invalid(&e)))

@@ -193,6 +193,7 @@ pub(super) struct Output {
     pub(super) streamed: String,
     pub(super) plain: String,
     pub(super) failed: bool,
+    pub(super) read_only_background: bool,
     pub(super) tool_seen: std::collections::BTreeSet<String>,
 }
 impl Output {
@@ -292,6 +293,9 @@ impl Output {
             }
             if let Some(item) = event.get("item") {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if self.read_only_background && item_type == "file_change" {
+                    self.failed = true;
+                }
                 if matches!(kind, "item.updated" | "item.completed")
                     && item_type == "agent_message"
                     && let Some(text) = item.get("text").and_then(|v| v.as_str())
@@ -361,6 +365,7 @@ pub fn run_runner(
         prompt,
         working_dir,
         Duration::from_secs(600),
+        false,
         progress,
     )
 }
@@ -370,9 +375,18 @@ pub(super) fn run_runner_with_timeout(
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
+    read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
-    run_classified(runner, prompt, working_dir, timeout, progress).map_err(|e| e.message)
+    run_classified(
+        runner,
+        prompt,
+        working_dir,
+        timeout,
+        read_only_background,
+        progress,
+    )
+    .map_err(|e| e.message)
 }
 
 pub(super) fn run_classified(
@@ -380,6 +394,7 @@ pub(super) fn run_classified(
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
+    read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
     runners::validate(runner)?;
@@ -477,6 +492,7 @@ pub(super) fn run_classified(
         streamed: String::new(),
         plain: String::new(),
         failed: false,
+        read_only_background,
         tool_seen: Default::default(),
     };
     let mut done = false;
@@ -546,6 +562,18 @@ pub(super) fn run_classified(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daily_codex_write_refusal_keeps_interactive_parser_unchanged() {
+        for background in [false, true] {
+            let mut output = super::Output {
+                read_only_background: background,
+                ..Default::default()
+            };
+            let event = serde_json::json!({"type":"item.started", "item":{"type":"file_change"}});
+            output.line(&event.to_string(), "codex", true, &|_| {});
+            assert_eq!(output.failed, background);
+        }
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_agent_runners_fail_before_executable_lookup_or_launch() {
@@ -570,6 +598,7 @@ mod tests {
                     "synthetic".into(),
                     root.path(),
                     Duration::from_secs(1),
+                    false,
                     |_| {}
                 )
                 .unwrap_err(),
@@ -590,6 +619,7 @@ mod tests {
             streamed: String::new(),
             plain: String::new(),
             failed: false,
+            read_only_background: false,
             tool_seen: Default::default(),
         };
         let events = std::cell::RefCell::new(Vec::new());
