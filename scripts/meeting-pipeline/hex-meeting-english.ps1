@@ -51,6 +51,7 @@ if ($dir.Name -cmatch '\A[0-9][0-9-]{0,99}\z') { Write-Output "notes engine=scri
 # early. hex-meeting-watch.ps1 usually has done this already, and the script then skips. It never
 # fails the notes: any problem is one log line.
 try { & (Join-Path $PSScriptRoot 'hex-meeting-quick-title.ps1') -MeetingDir $dir.FullName } catch { Write-Host "quick-title failed; detail bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))" }
+if (-not $NotesOnly) {
 $version = (Get-Content -LiteralPath (Join-Path $env:APPDATA 'hex\current-version') -Raw).Trim()
 $hex = Join-Path $env:APPDATA "hex\versions\$version\hex.exe"
 if (-not (Test-Path -LiteralPath $hex -PathType Leaf)) { throw [IO.FileNotFoundException]::new('Hex executable missing') }
@@ -59,6 +60,7 @@ $uv = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $uv) { throw [IO.FileNotFoundException]::new('Required executable missing') }
 $tracks = @(@{File='system.wav'; Speaker='Them'}, @{File='microphone.wav'; Speaker='You'}) | Where-Object { Test-Path -LiteralPath (Join-Path $dir.FullName $_.File) -PathType Leaf }
 if (-not $tracks) { throw "No system.wav or microphone.wav found in $($dir.FullName)" }
+}
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('hex-meeting-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 function Set-PipelineStage([string]$Stage, [int]$Deadline) {
@@ -177,10 +179,10 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     }
     # Glossary: Hex vocabulary terms plus optional one-term-per-line file.
     $terms = New-Object System.Collections.Generic.List[string]
-    try {
+    if (-not $NotesOnly) { try {
         $vocab = (& $hex vocabulary list --json 2>$null | Out-String | ConvertFrom-Json)
         foreach ($v in @($vocab.entries) + @($vocab.terms)) { if ($v.term) { $terms.Add([string]$v.term) } }
-    } catch {}
+    } catch {} }
     if (Test-Path -LiteralPath $glossaryFile) {
         foreach ($line in [IO.File]::ReadAllLines($glossaryFile, $utf8)) { if ($line.Trim()) { $terms.Add($line.Trim()) } }
     }
@@ -235,7 +237,8 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     # The meeting folder's notes.md is the user's own typed notes, so ours are english-summary.md and english-transcript.md (Hex itself writes transcript.md).
     # A real Hex meeting gets the English versions put into Hex itself (hex-meeting-publish.py), so the
     # Documents copies are only for folders Hex does not know about.
-    $isHex = Test-Path -LiteralPath (Join-Path $dir.FullName 'manifest.json')
+    $isJoined = Test-Path -LiteralPath (Join-Path $dir.FullName 'sidenote-parts.json')
+    $isHex = (Test-Path -LiteralPath (Join-Path $dir.FullName 'manifest.json')) -and -not $isJoined
     $copyDir = Join-Path $env:USERPROFILE 'Documents\Hex Meetings'
     $stamp = $dir.CreationTime.ToString('yyyy-MM-dd HHmm')
     $suffix = ''
@@ -247,7 +250,7 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         @{ Skip = [bool]$NotesOnly; Local = 'english-transcript.md'; Copy = "$stamp English Transcript$suffix.md"; Text = "# Full English transcript`n`n$transcript`n" },
         @{ Skip = $false; Local = 'english-summary.json'; Copy = $null; Text = "$notes`n" }
     )
-    if (-not $isHex) { New-Item -ItemType Directory -Force -Path $copyDir | Out-Null }
+    if (-not $isHex -and -not $isJoined) { New-Item -ItemType Directory -Force -Path $copyDir | Out-Null }
     foreach ($o in $outputs) {
         if ($o.Skip) { continue }
         $target = Join-Path $dir.FullName $o.Local
@@ -258,7 +261,7 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
         }
         [IO.File]::WriteAllText($target, $o.Text, $utf8)
         Write-Host "Meeting output: $target"
-        if (-not $isHex -and $o.Copy) {
+        if (-not $isHex -and -not $isJoined -and $o.Copy) {
             [IO.File]::WriteAllText((Join-Path $copyDir $o.Copy), $o.Text, $utf8)
             Write-Host "Documents copy: $(Join-Path $copyDir $o.Copy)"
         }
@@ -268,7 +271,7 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     if (-not $isHex) {
         Set-PipelineStage 'render' 120
         Invoke-HexCli -CliArgs @('uv','run','--quiet','--no-project','python','-I',(Join-Path $promptDir 'hex-meeting-render.py'),$dir.FullName) -TimeoutSeconds 120 -Stage render
-        Copy-Item -LiteralPath (Join-Path $dir.FullName 'english-summary.md') -Destination (Join-Path $copyDir "$stamp English Summary$suffix.md")
+        if (-not $isJoined) { Copy-Item -LiteralPath (Join-Path $dir.FullName 'english-summary.md') -Destination (Join-Path $copyDir "$stamp English Summary$suffix.md") }
     }
     if ($isHex) {
         Set-PipelineStage 'publish' 120
