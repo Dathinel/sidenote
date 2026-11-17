@@ -84,6 +84,7 @@ pub enum Msg {
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
     RecheckStart(Result<EngineState, HexError>),
+    RecheckResume(Result<EngineState, HexError>),
     SettingsStatus(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
@@ -537,6 +538,22 @@ impl State {
                     );
                 }
             }
+            Msg::RecheckResume(result) => {
+                self.hex.record_busy = false;
+                match result {
+                    Ok(status) => {
+                        let recording = status.recording.is_some();
+                        self.hex_status(Ok(status));
+                        if recording {
+                            self.hex.error =
+                                Some("Hex is already recording. No new part was started.");
+                        } else {
+                            self.meeting_resume();
+                        }
+                    }
+                    Err(e) => self.hex.error = Some(plain(&e)),
+                }
+            }
             Msg::RecheckStart(result) => {
                 self.hex.record_busy = false;
                 match result {
@@ -799,6 +816,9 @@ impl State {
                         self.hex_spawn(|e| Msg::Status(e.status()));
                     }
                     Err(e) => {
+                        if matches!(action, Action::Start) {
+                            self.parts_start_failed();
+                        }
                         self.hex.error = Some(match (&action, &e) {
                             (
                                 Action::Stop(_),
@@ -821,7 +841,10 @@ impl State {
                             super::response_time::failed(live.take_notes_timing(recording));
                         }
                         // Even a failed start may have notes typed while waiting for Hex.
-                        if matches!(action, Action::Start) && self.live_close() {
+                        if matches!(action, Action::Start)
+                            && self.live.as_ref().is_none_or(|l| l.session.is_none())
+                            && self.live_close()
+                        {
                             self.live = None;
                             self.live_open = false;
                         }
@@ -920,6 +943,14 @@ impl State {
     pub(super) fn hex_connection_tick(&mut self, tx: &mut Tx) -> bool {
         self.hex.connection.tick(tx)
     }
+    pub(super) fn hex_recheck_resume(&mut self) {
+        if self.hex.record_busy {
+            return;
+        }
+        self.hex.record_busy = true;
+        self.hex.error = None;
+        self.hex_spawn(|engine| Msg::RecheckResume(engine.status_for_command()));
+    }
     pub(super) fn hex_recheck_start(&mut self) {
         self.hex.record_busy = true;
         self.hex.error = None;
@@ -991,8 +1022,10 @@ impl State {
         self.hex.error = None;
         let engine = self.hex.engine.clone();
         let recording = self.live.as_mut().map_or(0, |live| {
-            live.notes_response_time =
-                super::Operation::at(super::TimedAction::Notes, pressed).defer();
+            if live.session.is_none() {
+                live.notes_response_time =
+                    super::Operation::at(super::TimedAction::Notes, pressed).defer();
+            }
             live.recording_id
         });
         let events = self.events_tx.clone();

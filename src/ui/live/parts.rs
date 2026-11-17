@@ -257,6 +257,10 @@ impl State {
         true
     }
     pub(in crate::ui) fn meeting_resume(&mut self) {
+        if self.hex_status_unknown() {
+            self.hex_recheck_resume();
+            return;
+        }
         if let Some(reason) = hex::start_blocked(self) {
             self.hex.error = Some(reason);
             return;

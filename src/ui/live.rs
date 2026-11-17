@@ -1,26 +1,9 @@
-//! "New meeting": the live page. Starting a meeting starts a Hex recording and opens a page with
-//! a heading ("Meeting at 14:30"), a recording mark, the elapsed time and a large Stop button.
-//! After Stop it says "Writing summary" until the normal pipeline has written the meeting, then
-//! opens the notes.
-//!
-//! While recording, the page is a calm notes editor (plain text, saved to the meeting folder's
-//! `notes.md` about 2 s after typing stops and again on Stop). A bottom bar holds a recording
-//! pill (dot, voice bars, timer, chevron, Stop) next to the Ask pill; the chevron opens a panel
-//! above it with the live transcript, which Hex writes to `transcript.rolling.ndjson` while it
-//! records (see `core::live`). A background thread reads that file every 2.5 s, only while this
-//! page is visible, and skips the parse when the file has not changed.
-//!
-//! The voice bars are not a level meter. Hex exposes no microphone level, so the bars follow
-//! transcript activity: they lift while new words keep arriving and rest in a slow, gentle idle
-//! otherwise.
-//!
-//! After Stop it says "Writing summary" (with the user's notes beside it) until the normal pipeline
-//! has written the meeting, then opens it. Nobody types a title: a cheap model names the meeting
-//! seconds after Stop (quick-title.json, read here while the notes are made), and the notes' own
-//! title replaces it.
+//! The meeting page records ordered Hex parts. Pause stops a part without starting notes.
+//! Only Generate notes or Update notes snapshots the parts and asks for notes. The live
+//! reader and personal-note writer remain independent of the notes engine.
 use super::{
     State,
-    ask::{self, EASE_IN, raised, rise},
+    ask::{self, raised, rise},
     hex,
     list::text_title,
     roles,
@@ -76,8 +59,6 @@ const TITLE_EVERY: Duration = Duration::from_secs(2);
 const FEED_EVERY: Duration = Duration::from_millis(2500);
 /// Notes are saved this long after the last key.
 const SAVE_AFTER: Duration = Duration::from_secs(2);
-/// The bars count as busy for this long after words last arrived.
-const ACTIVE_FOR: Duration = Duration::from_secs(6);
 /// With no live file after this long, the panel says so instead of only "Listening".
 const NO_FEED_AFTER: Duration = Duration::from_secs(45);
 
@@ -244,12 +225,6 @@ pub struct Feed {
     summary_skip: Option<sidenote::core::notes::SummarySkip>,
     notes_problem: Option<&'static str>,
     transcript: Option<Transcript>,
-}
-
-impl Feed {
-    fn busy(&self) -> bool {
-        self.last_words.is_some_and(|t| t.elapsed() < ACTIVE_FOR)
-    }
 }
 
 /// Where the notes stand, for the quiet line beside the heading.
@@ -565,6 +540,24 @@ impl State {
         }
         self.go_home();
         self.live_open = true;
+        match sidenote::core::meeting_parts::Meeting::pending(
+            &sidenote::core::state_dir(),
+            chrono::Utc::now().timestamp_millis(),
+        ) {
+            Ok(m) => {
+                if let Some(live) = &mut self.live {
+                    live.folder = Some(
+                        sidenote::core::meeting_parts::inputs(&sidenote::core::state_dir())
+                            .join(&m.id),
+                    );
+                    live.session = Some(m);
+                }
+            }
+            Err(_) => {
+                self.hex.error = Some("Could not save meeting before recording.");
+                return;
+            }
+        }
         self.hex_record_start();
         self.nav_done();
     }
@@ -614,6 +607,10 @@ impl State {
 
     /// Called after each Hex sample and each scan: moves the page along its three phases.
     pub fn live_sync(&mut self) {
+        self.parts_sync();
+        if self.live.is_none() && !self.hex.parts_restore_checked {
+            return;
+        }
         let recording = self.hex_recording();
         let running = self.hex_running();
         let busy = self.hex_record_busy();
@@ -626,6 +623,15 @@ impl State {
             return;
         }
         self.live_sync_start();
+        if !recording
+            && !busy
+            && self
+                .live
+                .as_ref()
+                .is_some_and(|l| l.phase == Phase::Paused && l.generate_after_pause)
+        {
+            self.meeting_generate();
+        }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -654,6 +660,10 @@ impl State {
 
     /// Recording ended, by Stop here or in Hex: wait for the notes.
     pub fn live_stopped(&mut self) {
+        if self.live.as_ref().is_some_and(|l| l.session.is_some()) {
+            self.parts_paused();
+            return;
+        }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -710,10 +720,24 @@ impl State {
         let found = self
             .meetings
             .iter()
-            .find(|m| live.matches_meeting(m) && !live.known.contains(&m.id) && m.has_summary())
+            .find(|m| {
+                live.matches_meeting(m)
+                    && m.has_summary()
+                    && if let Some(session) = &live.session {
+                        session
+                            .notes_ready(&sidenote::core::state_dir())
+                            .unwrap_or(false)
+                    } else {
+                        !live.known.contains(&m.id)
+                    }
+            })
             .map(|m| (m.id.clone(), m.folder.clone()));
         if let Some((id, folder)) = found {
             let timing_matched = live.folder.as_ref() == Some(&folder);
+            if let Some(m) = self.live.as_mut().and_then(|l| l.session.as_mut()) {
+                m.notes_parts = m.requested_parts;
+                let _ = m.save(&sidenote::core::state_dir());
+            }
             if !timing_matched && let Some(live) = &mut self.live {
                 super::response_time::unmatched(std::mem::take(&mut live.notes_response_time));
             }
@@ -822,10 +846,12 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
     }
 }
 
+#[cfg(test)]
 const BARS: usize = 5;
 
 /// The bar heights, in points. Busy: a livelier pattern that shifts with each new word count.
 /// Idle: a slow, small swell that moves with the clock. Neither is a level; see the module note.
+#[cfg(test)]
 fn bar_heights(busy: bool, tick: u64, words: usize) -> [f32; BARS] {
     let mut h = [0.0; BARS];
     for (i, h) in h.iter_mut().enumerate() {
@@ -842,6 +868,13 @@ impl State {
     /// Called on every poll. Hands the reader thread its hint and whether to read, adopts the
     /// meeting folder, and saves the notes 2 s after the last key. True when the page changed.
     pub fn live_tick(&mut self) -> bool {
+        if self.live.as_ref().is_some_and(|l| {
+            !l.scene
+                && l.session.is_some()
+                && l.parts_checked.is_none_or(|at| at.elapsed() >= FEED_EVERY)
+        }) {
+            self.parts_sync();
+        }
         let saved = self.live_saved();
         let visible = self.on_live() && hex::window_shown();
         let hint = hex::recording_id(self);
@@ -853,8 +886,10 @@ impl State {
             return false;
         }
         let mut changed = saved;
-        live.watching
-            .store(visible || live.phase == Phase::Making, Ordering::Relaxed);
+        live.watching.store(
+            live.session.is_none() && (visible || live.phase == Phase::Making),
+            Ordering::Relaxed,
+        );
         {
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if feed.hint.is_none() {
@@ -981,88 +1016,6 @@ impl State {
 }
 
 // ---- the page ---------------------------------------------------------------------------------
-
-/// The recording pill: dot, voice bars, timer, chevron, and Stop. The first four are one button
-/// that opens the live transcript above the bar.
-fn rec_pill(s: &State, k: &Kit, p: Palette) -> El {
-    let Some(live) = s.live.as_ref() else {
-        return el();
-    };
-    let starting = live.phase == Phase::Starting;
-    let (busy, words) = {
-        let f = live.feed.lock().unwrap_or_else(|e| e.into_inner());
-        (f.busy() && !starting, f.words)
-    };
-    let tick = if live.scene {
-        0
-    } else {
-        live.began.elapsed().as_secs()
-    };
-    let bars = row()
-        .key("live-bars")
-        .gap(3.0)
-        .items_center()
-        .h(20.0)
-        .a11y_hidden()
-        .children(
-            bar_heights(busy, tick, words)
-                .into_iter()
-                .enumerate()
-                .map(|(i, h)| {
-                    el().key(format!("live-bar-{i}"))
-                        .w(3.0)
-                        .h(h)
-                        .radius(1.5)
-                        .fill(if busy { p.ink } else { p.soft })
-                        // One ease of about 180 ms with no bounce, as the Ask bar.
-                        .motion(EASE_IN)
-                }),
-        );
-    let open = live.panel_open && !starting;
-    let chevron = if open {
-        k.glyph.chevron_down
-    } else {
-        k.glyph.chevron_up
-    };
-    let mut group = row()
-        .gap(10.0)
-        .items_center()
-        .child(bars)
-        .child(roles::CONTROL.wrap(
-            if open {
-                "Hide live transcript"
-            } else {
-                "Show live transcript"
-            },
-            p.accent,
-        ));
-    if !starting {
-        group = group.child(rune::icon(chevron, 14.0).color(p.faint));
-    }
-    let group = pressable(group)
-        .key("live-chevron")
-        .label(if open {
-            "Hide the live transcript"
-        } else {
-            "Show the live transcript"
-        })
-        .help(if open {
-            "Hide the live transcript"
-        } else {
-            "Show the live transcript, a few seconds behind"
-        })
-        .preserve_focus_on_press(true)
-        .pl(16.0)
-        .pr(12.0)
-        .py(8.0)
-        .radius(999.0)
-        .hover(p.chip);
-    if starting {
-        group.dim(0.8)
-    } else {
-        group.on_press(|s: &mut State| s.live_toggle_panel())
-    }
-}
 
 /// "1:05" or "1:02:05" for a line in the live transcript.
 fn stamp(seconds: u64) -> String {
@@ -1359,7 +1312,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
             .mt(if narrow { 4.0 } else { 10.0 })
             .child(rune::auto_grow(field, 2, 400)),
     );
-    c.children((!starting).then(|| rec_pill(s, k, p)))
+    c
 }
 
 fn save_warning(recording: bool, recovered: bool) -> String {
