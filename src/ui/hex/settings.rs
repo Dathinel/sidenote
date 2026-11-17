@@ -2775,6 +2775,8 @@ pub fn scene(s: &mut State, name: &str) {
         | "settings-hex-installing"
         | "settings-hex-install-failed"
         | "settings-hex-installed"
+        | "settings-hex-stale"
+        | "settings-hex-update"
         | "settings-hex-meetings-off"
         | "settings-hex-meetings-enable" => (Page::Hex, 0),
         "settings-helpers" | "settings-helpers-expanded" => (Page::Helpers, 0),
@@ -2837,6 +2839,21 @@ pub fn scene(s: &mut State, name: &str) {
             s.hex.settings.push(serde_json::from_value(serde_json::json!({
                 "key": "meetings.enabled", "value": false, "kind": "bool", "writable": true, "available": true
             })).unwrap());
+        }
+        // Hex answered once, then went quiet past the freshness limit: unknown, not stopped.
+        "settings-hex-stale" | "settings-hex-update" => {
+            let mut good = s.hex.status.as_ref().unwrap().as_ref().unwrap().clone();
+            s.hex.installation = sidenote::hex_install::Installation::Installed {
+                version: "0.0.0-dev-1085".into(),
+                exe: "fixture/hex.exe".into(),
+            };
+            if name == "settings-hex-update" {
+                good.version = "0.0.0-dev-1083".into();
+                s.hex.caps_version = Some(good.version.clone());
+                s.hex.status = Some(Ok(good));
+            } else {
+                s.hex_status_at(Ok(good), Instant::now() - Duration::from_secs(11));
+            }
         }
         "settings-hex-setup"
         | "settings-hex-installing"
