@@ -505,6 +505,8 @@ fn listen(finished: &std::sync::mpsc::Sender<String>) -> Result<(), Problem> {
         if body.read_until(b'\n', &mut raw)? == 0 {
             break;
         }
+        let mut event_span = crate::core::idle_pass::Span::begin("sse_handling");
+        event_span.bytes(raw.len());
         let decoded = String::from_utf8_lossy(&raw);
         let Some(data) = decoded.trim().strip_prefix("data:") else {
             continue;
@@ -625,6 +627,7 @@ pub fn run() -> ! {
     }
     std::thread::spawn(|| {
         loop {
+            let pass = crate::core::idle_pass::Span::begin("listener_pass");
             let _ = crate::core::meeting_router::jobs::start_worker();
             if let Err(error) = crate::core::notes::queue::start_worker() {
                 log(&format!(
@@ -641,6 +644,7 @@ pub fn run() -> ! {
                     Stage::CatchUpMeetings.error(error)
                 ));
             }
+            drop(pass);
             std::thread::sleep(Duration::from_secs(30));
         }
     });

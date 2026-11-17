@@ -123,6 +123,7 @@ struct Cursor {
 
 #[cfg(windows)]
 pub(crate) fn delivered(cursor: &Path) -> io::Result<BTreeMap<String, String>> {
+    let _read = super::idle_pass::Span::begin("cursor_reads");
     Ok(store_io::read::<Cursor>(cursor)?.revisions)
 }
 
@@ -168,8 +169,10 @@ impl<S: Source> Session<S> {
         }
         let _lock = store_io::lock(&self.cursor.with_extension("lock"))
             .map_err(|e| Error::Cursor(e.kind()))?;
-        let mut cursor: Cursor =
-            store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?;
+        let mut cursor: Cursor = {
+            let _read = super::idle_pass::Span::begin("cursor_reads");
+            store_io::read(&self.cursor).map_err(|e| Error::Cursor(e.kind()))?
+        };
         let (meetings, retained) = self.source.catch_up_excluding(&cursor.revisions)?;
         if let Some(ids) = retained {
             let before = cursor.delivered.len();

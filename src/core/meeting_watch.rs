@@ -532,10 +532,11 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
         let meetings = super::meetings_dir();
         #[cfg(windows)]
         let mut source = super::recording_source::Session::open(
-            super::recording_source::folders::Discovery(meetings.clone()),
+            super::recording_source::folders::Discovery::configured(meetings.clone()),
             state.join("local/recording-source.json"),
         );
         loop {
+            let pass = super::idle_pass::Span::begin("watch_pass");
             let labs = super::store_io::defer_busy(super::config::Config::load_in(&state));
             if let Ok(Some(config)) = &labs {
                 let labs = &config.labs;
@@ -555,6 +556,7 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
             }
             #[cfg(windows)]
             dispatch_completions(&mut source, log);
+            drop(pass);
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {

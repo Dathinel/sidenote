@@ -6,14 +6,23 @@ use std::{
     path::{Component, PathBuf},
 };
 
-pub struct Discovery(pub(crate) PathBuf);
+pub struct Discovery {
+    root: PathBuf,
+    validated: BTreeMap<String, (String, bool)>,
+}
 impl Discovery {
+    pub(crate) fn configured(root: PathBuf) -> Self {
+        Self {
+            root,
+            validated: BTreeMap::new(),
+        }
+    }
     /// An explicitly selected meetings folder, e.g. Sidenote's --meetings-dir.
     pub fn new(meetings: PathBuf) -> Result<Self, Error> {
         if !meetings.is_absolute() || meetings.components().any(|c| c == Component::ParentDir) {
             return Err(Error::InvalidInput);
         }
-        Ok(Self(meetings))
+        Ok(Self::configured(meetings))
     }
 
     /// Hex 7681742 stores meetings below its application support directory on both OSes.
@@ -34,11 +43,12 @@ impl Source for Discovery {
         &mut self,
         delivered: &BTreeMap<String, String>,
     ) -> Result<CatchUp, Error> {
-        let scan = MeetingScan::open(&self.0).map_err(|e| match e.kind() {
+        let _stage = crate::core::idle_pass::Span::begin("source_discovery");
+        let scan = MeetingScan::open(&self.root).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
         })?;
-        let root_meta = std::fs::metadata(&self.0).map_err(|e| Error::Input(e.kind()))?;
+        let root_meta = std::fs::metadata(&self.root).map_err(|e| Error::Input(e.kind()))?;
         let mut completed = Vec::new();
         let mut ids = BTreeSet::new();
         for name in &scan.names {
@@ -47,9 +57,9 @@ impl Source for Discovery {
             };
             ids.insert(id.to_owned());
             let before = if let Some(directory) = scan.metadata.get(name) {
-                revision::input_with_metadata(&self.0.join(id), &root_meta, directory)
+                revision::input_with_metadata(&self.root.join(id), &root_meta, directory)
             } else {
-                revision::input_with_root(&self.0.join(id), &root_meta)
+                revision::input_with_root(&self.root.join(id), &root_meta)
             };
             let Ok(before) = before else {
                 continue;
@@ -57,26 +67,46 @@ impl Source for Discovery {
             if delivered.get(id) == Some(&before) {
                 continue;
             }
-            match CompletedMeeting::capture_in(&scan, id) {
-                Ok(mut meeting) => {
-                    if revision::input_with_root(&self.0.join(id), &root_meta)
-                        .is_ok_and(|after| after == before)
-                    {
-                        meeting.1 = before;
-                        completed.push(meeting);
-                    }
+            let folder = self.root.join(id);
+            let Ok(key) = revision::validation(&folder, &before) else {
+                continue;
+            };
+            let cached = self
+                .validated
+                .get(id)
+                .filter(|(revision, _)| revision == &key)
+                .map(|(_, valid)| *valid);
+            let valid = match cached {
+                Some(valid) => valid,
+                None => match CompletedMeeting::capture_in(&scan, id) {
+                    Ok(_) => true,
+                    Err(Error::InvalidInput | Error::Incomplete) => false,
+                    Err(Error::Input(_)) => continue,
+                    Err(error) => return Err(error),
+                },
+            };
+            if cached.is_some()
+                || (revision::input_with_root(&folder, &root_meta)
+                    .is_ok_and(|after| after == before)
+                    && revision::validation(&folder, &before).is_ok_and(|after| after == key))
+            {
+                if self.validated.len() < crate::core::file_reads::ENTRIES_MAX
+                    || self.validated.contains_key(id)
+                {
+                    self.validated.insert(id.to_owned(), (key, valid));
                 }
-                // A deleted, growing or temporarily locked folder cannot starve other meetings.
-                Err(Error::InvalidInput | Error::Incomplete | Error::Input(_)) => {}
-                Err(error) => return Err(error),
+                if valid {
+                    completed.push(CompletedMeeting(id.to_owned(), before));
+                }
             }
         }
         if !scan
-            .root_matches(&self.0)
+            .root_matches(&self.root)
             .map_err(|e| Error::Input(e.kind()))?
         {
             return Err(Error::Input(io::ErrorKind::Interrupted));
         }
+        self.validated.retain(|id, _| ids.contains(id));
         completed.sort_by(|a, b| a.id().cmp(b.id()));
         Ok((completed, Some(ids)))
     }
@@ -89,9 +119,68 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn unchanged_unacknowledged_folders_do_not_reread_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        let meetings = root.path().join("meetings");
+        let folder = meetings.join("100-1");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+        fs::write(
+            folder.join("transcript.ndjson"),
+            br#"{"text":"Synthetic words"}"#,
+        )
+        .unwrap();
+        let mut session = Session::open(
+            Discovery::configured(meetings),
+            root.path().join("cursor.json"),
+        )
+        .unwrap();
+        let calls = std::cell::Cell::new(0);
+        let mut defer = |_: &CompletedMeeting| {
+            calls.set(calls.get() + 1);
+            Err(io::ErrorKind::WouldBlock.into())
+        };
+        session.drain(&mut defer).unwrap();
+        let reads = crate::core::meeting_router::inputs::body_reads();
+        session.drain(&mut defer).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(crate::core::meeting_router::inputs::body_reads(), reads);
+        fs::write(
+            folder.join("audio-evidence.json"),
+            b"invalid synthetic JSON",
+        )
+        .unwrap();
+        session.drain(&mut defer).unwrap();
+        assert_eq!(calls.get(), 2);
+        fs::remove_file(folder.join("audio-evidence.json")).unwrap();
+        fs::write(folder.join("transcript.ndjson"), b"invalid synthetic JSON").unwrap();
+        session.drain(&mut defer).unwrap();
+        let reads = crate::core::meeting_router::inputs::body_reads();
+        session.drain(&mut defer).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(crate::core::meeting_router::inputs::body_reads(), reads);
+        fs::write(
+            folder.join("transcript.ndjson"),
+            br#"{"text":"Synthetic replacement"}"#,
+        )
+        .unwrap();
+        session
+            .drain(|_| {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 3);
+        session
+            .drain(|_| panic!("acknowledged input replayed"))
+            .unwrap();
+    }
+
+    #[test]
     fn same_name_rewrite_and_restore_are_delivered_after_restart() {
         let (root, meetings, cursor) = super::super::tests::fixture();
-        let open = || Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
+        let open =
+            || Session::open(Discovery::configured(meetings.clone()), cursor.clone()).unwrap();
         open().drain(|_| Ok(())).unwrap();
         for restore in [false, true] {
             if restore {
@@ -131,7 +220,8 @@ mod tests {
     fn folder_scan_and_repeated_event_wakeups_share_the_durable_cursor() {
         let (root, meetings, cursor) = super::super::tests::fixture();
         fs::remove_file(meetings.join("99-1/transcript.ndjson")).unwrap();
-        let mut session = Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
+        let mut session =
+            Session::open(Discovery::configured(meetings.clone()), cursor.clone()).unwrap();
         let mut queued = Vec::new();
         for _ in 0..3 {
             session
@@ -147,7 +237,7 @@ mod tests {
             b"{\"text\":\"synthetic final\"}",
         )
         .unwrap();
-        let mut restarted = Session::open(Discovery(meetings), cursor).unwrap();
+        let mut restarted = Session::open(Discovery::configured(meetings), cursor).unwrap();
         restarted
             .drain(|m| {
                 queued.push(m.id().to_owned());
@@ -161,7 +251,8 @@ mod tests {
     #[test]
     fn unavailable_root_is_typed_and_does_not_advance_the_cursor() {
         let (root, meetings, cursor) = super::super::tests::fixture();
-        let mut session = Session::open(Discovery(meetings.clone()), cursor.clone()).unwrap();
+        let mut session =
+            Session::open(Discovery::configured(meetings.clone()), cursor.clone()).unwrap();
         fs::rename(&meetings, root.path().join("saved")).unwrap();
         assert_eq!(session.drain(|_| panic!("offline")), Err(Error::Offline));
         assert!(!cursor.exists());

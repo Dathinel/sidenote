@@ -15,6 +15,7 @@ pub mod engine_settings;
 pub mod export;
 pub(crate) mod failure;
 pub mod growing_wav;
+pub(crate) mod idle_pass;
 pub mod lid;
 pub(crate) mod meeting_evidence;
 pub mod meeting_job;

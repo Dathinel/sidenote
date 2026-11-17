@@ -959,6 +959,7 @@ pub fn enqueue(id: &str) -> io::Result<()> {
     )
 }
 pub fn catch_up() -> io::Result<()> {
+    let _stage = core::idle_pass::Span::begin("notes_catch_up");
     let Some(settings) = store_io::defer_busy(super::settings()).at(Stage::NotesSettingsRead)?
     else {
         return Ok(());
@@ -1016,6 +1017,7 @@ pub fn catch_up() -> io::Result<()> {
     failure.map_or(Ok(()), Err)
 }
 pub fn start_worker() -> io::Result<()> {
+    let _stage = core::idle_pass::Span::begin("notes_queue");
     let Some(settings) = store_io::defer_busy(super::settings()).at(Stage::NotesSettingsRead)?
     else {
         return Ok(());
