@@ -257,28 +257,26 @@ pub fn meeting_footer(s: &State, m: &core::Meeting, p: Palette) -> El {
         .iter()
         .filter(|row| row.entry.source_meeting_id == m.id && !row.undone)
         .count();
+    // Nothing settled from this meeting: there is nothing to say and nothing to open.
+    if count == 0 {
+        return el();
+    }
     let id = m.id.clone();
-    col()
-        .w_full()
-        .gap(4.0)
-        .mt(18.0)
-        .child(roles::META.wrap(
-            format!(
-                "Sidenote updated {count} {} from this meeting.",
-                if count == 1 { "thing" } else { "things" }
-            ),
-            p.soft,
-        ))
-        .child(
-            crate::ui::widgets::link("See in Memory", p)
-                .key("meeting-settle-memory")
-                .self_start()
-                .on_press(move |s: &mut State| {
-                    s.open_memory();
-                    s.memory.settle_all = true;
-                    s.memory.settle_meeting = Some(id.clone());
-                }),
-        )
+    crate::ui::widgets::link(
+        format!(
+            "{count} {} added to Memory \u{203a}",
+            if count == 1 { "thing" } else { "things" }
+        ),
+        p,
+    )
+    .key("meeting-settle-memory")
+    .self_start()
+    .mt(18.0)
+    .on_press(move |s: &mut State| {
+        s.open_memory();
+        s.memory.settle_all = true;
+        s.memory.settle_meeting = Some(id.clone());
+    })
 }
 
 /// Uses the same write-ahead entry points as the notes worker, only with invented fixture data.

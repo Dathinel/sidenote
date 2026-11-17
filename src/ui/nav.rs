@@ -327,7 +327,7 @@ impl Place {
 
 /// The places (Meetings, Tasks, Memory, Diary), the tools (Settings) and the filter for
 /// meetings from other devices, when there are any.
-fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
+fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
     let page = s.page();
     let features = &s.config.features;
     let open_tasks = s.tasks.counts.open;
@@ -379,7 +379,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
             },
             active: page == Page::Memory,
             icon: |c, _| icon_memory(c),
-            flag: (proposals > 0).then_some(p.accent),
+            flag: None,
             press: |s| {
                 s.open_memory();
                 s.nav_done();
@@ -399,7 +399,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
             },
             active: page == Page::Check,
             icon: icon_check,
-            flag: (high > 0).then_some(p.warn),
+            flag: None,
             press: |s| {
                 s.open_check();
                 s.nav_done();

@@ -1,6 +1,7 @@
 use super::super::*;
 mod api;
 use api::Fixture;
+use std::sync::atomic::Ordering;
 
 fn isolated_api_test(name: &str) -> bool {
     if std::env::var("SIDENOTE_HEX_API_TEST").as_deref() == Ok(name) {
@@ -423,4 +424,189 @@ fn successful_snapshot_expires_without_another_poll() {
     );
     assert_eq!(start_blocked(&state), None);
     assert_eq!(stop_blocked(&state), None);
+}
+
+#[test]
+fn settings_check_uses_the_bounded_status_call_without_starting_a_meeting() {
+    if isolated_api_test("settings_check_uses_the_bounded_status_call_without_starting_a_meeting") {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start();
+    state.hex.settings_status_at = None;
+    state.hex_check_settings();
+    assert!(state.hex.settings_status_pending);
+    while state.hex.settings_status_pending {
+        if let Event::Hex(msg) = state
+            .events_rx
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap()
+        {
+            state.hex_apply(msg);
+        }
+    }
+    assert!(state.hex_running());
+    assert!(state.hex.settings_status_at.is_some());
+    assert_eq!(api.data.lock().unwrap().starts, 0);
+}
+
+fn finished_refresh_view(view: &str) {
+    use crate::ui::{Event, refresh};
+    use sidenote::core;
+    let (api, mut state, _) = Fixture::start();
+    let root = core::meetings_dir();
+    let now = chrono::Utc::now().timestamp_millis();
+    let write = |id: &str, title: &str, started: i64, summary: bool| {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest.json"), serde_json::json!({"status":"complete","created_at_ms":started,
+            "ended_at_ms":started+60_000,"duration_ms":60_000,"title":"Meeting at 15:14","title_source":"default"}).to_string()).unwrap();
+        if summary {
+            std::fs::write(
+                dir.join("english-summary.json"),
+                serde_json::json!({"title":title}).to_string(),
+            )
+            .unwrap();
+        }
+    };
+    write("10-1", "Earlier workshop", now - 68 * 60_000, true);
+    let apply = |state: &mut State| {
+        let options = state.refresh_options();
+        state.apply_event(Event::Refreshed(refresh::Result {
+            generation: core::mutation_generation(),
+            options,
+            data: Some(Box::new(refresh::Data::read(options))),
+        }));
+    };
+    apply(&mut state);
+    state.live = None;
+    state.live_open = false;
+    match view {
+        "meeting" => state.selected = Some("10-1".into()),
+        "memory" => state.memory_open = true,
+        "sidebar" | "home" | "list" => state.go_home(),
+        _ => panic!("unknown view"),
+    }
+    let (handle, dirty) = refresh::observing_handle();
+    state.scan_tx = Some(handle);
+    write("100-1", "Latest workshop", now - 2 * 60_000, false);
+    api.data.lock().unwrap().id = None;
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.apply_event(Event::Hex(Msg::Status(Ok(idle))));
+    assert!(
+        dirty.load(Ordering::Acquire),
+        "meeting-finished observation did not invalidate the catalog in {view}"
+    );
+    apply(&mut state);
+    assert_eq!(state.meetings[0].id, "100-1", "{view}");
+    assert!(
+        state
+            .groups
+            .iter()
+            .flat_map(|g| &g.items)
+            .any(|i| state.meetings[i.index].id == "100-1")
+    );
+    assert_eq!(
+        state
+            .ask_settings
+            .last_live
+            .as_ref()
+            .unwrap()
+            .hint
+            .as_deref(),
+        Some("100-1")
+    );
+    write("100-1", "Latest workshop", now - 2 * 60_000, true);
+    apply(&mut state);
+    assert_eq!(
+        state.meetings[0].title, "Latest workshop",
+        "notes did not replace the default title in {view}"
+    );
+    if view == "meeting" {
+        assert_eq!(
+            state.current().unwrap().title,
+            "Earlier workshop",
+            "Do not redirect a reader browsing an older meeting"
+        );
+    }
+}
+
+#[test]
+fn finished_event_refreshes_meetings_list() {
+    if !isolated_api_test("finished_event_refreshes_meetings_list") {
+        finished_refresh_view("list");
+    }
+}
+#[test]
+fn finished_event_refreshes_home() {
+    if !isolated_api_test("finished_event_refreshes_home") {
+        finished_refresh_view("home");
+    }
+}
+#[test]
+fn finished_event_refreshes_meeting_catalog_without_redirecting_the_reader() {
+    if !isolated_api_test("finished_event_refreshes_meeting_catalog_without_redirecting_the_reader")
+    {
+        finished_refresh_view("meeting");
+    }
+}
+#[test]
+fn finished_event_refreshes_memory_catalog() {
+    if !isolated_api_test("finished_event_refreshes_memory_catalog") {
+        finished_refresh_view("memory");
+    }
+}
+#[test]
+fn finished_event_refreshes_sidebar_catalog() {
+    if !isolated_api_test("finished_event_refreshes_sidebar_catalog") {
+        finished_refresh_view("sidebar");
+    }
+}
+#[test]
+fn page_notice_does_not_follow_navigation_to_memory() {
+    if isolated_api_test("page_notice_does_not_follow_navigation_to_memory") {
+        return;
+    }
+    let (_api, mut state, _) = Fixture::start();
+    state.config.features.memory = true;
+    state.notice = Some("The transcript has no line for that time.".into());
+    state.open_memory();
+    assert!(state.on_memory());
+    assert!(state.notice.is_none());
+}
+
+#[test]
+fn preview_title_replaces_the_default_heading_without_publishing_a_final_summary() {
+    if isolated_api_test(
+        "preview_title_replaces_the_default_heading_without_publishing_a_final_summary",
+    ) {
+        return;
+    }
+    let (_api, _state, _) = Fixture::start();
+    let folder = sidenote::core::meetings_dir().join("200-2");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("manifest.json"),
+        r#"{"status":"complete","title":"Meeting at 15:14","title_source":"default"}"#,
+    )
+    .unwrap();
+    let drafts = sidenote::core::state_dir().join("local/draft-summaries");
+    std::fs::create_dir_all(&drafts).unwrap();
+    std::fs::write(
+        drafts.join("200-2.json"),
+        r#"{"title":"Workshop launch plan","context":["Synthetic preview"]}"#,
+    )
+    .unwrap();
+    let meeting = sidenote::core::Meeting::load_pending(&folder).unwrap();
+    assert_eq!(meeting.title, "Workshop launch plan");
+    assert!(meeting.summary.title.is_empty());
+    assert!(!meeting.has_summary());
+    std::fs::write(
+        folder.join("english-summary.json"),
+        r#"{"title":"Final workshop decisions"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        sidenote::core::Meeting::load(&folder).unwrap().title,
+        "Final workshop decisions"
+    );
 }

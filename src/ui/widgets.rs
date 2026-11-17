@@ -347,18 +347,10 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
 
 /// Recording positions keep a minutes field even before the first minute.
 pub fn recording_time(at: &str) -> String {
-    let shown = if at.matches(':').count() == 2 {
-        core::short(at)
-    } else {
-        at
-    };
-    if shown.len() == 2 && !shown.contains(':') {
-        format!("0:{shown}")
-    } else if let Some(seconds) = shown.strip_prefix("00:") {
-        format!("0:{seconds}")
-    } else {
-        shown.to_string()
-    }
+    core::seconds(at).map_or_else(
+        || at.to_string(),
+        |seconds| format!("{}:{:02}", seconds / 60, seconds % 60),
+    )
 }
 
 /// The timestamp that opens the transcript at its line.
@@ -699,9 +691,10 @@ mod tests {
         for (source, shown) in [
             ("00:00:24", "0:24"),
             ("00:24", "0:24"),
-            ("00:04:10", "04:10"),
-            ("04:10", "04:10"),
-            ("01:04:10", "01:04:10"),
+            ("00:04:10", "4:10"),
+            ("04:10", "4:10"),
+            ("01:04:10", "64:10"),
+            ("01:02.520", "1:02"),
         ] {
             assert_eq!(recording_time(source), shown);
         }

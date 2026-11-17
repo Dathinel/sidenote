@@ -199,6 +199,9 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     if page == Page::Meetings && tab == 3 {
         engine::enter(s);
     }
+    if page == Page::Meetings && !super::super::isolated() {
+        s.hex_check_settings();
+    }
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
     s.hex.shell.jump_active = 0;
@@ -245,6 +248,17 @@ fn back(s: &mut State) {
 
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
+    if s.on_hex()
+        && !super::super::isolated()
+        && !s.hex.settings_status_pending
+        && (s.hex.status.is_none() || s.hex.connection.expired())
+        && s.hex
+            .settings_status_at
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(10))
+    {
+        s.hex_check_settings();
+        changed = true;
+    }
     if s.on_hex() && s.hex.section == Section::Features && s.hex.shell.kb_base.is_none() {
         load_kb(s);
         changed = true;
@@ -2530,7 +2544,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(setup) = setup {
         doc = doc.child(setup);
     }
-    if let Some(note_) = s
+    if s.hex.settings_status_pending {
+        doc = doc.child(
+            roles::SMALL
+                .wrap("Checking Hex...", p.soft)
+                .role("status")
+                .key("settings-hex-check"),
+        );
+    } else if let Some(note_) = s
         .hex
         .page_note()
         .filter(|_| matches!(page, Page::Hex | Page::Appearance | Page::Meetings))
@@ -2538,7 +2559,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             !has_setup || !matches!(s.hex.status, None | Some(Err(HexError::HexNotRunning)))
         })
     {
-        doc = doc.child(note(note_, p));
+        doc = doc.child(note(
+            if note_ == super::connection::UNKNOWN {
+                "Could not confirm Hex recording status. Checking again automatically."
+            } else {
+                note_
+            },
+            p,
+        ));
     }
     if let Some(problem) = s.hex.settings_note {
         doc = doc.child(note(problem, p));
@@ -2674,6 +2702,17 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     false
 }
 
+pub fn scene_status(s: &mut State, pending: bool) {
+    scene(s, "settings-engine");
+    s.hex.shell.engine.unused_open = false;
+    s.hex_status_at(
+        Err(HexError::Timeout),
+        Instant::now() - Duration::from_secs(20),
+    );
+    s.hex.settings_status_pending = pending;
+    s.hex.settings_status_at = Some(Instant::now());
+}
+
 /// Synthetic scenes run only with the render harness's isolated state.
 pub fn scene(s: &mut State, name: &str) {
     assert!(super::super::isolated());
@@ -2757,6 +2796,9 @@ pub fn scene(s: &mut State, name: &str) {
         s.config.notes = s.ai_notes.settings.clone();
     }
     navigate(s, page, tab);
+    if name.starts_with("settings-engine") {
+        s.hex.shell.engine.unused_open = true;
+    }
     if name == "settings-engine-invalid" {
         engine::scene_invalid(s);
     }

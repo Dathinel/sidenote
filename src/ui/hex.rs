@@ -83,6 +83,7 @@ pub enum Msg {
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
     RecheckStart(Result<EngineState, HexError>),
+    SettingsStatus(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
         settings: Result<Vec<Setting>, HexError>,
@@ -138,6 +139,8 @@ pub struct HexState {
     pub status: Option<Result<EngineState, HexError>>,
     connection: connection::Connection,
     was_running: bool,
+    settings_status_pending: bool,
+    settings_status_at: Option<Instant>,
     caps: Option<Capabilities>,
     caps_version: Option<String>,
     caps_loading: bool,
@@ -193,6 +196,8 @@ impl Default for HexState {
             status: None,
             connection: connection::Connection::default(),
             was_running: false,
+            settings_status_pending: false,
+            settings_status_at: None,
             caps: None,
             caps_version: None,
             caps_loading: false,
@@ -401,6 +406,9 @@ impl State {
         self.hex.data_dirty = true;
         self.hex.select_open = None;
         timing.ready();
+        if !super::isolated() {
+            self.hex_check_settings();
+        }
         self.hex_refresh_if_due();
         self.refresh_ai_notes();
     }
@@ -513,6 +521,11 @@ impl State {
                 self.hex.install = state;
             }
             Msg::Status(r) => self.hex_status(r),
+            Msg::SettingsStatus(result) => {
+                self.hex.settings_status_pending = false;
+                self.hex.settings_status_at = Some(Instant::now());
+                self.hex_status(result);
+            }
             Msg::RecheckStart(result) => {
                 self.hex.record_busy = false;
                 match result {
@@ -655,6 +668,7 @@ impl State {
         }
         let recording = r.as_ref().ok().map(|state| state.recording.is_some());
         if self.ask_settings.recording && recording == Some(false) {
+            self.request_refresh();
             self.ask_settings.last_end_ms = Some(chrono::Local::now().timestamp_millis());
             self.ask_settings.last_live = self.ask_settings.recording_source.take();
         }
@@ -879,6 +893,14 @@ impl State {
                 },
             )
         });
+    }
+
+    pub(super) fn hex_check_settings(&mut self) {
+        if self.hex.settings_status_pending {
+            return;
+        }
+        self.hex.settings_status_pending = true;
+        self.hex_spawn(|engine| Msg::SettingsStatus(engine.status_for_command()));
     }
 
     pub fn hex_status_unknown(&self) -> bool {

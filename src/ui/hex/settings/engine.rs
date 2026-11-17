@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const NOT_USED: &str = "Not used by the built-in engine yet";
+const NOT_USED: &str = "These saved choices do not affect the built-in engine yet.";
 const NOT_SAVED: &str = "Nothing was saved. Fix the values marked not valid.";
 const SAVE_FAILED: &str = "Could not save. Reload Settings and try again.";
 
@@ -334,28 +334,36 @@ fn apply(base: &Config, edits: &[(Field, &str)]) -> Result<Option<Config>, Vec<F
 /// passes the text checks, but nothing here has run it, so it says the name is not checked.
 fn status_text(key: &str, status: &FieldStatus) -> (String, bool) {
     let source = match status.source {
-        Source::Default => "Default value",
+        Source::Default => "Using the default",
         Source::Saved => "Saved on this PC",
         Source::LegacyEnvironment => "Imported from your scripts",
         Source::ExistingRoute => "Set in your language settings",
     };
-    let validity = match status.validation {
-        Validation::Empty => "not set",
-        Validation::Valid if key == "notes.model" => "name not checked on this PC yet",
-        Validation::Valid => "valid",
-        Validation::Invalid => "not valid",
-        Validation::Unavailable => "not available on this PC",
-        Validation::ModelQualificationRequired => "name not checked on this PC yet",
+    let hint = match status.validation {
+        Validation::Empty => "",
+        Validation::Valid if key == "notes.model" => "Model has not been tested on this PC",
+        Validation::Valid => "",
+        Validation::Invalid => "Check this setting",
+        Validation::Unavailable => "Not available on this PC",
+        Validation::ModelQualificationRequired => "Model has not been tested on this PC",
     };
     let warn = matches!(
         status.validation,
         Validation::Invalid | Validation::Unavailable
     );
-    (format!("{source} \u{b7} {validity}"), warn)
+    (
+        if hint.is_empty() {
+            source.into()
+        } else {
+            format!("{source} \u{b7} {hint}")
+        },
+        warn,
+    )
 }
 
 #[derive(Default)]
 pub(super) struct Engine {
+    pub(super) unused_open: bool,
     base: Option<Config>,
     drafts: Vec<TextEdit>,
     bad: Vec<Field>,
@@ -512,14 +520,12 @@ fn copy_column(
         .gap(4.0)
         .child(roles::NAME.wrap(text.0, p.ink))
         .child(roles::SMALL.wrap(text.1, p.soft));
-    if let Some(status) = statuses.get(status_key) {
+    if let Some(status) = statuses.get(status_key)
+        && in_use(status_key)
+    {
         let (line, warn) = status_text(status_key, status);
         let color = if warn { p.warn } else { p.soft };
         copy = copy.child(roles::META.wrap(line, color).key(format!("{key}-status")));
-    }
-    if !in_use(status_key) {
-        let usage = roles::META.medium().wrap(NOT_USED, p.soft);
-        copy = copy.child(usage.key(format!("{key}-usage")));
     }
     copy
 }
@@ -917,33 +923,54 @@ fn notes_extras(s: &State, p: Palette, st: &BTreeMap<String, FieldStatus>) -> Ve
 
 pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let statuses = s.config.engine_field_status();
-    let intro = "Choices for how Sidenote turns a meeting into notes. They are saved on this PC. Each one says whether the built-in engine uses it yet.";
+    let open = s.hex.shell.engine.unused_open;
+    let mut deferred = col()
+        .key("engine-unused-section")
+        .w_full()
+        .mt(18.0)
+        .child(
+            crate::ui::cards::fold_control("Not used yet", "engine-unused", open, p).on_press(
+                |s: &mut State| s.hex.shell.engine.unused_open = !s.hex.shell.engine.unused_open,
+            ),
+        )
+        .child(roles::SMALL.wrap(NOT_USED, p.soft));
+    if open {
+        deferred = deferred
+            .child(group(
+                s,
+                k,
+                p,
+                "Transcription",
+                "engine-transcription",
+                &Field::TRANSCRIPTION,
+                &statuses,
+            ))
+            .child(group(
+                s,
+                k,
+                p,
+                "Step models",
+                "engine-step-models",
+                &Field::STEP_MODELS,
+                &statuses,
+            ))
+            .child(prompts_card(s, k, p, &statuses))
+            .child(steps_card(s, k, p, &statuses))
+            .child(import_row(s, p));
+    }
     col()
         .w_full()
         .key("meeting-engine")
-        .child(roles::SMALL.wrap(intro, p.soft).mt(12.0))
-        .child(group(
-            s,
-            k,
-            p,
-            "Transcription",
-            "engine-transcription",
-            &Field::TRANSCRIPTION,
-            &statuses,
-        ))
+        .child(
+            roles::SMALL
+                .wrap(
+                    "Choose the agent and model that write your meeting notes.",
+                    p.soft,
+                )
+                .mt(12.0),
+        )
         .child(notes(s, k, p, layer, &statuses))
-        .child(group(
-            s,
-            k,
-            p,
-            "Step models",
-            "engine-step-models",
-            &Field::STEP_MODELS,
-            &statuses,
-        ))
-        .child(prompts_card(s, k, p, &statuses))
-        .child(steps_card(s, k, p, &statuses))
-        .child(import_row(s, p))
+        .child(deferred)
 }
 
 /// Render fixtures, used only by the isolated scenes: a saved Telugu model and a Hindi model
@@ -1317,7 +1344,7 @@ mod tests {
                     invalid_import: false,
                 };
                 let (line, warn) = status_text("worker_threads", &status);
-                assert!(line.contains(" \u{b7} "));
+                assert!(!line.contains("Default value") && !line.contains("valid"));
                 let attention = matches!(validation, Validation::Invalid | Validation::Unavailable);
                 assert_eq!(warn, attention);
             }
@@ -1335,10 +1362,10 @@ mod tests {
         let (model, _) = status_text("notes.model", &status);
         assert_eq!(
             model,
-            "Saved on this PC \u{b7} name not checked on this PC yet"
+            "Saved on this PC \u{b7} Model has not been tested on this PC"
         );
         let (threads, _) = status_text("worker_threads", &status);
-        assert!(threads.ends_with("valid") && !threads.contains("not checked"));
+        assert_eq!(threads, "Saved on this PC");
     }
     #[test]
     fn a_pending_or_failed_summary_save_is_shown_on_this_tab() {

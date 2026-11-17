@@ -43,8 +43,11 @@ def render(job):
  assert not tree['warnings'],(base.name,tree['warnings'])
  if scene.startswith('settings-engine'):
   keys={n.get('key') for n in tree['elements']}
-  need={'engine-transcription','engine-worker-threads-status','engine-worker-threads-usage','engine-worker-threads-input','engine-transcription-save','engine-model-te-status','engine-model-te-usage','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-translation-model-usage','engine-title-model-status','engine-step-tasks-switch','engine-step-comparison-switch','engine-step-comparison-usage','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-status','engine-prompt-translation-reset'}
+  need={'engine-unused','engine-worker-threads-input','engine-transcription-save','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-step-tasks-switch','engine-step-comparison-switch','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-reset'}
   assert 'engine-model-hi-input' not in keys,'A routed language must be read only'
+  text=[n.get('text','') for n in tree['elements']]
+  assert text.count('These saved choices do not affect the built-in engine yet.')==1
+  assert not any('Default value' in t or ' ? valid' in t or ' ? not set' in t for t in text)
   paths={n.get('key'):n.get('path','') for n in tree['elements']}
   rects={n.get('key'):n.get('rect') for n in tree['elements']}
   end=rects['engine-import'];assert end[1]+end[3]<=height,(base.name,'The Engine tab runs past the render',end,height)

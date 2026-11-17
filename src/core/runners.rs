@@ -69,7 +69,11 @@ pub(super) fn list_runners_at(root: &Path) -> Result<Vec<Runner>, String> {
         }
         Err(_) => return Err("Could not read runners.json".into()),
     };
-    for name in ["Daily check (Opus)", "Memory migration (answer only)"] {
+    for name in [
+        "Codex Sol",
+        "Daily check (Opus)",
+        "Memory migration (answer only)",
+    ] {
         if !runners.iter().any(|r| r.name == name) {
             let daily =
                 serde_json::from_str::<Vec<Runner>>(include_str!("../../default-runners.json"))

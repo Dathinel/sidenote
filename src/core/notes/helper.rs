@@ -188,20 +188,27 @@ impl Run for Cli {
             return Err(Failure::Missing);
         }
         let scratch = Scratch::new().map_err(|_| Failure::Backend { exit: None })?;
-        runner_process::run_classified(&runner(helper, model), prompt, &scratch.0, timeout, |_| {})
-            .map_err(|error| {
-                if error.category == "HELPER_TIMEOUT" {
-                    Failure::TimedOut
-                } else if error.category == "HELPER_UNAVAILABLE_LINUX" {
-                    Failure::LinuxUnavailable
-                } else if error.category == "HELPER_LIMIT" {
-                    Failure::Limit { exit: error.exit }
-                } else if error.category == "HELPER_AUTH" {
-                    Failure::Auth { exit: error.exit }
-                } else {
-                    Failure::Backend { exit: error.exit }
-                }
-            })
+        runner_process::run_classified(
+            &runner(helper, model),
+            prompt,
+            &scratch.0,
+            timeout,
+            false,
+            |_| {},
+        )
+        .map_err(|error| {
+            if error.category == "HELPER_TIMEOUT" {
+                Failure::TimedOut
+            } else if error.category == "HELPER_UNAVAILABLE_LINUX" {
+                Failure::LinuxUnavailable
+            } else if error.category == "HELPER_LIMIT" {
+                Failure::Limit { exit: error.exit }
+            } else if error.category == "HELPER_AUTH" {
+                Failure::Auth { exit: error.exit }
+            } else {
+                Failure::Backend { exit: error.exit }
+            }
+        })
     }
 }
 

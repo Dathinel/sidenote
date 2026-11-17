@@ -1,7 +1,7 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
 use crate::ui::{cards, icons, tasks};
-use rune_kit::{Menu, MenuItem, Placement, SegmentedControl};
+use rune_kit::{Menu, MenuItem, SegmentedControl};
 use sidenote::core::{self, people::Side};
 
 pub fn return_key(origin: &str) -> String {
@@ -12,63 +12,6 @@ pub fn return_key(origin: &str) -> String {
     } else {
         origin.into()
     }
-}
-
-pub fn sheet_bottom(s: &State) -> f32 {
-    s.meeting_ui.dock_h.get() + 10.0
-}
-
-pub fn sheet_height(s: &State) -> f32 {
-    let available = (s.viewport_h.get() - sheet_bottom(s) - 8.0).max(180.0);
-    s.meeting_ui
-        .sheet_h
-        .unwrap_or(s.meeting_ui.window_h.get() * 0.55)
-        .clamp(180.0, available)
-}
-
-fn resize_handle(s: &State, p: Palette) -> El {
-    col()
-        .key("transcript-resize")
-        .w_full()
-        .h(18.0)
-        .shrink()
-        .center()
-        .cursor(rune::Cursor::ResizeRow)
-        .role("separator")
-        .focusable(true)
-        .label(format!(
-            "Resize transcript, {} pixels",
-            sheet_height(s).round()
-        ))
-        .help("Drag up or down, or use the arrow keys to resize the transcript.")
-        .hover(p.chip)
-        .child(el().w(36.0).h(4.0).radius(2.0).fill(p.faint.alpha(0.5)))
-        .on_drag(|s: &mut State, d, _| match d.phase {
-            rune::Phase::Down => {
-                d.data = if s.meeting_ui.sheet_h.is_some() {
-                    sheet_height(s)
-                } else {
-                    -sheet_height(s)
-                }
-            }
-            rune::Phase::Move => s.meeting_ui.sheet_h = Some(d.data.abs() - d.dy),
-            rune::Phase::Up => {
-                if d.cancelled() {
-                    s.meeting_ui.sheet_h = (d.data > 0.0).then_some(d.data);
-                } else {
-                    s.meeting_ui.sheet_h = Some(sheet_height(s));
-                }
-            }
-        })
-        .on_key(|s: &mut State, e, _| {
-            let change = match e.key {
-                Key::Up => 24.0,
-                Key::Down => -24.0,
-                _ => return false,
-            };
-            s.meeting_ui.sheet_h = Some(sheet_height(s) + change);
-            true
-        })
 }
 
 impl State {
@@ -104,7 +47,7 @@ impl State {
         match prefs.save(&self.store.root) {
             Ok(()) => {
                 self.meeting_ui.templates = prefs.meeting_summary_templates;
-                self.meeting_ui.template_open = false;
+                self.more_menu = None;
             }
             Err(_) => self.notice = Some("Could not save the summary template. Try again.".into()),
         }
@@ -114,6 +57,49 @@ impl State {
 pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
     let id = m.id.clone();
     let mut out = menu
+        .separator()
+        .item(
+            MenuItem::new("Ask model and effort").on_select(|s: &mut State| {
+                s.more_menu = None;
+                s.open_hex();
+                s.hex.section = crate::ui::hex::Section::Connect;
+                crate::ui::scene_scroll(s, "ask-agent-row");
+            }),
+        )
+        .item(MenuItem::new("Project").on_select({
+            let id = m.id.clone();
+            move |s: &mut State| {
+                s.more_menu = None;
+                s.project_menu = Some(id.clone());
+            }
+        }))
+        .item(MenuItem::new("Memory from this meeting").on_select({
+            let id = m.id.clone();
+            move |s: &mut State| {
+                s.more_menu = None;
+                s.open_memory();
+                s.memory.settle_all = true;
+                s.memory.settle_meeting = Some(id.clone());
+            }
+        }))
+        .group_label("View")
+        .item(
+            MenuItem::new("Summary")
+                .checked(main_tab(s, m) == Tab::Summary)
+                .on_select(|s: &mut State| {
+                    s.set_meeting_tab(Tab::Summary);
+                    s.more_menu = None;
+                }),
+        )
+        .item(
+            MenuItem::new("Your notes")
+                .disabled(m.notes.is_empty())
+                .checked(main_tab(s, m) == Tab::Notes)
+                .on_select(|s: &mut State| {
+                    s.set_meeting_tab(Tab::Notes);
+                    s.more_menu = None;
+                }),
+        )
         .separator()
         .group_label("Layout")
         .item(
@@ -127,14 +113,28 @@ pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
                 .on_select(|s: &mut State| s.set_meeting_layout(true)),
         )
         .separator()
-        .item(
-            MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
-                s.more_menu = None;
-                s.open_hex();
-                s.hex.section = crate::ui::hex::Section::PromptLibrary;
-                crate::ui::scene_scroll(s, "agent-instructions");
-            }),
+        .group_label("Next summary uses");
+    let picked = picked_template(s, m);
+    for (title, choice, enabled) in [
+        ("Standard", "standard", true),
+        ("Your instructions", "custom", s.meeting_ui.custom),
+    ] {
+        let id = id.clone();
+        out = out.item(
+            MenuItem::new(title)
+                .checked(choice == picked)
+                .disabled(!enabled)
+                .on_select(move |s: &mut State| s.choose_summary_template(&id, choice)),
         );
+    }
+    out = out.item(
+        MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
+            s.more_menu = None;
+            s.open_hex();
+            s.hex.section = crate::ui::hex::Section::PromptLibrary;
+            crate::ui::scene_scroll(s, "agent-instructions");
+        }),
+    );
     out=out.item(MenuItem::new("Write an email").on_select(|s:&mut State| {
         s.more_menu=None;s.question=TextEdit::new("Draft a short email about this meeting. Use only what was discussed and keep it ready to copy.");
         s.question.focused = true;
@@ -148,7 +148,8 @@ pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
     out
 }
 
-fn template(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
+/// The instructions the next summary of this meeting will use: "standard" or "custom".
+fn picked_template(s: &State, m: &Meeting) -> &'static str {
     let custom = s.meeting_ui.custom;
     let generated = serde_json::from_str::<serde_json::Value>(&m.summary_raw)
         .ok()
@@ -169,121 +170,70 @@ fn template(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) ->
             None if custom => "custom",
             None => "standard",
         });
-    let picked = if picked == "custom" && !custom {
+    if picked == "custom" && custom {
+        "custom"
+    } else {
         "standard"
-    } else {
-        picked
-    };
-    let shown = if picked == "custom" {
-        "Your instructions"
-    } else {
-        "Standard"
-    };
-    let trigger = tasks::value_button(
-        row()
-            .gap(5.0)
-            .items_center()
-            .child(roles::META.line(format!("Summary: {shown}"), p.soft))
-            .child(icons::draw(&icons::CHEVRON_DOWN, 16.0, p.soft)),
-        "meeting-template",
-        format!("Summary: {shown}"),
-        p,
-    )
-    .help("Choose the instructions for the next summary. The current meeting summary is kept.")
-    .on_press(|s: &mut State| s.meeting_ui.template_open = !s.meeting_ui.template_open);
-    let mut menu = Menu::new("meeting-template-menu")
-        .trigger(trigger)
-        .open(s.meeting_ui.template_open)
-        .placement(Placement::BottomStart)
-        .min_width(240.0);
-    if s.meeting_ui.template_open {
-        menu = menu.on_close(|s: &mut State| s.meeting_ui.template_open = false);
-        for (title, choice, enabled) in [
-            ("Standard", "standard", true),
-            ("Your instructions", "custom", custom),
-        ] {
-            let id = m.id.clone();
-            menu = menu.item(
-                MenuItem::new(title)
-                    .checked(choice == picked)
-                    .disabled(!enabled)
-                    .on_select(move |s: &mut State| s.choose_summary_template(&id, choice)),
-            );
-        }
-        menu = menu
-            .separator()
-            .item(
-                MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
-                    s.meeting_ui.template_open = false;
-                    s.open_hex();
-                    s.hex.section = crate::ui::hex::Section::PromptLibrary;
-                    crate::ui::scene_scroll(s, "agent-instructions");
-                }),
-            );
     }
-    menu.build(k, layer)
+}
+
+/// "15 Nov · 2 min · 3 people". A part that is not known is left out, so nobody sees
+/// "0 people" or "Length not recorded".
+fn facts_line(date: Option<String>, minutes: Option<u64>, people: usize) -> String {
+    [
+        date,
+        minutes.map(|n| format!("{n} min")),
+        match people {
+            0 => None,
+            1 => Some("1 person".into()),
+            n => Some(format!("{n} people")),
+        },
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" \u{b7} ")
 }
 
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
-    let date = m
-        .started
-        .map(|d| d.format("%-d %b").to_string())
-        .unwrap_or_else(|| "Date not recorded".into());
-    let length = m
-        .minutes
-        .map(|n| format!("{n} min"))
-        .unwrap_or_else(|| "Length not recorded".into());
-    let facts = format!(
-        "{date} \u{b7} {length} \u{b7} {} {}",
+    let facts = facts_line(
+        m.started.map(|d| d.format("%-d %b").to_string()),
+        m.minutes,
         m.summary.people.len(),
-        if m.summary.people.len() == 1 {
-            "person"
-        } else {
-            "people"
-        }
     );
-    let switch = SegmentedControl::new(
-        &["Summary", "Your notes"],
-        Some(usize::from(s.meeting_tab == Tab::Notes)),
-    )
-    .label("Meeting view")
-    .width(Some(188.0))
-    .on_pick::<State>(|s, i, tx| {
-        s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
-        tx.blur();
-    })
-    .build(k)
-    .key("meeting-view");
     let mut controls = row()
         .key("meeting-controls")
         .w_full()
         .flex_wrap()
         .gap(8.0)
         .items_center()
-        .child(switch)
         .child(
-            chip(facts, p)
+            SegmentedControl::new(
+                &["Notes", "Your notes"],
+                Some(usize::from(s.meeting_tab == Tab::Notes)),
+            )
+            .label("Meeting view")
+            .width(Some(188.0))
+            .on_pick::<State>(|s, i, tx| {
+                s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
+                tx.blur();
+            })
+            .build(k)
+            .key("meeting-view"),
+        );
+    if !facts.is_empty() {
+        controls = controls.child(
+            roles::META
+                .line(facts, p.soft)
                 .key("meeting-facts")
                 .help(m.summary.people.join(", ")),
         );
+    }
     if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
         controls = controls.child(project);
     }
-    controls = controls
-        .child(template(s, k, m, p, layer))
-        .child(more::menu(s, k, m, "meeting", p, layer));
-    let ours: Vec<_> = m
-        .summary
-        .people
-        .iter()
-        .map(|n| s.tasks.teams.owner_name(n))
-        .filter(|name| {
-            s.people
-                .affiliations
-                .side(name, &s.tasks.teams, &s.people.prefs)
-                == Some(Side::OurTeam)
-        })
-        .collect();
+    controls = controls.child(el().grow(1.0));
+    controls = controls.child(more::menu(s, k, m, "meeting", p, layer));
     col()
         .key("meeting-header")
         .w_full()
@@ -298,23 +248,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
-        .child(
-            roles::META
-                .line(
-                    format!(
-                        "Our side: {}",
-                        if ours.is_empty() {
-                            "not set".into()
-                        } else {
-                            ours.join(", ")
-                        }
-                    ),
-                    p.soft,
-                )
-                .key("meeting-our-side"),
-        )
         .children(project::form(s, k, &m.id, p))
-        .children(crate::ui::notes_status::banner(s, m, p))
 }
 
 fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
@@ -335,37 +269,21 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .child(body.grow(1.0).min_w(0.0));
     if let Some(at) = pt.at.first() {
         let time = at.clone();
-        let back = origin.clone();
-        let meta = match pt.who.as_deref().filter(|who| !who.is_empty()) {
-            Some(who) => format!("{who} \u{b7} {}", crate::ui::widgets::recording_time(at)),
-            None => crate::ui::widgets::recording_time(at),
-        };
-        let source = roles::META
-            .line(&meta, p.soft.alpha(0.0))
-            .max_w(140.0)
-            .key(source_key)
-            .group_color(p.soft)
-            .link(
-                rune::Link::new(0..meta.len(), origin.clone())
-                    .label(format!("Open source at {at}"))
-                    .help("Open this line in the transcript")
-                    .focused(rune::LinkPaint::new().color(p.soft).bg(p.chip)),
-            )
-            .on_link(move |s: &mut State, _, tx| s.jump(&time, back.clone(), tx));
-        let time = at.clone();
+        let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
         line = line.child(
-            row().gap(4.0).items_center().child(source).child(
-                pressable(icons::draw(&icons::SEARCH, 16.0, p.soft))
-                    .key(format!("meeting-source-icon-{origin}"))
-                    .label(format!("Open source at {at}"))
-                    .focusable(false)
-                    .group_opacity(0.0, 1.0)
-                    .on_press_tx(move |s: &mut State, tx| {
-                        s.jump(&time, back.clone(), tx);
-                        tx.blur();
-                    }),
-            ),
+            pressable(roles::META.line(&shown, p.accent))
+                .key(source_key)
+                .label(format!("Open source at {shown}"))
+                .help("Open this line in the transcript")
+                .px(6.0)
+                .py(2.0)
+                .radius(5.0)
+                .fill(p.chip)
+                .hover(p.hit)
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.jump(&time, back.clone(), tx);
+                }),
         );
     }
     if s.back.as_deref() == Some(&origin) {
@@ -378,7 +296,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
     let mut body = col().key("summary-top").w_full().gap(4.0);
     if s.meeting_tab == Tab::Notes {
         return body.child(if m.notes.is_empty() {
-            roles::READ.wrap("Your notes are empty. Add a note.", p.soft)
+            roles::READ.wrap("No personal notes for this meeting.", p.soft)
         } else {
             crate::ui::live::your_notes(&m.notes, p).key("sec-your-notes")
         });
@@ -394,10 +312,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         );
     }
     if !m.has_summary() && draft.is_none() {
-        return body.child(roles::READ.wrap(
-            "The meeting summary will appear here when it is ready.",
-            p.soft,
-        ));
+        return body.children(crate::ui::notes_status::banner(s, m, p));
     }
     if !summary.context.is_empty() {
         body = body.child(
@@ -428,7 +343,13 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             body = body.child(roles::READ.wrap(line, p.soft).key(format!("verify-{i}")));
         }
     }
-    body.children(crate::ui::notes_status::provenance(m, p))
+    body.children(
+        draft
+            .as_ref()
+            .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
+    )
+    .children(crate::ui::notes_status::banner(s, m, p))
+    .children(crate::ui::notes_status::provenance(m, p))
 }
 
 fn rail(s: &State, m: &Meeting, p: Palette) -> El {
@@ -581,6 +502,54 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
     rail.child(crate::ui::memory::settled::meeting_footer(s, m, p).mt(8.0))
 }
 
+pub fn transcript_height(s: &State) -> f32 {
+    (s.meeting_ui.window_h.get() * 0.45).clamp(140.0, 380.0)
+}
+
+/// Saved-meeting dock control. The pause lane can fill `meeting-recording-slot`.
+pub(super) fn recording_control(s: &State, p: Palette) -> El {
+    let shown = if s.transcript_open {
+        "Hide transcript"
+    } else {
+        "Show transcript"
+    };
+    let toggle = pressable(
+        row()
+            .gap(4.0)
+            .items_center()
+            .child(icons::draw(&icons::AUDIO_LINES, 18.0, p.soft))
+            .child(icons::draw(
+                if s.transcript_open {
+                    &icons::CHEVRON_DOWN
+                } else {
+                    &icons::CHEVRON_UP
+                },
+                12.0,
+                p.soft,
+            )),
+    )
+    .key("meeting-transcript")
+    .label(shown)
+    .help(shown)
+    .px(12.0)
+    .h(38.0)
+    .radius(20.0)
+    .hover(p.chip)
+    .on_press_tx(|s: &mut State, tx| {
+        s.toggle_transcript();
+        tx.blur();
+    });
+    row()
+        .key("meeting-recording-control")
+        .items_center()
+        .padding(3.0)
+        .radius(24.0)
+        .fill(p.card)
+        .border(1.0, p.line)
+        .child(toggle)
+        .child(el().key("meeting-recording-slot"))
+}
+
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let Some(m) = s.current() else {
         return col();
@@ -610,61 +579,41 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .pb(s.overlay_h.get() + 32.0),
             "meeting-scroll",
         ));
-    if s.transcript_open {
-        main = main.child(
-            el().key("meeting-summary-dim")
-                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                .fill(rune::Color::BLACK.alpha(0.1))
-                .label("Close transcript")
-                .on_press(|s: &mut State| s.close_transcript_sheet()),
-        );
-    }
-    let transcript = tasks::value_button(
-        icons::draw(&icons::AUDIO_LINES, 16.0, p.soft),
-        "meeting-transcript",
-        "Transcript".into(),
-        p,
-    )
-    .w(28.0)
-    .px(6.0)
-    .help("Transcript")
-    .shrink()
-    .on_press_tx(|s: &mut State, tx| {
-        s.toggle_transcript();
-        tx.blur();
+    let control = recording_control(s, p);
+    let panel = s.transcript_open.then(|| {
+        col()
+            .key("meeting-transcript-view")
+            .focus_return("meeting-transcript")
+            .w_full()
+            .h(transcript_height(s))
+            .min_h(transcript_height(s))
+            .max_h(transcript_height(s))
+            .child(transcript_panel(s, k, m, true, p))
     });
-    let transcript = if narrow {
-        transcript
+    main = main.child(if let Some(panel) = panel {
+        col()
+            .key("meeting-transcript-dock")
+            .w_full()
+            .items_center()
+            .shrink()
+            .px(16.0)
+            .pb(12.0)
+            .child(
+                col()
+                    .key("meeting-transcript-surface")
+                    .max_w(COLUMN)
+                    .w_full()
+                    .radius(14.0)
+                    .clip_rounded(14.0)
+                    .fill(p.card)
+                    .border(1.0, p.line)
+                    .child(panel)
+                    .child(hairline(p))
+                    .child(control.self_start()),
+            )
     } else {
-        transcript.self_center()
-    };
-    main = main.child(ask::overlay_with(
-        s,
-        k,
-        p,
-        narrow,
-        layer,
-        Some(transcript),
-        None,
-    ));
-    if s.transcript_open {
-        main = main.child(
-            col()
-                .key("transcript-sheet")
-                .focus_return("meeting-transcript")
-                .pin(Some(16.0), None, Some(16.0), Some(sheet_bottom(s)))
-                .h(sheet_height(s))
-                .min_h(0.0)
-                .radius(10.0)
-                .clip_rounded(10.0)
-                .padding(1.0)
-                .border(1.0, p.faint.alpha(0.4))
-                .fill(p.card)
-                .shadow(8.0, 28.0, p.shadow)
-                .child(resize_handle(s, p))
-                .child(transcript_panel(s, k, m, true, p).grow(1.0)),
-        );
-    }
+        ask::overlay_with(s, k, p, narrow, layer, Some(control), None)
+    });
     let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0).child(main);
     if wide {
         columns = columns.child(
@@ -686,4 +635,53 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         pane = pane.child(notice_bar(note, p));
     }
     pane.child(header(s, k, m, p, layer)).child(columns)
+}
+
+/// Publication-arrival scene, confined to the renderer's invented meeting directory.
+pub fn scene_publication(s: &mut State, home: bool) {
+    assert!(crate::ui::isolated());
+    crate::ui::scene_screens(s);
+    let current = s.current().unwrap().clone();
+    assert!(current.folder.starts_with(&s.store.root));
+    let folder = if home {
+        current.folder.parent().unwrap().join("2000000000000-2")
+    } else {
+        current.folder
+    };
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("manifest.json"), serde_json::json!({"title":"Meeting at 15:14","title_source":"default",
+        "status":"complete","created_at_ms":chrono::Utc::now().timestamp_millis()-120_000,"duration_ms":60_000}).to_string()).unwrap();
+    std::fs::write(
+        folder.join("english-summary.json"),
+        serde_json::json!({"title":"Latest workshop decisions",
+        "context":["A synthetic meeting published while this window stays open."]})
+        .to_string(),
+    )
+    .unwrap();
+    let options = s.refresh_options();
+    s.apply_event(crate::ui::Event::Refreshed(crate::ui::refresh::Result {
+        generation: core::mutation_generation(),
+        options,
+        data: Some(Box::new(crate::ui::refresh::Data::read(options))),
+    }));
+    if home {
+        s.go_home();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::facts_line;
+
+    #[test]
+    fn the_facts_line_leaves_out_what_is_not_known() {
+        let date = || Some("17 Nov".to_string());
+        assert_eq!(facts_line(date(), Some(2), 0), "17 Nov \u{b7} 2 min");
+        assert_eq!(
+            facts_line(date(), Some(2), 1),
+            "17 Nov \u{b7} 2 min \u{b7} 1 person"
+        );
+        assert_eq!(facts_line(date(), None, 3), "17 Nov \u{b7} 3 people");
+        assert_eq!(facts_line(None, None, 0), "");
+    }
 }
