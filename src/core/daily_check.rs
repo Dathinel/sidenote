@@ -817,25 +817,89 @@ fn validate_content(
     }
     Ok(())
 }
-fn daily_runner(name: &str, _kb: &Path, _memory: &Path) -> Result<Runner, String> {
+fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> {
     let mut runner = super::list_runners()?
         .into_iter()
         .find(|r| r.name == name)
         .ok_or("Daily runner name not found")?;
-    if super::runners::kind(&runner)? != "codex" {
-        return Err("Background daily checks require a Codex runner".into());
+    let kind = super::runners::kind(&runner)?;
+    if !matches!(kind, "claude" | "codex") {
+        return Err("Daily checks require a Claude or Codex runner".into());
     }
-    let mut isolated =
-        super::runners::background_codex(runner.model.as_deref().unwrap_or("gpt-6.1-sol"), true);
-    isolated.name = runner.name;
-    isolated.program = runner.program;
-    runner = isolated;
+    if kind == "codex" {
+        runner.args = [
+            "exec",
+            "--model",
+            "{model}",
+            "--sandbox",
+            "read-only",
+            "-c",
+            "approval_policy=\"never\"",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--ignore-user-config",
+            "-c",
+            "mcp_servers={}",
+            "-c",
+            "features.hooks=false",
+            "-c",
+            "features.apps=false",
+            "-c",
+            "features.plugins=false",
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "web_search=\"disabled\"",
+            "--json",
+            "-",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        runner.tools = true;
+        runner.stdin = true;
+        return Ok(runner);
+    }
+    // Preserve Claude's existing read-only tool list and MCP restrictions.
+    runner.args = vec![
+        "-p",
+        "--model",
+        "{model}",
+        "--tools",
+        "Read,Grep,Glob",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--strict-mcp-config",
+        "--permission-prompts",
+        "none",
+        "--no-session-persistence",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    runner.tools = true;
+    runner.stdin = true;
+    for path in [
+        meetings_dir(),
+        super::peers_dir(),
+        kb.to_owned(),
+        memory.to_owned(),
+    ]
+    .into_iter()
+    .filter(|p| p.is_dir())
+    {
+        runner.args.push("--add-dir".into());
+        runner.args.push(path.to_string_lossy().into_owned());
+    }
     Ok(runner)
 }
 
 #[cfg(test)]
 #[test]
-fn background_daily_runner_uses_codex() {
+fn background_daily_runners_keep_codex_and_claude_selectable() {
     let root = tempfile::tempdir().unwrap();
     let runner = daily_runner(DEFAULT_RUNNER, root.path(), root.path()).unwrap();
     assert_eq!(super::runners::kind(&runner).unwrap(), "codex");
@@ -848,6 +912,15 @@ fn background_daily_runner_uses_codex() {
     assert!(runner.args.iter().any(|a| a == "--ignore-user-config"));
     assert!(!runner.args.iter().any(|a| a == "--add-dir"));
     super::runners::validate(&runner).unwrap();
+    let claude = daily_runner("Claude Sonnet", root.path(), root.path()).unwrap();
+    assert_eq!(super::runners::kind(&claude).unwrap(), "claude");
+    assert!(
+        claude
+            .args
+            .windows(2)
+            .any(|a| a == ["--tools", "Read,Grep,Glob"])
+    );
+    super::runners::validate(&claude).unwrap();
 }
 fn log_line(message: &str) {
     let path = super::log_path();

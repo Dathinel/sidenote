@@ -73,7 +73,6 @@ pub(super) fn list_runners_at(root: &Path) -> Result<Vec<Runner>, String> {
         "Codex Sol",
         "Daily check (Opus)",
         "Memory migration (answer only)",
-        "Memory migration (Codex)",
     ] {
         if !runners.iter().any(|r| r.name == name) {
             let daily =
@@ -140,6 +139,7 @@ pub fn validate(runner: &Runner) -> Result<(), String> {
             || a == "bypassPermissions"
             || a == "--bare"
             || a == "--safe-mode"
+            || (a == "--ignore-user-config" && harness != "codex")
             || a == "--ignore-rules"
     }) {
         return Err("Runner arguments may not bypass hooks, approvals or the sandbox".into());
@@ -180,8 +180,8 @@ pub fn validate(runner: &Runner) -> Result<(), String> {
         "codex" if runner.args.first().is_none_or(|a| a != "exec") => {
             Err("Codex runners must use exec".into())
         }
-        "codex" if !runner.tools && !isolated_codex(runner) => {
-            Err("Answer-only Codex must disable user config, tools, MCP and hooks".into())
+        "codex" if !runner.tools => {
+            Err("Answer-only Codex has not been verified; use the Claude answer-only runner".into())
         }
         // Ask never writes files (owner, 2026-11-06), so Codex always runs in the read-only sandbox.
         "codex" if !pair("--sandbox", "read-only") => {
@@ -194,81 +194,6 @@ pub fn validate(runner: &Runner) -> Result<(), String> {
             "Answer-only OpenCode has not been verified; use the Claude answer-only runner".into(),
         ),
         _ => Ok(()),
-    }
-}
-
-pub(super) fn isolated_codex(runner: &Runner) -> bool {
-    [
-        "--ignore-user-config",
-        "--ephemeral",
-        "features.hooks=false",
-        "mcp_servers={}",
-        "features.shell_tool=false",
-        "features.apply_patch_freeform=false",
-        "features.view_image=false",
-        "features.unified_exec=false",
-        "features.apps=false",
-        "features.plugins=false",
-        "features.multi_agent=false",
-        "web_search=\"disabled\"",
-    ]
-    .iter()
-    .all(|required| runner.args.iter().any(|a| a == required))
-}
-
-/// Background capabilities are rebuilt from the selected model, never editable runner arguments.
-pub(super) fn background_codex(model: &str, read_tools: bool) -> Runner {
-    let mut args: Vec<String> = [
-        "exec",
-        "--ignore-user-config",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--model",
-        "{model}",
-        "-c",
-        "approval_policy=\"never\"",
-        "-c",
-        "mcp_servers={}",
-        "-c",
-        "features.hooks=false",
-        "-c",
-        "features.apps=false",
-        "-c",
-        "features.plugins=false",
-        "-c",
-        "features.multi_agent=false",
-        "-c",
-        "web_search=\"disabled\"",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    if !read_tools {
-        args.extend(
-            [
-                "-c",
-                "features.shell_tool=false",
-                "-c",
-                "features.apply_patch_freeform=false",
-                "-c",
-                "features.view_image=false",
-                "-c",
-                "features.unified_exec=false",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        );
-    }
-    args.extend(["--json".into(), "-".into()]);
-    Runner {
-        name: "Codex background".into(),
-        program: "codex".into(),
-        args,
-        stdin: true,
-        tools: read_tools,
-        model: Some(model.into()),
     }
 }
 /// True when the runner's program resolves to a native executable, as a start would find it.

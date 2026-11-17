@@ -193,7 +193,7 @@ pub(super) struct Output {
     pub(super) streamed: String,
     pub(super) plain: String,
     pub(super) failed: bool,
-    pub(super) isolated: bool,
+    pub(super) read_only_background: bool,
     pub(super) tool_seen: std::collections::BTreeSet<String>,
 }
 impl Output {
@@ -293,7 +293,7 @@ impl Output {
             }
             if let Some(item) = event.get("item") {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if self.isolated && item_type == "file_change" {
+                if self.read_only_background && item_type == "file_change" {
                     self.failed = true;
                 }
                 if matches!(kind, "item.updated" | "item.completed")
@@ -306,14 +306,9 @@ impl Output {
                 if kind == "item.started" || kind == "item.completed" {
                     let name = match item_type {
                         "command_execution" => Some("Command"),
-                        "mcp_tool_call" => item
-                            .get("tool")
-                            .and_then(|v| v.as_str())
-                            .or(self.isolated.then_some("MCP tool")),
+                        "mcp_tool_call" => item.get("tool").and_then(|v| v.as_str()),
                         "web_search" => Some("Web search"),
                         "file_change" => Some("File edit"),
-                        "agent_message" | "reasoning" | "" => None,
-                        _ if self.isolated => Some("Tool"),
                         _ => None,
                     };
                     if let Some(name) = name {
@@ -486,7 +481,7 @@ pub(super) fn run_classified(
         streamed: String::new(),
         plain: String::new(),
         failed: false,
-        isolated: args.iter().any(|a| a == "--ignore-user-config"),
+        read_only_background: args.iter().any(|a| a == "--ignore-user-config"),
         tool_seen: Default::default(),
     };
     let mut done = false;
@@ -495,8 +490,6 @@ pub(super) fn run_classified(
     loop {
         let stop = if too_large {
             Some("The runner exceeded its output limit.")
-        } else if output.isolated && !runner.tools && !output.tool_seen.is_empty() {
-            Some("An answer-only runner attempted to use a tool.")
         } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
         } else if crate::service::stopping() || super::ask::cancel_requested() {
@@ -539,11 +532,7 @@ pub(super) fn run_classified(
     } else {
         output.plain.trim()
     };
-    if !status.is_some_and(|s| s.success())
-        || output.failed
-        || answer.is_empty()
-        || (output.isolated && !runner.tools && !output.tool_seen.is_empty())
-    {
+    if !status.is_some_and(|s| s.success()) || output.failed || answer.is_empty() {
         let detail = format!("{error_text}\n{}\n{}", output.plain, output.final_text);
         return Err(RunnerFailure {
             category: category(&detail),
@@ -563,34 +552,15 @@ pub(super) fn run_classified(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn background_codex_recognizes_every_non_text_item_as_a_tool() {
-        for item in [
-            "command_execution",
-            "mcp_tool_call",
-            "file_change",
-            "web_search",
-            "todo_list",
-            "unknown_tool",
-        ] {
+    fn daily_codex_write_refusal_keeps_interactive_parser_unchanged() {
+        for background in [false, true] {
             let mut output = super::Output {
-                isolated: true,
+                read_only_background: background,
                 ..Default::default()
             };
-            let event =
-                serde_json::json!({"type":"item.started", "item":{"id":"synthetic", "type":item}});
+            let event = serde_json::json!({"type":"item.started", "item":{"type":"file_change"}});
             output.line(&event.to_string(), "codex", true, &|_| {});
-            assert!(!output.tool_seen.is_empty(), "unrecognized tool {item}");
-            assert_eq!(output.failed, item == "file_change");
-        }
-    }
-    #[test]
-    fn interactive_codex_keeps_the_existing_output_policy() {
-        for item in ["file_change", "todo_list", "unknown_tool", "mcp_tool_call"] {
-            let mut output = super::Output::default();
-            let event = serde_json::json!({"type":"item.started", "item":{"type":item}});
-            output.line(&event.to_string(), "codex", true, &|_| {});
-            assert!(!output.failed);
-            assert_eq!(output.tool_seen.is_empty(), item != "file_change");
+            assert_eq!(output.failed, background);
         }
     }
     #[cfg(target_os = "linux")]
@@ -637,7 +607,7 @@ mod tests {
             streamed: String::new(),
             plain: String::new(),
             failed: false,
-            isolated: false,
+            read_only_background: false,
             tool_seen: Default::default(),
         };
         let events = std::cell::RefCell::new(Vec::new());
