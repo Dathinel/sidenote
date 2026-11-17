@@ -98,3 +98,9 @@ tempfile = "3"
 [patch.crates-io]
 spake2 = { path = "crates/sidenote-sync/vendor/spake2" }
 parley_engine = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+# Rune's workspace patches these crates to its vendor/ copies, and a dependency's [patch] does not
+# apply to the app that builds it, so the app repeats them at the same revision.
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }

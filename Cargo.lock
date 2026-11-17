@@ -38,8 +38,7 @@ dependencies = [
 [[package]]
 name = "accesskit_macos"
 version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "123828ceeec755b05255e3976cb0852993202de98a0626c97dd8d34246991f84"
+source = "git+https://github.com/anomalyco/rune?rev=3d037b49e459cd45d9438a46d50be3b20d53542a#3d037b49e459cd45d9438a46d50be3b20d53542a"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -70,8 +69,7 @@ dependencies = [
 [[package]]
 name = "accesskit_windows"
 version = "0.35.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "498668b90da9995302a0055aaecad4756932333da2ddef6baee1c00844c430fc"
+source = "git+https://github.com/anomalyco/rune?rev=3d037b49e459cd45d9438a46d50be3b20d53542a#3d037b49e459cd45d9438a46d50be3b20d53542a"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -1595,7 +1593,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1806,7 +1804,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -5410,8 +5408,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
+source = "git+https://github.com/anomalyco/rune?rev=3d037b49e459cd45d9438a46d50be3b20d53542a#3d037b49e459cd45d9438a46d50be3b20d53542a"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -5782,8 +5779,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
+source = "git+https://github.com/anomalyco/rune?rev=3d037b49e459cd45d9438a46d50be3b20d53542a#3d037b49e459cd45d9438a46d50be3b20d53542a"
 dependencies = [
  "ahash",
  "android-activity",
