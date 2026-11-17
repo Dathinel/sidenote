@@ -1,8 +1,11 @@
-//! Local client setup. Only the explicit Claude Code action changes client state.
+//! Local client setup. Writes happen only after an explicit Add action.
+mod agents;
+mod json_config;
+pub use agents::{Agent, Status, add_all, discover};
 use serde_json::json;
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 
@@ -39,7 +42,7 @@ impl Client {
             Self::ClaudeDesktop => {
                 crate::platform::data_home().join("Claude/claude_desktop_config.json")
             }
-            Self::Codex => std::env::var_os("CODEX_HOME")
+            Self::Codex => codex_home()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".codex"))
@@ -65,7 +68,6 @@ impl Client {
         }
     }
 }
-#[cfg(windows)]
 fn claude() -> Result<PathBuf, String> {
     let runner = super::Runner {
         name: "Claude Code".into(),
@@ -76,13 +78,14 @@ fn claude() -> Result<PathBuf, String> {
         model: None,
     };
     super::runners::executable(&runner).or_else(|_| {
-        let path = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join(".local/bin/claude.exe");
+        let path = crate::platform::home().join(if cfg!(windows) { ".local/bin/claude.exe" } else { ".local/bin/claude" });
         super::runners::executable(&super::Runner { program: path.to_string_lossy().into_owned(), ..runner })
     }).map_err(|_| "Claude Code was not found. Install its native Windows CLI, reopen Sidenote, or use the copyable command.".into())
 }
 fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output, String> {
     use crate::platform::CommandExt;
-    let mut child = Command::new(program)
+    let mut child = crate::platform::worker_command(program)
+        .map_err(|_| "Could not prepare the MCP client command.".to_string())?
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -90,7 +93,7 @@ fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output
         .creation_flags(0x08000000)
         .spawn()
         .map_err(|_| {
-            "Could not start Claude Code. Check its installation and try again.".to_string()
+            "Could not start the MCP client. Check its installation and try again.".to_string()
         })?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -98,13 +101,13 @@ fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output
             Ok(Some(_)) => {
                 return child
                     .wait_with_output()
-                    .map_err(|_| "Could not read the Claude Code result.".into());
+                    .map_err(|_| "Could not read the MCP client result.".into());
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("Claude Code did not finish within 30 seconds. Check its MCP settings before retrying.".into());
+                return Err("The MCP client did not finish within 30 seconds. Check its MCP settings before retrying.".into());
             }
         }
     }
@@ -162,6 +165,10 @@ fn register(
         return Err("Claude Code accepted the command, but the connection could not be verified. Check claude mcp get sidenote.".into());
     }
     Ok("Added to Claude Code for your user account. Restart its MCP session to connect. To undo, run claude mcp remove --scope user sidenote.".into())
+}
+
+fn codex_home() -> Option<std::ffi::OsString> {
+    std::env::var_os("CODEX_HOME")
 }
 
 #[cfg(test)]
@@ -258,11 +265,8 @@ mod registration_tests {
             assert_eq!(calls, 1);
         }
         let mut wrong_exit = output(false, missing_replies[1]);
-        wrong_exit.status = std::process::ExitStatus::from_raw(if cfg!(windows) {
-            2
-        } else {
-            2 << 8
-        });
+        wrong_exit.status =
+            std::process::ExitStatus::from_raw(if cfg!(windows) { 2 } else { 2 << 8 });
         assert!(!missing(&wrong_exit));
     }
     #[test]
@@ -312,9 +316,4 @@ mod registration_tests {
             assert_eq!(step, if add_ok { 3 } else { 2 });
         }
     }
-}
-
-#[cfg(not(windows))]
-fn claude() -> Result<PathBuf, String> {
-    Err(crate::platform::UNAVAILABLE.into())
 }
