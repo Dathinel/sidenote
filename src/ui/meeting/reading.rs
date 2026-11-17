@@ -248,6 +248,12 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
+        .children(
+            s.live
+                .as_ref()
+                .filter(|l| l.session.as_ref().is_some_and(|session| session.id == m.id))
+                .map(|_| crate::ui::live::parts_status(s, p)),
+        )
         .children(project::form(s, k, &m.id, p))
 }
 
@@ -507,47 +513,8 @@ pub fn transcript_height(s: &State) -> f32 {
 }
 
 /// Saved-meeting dock control. The pause lane can fill `meeting-recording-slot`.
-pub(super) fn recording_control(s: &State, p: Palette) -> El {
-    let shown = if s.transcript_open {
-        "Hide transcript"
-    } else {
-        "Show transcript"
-    };
-    let toggle = pressable(
-        row()
-            .gap(4.0)
-            .items_center()
-            .child(icons::draw(&icons::AUDIO_LINES, 18.0, p.soft))
-            .child(icons::draw(
-                if s.transcript_open {
-                    &icons::CHEVRON_DOWN
-                } else {
-                    &icons::CHEVRON_UP
-                },
-                12.0,
-                p.soft,
-            )),
-    )
-    .key("meeting-transcript")
-    .label(shown)
-    .help(shown)
-    .px(12.0)
-    .h(38.0)
-    .radius(20.0)
-    .hover(p.chip)
-    .on_press_tx(|s: &mut State, tx| {
-        s.toggle_transcript();
-        tx.blur();
-    });
-    row()
-        .key("meeting-recording-control")
-        .items_center()
-        .padding(3.0)
-        .radius(24.0)
-        .fill(p.card)
-        .border(1.0, p.line)
-        .child(toggle)
-        .child(el().key("meeting-recording-slot"))
+pub(super) fn recording_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    crate::ui::live::parts_control(s, k, p, layer)
 }
 
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
@@ -579,7 +546,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .pb(s.overlay_h.get() + 32.0),
             "meeting-scroll",
         ));
-    let control = recording_control(s, p);
+    let control = recording_control(s, k, p, layer);
     let panel = s.transcript_open.then(|| {
         col()
             .key("meeting-transcript-view")
@@ -597,7 +564,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .items_center()
             .shrink()
             .px(16.0)
-            .pb(12.0)
+            .pb(36.0)
             .child(
                 col()
                     .key("meeting-transcript-surface")

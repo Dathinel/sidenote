@@ -19,9 +19,17 @@ pub struct Paragraph<'a> {
 /// Groups consecutive lines of one speaker and language. `apart` is a line that must stand on its
 /// own, such as the one a summary point cites: it is found by its own key and highlight.
 pub fn paragraphs(lines: &[Line], apart: Option<usize>) -> Vec<Paragraph<'_>> {
+    paragraphs_between(lines, apart, &[])
+}
+pub fn paragraphs_between<'a>(
+    lines: &'a [Line],
+    apart: Option<usize>,
+    breaks: &[usize],
+) -> Vec<Paragraph<'a>> {
     let mut out: Vec<Paragraph> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         if let Some(open) = out.last_mut()
+            && !breaks.contains(&i)
             && !line.who.is_empty()
             && line.who == open.line.who
             && line.language == open.line.language

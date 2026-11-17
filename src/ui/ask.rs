@@ -890,7 +890,7 @@ pub fn overlay_with(
     let ready = !empty && !pending;
     // The pill lines up with the thread above it when there is one.
     let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
-    let hide_pickers = s.selected.is_some();
+    let hide_pickers = s.selected.is_some() || s.on_live();
     let model = (!hide_pickers).then(|| {
         if s.ask_settings.connection.settings.enabled {
             quiet_button("Connection", "ask-endpoint-settings", p)

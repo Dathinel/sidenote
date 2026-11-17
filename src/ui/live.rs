@@ -1079,9 +1079,7 @@ pub(super) fn limits(s: &State) -> PanelLimits {
         s.live_document_h.get(),
         s.live_thread_h.get(),
         !s.saved.messages.is_empty() || s.asks.contains_key(&id) || s.ask_errors.contains_key(&id),
-        s.live
-            .as_ref()
-            .is_some_and(|live| live.panel_open && live.phase == Phase::Recording),
+        s.live.as_ref().is_some_and(|live| live.panel_open),
         s.ask_settings.fallback_notice.is_some(),
     )
 }
@@ -1142,6 +1140,17 @@ fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
         let mut rows = col().w_full().px(16.0).py(6.0);
         let mut last: Option<bool> = None;
         for (i, line) in feed.lines.iter().enumerate() {
+            if line.text == "Recording resumed" {
+                last = None;
+                rows = rows.child(
+                    row().w_full().justify_center().py(8.0).child(
+                        roles::META
+                            .line("Recording resumed", p.faint)
+                            .key(format!("live-gap-{i}")),
+                    ),
+                );
+                continue;
+            }
             let who = (last != Some(line.you)).then_some(line.you);
             last = Some(line.you);
             rows = rows.child(
@@ -1203,9 +1212,14 @@ fn bar(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El 
     let panel = s
         .live
         .as_ref()
-        .filter(|l| l.panel_open && l.phase == Phase::Recording && cap >= 44.0)
+        .filter(|l| l.panel_open && cap >= 44.0)
         .map(|_| transcript_panel(s, p, cap));
-    ask::overlay_with(s, k, p, narrow, layer, None, panel)
+    let control = parts_control(s, k, p, layer);
+    if let Some(panel) = panel {
+        col().w_full().px(16.0).pb(36.0).child(panel).child(control)
+    } else {
+        ask::overlay_with(s, k, p, narrow, layer, Some(control), None)
+    }
 }
 
 /// The notes editor: plain text, several lines, under the "Meeting at HH:MM" heading.
@@ -1231,10 +1245,12 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                 .pb(6.0),
         );
     }
-    let hint = if starting {
+    let hint = if s.live.as_ref().is_some_and(|l| l.phase == Phase::Paused) {
+        "Nothing is recorded while paused."
+    } else if starting {
         "Starting the recording. You can start writing now."
     } else {
-        "Your notes save as you type. Sidenote writes the summary after you stop."
+        "Your notes save as you type. Generate notes when you are ready."
     };
     let field = rune::text_input(&s.live_notes, roles::READ.style())
         .key("live-notes-input")
@@ -1251,7 +1267,8 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .w_full()
         .items_start()
         .gap(if narrow { 10.0 } else { 12.0 })
-        .child(head);
+        .child(head)
+        .child(parts_status(s, p));
     if let Some(Saving::Failed(_)) = saving {
         let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
         let warning = save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered);
@@ -1339,6 +1356,20 @@ fn heading(s: &State) -> String {
 }
 
 fn making_view(s: &State, p: Palette, narrow: bool) -> El {
+    if s.live.as_ref().is_some_and(|live| live.session.is_some()) {
+        return col()
+            .w_full()
+            .gap(16.0)
+            .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+            .child(
+                roles::READ
+                    .wrap("Writing notes", p.soft)
+                    .key("meeting-writing-notes")
+                    .role("status"),
+            )
+            .children((!s.live_notes.text.is_empty()).then(|| your_notes(&s.live_notes.text, p)));
+    }
+
     if let Some(skipped) = summary_skip(s) {
         return col()
             .key("live-summary-skipped")
@@ -1602,7 +1633,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 },
             ),
         );
-    if phase != Phase::Making {
+    if phase != Phase::Making || s.live.as_ref().is_some_and(|l| l.session.is_some()) {
         pane = pane.child(bar(s, k, p, narrow, layer));
     }
     pane
@@ -1956,3 +1987,6 @@ mod writer_tests {
 
 #[path = "live/parts.rs"]
 mod parts;
+#[path = "live/recording_control.rs"]
+mod recording_control;
+pub(super) use recording_control::{parts_control, status as parts_status};
