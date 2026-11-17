@@ -103,6 +103,8 @@ if __name__ == "__main__":
             print(f"{Path(f).name}: {classify(f, force)}")
         except Exception as error:
             failed = True
+            if isinstance(error, pipeline.PipelineFailure):
+                print(str(error), file=sys.stderr)
             print(f"{Path(f).name}: failed ({type(error).__name__}; detail bytes={len(str(error).encode())})")
     if failed:
         sys.exit(1)

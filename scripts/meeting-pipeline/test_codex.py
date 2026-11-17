@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
+FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 def load(name):
@@ -33,10 +34,13 @@ class Fake {
   string name = Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]);
   string log = Environment.GetEnvironmentVariable("FAKE_LOG");
   File.AppendAllText(log, name + "\n" + String.Join("\n", args) + "\nEND\n");
-  Console.In.ReadToEnd();
+  string prompt = Console.In.ReadToEnd();
+  if (prompt.Length == 0 || (name == "codex" && Directory.GetFileSystemEntries(Environment.CurrentDirectory).Length != 0)) Environment.Exit(39);
   if (name == "claude") { Console.Write("interactive answer"); return; }
   if (Environment.GetEnvironmentVariable("FAKE_ERROR") != null) {
-   Console.Error.Write(Environment.GetEnvironmentVariable("FAKE_ERROR"));
+   if (Environment.GetEnvironmentVariable("FAKE_ERROR_STDOUT") == "1")
+    Console.Write(Environment.GetEnvironmentVariable("FAKE_ERROR"));
+   else Console.Error.Write(Environment.GetEnvironmentVariable("FAKE_ERROR"));
    Environment.Exit(37);
   }
   string answer = Environment.GetEnvironmentVariable("FAKE_ANSWER");
@@ -50,7 +54,7 @@ class Fake {
         setup.write_text("Add-Type -OutputType ConsoleApplication -OutputAssembly '" +
                          str(cls.root / 'codex.exe') + "' -Path '" + str(source) + "'\n")
         subprocess.run(['powershell', '-NoProfile', '-File', str(setup)],
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, creationflags=FLAGS)
         (cls.root / 'claude.exe').write_bytes((cls.root / 'codex.exe').read_bytes())
 
     @classmethod
@@ -65,10 +69,12 @@ class Fake {
         self.env = os.environ | dict(PATH=str(self.root) + os.pathsep + os.environ['PATH'],
             APPDATA=str(self.folder), SIDENOTE_DATA_DIR=str(self.folder),
             FAKE_LOG=str(self.log), FAKE_ANSWER='Synthetic planning meeting')
+        self.env = {k: v for k, v in self.env.items() if not k.startswith('HEX_MEETING_')}
 
     def assert_isolated(self):
         calls = self.log.read_text()
         self.assertNotIn('claude\n', calls)
+        self.assertNotIn('Synthetic input', calls)
         for flag in ['exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
                      '--sandbox\nread-only', 'features.hooks=false',
                      'features.shell_tool=false', 'mcp_servers={}', '--output-last-message']:
@@ -81,25 +87,36 @@ class Fake {
         prompt.write_text('Synthetic input')
         request.write_text(json.dumps(dict(kind='codex', stage='notes', model='gpt-6.1-sol',
             timeout=5, input_file=str(prompt), output_file=str(output))))
-        with patch.dict(os.environ, self.env):
+        with patch.dict(os.environ, self.env, clear=True):
             runner.run_request(request)
             self.assertEqual(output.read_text(), self.env['FAKE_ANSWER'])
             self.assert_isolated()
             self.assertEqual(runner.claude('Synthetic input', 'synthetic-model', 5), 'interactive answer')
+
+    def test_codex_missing_answer_and_tool_events_fail_closed(self):
+        runner = load('hex-pipeline-run')
+        with patch.dict(os.environ, self.env, clear=True), patch.object(runner, 'execute', return_value=''):
+            with self.assertRaises(runner.PipelineFailure):
+                runner.codex('Synthetic input', 'gpt-6.1-sol', 5)
+            for item in ['command_execution', 'mcp_tool_call', 'file_change', 'web_search']:
+                events = json.dumps(dict(type='item.started', item=dict(type=item)))
+                with patch.object(runner, 'execute', return_value=events):
+                    with self.assertRaises(runner.PipelineFailure):
+                        runner.codex('Synthetic input', 'gpt-6.1-sol', 5)
 
     def test_codex_failure_contract(self):
         runner = load('hex-pipeline-run')
         for message, expected in [('Your refresh token has expired', 'HELPER_AUTH'),
                                   ('Please run codex login', 'HELPER_AUTH'),
                                   ("You've hit your usage limit", 'HELPER_LIMIT')]:
-            with self.subTest(expected=expected), patch.dict(os.environ, self.env | {'FAKE_ERROR': message}):
+            with self.subTest(expected=expected), patch.dict(os.environ, self.env | {'FAKE_ERROR': message, 'FAKE_ERROR_STDOUT': '1'}, clear=True):
                 with self.assertRaises(runner.PipelineFailure) as caught:
                     runner.codex('Synthetic', 'gpt-6.1-sol', 5)
                 self.assertEqual(caught.exception.category, expected)
                 self.assertEqual(caught.exception.kind, 'codex')
 
     def test_automatic_tasks_and_compare(self):
-        with patch.dict(os.environ, self.env):
+        with patch.dict(os.environ, self.env, clear=True):
             tasks = load('hex-meeting-tasks')
             summary = dict(title='Synthetic', todo=[dict(task='Synthetic task')])
             (self.folder / 'english-summary.json').write_text(json.dumps(summary))
@@ -113,6 +130,7 @@ class Fake {
         from test_engine_lock import query_environment
         env = self.env | query_environment(self.folder)
         env.update(self.env)
+        env = {k: v for k, v in env.items() if not k.startswith('HEX_MEETING_')}
         meeting = self.folder / '1800000000000-1'
         meeting.mkdir()
         (meeting / 'transcript.ndjson').write_text('{"text":"Synthetic discussion","start_ms":0}')
@@ -123,7 +141,7 @@ class Fake {
                 str(meeting / 'english-summary.json'), '-MeetingDir', str(meeting), '-Project', 'other']),
                 ('hex-meeting-quick-title.ps1', ['-MeetingDir', str(meeting)])]:
             result = subprocess.run(['powershell', '-NoProfile', '-File', str(HERE / name), *args],
-                env=env, capture_output=True, text=True, timeout=30)
+                env=env, capture_output=True, text=True, timeout=30, creationflags=FLAGS)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((meeting / 'quick-title.json').is_file())
         self.assert_isolated()

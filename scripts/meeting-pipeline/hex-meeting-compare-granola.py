@@ -154,7 +154,7 @@ def compare(folder, rows, rules):
             data,extra=codex(prompt+'\n\nYour prior response failed validation: '+str(e)+'. Repair the JSON and include all required fields. Prior response:\n'+json.dumps(data,ensure_ascii=False))
             seconds+=extra
     data['match']={'id':row['document_id'],'title':row['document_title'],'created':row['document_created'],'source':row.get('_source','CSV'),**score}
-    data['model']={'name':'sonnet','seconds':seconds}; data['meeting_id']=folder.name
+    data['model']={'name':'gpt-6.1-sol','seconds':seconds}; data['meeting_id']=folder.name
     (folder/'granola-compare.json').write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     (folder/'granola-compare.md').write_text(render(data),encoding='utf-8')
     save_lessons(folder.name,data['lessons']); print(f'Compared in {seconds}s',flush=True); return True
@@ -184,7 +184,11 @@ def main():
     failed=False
     for folder in folders:
         try: compare(folder,rows,rules)
-        except Exception as e: print(f'{folder.name}: failed ({type(e).__name__}); detail bytes={len(str(e).encode())}',file=sys.stderr); failed=True
+        except Exception as e:
+            if isinstance(e, pipeline.PipelineFailure):
+                print(str(e), file=sys.stderr)
+            print(f'{folder.name}: failed ({type(e).__name__}); detail bytes={len(str(e).encode())}',file=sys.stderr)
+            failed=True
     if failed: sys.exit(1)
 
 if __name__=='__main__': main()
