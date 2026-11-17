@@ -5,11 +5,13 @@ $Pack = $false
 $Arguments = @($args)
 if ($Arguments.Count -and $Arguments[0] -ceq '-Pack') { $Pack = $true; $Arguments = @($Arguments | Select-Object -Skip 1) }
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release_lock.ps1')
 $slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
 $watchLog = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
 $mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
 $slot = $null
 $child = $null
+$marker = $null
 
 function Alive([string]$Identity) {
     if ($Identity -notmatch '^(\d+)-(\d+)$') { return $false }
@@ -72,6 +74,12 @@ function Assert-TargetSpace {
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
     $targetDirectory = Resolve-TargetDirectory
+    $lockPath = Get-ReleaseLockPath
+    while (-not $marker) {
+        Wait-ReleaseLock $lockPath $ReleaseLockWaitMinutes $ReleaseLockReportSeconds $ReleaseLockPollSeconds
+        $marker = Register-BuildMarker
+        if (Get-BlockingReleaseLock $lockPath) { Unregister-BuildMarker $marker; $marker = $null }
+    }
     Assert-TargetSpace
     New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
@@ -124,6 +132,7 @@ try {
     [Console]::Error.WriteLine(('local_build: ' + $_.Exception.Message -replace '[\r\n]+', ' '))
     exit 1
 } finally {
+    Unregister-BuildMarker $marker
     if ($slot -and (-not $child -or $child.HasExited)) {
         LockSlots
         try { Remove-Item -LiteralPath $slot -Recurse -Force -ErrorAction SilentlyContinue }

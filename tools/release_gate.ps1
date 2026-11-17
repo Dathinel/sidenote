@@ -10,9 +10,12 @@ list once. It writes artifacts\release-gate-<commit>.md with a pass table,
 links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fails.
 #>
 param(
-    [string]$GnuBin = 'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin'
+    [string]$GnuBin = 'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin',
+    [switch]$PreflightOnly
 )
 $ErrorActionPreference = 'Continue'
+$MinFreeGb = 60
+. (Join-Path $PSScriptRoot 'release_lock.ps1')
 
 $root = (Get-Location).Path
 $top = (git rev-parse --show-toplevel 2>$null)
@@ -27,6 +30,35 @@ if (-not (Test-Path (Join-Path $root 'Cargo.toml')) -or -not (Test-Path (Join-Pa
 if (git status --porcelain) {
     Write-Output 'release_gate: the worktree has uncommitted changes; commit them first.'
     exit 2
+}
+$branch = (git symbolic-ref --short -q HEAD)
+if ($branch) {
+    & (Join-Path $PSScriptRoot 'prune_merged_targets.ps1') -Release $branch -Keep @($root) -WhatIf:$PreflightOnly
+    if ($LASTEXITCODE -ne 0) { Write-Output "release_gate: prune_merged_targets exited $LASTEXITCODE; continuing to the space check." }
+} else {
+    Write-Output 'release_gate: detached HEAD, so no merged build folders were pruned.'
+}
+$freeGb = (New-Object IO.DriveInfo([IO.Path]::GetPathRoot($root))).AvailableFreeSpace / 1GB
+if ($freeGb -lt $MinFreeGb) {
+    Write-Output ('release_gate: only {0:N1} GB free on {1}; a release check needs {2} GB. Stopping before any build step.' -f $freeGb, [IO.Path]::GetPathRoot($root), $MinFreeGb)
+    exit 2
+}
+$lockPath = Get-ReleaseLockPath
+$lock = Enter-ReleaseLock $lockPath
+if ($lock.Busy) {
+    Write-Output "release_gate: another release check holds the lock (PID $($lock.Busy.Pid), started $($lock.Busy.Started)); stopping."
+    exit 2
+}
+try {
+$env:SIDENOTE_RELEASE_GATE_PID = [string]$PID
+try { Wait-RunningBuilds $RunningBuildWaitMinutes $ReleaseLockReportSeconds $ReleaseLockPollSeconds }
+catch {
+    Write-Output "release_gate: $($_.Exception.Message)"
+    exit 2
+}
+if ($PreflightOnly) {
+    Write-Output ('release_gate: preflight passed ({0:N1} GB free, {1} GB needed, lock held, no other local build running); stopping because -PreflightOnly was given.' -f $freeGb, $MinFreeGb)
+    exit 0
 }
 if (Test-Path $GnuBin) { $env:PATH = "$GnuBin;" + $env:PATH }
 # Always this worktree's own build folder. A shared folder can hold another worktree's exe.
@@ -145,3 +177,6 @@ $report = Join-Path $artifacts "release-gate-$commit.md"
 Write-Output ("SUMMARY: " + (($rows | ForEach-Object { "$($_.Check) exit=$($_.Exit) $($_.Detail)" }) -join '; '))
 Write-Output "Report: $report"
 if ($failed.Count) { exit 1 } else { exit 0 }
+} finally {
+    Exit-ReleaseLock $lock.Stream $lockPath
+}
