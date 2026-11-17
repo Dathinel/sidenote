@@ -19,8 +19,8 @@ use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
 pub use settings::{sidebar as settings_sidebar, tick as settings_tick};
 use sidenote::hex_engine::{
-    Capabilities, EngineState, Feature, HexEngine, HexError, ModelInfo, ModelState, Recording,
-    Setting, Support, VocabularyEntry,
+    AudioRetention, Capabilities, EngineState, Feature, HexEngine, HexError, ModelInfo, ModelState,
+    Recording, Setting, Support, VocabularyEntry,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -1004,33 +1004,25 @@ impl State {
     fn hex_keep_audio(&mut self, choice: &str) {
         self.hex.select_open = None;
         let value = match choice {
+            "Same as meetings" => "none",
             "24 hours" => "day",
             "7 days" => "week",
             "1 month" => "month",
             "Forever" => "forever",
             _ => return,
         };
+        let audio = AudioRetention::from_settings(&self.hex.settings);
         if !self.hex.can(Feature::SettingsSet)
             || self.hex.settings_note.is_some()
             || self.hex.busy_keys.contains("meetings.audio_retention")
-            || !["meetings.audio_retention", "labs.expire_meeting_audio"]
-                .iter()
-                .all(|key| self.hex.setting(key).is_some_and(editable))
+            || !audio.editable
         {
             return;
         }
         self.hex.busy_keys.insert("meetings.audio_retention".into());
         self.hex.row_errors.remove("meetings.audio_retention");
         self.hex_spawn(move |e| {
-            let result = e
-                .settings_set("meetings.audio_retention", value)
-                .and_then(|()| {
-                    e.settings_set(
-                        "labs.expire_meeting_audio",
-                        if value == "forever" { "false" } else { "true" },
-                    )
-                });
-            // Even a partial write must show the values Hex actually kept.
+            let result = audio.set(&e, value);
             let settings = e.settings_list();
             Msg::AudioSettings(result, settings)
         });
@@ -1737,28 +1729,10 @@ fn section_head(section: Section, count: Option<usize>, p: Palette) -> El {
 
 fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let h = &s.hex;
-    let audio = h.setting("meetings.audio_retention");
-    let enabled = h
-        .setting("labs.expire_meeting_audio")
-        .and_then(|st| st.value.as_bool());
-    let current = match enabled {
-        Some(false) => Some("Forever"),
-        Some(true) => match audio.and_then(|st| st.value.as_str()) {
-            Some("day") => Some("24 hours"),
-            Some("week") => Some("7 days"),
-            Some("month") => Some("1 month"),
-            Some("forever") => Some("Forever"),
-            _ => None,
-        },
-        None => None,
-    };
+    let audio = AudioRetention::from_settings(&h.settings);
+    let current = audio.current;
     let busy = h.busy_keys.contains("meetings.audio_retention");
-    let can = h.can(Feature::SettingsSet)
-        && h.settings_note.is_none()
-        && !busy
-        && ["meetings.audio_retention", "labs.expire_meeting_audio"]
-            .iter()
-            .all(|key| h.setting(key).is_some_and(editable));
+    let can = h.can(Feature::SettingsSet) && h.settings_note.is_none() && !busy && audio.editable;
     let mut text = col()
         .grow(1.0)
         .min_w(220.0)
@@ -1784,10 +1758,10 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 .role("alert"),
         );
     }
-    if enabled == Some(true) && current.is_none() {
+    if audio.follows_meetings {
         text = text.child(roles::SMALL.wrap("Audio follows Keep whole meetings in Hex.", p.soft));
     }
-    let options = ["24 hours", "7 days", "1 month", "Forever"].map(str::to_string);
+    let options: Vec<_> = audio.choices().iter().map(|s| s.to_string()).collect();
     let control = Select::new("keep-audio", &options)
         .label("Keep audio")
         .current(if h.running() && h.settings_note.is_none() {
