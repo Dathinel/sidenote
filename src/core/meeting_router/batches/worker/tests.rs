@@ -115,11 +115,16 @@ fn cancel_timeout_drop_reap_worker_tree() {
                 .recognize(&ranges(Path::new("unused.wav")).remove(1))
                 .unwrap_err();
             if mode == "timeout" {
-                assert_eq!(error.downcast_ref::<Failure>(), Some(&Failure::Timeout));
+                assert_eq!(
+                    error.downcast_ref::<Failure>(),
+                    Some(&Failure::Timeout),
+                    "{mode}: {error:#}"
+                );
             } else {
                 assert_eq!(
                     error.downcast_ref::<WorkerFailure>(),
-                    Some(&WorkerFailure::Cancelled)
+                    Some(&WorkerFailure::Cancelled),
+                    "{mode}: {error:#}"
                 );
             }
             cancelling.join().unwrap();
