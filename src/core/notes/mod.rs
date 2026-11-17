@@ -261,6 +261,7 @@ pub fn request(meeting_id: &str, mode: Request) -> io::Result<()> {
     queue::start_worker()
 }
 pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
+    use helper::Run;
     // Public-domain words, fixed in code; never reads a meeting or the glossary.
     let transcript = "[00:00] Speaker: Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.";
     let date = chrono::NaiveDate::from_ymd_opt(1863, 11, 19).unwrap();
@@ -272,7 +273,7 @@ pub fn test_helper(h: Helper, model: &str) -> Result<Duration, String> {
     );
     let start = std::time::Instant::now();
     let raw = helper::Cli { root: None }
-        .run_interactive(h, model, sample, helper::NOTES_TIMEOUT)
+        .run(h, model, sample, helper::NOTES_TIMEOUT)
         .map_err(|e| {
             match e {
                 helper::Failure::LinuxUnavailable => LINUX_HELPER_UNAVAILABLE,

@@ -161,19 +161,5 @@
     ],
     "stdin": true,
     "tools": false
-  },
-  {
-    "name": "Memory migration (Codex)",
-    "program": "codex",
-    "model": "gpt-6.1-sol",
-    "args": [
-      "exec",
-      "--sandbox",
-      "read-only",
-      "--json",
-      "-"
-    ],
-    "stdin": true,
-    "tools": true
   }
 ]

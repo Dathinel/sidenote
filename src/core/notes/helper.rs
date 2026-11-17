@@ -39,16 +39,6 @@ impl Helper {
 }
 
 pub(super) fn runner(helper: Helper, model: &str) -> Runner {
-    if helper == Helper::Codex {
-        return runners::background_codex(
-            if model.trim().is_empty() {
-                helper.default_model()
-            } else {
-                model
-            },
-            false,
-        );
-    }
     let (program, args, tools): (&str, Vec<&str>, bool) = match helper {
         Helper::Claude => (
             "claude",
@@ -65,7 +55,23 @@ pub(super) fn runner(helper: Helper, model: &str) -> Runner {
             ],
             false,
         ),
-        Helper::Codex => unreachable!("Codex is built above"),
+        Helper::Codex => (
+            "codex",
+            vec![
+                "exec",
+                "--model",
+                "{model}",
+                "--sandbox",
+                "read-only",
+                "-c",
+                "approval_policy=\"never\"",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--json",
+                "-",
+            ],
+            true,
+        ),
         Helper::OpenCode => (
             "opencode",
             vec!["run", "--format", "json", "--agent", "plan"],
@@ -166,22 +172,6 @@ impl Run for Cli {
         prompt: String,
         timeout: Duration,
     ) -> Result<String, Failure> {
-        if helper == Helper::Claude {
-            return Err(Failure::Consent);
-        }
-        self.run_interactive(helper, model, prompt, timeout)
-    }
-}
-
-impl Cli {
-    /// Only the explicit Settings test uses this entry; queued work uses Run::run.
-    pub(super) fn run_interactive(
-        &mut self,
-        helper: Helper,
-        model: &str,
-        prompt: String,
-        timeout: Duration,
-    ) -> Result<String, Failure> {
         if !helper.offered() {
             return Err(Failure::Consent);
         }
@@ -218,54 +208,6 @@ impl Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
-    #[test]
-    fn background_fake_helper_child() {
-        if std::env::var("SIDENOTE_FAKE_CHILD").as_deref() != Ok("1") {
-            return;
-        }
-        let mut cli = Cli { root: None };
-        let result = cli.run(
-            Helper::Codex,
-            "gpt-6.1-sol",
-            "Synthetic input".into(),
-            Duration::from_secs(10),
-        );
-        if std::env::var("SIDENOTE_FAKE_TOOL").as_deref() == Ok("1") {
-            assert!(result.is_err());
-            return;
-        }
-        assert_eq!(result.unwrap(), "Synthetic answer");
-        assert_eq!(
-            cli.run(
-                Helper::Claude,
-                "synthetic",
-                "Synthetic input".into(),
-                Duration::from_secs(10)
-            ),
-            Err(Failure::Consent)
-        );
-        assert_eq!(
-            cli.run_interactive(
-                Helper::Claude,
-                "synthetic",
-                "Synthetic input".into(),
-                Duration::from_secs(10)
-            )
-            .unwrap(),
-            "Interactive answer"
-        );
-    }
-    #[test]
-    fn background_codex_is_isolated_and_claude_is_refused() {
-        let codex = runner(Helper::Codex, "gpt-6.1-sol");
-        assert!(codex.args.iter().any(|a| a == "--ignore-user-config"));
-        assert!(codex.args.iter().any(|a| a == "features.shell_tool=false"));
-        assert_eq!(
-            Cli { root: None }.run(Helper::Claude, "", "synthetic".into(), Duration::ZERO),
-            Err(Failure::Consent)
-        );
-    }
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_helper_stops_with_typed_unavailable_before_lookup_or_launch() {

@@ -680,7 +680,7 @@ fn no_agent(s: &State, p: Palette) -> El {
         .min_w(0.0)
         .gap(2.0)
         .child(roles::CONTROL.wrap(
-            "Ask works with Claude Code, Codex or OpenCode. Automatic meeting summaries use Codex.",
+            "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
             p.ink,
         ));
     if s.agents_rechecked {

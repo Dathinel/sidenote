@@ -51,7 +51,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
     let name = helper.map(Helper::name).unwrap_or("The agent");
     let standard: String = match &job.state {
-        JobState::NoHelper => "Choose Codex in Settings for automatic summaries, then press Write summary. Your transcript is saved.".into(),
+        JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
         JobState::Running => running_message(name, job.updated_at),
