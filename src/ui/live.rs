@@ -1987,6 +1987,9 @@ mod writer_tests {
 
 #[path = "live/parts.rs"]
 mod parts;
+#[path = "live/parts_scene.rs"]
+mod parts_scene;
 #[path = "live/recording_control.rs"]
 mod recording_control;
+pub(super) use parts_scene::scene as parts_scene;
 pub(super) use recording_control::{parts_control, status as parts_status};
