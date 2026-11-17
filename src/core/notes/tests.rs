@@ -1973,22 +1973,49 @@ fn multipart_pause_resume_end_runs_once_over_ordered_parts() {
 #[test]
 fn resume_while_notes_are_queued_keeps_the_requested_snapshot() {
     use crate::core::meeting_parts::Meeting;
-    let root=Temp::new(); let first=meeting(&root.0,"First requested snapshot"); let hex=root.0.join("meetings");
-    let mut session=Meeting::begin(&root.0,ID,1793946600000).unwrap();
-    let folder=session.prepare_notes(&root.0,&hex).unwrap(); let snapshot=fs::read(folder.join("transcript.ndjson")).unwrap(); let manifest=fs::read(folder.join("manifest.json")).unwrap();
-    let settings=settings_fixture();
-    queue::enqueue_in(&root.0,folder.parent().unwrap(),ID,Some(Request::TryAgain),&settings).unwrap();
-    let second="1793947600000-456"; fs::create_dir_all(hex.join(second)).unwrap();
-    for name in ["manifest.json","transcript.ndjson"] { fs::copy(first.join(name),hex.join(second).join(name)).unwrap(); }
-    session.resume(&root.0,second,1793947600000).unwrap();
+    let root = Temp::new();
+    let first = meeting(&root.0, "First requested snapshot");
+    let hex = root.0.join("meetings");
+    let mut session = Meeting::begin(&root.0, ID, 1793946600000).unwrap();
+    let folder = session.prepare_notes(&root.0, &hex).unwrap();
+    let snapshot = fs::read(folder.join("transcript.ndjson")).unwrap();
+    let manifest = fs::read(folder.join("manifest.json")).unwrap();
+    let settings = settings_fixture();
+    queue::enqueue_in(
+        &root.0,
+        folder.parent().unwrap(),
+        ID,
+        Some(Request::TryAgain),
+        &settings,
+    )
+    .unwrap();
+    let second = "1793947600000-456";
+    fs::create_dir_all(hex.join(second)).unwrap();
+    for name in ["manifest.json", "transcript.ndjson"] {
+        fs::copy(first.join(name), hex.join(second).join(name)).unwrap();
+    }
+    session.resume(&root.0, second, 1793947600000).unwrap();
     session.pause(&root.0).unwrap();
-    assert_eq!(fs::read(folder.join("manifest.json")).unwrap(),manifest);
-    assert_eq!(session.prepare_notes(&root.0,&hex).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
-    assert_eq!(fs::read(folder.join("transcript.ndjson")).unwrap(),snapshot);
-    let mut fake=Fake::new(vec![Ok(r#"{"title":"Requested snapshot"}"#.into()),Ok(summary()),Ok(sorted())]);
-    queue::drain(&root.0,&hex,&mut fake,||Ok(settings.clone())).unwrap();
-    assert_eq!(fake.calls.len(),3);
-    assert_eq!(fake.calls[1].0.matches("First requested snapshot").count(),1);
-    session.notes_parts=session.requested_parts;
+    assert_eq!(fs::read(folder.join("manifest.json")).unwrap(), manifest);
+    assert_eq!(
+        session.prepare_notes(&root.0, &hex).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert_eq!(
+        fs::read(folder.join("transcript.ndjson")).unwrap(),
+        snapshot
+    );
+    let mut fake = Fake::new(vec![
+        Ok(r#"{"title":"Requested snapshot"}"#.into()),
+        Ok(summary()),
+        Ok(sorted()),
+    ]);
+    queue::drain(&root.0, &hex, &mut fake, || Ok(settings.clone())).unwrap();
+    assert_eq!(fake.calls.len(), 3);
+    assert_eq!(
+        fake.calls[1].0.matches("First requested snapshot").count(),
+        1
+    );
+    session.notes_parts = session.requested_parts;
     assert!(session.stale());
 }

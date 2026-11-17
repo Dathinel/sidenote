@@ -242,25 +242,41 @@ fn routing_dependency_does_not_starve_another_meetings_notes() {
 
 #[test]
 fn joined_parts_keep_their_language_readings_and_pin_the_combined_text() {
-    let (root,first,_)=setup();
-    let (_,data)=selected(&root.0,&first);
-    let hex=root.0.join("meetings");
-    let second_id="1793947600000-456";
-    let second=hex.join(second_id);
+    let (root, first, _) = setup();
+    let (_, data) = selected(&root.0, &first);
+    let hex = root.0.join("meetings");
+    let second_id = "1793947600000-456";
+    let second = hex.join(second_id);
     fs::create_dir_all(&second).unwrap();
-    for name in ["manifest.json","transcript.ndjson"] { fs::copy(first.join(name),second.join(name)).unwrap(); }
-    let (_,_,_)=transcript::chosen_part(&root.0,second_id,&second,None,0,10000).unwrap().unwrap();
-    crate::core::meeting_router::jobs::handoff::tests::complete(&root.0,second_id,&data.transcript.baseline,"hi").unwrap();
-    let mut meeting=crate::core::meeting_parts::Meeting::begin(&root.0,ID,1793946600000).unwrap();
-    meeting.resume(&root.0,second_id,1793947600000).unwrap();
-    let folder=meeting.prepare_notes(&root.0,&hex).unwrap();
-    let now=chrono::Utc::now().timestamp_millis()+1000;
-    let (pin,text,_)=super::super::joined::chosen(&root.0,&hex,ID,&folder,None,0,now).unwrap().unwrap();
-    assert!(text.contains("(Telugu)")); assert!(text.contains("(Hindi)"));
-    assert!(text.find("(Telugu)").unwrap()<text.find("(Hindi)").unwrap());
+    for name in ["manifest.json", "transcript.ndjson"] {
+        fs::copy(first.join(name), second.join(name)).unwrap();
+    }
+    let (_, _, _) = transcript::chosen_part(&root.0, second_id, &second, None, 0, 10000)
+        .unwrap()
+        .unwrap();
+    crate::core::meeting_router::jobs::handoff::tests::complete(
+        &root.0,
+        second_id,
+        &data.transcript.baseline,
+        "hi",
+    )
+    .unwrap();
+    let mut meeting =
+        crate::core::meeting_parts::Meeting::begin(&root.0, ID, 1793946600000).unwrap();
+    meeting.resume(&root.0, second_id, 1793947600000).unwrap();
+    let folder = meeting.prepare_notes(&root.0, &hex).unwrap();
+    let now = chrono::Utc::now().timestamp_millis() + 1000;
+    let (pin, text, _) = super::super::joined::chosen(&root.0, &hex, ID, &folder, None, 0, now)
+        .unwrap()
+        .unwrap();
+    assert!(text.contains("(Telugu)"));
+    assert!(text.contains("(Hindi)"));
+    assert!(text.find("(Telugu)").unwrap() < text.find("(Hindi)").unwrap());
     assert!(text.contains("[00:05:01.000]"));
     fs::remove_file(first.join("transcript.ndjson")).unwrap();
     fs::remove_file(second.join("transcript.ndjson")).unwrap();
-    let again=super::super::joined::chosen(&root.0,&hex,ID,&folder,Some(&pin),0,now).unwrap().unwrap();
-    assert_eq!(again.1,text);
+    let again = super::super::joined::chosen(&root.0, &hex, ID, &folder, Some(&pin), 0, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.1, text);
 }

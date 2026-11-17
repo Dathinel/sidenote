@@ -5,12 +5,12 @@ pub mod draft;
 mod helper;
 #[cfg(feature = "idle-cpu-proof")]
 pub mod idle_fixture;
+mod joined;
 mod prompt;
 pub mod queue;
 mod schema;
 mod status_detail;
 mod transcript;
-mod joined;
 pub use status_detail::{StatusDetail, status_record, status_records};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,13 +318,24 @@ pub(crate) fn render_joined_transcript(raw: &str) -> String {
     transcript::render(raw)
 }
 
-pub(crate) fn shift_transcript(text: &str,offset: u64) -> io::Result<String> {
-    let mut out=String::new();
-    for line in text.lines().filter(|line|!line.trim().is_empty()) {
-        if let Some((stamp,words))=line.strip_prefix('[').and_then(|line|line.split_once(']')) {
-            let ms=super::meetings::milliseconds(stamp).ok_or_else(||super::store_io::invalid("Invalid part time"))?.saturating_add(offset);
-            out.push_str(&format!("[{:02}:{:02}:{:02}.{:03}]{words}\n",ms/3_600_000,ms/60_000%60,ms/1000%60,ms%1000));
-        } else if !line.starts_with("# Full English transcript") { out.push_str(line); out.push('\n'); }
+pub(crate) fn shift_transcript(text: &str, offset: u64) -> io::Result<String> {
+    let mut out = String::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        if let Some((stamp, words)) = line.strip_prefix('[').and_then(|line| line.split_once(']')) {
+            let ms = super::meetings::milliseconds(stamp)
+                .ok_or_else(|| super::store_io::invalid("Invalid part time"))?
+                .saturating_add(offset);
+            out.push_str(&format!(
+                "[{:02}:{:02}:{:02}.{:03}]{words}\n",
+                ms / 3_600_000,
+                ms / 60_000 % 60,
+                ms / 1000 % 60,
+                ms % 1000
+            ));
+        } else if !line.starts_with("# Full English transcript") {
+            out.push_str(line);
+            out.push('\n');
+        }
     }
     Ok(out)
 }

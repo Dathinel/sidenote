@@ -5,8 +5,8 @@ impl Meeting {
         if self.parts.is_empty() {
             return Err(store_io::invalid("No recording part yet"));
         }
-        if super::super::notes::queue::active(root,&self.id)? {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,"notes_busy"));
+        if super::super::notes::queue::active(root, &self.id)? {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "notes_busy"));
         }
         self.refresh(hex)?;
         let folder = inputs(root).join(&self.id);
@@ -56,35 +56,78 @@ impl Meeting {
         self.save(root)?;
         Ok(folder)
     }
-    pub fn view_text(&self,hex:&Path) -> io::Result<String> {
-        let mut out=String::new(); let mut offset=0u64;
-        for (i,part) in self.parts.iter().enumerate() {
-            let text=part_text(&hex.join(&part.id),self.phase==Phase::Recording && i+1==self.parts.len())?;
-            out.push_str(&super::super::notes::shift_transcript(&text,offset)?);
-            offset=offset.saturating_add(part.duration_ms);
-            if out.len() as u64>super::super::live::ROLLING_MAX_BYTES { return Err(store_io::invalid("Meeting transcript is too large")); }
+    pub fn view_text(&self, hex: &Path) -> io::Result<String> {
+        let mut out = String::new();
+        let mut offset = 0u64;
+        for (i, part) in self.parts.iter().enumerate() {
+            let text = part_text(
+                &hex.join(&part.id),
+                self.phase == Phase::Recording && i + 1 == self.parts.len(),
+            )?;
+            out.push_str(&super::super::notes::shift_transcript(&text, offset)?);
+            offset = offset.saturating_add(part.duration_ms);
+            if out.len() as u64 > super::super::live::ROLLING_MAX_BYTES {
+                return Err(store_io::invalid("Meeting transcript is too large"));
+            }
         }
         Ok(out)
     }
-    pub fn live_lines(&self,hex:&Path) -> Vec<super::super::live::LiveLine> {
-        let mut out=Vec::new(); let mut offset=0u64;
-        for (i,part) in self.parts.iter().enumerate() {
-            if i>0 { out.push(super::super::live::LiveLine {seconds:offset/1000,you:false,text:"Recording resumed".into()}); }
-            if let Ok(text)=part_text(&hex.join(&part.id),self.phase==Phase::Recording && i+1==self.parts.len()) {
-                out.extend(super::super::parse_transcript(&text).into_iter().map(|line|super::super::live::LiveLine {
-                    seconds:line.seconds.unwrap_or(0).saturating_add(offset/1000),you:line.who.eq_ignore_ascii_case("You"),text:line.text }));
+    pub fn live_lines(&self, hex: &Path) -> Vec<super::super::live::LiveLine> {
+        let mut out = Vec::new();
+        let mut offset = 0u64;
+        for (i, part) in self.parts.iter().enumerate() {
+            if i > 0 {
+                out.push(super::super::live::LiveLine {
+                    seconds: offset / 1000,
+                    you: false,
+                    text: "Recording resumed".into(),
+                });
             }
-            offset=offset.saturating_add(part.duration_ms);
+            if let Ok(text) = part_text(
+                &hex.join(&part.id),
+                self.phase == Phase::Recording && i + 1 == self.parts.len(),
+            ) {
+                out.extend(
+                    super::super::parse_transcript(&text)
+                        .into_iter()
+                        .map(|line| super::super::live::LiveLine {
+                            seconds: line.seconds.unwrap_or(0).saturating_add(offset / 1000),
+                            you: line.who.eq_ignore_ascii_case("You"),
+                            text: line.text,
+                        }),
+                );
+            }
+            offset = offset.saturating_add(part.duration_ms);
         }
         out
     }
 }
-fn part_text(folder:&Path,active:bool) -> io::Result<String> {
-    let read=|name:&str| match file_reads::text(&folder.join(name),super::super::live::ROLLING_MAX_BYTES) {
-        Ok(text)=>Ok(text),Err(e) if e.kind()==io::ErrorKind::NotFound=>Ok(String::new()),Err(e)=>Err(e)
+fn part_text(folder: &Path, active: bool) -> io::Result<String> {
+    let read = |name: &str| match file_reads::text(
+        &folder.join(name),
+        super::super::live::ROLLING_MAX_BYTES,
+    ) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
     };
-    if !active { let english=read("english-transcript.md")?; if !english.trim().is_empty() {return Ok(english);} }
-    let mut raw=if active {read("transcript.rolling.ndjson")?} else {read("transcript.ndjson")?};
-    if raw.trim().is_empty() { raw=read(if active {"transcript.ndjson"} else {"transcript.rolling.ndjson"})?; }
+    if !active {
+        let english = read("english-transcript.md")?;
+        if !english.trim().is_empty() {
+            return Ok(english);
+        }
+    }
+    let mut raw = if active {
+        read("transcript.rolling.ndjson")?
+    } else {
+        read("transcript.ndjson")?
+    };
+    if raw.trim().is_empty() {
+        raw = read(if active {
+            "transcript.ndjson"
+        } else {
+            "transcript.rolling.ndjson"
+        })?;
+    }
     Ok(super::super::notes::render_joined_transcript(&raw))
 }

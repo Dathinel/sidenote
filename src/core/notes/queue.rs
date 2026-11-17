@@ -84,8 +84,13 @@ fn job_eligible(root: &Path, meetings: &Path, id: &str, job: &Job) -> io::Result
     let source = core::meeting_parts::source(root, meetings, id);
     let meetings = source.as_path();
     if let Some(m) = core::meeting_parts::read(root, id)? {
-        let revision=core::recording_source::revision::input(&meetings.join(id))?;
-        if m.requested_parts==0 || job.request.is_none() || job.input_revision.as_ref()!=Some(&revision) { return Ok(false); }
+        let revision = core::recording_source::revision::input(&meetings.join(id))?;
+        if m.requested_parts == 0
+            || job.request.is_none()
+            || job.input_revision.as_ref() != Some(&revision)
+        {
+            return Ok(false);
+        }
     }
     let eligibility = core::recording_guard::eligibility(root, meetings, id)?;
     // Saved chosen revisions and explicit task redo survive missing Hex originals.
@@ -297,7 +302,7 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Meeting is not complete"));
     }
     let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
-    let changed = (mode.is_none() || core::meeting_parts::read(root,id)?.is_some())
+    let changed = (mode.is_none() || core::meeting_parts::read(root, id)?.is_some())
         && (previous
             .as_ref()
             .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
@@ -1244,5 +1249,8 @@ pub fn input_finished(root: &Path, folder: &Path, id: &str) -> io::Result<bool> 
 }
 
 pub fn active(root: &Path, id: &str) -> io::Result<bool> {
-    Ok(read(root,id)?.is_some_and(|job|matches!(job.state,JobState::Queued|JobState::Running)))
+    Ok(
+        read(root, id)?
+            .is_some_and(|job| matches!(job.state, JobState::Queued | JobState::Running)),
+    )
 }

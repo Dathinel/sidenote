@@ -62,11 +62,17 @@ impl State {
         let hint = hex::recording_id(self);
         let elapsed = hex::part_elapsed_ms(self);
         let active_id = hint.clone();
-        let status_known = !self.hex_status_unknown() && matches!(&self.hex.status,Some(Ok(_)));
+        let status_known = !self.hex_status_unknown() && matches!(&self.hex.status, Some(Ok(_)));
         let start = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
-        let adopting=self.live.as_ref().is_some_and(|live|live.session.is_none() && matches!(live.phase,Phase::Starting|Phase::Recording))
-            && hint.as_ref().is_some_and(|id|hex.join(id).join("manifest.json").is_file());
-        if adopting && !self.live_close() { self.hex.error=Some("Save these notes before pausing the meeting."); return; }
+        let adopting = self.live.as_ref().is_some_and(|live| {
+            live.session.is_none() && matches!(live.phase, Phase::Starting | Phase::Recording)
+        }) && hint
+            .as_ref()
+            .is_some_and(|id| hex.join(id).join("manifest.json").is_file());
+        if adopting && !self.live_close() {
+            self.hex.error = Some("Save these notes before pausing the meeting.");
+            return;
+        }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -122,21 +128,29 @@ impl State {
                 && let Some(elapsed) = elapsed
             {
                 part.duration_ms = part.duration_ms.max(elapsed);
-                let _=m.save(&root);
+                let _ = m.save(&root);
             }
             let lines = m.live_lines(&hex);
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(saved) = self.meetings.iter_mut().find(|saved| saved.id == m.id) {
                 saved.minutes = Some(m.elapsed_ms().div_ceil(60_000));
-                if let Ok(text)=m.view_text(&hex) { saved.lines=core::parse_transcript(&text); saved.transcript_raw=text; }
+                if let Ok(text) = m.view_text(&hex) {
+                    saved.lines = core::parse_transcript(&text);
+                    saved.transcript_raw = text;
+                }
             }
             feed.lines = lines;
             feed.version += 1;
         }
         if live.recovering_part && status_known {
-            live.recovering_part=false;
-            if active_id.is_some() && live.session.as_ref().and_then(|m| m.parts.last())
-                .is_some_and(|part| Some(&part.id)==active_id.as_ref()) {
+            live.recovering_part = false;
+            if active_id.is_some()
+                && live
+                    .session
+                    .as_ref()
+                    .and_then(|m| m.parts.last())
+                    .is_some_and(|part| Some(&part.id) == active_id.as_ref())
+            {
                 self.hex_record_stop(active_id);
             }
         }
@@ -242,7 +256,7 @@ impl State {
             return;
         }
         let root = core::state_dir();
-        let show_live=self.current().is_some_and(|meeting|!meeting.has_summary());
+        let show_live = self.current().is_some_and(|meeting| !meeting.has_summary());
         if !self.parts_select() {
             return;
         }
@@ -260,7 +274,10 @@ impl State {
             self.hex.error = Some("Could not save meeting before Resume.");
             return;
         }
-        if show_live { self.go_home(); self.live_open=true; }
+        if show_live {
+            self.go_home();
+            self.live_open = true;
+        }
         // Keep the page and its notes; the next status supplies the new Hex part id.
         self.hex_record_start();
     }
@@ -305,9 +322,11 @@ impl State {
                 self.request_refresh();
             }
             Err(error) => {
-                self.hex.error = Some(if error.kind()==std::io::ErrorKind::WouldBlock {
+                self.hex.error = Some(if error.kind() == std::io::ErrorKind::WouldBlock {
                     "Notes are still being written. Update them when they finish."
-                } else { "Wait for Hex to finish all parts, then Generate notes again." })
+                } else {
+                    "Wait for Hex to finish all parts, then Generate notes again."
+                })
             }
         }
     }

@@ -651,9 +651,12 @@ pub fn scan() -> (Vec<Meeting>, Vec<String>) {
             for session in parts {
                 let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
                 if let Ok(mut m) = Meeting::load_pending(&folder) {
-                    m.minutes=Some(session.elapsed_ms().div_ceil(60_000));
-                    if session.phase!=super::meeting_parts::Phase::Ended && let Ok(text)=session.view_text(&meetings_dir()) {
-                        m.lines=parse_transcript(&text); m.transcript_raw=text;
+                    m.minutes = Some(session.elapsed_ms().div_ceil(60_000));
+                    if session.phase != super::meeting_parts::Phase::Ended
+                        && let Ok(text) = session.view_text(&meetings_dir())
+                    {
+                        m.lines = parse_transcript(&text);
+                        m.transcript_raw = text;
                     }
                     meetings.push(m);
                 }

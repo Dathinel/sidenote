@@ -4,8 +4,7 @@ use sidenote::core::{
     meeting_parts::{self, Phase as SavedPhase},
 };
 fn session(s: &State) -> Option<meeting_parts::Meeting> {
-    s
-        .live
+    s.live
         .as_ref()
         .and_then(|l| l.session.as_ref())
         .filter(|m| s.selected.as_ref().is_none_or(|id| id == &m.id))
@@ -130,10 +129,24 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
 }
 
 pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
-    let m=session(s)?;
-    if m.phase==SavedPhase::Ended { return None; }
-    let phase=s.live.as_ref().filter(|live| live.session.as_ref().is_some_and(|session|session.id==m.id))
-        .map(|live|live.phase).unwrap_or(if m.phase==SavedPhase::Recording {Phase::Recording} else {Phase::Paused});
+    let m = session(s)?;
+    if m.phase == SavedPhase::Ended {
+        return None;
+    }
+    let phase = s
+        .live
+        .as_ref()
+        .filter(|live| {
+            live.session
+                .as_ref()
+                .is_some_and(|session| session.id == m.id)
+        })
+        .map(|live| live.phase)
+        .unwrap_or(if m.phase == SavedPhase::Recording {
+            Phase::Recording
+        } else {
+            Phase::Paused
+        });
     let state = match phase {
         Phase::Starting => "Starting",
         Phase::Recording => "Recording",

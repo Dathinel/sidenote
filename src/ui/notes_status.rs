@@ -165,8 +165,13 @@ fn after_setup(state: JobState, configured: bool) -> JobState {
     }
 }
 pub fn job(s: &State, m: &Meeting) -> Option<Job> {
-    if sidenote::core::meeting_parts::read(&sidenote::core::state_dir(), &m.id).ok().flatten()
-        .is_some_and(|session| session.phase != sidenote::core::meeting_parts::Phase::Ended) { return None; }
+    if sidenote::core::meeting_parts::read(&sidenote::core::state_dir(), &m.id)
+        .ok()
+        .flatten()
+        .is_some_and(|session| session.phase != sidenote::core::meeting_parts::Phase::Ended)
+    {
+        return None;
+    }
     if m.device.is_some() || (!m.has_summary() && !m.draft_raw.is_empty()) {
         return None;
     }
