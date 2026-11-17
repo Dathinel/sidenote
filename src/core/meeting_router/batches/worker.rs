@@ -196,7 +196,9 @@ impl Recognizer for Worker {
             }
         })();
         if result.is_err() {
-            self.shutdown()?;
+            // Callers classify the cause (Timeout, Cancelled, Exited); a slow reap must not
+            // replace it. The cleanup result stays cached for finish() and Drop.
+            let _ = self.shutdown();
         }
         result
     }
