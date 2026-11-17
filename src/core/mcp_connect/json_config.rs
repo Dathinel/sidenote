@@ -9,6 +9,8 @@ fn key(client: Client) -> &'static str {
     }
 }
 fn read(path: &Path) -> Result<(Option<Vec<u8>>, Value), String> {
+    #[cfg(test)]
+    super::isolated_tests::check_path(path);
     match fs::read(path) {
         Ok(bytes) => {
             // Strict JSON refuses JSONC comments without stripping the user's text.

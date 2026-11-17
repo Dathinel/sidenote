@@ -1,5 +1,7 @@
 //! Local client setup. Writes happen only after an explicit Add action.
 mod agents;
+#[cfg(test)]
+mod isolated_tests;
 mod json_config;
 pub use agents::{Agent, Status, add_all, discover};
 use serde_json::json;
@@ -168,7 +170,14 @@ fn register(
 }
 
 fn codex_home() -> Option<std::ffi::OsString> {
-    std::env::var_os("CODEX_HOME")
+    #[cfg(test)]
+    {
+        Some(crate::test_home().join("codex").into_os_string())
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var_os("CODEX_HOME")
+    }
 }
 
 #[cfg(test)]

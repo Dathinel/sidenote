@@ -57,6 +57,8 @@ impl Client {
 }
 pub fn discover() -> Vec<Agent> {
     // Unit tests must inject paths and runners, never discover the owner's configuration.
+    #[cfg(test)]
+    super::isolated_tests::forbid_discovery();
     Client::ALL
         .into_iter()
         .filter(|c| c.visible(cfg!(target_os = "linux")))
@@ -74,6 +76,8 @@ impl Agent {
         cli: Option<PathBuf>,
         mut command: impl FnMut(&Path, &[&std::ffi::OsStr]) -> Result<Output, String>,
     ) -> Self {
+        #[cfg(test)]
+        super::isolated_tests::check_path(&path);
         let installed = cli.is_some()
             || path.is_file()
             || path.parent().is_some_and(Path::is_dir) && client != Client::ClaudeCode
