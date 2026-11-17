@@ -1,10 +1,16 @@
 use super::*;
 use std::{
     net::TcpListener,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
 };
 
 const LIVE: &str = r#"{"status":"settings","settings":[{"key":"meetings.audio_retention","value":null,"kind":"choice","choices":["day","week","month","forever"],"writable":true,"about":"How long finished meetings keep their audio while their transcripts, notes, summary, and Markdown stay; none follows meetings.retention","available":true}]}"#;
+
+const WORKER_TIMEOUT: Duration = Duration::from_secs(5);
+const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[test]
 fn keep_audio_contracts_through_hex_settings_api() {
@@ -24,7 +30,24 @@ fn keep_audio_contracts_through_hex_settings_api() {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        assert!(command.status().unwrap().success());
+        let mut child = command.spawn().expect("spawn isolated Keep audio test");
+        let deadline = Instant::now() + CHILD_TIMEOUT;
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("check isolated Keep audio child") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child
+                    .kill()
+                    .expect("Keep audio child exceeded 30s and could not be killed");
+                panic!("isolated Keep audio test exceeded its 30s deadline; child killed");
+            }
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert!(
+            status.success(),
+            "isolated Keep audio test failed: {status}"
+        );
         return;
     }
     let dir = hex_dir().unwrap();
@@ -32,9 +55,10 @@ fn keep_audio_contracts_through_hex_settings_api() {
     fs::create_dir_all(&dir).unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
     fs::write(
         dir.join("local-api.json"),
-        json!({"port":listener.local_addr().unwrap().port(),"token":"synthetic"}).to_string(),
+        json!({"port":address.port(),"token":"synthetic"}).to_string(),
     )
     .unwrap();
     let data = Arc::new(Mutex::new((
@@ -45,8 +69,9 @@ fn keep_audio_contracts_through_hex_settings_api() {
     let shutdown = Arc::new(AtomicBool::new(false));
     let shared = data.clone();
     let stopping = shutdown.clone();
+    let (closed, eof) = mpsc::channel::<()>();
     let worker = thread::spawn(move || {
-        while !stopping.load(Ordering::Relaxed) {
+        'connections: while !stopping.load(Ordering::Relaxed) {
             let Ok((stream, _)) = listener.accept() else {
                 thread::sleep(Duration::from_millis(2));
                 continue;
@@ -62,7 +87,10 @@ fn keep_audio_contracts_through_hex_settings_api() {
             let mut length = 0;
             loop {
                 let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    let _ = closed.send(());
+                    continue 'connections;
+                }
                 if line == "\r\n" {
                     break;
                 }
@@ -212,6 +240,36 @@ fn keep_audio_contracts_through_hex_settings_api() {
         matches!(audio.set(&engine, "day"), Err(HexError::Failed { code: Some(code), .. }) if code == "invalid-value")
     );
     assert_eq!(data.lock().unwrap().1.len(), 1);
+    let started = Instant::now();
+    let deadline = started + WORKER_TIMEOUT;
+    let mut probe = TcpStream::connect_timeout(&address, Duration::from_secs(1))
+        .expect("connect forced-EOF probe");
+    probe
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    probe
+        .write_all(b"POST /control HTTP/1.1\r\nHost: forced-eof\r\n")
+        .unwrap();
+    probe.shutdown(std::net::Shutdown::Write).unwrap();
+    eof.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .expect("fake Hex header reader did not close EOF within 5s");
+    drop(probe);
     shutdown.store(true, Ordering::Relaxed);
-    worker.join().unwrap();
+    let (joined, finished) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = joined.send(worker.join());
+    });
+    finished
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .expect("fake Hex worker join exceeded the shared 5s deadline")
+        .expect("fake Hex worker panicked");
+    assert!(
+        started.elapsed() < WORKER_TIMEOUT,
+        "forced-EOF probe exceeded 5s"
+    );
+    println!(
+        "forced EOF and worker shutdown: {:?}, bound {:?}",
+        started.elapsed(),
+        WORKER_TIMEOUT
+    );
 }
