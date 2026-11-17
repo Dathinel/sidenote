@@ -20,7 +20,6 @@ pub(super) mod reading;
 pub struct ReadingUi {
     pub custom: bool,
     pub tabs: bool,
-    pub template_open: bool,
     pub templates: std::collections::BTreeMap<String, String>,
     pub time_open: bool,
     pub sheet_h: Option<f32>,
@@ -38,7 +37,6 @@ impl ReadingUi {
         Self {
             custom,
             tabs: prefs.meeting_tabs,
-            template_open: false,
             templates: prefs.meeting_summary_templates.clone(),
             time_open: false,
             sheet_h: None,

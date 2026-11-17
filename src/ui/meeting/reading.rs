@@ -1,7 +1,7 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
 use crate::ui::{cards, icons, tasks};
-use rune_kit::{Menu, MenuItem, Placement, SegmentedControl};
+use rune_kit::{Menu, MenuItem, SegmentedControl};
 use sidenote::core::{self, people::Side};
 
 pub fn return_key(origin: &str) -> String {
@@ -104,7 +104,7 @@ impl State {
         match prefs.save(&self.store.root) {
             Ok(()) => {
                 self.meeting_ui.templates = prefs.meeting_summary_templates;
-                self.meeting_ui.template_open = false;
+                self.more_menu = None;
             }
             Err(_) => self.notice = Some("Could not save the summary template. Try again.".into()),
         }
@@ -114,6 +114,49 @@ impl State {
 pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
     let id = m.id.clone();
     let mut out = menu
+        .separator()
+        .item(
+            MenuItem::new("Ask model and effort").on_select(|s: &mut State| {
+                s.more_menu = None;
+                s.open_hex();
+                s.hex.section = crate::ui::hex::Section::Connect;
+                crate::ui::scene_scroll(s, "ask-agent-row");
+            }),
+        )
+        .item(MenuItem::new("Project").on_select({
+            let id = m.id.clone();
+            move |s: &mut State| {
+                s.more_menu = None;
+                s.project_menu = Some(id.clone());
+            }
+        }))
+        .item(MenuItem::new("Memory from this meeting").on_select({
+            let id = m.id.clone();
+            move |s: &mut State| {
+                s.more_menu = None;
+                s.open_memory();
+                s.memory.settle_all = true;
+                s.memory.settle_meeting = Some(id.clone());
+            }
+        }))
+        .group_label("View")
+        .item(
+            MenuItem::new("Summary")
+                .checked(main_tab(s, m) == Tab::Summary)
+                .on_select(|s: &mut State| {
+                    s.set_meeting_tab(Tab::Summary);
+                    s.more_menu = None;
+                }),
+        )
+        .item(
+            MenuItem::new("Your notes")
+                .disabled(m.notes.is_empty())
+                .checked(main_tab(s, m) == Tab::Notes)
+                .on_select(|s: &mut State| {
+                    s.set_meeting_tab(Tab::Notes);
+                    s.more_menu = None;
+                }),
+        )
         .separator()
         .group_label("Layout")
         .item(
@@ -127,14 +170,28 @@ pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
                 .on_select(|s: &mut State| s.set_meeting_layout(true)),
         )
         .separator()
-        .item(
-            MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
-                s.more_menu = None;
-                s.open_hex();
-                s.hex.section = crate::ui::hex::Section::PromptLibrary;
-                crate::ui::scene_scroll(s, "agent-instructions");
-            }),
+        .group_label("Next summary uses");
+    let picked = picked_template(s, m);
+    for (title, choice, enabled) in [
+        ("Standard", "standard", true),
+        ("Your instructions", "custom", s.meeting_ui.custom),
+    ] {
+        let id = id.clone();
+        out = out.item(
+            MenuItem::new(title)
+                .checked(choice == picked)
+                .disabled(!enabled)
+                .on_select(move |s: &mut State| s.choose_summary_template(&id, choice)),
         );
+    }
+    out = out.item(
+        MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
+            s.more_menu = None;
+            s.open_hex();
+            s.hex.section = crate::ui::hex::Section::PromptLibrary;
+            crate::ui::scene_scroll(s, "agent-instructions");
+        }),
+    );
     out=out.item(MenuItem::new("Write an email").on_select(|s:&mut State| {
         s.more_menu=None;s.question=TextEdit::new("Draft a short email about this meeting. Use only what was discussed and keep it ready to copy.");
         s.question.focused = true;
@@ -148,7 +205,8 @@ pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
     out
 }
 
-fn template(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
+/// The instructions the next summary of this meeting will use: "standard" or "custom".
+fn picked_template(s: &State, m: &Meeting) -> &'static str {
     let custom = s.meeting_ui.custom;
     let generated = serde_json::from_str::<serde_json::Value>(&m.summary_raw)
         .ok()
@@ -169,121 +227,70 @@ fn template(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) ->
             None if custom => "custom",
             None => "standard",
         });
-    let picked = if picked == "custom" && !custom {
+    if picked == "custom" && custom {
+        "custom"
+    } else {
         "standard"
-    } else {
-        picked
-    };
-    let shown = if picked == "custom" {
-        "Your instructions"
-    } else {
-        "Standard"
-    };
-    let trigger = tasks::value_button(
-        row()
-            .gap(5.0)
-            .items_center()
-            .child(roles::META.line(format!("Summary: {shown}"), p.soft))
-            .child(icons::draw(&icons::CHEVRON_DOWN, 16.0, p.soft)),
-        "meeting-template",
-        format!("Summary: {shown}"),
-        p,
-    )
-    .help("Choose the instructions for the next summary. The current meeting summary is kept.")
-    .on_press(|s: &mut State| s.meeting_ui.template_open = !s.meeting_ui.template_open);
-    let mut menu = Menu::new("meeting-template-menu")
-        .trigger(trigger)
-        .open(s.meeting_ui.template_open)
-        .placement(Placement::BottomStart)
-        .min_width(240.0);
-    if s.meeting_ui.template_open {
-        menu = menu.on_close(|s: &mut State| s.meeting_ui.template_open = false);
-        for (title, choice, enabled) in [
-            ("Standard", "standard", true),
-            ("Your instructions", "custom", custom),
-        ] {
-            let id = m.id.clone();
-            menu = menu.item(
-                MenuItem::new(title)
-                    .checked(choice == picked)
-                    .disabled(!enabled)
-                    .on_select(move |s: &mut State| s.choose_summary_template(&id, choice)),
-            );
-        }
-        menu = menu
-            .separator()
-            .item(
-                MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
-                    s.meeting_ui.template_open = false;
-                    s.open_hex();
-                    s.hex.section = crate::ui::hex::Section::PromptLibrary;
-                    crate::ui::scene_scroll(s, "agent-instructions");
-                }),
-            );
     }
-    menu.build(k, layer)
+}
+
+/// "15 Nov Â· 2 min Â· 3 people". A part that is not known is left out, so nobody sees
+/// "0 people" or "Length not recorded".
+fn facts_line(date: Option<String>, minutes: Option<u64>, people: usize) -> String {
+    [
+        date,
+        minutes.map(|n| format!("{n} min")),
+        match people {
+            0 => None,
+            1 => Some("1 person".into()),
+            n => Some(format!("{n} people")),
+        },
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" \u{b7} ")
 }
 
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
-    let date = m
-        .started
-        .map(|d| d.format("%-d %b").to_string())
-        .unwrap_or_else(|| "Date not recorded".into());
-    let length = m
-        .minutes
-        .map(|n| format!("{n} min"))
-        .unwrap_or_else(|| "Length not recorded".into());
-    let facts = format!(
-        "{date} \u{b7} {length} \u{b7} {} {}",
+    let facts = facts_line(
+        m.started.map(|d| d.format("%-d %b").to_string()),
+        m.minutes,
         m.summary.people.len(),
-        if m.summary.people.len() == 1 {
-            "person"
-        } else {
-            "people"
-        }
     );
-    let switch = SegmentedControl::new(
-        &["Summary", "Your notes"],
-        Some(usize::from(s.meeting_tab == Tab::Notes)),
-    )
-    .label("Meeting view")
-    .width(Some(188.0))
-    .on_pick::<State>(|s, i, tx| {
-        s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
-        tx.blur();
-    })
-    .build(k)
-    .key("meeting-view");
     let mut controls = row()
         .key("meeting-controls")
         .w_full()
         .flex_wrap()
         .gap(8.0)
         .items_center()
-        .child(switch)
         .child(
-            chip(facts, p)
+            SegmentedControl::new(
+                &["Notes", "Your notes"],
+                Some(usize::from(s.meeting_tab == Tab::Notes)),
+            )
+            .label("Meeting view")
+            .width(Some(188.0))
+            .on_pick::<State>(|s, i, tx| {
+                s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
+                tx.blur();
+            })
+            .build(k)
+            .key("meeting-view"),
+        );
+    if !facts.is_empty() {
+        controls = controls.child(
+            roles::META
+                .line(facts, p.soft)
                 .key("meeting-facts")
                 .help(m.summary.people.join(", ")),
         );
+    }
     if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
         controls = controls.child(project);
     }
-    controls = controls
-        .child(template(s, k, m, p, layer))
-        .child(more::menu(s, k, m, "meeting", p, layer));
-    let ours: Vec<_> = m
-        .summary
-        .people
-        .iter()
-        .map(|n| s.tasks.teams.owner_name(n))
-        .filter(|name| {
-            s.people
-                .affiliations
-                .side(name, &s.tasks.teams, &s.people.prefs)
-                == Some(Side::OurTeam)
-        })
-        .collect();
+    controls = controls.child(el().grow(1.0));
+    controls = controls.child(more::menu(s, k, m, "meeting", p, layer));
     col()
         .key("meeting-header")
         .w_full()
@@ -298,23 +305,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
-        .child(
-            roles::META
-                .line(
-                    format!(
-                        "Our side: {}",
-                        if ours.is_empty() {
-                            "not set".into()
-                        } else {
-                            ours.join(", ")
-                        }
-                    ),
-                    p.soft,
-                )
-                .key("meeting-our-side"),
-        )
         .children(project::form(s, k, &m.id, p))
-        .children(crate::ui::notes_status::banner(s, m, p))
 }
 
 fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
