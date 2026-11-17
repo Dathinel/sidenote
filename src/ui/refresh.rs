@@ -34,6 +34,7 @@ impl Default for Options {
 pub(super) struct Data {
     pub meetings: Vec<Meeting>,
     pub short_recordings: Option<Vec<core::recording_guard::ShortRecording>>,
+    pub recent_meeting: Option<(i64, core::ask_options::LiveSource)>,
     pub notes_jobs: std::collections::BTreeMap<String, super::notes_status::Job>,
     pub retained: Vec<PathBuf>,
     pub temporary: bool,
@@ -143,6 +144,10 @@ impl Data {
             ));
         }
         Self {
+            recent_meeting: core::ask_options::recent_meeting(
+                &core::meetings_dir(),
+                chrono::Utc::now().timestamp_millis(),
+            ),
             meetings,
             short_recordings,
             notes_jobs,
@@ -389,6 +394,7 @@ fn read_caught_with(read: impl FnOnce() -> Data + std::panic::UnwindSafe) -> (Da
             PANICS.fetch_add(1, Ordering::Relaxed);
             (
                 Data {
+                    recent_meeting: None,
                     short_recordings: None,
                     meetings: vec![],
                     notes_jobs: Default::default(),
@@ -470,6 +476,21 @@ pub(super) fn start(waker: Waker, initial: Options) -> Handle {
         slot,
         dirty,
     }
+}
+
+#[cfg(test)]
+pub(super) fn observing_handle() -> (Handle, Arc<AtomicBool>) {
+    let (tx, _) = mpsc::sync_channel(1);
+    let dirty = Arc::new(AtomicBool::new(false));
+    (
+        Handle {
+            tx: Arc::new(tx),
+            options: Arc::new(Mutex::new(Options::default())),
+            slot: Arc::new(Mutex::new(None)),
+            dirty: dirty.clone(),
+        },
+        dirty,
+    )
 }
 
 #[cfg(test)]

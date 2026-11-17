@@ -710,6 +710,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        self.notice = None;
         response_time::superseded(std::mem::take(&mut self.annotations.response_time));
         response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         let company_open = self.companies.open;
@@ -1409,6 +1410,7 @@ impl State {
                     profile,
                     check,
                     notes_jobs,
+                    recent_meeting,
                     ..
                 } = *data;
                 refresh::retain_catalog(&self.meetings, &mut meetings, &retained);
@@ -1429,6 +1431,7 @@ impl State {
                 let mut content_changed = !same_catalog(&self.meetings, &meetings);
                 if !same_catalog(&self.meetings, &meetings) {
                     self.meetings = meetings;
+                    self.rebuild_nav();
                     // An open meeting that has gone away returns to the home list.
                     if self.selected.is_some() && self.current().is_none() {
                         self.selected = None;
@@ -1459,6 +1462,13 @@ impl State {
                 if let Some(affiliations) = affiliations {
                     content_changed |= self.people.affiliations != affiliations;
                     self.people.affiliations = affiliations;
+                }
+                if !self.ask_settings.recording
+                    && let Some((ended, source)) = recent_meeting
+                    && self.ask_settings.last_end_ms.is_none_or(|old| ended > old)
+                {
+                    self.ask_settings.last_end_ms = Some(ended);
+                    self.ask_settings.last_live = Some(source);
                 }
                 self.ai_notes.jobs = notes_jobs;
                 self.scan_errors = errors;
@@ -1640,6 +1650,7 @@ impl State {
     }
     pub fn request_refresh(&self) {
         if let Some(handle) = &self.scan_tx {
+            handle.invalidate();
             handle.request(self.refresh_options());
         }
     }
@@ -2746,6 +2757,12 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("notes-settings-test-bad-answer", |s| {
                 notes_scene::settings(s, "test-bad-answer")
+            }),
+            ("settings-engine-checking", |s| {
+                hex::settings::scene_status(s, true)
+            }),
+            ("settings-engine-failed-check", |s| {
+                hex::settings::scene_status(s, false)
             }),
             ("notes-settings-last-error", |s| {
                 notes_scene::settings(s, "last-error")
