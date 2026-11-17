@@ -5,6 +5,7 @@ $Pack = $false
 $Arguments = @($args)
 if ($Arguments.Count -and $Arguments[0] -ceq '-Pack') { $Pack = $true; $Arguments = @($Arguments | Select-Object -Skip 1) }
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'release_lock.ps1')
 $slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
 $watchLog = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
 $mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
@@ -72,6 +73,7 @@ function Assert-TargetSpace {
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
     $targetDirectory = Resolve-TargetDirectory
+    Wait-ReleaseLock (Get-ReleaseLockPath) $ReleaseLockWaitMinutes $ReleaseLockReportSeconds $ReleaseLockPollSeconds
     Assert-TargetSpace
     New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
