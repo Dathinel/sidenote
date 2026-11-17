@@ -294,9 +294,9 @@ fn diary_title(manifest: Option<&str>, source: Option<&str>, summary: &str) -> S
         let value = value.trim();
         !value.is_empty() && !value.starts_with("Meeting on ") && !TIME_TITLE.is_match(value)
     };
-    let explicit = manifest
-        .filter(|v| !v.trim().is_empty())
-        .filter(|v| matches!(source, Some("user" | "calendar" | "call")) || meaningful(v));
+    let explicit = manifest.filter(|v| !v.trim().is_empty()).filter(|v| {
+        matches!(source, Some("user" | "calendar" | "call")) || (source.is_none() && meaningful(v))
+    });
     explicit
         .or_else(|| (!summary.trim().is_empty()).then_some(summary))
         .unwrap_or("Untitled meeting")
@@ -308,6 +308,14 @@ static LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\] (\S+) \(([^)]*)\): ?(.*)$").unwrap()
 });
 pub fn seconds(stamp: &str) -> Option<u64> {
+    let stamp = if let Some((whole, fraction)) = stamp.split_once('.') {
+        if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        whole
+    } else {
+        stamp
+    };
     let parts: Vec<u64> = stamp
         .split(':')
         .map(str::parse)
@@ -320,6 +328,19 @@ pub fn seconds(stamp: &str) -> Option<u64> {
         }
         _ => None,
     }
+}
+fn milliseconds(stamp: &str) -> Option<u64> {
+    let whole = seconds(stamp)?.checked_mul(1000)?;
+    let fraction = stamp.split_once('.').map_or("", |(_, fraction)| fraction);
+    let mut millis = 0;
+    for i in 0..3 {
+        millis = millis * 10
+            + fraction
+                .as_bytes()
+                .get(i)
+                .map_or(0, |b| u64::from(b - b'0'));
+    }
+    whole.checked_add(millis)
 }
 pub fn short(stamp: &str) -> &str {
     stamp.strip_prefix("00:").unwrap_or(stamp)
@@ -336,12 +357,16 @@ pub fn parse_transcript(raw: &str) -> Vec<Line> {
     let mut lines: Vec<Line> = Vec::new();
     for raw in raw.lines() {
         if let Some(c) = LINE.captures(raw.trim()) {
-            let at = format!(
+            let mut at = format!(
                 "{:02}:{:02}:{:02}",
                 c[1].parse::<u64>().unwrap_or(0),
                 c[2].parse::<u64>().unwrap_or(0),
                 c[3].parse::<u64>().unwrap_or(0)
             );
+            if let Some(fraction) = c.get(4) {
+                at.push('.');
+                at.push_str(fraction.as_str());
+            }
             lines.push(Line {
                 seconds: Some(seconds(&at).unwrap_or(0)),
                 at,
@@ -462,6 +487,14 @@ impl Meeting {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Manifest::default(),
                 Err(e) => return Err(e.into()),
             };
+        let summary_title = if summary.title.trim().is_empty() {
+            serde_json::from_str::<Summary>(&draft_raw)
+                .ok()
+                .map(|draft| draft.title)
+                .unwrap_or_default()
+        } else {
+            summary.title.clone()
+        };
         let title = if matches!(
             manifest.title_source.as_deref(),
             Some("call" | "calendar" | "user")
@@ -471,7 +504,7 @@ impl Meeting {
             None
         }
         .unwrap_or_else(|| {
-            if summary.title.is_empty() {
+            if summary_title.trim().is_empty() {
                 read_quick_title(folder)
                     .or_else(|| manifest.title.clone().filter(|t| !t.trim().is_empty()))
                     .unwrap_or_else(|| {
@@ -486,13 +519,13 @@ impl Meeting {
                             .unwrap_or_else(|| id.clone())
                     })
             } else {
-                summary.title.clone()
+                summary_title.clone()
             }
         });
         let diary_title = diary_title(
             manifest.title.as_deref(),
             manifest.title_source.as_deref(),
-            &summary.title,
+            &summary_title,
         );
         let transcript_raw = match super::file_reads::text(
             &folder.join("english-transcript.md"),
@@ -565,10 +598,16 @@ impl Meeting {
         self.summary.topics.iter().flat_map(|t| &t.points)
     }
     pub fn target(&self, stamp: &str) -> Option<usize> {
-        let target = seconds(stamp)?.saturating_add(1);
+        let target = milliseconds(stamp)?;
         self.lines
             .iter()
-            .rposition(|l| l.seconds.is_some_and(|s| s <= target))
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let start = milliseconds(&line.at).or_else(|| line.seconds?.checked_mul(1000))?;
+                (start <= target).then_some((i, start))
+            })
+            .max_by_key(|(_, start)| *start)
+            .map(|(i, _)| i)
     }
     /// Whether the transcript lines carry times. Imported meetings have text only.
     pub fn timed(&self) -> bool {
@@ -717,6 +756,57 @@ pub fn nice_date(date: &str) -> String {
 mod quick_title_tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn fractional_citation_targets_the_containing_line_and_never_the_next_one() {
+        let dir = folder("fractional-citation");
+        fs::write(
+            dir.join("english-summary.json"),
+            r#"{"title":"Workshop plan"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("english-transcript.md"), "[00:01:00.000] You (English): First paragraph\n[00:01:03.000] Maya (English): Next paragraph\n").unwrap();
+        let meeting = Meeting::load(&dir).unwrap();
+        assert_eq!(meeting.target("01:02.520"), Some(0));
+        assert_eq!(meeting.target("00:01:02.520"), Some(0));
+        assert_eq!(meeting.target("1:03"), Some(1));
+        let mut overlap = meeting.clone();
+        overlap.lines = parse_transcript(
+            "[00:01:02.800] You (English): Later\n[00:01:02.100] Maya (English): Earlier\n",
+        );
+        assert_eq!(overlap.target("1:02.520"), Some(1));
+        assert_eq!(overlap.target("1:02.900"), Some(0));
+        assert_eq!(seconds("1:62.520"), None);
+        assert_eq!(seconds("1:02.bad"), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_manifest_keeps_the_summary_title_and_explicit_titles_win() {
+        let dir = folder("default-title");
+        fs::write(
+            dir.join("english-summary.json"),
+            r#"{"title":"Workshop launch plan"}"#,
+        )
+        .unwrap();
+        for source in ["default", "user", "calendar", "call"] {
+            fs::write(
+                dir.join("manifest.json"),
+                format!(r#"{{"title":"Meeting at 15:14","title_source":"{source}"}}"#),
+            )
+            .unwrap();
+            let m = Meeting::load(&dir).unwrap();
+            assert_eq!(
+                m.title,
+                if source == "default" {
+                    "Workshop launch plan"
+                } else {
+                    "Meeting at 15:14"
+                }
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn summary_titles_are_bounded_without_changing_the_stored_task() {

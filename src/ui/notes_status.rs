@@ -37,15 +37,17 @@ pub fn is_failure(state: &JobState) -> bool {
             | JobState::ContextTooLong { .. }
     )
 }
-pub fn running_message(name: &str, started_at: i64) -> String {
-    let minutes = chrono::Utc::now()
-        .timestamp_millis()
-        .saturating_sub(started_at)
-        .max(0)
-        / 60_000;
-    format!(
-        "Writing summary with {name}. This can take up to 15 minutes. Started {minutes} minutes ago."
-    )
+/// What the summary card says while the summary is being written. It names no engine and no
+/// timer: only whether this is taking longer than most meetings do.
+pub fn running_message(started_at: i64) -> String {
+    running_message_at(started_at, chrono::Utc::now().timestamp_millis())
+}
+fn running_message_at(started_at: i64, now: i64) -> String {
+    if now.saturating_sub(started_at) < 5 * 60_000 {
+        "Writing the summary. It will appear here when it is ready.".into()
+    } else {
+        "Still writing the summary. Your transcript is saved.".into()
+    }
 }
 pub fn message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
@@ -54,7 +56,7 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
         JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
-        JobState::Running => running_message(name, job.updated_at),
+        JobState::Running => running_message(job.updated_at),
         JobState::HelperUnavailableOnLinux => core::notes::LINUX_HELPER_UNAVAILABLE.into(),
         JobState::HelperMissing => format!("{name} was not found on this PC. Install {name}, then choose it in Settings. Your transcript is saved."),
         JobState::BackendError { next_try_ms, .. } => {
@@ -245,6 +247,16 @@ pub(super) fn use_codex_button(
             .on_press(move |s: &mut State| s.use_codex_for_summary(id.clone())),
     )
 }
+pub(super) fn progress(title: &str, p: Palette) -> El {
+    row()
+        .key("notes-state-banner")
+        .gap(8.0)
+        .items_center()
+        .py(8.0)
+        .child(widgets::dot(6.0, p.accent))
+        .child(roles::SMALL.wrap(title, p.soft).role("status"))
+}
+
 pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     let selected = s
         .ai_notes
@@ -259,6 +271,16 @@ pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
     } else {
         BannerKind::Info
     };
+    if matches!(job.state, JobState::Running | JobState::Queued) {
+        return Some(progress(
+            if job.state == JobState::Queued {
+                "Waiting to write notes"
+            } else {
+                "Writing notes"
+            },
+            p,
+        ));
+    }
     let mut c = widgets::banner(title, copy, kind, p).key("notes-state-banner");
     let mut buttons = row().w_full().flex_wrap().gaps(8.0, 8.0);
     match job.state {
@@ -531,6 +553,40 @@ mod tests {
         job.helper = Some(Helper::Claude);
         job.state = JobState::HelperAuth { exit: Some(1) };
         assert!(!can_use_codex(&job, &[(Helper::Codex, true)]));
+    }
+    #[test]
+    fn the_running_card_names_no_engine_and_no_timer() {
+        let started = 1_800_000_000_000;
+        for waited in [0, 59_000, 4 * 60_000] {
+            let copy = running_message_at(started, started + waited);
+            assert_eq!(
+                copy,
+                "Writing the summary. It will appear here when it is ready."
+            );
+        }
+        let slow = running_message_at(started, started + 6 * 60_000);
+        assert_eq!(slow, "Still writing the summary. Your transcript is saved.");
+        for copy in [running_message_at(started, started), slow] {
+            for banned in [
+                "Claude",
+                "Codex",
+                "OpenCode",
+                "15 minutes",
+                "ago",
+                "Started",
+            ] {
+                assert!(!copy.contains(banned), "{banned}");
+            }
+        }
+        let job = Job {
+            state: JobState::Running,
+            helper: Some(Helper::Codex),
+            updated_at: chrono::Utc::now().timestamp_millis(),
+            request: None,
+            transcript_revision: None,
+            routing_fallbacks: Vec::new(),
+        };
+        assert!(!message(&job, None).contains("Codex"));
     }
     #[test]
     fn meetings_that_previously_needed_setup_offer_a_manual_request_after_setup() {
