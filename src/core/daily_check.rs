@@ -19,7 +19,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DEFAULT_RUNNER: &str = "Daily check (Opus)";
+const DEFAULT_RUNNER: &str = "Codex Sol";
+
+#[cfg(all(test, windows))]
+#[path = "background_tests.rs"]
+mod background_tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -813,49 +817,36 @@ fn validate_content(
     }
     Ok(())
 }
-fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> {
+fn daily_runner(name: &str, _kb: &Path, _memory: &Path) -> Result<Runner, String> {
     let mut runner = super::list_runners()?
         .into_iter()
         .find(|r| r.name == name)
         .ok_or("Daily runner name not found")?;
-    // Rebuild capability flags so a selected tools-enabled runner cannot gain write tools or MCP.
-    if super::runners::kind(&runner)? != "claude" {
-        return Err("Daily checks currently require a Claude runner for verified read-only tool restrictions".into());
+    if super::runners::kind(&runner)? != "codex" {
+        return Err("Background daily checks require a Codex runner".into());
     }
-    runner.args = vec![
-        "-p",
-        "--model",
-        "{model}",
-        "--tools",
-        "Read,Grep,Glob",
-        "--allowedTools",
-        "Read,Grep,Glob",
-        "--strict-mcp-config",
-        "--permission-prompts",
-        "none",
-        "--no-session-persistence",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    runner.tools = true;
-    runner.stdin = true;
-    for path in [
-        meetings_dir(),
-        super::peers_dir(),
-        kb.to_owned(),
-        memory.to_owned(),
-    ]
-    .into_iter()
-    .filter(|p| p.is_dir())
-    {
-        runner.args.push("--add-dir".into());
-        runner.args.push(path.to_string_lossy().into_owned());
-    }
+    let mut isolated =
+        super::runners::background_codex(runner.model.as_deref().unwrap_or("gpt-6.1-sol"), true);
+    isolated.name = runner.name;
+    runner = isolated;
     Ok(runner)
+}
+
+#[cfg(test)]
+#[test]
+fn background_daily_runner_uses_codex() {
+    let root = tempfile::tempdir().unwrap();
+    let runner = daily_runner(DEFAULT_RUNNER, root.path(), root.path()).unwrap();
+    assert_eq!(super::runners::kind(&runner).unwrap(), "codex");
+    assert!(
+        runner
+            .args
+            .windows(2)
+            .any(|a| a == ["--sandbox", "read-only"])
+    );
+    assert!(runner.args.iter().any(|a| a == "--ignore-user-config"));
+    assert!(!runner.args.iter().any(|a| a == "--add-dir"));
+    super::runners::validate(&runner).unwrap();
 }
 fn log_line(message: &str) {
     let path = super::log_path();
