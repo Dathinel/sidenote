@@ -20,7 +20,8 @@ class MeetingPause(unittest.TestCase):
                 "function Get-ScriptsNotesEngine { 'scripts' }\n"
                 "function Get-PipelineFailure { 'synthetic pipeline failure' }\n")
             (scripts / 'hex-meeting-english.ps1').write_text(
-                "param([string]$MeetingDir,[switch]$NotesOnly)\n"
+                "param([string]$MeetingDir,[switch]$NotesOnly,[switch]$TranscriptOnly)\n"
+                "if ($TranscriptOnly) { [IO.File]::WriteAllText((Join-Path $MeetingDir 'english-transcript.md'), ('[00:00:01.000] Them (English): Synthetic part '+(Split-Path -Leaf $MeetingDir))); return }\n"
                 "if (-not $NotesOnly) { throw 'Joined input must use notes only' }\n"
                 "[IO.File]::WriteAllText((Join-Path $MeetingDir 'english-summary.json'), '{\"title\":\"Synthetic notes\"}')\n")
             (scripts / 'hex-meeting-quick-title.ps1').write_text(
@@ -34,7 +35,7 @@ class MeetingPause(unittest.TestCase):
                 folder.mkdir(parents=True)
                 (folder / 'manifest.json').write_text(json.dumps(dict(status='complete', duration_ms=60000)))
                 (folder / 'transcript.ndjson').write_text('{"start_ms":0,"text":"Only synthetic words."}')
-            (joined / 'sidenote-parts.json').write_text('[]')
+            (joined / 'sidenote-parts.json').write_text(json.dumps([dict(id='100-1',duration_ms=60000),dict(id='200-2',duration_ms=60000)]))
             store = state / 'local/meeting-parts'
             store.mkdir()
             (store / '100-1.json').write_text(json.dumps(dict(id='100-1', parts=[dict(id='100-1')], phase='Paused')))
@@ -57,6 +58,9 @@ class MeetingPause(unittest.TestCase):
             subprocess.run(command + ['-MeetingFolders', str(joined)], env=env, check=True,
                            creationflags=flags, timeout=30, capture_output=True)
             self.assertTrue((joined / 'english-summary.json').exists())
+            text=(joined / 'english-transcript.md').read_text()
+            self.assertLess(text.index('Synthetic part 100-1'),text.index('Synthetic part 200-2'))
+            self.assertIn('[00:01:01.000]',text)
             self.assertFalse((physical / 'english-summary.json').exists())
 
     def test_joined_notes_only_uses_transcript_without_hex_or_audio(self):
@@ -106,6 +110,19 @@ Copy-Item -LiteralPath $InputFile -Destination (Join-Path $MeetingDir 'notes-req
             self.assertEqual((folder/'english-transcript.md').read_text(),transcript)
             self.assertTrue((folder/'english-summary.json').exists())
             self.assertFalse((root/'profile/Documents').exists())
+
+    def test_transcript_only_reuses_a_finished_part_without_notes(self):
+        with tempfile.TemporaryDirectory(prefix='sidenote-part-cache-') as tmp:
+            root=Path(tmp); scripts=root/'scripts'; scripts.mkdir(); folder=root/'100-1'; folder.mkdir()
+            source=SOURCE.with_name('hex-meeting-english.ps1'); shutil.copy2(source,scripts/source.name)
+            (scripts/'hex-pipeline-cli.ps1').write_text("function Get-ScriptsNotesEngine { 'scripts' }\nfunction Get-PipelineFailure($record) { $record.Exception.Message }\nfunction Enter-NotesEngine { throw 'A cached part must not start work' }\n")
+            text='[00:00:01.000] You (English): A cached synthetic part.\n'
+            (folder/'english-transcript.md').write_text(text)
+            env=os.environ|dict(APPDATA=str(root/'appdata'),LOCALAPPDATA=str(root/'localappdata'),USERPROFILE=str(root/'profile'),SIDENOTE_DATA_DIR=str(root/'state'))
+            result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-File',str(scripts/source.name),'-MeetingDir',str(folder),'-TranscriptOnly'],env=env,capture_output=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),timeout=30)
+            self.assertEqual(result.returncode,0,result.stderr.decode(errors='replace'))
+            self.assertEqual((folder/'english-transcript.md').read_text(),text)
+            self.assertFalse((folder/'english-summary.json').exists())
 
 if __name__ == '__main__':
     unittest.main()

@@ -71,6 +71,29 @@ try {
         try {
             $deferred = $false
             $notesOnly = Test-Path -LiteralPath (Join-Path $dir.FullName 'sidenote-parts.json')
+            if ($notesOnly) {
+                $parts=[IO.File]::ReadAllText((Join-Path $dir.FullName 'sidenote-parts.json')) | ConvertFrom-Json
+                $joined=New-Object Text.StringBuilder
+                $offset=0L
+                foreach ($part in $parts) {
+                    if ([string]$part.id -cnotmatch '\A[0-9][0-9-]{0,99}\z') { throw 'Invalid meeting part' }
+                    $partFolder=Join-Path $root ([string]$part.id)
+                    & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $partFolder -TranscriptOnly
+                    $reading=Join-Path $partFolder 'english-transcript.md'
+                    if (-not $? -or -not (Test-Path -LiteralPath $reading)) { throw 'Part transcript is not ready' }
+                    foreach ($line in [IO.File]::ReadAllLines($reading,[Text.Encoding]::UTF8)) {
+                        if ($line -match '^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\](.*)$') {
+                            $fraction=([string]$Matches[4]).PadRight(3,'0').Substring(0,3)
+                            $ms=([long]$Matches[1]*3600000)+([long]$Matches[2]*60000)+([long]$Matches[3]*1000)+[long]$fraction+$offset
+                            $seconds=[long][Math]::Floor($ms/1000)
+                            $time='{0:00}:{1:00}:{2:00}.{3:000}' -f [Math]::Floor($seconds/3600),([Math]::Floor($seconds/60)%60),($seconds%60),($ms%1000)
+                            [void]$joined.AppendLine("[$time]$($Matches[5])")
+                        } elseif ($line.Trim() -and $line -notlike '# Full English transcript*') { [void]$joined.AppendLine($line) }
+                    }
+                    $offset += [long]$part.duration_ms
+                }
+                [IO.File]::WriteAllText((Join-Path $dir.FullName 'english-transcript.md'),$joined.ToString(),(New-Object Text.UTF8Encoding($false)))
+            }
             & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName -NotesOnly:$notesOnly *>&1 | ForEach-Object {
                 $line = "$_"
                 if ($line -ceq 'notes deferred engine busy' -or $line -cmatch '\Anotes skipped (?:engine=(app|off)|category=(settings_invalid|settings_unavailable|query_unavailable))\z') { $deferred = $true; Log $line }

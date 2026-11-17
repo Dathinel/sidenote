@@ -14,7 +14,8 @@ param(
     [ValidateSet('shadow','execute')][string]$RoutingMode = 'shadow',
     [switch]$AllModels,
     # Rebuild only the summary from the existing english-transcript.md (no audio, no translation).
-    [switch]$NotesOnly
+    [switch]$NotesOnly,
+    [switch]$TranscriptOnly
 )
 $promptDir = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
@@ -39,18 +40,20 @@ if (-not $MeetingDir) {
     if (-not $latest) { throw "No meeting folders found in $root" }
     $MeetingDir = $latest.FullName
 }
+if ($NotesOnly -and $TranscriptOnly) { throw 'Choose notes only or transcript only' }
 $dir = Get-Item -LiteralPath $MeetingDir
 if (-not $dir.PSIsContainer) { throw "MeetingDir is not a folder: $MeetingDir" }
+if ($TranscriptOnly -and (Test-Path -LiteralPath (Join-Path $dir.FullName 'english-transcript.md'))) { return }
 $notesClaim = Enter-NotesEngine $dir.FullName
 if ($null -eq $notesClaim) { Write-Output 'notes deferred engine busy'; return }
-if ($script:JobContract.preserve_completed -and -not $NotesOnly -and
+if ($script:JobContract.preserve_completed -and -not $NotesOnly -and -not $TranscriptOnly -and
     (Test-Path -LiteralPath (Join-Path $dir.FullName $script:JobContract.summary_file))) { return }
 if ($dir.Name -cmatch '\A[0-9][0-9-]{0,99}\z') { Write-Output "notes engine=scripts meeting=$($dir.Name)" }
 
 # Quick title (a cheap, fast model, a few seconds) before translation, so the app can name the meeting
 # early. hex-meeting-watch.ps1 usually has done this already, and the script then skips. It never
 # fails the notes: any problem is one log line.
-try { & (Join-Path $PSScriptRoot 'hex-meeting-quick-title.ps1') -MeetingDir $dir.FullName } catch { Write-Host "quick-title failed; detail bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))" }
+try { if (-not $TranscriptOnly) { & (Join-Path $PSScriptRoot 'hex-meeting-quick-title.ps1') -MeetingDir $dir.FullName } } catch { Write-Host "quick-title failed; detail bytes=$([Text.Encoding]::UTF8.GetByteCount([string]$_))" }
 if (-not $NotesOnly) {
 $version = (Get-Content -LiteralPath (Join-Path $env:APPDATA 'hex\current-version') -Raw).Trim()
 $hex = Join-Path $env:APPDATA "hex\versions\$version\hex.exe"
@@ -215,7 +218,14 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     }
     $transcript = $transcripts -join "`n`n"
     }
-    Write-Host 'Creating notes'
+    if ($TranscriptOnly) {
+        $target=Join-Path $dir.FullName 'english-transcript.md'
+        $staged=$target+'.part.tmp'
+        [IO.File]::WriteAllText($staged,"# Full English transcript`n`n$transcript`n",$utf8)
+        [IO.File]::Move($staged,$target)
+        return
+    }
+    Write-Host 'Creating notes' 
     # The quick title is only a hint, never required: the notes write the final title from the full meeting.
     $workingTitle = ''
     try {

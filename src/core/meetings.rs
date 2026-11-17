@@ -329,7 +329,7 @@ pub fn seconds(stamp: &str) -> Option<u64> {
         _ => None,
     }
 }
-fn milliseconds(stamp: &str) -> Option<u64> {
+pub(super) fn milliseconds(stamp: &str) -> Option<u64> {
     let whole = seconds(stamp)?.checked_mul(1000)?;
     let fraction = stamp.split_once('.').map_or("", |(_, fraction)| fraction);
     let mut millis = 0;
@@ -650,7 +650,11 @@ pub fn scan() -> (Vec<Meeting>, Vec<String>) {
             });
             for session in parts {
                 let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
-                if let Ok(m) = Meeting::load_pending(&folder) {
+                if let Ok(mut m) = Meeting::load_pending(&folder) {
+                    m.minutes=Some(session.elapsed_ms().div_ceil(60_000));
+                    if session.phase!=super::meeting_parts::Phase::Ended && let Ok(text)=session.view_text(&meetings_dir()) {
+                        m.lines=parse_transcript(&text); m.transcript_raw=text;
+                    }
                     meetings.push(m);
                 }
             }

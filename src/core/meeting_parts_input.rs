@@ -5,6 +5,9 @@ impl Meeting {
         if self.parts.is_empty() {
             return Err(store_io::invalid("No recording part yet"));
         }
+        if super::super::notes::queue::active(root,&self.id)? {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,"notes_busy"));
+        }
         self.refresh(hex)?;
         let folder = inputs(root).join(&self.id);
         let mut transcript = String::new();
@@ -39,6 +42,7 @@ impl Meeting {
         }
         let manifest = serde_json::json!({"schema_version":1,"status":"complete",
             "created_at_ms":self.parts[0].started_ms,"duration_ms":self.elapsed_ms(),
+            "notes_requested_at_ms": chrono::Utc::now().timestamp_millis(),
             "ended_at_ms": self.parts.last().map(|p| p.started_ms.saturating_add(p.duration_ms as i64))});
         store_io::atomic_write(&folder.join("transcript.ndjson"), transcript.as_bytes())?;
         store_io::write(&folder.join("manifest.json"), &manifest)?;
@@ -52,49 +56,35 @@ impl Meeting {
         self.save(root)?;
         Ok(folder)
     }
-    pub fn live_lines(&self, hex: &Path) -> Vec<super::super::live::LiveLine> {
-        let mut lines = Vec::new();
-        let mut offset = 0;
-        for (i, part) in self.parts.iter().enumerate() {
-            if i > 0 {
-                lines.push(super::super::live::LiveLine {
-                    seconds: offset / 1000,
-                    you: false,
-                    text: "Recording resumed".into(),
-                });
-            }
-            let folder = hex.join(&part.id);
-            let mut part_lines = match super::super::live::read_rolling(&folder, None) {
-                Ok(super::super::live::Read::Lines(lines, _)) => lines,
-                _ => Vec::new(),
-            };
-            if part_lines.is_empty() {
-                if let Ok(raw) = file_reads::text(
-                    &folder.join("transcript.ndjson"),
-                    super::super::live::ROLLING_MAX_BYTES,
-                ) {
-                    for row in raw
-                        .lines()
-                        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-                    {
-                        if let (Some(ms), Some(text)) =
-                            (row["start_ms"].as_f64(), row["text"].as_str())
-                        {
-                            part_lines.push(super::super::live::LiveLine {
-                                seconds: (ms.max(0.0) / 1000.0) as u64,
-                                you: row["source"] == "microphone",
-                                text: text.into(),
-                            });
-                        }
-                    }
-                }
-            }
-            for line in &mut part_lines {
-                line.seconds += offset / 1000;
-            }
-            lines.extend(part_lines);
-            offset = offset.saturating_add(part.duration_ms);
+    pub fn view_text(&self,hex:&Path) -> io::Result<String> {
+        let mut out=String::new(); let mut offset=0u64;
+        for (i,part) in self.parts.iter().enumerate() {
+            let text=part_text(&hex.join(&part.id),self.phase==Phase::Recording && i+1==self.parts.len())?;
+            out.push_str(&super::super::notes::shift_transcript(&text,offset)?);
+            offset=offset.saturating_add(part.duration_ms);
+            if out.len() as u64>super::super::live::ROLLING_MAX_BYTES { return Err(store_io::invalid("Meeting transcript is too large")); }
         }
-        lines
+        Ok(out)
     }
+    pub fn live_lines(&self,hex:&Path) -> Vec<super::super::live::LiveLine> {
+        let mut out=Vec::new(); let mut offset=0u64;
+        for (i,part) in self.parts.iter().enumerate() {
+            if i>0 { out.push(super::super::live::LiveLine {seconds:offset/1000,you:false,text:"Recording resumed".into()}); }
+            if let Ok(text)=part_text(&hex.join(&part.id),self.phase==Phase::Recording && i+1==self.parts.len()) {
+                out.extend(super::super::parse_transcript(&text).into_iter().map(|line|super::super::live::LiveLine {
+                    seconds:line.seconds.unwrap_or(0).saturating_add(offset/1000),you:line.who.eq_ignore_ascii_case("You"),text:line.text }));
+            }
+            offset=offset.saturating_add(part.duration_ms);
+        }
+        out
+    }
+}
+fn part_text(folder:&Path,active:bool) -> io::Result<String> {
+    let read=|name:&str| match file_reads::text(&folder.join(name),super::super::live::ROLLING_MAX_BYTES) {
+        Ok(text)=>Ok(text),Err(e) if e.kind()==io::ErrorKind::NotFound=>Ok(String::new()),Err(e)=>Err(e)
+    };
+    if !active { let english=read("english-transcript.md")?; if !english.trim().is_empty() {return Ok(english);} }
+    let mut raw=if active {read("transcript.rolling.ndjson")?} else {read("transcript.ndjson")?};
+    if raw.trim().is_empty() { raw=read(if active {"transcript.ndjson"} else {"transcript.rolling.ndjson"})?; }
+    Ok(super::super::notes::render_joined_transcript(&raw))
 }

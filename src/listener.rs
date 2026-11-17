@@ -141,6 +141,13 @@ pub(crate) fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
 }
 pub fn generate_meeting(id: &str) -> io::Result<()> {
     if crate::core::notes::settings()?.engine() == crate::core::notes::Engine::App {
+        if crate::core::meeting_router::jobs::notes_enabled(&crate::core::state_dir())?
+            && let Some(meeting)=crate::core::meeting_parts::read(&crate::core::state_dir(),id)? {
+            for part in meeting.parts.iter().take(meeting.requested_parts) {
+                crate::core::meeting_router::jobs::enqueue_automatic(&part.id).map_err(io::Error::other)?;
+            }
+            crate::core::meeting_router::jobs::start_worker().map_err(io::Error::other)?;
+        }
         crate::core::notes::request(id, crate::core::notes::Request::TryAgain)
     } else if crate::core::notes::settings()?.engine() == crate::core::notes::Engine::Off {
         Err(io::Error::other("Notes are off"))

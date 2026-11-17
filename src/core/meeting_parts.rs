@@ -91,6 +91,7 @@ pub fn source(root: &Path, hex: &Path, id: &str) -> PathBuf {
 }
 impl Meeting {
     pub fn write_view(&self, root: &Path) -> io::Result<()> {
+        if self.requested_parts > 0 { return Ok(()); }
         let folder = inputs(root).join(&self.id);
         store_io::write(
             &folder.join("manifest.json"),
