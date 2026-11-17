@@ -23,9 +23,7 @@ pub struct ReadingUi {
     pub tabs: bool,
     pub templates: std::collections::BTreeMap<String, String>,
     pub time_open: bool,
-    pub sheet_h: Option<f32>,
     pub window_h: std::cell::Cell<f32>,
-    pub dock_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
     pub fn new(root: &std::path::Path, prefs: &sidenote::core::UiPrefs) -> Self {
@@ -40,9 +38,7 @@ impl ReadingUi {
             tabs: prefs.meeting_tabs,
             templates: prefs.meeting_summary_templates.clone(),
             time_open: false,
-            sheet_h: None,
             window_h: std::cell::Cell::new(800.0),
-            dock_h: std::cell::Cell::new(100.0),
         }
     }
 }
@@ -99,7 +95,7 @@ fn chips(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El
     r
 }
 
-/// "6 decisions Â· 9 to do Â· 3 still open", each part a jump to its section.
+/// "6 decisions · 9 to do · 3 still open", each part a jump to its section.
 fn counts(m: &Meeting, p: Palette) -> El {
     let decided = m.points().filter(|pt| pt.kind == "decided").count();
     let parts = [

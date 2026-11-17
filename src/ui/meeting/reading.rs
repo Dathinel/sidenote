@@ -14,63 +14,6 @@ pub fn return_key(origin: &str) -> String {
     }
 }
 
-pub fn sheet_bottom(s: &State) -> f32 {
-    s.meeting_ui.dock_h.get() + 10.0
-}
-
-pub fn sheet_height(s: &State) -> f32 {
-    let available = (s.viewport_h.get() - sheet_bottom(s) - 8.0).max(180.0);
-    s.meeting_ui
-        .sheet_h
-        .unwrap_or(s.meeting_ui.window_h.get() * 0.55)
-        .clamp(180.0, available)
-}
-
-fn resize_handle(s: &State, p: Palette) -> El {
-    col()
-        .key("transcript-resize")
-        .w_full()
-        .h(18.0)
-        .shrink()
-        .center()
-        .cursor(rune::Cursor::ResizeRow)
-        .role("separator")
-        .focusable(true)
-        .label(format!(
-            "Resize transcript, {} pixels",
-            sheet_height(s).round()
-        ))
-        .help("Drag up or down, or use the arrow keys to resize the transcript.")
-        .hover(p.chip)
-        .child(el().w(36.0).h(4.0).radius(2.0).fill(p.faint.alpha(0.5)))
-        .on_drag(|s: &mut State, d, _| match d.phase {
-            rune::Phase::Down => {
-                d.data = if s.meeting_ui.sheet_h.is_some() {
-                    sheet_height(s)
-                } else {
-                    -sheet_height(s)
-                }
-            }
-            rune::Phase::Move => s.meeting_ui.sheet_h = Some(d.data.abs() - d.dy),
-            rune::Phase::Up => {
-                if d.cancelled() {
-                    s.meeting_ui.sheet_h = (d.data > 0.0).then_some(d.data);
-                } else {
-                    s.meeting_ui.sheet_h = Some(sheet_height(s));
-                }
-            }
-        })
-        .on_key(|s: &mut State, e, _| {
-            let change = match e.key {
-                Key::Up => 24.0,
-                Key::Down => -24.0,
-                _ => return false,
-            };
-            s.meeting_ui.sheet_h = Some(sheet_height(s) + change);
-            true
-        })
-}
-
 impl State {
     pub fn close_transcript_sheet(&mut self) {
         self.transcript_open = false;
@@ -234,7 +177,7 @@ fn picked_template(s: &State, m: &Meeting) -> &'static str {
     }
 }
 
-/// "15 Nov Â· 2 min Â· 3 people". A part that is not known is left out, so nobody sees
+/// "15 Nov · 2 min · 3 people". A part that is not known is left out, so nobody sees
 /// "0 people" or "Length not recorded".
 fn facts_line(date: Option<String>, minutes: Option<u64>, people: usize) -> String {
     [
@@ -322,7 +265,7 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .py(4.0)
         .items_start()
         .hover_group()
-        .child(roles::READ.wrap("â€¢", p.soft).w(12.0))
+        .child(roles::READ.wrap("•", p.soft).w(12.0))
         .child(body.grow(1.0).min_w(0.0));
     if let Some(at) = pt.at.first() {
         let time = at.clone();
@@ -559,6 +502,54 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
     rail.child(crate::ui::memory::settled::meeting_footer(s, m, p).mt(8.0))
 }
 
+pub fn transcript_height(s: &State) -> f32 {
+    (s.meeting_ui.window_h.get() * 0.45).clamp(140.0, 380.0)
+}
+
+/// Saved-meeting dock control. The pause lane can fill `meeting-recording-slot`.
+pub(super) fn recording_control(s: &State, p: Palette) -> El {
+    let shown = if s.transcript_open {
+        "Hide transcript"
+    } else {
+        "Show transcript"
+    };
+    let toggle = pressable(
+        row()
+            .gap(4.0)
+            .items_center()
+            .child(icons::draw(&icons::AUDIO_LINES, 18.0, p.soft))
+            .child(icons::draw(
+                if s.transcript_open {
+                    &icons::CHEVRON_DOWN
+                } else {
+                    &icons::CHEVRON_UP
+                },
+                12.0,
+                p.soft,
+            )),
+    )
+    .key("meeting-transcript")
+    .label(shown)
+    .help(shown)
+    .px(12.0)
+    .h(38.0)
+    .radius(20.0)
+    .hover(p.chip)
+    .on_press_tx(|s: &mut State, tx| {
+        s.toggle_transcript();
+        tx.blur();
+    });
+    row()
+        .key("meeting-recording-control")
+        .items_center()
+        .padding(3.0)
+        .radius(24.0)
+        .fill(p.card)
+        .border(1.0, p.line)
+        .child(toggle)
+        .child(el().key("meeting-recording-slot"))
+}
+
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let Some(m) = s.current() else {
         return col();
@@ -588,61 +579,41 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .pb(s.overlay_h.get() + 32.0),
             "meeting-scroll",
         ));
-    if s.transcript_open {
-        main = main.child(
-            el().key("meeting-summary-dim")
-                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                .fill(rune::Color::BLACK.alpha(0.1))
-                .label("Close transcript")
-                .on_press(|s: &mut State| s.close_transcript_sheet()),
-        );
-    }
-    let transcript = tasks::value_button(
-        icons::draw(&icons::AUDIO_LINES, 16.0, p.soft),
-        "meeting-transcript",
-        "Transcript".into(),
-        p,
-    )
-    .w(28.0)
-    .px(6.0)
-    .help("Transcript")
-    .shrink()
-    .on_press_tx(|s: &mut State, tx| {
-        s.toggle_transcript();
-        tx.blur();
+    let control = recording_control(s, p);
+    let panel = s.transcript_open.then(|| {
+        col()
+            .key("meeting-transcript-view")
+            .focus_return("meeting-transcript")
+            .w_full()
+            .h(transcript_height(s))
+            .min_h(transcript_height(s))
+            .max_h(transcript_height(s))
+            .child(transcript_panel(s, k, m, true, p))
     });
-    let transcript = if narrow {
-        transcript
+    main = main.child(if let Some(panel) = panel {
+        col()
+            .key("meeting-transcript-dock")
+            .w_full()
+            .items_center()
+            .shrink()
+            .px(16.0)
+            .pb(12.0)
+            .child(
+                col()
+                    .key("meeting-transcript-surface")
+                    .max_w(COLUMN)
+                    .w_full()
+                    .radius(14.0)
+                    .clip_rounded(14.0)
+                    .fill(p.card)
+                    .border(1.0, p.line)
+                    .child(panel)
+                    .child(hairline(p))
+                    .child(control.self_start()),
+            )
     } else {
-        transcript.self_center()
-    };
-    main = main.child(ask::overlay_with(
-        s,
-        k,
-        p,
-        narrow,
-        layer,
-        Some(transcript),
-        None,
-    ));
-    if s.transcript_open {
-        main = main.child(
-            col()
-                .key("transcript-sheet")
-                .focus_return("meeting-transcript")
-                .pin(Some(16.0), None, Some(16.0), Some(sheet_bottom(s)))
-                .h(sheet_height(s))
-                .min_h(0.0)
-                .radius(10.0)
-                .clip_rounded(10.0)
-                .padding(1.0)
-                .border(1.0, p.faint.alpha(0.4))
-                .fill(p.card)
-                .shadow(8.0, 28.0, p.shadow)
-                .child(resize_handle(s, p))
-                .child(transcript_panel(s, k, m, true, p).grow(1.0)),
-        );
-    }
+        ask::overlay_with(s, k, p, narrow, layer, Some(control), None)
+    });
     let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0).child(main);
     if wide {
         columns = columns.child(
@@ -664,4 +635,21 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         pane = pane.child(notice_bar(note, p));
     }
     pane.child(header(s, k, m, p, layer)).child(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::facts_line;
+
+    #[test]
+    fn the_facts_line_leaves_out_what_is_not_known() {
+        let date = || Some("17 Nov".to_string());
+        assert_eq!(facts_line(date(), Some(2), 0), "17 Nov \u{b7} 2 min");
+        assert_eq!(
+            facts_line(date(), Some(2), 1),
+            "17 Nov \u{b7} 2 min \u{b7} 1 person"
+        );
+        assert_eq!(facts_line(date(), None, 3), "17 Nov \u{b7} 3 people");
+        assert_eq!(facts_line(None, None, 0), "");
+    }
 }

@@ -879,7 +879,7 @@ impl State {
     /// about the middle of what the panel's search row and footer leave visible.
     fn panel_offset(&self) -> f32 {
         if !self.meeting_ui.tabs {
-            return ((meeting::reading::sheet_height(self) - 100.0) / 2.0).max(24.0);
+            return ((meeting::reading::transcript_height(self) - 100.0) / 2.0).max(24.0);
         }
         ((self.viewport_h.get() - 190.0) / 2.0).max(60.0)
     }
@@ -2079,13 +2079,6 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     }
     if let Some(h) = cx.layout_with("app", |r| r[3].round() as i32) {
         s.meeting_ui.window_h.set(h as f32);
-    }
-    if let (Some(bottom), Some(top)) = (
-        cx.layout_with("meeting-main", |r| (r[1] + r[3]).round() as i32),
-        cx.layout_with("live-bar", |r| r[1].round() as i32)
-            .or_else(|| cx.layout_with("meeting-transcript", |r| r[1].round() as i32)),
-    ) {
-        s.meeting_ui.dock_h.set((bottom - top).max(0) as f32);
     }
     let window_narrow = narrow;
     let narrow = window_narrow || s.app_w.get() - nav::width(s) < COMPACT;

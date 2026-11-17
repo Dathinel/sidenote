@@ -726,7 +726,8 @@ pub fn overlay_with(
 ) -> El {
     let id = s.ask_key();
     let pending = s.asks.contains_key(&id);
-    let mut stack = col().w_full().gap(10.0);
+    let meeting_bar = s.selected.is_some();
+    let mut stack = col().w_full().gap(if meeting_bar { 0.0 } else { 10.0 });
     if !s.companies.open {
         stack = stack
             .max_w(COLUMN)
@@ -840,7 +841,7 @@ pub fn overlay_with(
     }
     let empty = s.question.text.trim().is_empty();
     let focused = s.ask_open;
-    if empty && !pending && focused {
+    if empty && !pending && focused && s.selected.is_none() && !s.on_live() {
         stack = stack.child(suggestions(s, narrow, p));
     }
     let input = TextInput::new(&s.question)
@@ -889,29 +890,32 @@ pub fn overlay_with(
     let ready = !empty && !pending;
     // The pill lines up with the thread above it when there is one.
     let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
-    let model = if s.ask_settings.connection.settings.enabled {
-        quiet_button("Connection", "ask-endpoint-settings", p)
-            .button_disabled(pending)
-            .help(if pending {
-                "Available after this answer finishes"
-            } else {
-                "Open Ask connection settings"
-            })
-            .on_press(|s: &mut State| {
-                if !s.asks.contains_key(&s.ask_key()) {
-                    s.open_connection_settings();
-                }
-            })
-    } else {
-        match &s.runner_error {
-            Some(e) => roles::META
-                .medium()
-                .wrap(format!("Runners are not set up. {e}"), p.warn)
-                .px(8.0)
-                .max_w(260.0),
-            None => runner_choice(s, k, p, narrow, layer),
+    let hide_pickers = s.selected.is_some();
+    let model = (!hide_pickers).then(|| {
+        if s.ask_settings.connection.settings.enabled {
+            quiet_button("Connection", "ask-endpoint-settings", p)
+                .button_disabled(pending)
+                .help(if pending {
+                    "Available after this answer finishes"
+                } else {
+                    "Open Ask connection settings"
+                })
+                .on_press(|s: &mut State| {
+                    if !s.asks.contains_key(&s.ask_key()) {
+                        s.open_connection_settings();
+                    }
+                })
+        } else {
+            match &s.runner_error {
+                Some(e) => roles::META
+                    .medium()
+                    .wrap(format!("Runners are not set up. {e}"), p.warn)
+                    .px(8.0)
+                    .max_w(260.0),
+                None => runner_choice(s, k, p, narrow, layer),
+            }
         }
-    };
+    });
     let beside_lead = lead.is_some() && !narrow;
     let mut pill = row()
         .key("ask-pill")
@@ -933,8 +937,16 @@ pub fn overlay_with(
             p.shadow,
         )
         .child(input)
-        .child(model)
-        .children(thinking_choice(s, k, p, layer))
+        .children(
+            (hide_pickers && empty && !pending && !narrow)
+                .then(|| recipe(0, "Draft a follow-up", p)),
+        )
+        .children(model)
+        .children(if hide_pickers {
+            None
+        } else {
+            thinking_choice(s, k, p, layer)
+        })
         .child(action(s, p, ready, pending));
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
     pill = if beside_lead {
@@ -978,24 +990,29 @@ fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
             )
     } else if s.companies.open {
         col().key("company-ask").w_full().min_w(0.0).child(stack)
+    } else if s.selected.is_some() && !s.meeting_ui.tabs {
+        col()
+            .key("ask-overlay")
+            .w_full()
+            .items_center()
+            .shrink()
+            .py(12.0)
+            .child(stack)
     } else {
         dock(stack, narrow, p)
     }
 }
 
 /// Puts `lead` next to `pill` (above it when narrow) at the bottom of `stack`.
-fn beside(stack: El, lead: Option<El>, pill: El, narrow: bool) -> El {
+fn beside(stack: El, lead: Option<El>, pill: El, _narrow: bool) -> El {
     let Some(lead) = lead else {
         return stack.child(pill);
     };
-    if narrow {
-        return stack.child(lead).child(pill);
-    }
     stack.child(
         row()
-            .key("live-bar")
+            .key("meeting-bottom-bar")
             .w_full()
-            .gap(10.0)
+            .gap(8.0)
             .items_center()
             .child(lead)
             .child(pill.grow(1.0).min_w(0.0)),
