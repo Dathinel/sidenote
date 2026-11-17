@@ -21,30 +21,53 @@ function Safe-Version($Value) {
     return 'missing or invalid'
 }
 function Measure-IdleCpu([string]$Exe) {
-    $samples = @()
+    $minUptime = 300
+    $sampleSeconds = 60
+    $entries = @()
     try {
         foreach ($item in @(Get-CimInstance Win32_Process -Filter "Name = 'sidenote.exe'")) {
             if (-not $item.ExecutablePath -or $item.ExecutablePath -ine $Exe) { continue }
             $kind = if ($item.CommandLine -match '(?i)(?:^|\s)"?--listen"?(?=\s|$)') { 'recorder' }
                 elseif ($item.CommandLine -match '(?i)\.exe"?\s*$') { 'window' } else { continue }
             $process = Get-Process -Id $item.ProcessId -ErrorAction Stop
-            $samples += [pscustomobject]@{ Kind = $kind; Process = $process; Start = $process.StartTime; Cpu = $process.TotalProcessorTime.TotalSeconds }
+            $entries += [pscustomobject]@{ Kind = $kind; Process = $process; Start = $process.StartTime }
+        }
+        $now = [DateTime]::Now
+        $report = @{}
+        $eligible = @()
+        foreach ($entry in $entries) {
+            $uptime = ($now - $entry.Start).TotalSeconds
+            if ($uptime -lt $minUptime) {
+                $report[$entry] = "idle: too soon after start ($([int]$uptime) s)"
+                continue
+            }
+            $entry.Process.Refresh()
+            $entry | Add-Member -NotePropertyName Uptime -NotePropertyValue $uptime
+            $entry | Add-Member -NotePropertyName CpuStart -NotePropertyValue $entry.Process.TotalProcessorTime.TotalSeconds
+            $eligible += $entry
         }
         $clock = [Diagnostics.Stopwatch]::StartNew()
-        Start-Sleep -Seconds 10
+        if ($eligible.Count) { Start-Sleep -Seconds $sampleSeconds }
+        foreach ($entry in $eligible) {
+            try {
+                $entry.Process.Refresh()
+                if ($entry.Process.HasExited -or $entry.Process.StartTime -ne $entry.Start) { $report[$entry] = 'unavailable'; continue }
+                $cpuEnd = $entry.Process.TotalProcessorTime.TotalSeconds
+                $overUptime = 100 * $cpuEnd / (($entry.Uptime) + $clock.Elapsed.TotalSeconds)
+                $sampled = 100 * ($cpuEnd - $entry.CpuStart) / $clock.Elapsed.TotalSeconds
+                $report[$entry] = 'since start {0:F2}% over {1} s uptime; {2} s sample {3:F2}%' -f $overUptime, [int]($entry.Uptime + $clock.Elapsed.TotalSeconds), $sampleSeconds, $sampled
+            } catch { $report[$entry] = 'unavailable' }
+        }
         $parts = foreach ($kind in @('window', 'recorder')) {
-            $values = foreach ($sample in @($samples | Where-Object Kind -eq $kind)) {
-                try {
-                    $sample.Process.Refresh()
-                    if ($sample.Process.HasExited -or $sample.Process.StartTime -ne $sample.Start) { continue }
-                    100 * ($sample.Process.TotalProcessorTime.TotalSeconds - $sample.Cpu) / $clock.Elapsed.TotalSeconds
-                } catch { } # A process exiting during the sample is unavailable, not zero.
-            }
-            if (@($values).Count) { "$kind=$((@($values | ForEach-Object { '{0:F2}%' -f $_ })) -join ',')" }
+            $kindEntries = @($entries | Where-Object Kind -eq $kind)
+            if ($kindEntries.Count) { "$kind=$((@($kindEntries | ForEach-Object { $report[$_] })) -join ',')" }
             else { "$kind=unavailable" }
         }
-        return "10 s idle observation; % of one core; $($parts -join '; '); activity not checked"
-    } catch { return '10 s idle CPU sample unavailable (informational only)' }
+        $load = @(Get-CimInstance Win32_Processor | ForEach-Object { $_.LoadPercentage } | Where-Object { $null -ne $_ })
+        $loadText = if ($load.Count) { 'system load {0:F0}%' -f ($load | Measure-Object -Average).Average } else { 'system load unavailable' }
+        $measured = $eligible.Count -gt 0
+        return "% of one core; $($parts -join '; '); $loadText; $(if ($measured) { 'measured' } else { 'not measured' }); activity not checked"
+    } catch { return 'idle CPU unavailable, not measured (informational only)' }
 }
 function Invoke-ListenerCheck([string]$Exe) {
     $saved = @{}
