@@ -116,11 +116,23 @@ fn keep_audio_contracts_through_hex_settings_api() {
                 .unwrap();
             let mut reader = BufReader::new(stream);
             let mut length = 0;
+            // Other local clients (e.g. a host port prober) are not Sidenote calls: 404 and move on.
+            let mut request_line = String::new();
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).unwrap() == 0 {
-                    let _ = closed.send(());
+                let read = reader.read_line(&mut line);
+                let ours = request_line.starts_with("POST /control ");
+                if !ours && read.is_err() {
                     continue 'connections;
+                }
+                if read.unwrap() == 0 {
+                    if ours {
+                        let _ = closed.send(());
+                    }
+                    continue 'connections;
+                }
+                if request_line.is_empty() {
+                    request_line = line.clone();
                 }
                 if line == "\r\n" {
                     break;
@@ -130,6 +142,13 @@ fn keep_audio_contracts_through_hex_settings_api() {
                 {
                     length = value.trim().parse::<usize>().unwrap();
                 }
+            }
+            if request_line != "POST /control HTTP/1.1\r\n" {
+                let _ = write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                continue;
             }
             assert!(length < 4096);
             let mut body = vec![0; length];
