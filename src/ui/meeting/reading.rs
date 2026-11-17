@@ -322,41 +322,25 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .py(4.0)
         .items_start()
         .hover_group()
-        .child(roles::READ.wrap("•", p.soft).w(12.0))
+        .child(roles::READ.wrap("â€¢", p.soft).w(12.0))
         .child(body.grow(1.0).min_w(0.0));
     if let Some(at) = pt.at.first() {
         let time = at.clone();
-        let back = origin.clone();
-        let meta = match pt.who.as_deref().filter(|who| !who.is_empty()) {
-            Some(who) => format!("{who} \u{b7} {}", crate::ui::widgets::recording_time(at)),
-            None => crate::ui::widgets::recording_time(at),
-        };
-        let source = roles::META
-            .line(&meta, p.soft.alpha(0.0))
-            .max_w(140.0)
-            .key(source_key)
-            .group_color(p.soft)
-            .link(
-                rune::Link::new(0..meta.len(), origin.clone())
-                    .label(format!("Open source at {at}"))
-                    .help("Open this line in the transcript")
-                    .focused(rune::LinkPaint::new().color(p.soft).bg(p.chip)),
-            )
-            .on_link(move |s: &mut State, _, tx| s.jump(&time, back.clone(), tx));
-        let time = at.clone();
+        let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
         line = line.child(
-            row().gap(4.0).items_center().child(source).child(
-                pressable(icons::draw(&icons::SEARCH, 16.0, p.soft))
-                    .key(format!("meeting-source-icon-{origin}"))
-                    .label(format!("Open source at {at}"))
-                    .focusable(false)
-                    .group_opacity(0.0, 1.0)
-                    .on_press_tx(move |s: &mut State, tx| {
-                        s.jump(&time, back.clone(), tx);
-                        tx.blur();
-                    }),
-            ),
+            pressable(roles::META.line(&shown, p.accent))
+                .key(source_key)
+                .label(format!("Open source at {shown}"))
+                .help("Open this line in the transcript")
+                .px(6.0)
+                .py(2.0)
+                .radius(5.0)
+                .fill(p.chip)
+                .hover(p.hit)
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.jump(&time, back.clone(), tx);
+                }),
         );
     }
     if s.back.as_deref() == Some(&origin) {
@@ -369,7 +353,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
     let mut body = col().key("summary-top").w_full().gap(4.0);
     if s.meeting_tab == Tab::Notes {
         return body.child(if m.notes.is_empty() {
-            roles::READ.wrap("Your notes are empty. Add a note.", p.soft)
+            roles::READ.wrap("No personal notes for this meeting.", p.soft)
         } else {
             crate::ui::live::your_notes(&m.notes, p).key("sec-your-notes")
         });
@@ -385,10 +369,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         );
     }
     if !m.has_summary() && draft.is_none() {
-        return body.child(roles::READ.wrap(
-            "The meeting summary will appear here when it is ready.",
-            p.soft,
-        ));
+        return body.children(crate::ui::notes_status::banner(s, m, p));
     }
     if !summary.context.is_empty() {
         body = body.child(
@@ -419,7 +400,13 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             body = body.child(roles::READ.wrap(line, p.soft).key(format!("verify-{i}")));
         }
     }
-    body.children(crate::ui::notes_status::provenance(m, p))
+    body.children(
+        draft
+            .as_ref()
+            .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
+    )
+    .children(crate::ui::notes_status::banner(s, m, p))
+    .children(crate::ui::notes_status::provenance(m, p))
 }
 
 fn rail(s: &State, m: &Meeting, p: Palette) -> El {

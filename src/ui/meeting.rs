@@ -15,6 +15,7 @@ use rune::{El, Key, Span, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::{self, Meeting, Point};
 use std::ops::Range;
+pub(super) mod paragraphs;
 pub(super) mod reading;
 
 pub struct ReadingUi {
@@ -98,7 +99,7 @@ fn chips(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El
     r
 }
 
-/// "6 decisions · 9 to do · 3 still open", each part a jump to its section.
+/// "6 decisions Â· 9 to do Â· 3 still open", each part a jump to its section.
 fn counts(m: &Meeting, p: Palette) -> El {
     let decided = m.points().filter(|pt| pt.kind == "decided").count();
     let parts = [
@@ -430,17 +431,22 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     let mut out = col().w_full().px(6.0).pb(16.0);
     let mut shown = 0;
     let mut previous_speaker = None;
-    for (i, line) in lines.iter().enumerate() {
+    for para in paragraphs::paragraphs(lines, s.highlight) {
+        let (i, line) = (para.first, para.line);
         if !filter.is_empty()
-            && !format!("{} {}", line.who, line.text)
+            && !format!("{} {}", line.who, para.text)
                 .to_lowercase()
                 .contains(&filter)
         {
             continue;
         }
-        shown += 1;
-        let hit = s.highlight == Some(i);
-        let near = s.highlight.is_some_and(|h| h.abs_diff(i) == 1);
+        shown += para.last - para.first + 1;
+        let hit = s
+            .highlight
+            .is_some_and(|h| (para.first..=para.last).contains(&h));
+        let near = s
+            .highlight
+            .is_some_and(|h| h + 1 == para.first || para.last + 1 == h);
         let mut meta = row().gap(10.0).items_center();
         let show_time = has_time && (!s.transcript_original || line.seconds.is_some());
         if show_time {
@@ -459,12 +465,12 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
                     .min_w(0.0),
             );
         }
-        let spans: Vec<Span> = find_all(&line.text, &filter)
+        let spans: Vec<Span> = find_all(&para.text, &filter)
             .into_iter()
             .map(|r| Span::new(r.start, r.end).weight(600.0).bg(p.hit, 1.5))
             .collect();
         let body = roles::SMALL
-            .wrap(&line.text, p.ink)
+            .wrap(&para.text, p.ink)
             .font(roles::SMALL.style().lh(22.0))
             .spans(spans)
             .selectable(true)
@@ -479,27 +485,40 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
             if s.transcript_original && !line.language.is_empty() {
                 words = words.child(roles::META.wrap(&line.language, p.faint));
             }
+            let you = line.who.eq_ignore_ascii_case("You")
+                || s.ai_notes.settings.as_ref().is_some_and(|settings| {
+                    !settings.your_name.is_empty()
+                        && line.who.eq_ignore_ascii_case(&settings.your_name)
+                });
+            if show_time {
+                words = words
+                    .child(roles::META.line(super::widgets::recording_time(&line.at), p.faint));
+            }
+            let bubble = words
+                .child(body)
+                .padding(10.0)
+                .radius(10.0)
+                .max_w((s.app_w.get() - super::nav::width(s)).max(240.0) * 0.65)
+                .fill(if hit {
+                    p.hit
+                } else if near || you {
+                    p.chip
+                } else {
+                    p.bg
+                });
             let mut entry = row()
                 .key(format!("line-{i}"))
                 .w_full()
-                .gap(12.0)
-                .padding(10.0)
-                .items_start()
-                .fill(if hit {
-                    p.hit
-                } else if near {
-                    p.chip
-                } else {
-                    p.card
-                });
-            if show_time {
-                entry = entry.child(
-                    roles::META
-                        .line(super::widgets::recording_time(&line.at), p.faint)
-                        .w(48.0),
-                );
+                .py(4.0)
+                .items_start();
+            if you {
+                entry = entry.child(el().grow(1.0));
             }
-            out = out.child(entry.child(words.child(body)));
+            entry = entry.child(bubble);
+            if !you {
+                entry = entry.child(el().grow(1.0));
+            }
+            out = out.child(entry);
             continue;
         }
         let mut item = col()
@@ -666,8 +685,7 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
         .min_w(0.0)
         .min_h(0.0)
         .fill(p.card);
-    // Beside the summary the panel has its own title and close button. Covering the page it is
-    // a tab, and the page's tab row above it does that work.
+    // Reading uses the page itself for the transcript; the dock button returns to the summary.
     if !s.meeting_ui.tabs {
         let back = s.back.as_ref().map(|_| {
             quiet_button(
@@ -685,28 +703,17 @@ fn transcript_panel(s: &State, k: &Kit, m: &Meeting, overlay: bool, p: Palette) 
             )
             .on_press_tx(|s: &mut State, tx| s.go_back(tx))
         });
-        frame = frame.child(
-            row()
-                .key("transcript-header")
-                .w_full()
-                .gap(8.0)
-                .items_center()
-                .px(14.0)
-                .pb(8.0)
-                .child(roles::NAME.wrap("Transcript", p.ink))
-                .child(el().grow(1.0))
-                .children(back)
-                .child(
-                    super::widgets::icon_button(
-                        &super::icons::X,
-                        "Close transcript (Escape)",
-                        "transcript-close",
-                        super::widgets::ButtonRole::Ghost,
-                        p,
-                    )
-                    .on_press(|s: &mut State| s.close_transcript_sheet()),
-                ),
-        );
+        if let Some(back) = back {
+            frame = frame.child(
+                row()
+                    .key("transcript-header")
+                    .w_full()
+                    .items_center()
+                    .px(14.0)
+                    .pb(8.0)
+                    .child(back),
+            );
+        }
     } else if overlay {
         frame = frame.child(el().h(8.0));
     } else {
