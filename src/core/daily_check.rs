@@ -828,6 +828,7 @@ fn daily_runner(name: &str, _kb: &Path, _memory: &Path) -> Result<Runner, String
     let mut isolated =
         super::runners::background_codex(runner.model.as_deref().unwrap_or("gpt-6.1-sol"), true);
     isolated.name = runner.name;
+    isolated.program = runner.program;
     runner = isolated;
     Ok(runner)
 }

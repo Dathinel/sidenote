@@ -378,6 +378,7 @@ pub(super) fn prepare(store: &MemoryStore, force: bool) -> io::Result<MigrationP
         let mut isolated =
             runners::background_codex(runner.model.as_deref().unwrap_or("gpt-6.1-sol"), false);
         isolated.name = runner.name;
+        isolated.program = runner.program;
         cache.runner = Some(isolated.name.clone());
         let prompt = format!(
             "{}\nINPUT JSON:\n{}",

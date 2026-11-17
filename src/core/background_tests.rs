@@ -42,24 +42,31 @@ class Fake {
     )
     .unwrap();
     for tool in ["0", "1"] {
-        for test in [
-            "core::daily_check::background_tests::background_fake_cli_child",
+        for (case, test) in [
             "core::notes::helper::tests::background_fake_helper_child",
-        ] {
+            "core::daily_check::background_tests::background_fake_cli_child",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let output = crate::platform::worker_command(std::env::current_exe().unwrap())
                 .unwrap()
                 .args(["--exact", test, "--nocapture"])
                 .env("PATH", &path)
                 .env("SIDENOTE_DATA_DIR", root.path().join("data"))
-                .env("SIDENOTE_FAKE_CALLS", root.path().join("calls.txt"))
+                .env(
+                    "SIDENOTE_FAKE_CALLS",
+                    root.path().join(format!("calls-{tool}-{case}.txt")),
+                )
                 .env("SIDENOTE_FAKE_CHILD", "1")
                 .env("SIDENOTE_FAKE_TOOL", tool)
                 .output()
                 .unwrap();
             assert!(
                 output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             );
         }
     }
@@ -93,6 +100,25 @@ fn background_fake_cli_child() {
         return;
     }
     assert_eq!(run(&daily).unwrap(), "Synthetic answer");
+    let config = super::super::state_dir().join("runners.json");
+    let mut presets: Vec<Runner> = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let selected = presets
+        .iter_mut()
+        .find(|r| r.name == DEFAULT_RUNNER)
+        .unwrap();
+    let native = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .next()
+        .unwrap()
+        .join("codex.exe")
+        .to_string_lossy()
+        .into_owned();
+    selected.program = native.clone();
+    selected.model = Some("synthetic-selected-model".into());
+    fs::write(&config, serde_json::to_vec(&presets).unwrap()).unwrap();
+    let selected = daily_runner(DEFAULT_RUNNER, work.path(), work.path()).unwrap();
+    assert_eq!(selected.program, native);
+    assert_eq!(selected.model.as_deref(), Some("synthetic-selected-model"));
+    assert_eq!(run(&selected).unwrap(), "Synthetic answer");
     assert!(daily_runner("Claude Sonnet", work.path(), work.path()).is_err());
     assert!(
         super::super::notes::test_helper(super::super::notes::Helper::Codex, "gpt-6.1-sol")
