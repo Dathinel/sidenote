@@ -162,14 +162,38 @@ impl State {
             }
         }
     }
+    /// A first Start that never produced a recording leaves no meeting to keep. Drop its pending
+    /// record so the page follows the notes-safe removal it had before parts existed.
+    pub(in crate::ui) fn parts_drop_unstarted(&mut self) -> bool {
+        let Some(live) = &mut self.live else {
+            return false;
+        };
+        let Some(m) = &live.session else {
+            return false;
+        };
+        if !m.parts.is_empty() {
+            return false;
+        }
+        let id = m.id.clone();
+        live.session = None;
+        live.folder = None;
+        let _ = meeting_parts::discard_pending(&core::state_dir(), &id);
+        true
+    }
     pub(in crate::ui) fn parts_start_failed(&mut self) {
-        if let Some(live) = &mut self.live {
-            live.phase = Phase::Paused;
+        if self.parts_drop_unstarted() {
+            return;
         }
-        if let Some(m) = self.live.as_mut().and_then(|l| l.session.as_mut()) {
-            m.pending_start_ms = None;
-            let _ = m.save(&core::state_dir());
-        }
+        // A failed Resume returns the meeting to Paused with its parts intact.
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(m) = &mut live.session else {
+            return;
+        };
+        live.phase = Phase::Paused;
+        m.pending_start_ms = None;
+        let _ = m.save(&core::state_dir());
     }
     pub(in crate::ui) fn parts_paused(&mut self) {
         let Some(live) = &mut self.live else {

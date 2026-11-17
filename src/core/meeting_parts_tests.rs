@@ -130,3 +130,19 @@ fn script_update_retains_the_previous_notes_until_replacement() {
         "Previous notes"
     );
 }
+
+#[test]
+fn failed_first_start_drops_the_pending_record_but_keeps_a_meeting_with_parts() {
+    let root = tempfile::tempdir().unwrap();
+    let hex = root.path().join("hex");
+    let pending = Meeting::pending(root.path(), 100).unwrap();
+    assert!(inputs(root.path()).join(&pending.id).exists());
+    discard_pending(root.path(), &pending.id).unwrap();
+    assert!(read(root.path(), &pending.id).unwrap().is_none());
+    assert!(!inputs(root.path()).join(&pending.id).exists());
+    discard_pending(root.path(), &pending.id).unwrap();
+    part(&hex, "200-2", 5000, "complete");
+    Meeting::begin(root.path(), "200-2", 200).unwrap();
+    discard_pending(root.path(), "200-2").unwrap();
+    assert_eq!(read(root.path(), "200-2").unwrap().unwrap().parts.len(), 1);
+}

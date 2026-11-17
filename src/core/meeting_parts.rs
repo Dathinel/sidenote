@@ -79,6 +79,21 @@ pub fn owner(root: &Path, part: &str) -> io::Result<Option<Meeting>> {
         .into_iter()
         .find(|m| m.parts.iter().any(|p| p.id == part)))
 }
+/// A first Start that failed never produced a recording, so its pending record and view go away.
+/// A meeting that already has a part is kept.
+pub fn discard_pending(root: &Path, id: &str) -> io::Result<()> {
+    let Some(m) = read(root, id)? else {
+        return Ok(());
+    };
+    if !m.parts.is_empty() {
+        return Ok(());
+    }
+    std::fs::remove_file(path(root, id)?)?;
+    match std::fs::remove_dir_all(inputs(root).join(id)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
 pub fn inputs(root: &Path) -> PathBuf {
     root.join("local/meeting-inputs")
 }

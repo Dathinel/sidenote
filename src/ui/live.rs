@@ -641,6 +641,7 @@ impl State {
         match live.phase {
             Phase::Starting if recording => live.phase = Phase::Recording,
             Phase::Starting if running && !busy && live.began.elapsed() > START_WAIT => {
+                self.parts_drop_unstarted();
                 if self.live_close() {
                     self.live = None;
                     self.live_open = false;
