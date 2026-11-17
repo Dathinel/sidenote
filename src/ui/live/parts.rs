@@ -24,7 +24,7 @@ impl State {
                             Ok(m) => {
                                 let mut live = Live::new(Phase::Paused, self.known_ids());
                                 live.folder = Some(meeting_parts::inputs(&root).join(&m.id));
-                                self.live_notes = TextEdit::new(&feed_io::read_notes(
+                                self.live_notes = TextEdit::new(feed_io::read_notes(
                                     live.folder.as_ref().unwrap(),
                                 ));
                                 if let Some(at) = m
@@ -110,10 +110,9 @@ impl State {
             } else if let Some(m) = &mut live.session
                 && m.pending_start_ms.is_some()
                 && !m.parts.iter().any(|p| p.id == id)
+                && m.resume(&root, &id, start).is_ok()
             {
-                if m.resume(&root, &id, start).is_ok() {
-                    live.phase = Phase::Recording;
-                }
+                live.phase = Phase::Recording;
             }
         }
         live.parts_checked = Some(Instant::now());
@@ -234,7 +233,7 @@ impl State {
             *live.quick_title.lock().unwrap_or_else(|e| e.into_inner()) = Some(saved.title.clone());
         }
         live.folder = Some(meeting_parts::inputs(&root).join(&id));
-        self.live_notes = TextEdit::new(&feed_io::read_notes(live.folder.as_ref().unwrap()));
+        self.live_notes = TextEdit::new(feed_io::read_notes(live.folder.as_ref().unwrap()));
         live.saved = self.live_notes.text.clone();
         live.seen = live.saved.clone();
         live.notes_loaded = true;

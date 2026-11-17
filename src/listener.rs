@@ -316,10 +316,9 @@ fn catch_up_routing(
         if !id.is_empty()
             && id.bytes().any(|b| b.is_ascii_digit())
             && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+            && !crate::core::meeting_parts::held(&crate::core::state_dir(), &id)?
         {
-            if !crate::core::meeting_parts::held(&crate::core::state_dir(), &id)? {
-                enqueue(&id).at(Stage::CatchUpRouting)?;
-            }
+            enqueue(&id).at(Stage::CatchUpRouting)?;
         }
     }
     Ok(())

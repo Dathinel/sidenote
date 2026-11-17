@@ -661,7 +661,7 @@ pub fn scan() -> (Vec<Meeting>, Vec<String>) {
                     meetings.push(m);
                 }
             }
-            meetings.sort_by(|a, b| b.started.cmp(&a.started));
+            meetings.sort_by_key(|m| std::cmp::Reverse(m.started));
         }
         Err(_) => errors.push("Could not read meeting parts".into()),
     }

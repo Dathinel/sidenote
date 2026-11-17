@@ -846,24 +846,6 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
     }
 }
 
-#[cfg(test)]
-const BARS: usize = 5;
-
-/// The bar heights, in points. Busy: a livelier pattern that shifts with each new word count.
-/// Idle: a slow, small swell that moves with the clock. Neither is a level; see the module note.
-#[cfg(test)]
-fn bar_heights(busy: bool, tick: u64, words: usize) -> [f32; BARS] {
-    let mut h = [0.0; BARS];
-    for (i, h) in h.iter_mut().enumerate() {
-        *h = if busy {
-            8.0 + ((words * 7 + i * 5) % 11) as f32
-        } else {
-            5.0 + ((tick as usize + i * 2) % 5) as f32 * 0.9
-        };
-    }
-    h
-}
-
 impl State {
     /// Called on every poll. Hands the reader thread its hint and whether to read, adopts the
     /// meeting folder, and saves the notes 2 s after the last key. True when the page changed.
