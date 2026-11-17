@@ -292,6 +292,9 @@ impl Output {
             }
             if let Some(item) = event.get("item") {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if item_type == "file_change" {
+                    self.failed = true;
+                }
                 if matches!(kind, "item.updated" | "item.completed")
                     && item_type == "agent_message"
                     && let Some(text) = item.get("text").and_then(|v| v.as_str())
@@ -485,6 +488,8 @@ pub(super) fn run_classified(
     loop {
         let stop = if too_large {
             Some("The runner exceeded its output limit.")
+        } else if !runner.tools && !output.tool_seen.is_empty() {
+            Some("An answer-only runner attempted to use a tool.")
         } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
         } else if crate::service::stopping() || super::ask::cancel_requested() {
@@ -527,7 +532,11 @@ pub(super) fn run_classified(
     } else {
         output.plain.trim()
     };
-    if !status.is_some_and(|s| s.success()) || output.failed || answer.is_empty() {
+    if !status.is_some_and(|s| s.success())
+        || output.failed
+        || answer.is_empty()
+        || (!runner.tools && !output.tool_seen.is_empty())
+    {
         let detail = format!("{error_text}\n{}\n{}", output.plain, output.final_text);
         return Err(RunnerFailure {
             category: category(&detail),

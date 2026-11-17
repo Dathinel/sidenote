@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fs, io, path::Path, time::Instant};
 
 const CACHE_VERSION: u32 = 1;
-const RUNNER: &str = "Memory migration (answer only)";
+const RUNNER: &str = "Memory migration (Codex)";
 
 #[derive(Serialize)]
 struct Input {
@@ -360,7 +360,7 @@ pub(super) fn prepare(store: &MemoryStore, force: bool) -> io::Result<MigrationP
     let selected = runners::list_runners_at(&store.root).and_then(|runners| {
         runners
             .into_iter()
-            .find(|r| r.name == RUNNER && !r.tools)
+            .find(|r| r.name == RUNNER)
             .ok_or_else(|| format!("Configure an answer-only runner named {RUNNER}"))
     });
     let mut cache = Cache {
@@ -372,13 +372,21 @@ pub(super) fn prepare(store: &MemoryStore, force: bool) -> io::Result<MigrationP
         runtime_ms: 0,
     };
     let result = selected.and_then(|runner| {
-        cache.runner = Some(runner.name.clone());
+        if runners::kind(&runner)? != "codex" {
+            return Err("Background memory migration requires Codex".into());
+        }
+        let mut isolated =
+            runners::background_codex(runner.model.as_deref().unwrap_or("gpt-6.1-sol"), false);
+        isolated.name = runner.name;
+        cache.runner = Some(isolated.name.clone());
         let prompt = format!(
             "{}\nINPUT JSON:\n{}",
             include_str!("memory_migration_prompt.txt"),
             serde_json::to_string(&inputs(&original)).unwrap()
         );
-        run_runner(&runner, prompt, &store.root, |_| {})
+        let scratch =
+            tempfile::tempdir().map_err(|_| "Could not create migration working folder")?;
+        run_runner(&isolated, prompt, scratch.path(), |_| {})
     });
     cache.runtime_ms = started.elapsed().as_millis() as u64;
     match result {
