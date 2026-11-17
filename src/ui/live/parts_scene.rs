@@ -1,6 +1,7 @@
 use super::*;
 use sidenote::core::meeting_parts::{self, Meeting, Phase as SavedPhase};
 pub(in crate::ui) fn scene(s: &mut State, state: &str) {
+    if state=="failed" { crate::ui::notes_scene::meeting(s,"helper-missing"); }
     let recording = state == "recording" || state == "transcript" || state == "resumed";
     hex::scene(s, recording);
     let id = s
@@ -33,13 +34,13 @@ pub(in crate::ui) fn scene(s: &mut State, state: &str) {
             duration_ms: 62000,
         });
     }
-    if state == "done" || state == "writing" {
+    if state == "done" || state == "writing" || state == "failed" {
         m.phase = SavedPhase::Ended;
     }
     let mut live = Live::scene(
         if recording {
             Phase::Recording
-        } else if state == "writing" {
+        } else if state == "writing" || state == "failed" {
             Phase::Making
         } else {
             Phase::Paused
@@ -70,6 +71,7 @@ pub(in crate::ui) fn scene(s: &mut State, state: &str) {
     live.session = Some(m);
     s.live = Some(live);
     s.live_open = true;
+    if state=="failed" { s.selected=None; }
     s.live_notes = TextEdit::new(
         "Check the handling fee on the freight quote.
 Confirm volume by Friday.",

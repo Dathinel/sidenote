@@ -3832,6 +3832,7 @@ pub fn spec() -> AppSpec<State> {
                     live.saving = live::Saving::Failed("Could not save your notes or a recovery copy. Keep this text before closing Sidenote.".into());
                 }
             }),
+            ("meeting-parts-failed", |s| live::parts_scene(s,"failed")),
             ("meeting-parts-recording", |s| {
                 live::parts_scene(s, "recording")
             }),

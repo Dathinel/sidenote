@@ -3,8 +3,8 @@ use sidenote::core::{
     self,
     meeting_parts::{self, Phase as SavedPhase},
 };
-pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
-    let m = s
+fn session(s: &State) -> Option<meeting_parts::Meeting> {
+    s
         .live
         .as_ref()
         .and_then(|l| l.session.as_ref())
@@ -14,7 +14,10 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
             s.selected
                 .as_deref()
                 .and_then(|id| meeting_parts::read(&core::state_dir(), id).ok().flatten())
-        });
+        })
+}
+pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let m = session(s);
     let recording = m.as_ref().is_some_and(|m| m.phase == SavedPhase::Recording)
         || (s.selected.is_none() && s.live.as_ref().is_some_and(|l| l.phase == Phase::Recording));
     let open = if s.on_live() {
@@ -126,17 +129,16 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
     control
 }
 
-pub(in crate::ui) fn status(s: &State, p: Palette) -> El {
-    let Some(live) = &s.live else {
-        return el();
-    };
-    let Some(m) = &live.session else {
-        return el();
-    };
-    let state = if live.phase == Phase::Recording {
-        "Recording"
-    } else {
-        "Paused"
+pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
+    let m=session(s)?;
+    if m.phase==SavedPhase::Ended { return None; }
+    let phase=s.live.as_ref().filter(|live| live.session.as_ref().is_some_and(|session|session.id==m.id))
+        .map(|live|live.phase).unwrap_or(if m.phase==SavedPhase::Recording {Phase::Recording} else {Phase::Paused});
+    let state = match phase {
+        Phase::Starting => "Starting",
+        Phase::Recording => "Recording",
+        Phase::Paused => "Paused",
+        Phase::Making => "Writing notes",
     };
     let mut c = col().gap(8.0).child(
         roles::META
@@ -153,5 +155,5 @@ pub(in crate::ui) fn status(s: &State, p: Palette) -> El {
                 .key("meeting-notes-stale"),
         );
     }
-    c
+    Some(c)
 }

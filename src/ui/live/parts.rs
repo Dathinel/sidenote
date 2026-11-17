@@ -62,7 +62,11 @@ impl State {
         let hint = hex::recording_id(self);
         let elapsed = hex::part_elapsed_ms(self);
         let active_id = hint.clone();
+        let status_known = !self.hex_status_unknown() && matches!(&self.hex.status,Some(Ok(_)));
         let start = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
+        let adopting=self.live.as_ref().is_some_and(|live|live.session.is_none() && matches!(live.phase,Phase::Starting|Phase::Recording))
+            && hint.as_ref().is_some_and(|id|hex.join(id).join("manifest.json").is_file());
+        if adopting && !self.live_close() { self.hex.error=Some("Save these notes before pausing the meeting."); return; }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -90,6 +94,7 @@ impl State {
                         live.folder = Some(meeting_parts::inputs(&root).join(&m.id));
                         live.session = Some(m);
                         live.notes_loaded = true;
+                        live.saved.clear();
                     }
                     Err(_) => {
                         self.hex.error =
@@ -112,57 +117,28 @@ impl State {
                 let _ = m.save(&root);
             }
             let _ = m.refresh(&hex);
-            if m.phase == SavedPhase::Recording
-                && let Some(part) = m.parts.last_mut()
+            if let Some(part) = m.parts.last_mut()
                 && active_id.as_deref() == Some(&part.id)
                 && let Some(elapsed) = elapsed
             {
-                part.duration_ms = elapsed;
+                part.duration_ms = part.duration_ms.max(elapsed);
+                let _=m.save(&root);
             }
             let lines = m.live_lines(&hex);
             let mut feed = live.feed.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(saved) = self.meetings.iter_mut().find(|saved| saved.id == m.id) {
                 saved.minutes = Some(m.elapsed_ms().div_ceil(60_000));
-                saved.lines = lines
-                    .iter()
-                    .filter(|line| line.text != "Recording resumed")
-                    .map(|line| core::Line {
-                        at: stamp(line.seconds),
-                        seconds: Some(line.seconds),
-                        who: if line.you { "You" } else { "Others" }.into(),
-                        language: "English".into(),
-                        text: line.text.clone(),
-                    })
-                    .collect();
-                saved.transcript_raw = saved
-                    .lines
-                    .iter()
-                    .map(|line| {
-                        let seconds = line.seconds.unwrap_or(0);
-                        format!(
-                            "[{:02}:{:02}:{:02}.000] {} (English): {}\n",
-                            seconds / 3600,
-                            seconds / 60 % 60,
-                            seconds % 60,
-                            line.who,
-                            line.text
-                        )
-                    })
-                    .collect();
+                if let Ok(text)=m.view_text(&hex) { saved.lines=core::parse_transcript(&text); saved.transcript_raw=text; }
             }
             feed.lines = lines;
             feed.version += 1;
         }
-        if live.recovering_part
-            && active_id.is_some()
-            && live
-                .session
-                .as_ref()
-                .and_then(|m| m.parts.last())
-                .is_some_and(|p| Some(&p.id) == active_id.as_ref())
-        {
-            live.recovering_part = false;
-            self.hex_record_stop(active_id);
+        if live.recovering_part && status_known {
+            live.recovering_part=false;
+            if active_id.is_some() && live.session.as_ref().and_then(|m| m.parts.last())
+                .is_some_and(|part| Some(&part.id)==active_id.as_ref()) {
+                self.hex_record_stop(active_id);
+            }
         }
     }
     pub(in crate::ui) fn parts_notes_failed(&mut self) {
@@ -266,6 +242,7 @@ impl State {
             return;
         }
         let root = core::state_dir();
+        let show_live=self.current().is_some_and(|meeting|!meeting.has_summary());
         if !self.parts_select() {
             return;
         }
@@ -283,6 +260,7 @@ impl State {
             self.hex.error = Some("Could not save meeting before Resume.");
             return;
         }
+        if show_live { self.go_home(); self.live_open=true; }
         // Keep the page and its notes; the next status supplies the new Hex part id.
         self.hex_record_start();
     }
@@ -326,9 +304,10 @@ impl State {
                 });
                 self.request_refresh();
             }
-            Err(_) => {
-                self.hex.error =
-                    Some("Wait for Hex to finish all parts, then Generate notes again.")
+            Err(error) => {
+                self.hex.error = Some(if error.kind()==std::io::ErrorKind::WouldBlock {
+                    "Notes are still being written. Update them when they finish."
+                } else { "Wait for Hex to finish all parts, then Generate notes again." })
             }
         }
     }

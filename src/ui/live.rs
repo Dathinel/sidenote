@@ -1122,7 +1122,7 @@ fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
         )))
     } else if feed.lines.is_empty() {
         let mut c = col().w_full().child(note(
-            "Listening\u{2026} words appear a few seconds after they are said",
+            if live.phase==Phase::Paused { "No transcript yet." } else { "Listening\u{2026} words appear a few seconds after they are said" },
         ));
         if live.began.elapsed() > NO_FEED_AFTER && !live.scene {
             c = c.child(
@@ -1268,7 +1268,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .items_start()
         .gap(if narrow { 10.0 } else { 12.0 })
         .child(head)
-        .child(parts_status(s, p));
+        .children(parts_status(s, p));
     if let Some(Saving::Failed(_)) = saving {
         let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
         let warning = save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered);
@@ -1357,16 +1357,17 @@ fn heading(s: &State) -> String {
 
 fn making_view(s: &State, p: Palette, narrow: bool) -> El {
     if s.live.as_ref().is_some_and(|live| live.session.is_some()) {
+        let failure=s.live.as_ref().and_then(|live|live.session.as_ref()).and_then(|session| {
+            let job=s.ai_notes.jobs.get(&session.id)?;
+            if matches!(job.state,sidenote::core::notes::JobState::Queued|sidenote::core::notes::JobState::Running|sidenote::core::notes::JobState::Done {..}) { return None; }
+            s.meetings.iter().find(|m|m.id==session.id).and_then(|m|crate::ui::notes_status::banner(s,m,p))
+        });
         return col()
             .w_full()
             .gap(16.0)
             .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
-            .child(
-                roles::READ
-                    .wrap("Writing notes", p.soft)
-                    .key("meeting-writing-notes")
-                    .role("status"),
-            )
+            .child(failure.unwrap_or_else(|| roles::READ.wrap("Writing notes",p.soft)
+                .key("meeting-writing-notes").role("status")))
             .children((!s.live_notes.text.is_empty()).then(|| your_notes(&s.live_notes.text, p)));
     }
 

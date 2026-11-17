@@ -18,7 +18,7 @@ def main():
     results = []
     assertions = 0
     for width in (1280, 640, 390):
-        for name in ('recording', 'paused', 'transcript', 'resumed', 'writing', 'done', 'stale'):
+        for name in ('recording', 'paused', 'transcript', 'resumed', 'writing', 'failed', 'done', 'stale'):
             root = Path(tempfile.mkdtemp(prefix=name+'-', dir=out))
             meetings = fixture.prepare(root, 'finished')
             row = native.render(args.exe.resolve(), name, 'meeting-parts-'+name,
@@ -47,6 +47,9 @@ def main():
             if name == 'resumed':
                 assert any(n.get('text') == 'Recording resumed' for n in tree['elements'])
                 assertions += 1
+            if name == 'failed':
+                assert 'notes-state-banner' in nodes and 'meeting-writing-notes' not in nodes
+                assertions+=1
             if name == 'writing':
                 assert 'meeting-writing-notes' in nodes
                 assertions += 1

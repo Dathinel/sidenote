@@ -248,12 +248,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
-        .children(
-            s.live
-                .as_ref()
-                .filter(|l| l.session.as_ref().is_some_and(|session| session.id == m.id))
-                .map(|_| crate::ui::live::parts_status(s, p)),
-        )
+        .children(crate::ui::live::parts_status(s,p))
         .children(project::form(s, k, &m.id, p))
 }
 
