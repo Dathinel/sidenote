@@ -637,6 +637,38 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     pane.child(header(s, k, m, p, layer)).child(columns)
 }
 
+/// Publication-arrival scene, confined to the renderer's invented meeting directory.
+pub fn scene_publication(s: &mut State, home: bool) {
+    assert!(crate::ui::isolated());
+    crate::ui::scene_screens(s);
+    let current = s.current().unwrap().clone();
+    assert!(current.folder.starts_with(&s.store.root));
+    let folder = if home {
+        current.folder.parent().unwrap().join("2000000000000-2")
+    } else {
+        current.folder
+    };
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("manifest.json"), serde_json::json!({"title":"Meeting at 15:14","title_source":"default",
+        "status":"complete","created_at_ms":chrono::Utc::now().timestamp_millis()-120_000,"duration_ms":60_000}).to_string()).unwrap();
+    std::fs::write(
+        folder.join("english-summary.json"),
+        serde_json::json!({"title":"Latest workshop decisions",
+        "context":["A synthetic meeting published while this window stays open."]})
+        .to_string(),
+    )
+    .unwrap();
+    let options = s.refresh_options();
+    s.apply_event(crate::ui::Event::Refreshed(crate::ui::refresh::Result {
+        generation: core::mutation_generation(),
+        options,
+        data: Some(Box::new(crate::ui::refresh::Data::read(options))),
+    }));
+    if home {
+        s.go_home();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::facts_line;

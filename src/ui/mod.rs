@@ -3158,6 +3158,12 @@ pub fn spec() -> AppSpec<State> {
             // The meeting page with each tab, the transcript panel with a search hit, and the
             // "..." menu. All read the invented meetings in tools/ui-fixtures/screens.
             ("screens-summary", scene_screens),
+            ("meeting-published-without-reopen", |s| {
+                meeting::reading::scene_publication(s, false)
+            }),
+            ("home-published-without-reopen", |s| {
+                meeting::reading::scene_publication(s, true)
+            }),
             ("meeting-reading-review", |s| {
                 scene_screens(s);
                 s.refresh_areas();

@@ -357,16 +357,12 @@ pub fn parse_transcript(raw: &str) -> Vec<Line> {
     let mut lines: Vec<Line> = Vec::new();
     for raw in raw.lines() {
         if let Some(c) = LINE.captures(raw.trim()) {
-            let mut at = format!(
+            let at = format!(
                 "{:02}:{:02}:{:02}",
                 c[1].parse::<u64>().unwrap_or(0),
                 c[2].parse::<u64>().unwrap_or(0),
                 c[3].parse::<u64>().unwrap_or(0)
             );
-            if let Some(fraction) = c.get(4) {
-                at.push('.');
-                at.push_str(fraction.as_str());
-            }
             lines.push(Line {
                 seconds: Some(seconds(&at).unwrap_or(0)),
                 at,
@@ -599,11 +595,24 @@ impl Meeting {
     }
     pub fn target(&self, stamp: &str) -> Option<usize> {
         let target = milliseconds(stamp)?;
+        // Keep raw fractional starts for navigation without changing the notes engine's canonical times.
+        let starts: Vec<_> = self
+            .transcript_raw
+            .lines()
+            .filter_map(|raw| {
+                LINE.captures(raw.trim())?;
+                milliseconds(raw.trim().strip_prefix('[')?.split_once(']')?.0)
+            })
+            .collect();
         self.lines
             .iter()
             .enumerate()
             .filter_map(|(i, line)| {
-                let start = milliseconds(&line.at).or_else(|| line.seconds?.checked_mul(1000))?;
+                let start = starts
+                    .get(i)
+                    .copied()
+                    .or_else(|| milliseconds(&line.at))
+                    .or_else(|| line.seconds?.checked_mul(1000))?;
                 (start <= target).then_some((i, start))
             })
             .max_by_key(|(_, start)| *start)
@@ -770,10 +779,12 @@ mod quick_title_tests {
         assert_eq!(meeting.target("01:02.520"), Some(0));
         assert_eq!(meeting.target("00:01:02.520"), Some(0));
         assert_eq!(meeting.target("1:03"), Some(1));
-        let mut overlap = meeting.clone();
-        overlap.lines = parse_transcript(
+        fs::write(
+            dir.join("english-transcript.md"),
             "[00:01:02.800] You (English): Later\n[00:01:02.100] Maya (English): Earlier\n",
-        );
+        )
+        .unwrap();
+        let overlap = Meeting::load(&dir).unwrap();
         assert_eq!(overlap.target("1:02.520"), Some(1));
         assert_eq!(overlap.target("1:02.900"), Some(0));
         assert_eq!(seconds("1:62.520"), None);

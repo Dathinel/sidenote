@@ -151,6 +151,15 @@ def main():
         nodes,k=render('engine-failed-check','settings-engine-failed-check')
         check(any('Could not confirm Hex recording status. Checking again automatically.' in t for t in texts(nodes)),
               'Engine: failed bounded check explains retry')
+    for home in (False, True):
+        state=Path(tempfile.mkdtemp(prefix='publication-',dir=out))
+        source=meeting.prepare(state,'finished')
+        scene=('home' if home else 'meeting')+'-published-without-reopen'
+        if args.record_only:
+            scene='screens-finder-keys' if home else 'meeting-reading-review'
+        nodes,k=render('publication-'+('home' if home else 'meeting'),scene,state=state,meetings=source)
+        if not args.record_only:
+            check(any('Latest workshop decisions' in t for t in texts(nodes)),scene+': published meeting is visible')
     (out/'index.json').write_text(json.dumps(dict(rows=rows,checks=checks,failures=failures),indent=2))
     print(f'{len(checks)-len(failures)}/{len(checks)} render checks passed; {len(rows)} scenes',flush=True)
     if failures and not args.record_only:
