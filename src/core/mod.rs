@@ -19,6 +19,7 @@ pub(crate) mod idle_pass;
 pub mod lid;
 pub(crate) mod meeting_evidence;
 pub mod meeting_job;
+pub mod meeting_parts;
 pub mod meeting_router;
 pub mod meeting_watch;
 pub mod provider;
