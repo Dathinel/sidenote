@@ -365,6 +365,7 @@ pub fn run_runner(
         prompt,
         working_dir,
         Duration::from_secs(600),
+        false,
         progress,
     )
 }
@@ -374,9 +375,18 @@ pub(super) fn run_runner_with_timeout(
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
+    read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
-    run_classified(runner, prompt, working_dir, timeout, progress).map_err(|e| e.message)
+    run_classified(
+        runner,
+        prompt,
+        working_dir,
+        timeout,
+        read_only_background,
+        progress,
+    )
+    .map_err(|e| e.message)
 }
 
 pub(super) fn run_classified(
@@ -384,6 +394,7 @@ pub(super) fn run_classified(
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
+    read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
     runners::validate(runner)?;
@@ -481,7 +492,7 @@ pub(super) fn run_classified(
         streamed: String::new(),
         plain: String::new(),
         failed: false,
-        read_only_background: args.iter().any(|a| a == "--ignore-user-config"),
+        read_only_background,
         tool_seen: Default::default(),
     };
     let mut done = false;
@@ -587,6 +598,7 @@ mod tests {
                     "synthetic".into(),
                     root.path(),
                     Duration::from_secs(1),
+                    false,
                     |_| {}
                 )
                 .unwrap_err(),

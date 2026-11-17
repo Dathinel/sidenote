@@ -77,31 +77,43 @@ fn background_fake_cli_child() {
     let work = tempfile::tempdir().unwrap();
     let log = PathBuf::from(std::env::var_os("SIDENOTE_FAKE_CALLS").unwrap());
     let mut codex = daily_runner("Codex Sol", work.path(), work.path()).unwrap();
-    let run = |r: &Runner| {
+    let run = |r: &Runner, read_only_background| {
         super::super::runner_process::run_runner_with_timeout(
             r,
             "Synthetic input".into(),
             work.path(),
             Duration::from_secs(10),
+            read_only_background,
             |_| {},
         )
     };
     assert_eq!(super::super::runners::kind(&codex).unwrap(), "codex");
     if std::env::var("SIDENOTE_FAKE_TOOL").as_deref() == Ok("1") {
-        assert!(run(&codex).is_err(), "daily Codex accepted a file edit");
+        assert!(
+            run(&codex, true).is_err(),
+            "daily Codex accepted a file edit"
+        );
+        assert_eq!(run(&codex, false).unwrap(), "Synthetic answer");
         return;
     }
-    assert_eq!(run(&codex).unwrap(), "Synthetic answer");
+    assert_eq!(run(&codex, true).unwrap(), "Synthetic answer");
     let calls = fs::read_to_string(&log).unwrap();
     assert!(!calls.contains("claude\n"));
     for flag in [
-        "--ignore-user-config",
-        "features.hooks=false",
         "mcp_servers={}",
         "--sandbox\nread-only",
+        "approval_policy=\"never\"",
+        "features.apps=false",
+        "features.plugins=false",
+        "features.multi_agent=false",
+        "web_search=\"disabled\"",
+        "--ephemeral",
+        "--json",
     ] {
         assert!(calls.contains(flag), "missing {flag}");
     }
+    assert!(!calls.contains("--ignore-user-config"));
+    assert!(!calls.contains("features.hooks"));
     assert!(!codex.args.iter().any(|a| a == "--add-dir"));
     let config = super::super::state_dir().join("runners.json");
     let mut presets: Vec<Runner> = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
@@ -118,7 +130,7 @@ fn background_fake_cli_child() {
     let selected = daily_runner("Codex Sol", work.path(), work.path()).unwrap();
     assert_eq!(selected.program, native);
     assert_eq!(selected.model.as_deref(), Some("synthetic-selected-model"));
-    assert_eq!(run(&selected).unwrap(), "Synthetic answer");
+    assert_eq!(run(&selected, true).unwrap(), "Synthetic answer");
     let claude = daily_runner("Claude Sonnet", work.path(), work.path()).unwrap();
     for flag in ["--tools", "--allowedTools"] {
         assert!(
@@ -129,7 +141,7 @@ fn background_fake_cli_child() {
         );
     }
     assert!(claude.args.iter().any(|a| a == "--strict-mcp-config"));
-    assert_eq!(run(&claude).unwrap(), "Synthetic answer");
+    assert_eq!(run(&claude, true).unwrap(), "Synthetic answer");
     assert!(fs::read_to_string(&log).unwrap().contains("claude\n"));
     let sandbox = codex.args.iter().position(|a| a == "read-only").unwrap();
     codex.args[sandbox] = "workspace-write".into();

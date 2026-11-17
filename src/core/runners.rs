@@ -139,7 +139,7 @@ pub fn validate(runner: &Runner) -> Result<(), String> {
             || a == "bypassPermissions"
             || a == "--bare"
             || a == "--safe-mode"
-            || (a == "--ignore-user-config" && harness != "codex")
+            || a == "--ignore-user-config"
             || a == "--ignore-rules"
     }) {
         return Err("Runner arguments may not bypass hooks, approvals or the sandbox".into());

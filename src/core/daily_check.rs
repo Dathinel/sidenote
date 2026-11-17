@@ -837,11 +837,8 @@ fn daily_runner(name: &str, kb: &Path, memory: &Path) -> Result<Runner, String> 
             "approval_policy=\"never\"",
             "--ephemeral",
             "--skip-git-repo-check",
-            "--ignore-user-config",
             "-c",
             "mcp_servers={}",
-            "-c",
-            "features.hooks=false",
             "-c",
             "features.apps=false",
             "-c",
@@ -909,7 +906,8 @@ fn background_daily_runners_keep_codex_and_claude_selectable() {
             .windows(2)
             .any(|a| a == ["--sandbox", "read-only"])
     );
-    assert!(runner.args.iter().any(|a| a == "--ignore-user-config"));
+    assert!(!runner.args.iter().any(|a| a == "--ignore-user-config"));
+    assert!(!runner.args.iter().any(|a| a.contains("features.hooks")));
     assert!(!runner.args.iter().any(|a| a == "--add-dir"));
     super::runners::validate(&runner).unwrap();
     let claude = daily_runner("Claude Sonnet", root.path(), root.path()).unwrap();
@@ -921,6 +919,15 @@ fn background_daily_runners_keep_codex_and_claude_selectable() {
             .any(|a| a == ["--tools", "Read,Grep,Glob"])
     );
     super::runners::validate(&claude).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn daily_codex_validator_rejects_ignored_user_config() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runner = daily_runner("Codex Sol", root.path(), root.path()).unwrap();
+    runner.args.push("--ignore-user-config".into());
+    assert!(super::runners::validate(&runner).is_err());
 }
 fn log_line(message: &str) {
     let path = super::log_path();
@@ -1112,6 +1119,7 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
                 prompt.to_owned(),
                 &memory_dir,
                 Duration::from_secs(900),
+                true,
                 |_| {},
             )
             .map_err(|e| Stage::CheckRunner.error(invalid(&e)))
