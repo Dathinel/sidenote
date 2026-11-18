@@ -663,3 +663,37 @@ fn a_cli_that_finishes_in_time_returns_its_output_and_status() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("out-text"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("err-text"));
 }
+
+#[test]
+fn add_all_keeps_added_agents_untouched_and_reports_every_result() {
+    let sandbox = Sandbox::new();
+    let mut added = prepared(&sandbox, Client::Cursor);
+    added.add(Path::new("sidenote")).unwrap();
+    added.status = Status::Added;
+    let before = fs::read(&added.path).unwrap();
+    let pending = prepared(&sandbox, Client::OpenCode);
+    let mut missing = sandbox.agent(Client::ClaudeDesktop);
+    missing.status = Status::NotInstalled;
+    let results = add_all(
+        &[added.clone(), pending.clone(), missing.clone()],
+        Path::new("sidenote"),
+    );
+    assert_eq!(results.len(), 2);
+    assert!(results[0].0 == Client::Cursor);
+    assert!(results[0].1.as_ref().unwrap().starts_with("Already added"));
+    assert_eq!(fs::read(&added.path).unwrap(), before);
+    assert_eq!(files_in(&added), 2, "no new backup for an added agent");
+    assert!(results[1].1.is_ok());
+    assert!(super::json_config::has_entry(Client::OpenCode, &pending.path).unwrap());
+    assert!(!missing.path.exists());
+}
+
+#[test]
+fn add_refuses_an_agent_that_is_not_installed_without_writing() {
+    let sandbox = Sandbox::new();
+    let mut agent = sandbox.agent(Client::Cursor);
+    agent.status = Status::NotInstalled;
+    assert!(agent.add(Path::new("sidenote")).is_err());
+    assert!(!agent.path.exists());
+    assert!(!agent.path.parent().unwrap().exists());
+}
