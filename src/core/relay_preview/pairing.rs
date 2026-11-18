@@ -414,7 +414,7 @@ mod security_tests {
     }
 }
 
-fn token(key: &[u8; 32]) -> String {
+pub(super) fn token(key: &[u8; 32]) -> String {
     key.iter().map(|b| format!("{b:02x}")).collect()
 }
 
