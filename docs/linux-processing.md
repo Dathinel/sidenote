@@ -74,9 +74,11 @@ worker now run on Linux; the speech listener and remote protocol are later lanes
 catalog license labels are metadata, not a new license review.
 
 The packaged unattended worker retains its ordinary 512 MiB, one CPU and 32-task
-budget so existing routing helpers remain admitted. Unattended speech needs its own
-bounded service in L5. The speech profile is qualified separately in a 1 GiB user
-service; those tests do not qualify the packaged unattended service for speech.
+budget so existing routing helpers remain admitted. The separate
+`sidenote-speech@.service` packages the speech-only lifetime with a 1 GiB, one CPU,
+64-task inner service. Speech admission requires `sidenote-speech-worker.service`;
+the ordinary server cannot launch speech. Resource-property tests do not qualify
+the installed template's full mount and namespace restrictions.
 
 ## System service, independent of login
 

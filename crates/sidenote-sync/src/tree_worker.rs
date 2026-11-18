@@ -159,7 +159,10 @@ pub fn bounded_output(command: &mut Command, limit: Duration) -> io::Result<std:
 }
 
 fn budget(speech: bool) -> io::Result<()> {
-    let (_, group) = owner_unit()?;
+    let (unit, group) = owner_unit()?;
+    if speech && unit != "sidenote-speech-worker.service" {
+        return Err(unavailable());
+    }
     let directory = std::path::Path::new("/sys/fs/cgroup")
         .join(group.strip_prefix("/").map_err(|_| unavailable())?);
     for (file, maximum) in [
@@ -246,7 +249,7 @@ mod tests {
             property("TasksMax")
         );
         assert_eq!(property("CPUQuota"), "100%%");
-        speech_command(OsStr::new("/bin/true")).unwrap();
+        assert!(speech_command(OsStr::new("/bin/true")).is_err());
         let ordinary = command(OsStr::new("/bin/true")).unwrap();
         assert_eq!(ordinary.get_args().next(), Some(OsStr::new("--launch")));
     }

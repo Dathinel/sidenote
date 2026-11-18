@@ -153,10 +153,11 @@ Batches and the native Hindi/Telugu entry now compile on Linux. The speech worke
 PID/user/network namespaces and parent-death checks. It refuses a missing launcher,
 non-user-service ownership or an unbounded cgroup. No speech listener is added.
 The unattended worker retains its ordinary 512 MiB, 32-task and one-CPU budget.
-Unattended speech needs its own bounded service in L5. The user unit retains its
-existing 1 GiB/64-task budget. The speech launcher accepts at most 1 GiB/64 tasks
-and one CPU, qualified separately in a 1 GiB user service. The outer credential
-launcher remains at 1 GiB/64 tasks.
+`sidenote-speech@.service` launches only the speech lifetime in the separate
+`sidenote-speech-worker.service` user service, with 1 GiB, 64 tasks and one CPU.
+Speech admission requires that exact unit and those finite ceilings; ordinary
+helpers retain their existing admission. The speech template copies the unattended
+template's hardening. The outer credential launcher remains at 1 GiB/64 tasks.
 The speech child's address-space rlimit is 4 GiB, CPU rlimit 120 seconds, core limit
 zero, with no-new-privileges and nice +10. The existing namespace launcher's
 120-second wall deadline still applies. Cgroup memory bounds resident memory;
