@@ -1,6 +1,8 @@
-//! Colours, fonts and the type scale. Light and dark follow the system setting. `soft` and
-//! `faint` keep 4.5:1 on the page, raised surfaces, the sidebar and the hover, selected and
-//! highlight fills in both modes. docs/design/typography.md lists the ratios.
+//! Colours, fonts and the type scale. Light and dark follow the system setting. Greys carry
+//! structure and hierarchy (`bg`, `card`, `side`, `line`, then the text greys `ink`, `soft`,
+//! `faint`); the accent marks the one main action and the focus ring; green, amber and
+//! red mean status only. Every text token keeps 4.5:1 on the fills it sits on, in both modes
+//! (`text_tokens_keep_four_and_a_half_to_one`). docs/design/typography.md lists the ratios.
 use rune::{Color, Family, TextStyle};
 use rune_kit::{Kit, PaletteSeed};
 
@@ -14,6 +16,8 @@ pub struct Palette {
     pub side: Color,
     pub ink: Color,
     pub soft: Color,
+    /// The dimmest text grey: facts, placeholders and small notes. Still 4.5:1 on every fill,
+    /// and in dark mode never below #a9a69f on a raised surface.
     pub faint: Color,
     pub line: Color,
     pub accent: Color,
@@ -154,58 +158,67 @@ pub fn kit(p: &Palette) -> Kit {
     kit
 }
 
-/// Reading text: summary points, to-dos and answers.
-pub const BODY: f32 = 16.0;
-pub const BODY_LH: f32 = 27.0;
+/// Reading text: summary points, to-dos and answers (14.5 px, line height 1.6).
+pub const BODY: f32 = 14.5;
+pub const BODY_LH: f32 = 23.0;
 
-/// Windows keeps its existing Georgia title face and Inter fallback.
-#[cfg(windows)]
-const DISPLAY: Family = Family::Named("Georgia");
-#[cfg(not(windows))]
-const DISPLAY: Family = Family::Named("Inter");
+/// The largest a page title gets. Every page title goes through `display`, so one number sets
+/// them all.
+pub const PAGE_TITLE: f32 = 26.0;
+
+/// Titles use bundled Fraunces on every platform, so Windows and Linux draw the same face.
+const DISPLAY: Family = Family::Named("Fraunces");
 
 pub fn display(size: f32) -> TextStyle {
+    let size = size.min(PAGE_TITLE);
     TextStyle::new(size, 400.0)
         .family(DISPLAY)
         .lh((size * 1.25).round())
 }
 
-/// The sans list. Inter draws Latin. Windows ships Nirmala UI, which draws Telugu and
-/// Devanagari, so text in those scripts, such as the Telugu examples in the translation prompt,
-/// shows letters and not empty boxes. Rune has no Telugu fallback of its own.
+/// The sans list. Figtree draws Latin, with Inter behind it. Windows ships Nirmala UI, which
+/// draws Telugu and Devanagari, so text in those scripts, such as the Telugu examples in the
+/// translation prompt, shows letters and not empty boxes. Linux bundles Noto Sans Devanagari
+/// and Noto Sans Telugu for the same job. Rune has no Telugu fallback of its own.
 #[cfg(windows)]
-pub const SANS: &str = "Inter, Nirmala UI";
+pub const SANS: &str = "Figtree, Inter, Nirmala UI";
 #[cfg(not(windows))]
-pub const SANS: &str = "Inter";
+pub const SANS: &str = "Figtree, Inter, Noto Sans Devanagari, Noto Sans Telugu";
 
-/// Linux uses only the repo's licensed Inter fonts.
-#[cfg(not(windows))]
-pub fn fonts() -> &'static [&'static [u8]] {
-    &[
+/// The bundled faces every platform loads: Figtree for text, Fraunces for titles and Inter
+/// as the mono slot's name and a Latin fallback.
+fn bundled() -> Vec<&'static [u8]> {
+    vec![
+        include_bytes!("../../assets/fonts/Figtree-Variable.ttf"),
+        include_bytes!("../../assets/fonts/Fraunces-Variable.ttf"),
         include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
         include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
         include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
     ]
 }
 
-/// Preserve the Windows Georgia load and its existing Inter fallback, and add Nirmala UI for
-/// the scripts Inter lacks.
+/// Linux uses only the repo's licensed fonts, with Noto for Devanagari and Telugu.
+#[cfg(not(windows))]
+pub fn fonts() -> &'static [&'static [u8]] {
+    let mut list = bundled();
+    list.extend([
+        include_bytes!("../../assets/fonts/NotoSansDevanagari-Variable.ttf").as_slice(),
+        include_bytes!("../../assets/fonts/NotoSansTelugu-Variable.ttf").as_slice(),
+    ]);
+    Box::leak(list.into_boxed_slice())
+}
+
+/// The bundled faces, plus Nirmala UI from Windows for the scripts they lack.
 #[cfg(windows)]
 pub fn fonts() -> &'static [&'static [u8]] {
-    let mut list: Vec<&'static [u8]> = vec![
-        include_bytes!("../../assets/fonts/Inter-Regular.ttf"),
-        include_bytes!("../../assets/fonts/Inter-Medium.ttf"),
-        include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"),
-    ];
+    let mut list = bundled();
     let dir = std::env::var_os("WINDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "C:\\Windows".into())
         .join("Fonts");
-    for file in ["georgia.ttf", "nirmala.ttc"] {
-        if let Ok(bytes) = std::fs::read(dir.join(file)) {
-            // Read once at startup and kept for the life of the process, as Rune requires.
-            list.push(Box::leak(bytes.into_boxed_slice()));
-        }
+    if let Ok(bytes) = std::fs::read(dir.join("nirmala.ttc")) {
+        // Read once at startup and kept for the life of the process, as Rune requires.
+        list.push(Box::leak(bytes.into_boxed_slice()));
     }
     Box::leak(list.into_boxed_slice())
 }
@@ -215,8 +228,8 @@ mod quiet_ink_switch_tests {
     use super::*;
 
     #[test]
-    fn the_sans_list_keeps_inter_first_and_names_a_telugu_font_on_windows() {
-        assert!(SANS.starts_with("Inter"));
+    fn the_sans_list_leads_with_figtree_and_names_the_indic_fallback() {
+        assert!(SANS.starts_with("Figtree"));
         assert_eq!(SANS.contains("Nirmala UI"), cfg!(windows));
     }
 
@@ -237,6 +250,170 @@ mod quiet_ink_switch_tests {
             assert_eq!(k.c.bg_accent, p.button_fill);
             assert_eq!(k.c.knob_on, p.button_ink);
             assert_ne!(k.c.bg_accent, p.accent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod type_and_contrast_tests {
+    use super::*;
+    use parley::PositionedLayoutItem;
+    use rune::text::TextSystem;
+
+    const HINDI: &str = "\u{92f}\u{939} \u{90f}\u{915} \u{92a}\u{930}\u{940}\u{915}\u{94d}\u{937}\u{923} \u{935}\u{93e}\u{915}\u{94d}\u{92f} \u{939}\u{948}";
+    const TELUGU: &str = "\u{c07}\u{c26}\u{c3f} \u{c12}\u{c15} \u{c2a}\u{c30}\u{c40}\u{c15}\u{c4d}\u{c37} \u{c35}\u{c3e}\u{c15}\u{c4d}\u{c2f}\u{c02}";
+
+    fn glyph_ids(ts: &mut TextSystem, text: &str, style: TextStyle) -> Vec<u32> {
+        let layout = ts.layout_rich(text, &[], style, 1.0, None);
+        let mut ids = Vec::new();
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    ids.extend(run.glyphs().map(|g| g.id));
+                }
+            }
+        }
+        ids
+    }
+
+    fn system() -> TextSystem {
+        TextSystem::new(fonts(), (SANS, "Inter"))
+    }
+
+    #[test]
+    fn titles_draw_in_fraunces_and_text_in_figtree_not_in_inter() {
+        let mut ts = system();
+        let word = "Hamburgefonstiv 1234";
+        let text = glyph_ids(&mut ts, word, TextStyle::new(14.0, 400.0));
+        let inter = glyph_ids(
+            &mut ts,
+            word,
+            TextStyle::new(14.0, 400.0).family(Family::Named("Inter")),
+        );
+        let title = glyph_ids(&mut ts, word, display(26.0));
+        assert_ne!(text, inter, "text still falls through to Inter");
+        assert_ne!(title, text, "titles still draw in the text face");
+        assert!(title.iter().chain(&text).all(|id| *id != 0));
+    }
+
+    #[test]
+    fn a_page_title_never_passes_the_shared_size() {
+        assert_eq!(display(40.0).size, PAGE_TITLE);
+        assert_eq!(display(16.0).size, 16.0);
+    }
+
+    #[test]
+    fn figtree_semibold_is_a_real_weight_of_the_variable_face() {
+        let mut ts = system();
+        let (regular, _) = ts.measure("Meeting notes", TextStyle::new(14.0, 400.0), 1.0);
+        let (bold, _) = ts.measure("Meeting notes", TextStyle::new(14.0, 600.0), 1.0);
+        assert!(
+            bold > regular,
+            "600 measured {bold}, 400 measured {regular}"
+        );
+    }
+
+    /// Hindi and Telugu transcript lines must draw letters. Linux has no system fallback
+    /// here, so the bundled Noto faces carry them; Windows reads Nirmala UI.
+    #[test]
+    fn a_hindi_and_a_telugu_line_draw_letters_not_boxes() {
+        let mut ts = system();
+        for line in [HINDI, TELUGU] {
+            let ids = glyph_ids(&mut ts, line, TextStyle::new(14.0, 400.0));
+            assert!(!ids.is_empty());
+            assert!(
+                ids.iter().all(|id| *id != 0),
+                "missing glyphs in {line}: {ids:?}"
+            );
+        }
+    }
+
+    /// The detector sees a missing glyph: a code point no font has draws the box (id 0).
+    /// Windows falls back to the system's own Indic faces, so the lines above cannot be
+    /// made to fail here; this proves the check is not blind.
+    #[test]
+    fn the_box_detector_sees_a_missing_glyph() {
+        let mut ts = system();
+        let ids = glyph_ids(&mut ts, "\u{10fffd}", TextStyle::new(14.0, 400.0));
+        assert!(ids.contains(&0), "{ids:?}");
+    }
+
+    /// Off Windows nothing but the bundled list carries Indic text, so it must name both.
+    #[test]
+    fn the_non_windows_font_list_carries_both_indic_faces() {
+        if cfg!(windows) {
+            return;
+        }
+        assert_eq!(fonts().len(), bundled().len() + 2);
+        assert!(SANS.contains("Noto Sans Devanagari") && SANS.contains("Noto Sans Telugu"));
+    }
+
+    fn ratio(a: Color, b: Color) -> f32 {
+        let (hi, lo) = (
+            a.luminance().max(b.luminance()),
+            a.luminance().min(b.luminance()),
+        );
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// Every text token against every fill it is drawn on, in both modes: at least 4.5:1.
+    #[test]
+    fn text_tokens_keep_four_and_a_half_to_one() {
+        let mut failures = Vec::new();
+        for dark in [false, true] {
+            let p = palette(dark);
+            let k = kit(&p);
+            let plain = [p.bg, p.card, p.side, p.chip, p.sel, p.hit];
+            let rows: Vec<(&str, Color, Vec<Color>)> = vec![
+                ("ink", p.ink, plain.to_vec()),
+                ("soft", p.soft, plain.to_vec()),
+                ("faint", p.faint, plain.to_vec()),
+                ("accent", p.accent, vec![p.bg, p.card, p.side]),
+                ("open", p.open, vec![p.bg, p.card, p.side]),
+                ("danger", p.danger, vec![p.bg, p.card, p.side]),
+                ("ok", p.ok, vec![p.bg, p.card, p.okbg]),
+                ("warn", p.warn, vec![p.bg, p.card, p.side, p.chip, p.warnbg]),
+                ("button ink", p.button_ink, vec![p.button_fill]),
+                ("kit base", k.c.text_base, vec![p.card]),
+                ("kit muted", k.c.text_muted, vec![p.card]),
+                ("kit faint", k.c.text_faint, vec![p.card]),
+                ("kit weak", k.c.text_weak, vec![p.card]),
+                ("kit strong", k.c.text_strong, vec![p.card]),
+            ];
+            for (name, ink, fills) in rows {
+                for (i, fill) in fills.into_iter().enumerate() {
+                    let r = ratio(ink, fill);
+                    if r < 4.5 {
+                        failures.push(format!(
+                            "{} {name} on fill {i}: {r:.2}",
+                            if dark { "dark" } else { "light" }
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "below 4.5:1: {failures:#?}");
+    }
+
+    /// Marks people click, such as section marks, need 3:1.
+    #[test]
+    fn the_dimmest_text_grey_clears_three_to_one_for_clickable_marks() {
+        for dark in [false, true] {
+            let p = palette(dark);
+            assert!(ratio(p.faint, p.bg) >= 3.0);
+        }
+    }
+
+    /// Small text on a raised surface in dark mode is at least #a9a69f, and the old
+    /// #77746d is not a text token any more.
+    #[test]
+    fn dark_small_text_on_raised_surfaces_is_at_least_a9a69f() {
+        let p = palette(true);
+        let floor = rune::color::hex("#a9a69f").unwrap().luminance();
+        let old = rune::color::hex("#77746d").unwrap().luminance();
+        for ink in [p.ink, p.soft, p.faint] {
+            assert!(ink.luminance() >= floor);
+            assert_ne!(ink.luminance(), old);
         }
     }
 }

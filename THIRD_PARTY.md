@@ -7,6 +7,12 @@ Sidenote is AGPL-3.0-or-later. Dependencies retain their own licences.
   a138b97e654b8299b2a4cb518b8476b2b528c2c4 in Cargo.lock.
 - Bundled Inter fonts use the SIL Open Font License 1.1. The original notice is
   in [assets/fonts/Inter-LICENSE.txt](assets/fonts/Inter-LICENSE.txt).
+- Bundled Fraunces (titles), Figtree (text) and, on Linux, Noto Sans Devanagari and
+  Noto Sans Telugu (fallback for Hindi and Telugu) use the same licence. Their notices are
+  [Fraunces](assets/fonts/Fraunces-LICENSE.txt), [Figtree](assets/fonts/Figtree-LICENSE.txt),
+  [Noto Sans Devanagari](assets/fonts/NotoSansDevanagari-LICENSE.txt) and
+  [Noto Sans Telugu](assets/fonts/NotoSansTelugu-LICENSE.txt). The files come from the
+  google/fonts repository's `ofl` folder.
 
 The following MIT notice applies to Hex and Rune (upstream notice retained):
 

@@ -94,6 +94,8 @@ panic = "unwind"
 tokio = { version = "1", features = ["test-util"] }
 pollster = "1"
 tempfile = "3"
+# The font tests read glyph ids from Rune's layout; Rune already pulls in this version.
+parley = { version = "0.12", default-features = false, features = ["std"] }
 
 [patch.crates-io]
 spake2 = { path = "crates/sidenote-sync/vendor/spake2" }

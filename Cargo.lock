@@ -4166,6 +4166,7 @@ dependencies = [
  "kaldi-fbank",
  "libc",
  "ort",
+ "parley",
  "pollster",
  "regex",
  "rmcp",

@@ -2,10 +2,11 @@
 
 Sidenote separates text by size, weight and colour, the way GitHub's Primer does: names
 are heavier than body, body is regular, and facts about an item are smaller and greyer.
-Space groups things first; lines come second. Windows page titles use Georgia when
-available, with the existing Inter fallback. Linux page titles and all other text use
-bundled Inter, with the warm palette in `src/ui/theme.rs`. The roles
-live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
+Space groups things first; lines come second. Page titles use bundled Fraunces (400) and
+all other text bundled Figtree (400 and 600), on every platform, with the warm palette in
+`src/ui/theme.rs`. Hindi and Telugu fall back to Nirmala UI on Windows and to bundled Noto
+Sans Devanagari and Telugu on Linux. The font files and their OFL licences are in
+`assets/fonts`. The roles live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
 
 ## What we took from Primer
 
@@ -21,13 +22,13 @@ live in `src/ui/roles.rs`. Pages use them, never raw sizes or colours.
 
 | Role | Size / line height | Weight | Colour | Use |
 |---|---|---|---|---|
-| Page title | Georgia on Windows, Inter on Linux; 34/42 (28/35 at 560 px) | 400 | `ink` | One per page |
-| `SECTION` | 20/28 | 600 | `ink` | Needs attention, Decisions, To do, a settings section, Memory and Tasks panels |
-| `TITLE` | 16/24 | 600 | `ink` | A meeting in the list, a topic, a model card, the Ask question |
-| `READ` | 16/27 | 400 | `ink` | Summary points, to-dos, Ask answers, live notes |
-| `SMALL` | 14/21 | 400 | `ink` or `soft` | Dense rows, descriptions, transcript lines |
-| `NAME` | 14/21 | 600 | `ink` | The name in a dense row: a setting, a finding, the active sidebar place |
-| `CONTROL` | 14/20 | 500 | `soft`, `ink` when active | Tabs, buttons, links, sidebar places |
+| Page title | Fraunces, 26/33 | 400 | `ink` | One per page |
+| `SECTION` | 14/20 | 600 | `ink` | Needs attention, Decisions, To do, a settings section, Memory and Tasks panels |
+| `TITLE` | 14.5/22 | 600 | `ink` | A meeting in the list, a topic, a model card, the Ask question |
+| `READ` | 14.5/23 (1.6) | 400 | `ink` | Summary points, to-dos, Ask answers, live notes |
+| `SMALL` | 12.5/19 | 400 | `ink` or `soft` | Dense rows, descriptions, transcript lines |
+| `NAME` | 12.5/19 | 600 | `ink` | The name in a dense row: a setting, a finding, the active sidebar place |
+| `CONTROL` | 13/19 | 500 | `soft`, `ink` when active | Tabs, buttons, links, sidebar places |
 | `META` | 12/18 | 400 | `faint` | Times, people, dates, sizes, licences, sources, help text |
 | `GROUP` | 13/20 | 600 | `ink` or `soft` | Group labels inside a section (Yesterday, This week, Medium) and field labels |
 | `CAPTION` | 12/16 | 600, capitals | `faint` | Panel captions: FINDING, ASKED ABOUT THIS MEETING |
@@ -41,8 +42,8 @@ never do.
 
 ## The Ask thread
 
-The answer reads at `READ` (16/27), the same as the summary under it. It used to be 15/25,
-a size used nowhere else, so it read as neither body nor small text. An answer is prose
+The answer reads at `READ` (14.5/23), the same as the summary under it, so it reads as
+body text and not as a size used nowhere else. An answer is prose
 people read in full, so it gets the reading size; the question above it is `TITLE`.
 
 ## Colour tokens and contrast (WCAG, checked 2026-11-10)
@@ -66,10 +67,17 @@ dark `soft` #b0ada4 to #bcb9b0 to keep a clear step above `faint`, dark `hit` #3
 4.35:1 on `chip`). Selected rows used the hairline colour, which left `faint` at 4.3:1;
 they now use `sel`, the accent at 10% over the page (#e8ebed light, #262a2c dark).
 
+Items 7, 8, 13 of the v3 page: the size scale lives only in `roles.rs` and `theme.rs`
+(`BODY`, `BODY_LH`, `PAGE_TITLE`), so a page that uses the roles follows it. A page title
+never passes `PAGE_TITLE` (26). `#77746d` is no longer used for text; `faint` is the dimmest
+text grey, never below #a9a69f in dark mode. Greys carry structure; the coral accent marks the one main action; green, amber
+and red mean status only. `ui::theme::type_and_contrast_tests` fails any text token under
+4.5:1 on any fill it sits on, and any clickable mark under 3:1.
+
 ## Spacing (4 px grid)
 
 - Page title to the first content: 16. Page sides: 40 wide, 16 to 20 at 560 px.
-- `SECTION_TOP` 40 above a section heading, `SECTION_GAP` 12 below it.
+- `SECTION_TOP` 28 above a section heading, `SECTION_GAP` 12 below it.
 - `GROUP_TOP` 20 above a group label inside a section. Group labels are plain text, not
   shaded bars.
 - `META_GAP` 2 between a name and its facts line.

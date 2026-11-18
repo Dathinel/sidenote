@@ -1,4 +1,6 @@
 //! Text roles: the few sizes, weights and greys the app reads in. See docs/design/typography.md.
+//! The scale follows the v3 approval: section heading 14 semibold, note text 14.5 on 1.6,
+//! tasks and chips 12.5, 28 between sections; page titles are capped in `theme::display`.
 //! Pages use these instead of raw sizes, so every page keeps the same hierarchy.
 use super::theme::{BODY, BODY_LH, Palette};
 use rune::{Color, El, TextStyle, row, text};
@@ -58,26 +60,26 @@ impl Role {
 
 /// Page sections: Decisions, To do, Needs attention, a settings group.
 pub const SECTION: Role = Role {
-    size: 20.0,
+    size: 14.0,
     weight: 600.0,
-    lh: 28.0,
+    lh: 20.0,
 };
 /// Date headings and summaries in narrow reading views.
 pub const COMPACT_SECTION: Role = Role {
-    size: 18.0,
+    size: 14.0,
     weight: 600.0,
-    lh: 26.0,
+    lh: 20.0,
 };
 pub const COMPACT_READ: Role = Role {
-    size: 14.0,
+    size: 13.0,
     weight: 400.0,
-    lh: 23.0,
+    lh: 21.0,
 };
 /// Item titles: a meeting in a list, a topic, a model card, a panel's subject.
 pub const TITLE: Role = Role {
-    size: 16.0,
+    size: 14.5,
     weight: 600.0,
-    lh: 24.0,
+    lh: 22.0,
 };
 /// Reading text: summary points, to-dos, answers and live notes.
 pub const READ: Role = Role {
@@ -87,17 +89,17 @@ pub const READ: Role = Role {
 };
 /// Dense rows and descriptions: tasks, findings, transcript lines, form text.
 pub const SMALL: Role = Role {
-    size: 14.0,
+    size: 12.5,
     weight: 400.0,
-    lh: 21.0,
+    lh: 19.0,
 };
 /// The name in a dense row: a setting, a finding, a memory claim, a sidebar place.
 pub const NAME: Role = SMALL.bold();
 /// Tabs, buttons, links and menu items.
 pub const CONTROL: Role = Role {
-    size: 14.0,
+    size: 13.0,
     weight: 500.0,
-    lh: 20.0,
+    lh: 19.0,
 };
 /// Facts about an item: times, people, dates, sizes, licences, sources and help text.
 pub const META: Role = Role {
@@ -119,7 +121,7 @@ pub const CAPTION: Role = Role {
 };
 
 /// Space above a section heading. Sections are grouped by space first, lines second.
-pub const SECTION_TOP: f32 = 40.0;
+pub const SECTION_TOP: f32 = 28.0;
 /// Space between a section heading and its first item.
 pub const SECTION_GAP: f32 = 12.0;
 /// Space above a group label inside a section.

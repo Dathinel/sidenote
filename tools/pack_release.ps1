@@ -38,6 +38,8 @@ try {
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote-sync-worker.exe" -Destination "$stage/sidenote-sync-worker.exe" -Force
     $notices = @('LICENSE', 'THIRD_PARTY.md', 'assets/fonts/Inter-LICENSE.txt',
+        'assets/fonts/Fraunces-LICENSE.txt', 'assets/fonts/Figtree-LICENSE.txt',
+        'assets/fonts/NotoSansDevanagari-LICENSE.txt', 'assets/fonts/NotoSansTelugu-LICENSE.txt',
         'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt', 'assets/licenses/lucide-LICENSE.txt')
     foreach ($notice in $notices) {
         $destination = Join-Path $stage $notice
