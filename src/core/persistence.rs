@@ -21,10 +21,14 @@ pub struct Message {
     /// recorded have none, and still load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner: Option<String>,
-    /// The model the answer asked for. `None` is the helper's own default, which helpers do
-    /// not report, so it is shown as "provider default" and never guessed.
+    /// The model the helper reported for this answer. `None` means it did not report one,
+    /// which is shown as "model not reported" and never filled in from the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The model named in the request. Kept apart from `model`: a helper can resolve an alias
+    /// or answer on another model, and only `model` says what answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_model: Option<String>,
     /// A fallback helper wrote this answer.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fallback: bool,

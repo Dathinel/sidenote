@@ -180,8 +180,13 @@ pub struct AskRun {
     pub starting_codex: bool,
     pub turn_started: bool,
     pub runner: String,
-    /// The model this run asked for, kept so a switch mid-answer cannot relabel it.
+    /// The model the picker held when this run was sent, compared with the current choice to
+    /// show "Next answer". A switch mid-answer cannot relabel the run.
     pub model: Option<String>,
+    /// The model named in the request to the helper or endpoint.
+    pub requested_model: Option<String>,
+    /// The model the helper reported, once it has. Never filled in from the request.
+    pub reported_model: Option<String>,
     fallback_model: Option<String>,
     fell_back: bool,
     pub text: String,
@@ -210,6 +215,8 @@ impl AskRun {
             turn_started: true,
             runner: runner.into(),
             model: None,
+            requested_model: None,
+            reported_model: None,
             fallback_model: None,
             fell_back: false,
             text: String::new(),
@@ -1159,6 +1166,10 @@ impl State {
                 .then(|| self.live_notes.text.clone()),
         };
         let used_model = options.model.clone();
+        let requested_model = match &options.connection {
+            Some(connection) => Some(connection.model.trim().to_owned()),
+            None => used_model.clone(),
+        };
         let fallback_model = options.fallback.as_ref().and_then(|f| f.model.clone());
         self.saved = saved.clone();
         self.question = TextEdit::new("");
@@ -1247,6 +1258,8 @@ impl State {
                 turn_started: false,
                 runner,
                 model: used_model,
+                requested_model,
+                reported_model: None,
                 fallback_model,
                 fell_back: false,
                 text: String::new(),
@@ -1295,7 +1308,8 @@ impl State {
                     role: "assistant".into(),
                     text,
                     runner: Some(run.runner.clone()),
-                    model: run.model.clone(),
+                    model: run.reported_model.clone(),
+                    requested_model: run.requested_model.clone(),
                     fallback: run.fell_back,
                     ..Default::default()
                 },
@@ -1616,6 +1630,8 @@ impl State {
                         run.starting_codex = false;
                         run.runner = runner.clone();
                         run.model = run.fallback_model.take();
+                        run.requested_model = run.model.clone();
+                        run.reported_model = None;
                         run.fell_back = true;
                         let name = self
                             .runners
@@ -1632,6 +1648,7 @@ impl State {
                             self.ask_settings.meeting_level = Some(self.ask_settings.chat);
                         }
                     }
+                    AskProgress::Model { model } => run.reported_model = Some(model),
                     AskProgress::Tool { name } => run.steps.push(format!("Using {name}")),
                     AskProgress::Text { text } => {
                         if !text.is_empty() && !run.response_time_ready {

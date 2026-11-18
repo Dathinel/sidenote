@@ -28,12 +28,27 @@ pub enum AskProgress {
     Metrics(super::provider::Metrics),
     Slow,
     StartingCodex,
-    Fallback { runner: String },
-    Started { runner: String },
-    Tool { name: String },
-    Text { text: String },
+    Fallback {
+        runner: String,
+    },
+    Started {
+        runner: String,
+    },
+    /// The model the helper or endpoint says is answering. A helper that does not say never
+    /// sends this, and nothing fills it in from what was asked for.
+    Model {
+        model: String,
+    },
+    Tool {
+        name: String,
+    },
+    Text {
+        text: String,
+    },
     Finished,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Selection {
@@ -93,6 +108,13 @@ pub(super) fn list_runners_at(root: &Path) -> Result<Vec<Runner>, String> {
         }
     }
     Ok(runners)
+}
+/// A model name a helper reported, if it is fit to show. Placeholders such as "<synthetic>",
+/// empty names, long names and names with control characters are not model names.
+pub(super) fn reported_model(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    (!id.is_empty() && id.len() <= 200 && !id.starts_with('<') && !id.chars().any(char::is_control))
+        .then(|| id.to_owned())
 }
 pub fn last_used_runner() -> Result<Option<String>, String> {
     match fs::read(state_dir().join("runner-state.json")) {

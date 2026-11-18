@@ -140,9 +140,9 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
         }))
 }
 
-/// "Codex \u{b7} GPT-6.1-Sol" under an answer: the helper and model that wrote it. A model the
-/// helper gave no name for reads "provider default"; messages saved before this was recorded
-/// have no runner and show nothing.
+/// "Codex \u{b7} GPT-6.1-Sol" under an answer: the helper and the model it reported. A helper
+/// that reported none reads "Codex (model not reported)", never the model that was asked for.
+/// Messages saved before this was recorded have no runner and show nothing.
 pub(super) fn answer_label(s: &State, m: &Message) -> Option<String> {
     let name = m.runner.as_deref()?;
     let runner = s.runners.iter().find(|r| r.name == name);
@@ -150,16 +150,12 @@ pub(super) fn answer_label(s: &State, m: &Message) -> Option<String> {
         || short_runner(name).to_string(),
         |r| core::ask_options::agent_name(r).to_string(),
     );
-    if name == core::provider::NAME {
-        return Some(agent);
-    }
-    let model = match (&m.model, runner) {
-        (Some(id), Some(r)) => model_label(r, Some(id)),
-        (Some(id), None) => id.clone(),
-        (None, _) => "provider default".into(),
-    };
     let fallback = if m.fallback { " \u{b7} fallback" } else { "" };
-    Some(format!("{agent} \u{b7} {model}{fallback}"))
+    Some(match (&m.model, runner) {
+        (Some(id), Some(r)) => format!("{agent} \u{b7} {}{fallback}", model_label(r, Some(id))),
+        (Some(id), None) => format!("{agent} \u{b7} {id}{fallback}"),
+        (None, _) => format!("{agent} (model not reported){fallback}"),
+    })
 }
 
 /// One ease for the whole bar: 180 ms in, 140 ms out, no bounce.
@@ -327,7 +323,8 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
                         role: "assistant".into(),
                         text: run.text.clone(),
                         runner: Some(run.runner.clone()),
-                        model: run.model.clone(),
+                        model: run.reported_model.clone(),
+                        requested_model: run.requested_model.clone(),
                         fallback: run.fell_back,
                         ..Default::default()
                     },

@@ -195,8 +195,18 @@ pub(super) struct Output {
     pub(super) failed: bool,
     pub(super) read_only_background: bool,
     pub(super) tool_seen: std::collections::BTreeSet<String>,
+    /// The model the helper last reported for this answer.
+    pub(super) model: Option<String>,
 }
 impl Output {
+    fn reported(&mut self, raw: Option<&str>, progress: &impl Fn(AskProgress)) {
+        if let Some(model) = raw.and_then(runners::reported_model)
+            && self.model.as_deref() != Some(model.as_str())
+        {
+            self.model = Some(model.clone());
+            progress(AskProgress::Model { model });
+        }
+    }
     fn text(&mut self, text: String, progress: &impl Fn(AskProgress)) {
         if !text.is_empty() && self.streamed != text {
             self.streamed = text.clone();
@@ -223,6 +233,13 @@ impl Output {
         };
         let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if harness == "claude" {
+            let named = match kind {
+                "system" => event.get("model"),
+                "assistant" => event.pointer("/message/model"),
+                "stream_event" => event.pointer("/event/message/model"),
+                _ => None,
+            };
+            self.reported(named.and_then(|v| v.as_str()), progress);
             if kind == "stream_event" {
                 if event.pointer("/event/type").and_then(|v| v.as_str()) == Some("message_start") {
                     self.final_text.clear();
@@ -494,6 +511,7 @@ pub(super) fn run_classified(
         failed: false,
         read_only_background,
         tool_seen: Default::default(),
+        model: None,
     };
     let mut done = false;
     let mut status = None;
@@ -563,6 +581,35 @@ pub(super) fn run_classified(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_claude_stream_reports_its_model_once_and_ignores_placeholders() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let mut output = super::Output::default();
+        for line in [
+            r#"{"type":"system","subtype":"init","model":"claude-test-1"}"#,
+            r#"{"type":"assistant","message":{"model":"claude-test-1","content":[{"type":"text","text":"a"}]}}"#,
+            r#"{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"b"}]}}"#,
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude-test-2"}}}"#,
+        ] {
+            output.line(line, "claude", true, &|e| events.borrow_mut().push(e));
+        }
+        let models: Vec<_> = events
+            .borrow()
+            .iter()
+            .filter_map(|e| match e {
+                super::AskProgress::Model { model } => Some(model.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(models, ["claude-test-1", "claude-test-2"]);
+        let mut codex = super::Output::default();
+        codex.line(
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}"#,
+            "codex",
+            true,
+            &|e| assert!(!matches!(e, super::AskProgress::Model { .. })),
+        );
+    }
+    #[test]
     fn daily_codex_write_refusal_keeps_interactive_parser_unchanged() {
         for background in [false, true] {
             let mut output = super::Output {
@@ -621,6 +668,7 @@ mod tests {
             failed: false,
             read_only_background: false,
             tool_seen: Default::default(),
+            model: None,
         };
         let events = std::cell::RefCell::new(Vec::new());
         let progress = |event| events.borrow_mut().push(event);

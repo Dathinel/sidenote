@@ -273,7 +273,7 @@ pub(super) fn closed() -> bool {
 #[cfg(debug_assertions)]
 pub static STAND_IN: Mutex<Option<StandIn>> = Mutex::new(None);
 #[cfg(debug_assertions)]
-pub type StandIn = fn(&Runner, &str) -> Result<String, String>;
+pub type StandIn = fn(&Runner, &str, &dyn Fn(AskProgress)) -> Result<String, String>;
 
 /// Blocking on an Ask worker, never the UI thread. Cancellation also stops an in-flight transport.
 pub fn run(
@@ -287,7 +287,7 @@ pub fn run(
         progress(AskProgress::Started {
             runner: runner.name.clone(),
         });
-        return stand_in(runner, &prompt);
+        return stand_in(runner, &prompt, &progress);
     }
     let _activity = crate::updates::activity()
         .map_err(|_| "An update is being installed. Try again after restart.")?;
@@ -479,6 +479,8 @@ struct Session {
     thread_id: Option<String>,
     next_id: u64,
     answered: bool,
+    /// The model the agent reported when it opened the conversation, if it did.
+    model: Option<String>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -587,6 +589,7 @@ impl Session {
             thread_id: None,
             next_id: 0,
             answered: false,
+            model: None,
         })
     }
     fn alive(&mut self) -> bool {
@@ -692,6 +695,7 @@ impl Session {
             remember_models("codex", &models);
             let response = self.rpc("thread/start", json!({"cwd":super::state_dir(),"model":runner.model,"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"}), cancel)?;
             self.thread_id = response["thread"]["id"].as_str().map(str::to_owned);
+            self.model = response["model"].as_str().and_then(runners::reported_model);
             if self.thread_id.is_none() {
                 return Err("The agent did not open a conversation.".into());
             }
@@ -736,6 +740,9 @@ impl Session {
         progress(AskProgress::Started {
             runner: runner.name.clone(),
         });
+        if let Some(model) = self.model.clone() {
+            progress(AskProgress::Model { model });
+        }
         let mut turn_request = None;
         if self.kind == "claude" {
             self.send(json!({"type":"user","message":{"role":"user","content":prompt}}))?;
@@ -946,6 +953,16 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e,AskProgress::Text {text} if text=="answer "))
             );
+            // Each transport reports the model the agent named, and only that.
+            let reported: Vec<_> = events
+                .borrow()
+                .iter()
+                .filter_map(|e| match e {
+                    AskProgress::Model { model } => Some(model.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reported, [format!("fixture-{kind}-model")]);
             assert!(
                 session
                     .turn(&runner, "die".into(), &cancel, &|_| {})
@@ -1006,7 +1023,9 @@ mod tests {
                 assert_eq!(event["params"]["sandbox"], "read-only");
                 assert_eq!(event["params"]["approvalPolicy"], "never");
                 assert_eq!(event["params"]["ephemeral"], true);
-                vec![json!({"id":event["id"],"result":{"thread":{"id":"fixture-thread"}}})]
+                vec![
+                    json!({"id":event["id"],"result":{"thread":{"id":"fixture-thread"},"model":"fixture-codex-model"}}),
+                ]
             } else if event["type"] == "user" || method == "turn/start" {
                 if event["message"]["content"] == "die"
                     || event["params"]["input"][0]["text"] == "die"
@@ -1025,6 +1044,7 @@ mod tests {
                     vec![
                         json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answer "}}}),
                         json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":turn.to_string()}}}),
+                        json!({"type":"assistant","message":{"model":"fixture-claude-model","content":[{"type":"text","text":format!("answer {turn}")}]}}),
                         json!({"type":"result","result":format!("answer {turn}"),"is_error":false}),
                     ]
                 }

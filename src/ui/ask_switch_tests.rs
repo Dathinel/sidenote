@@ -92,6 +92,11 @@ fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() 
         fallback,
         ..Default::default()
     };
+    // Asked for a model, the helper reported none: the label must not claim the request.
+    let requested_only = Message {
+        requested_model: Some("gpt-6.1-sol".into()),
+        ..said(Some("Codex"), None, false)
+    };
     let old: Message =
         serde_json::from_str(r#"{"role":"assistant","text":"Older answer."}"#).unwrap();
     assert!(old.runner.is_none() && old.model.is_none() && !old.fallback);
@@ -101,6 +106,7 @@ fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() 
         said(Some("Codex"), Some("gpt-6.1-sol"), false),
         said(Some("OpenCode"), None, false),
         said(Some("Claude Sonnet"), None, true),
+        requested_only,
     ];
     rt.update(|s, _| s.saved.messages = messages);
     rt.settle_all();
@@ -108,14 +114,14 @@ fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() 
     let label = |i: usize| ask::answer_label(&rt.state, &rt.state.saved.messages[i]);
     assert_eq!(label(0), None);
     assert!(label(1).unwrap().starts_with("Codex"), "{:?}", label(1));
-    assert!(
-        label(2).unwrap().ends_with("provider default"),
-        "{:?}",
-        label(2)
+    assert_eq!(label(2).as_deref(), Some("OpenCode (model not reported)"));
+    assert_eq!(
+        label(3).as_deref(),
+        Some("Claude Code (model not reported) \u{b7} fallback")
     );
-    assert!(label(3).unwrap().ends_with("fallback"), "{:?}", label(3));
+    assert_eq!(label(4).as_deref(), Some("Codex (model not reported)"));
     assert!(rt.find("answer-model-0").is_none());
-    for i in 1..4 {
+    for i in 1..5 {
         assert!(
             rt.find(&format!("answer-model-{i}")).is_some(),
             "answer {i}"
@@ -132,15 +138,44 @@ fn a_fallback_answer_is_saved_with_the_helper_that_wrote_it() {
     let s = &mut rt.state;
     let mut run = AskRun::stand_in("Codex", &[], 0);
     run.model = Some("gpt-6.1-sol".into());
+    run.requested_model = Some("gpt-6.1-sol".into());
     run.fallback_model = Some("claude-sonnet-5-5".into());
     s.asks.insert(MEETING.into(), run);
-    s.apply_event(Event::Progress {
-        id: MEETING.into(),
-        generation: 0,
-        event: AskProgress::Fallback {
+    let progress = |s: &mut State, event| {
+        s.apply_event(Event::Progress {
+            id: MEETING.into(),
+            generation: 0,
+            event,
+        })
+    };
+    progress(
+        s,
+        AskProgress::Model {
+            model: "gpt-6.1-sol-reported".into(),
+        },
+    );
+    assert_eq!(
+        s.asks[MEETING].reported_model.as_deref(),
+        Some("gpt-6.1-sol-reported")
+    );
+    progress(
+        s,
+        AskProgress::Fallback {
             runner: "Claude Sonnet".into(),
         },
-    });
+    );
+    // The first helper's report does not carry over, and the request is now the fallback's.
+    assert_eq!(s.asks[MEETING].reported_model, None);
+    assert_eq!(
+        s.asks[MEETING].requested_model.as_deref(),
+        Some("claude-sonnet-5-5")
+    );
+    progress(
+        s,
+        AskProgress::Model {
+            model: "claude-sonnet-5-5-20261101".into(),
+        },
+    );
     let mut run = s.asks.remove(MEETING).unwrap();
     let (tx, rx) = mpsc::channel();
     tx.send(Ok("Here is the answer.".to_string())).unwrap();
@@ -148,7 +183,8 @@ fn a_fallback_answer_is_saved_with_the_helper_that_wrote_it() {
     s.finish_ask(MEETING, run, None);
     let saved = s.saved.messages.last().unwrap();
     assert_eq!(saved.runner.as_deref(), Some("Claude Sonnet"));
-    assert_eq!(saved.model.as_deref(), Some("claude-sonnet-5-5"));
+    assert_eq!(saved.model.as_deref(), Some("claude-sonnet-5-5-20261101"));
+    assert_eq!(saved.requested_model.as_deref(), Some("claude-sonnet-5-5"));
     assert!(saved.fallback);
 }
 
@@ -214,14 +250,39 @@ static CALLS: std::sync::Mutex<Vec<(String, Option<String>)>> = std::sync::Mutex
 #[cfg(debug_assertions)]
 const WAIT: Duration = Duration::from_secs(20);
 
-/// The fake helper: records what it was started with. Helper A (Codex) says it has started, then
-/// holds its answer until the gate opens, so the test can switch while it is still answering.
+/// Makes the fake Codex fail at once, as an agent that is not installed does.
 #[cfg(debug_assertions)]
-fn fake_helper(runner: &core::Runner, _prompt: &str) -> Result<String, String> {
+static CODEX_FAILS: AtomicBool = AtomicBool::new(false);
+/// What the fake Claude Sonnet reports as the model that answered.
+#[cfg(debug_assertions)]
+const SONNET_REPORTS: &str = "claude-sonnet-5-5-20261101";
+
+/// The fake helper: records what it was started with and reports a model the way a real one
+/// would: Codex a resolved name that differs from the request, Claude Sonnet a dated name,
+/// OpenCode none. Helper A (Codex) says it has started, then holds its answer until the gate
+/// opens, so the test can switch while it is still answering.
+#[cfg(debug_assertions)]
+fn fake_helper(
+    runner: &core::Runner,
+    _prompt: &str,
+    progress: &dyn Fn(AskProgress),
+) -> Result<String, String> {
     CALLS
         .lock()
         .unwrap()
         .push((runner.name.clone(), runner.model.clone()));
+    if runner.name == "Codex" && CODEX_FAILS.load(SeqCst) {
+        return Err("Codex is not available".into());
+    }
+    match runner.name.as_str() {
+        "Codex" => progress(AskProgress::Model {
+            model: format!("{}-resolved", runner.model.clone().unwrap_or_default()),
+        }),
+        "Claude Sonnet" => progress(AskProgress::Model {
+            model: SONNET_REPORTS.into(),
+        }),
+        _ => {}
+    }
     if runner.name == "Codex" {
         ENTERED.store(true, SeqCst);
         let end = Instant::now() + WAIT;
@@ -293,9 +354,15 @@ fn switching_helper_mid_answer_labels_each_answer_and_runs_the_next_on_the_new_o
     finish_answer(&mut rt);
     let first = rt.state.saved.messages.last().unwrap().clone();
     assert_eq!(first.text, format!("answer from {a}"));
+    // Codex reported a resolved name that differs from the request: the answer keeps both.
+    let resolved = format!("{}-resolved", a_model.clone().unwrap());
     assert_eq!(
-        (first.runner.as_deref(), &first.model),
-        (Some(a.as_str()), &a_model)
+        (
+            first.runner.as_deref(),
+            first.model.as_deref(),
+            &first.requested_model
+        ),
+        (Some(a.as_str()), Some(resolved.as_str()), &a_model)
     );
     assert!(
         ask::answer_label(&rt.state, &first)
@@ -307,18 +374,76 @@ fn switching_helper_mid_answer_labels_each_answer_and_runs_the_next_on_the_new_o
     finish_answer(&mut rt);
     let second = rt.state.saved.messages.last().unwrap().clone();
     assert_eq!(second.text, format!("answer from {b}"));
+    // OpenCode reported no model: the request is kept, and the label does not claim it.
     assert_eq!(
-        (second.runner.as_deref(), &second.model),
-        (Some(b.as_str()), &b_model)
+        (
+            second.runner.as_deref(),
+            &second.model,
+            &second.requested_model
+        ),
+        (Some(b.as_str()), &None, &b_model)
     );
-    assert!(
-        ask::answer_label(&rt.state, &second)
-            .unwrap()
-            .starts_with("OpenCode")
+    assert_eq!(
+        ask::answer_label(&rt.state, &second).as_deref(),
+        Some("OpenCode (model not reported)")
     );
     assert!(rt.state.ask_settings.pick.is_none());
+    // Reload the saved thread from disk: both answers and their labels are unchanged.
+    let before = rt.state.saved.messages.clone();
+    rt.update(|s, _| s.load_saved());
+    assert_eq!(rt.state.saved.messages, before);
+    let labels: Vec<_> = rt
+        .state
+        .saved
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .map(|m| ask::answer_label(&rt.state, m))
+        .collect();
+    assert!(labels[0].as_ref().unwrap().starts_with("Codex"));
+    assert_eq!(labels[1].as_deref(), Some("OpenCode (model not reported)"));
     let calls = CALLS.lock().unwrap().clone();
     assert_eq!(calls, vec![(a, a_model), (b, b_model)]);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn a_fallback_answer_through_the_real_ask_names_the_helper_that_answered_and_survives_reload() {
+    if in_parent(
+        "a_fallback_answer_through_the_real_ask_names_the_helper_that_answered_and_survives_reload",
+    ) {
+        return;
+    }
+    *core::ask_session::STAND_IN.lock().unwrap() = Some(fake_helper);
+    CODEX_FAILS.store(true, SeqCst);
+    let mut rt = page();
+    rt.update(|s, _| scene_agents(s, ALL_AGENTS));
+    // A live meeting asks Codex first and falls back to the normal helper when it fails.
+    rt.update(|s, _| {
+        s.ask_settings.recording = true;
+        s.meeting_agent_transition();
+    });
+    assert_eq!(rt.state.ask_runner_name(), Some("Codex"));
+    let fallback_request = rt.state.normal_ask_model();
+    rt.update(|s, _| s.send("What did we decide?"));
+    finish_answer(&mut rt);
+    let calls: Vec<_> = CALLS.lock().unwrap().iter().map(|c| c.0.clone()).collect();
+    assert_eq!(calls, ["Codex", "Claude Sonnet"]);
+    let answer = rt.state.saved.messages.last().unwrap().clone();
+    assert_eq!(answer.text, "answer from Claude Sonnet");
+    assert_eq!(answer.runner.as_deref(), Some("Claude Sonnet"));
+    assert_eq!(answer.model.as_deref(), Some(SONNET_REPORTS));
+    assert_eq!(answer.requested_model, fallback_request);
+    assert!(answer.fallback);
+    // After a reload from disk the label still names the helper that answered.
+    rt.update(|s, _| s.load_saved());
+    let saved = rt.state.saved.messages.last().unwrap();
+    assert_eq!(saved, &answer);
+    let label = ask::answer_label(&rt.state, saved).unwrap();
+    assert!(
+        label.starts_with("Claude Code") && label.ends_with("fallback"),
+        "{label}"
+    );
 }
 
 #[cfg(debug_assertions)]
