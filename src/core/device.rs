@@ -40,6 +40,32 @@ impl DeviceSettings {
         store_io::write(&path, &settings)
     }
 
+    /// The name other devices show. Same rule as pairing: 1 to 80 characters, no control characters.
+    pub fn valid_name(name: &str) -> Option<String> {
+        let name = name.trim();
+        (!name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control))
+            .then(|| name.to_owned())
+    }
+    pub fn set_name(name: &str) -> io::Result<()> {
+        Self::set_name_in(&state_dir(), name)
+    }
+    pub(crate) fn set_name_in(root: &Path, name: &str) -> io::Result<()> {
+        let name = Self::valid_name(name).ok_or_else(|| {
+            store_io::invalid("Use 1 to 80 characters, with no control characters")
+        })?;
+        let path = root.join("device.json");
+        let _lock = store_io::lock(&path.with_extension("lock"))?;
+        let mut settings: Self = store_io::read(&path)?;
+        if settings.id.is_empty() {
+            settings.id = random_id()?;
+        }
+        if !valid_id(&settings.id) {
+            return Err(store_io::invalid("Invalid local device id"));
+        }
+        settings.name = name;
+        store_io::write(&path, &settings)
+    }
+
     /// No identity creation or lock-file writes for agent read requests.
     pub(crate) fn read_in(root: &Path) -> io::Result<Self> {
         let settings: Self = store_io::read(&root.join("device.json"))?;
@@ -103,4 +129,28 @@ pub(super) fn random_id() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_keeps_the_identity_and_rejects_bad_names() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let before = DeviceSettings::load_in(root.path())?;
+        DeviceSettings::set_name_in(root.path(), "  Studio PC ")?;
+        let after = DeviceSettings::read_in(root.path())?;
+        assert_eq!(after.name, "Studio PC");
+        assert_eq!(after.id, before.id);
+        for bad in ["", "   ", "tab	here", &"x".repeat(81)] {
+            assert!(
+                DeviceSettings::set_name_in(root.path(), bad).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(DeviceSettings::read_in(root.path())?.name, "Studio PC");
+        assert!(DeviceSettings::valid_name(&"y".repeat(80)).is_some());
+        Ok(())
+    }
 }

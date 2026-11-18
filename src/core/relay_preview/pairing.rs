@@ -1,3 +1,4 @@
+use super::super::DeviceSettings;
 use super::*;
 use anyhow::Context;
 use sidenote_sync::pairing::{self as protocol, Confirmation, PairHost, Receipt, SecretCode};
@@ -382,6 +383,51 @@ mod security_tests {
     }
     #[test]
     #[cfg(windows)]
+    fn a_renamed_device_shows_its_new_name_and_a_bad_name_changes_nothing() -> anyhow::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        let preview = get(root)?.unwrap();
+        let peer = Device::open(&d.path().join("peer.sqlite"))?;
+        let room = Settings::load(root)?.room;
+        let mut group = preview.device.store(|s| Group::load(s, &room))?;
+        group.enroll(&preview.device.identity, peer.identity.public());
+        let confirmation = Confirmation {
+            peer: peer.identity.public(),
+            peer_name: "Old name".into(),
+            phrase: String::new(),
+        };
+        preview.adopt(&group, &confirmation, Receipt::Confirmed)?;
+        let shown = |root: &Path| -> io::Result<Vec<String>> {
+            Ok(devices(root)?.into_iter().map(|p| p.name).collect())
+        };
+        assert!(shown(root)?.contains(&"Old name".to_owned()));
+        // The peer renames itself; its entry arrives through the shared document.
+        preview.device.store(|s| {
+            s.edit("tasks", |doc| {
+                put_names(doc, &[(peer.identity.public(), "New name")])
+            })
+        })?;
+        let names = shown(root)?;
+        assert!(names.contains(&"New name".to_owned()) && !names.contains(&"Old name".to_owned()));
+        rename_device(root, " Studio PC ")?;
+        let local = devices(root)?.into_iter().find(|p| p.local).unwrap();
+        assert_eq!(local.name, "Studio PC");
+        assert!(rename_device(root, "").is_err());
+        assert!(rename_device(root, &"x".repeat(81)).is_err());
+        assert_eq!(
+            devices(root)?.into_iter().find(|p| p.local).unwrap().name,
+            "Studio PC"
+        );
+        disconnect(root)?;
+        Ok(())
+    }
+    #[test]
+    #[cfg(windows)]
     fn uncertain_pairing_status_and_peer_name_survive_restart() -> anyhow::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path();
@@ -412,18 +458,138 @@ mod security_tests {
         disconnect(root)?;
         Ok(())
     }
+    #[cfg(windows)]
+    fn enable(root: &Path) -> anyhow::Result<Arc<Preview>> {
+        Settings {
+            enabled: true,
+            ..Settings::load(root)?
+        }
+        .save(root)?;
+        Ok(get(root)?.expect("relay sync is on"))
+    }
+    /// Two devices that adopted each other and have exchanged their shared documents.
+    #[cfg(windows)]
+    fn paired(a_root: &Path, b_root: &Path) -> anyhow::Result<(Arc<Preview>, Arc<Preview>)> {
+        let (a, b) = (enable(a_root)?, enable(b_root)?);
+        for (me, other, other_name) in [(&a, &b, "Peer B"), (&b, &a, "Peer A")] {
+            let room = Settings::load(&me.root)?.room;
+            let mut group = me.device.store(|s| Group::load(s, &room))?;
+            group.enroll(&me.device.identity, other.device.identity.public());
+            let confirmation = Confirmation {
+                peer: other.device.identity.public(),
+                peer_name: other_name.into(),
+                phrase: String::new(),
+            };
+            me.adopt(&group, &confirmation, Receipt::Confirmed)?;
+        }
+        sync_documents(&a, &b)?;
+        sync_documents(&b, &a)?;
+        Ok((a, b))
+    }
+    /// What the relay does for the shared document: the receiver merges the sender's changes.
+    #[cfg(windows)]
+    fn sync_documents(from: &Preview, to: &Preview) -> anyhow::Result<()> {
+        let mut theirs = from.device.load("tasks").map_err(failed)?;
+        to.device
+            .store(|s| {
+                s.edit("tasks", |doc| {
+                    doc.merge(&mut theirs)?;
+                    Ok(())
+                })
+            })
+            .map_err(failed)?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    fn other_names(root: &Path) -> io::Result<Vec<String>> {
+        Ok(devices(root)?
+            .into_iter()
+            .filter(|p| !p.local)
+            .map(|p| p.name)
+            .collect())
+    }
+    #[test]
+    #[cfg(windows)]
+    fn a_rename_made_with_relay_on_reaches_the_other_device() -> anyhow::Result<()> {
+        let (da, db) = (tempfile::tempdir()?, tempfile::tempdir()?);
+        let (a, b) = paired(da.path(), db.path())?;
+        assert!(!other_names(db.path())?.contains(&"Studio PC".to_owned()));
+        let tags: Vec<String> = devices(db.path())?.into_iter().map(|p| p.tag).collect();
+        assert!(tags.len() == 2 && tags[0] != tags[1] && tags.iter().all(|t| t.len() == 4));
+        rename_device(da.path(), "Studio PC")?;
+        sync_documents(&a, &b)?;
+        assert_eq!(other_names(db.path())?, ["Studio PC"]);
+        disconnect(da.path())?;
+        disconnect(db.path())?;
+        Ok(())
+    }
+    #[test]
+    #[cfg(windows)]
+    fn a_rename_made_with_relay_off_is_published_when_relay_is_turned_on() -> anyhow::Result<()> {
+        let (da, db) = (tempfile::tempdir()?, tempfile::tempdir()?);
+        let (a, b) = paired(da.path(), db.path())?;
+        Settings {
+            enabled: false,
+            ..Settings::load(da.path())?
+        }
+        .save(da.path())?;
+        drop(a);
+        rename_device(da.path(), "Studio PC")?;
+        assert_eq!(DeviceSettings::read_in(da.path())?.name, "Studio PC");
+        let a = enable(da.path())?;
+        sync_documents(&a, &b)?;
+        assert_eq!(other_names(db.path())?, ["Studio PC"]);
+        disconnect(da.path())?;
+        disconnect(db.path())?;
+        Ok(())
+    }
 }
 
 pub(super) fn token(key: &[u8; 32]) -> String {
     key.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn put_names(doc: &mut Automerge, names: &[([u8; 32], &str)]) -> anyhow::Result<()> {
+    let mut tx = doc.transaction();
+    for (key, name) in names {
+        tx.put(
+            ROOT,
+            serde_json::to_string(&["$device", token(key).as_str()])?,
+            serde_json::to_string(name)?,
+        )?;
+    }
+    tx.commit();
+    Ok(())
+}
+
+/// The name a device published about itself in the shared document, if it is a valid one.
+fn shared_name(document: &Automerge, token: &str) -> Option<String> {
+    let key = serde_json::to_string(&["$device", token]).ok()?;
+    let value = document.get(ROOT, key).ok()??.0;
+    let name: String = serde_json::from_str(value.as_str()?).ok()?;
+    DeviceSettings::valid_name(&name).filter(|valid| *valid == name)
+}
+
+/// Renames this device: device.json first, then the shared document when relay sync is on.
+pub fn rename_device(root: &Path, name: &str) -> io::Result<()> {
+    let name = DeviceSettings::valid_name(name)
+        .ok_or_else(|| store_io::invalid("Use 1 to 80 characters, with no control characters"))?;
+    DeviceSettings::set_name_in(root, &name)?;
+    match get(root)? {
+        Some(preview) => preview.publish_name(&name),
+        None => Ok(()),
+    }
+}
+
 #[derive(Clone)]
 pub struct PairedDevice {
     pub token: String,
+    /// Last 4 characters of the token: tells apart devices that share a name.
+    pub tag: String,
     pub name: String,
     pub local: bool,
     pub unconfirmed: bool,
+    pub presence: Presence,
 }
 
 pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
@@ -438,32 +604,29 @@ pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
         .map_err(failed)?;
     let local_name = super::super::DeviceSettings::read_in(root)?.name;
     let document = preview.device.load("tasks").map_err(failed)?;
+    let presence = preview.presence();
     Ok(group
         .members()
         .into_iter()
         .map(|key| {
             let local = key == preview.device.identity.public();
             let token = token(&key);
+            // The device's own entry in the shared document is newest; the pairing-time name is the fallback.
             let name = if local {
                 local_name.clone()
             } else {
-                settings
-                    .peers
-                    .get(&token)
-                    .cloned()
-                    .or_else(|| {
-                        let key = serde_json::to_string(&["$device", token.as_str()]).ok()?;
-                        let value = document.get(ROOT, key).ok()??.0;
-                        let name: String = serde_json::from_str(value.as_str()?).ok()?;
-                        (!name.trim().is_empty()
-                            && name.chars().count() <= 80
-                            && !name.chars().any(char::is_control))
-                        .then_some(name)
-                    })
+                shared_name(&document, &token)
+                    .or_else(|| settings.peers.get(&token).cloned())
                     .unwrap_or_else(|| "Paired device".into())
             };
             let unconfirmed = settings.unconfirmed.contains(&token);
             PairedDevice {
+                tag: token[token.len().saturating_sub(4)..].to_owned(),
+                presence: if local {
+                    Presence::Online
+                } else {
+                    presence.get(&token).copied().unwrap_or(Presence::Unknown)
+                },
                 token,
                 name,
                 local,
@@ -513,25 +676,48 @@ impl Preview {
         self.device
             .store(|s| {
                 s.edit("tasks", |doc| {
-                    let mut tx = doc.transaction();
-                    for (key, name) in [
-                        (self.device.identity.public(), local_name.as_str()),
-                        (peer.peer, peer.peer_name.as_str()),
-                    ] {
-                        tx.put(
-                            ROOT,
-                            serde_json::to_string(&["$device", token(&key).as_str()])?,
-                            serde_json::to_string(name)?,
-                        )?;
-                    }
-                    tx.commit();
-                    Ok(())
+                    put_names(
+                        doc,
+                        &[
+                            (self.device.identity.public(), local_name.as_str()),
+                            (peer.peer, peer.peer_name.as_str()),
+                        ],
+                    )
                 })
             })
             .map_err(failed)
             .context(Operation("persist peer names replica database"))?;
         settings.save_authority(&self.root, &self.device)?;
         self.online(true).context(Operation("start sync session"))
+    }
+    /// A rename made while relay sync was off lives only in device.json. When sync starts again,
+    /// publish it so the paired devices stop showing the old name. Best effort: the next start retries.
+    pub(super) fn reconcile_name(&self) {
+        let Ok(local) = DeviceSettings::read_in(&self.root) else {
+            return;
+        };
+        let Ok(document) = self.device.load("tasks") else {
+            return;
+        };
+        let published = shared_name(&document, &token(&self.device.identity.public()));
+        if published.is_some_and(|name| name != local.name) {
+            let _ = self.publish_name(&local.name);
+        }
+    }
+    /// Publishes this device's name in the shared document; paired devices learn it through sync.
+    pub fn publish_name(&self, name: &str) -> io::Result<()> {
+        let names = [(self.device.identity.public(), name)];
+        let connection = self.connection.lock().map_err(|_| failed("mutex"))?;
+        if let Some(connection) = connection.as_ref() {
+            connection
+                .client
+                .edit("tasks", |doc| put_names(doc, &names))
+                .map_err(failed)
+        } else {
+            self.device
+                .store(|s| s.edit("tasks", |doc| put_names(doc, &names)))
+                .map_err(failed)
+        }
     }
     pub fn remove_device(&self, _target: &str) -> io::Result<()> {
         Err(store_io::invalid(

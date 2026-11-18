@@ -714,6 +714,7 @@ pub fn get(root: &Path) -> io::Result<Option<Arc<Preview>>> {
         return Ok(Some(preview.clone()));
     }
     let preview = Arc::new(Preview::open(root, settings)?);
+    preview.reconcile_name();
     preview.online(true)?;
     replicas.insert(root.to_owned(), preview.clone());
     Ok(Some(preview))

@@ -579,9 +579,11 @@ pub fn scene(s: &mut State, kind: &str) {
     s.hex.shell.relay_address = TextEdit::new("ws://127.0.0.1:8787");
     s.relay_ui.peers = vec![PairedDevice {
         token: "synthetic-local".into(),
+        tag: String::new(),
         name: "DEMO-PC".into(),
         local: true,
         unconfirmed: false,
+        presence: core::Presence::Online,
     }];
     match kind {
         "operational" | "unreachable" | "wrong-address" | "update-required" => {
@@ -630,18 +632,22 @@ pub fn scene(s: &mut State, kind: &str) {
         "unconfirmed" => {
             s.relay_ui.peers.push(PairedDevice {
                 token: "synthetic-peer".into(),
+                tag: String::new(),
                 name: "Travel laptop".into(),
                 local: false,
                 unconfirmed: true,
+                presence: core::Presence::Unknown,
             });
             s.relay_update(s.relay_ui.generation, Update::Unconfirmed);
             super::scene_scroll(s, "relay-unconfirmed-notice-1");
         }
         "paired" => s.relay_ui.peers.push(PairedDevice {
             token: "synthetic-peer".into(),
+            tag: String::new(),
             name: "Travel laptop".into(),
             local: false,
             unconfirmed: false,
+            presence: core::Presence::Online,
         }),
         "conflict" | "shared-conflict" => {
             if kind == "shared-conflict" {
