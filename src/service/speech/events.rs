@@ -226,9 +226,8 @@ fn host_status(last: &mut (serde_json::Value, Instant)) -> io::Result<()> {
         return Ok(());
     }
     for id in sessions.keys() {
-        store
-            .emit(id, "host.status", data.clone())
-            .map_err(|_| io::Error::other("SPEECH_STORAGE"))?;
+        // A retained session's unavailable log must not stop the shared listener.
+        let _ = store.emit(id, "host.status", data.clone());
     }
     *last = (identity, Instant::now());
     Ok(())

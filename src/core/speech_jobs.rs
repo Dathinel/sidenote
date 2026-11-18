@@ -58,6 +58,10 @@ impl Store {
         let (_lock, sessions) = self.load()?;
         sessions.get(session).ok_or(Error::Missing)?;
         let mut events = self.log(session)?;
+        // Status is advisory. Keep its lifetime bounded without renumbering durable results.
+        if event == "host.status" && events.iter().filter(|e| e.event == event).count() >= 64 {
+            return Ok(());
+        }
         if event != "host.status"
             && events.iter().any(|e| {
                 e.event == event
@@ -78,7 +82,11 @@ impl Store {
             bytes.push(b'\n');
         }
         if bytes.len() > 16 << 20 {
-            return Err(Error::Storage);
+            return if event == "host.status" {
+                Ok(())
+            } else {
+                Err(Error::Storage)
+            };
         }
         // Atomic replacement preserves the complete append-only sequence after interruption.
         store_io::atomic_write(&self.0.join(session).join("events.ndjson"), &bytes)?;
@@ -124,13 +132,21 @@ impl Store {
                 if STOP.load(std::sync::atomic::Ordering::Acquire) {
                     return Ok(());
                 }
-                self.emit(
-                    id,
-                    "piece.accepted",
-                    json!({"piece":piece,"track":accepted.metadata.track,
+                // Keep a session's event-store failure local to that session.
+                if self
+                    .emit(
+                        id,
+                        "piece.accepted",
+                        json!({"piece":piece,"track":accepted.metadata.track,
                     "index":accepted.metadata.index,"bytes":accepted.bytes,"queue_pos":1}),
-                )?;
-                let snapshot = self.snapshot(&session.owner, id, piece)?;
+                    )
+                    .is_err()
+                {
+                    break;
+                }
+                let Ok(snapshot) = self.snapshot(&session.owner, id, piece) else {
+                    break;
+                };
                 let result = if snapshot["state"] != "done" && snapshot["state"] != "failed" {
                     process(id, piece, session)
                 } else {
@@ -139,12 +155,16 @@ impl Store {
                 if STOP.load(std::sync::atomic::Ordering::Acquire) {
                     return Ok(());
                 }
-                if result.is_err() {
-                    self.emit(
-                        id,
-                        "piece.failed",
-                        json!({"piece":piece,"code":"ASR_UNAVAILABLE","retryable":false}),
-                    )?;
+                if result.is_err()
+                    && self
+                        .emit(
+                            id,
+                            "piece.failed",
+                            json!({"piece":piece,"code":"ASR_UNAVAILABLE","retryable":false}),
+                        )
+                        .is_err()
+                {
+                    break;
                 }
                 let (_lock, mut current) = self.load()?;
                 current
@@ -162,7 +182,7 @@ impl Store {
                         .is_ok_and(|v| v["state"] == "done" || v["state"] == "failed")
                 })
             {
-                self.emit(id, "session.done", json!({"pieces_total":session.finished}))?;
+                let _ = self.emit(id, "session.done", json!({"pieces_total":session.finished}));
             }
         }
         Ok(())
