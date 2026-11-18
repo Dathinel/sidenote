@@ -2,7 +2,7 @@
 #[cfg(target_os = "linux")]
 mod schedule;
 #[cfg(target_os = "linux")]
-mod speech;
+pub(crate) mod speech;
 #[cfg(target_os = "linux")]
 pub(crate) mod workers;
 use serde::{Deserialize, Serialize};

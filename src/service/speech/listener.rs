@@ -83,6 +83,14 @@ async fn authorize(
     }
 }
 fn argument(name: &str) -> io::Result<Option<std::ffi::OsString>> {
+    #[cfg(all(test, feature = "asr-runtime"))]
+    if super::proofs::active() {
+        return Ok(match name {
+            "--speech-port" => Some("0".into()),
+            "--runtime-library" => std::env::var_os("SIDENOTE_L4_RUNTIME"),
+            _ => None,
+        });
+    }
     let args: Vec<_> = std::env::args_os().collect();
     let positions: Vec<_> = args
         .iter()

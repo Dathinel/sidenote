@@ -20,6 +20,10 @@ pub(crate) mod regression;
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
     fn load(&mut self, language: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+        #[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
+        if crate::service::speech::proofs::active() {
+            return crate::service::speech::proofs::recognizer();
+        }
         let language = match language {
             NativeLanguage::Hindi => "hi",
             NativeLanguage::Telugu => "te",

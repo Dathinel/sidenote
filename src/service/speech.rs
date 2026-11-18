@@ -2,6 +2,8 @@
 use std::io;
 mod events;
 mod listener;
+#[cfg(all(test, feature = "asr-runtime"))]
+pub(crate) mod proofs;
 mod routes;
 
 pub(super) fn run() -> i32 {
