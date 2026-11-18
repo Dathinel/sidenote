@@ -74,6 +74,7 @@ pub struct SyncClient {
     fatal: Mutex<Option<Reason>>,
     documents: Mutex<BTreeMap<String, Reason>>,
     healthy_session: AtomicBool,
+    relay_connected: AtomicBool,
     #[cfg(test)]
     retry_ceilings: Mutex<Vec<Duration>>,
     pub connections: AtomicU64,
@@ -143,6 +144,7 @@ impl SyncClient {
             fatal: Mutex::new(None),
             documents: Mutex::new(BTreeMap::new()),
             healthy_session: AtomicBool::new(false),
+            relay_connected: AtomicBool::new(false),
             #[cfg(test)]
             retry_ceilings: Mutex::new(Vec::new()),
             connections: AtomicU64::new(0),
@@ -195,6 +197,10 @@ impl SyncClient {
     }
     pub fn subscribe_status(&self) -> watch::Receiver<Status> {
         self.status.subscribe()
+    }
+    /// True while this process holds an authenticated relay connection.
+    pub fn relay_connected(&self) -> bool {
+        self.relay_connected.load(Ordering::Relaxed)
     }
     pub fn peer_statuses(&self) -> Result<Vec<PeerStatus>> {
         Ok(self
@@ -275,9 +281,11 @@ impl SyncClient {
                 )
                 .await?;
                 self.connections.fetch_add(1, Ordering::Relaxed);
+                self.relay_connected.store(true, Ordering::Relaxed);
                 self.session(&mut ws, ready, &group, &mut bans).await
             };
-            let result = tokio::select! {_=stop.changed()=>{self.status.send_replace(Status::Offline);return Ok(());},result=connection=>result};
+            let result = tokio::select! {_=stop.changed()=>{self.clear_presence()?;self.status.send_replace(Status::Offline);return Ok(());},result=connection=>result};
+            self.clear_presence()?;
             if let Err(error) = result {
                 let code = reason(&error);
                 if local_failure(code) {
@@ -327,7 +335,10 @@ impl SyncClient {
             sending_bad_data: false,
             reason: None,
             last_synced: None,
+            online: false,
+            last_seen: None,
         });
+        record.online = false;
         record.reason = Some(code);
         record.sending_bad_data = !matches!(code, Reason::Transport);
         Ok(())
@@ -719,15 +730,37 @@ impl SyncClient {
                 sending_bad_data: false,
                 reason: None,
                 last_synced: None,
+                online: false,
+                last_seen: None,
             });
-            if p.domains == p.synced
-                && p.inventory_received
-                && p.last_pong.is_some_and(|at| at.elapsed() < HEARTBEAT * 2)
-            {
+            let live = p.last_pong.is_some_and(|at| at.elapsed() < HEARTBEAT * 2);
+            record.online = live;
+            if live {
+                record.last_seen = p.last_pong_system;
+            }
+            if p.domains == p.synced && p.inventory_received && live {
                 record.last_synced = p.last_pong_system;
                 record.sending_bad_data = false;
                 record.reason = None;
             }
+        }
+        for (id, record) in records.iter_mut() {
+            if !s.peers.contains_key(id) {
+                record.online = false;
+            }
+        }
+        Ok(())
+    }
+    /// A finished session proves nothing about any peer, so none stays online.
+    fn clear_presence(&self) -> Result<()> {
+        self.relay_connected.store(false, Ordering::Relaxed);
+        for record in self
+            .peers
+            .lock()
+            .map_err(|_| Failure(Reason::LockPoisoned))?
+            .values_mut()
+        {
+            record.online = false;
         }
         Ok(())
     }
@@ -1233,6 +1266,7 @@ mod tests {
             fatal: Mutex::new(None),
             documents: Mutex::new(BTreeMap::new()),
             healthy_session: AtomicBool::new(false),
+            relay_connected: AtomicBool::new(false),
             #[cfg(test)]
             retry_ceilings: Mutex::new(Vec::new()),
             connections: AtomicU64::new(0),
@@ -1325,6 +1359,126 @@ mod tests {
             }=>result?,
         }
         assert_ne!(*client.status.borrow(), Status::Synced);
+        Ok(())
+    }
+    /// The far device: it opens each ping the client sends and, while `answer` is set, returns a pong.
+    struct Answering {
+        far: Arc<Device>,
+        owner: [u8; 32],
+        group: Group,
+        cipher: crypto::Cipher,
+        session: [u8; 32],
+        answer: Arc<AtomicBool>,
+        replies: tokio::sync::mpsc::UnboundedSender<Frame>,
+        inbox: tokio::sync::mpsc::UnboundedReceiver<Frame>,
+    }
+    #[async_trait::async_trait]
+    impl Transport for Answering {
+        async fn send(&mut self, frame: Frame) -> Result<()> {
+            let bytes = match frame {
+                Frame::Binary(bytes) => bytes,
+                // The relay answers its own pings, so only the far device's silence is under test.
+                Frame::Text(text) if text.contains("ping") => {
+                    let _ = self.replies.send(Frame::Text("{\"type\":\"pong\"}".into()));
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            };
+            let opened = crypto::open(&self.far.identity, &self.group, &bytes)?;
+            if opened.kind != 3 || !self.answer.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            if let Some(plain) = self.cipher.decrypt(opened.payload)?
+                && let Inner::Ping(nonce) = Inner::decode(plain)?
+            {
+                let out = self.cipher.encrypt_control(&Inner::Pong(nonce).encode()?)?;
+                let reply = crypto::seal(
+                    &self.far.identity,
+                    &self.group,
+                    self.owner,
+                    3,
+                    self.session,
+                    &out,
+                );
+                let _ = self.replies.send(Frame::Binary(reply));
+            }
+            Ok(())
+        }
+        async fn recv(&mut self) -> Result<Frame> {
+            match self.inbox.recv().await {
+                Some(frame) => Ok(frame),
+                None => std::future::pending().await,
+            }
+        }
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn presence_follows_the_real_ping_and_pong_and_keeps_last_seen() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let owner = Arc::new(Device::open(&dir.path().join("owner.sqlite"))?);
+        let far = Arc::new(Device::open(&dir.path().join("far.sqlite"))?);
+        let mut group = Group::new(&owner.identity);
+        group.enroll(&owner.identity, far.identity.public());
+        let client = client(owner.clone(), group.clone())?;
+        let (mut local, cipher) =
+            peer_pair(&group, far.identity.public(), owner.identity.public())?;
+        // No pong yet, so the first heartbeat tick sends a real encrypted ping.
+        local.last_pong = None;
+        local.last_pong_system = None;
+        let session = local.cipher.session;
+        let mut live = Session::default();
+        live.peers.insert(far.identity.public(), local);
+        let (replies, inbox) = tokio::sync::mpsc::unbounded_channel();
+        let answer = Arc::new(AtomicBool::new(true));
+        let mut transport = Answering {
+            far: far.clone(),
+            owner: owner.identity.public(),
+            group: group.clone(),
+            cipher,
+            session,
+            answer: answer.clone(),
+            replies,
+            inbox,
+        };
+        let mut bans = BTreeMap::new();
+        let id = far.identity.public();
+        let find = |client: &SyncClient| -> Result<Option<crate::status::PeerStatus>> {
+            Ok(client.peer_statuses()?.into_iter().find(|p| p.device == id))
+        };
+        tokio::select! {
+            result = client.session_from(&mut transport, serde_json::json!({"peers":[]}), &group, &mut bans, live) => {
+                result?;
+                anyhow::bail!("session ended before presence was checked");
+            },
+            result = async {
+                let first = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        if let Some(p) = find(&client)? && p.online {
+                            break Ok::<_, anyhow::Error>(p);
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }).await??;
+                assert!(first.last_seen.is_some(), "an answered ping must record last seen");
+                answer.store(false, Ordering::Relaxed);
+                // Unanswered, the peer is dropped two heartbeats after its next ping.
+                tokio::time::timeout(HEARTBEAT * 4, async {
+                    loop {
+                        if find(&client)?.is_some_and(|p| !p.online) {
+                            break Ok::<_, anyhow::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }).await??;
+                let after = find(&client)?.expect("record kept");
+                assert_eq!(after.last_seen, first.last_seen, "offline must keep the last seen time");
+                Ok::<_, anyhow::Error>(())
+            } => result?,
+        }
+        client.clear_presence()?;
+        assert!(client.peer_statuses()?.iter().all(|p| !p.online));
         Ok(())
     }
     #[tokio::test]
