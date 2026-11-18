@@ -158,7 +158,7 @@
   "src/service/speech/events.rs": "8837a2f310b22758a69d11e7e2a75dea3a2b3061b6b80fee404e1d5bfe2d3fae",
   "src/service/speech/listener_tests.rs": "3beb25218f9ca86701f58cccda1d02a5a4d97ada9a55a4ed466f6b9e3dd34cff",
   "src/service/speech/native_tests.rs": "ed0aab6101e77a1115ef845a4638bdd866b02e75e271060ecbd0a37df2930db6",
-  "src/service/speech/proofs.rs": "f41665326ac5b8159992f057267ed57de21367d2dd93d0f4b3376e471cc3d207",
+  "src/service/speech/proofs.rs": "766cac095502f9f54c63ccc50c3afb405caccf7b40e067a70ef3aec28686e1ed",
   "src/service/workers.rs": "d3e3abd1f69114ce2798268fdcbf9507b83b27a9137a40421367125b042dbc89",
   "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",

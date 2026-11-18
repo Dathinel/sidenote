@@ -345,3 +345,97 @@ fn events(root: &Path, id: &str) -> Vec<Value> {
         .map(|s| serde_json::from_str(s).unwrap())
         .collect()
 }
+#[test]
+fn service_shutdown_replans_and_replays_over_http() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let root = setup();
+    let root = root.path();
+    fs::write(root.join("hold"), b"pause").unwrap();
+    let mut service = Service::start(root);
+    let (id, piece) = service.upload(&request(), 0);
+    wait(|| root.join("blocked").exists());
+    let (_, second) = service.upload(&request(), 1);
+    let before = service.snapshot(&id, &piece);
+    assert_eq!(before["ranges"].as_array().unwrap().len(), 1);
+    service.stop();
+    for pid in fs::read_to_string(root.join("workers")).unwrap().lines() {
+        assert!(
+            !Path::new("/proc").join(pid).exists(),
+            "owned worker was not reaped"
+        );
+    }
+    let sessions: Value =
+        serde_json::from_slice(&fs::read(root.join("local/speech/sessions.json")).unwrap())
+            .unwrap();
+    assert_eq!(sessions[&id]["pieces"][&piece]["done"], false);
+    assert!(
+        !root
+            .join(format!("local/speech/{id}/jobs/{second}"))
+            .exists()
+    );
+    assert!(
+        !events(root, &id)
+            .iter()
+            .any(|e| e["event"] == "piece.failed")
+    );
+    let calls = fs::read_to_string(root.join("calls")).unwrap();
+    let first = calls.lines().next().unwrap().to_owned();
+    let job = root.join(format!("local/speech/{id}/jobs/{piece}"));
+    fs::write(job.join("input/.input-crash.tmp"), b"interrupted").unwrap();
+    fs::write(job.join(".tmp-derived-cut"), b"interrupted").unwrap();
+    fs::remove_file(root.join("hold")).unwrap();
+    let mut service = Service::start(root);
+    wait(|| service.snapshot(&id, &second)["state"] == "done");
+    let resumed = service.snapshot(&id, &piece);
+    assert_eq!(resumed["state"], "done");
+    assert!(!job.join("input/.input-crash.tmp").exists());
+    assert!(!job.join(".tmp-derived-cut").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("calls"))
+            .unwrap()
+            .lines()
+            .filter(|s| *s == first)
+            .count(),
+        1
+    );
+    let saved = events(root, &id);
+    let after = saved.len() as u64 / 2;
+    let later: Vec<_> = saved
+        .iter()
+        .filter(|e| e["seq"].as_u64().unwrap() > after)
+        .cloned()
+        .collect();
+    assert_eq!(service.replay(&id, after, later.len()), later);
+    assert_eq!(
+        resumed["ranges"],
+        json!(
+            saved
+                .iter()
+                .filter(|e| e["event"] == "range.result" && e["data"]["piece"] == piece)
+                .map(|e| e["data"].clone())
+                .collect::<Vec<_>>()
+        )
+    );
+    assert!(
+        resumed["ranges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["start_sample"].as_u64().unwrap() >= 96000
+                && r["end_sample"].as_u64().unwrap() <= 256000)
+    );
+    service.stop();
+    fs::remove_dir_all(root.join("local/speech")).unwrap();
+    fs::remove_file(root.join("calls")).unwrap();
+    let service = Service::start(root);
+    let (same_id, same_piece) = service.upload(&request(), 0);
+    assert_eq!((&same_id, &same_piece), (&id, &piece));
+    wait(|| service.snapshot(&id, &piece)["state"] == "done");
+    assert_eq!(
+        service.snapshot(&id, &piece),
+        resumed,
+        "uninterrupted production plan and snapshot"
+    );
+}
