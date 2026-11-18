@@ -153,3 +153,24 @@ fn stale_bound_expires_availability_but_keeps_stop() {
     assert!(!state.hex_recording());
     assert!(hex::stop_blocked(&state).is_some());
 }
+
+#[test]
+#[cfg(windows)]
+fn unknown_status_does_not_offer_to_open_an_installed_hex() {
+    let (mut state, mut client) = setup([], false);
+    state.hex.installation = sidenote::hex_install::Installation::Installed {
+        version: "0.0.0-dev-1085".into(),
+        exe: "fixture/hex.exe".into(),
+    };
+    client.replies[0].as_mut().unwrap().version = "0.0.0-dev-1083".into();
+    state.hex.caps_version = Some("0.0.0-dev-1083".into());
+    client.poll(&mut state);
+    assert!(state.hex_running(), "an update waiting does not stop Hex");
+    assert!(hex::setup::card(&state, theme::palette(false)).is_none());
+    let good = state.hex.status.as_ref().unwrap().as_ref().unwrap().clone();
+    state.hex_status_at(Ok(good), Instant::now() - Duration::from_secs(11));
+    assert!(state.hex_status_unknown());
+    assert!(hex::setup::card(&state, theme::palette(false)).is_none());
+    state.hex_apply(Msg::Status(Err(HexError::HexNotRunning)));
+    assert!(hex::setup::card(&state, theme::palette(false)).is_some());
+}

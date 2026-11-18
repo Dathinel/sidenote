@@ -3008,6 +3008,12 @@ pub fn spec() -> AppSpec<State> {
             ("settings-hex-installed", |s| {
                 hex::settings::scene(s, "settings-hex-installed")
             }),
+            ("settings-hex-stale", |s| {
+                hex::settings::scene(s, "settings-hex-stale")
+            }),
+            ("settings-hex-update", |s| {
+                hex::settings::scene(s, "settings-hex-update")
+            }),
             ("settings-hex-meetings-off", |s| {
                 hex::settings::scene(s, "settings-hex-meetings-off")
             }),

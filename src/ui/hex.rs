@@ -266,6 +266,11 @@ impl HexState {
         self.state().is_some()
     }
 
+    /// Hex answered that it is not running. A missing, slow or expired answer is not this.
+    fn stopped(&self) -> bool {
+        matches!(self.status, Some(Err(HexError::HexNotRunning)))
+    }
+
     // A Stop target is an observation, not a claim that an expired recording is still live.
     fn recording(&self) -> Option<&Recording> {
         self.status
