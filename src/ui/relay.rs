@@ -38,6 +38,13 @@ pub struct RelayUi {
     pub waiting: bool,
 }
 
+impl RelayUi {
+    /// A pairing job is open; renaming waits because the confirmation screen shows names.
+    pub fn pairing_busy(&self) -> bool {
+        self.job.is_some()
+    }
+}
+
 fn button(label: &str, key: impl Into<String>, p: Palette) -> El {
     super::widgets::button(label, &key.into(), super::widgets::ButtonRole::Secondary, p)
 }
@@ -176,7 +183,7 @@ impl State {
         self.relay_ui.join = TextEdit::default().secure().revealed(true);
         self.relay_ui.join_open = false;
     }
-    fn relay_pair(&mut self, joining: bool) {
+    pub(crate) fn relay_pair(&mut self, joining: bool) {
         if joining && !complete_code(&self.relay_ui.join.text) {
             return;
         }
@@ -709,6 +716,19 @@ pub fn task_chooser(s: &State, task: &sidenote::core::TaskItem, p: Palette) -> O
     }
 }
 
+const DEMO_NAME: &str = "DEMO-PC";
+
+fn demo_peer(name: &str, presence: Presence) -> PairedDevice {
+    PairedDevice {
+        token: format!("synthetic-{name}"),
+        tag: String::new(),
+        name: name.into(),
+        local: false,
+        unconfirmed: false,
+        presence,
+    }
+}
+
 pub fn scene(s: &mut State, kind: &str) {
     assert!(super::isolated());
     super::hex::settings::scene(s, "settings-sync");
@@ -788,6 +808,90 @@ pub fn scene(s: &mut State, kind: &str) {
             unconfirmed: false,
             presence: core::Presence::Online,
         }),
+        "devices-none" => super::scene_scroll(s, "relay-peers-card"),
+        "devices-mixed" => {
+            let midnight = chrono::Local::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
+                .expect("local midnight");
+            let yesterday_1840 = SystemTime::from(midnight - chrono::Duration::minutes(320));
+            s.relay_ui.peers.extend([
+                demo_peer("Travel laptop", Presence::Online),
+                demo_peer("Studio PC", Presence::Offline(Some(yesterday_1840))),
+                demo_peer(
+                    "Old tablet",
+                    Presence::Offline(Some(SystemTime::now() - Duration::from_secs(20 * 86_400))),
+                ),
+            ]);
+            super::scene_scroll(s, "relay-peers-card");
+        }
+        "devices-long" => {
+            let spaced: String = "North wing shared laptop for the planning team "
+                .repeat(2)
+                .chars()
+                .take(80)
+                .collect();
+            let unbroken: String = "StudioLaptop".repeat(7).chars().take(80).collect();
+            s.relay_ui.peers.extend([
+                demo_peer(spaced.trim_end(), Presence::Online),
+                demo_peer(&unbroken, Presence::Offline(None)),
+            ]);
+            let mut waiting = demo_peer("Travel laptop", Presence::Unknown);
+            waiting.unconfirmed = true;
+            s.relay_ui.peers.push(waiting);
+            super::scene_scroll(s, "relay-peers-card");
+        }
+        "devices-unknown" => {
+            s.relay_ui.peers.extend([
+                demo_peer("Travel laptop", Presence::Unknown),
+                demo_peer("Studio PC", Presence::Unknown),
+            ]);
+            super::scene_scroll(s, "relay-peers-card");
+        }
+        "devices-twins" => {
+            let unbroken: String = "StudioLaptop".repeat(7).chars().take(80).collect();
+            let mut twins = Vec::new();
+            for (name, tag, presence) in [
+                ("Laptop", "a1b2", Presence::Online),
+                ("Laptop", "c3d4", Presence::Offline(None)),
+                (unbroken.as_str(), "e5f6", Presence::Online),
+                (unbroken.as_str(), "0789", Presence::Unknown),
+            ] {
+                let mut twin = demo_peer(name, presence);
+                twin.token = format!("synthetic-{name}-{tag}");
+                twin.tag = tag.into();
+                twins.push(twin);
+            }
+            s.relay_ui.peers.extend(twins);
+            super::scene_scroll(s, "relay-peers-card");
+        }
+        "devices-rename" | "devices-rename-empty" => {
+            // Real isolated state with relay on and one device, so Enter in the name field runs the
+            // real save and refresh. The script in tools/ui-scripts edits and submits the field.
+            let root = s.store.root.clone();
+            sidenote::core::DeviceSettings::set_name(DEMO_NAME).expect("synthetic device name");
+            core::Settings {
+                enabled: true,
+                ..Default::default()
+            }
+            .save(&root)
+            .expect("isolated relay settings");
+            s.relay_ui.fixture = false;
+            s.relay_refresh();
+            if kind.ends_with("empty") {
+                s.hex.shell.device_name = TextEdit::new("");
+            }
+            super::scene_scroll(s, "device-name-input");
+        }
+        "devices-renamed" => {
+            s.relay_ui.peers[0].name = "Studio PC".into();
+            s.hex.shell.device_name = TextEdit::new("Studio PC");
+            s.relay_ui
+                .peers
+                .push(demo_peer("Travel laptop", Presence::Online));
+            super::scene_scroll(s, "relay-peers-card");
+        }
         "conflict" | "shared-conflict" => {
             if kind == "shared-conflict" {
                 core::seed_shared_render_conflict(&s.store.root).expect("isolated shared conflict");

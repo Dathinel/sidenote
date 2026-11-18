@@ -33,6 +33,8 @@ pub struct Settings {
     pub relay: sidenote::core::relay_preview::Settings,
     pub relay_address: TextEdit,
     pub relay_error: Option<String>,
+    pub device_name: TextEdit,
+    pub device_name_error: Option<String>,
     kb_fields: [TextEdit; 5],
     kb_base: Option<sidenote::core::Config>,
     kb_error: Option<String>,
@@ -1603,39 +1605,101 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 .label("Process meetings in 5-minute windows (test)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.process_meeting_windows = !labs.process_meeting_windows)).build(k).key("labs-process-windows-toggle"), true, p)), p)
 }
-fn devices(s: &State, p: Palette) -> El {
-    let name = if rune::tooling::headless_run().is_some() {
-        "DEMO-PC".into()
+fn save_device_name(s: &mut State) {
+    s.hex.shell.device_name_error = None;
+    if s.relay_ui.pairing_busy() {
+        s.hex.shell.device_name_error =
+            Some("Finish or cancel pairing before renaming this device.".into());
+        return;
+    }
+    let Some(name) = sidenote::core::DeviceSettings::valid_name(&s.hex.shell.device_name.text)
+    else {
+        s.hex.shell.device_name_error =
+            Some("Use 1 to 80 characters, with no control characters.".into());
+        return;
+    };
+    match sidenote::core::relay_preview::pairing::rename_device(&s.store.root, &name) {
+        Ok(()) => {
+            s.hex.shell.device_name = TextEdit::new(&name);
+            s.relay_refresh();
+            s.request_refresh();
+            let tail = if s.hex.shell.relay.enabled {
+                " Paired devices show it after their next sync."
+            } else {
+                ""
+            };
+            s.toast = Some((format!("Name saved.{tail}"), Instant::now()));
+        }
+        Err(_) => {
+            s.hex.shell.device_name_error = Some("Could not save the name. Try again.".into())
+        }
+    }
+}
+/// The date is when the newest of the device's meetings was recorded, not when it arrived.
+fn folder_device_line(count: usize, latest: Option<chrono::DateTime<chrono::Local>>) -> String {
+    let latest = latest
+        .map(|t| format!(" Latest meeting recorded {}.", t.format("%-d %b %Y")))
+        .unwrap_or_default();
+    format!("{count} meetings received.{latest}")
+}
+fn devices(s: &State, k: &Kit, p: Palette) -> El {
+    let help = if s.relay_ui.pairing_busy() {
+        "Finish or cancel pairing first."
     } else {
-        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "This PC".into())
+        "Other devices show this name. Press Enter to save."
     };
     let mut out = col().w_full().child(setting_row(
         s,
         "this-pc-name",
-        "This PC's name",
-        "Windows names this PC.",
-        roles::CONTROL.wrap(name, p.ink),
+        "This device's name",
+        help,
+        TextInput::new(&s.hex.shell.device_name)
+            .label("This device's name")
+            .on_edit(|s: &mut State| &mut s.hex.shell.device_name)
+            .on_submit(|s: &mut State, _| save_device_name(s))
+            .build(k)
+            .key("device-name-input")
+            .w(220.0),
         false,
         p,
     ));
-    let mut peers = BTreeMap::<&str, usize>::new();
+    if let Some(error) = &s.hex.shell.device_name_error {
+        out = out.child(
+            roles::SMALL
+                .wrap(error, p.warn)
+                .padding(14.0)
+                .role("alert")
+                .key("device-name-error"),
+        );
+    }
+    let mut peers = BTreeMap::<&str, (usize, Option<chrono::DateTime<chrono::Local>>)>::new();
     for meeting in &s.meetings {
         if let Some(device) = meeting.device.as_deref() {
-            *peers.entry(device).or_default() += 1;
+            let entry = peers.entry(device).or_default();
+            entry.0 += 1;
+            entry.1 = entry.1.max(meeting.started);
         }
     }
-    for (device, count) in peers {
+    for (device, (count, last)) in peers {
         out = out.child(hairline(p)).child(setting_row(
             s,
             &format!("sync-device-{device}"),
             device,
-            &format!("{count} meetings received. This app does not report a sync time per device."),
+            &folder_device_line(count, last),
             roles::CONTROL.line("Received", p.soft),
             false,
             p,
         ));
     }
-    out
+    out.child(hairline(p)).child(
+        roles::SMALL
+            .wrap(
+                "Folder sync lists the meetings each device recorded. It does not show whether a device is online.",
+                p.soft,
+            )
+            .padding(14.0)
+            .key("sync-devices-no-online"),
+    )
 }
 fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
     setting_row(
@@ -1731,8 +1795,8 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
     out = out.child(setting_row(
         s,
         "relay-last-contact",
-        "Last relay contact",
-        "Last time this PC reached the relay.",
+        "Last relay check",
+        "Last time this PC checked that the relay answered. It says nothing about other devices.",
         roles::SMALL.wrap(contact, p.soft),
         false,
         p,
@@ -1797,7 +1861,7 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
 fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
     let devices = col().w_full().child(card(
         "Devices",
-        devices(s, p).child(hairline(p)).child(feature(
+        devices(s, k, p).child(hairline(p)).child(feature(
             s,
             k,
             AppFeature::OtherDevices,
@@ -1821,6 +1885,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
         col()
             .w_full()
             .child(devices)
+            .child(super::super::relay::peers_card(s, p))
             .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
     }
 }
@@ -2905,6 +2970,87 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stored_device_name(root: &std::path::Path) -> String {
+        let file = std::fs::read(root.join("device.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&file).unwrap();
+        value["name"].as_str().unwrap().to_owned()
+    }
+    #[test]
+    fn a_folder_device_shows_the_recording_date_not_a_receipt_date() {
+        use chrono::TimeZone;
+        let day = chrono::Local
+            .with_ymd_and_hms(2026, 11, 1, 9, 30, 0)
+            .unwrap();
+        assert_eq!(
+            folder_device_line(3, Some(day)),
+            "3 meetings received. Latest meeting recorded 1 Nov 2026."
+        );
+        assert_eq!(folder_device_line(1, None), "1 meetings received.");
+    }
+    const BAD_NAME: &str = "Use 1 to 80 characters, with no control characters.";
+
+    #[test]
+    fn saving_the_device_name_stores_it_and_rejects_bad_input() {
+        let root = tempfile::tempdir().unwrap();
+        let mut s = State::new();
+        s.store.root = root.path().to_path_buf();
+        s.hex.shell.device_name = TextEdit::new("  Studio PC ");
+        save_device_name(&mut s);
+        assert_eq!(s.hex.shell.device_name_error, None);
+        assert_eq!(stored_device_name(root.path()), "Studio PC");
+        assert_eq!(s.hex.shell.device_name.text, "Studio PC");
+        assert!(
+            s.toast
+                .as_ref()
+                .is_some_and(|(t, _)| t.starts_with("Name saved."))
+        );
+        for bad in ["   ".to_owned(), "x".repeat(81), "tab\there".to_owned()] {
+            s.hex.shell.device_name = TextEdit::new(&bad);
+            save_device_name(&mut s);
+            assert_eq!(s.hex.shell.device_name_error.as_deref(), Some(BAD_NAME));
+            assert_eq!(stored_device_name(root.path()), "Studio PC");
+        }
+        s.hex.shell.device_name = TextEdit::new("Travel laptop");
+        save_device_name(&mut s);
+        assert_eq!(
+            s.hex.shell.device_name_error, None,
+            "a good name clears the error"
+        );
+        assert_eq!(stored_device_name(root.path()), "Travel laptop");
+    }
+
+    #[test]
+    fn saving_the_device_name_is_blocked_while_pairing_is_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let mut s = State::new();
+        s.store.root = root.path().to_path_buf();
+        s.hex.shell.device_name = TextEdit::new("Studio PC");
+        save_device_name(&mut s);
+        assert_eq!(stored_device_name(root.path()), "Studio PC");
+        sidenote::core::relay_preview::Settings {
+            enabled: true,
+            address: "ws://127.0.0.1:9".into(),
+            ..Default::default()
+        }
+        .save(root.path())
+        .unwrap();
+        s.relay_pair(false);
+        assert!(s.relay_ui.pairing_busy(), "a real pairing job is running");
+        s.hex.shell.device_name = TextEdit::new("Travel laptop");
+        save_device_name(&mut s);
+        assert_eq!(
+            s.hex.shell.device_name_error.as_deref(),
+            Some("Finish or cancel pairing before renaming this device.")
+        );
+        assert_eq!(stored_device_name(root.path()), "Studio PC");
+        s.relay_cancel();
+        save_device_name(&mut s);
+        assert_eq!(s.hex.shell.device_name_error, None);
+        assert_eq!(stored_device_name(root.path()), "Travel laptop");
+        sidenote::core::relay_preview::disconnect(root.path()).unwrap();
+    }
+
     #[test]
     fn merged_kb_validation_reason_reaches_the_inline_error_without_raw_io_details() {
         crate::test_paths::isolate();

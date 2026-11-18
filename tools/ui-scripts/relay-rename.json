@@ -1,0 +1,6 @@
+{"events": [
+ {"t": 0.3, "type": "tap", "key": "device-name-input"},
+ {"t": 0.6, "type": "type", "text": " 2"},
+ {"t": 1.0, "type": "key", "name": "Enter"},
+ {"t": 1.8, "type": "mark", "name": "end"}
+]}
