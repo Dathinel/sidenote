@@ -189,6 +189,45 @@ fn a_fallback_answer_is_saved_with_the_helper_that_wrote_it() {
 }
 
 #[test]
+fn a_connected_endpoint_answer_names_the_model_it_reported_or_says_it_did_not() {
+    if in_parent("a_connected_endpoint_answer_names_the_model_it_reported_or_says_it_did_not") {
+        return;
+    }
+    let mut rt = page();
+    let s = &mut rt.state;
+    for (reported, want) in [
+        (
+            Some("served-model-1"),
+            "Chat completions \u{b7} served-model-1",
+        ),
+        (None, "Chat completions (model not reported)"),
+    ] {
+        let mut run = AskRun::stand_in(core::provider::NAME, &[], 0);
+        run.requested_model = Some("asked-model".into());
+        s.asks.insert(MEETING.into(), run);
+        if let Some(model) = reported {
+            s.apply_event(Event::Progress {
+                id: MEETING.into(),
+                generation: 0,
+                event: AskProgress::Model {
+                    model: model.into(),
+                },
+            });
+        }
+        let mut run = s.asks.remove(MEETING).unwrap();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok("An answer.".to_string())).unwrap();
+        run.rx = rx;
+        s.finish_ask(MEETING, run, None);
+        let saved = s.saved.messages.last().unwrap();
+        assert_eq!(saved.runner.as_deref(), Some(core::provider::NAME));
+        assert_eq!(saved.requested_model.as_deref(), Some("asked-model"));
+        assert_eq!(saved.model.as_deref(), reported);
+        assert_eq!(ask::answer_label(s, saved).as_deref(), Some(want));
+    }
+}
+
+#[test]
 fn the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat() {
     if in_parent("the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat") {
         return;

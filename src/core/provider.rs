@@ -267,6 +267,8 @@ pub struct Stream {
     pub text: String,
     pub done: bool,
     pub metrics: Metrics,
+    /// The model the endpoint named in its stream, if it did.
+    pub model: Option<String>,
     received: usize,
 }
 impl Stream {
@@ -318,6 +320,11 @@ impl Stream {
         }
         let value: Value =
             serde_json::from_str(&data).map_err(|_| "Endpoint sent an invalid streaming event")?;
+        if self.model.is_none() {
+            self.model = value["model"]
+                .as_str()
+                .and_then(super::runners::reported_model);
+        }
         if let Some(usage) = value.get("usage").filter(|v| !v.is_null()) {
             self.metrics.prompt_tokens = usage["prompt_tokens"].as_u64();
             self.metrics.completion_tokens = usage["completion_tokens"].as_u64();
@@ -605,6 +612,7 @@ pub fn chat(
     let mut slow_reported = false;
     let mut first_token_ms = None;
     let mut latest_metrics = Metrics::default();
+    let mut reported_model: Option<String> = None;
     let mut last_length = 0;
     let result = loop {
         if ask::cancel_requested() || ask::stop_requested() {
@@ -614,7 +622,7 @@ pub fn chat(
             break Err(error);
         }
         let completion = rx.recv_timeout(FRAME);
-        let (text, mut metrics, last_bytes) = {
+        let (text, mut metrics, last_bytes, model) = {
             let current = live.lock().unwrap_or_else(|e| e.into_inner());
             let text = if current.stream.text.len() != last_length {
                 last_length = current.stream.text.len();
@@ -626,8 +634,17 @@ pub fn chat(
             } else {
                 None
             };
-            (text, current.stream.metrics.clone(), current.last_bytes)
+            (
+                text,
+                current.stream.metrics.clone(),
+                current.last_bytes,
+                current.stream.model.clone(),
+            )
         };
+        if let Some(model) = model.filter(|m| reported_model.as_ref() != Some(m)) {
+            reported_model = Some(model.clone());
+            progress(AskProgress::Model { model });
+        }
         if let Some(text) = text.filter(|_| !matches!(&completion, Ok(Ok(_)))) {
             if !text.is_empty() {
                 first_token_ms.get_or_insert(started.elapsed().as_millis() as u64);
@@ -676,6 +693,21 @@ pub fn chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_endpoint_stream_reports_the_model_it_names_and_nothing_else() {
+        let mut named = Stream::default();
+        named
+            .push(
+                b"data: {\"model\":\"served-model-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: {\"model\":\"served-model-2\",\"choices\":[]}\n\ndata: [DONE]\n\n",
+            )
+            .unwrap();
+        assert_eq!(named.model.as_deref(), Some("served-model-1"));
+        let mut silent = Stream::default();
+        silent
+            .push(b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n")
+            .unwrap();
+        assert_eq!(silent.model, None);
+    }
     #[test]
     fn delete_cleans_keys_for_every_endpoint_without_removing_settings() {
         let root = tempfile::tempdir().unwrap();
