@@ -151,3 +151,26 @@ fn a_fallback_answer_is_saved_with_the_helper_that_wrote_it() {
     assert_eq!(saved.model.as_deref(), Some("claude-sonnet-5-5"));
     assert!(saved.fallback);
 }
+
+#[test]
+fn the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat() {
+    if in_parent("the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat") {
+        return;
+    }
+    let mut rt = page();
+    rt.update(|s, _| scene_agents(s, ALL_AGENTS));
+    rt.frame(0.0);
+    assert!(
+        rt.state.selected.is_some() && rt.find("ask-model").is_some(),
+        "meeting"
+    );
+    rt.update(|s, _| s.selected = None);
+    rt.frame(0.0);
+    assert!(rt.find("ask-model").is_some(), "new chat");
+    rt.update(|s, _| scene_live(s, "", &[], false));
+    rt.frame(0.0);
+    assert!(
+        rt.state.on_live() && rt.find("ask-model").is_some(),
+        "live screen"
+    );
+}

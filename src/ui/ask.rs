@@ -437,25 +437,7 @@ fn short_runner(name: &str) -> &str {
     name.strip_suffix(" (answer only)").unwrap_or(name)
 }
 
-/// The menu's name for a model. A text-only one says so, so two of the same name differ.
-fn menu_name(name: &str) -> String {
-    let name = name.strip_prefix("Claude ").unwrap_or(name);
-    match name.strip_suffix(" (answer only)") {
-        Some(base) => format!("{base} \u{b7} text only"),
-        None => name.to_string(),
-    }
-}
-
-fn runner_note(tools: bool) -> &'static str {
-    if tools {
-        "Can look things up and use tools"
-    } else {
-        "Answers from the text only"
-    }
-}
-
-/// The model's name, muted, inside the pill. Pressing it opens a small menu of agents. An agent
-/// whose program is not on PATH says "Not installed" and cannot be picked.
+/// A model's menu name; a helper that lists none shows its own name.
 fn model_label(runner: &core::Runner, model: Option<&str>) -> String {
     model
         .map(|id| {
@@ -467,29 +449,47 @@ fn model_label(runner: &core::Runner, model: Option<&str>) -> String {
         .unwrap_or_else(|| short_runner(&runner.name).to_string())
 }
 
+/// What the picker's button says: the helper and model the next question uses. While an answer
+/// runs and the choice has changed since it started, it says "Next answer: ...", so the
+/// answer on screen is never mistaken for the new choice.
+pub(super) fn picker_label(s: &State) -> String {
+    let current = choice_label(s, s.ask_runner_name(), s.ask_model().as_deref());
+    match s.asks.get(&s.ask_key()) {
+        Some(run)
+            if Some(run.runner.as_str()) != s.ask_runner_name() || run.model != s.ask_model() =>
+        {
+            format!("Next answer: {current}")
+        }
+        _ => current,
+    }
+}
+
+/// "Codex \u{b7} GPT-6.1-Sol", or "Codex \u{b7} provider default" when no model is set.
+fn choice_label(s: &State, name: Option<&str>, model: Option<&str>) -> String {
+    let Some(name) = name else {
+        return "Choose a model".into();
+    };
+    let Some(runner) = s.runners.iter().find(|r| r.name == name) else {
+        return name.to_string();
+    };
+    let agent = core::ask_options::agent_name(runner);
+    match model {
+        Some(id) => format!("{agent} \u{b7} {}", model_label(runner, Some(id))),
+        None => format!("{agent} \u{b7} provider default"),
+    }
+}
+
+/// The model picker: one button showing the helper and model, and one popover list. Default
+/// first (it follows Settings and shows what it resolves to), then each installed helper's
+/// models in a group, then a Thinking switch. It is on the meeting page, the live screen and
+/// before the first question of a new chat.
 fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
-    let name = s.ask_runner_name().unwrap_or("Choose a model");
-    let tools = s
-        .runners
-        .iter()
-        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
-        .is_some_and(|r| r.tools);
+    let shown = picker_label(s);
     let chevron = if s.runner_open {
         k.glyph.chevron_up
     } else {
         k.glyph.chevron_down
     };
-    let selected_model = if s.ask_live_meeting() {
-        s.ask_model()
-    } else {
-        s.ask_settings.models.get(name).cloned()
-    };
-    let shown = s
-        .runners
-        .iter()
-        .find(|r| r.name == name)
-        .map(|runner| model_label(runner, selected_model.as_deref()))
-        .unwrap_or_else(|| name.to_string());
     let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
         .gap(0.0)
         .child(
@@ -497,32 +497,20 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
                 .gap(2.0)
                 .items_center()
                 .child(
-                    text(shown.to_string())
+                    text(shown.clone())
                         .font(roles::META.medium().style())
-                        .color(p.faint)
+                        .color(p.soft)
                         .truncate()
                         .min_w(0.0),
                 )
                 .child(rune::icon(chevron, 16.0).color(p.faint)),
         )
         .role("combobox")
-        .label(format!("Model: {name}"))
-        .help(if s.ask_runner_name().is_some() {
-            let model = s.ask_model().unwrap_or_else(|| shown.clone());
-            let thinking = s
-                .runners
-                .iter()
-                .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
-                .filter(|r| !core::ask_options::supports_thinking(r))
-                .map(|_| super::ask_settings::OPENCODE_THINKING)
-                .unwrap_or("");
-            format!("Model: {model}. {}. {thinking}", runner_note(tools))
-        } else {
-            "Choose the model that answers".to_string()
-        })
+        .label(format!("Model: {shown}"))
+        .help(format!("Model for the next answer: {shown}"))
         .preserve_focus_on_press(true)
         .min_w(0.0)
-        .max_w(if narrow { 140.0 } else { 180.0 })
+        .max_w(if narrow { 150.0 } else { 240.0 })
         .on_press(|s: &mut State| {
             s.runner_open = !s.runner_open;
             s.ask_settings.thinking_open = false;
@@ -530,91 +518,82 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
                 s.reload_runners();
             }
         });
+    let overridden = if s.ask_live_meeting() {
+        s.ask_settings.meeting_override.is_some()
+    } else {
+        s.ask_settings.pick.is_some()
+    };
+    let (default_runner, default_model) = super::ask_settings::default_choice(s);
     let mut menu = Menu::new("runner")
         .trigger(trigger)
         .open(s.runner_open)
         .placement(Placement::TopEnd)
-        .min_width(260.0)
-        .on_close(|s: &mut State| s.runner_open = false);
-    // Agents that can run come first; the rest follow, marked.
-    let (found, missing): (Vec<_>, Vec<_>) = s
-        .runners
-        .iter()
-        .partition(|r| s.runner_found.contains(&r.name));
-    for r in found {
-        let chosen = r.name.clone();
-        menu = menu.item(
-            MenuItem::new(menu_name(&r.name))
-                .description(runner_note(r.tools))
-                .checked(s.ask_runner_name() == Some(r.name.as_str()))
-                .on_select(move |s: &mut State| {
-                    s.choose_ask_runner(chosen.clone());
-                }),
+        .min_width(280.0)
+        .on_close(|s: &mut State| s.runner_open = false)
+        .item(
+            MenuItem::new("Default")
+                .description(choice_label(
+                    s,
+                    default_runner.as_deref(),
+                    default_model.as_deref(),
+                ))
+                .checked(!overridden)
+                .on_select(|s: &mut State| s.choose_ask_default()),
         );
-    }
-    if s.ask_live_meeting() {
-        for (label, name, model) in super::ask_settings::meeting_choices(s) {
-            let chosen = s.ask_runner_name() == Some(name.as_str()) && s.ask_model() == model;
-            menu = menu.item(MenuItem::new(label).checked(chosen).on_select(
-                move |s: &mut State| {
-                    s.choose_meeting_model(name.clone(), model.clone());
-                },
-            ));
+    for (agent, runner, models) in super::ask_settings::picker_groups(s) {
+        menu = menu.group_label(agent);
+        for (label, id) in models {
+            let chosen =
+                overridden && s.ask_runner_name() == Some(runner.as_str()) && s.ask_model() == id;
+            let runner = runner.clone();
+            menu = menu.item(
+                MenuItem::new(label)
+                    .checked(chosen)
+                    .on_select(move |s: &mut State| s.choose_ask_pick(runner.clone(), id.clone())),
+            );
         }
     }
-    for r in missing {
+    let thinks = s
+        .runners
+        .iter()
+        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())
+        .is_some_and(core::ask_options::supports_thinking);
+    if thinks && !s.ask_settings.connection.settings.enabled {
+        menu = menu.group_label("Thinking");
+        let value = s.ask_thinking();
+        for level in core::ask_options::Thinking::ALL {
+            menu = menu.item(
+                MenuItem::new(level.label())
+                    .checked(level == value)
+                    .on_select(move |s: &mut State| {
+                        s.set_ask_thinking(level);
+                        s.runner_open = false;
+                    }),
+            );
+        }
+    }
+    // Helpers that are not installed stay listed, marked, so a missing one is not a mystery.
+    let mut missing: Vec<&str> = s
+        .runners
+        .iter()
+        .filter(|r| !s.runner_found.contains(&r.name))
+        .map(core::ask_options::agent_name)
+        .filter(|agent| {
+            !s.runners.iter().any(|r| {
+                s.runner_found.contains(&r.name) && core::ask_options::agent_name(r) == *agent
+            })
+        })
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    for agent in missing {
         menu = menu.item(
-            MenuItem::new(menu_name(&r.name))
+            MenuItem::new(agent)
                 .description("Not installed")
                 .disabled(true),
         );
     }
     menu.build(k, layer).min_w(0.0).shrink()
-}
-
-fn thinking_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> {
-    if s.ask_settings.connection.settings.enabled {
-        return None;
-    }
-    let runner = s
-        .runners
-        .iter()
-        .find(|r| Some(r.name.as_str()) == s.ask_runner_name())?;
-    if !core::ask_options::supports_thinking(runner) {
-        return None;
-    }
-    let value = s.ask_thinking();
-    let trigger = super::widgets::button("", "ask-thinking", super::widgets::ButtonRole::Ghost, p)
-        .gap(0.0)
-        .child(
-            row()
-                .gap(2.0)
-                .items_center()
-                .child(roles::META.wrap(value.label(), p.faint))
-                .child(rune::icon(k.glyph.chevron_down, 16.0).color(p.faint)),
-        )
-        .role("combobox")
-        .label(format!("Thinking: {}", value.label()))
-        .help("Thinking level for this chat. Low uses less reasoning; High can take longer.")
-        .preserve_focus_on_press(true)
-        .on_press(|s: &mut State| {
-            s.ask_settings.thinking_open = !s.ask_settings.thinking_open;
-            s.runner_open = false;
-        });
-    let mut menu = Menu::new("ask-thinking-menu")
-        .trigger(trigger)
-        .open(s.ask_settings.thinking_open)
-        .placement(Placement::TopEnd)
-        .min_width(140.0)
-        .on_close(|s: &mut State| s.ask_settings.thinking_open = false);
-    for level in core::ask_options::Thinking::ALL {
-        menu = menu.item(
-            MenuItem::new(level.label())
-                .checked(level == value)
-                .on_select(move |s: &mut State| s.set_ask_thinking(level)),
-        );
-    }
-    Some(menu.build(k, layer).shrink())
 }
 
 fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
@@ -659,7 +638,7 @@ fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
 }
 
 /// The room a send or Stop button takes, and how wide the pill is at rest.
-const ACTION: f32 = 32.0;
+const ACTION: f32 = 28.0;
 const IDLE_W: f32 = 580.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
@@ -894,7 +873,7 @@ pub fn overlay_with(
         } else {
             "Ask about your meetings"
         })
-        .height(40.0)
+        .height(28.0)
         .on_edit(|s: &mut State| &mut s.question)
         .on_submit(|s: &mut State, _| {
             let q = s.question.text.clone();
@@ -921,8 +900,8 @@ pub fn overlay_with(
     let ready = !empty && !pending;
     // The pill lines up with the thread above it when there is one.
     let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
-    let hide_pickers = s.selected.is_some() || s.on_live();
-    let model = (!hide_pickers).then(|| {
+    let in_meeting = s.selected.is_some() || s.on_live();
+    let model = Some({
         if s.ask_settings.connection.settings.enabled {
             quiet_button("Connection", "ask-endpoint-settings", p)
                 .button_disabled(pending)
@@ -947,14 +926,21 @@ pub fn overlay_with(
             }
         }
     });
-    let beside_lead = lead.is_some() && !narrow;
+    // The level control sits inside the bar, at its left; the bar is 40 points tall.
+    let lead_in = lead.is_some();
     let mut pill = row()
         .key("ask-pill")
         .gap(4.0)
         .items_center()
-        .pl(if narrow { 14.0 } else { 20.0 })
-        .pr(6.0)
-        .py(6.0)
+        .pl(if lead_in {
+            3.0
+        } else if narrow {
+            14.0
+        } else {
+            20.0
+        })
+        .pr(4.0)
+        .py(if lead_in { 2.0 } else { 6.0 })
         .radius(999.0)
         // It widens to the width of the thread and rises 4 points on focus.
         .motion(EASE_IN)
@@ -967,22 +953,15 @@ pub fn overlay_with(
             if focused { 28.0 } else { 16.0 },
             p.shadow,
         )
+        .children(lead)
         .child(input)
         .children(
-            (hide_pickers && empty && !pending && !narrow)
-                .then(|| recipe(0, "Draft a follow-up", p)),
+            (in_meeting && empty && !pending && !narrow).then(|| recipe(0, "Draft a follow-up", p)),
         )
         .children(model)
-        .children(if hide_pickers {
-            None
-        } else {
-            thinking_choice(s, k, p, layer)
-        })
         .child(action(s, p, ready, pending));
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
-    pill = if beside_lead {
-        pill.grow(1.0).min_w(0.0)
-    } else if s.companies.open {
+    pill = if s.companies.open {
         pill.w_full()
     } else {
         pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
@@ -995,7 +974,7 @@ pub fn overlay_with(
                 .child(scope_choice(s, k, p, layer)),
         );
     }
-    let stack = beside(stack, lead, pill, narrow);
+    let stack = stack.child(pill);
     place(s, stack, narrow, p)
 }
 

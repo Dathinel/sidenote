@@ -1226,6 +1226,10 @@ impl State {
                 }
             });
         }
+        // A pick from the model picker applies to this question only.
+        if !self.ask_live_meeting() {
+            self.ask_settings.pick = None;
+        }
         self.asks.insert(
             id,
             AskRun {
@@ -3559,6 +3563,16 @@ pub fn spec() -> AppSpec<State> {
                         ..Default::default()
                     });
                 }
+            }),
+            // The model picker open on a meeting and on the live screen.
+            ("ask-picker", |s| {
+                scene_meeting(s);
+                scene_agents(s, ALL_AGENTS);
+                s.runner_open = true;
+            }),
+            ("live-picker", |s| {
+                scene_live(s, "", &[], false);
+                s.runner_open = true;
             }),
             ("ask-opencode", |s| {
                 scene_agents(s, ALL_AGENTS);

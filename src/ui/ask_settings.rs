@@ -21,6 +21,9 @@ pub struct AskSettings {
     pub meeting_agent: String,
     pub meeting_model: Option<String>,
     pub meeting_override: Option<(String, Option<String>)>,
+    /// The helper and model picked for the next question outside a live meeting. Asking uses
+    /// it once, then the choice returns to Default.
+    pub pick: Option<(String, Option<String>)>,
     pub meeting_level: Option<Thinking>,
     pub meeting_epoch: u64,
     pub fallback_notice: Option<String>,
@@ -58,6 +61,7 @@ impl AskSettings {
             meeting_agent: prefs.ask_meeting_agent.clone(),
             meeting_model: prefs.ask_meeting_model.clone(),
             meeting_override: None,
+            pick: None,
             meeting_level: None,
             meeting_epoch: 0,
             fallback_notice: None,
@@ -111,7 +115,11 @@ impl State {
                     }),
             )
         } else {
-            self.runner.as_deref()
+            self.ask_settings
+                .pick
+                .as_ref()
+                .map(|(name, _)| name.as_str())
+                .or(self.runner.as_deref())
         }
     }
     pub fn normal_ask_model(&self) -> Option<String> {
@@ -311,7 +319,36 @@ impl State {
                         .clone()
                 });
         }
+        if let Some((name, model)) = &self.ask_settings.pick {
+            return model
+                .clone()
+                .or_else(|| self.ask_settings.models.get(name).cloned())
+                .or_else(|| self.runners.iter().find(|r| &r.name == name)?.model.clone());
+        }
         self.normal_ask_model()
+    }
+    /// A choice from the model picker: in a live meeting it stays for the meeting, elsewhere
+    /// it applies to the next question only.
+    pub fn choose_ask_pick(&mut self, name: String, model: Option<String>) {
+        if self.ask_live_meeting() {
+            self.choose_meeting_model(name, model);
+        } else {
+            self.ask_settings.pick = Some((name, model));
+            self.runner_open = false;
+        }
+    }
+    /// Back to what Settings say.
+    pub fn choose_ask_default(&mut self) {
+        self.runner_open = false;
+        if self.ask_live_meeting() {
+            self.ask_settings.fallback_notice = None;
+            self.ask_settings.meeting_epoch += 1;
+            self.ask_settings.meeting_override = None;
+            self.ask_settings.warm_signature.clear();
+            core::ask_session::release();
+        } else {
+            self.ask_settings.pick = None;
+        }
     }
     pub fn save_ask_model(&mut self) {
         let Some(name) = self.runner.clone() else {
@@ -527,6 +564,47 @@ pub(super) fn meeting_choices(s: &State) -> Vec<(String, String, Option<String>)
         }
     }
     choices
+}
+/// What Settings resolve Ask to: the helper and model a question uses with no pick made.
+pub(super) fn default_choice(s: &State) -> (Option<String>, Option<String>) {
+    if s.ask_live_meeting() {
+        let name = s.ask_settings.meeting_agent.clone();
+        let model = s
+            .ask_settings
+            .meeting_model
+            .clone()
+            .or_else(|| s.runners.iter().find(|r| r.name == name)?.model.clone());
+        (Some(name), model)
+    } else {
+        (s.runner.clone(), s.normal_ask_model())
+    }
+}
+
+/// One group per installed helper: its name, the runner that runs it, and its models as
+/// (menu name, id). Built from the runner list and the model catalogue, never hard-coded; a
+/// helper with no listed model gets one "Provider default" row.
+pub(super) type PickerGroup = (String, String, Vec<(String, Option<String>)>);
+pub(super) fn picker_groups(s: &State) -> Vec<PickerGroup> {
+    let mut groups: Vec<PickerGroup> = Vec::new();
+    for runner in s
+        .runners
+        .iter()
+        .filter(|r| s.runner_found.contains(&r.name))
+    {
+        let agent = ask_options::agent_name(runner);
+        if groups.iter().any(|g| g.0 == agent) {
+            continue;
+        }
+        let mut models: Vec<_> = core::ask_session::models(runner)
+            .into_iter()
+            .map(|m| (m.name, Some(m.id)))
+            .collect();
+        if models.is_empty() {
+            models.push(("Provider default".into(), None));
+        }
+        groups.push((agent.to_string(), runner.name.clone(), models));
+    }
+    groups
 }
 fn meeting_agent(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
     let choices = meeting_choices(s);
