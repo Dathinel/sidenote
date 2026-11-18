@@ -71,14 +71,13 @@ pub(super) fn check_question(history: &[Message]) -> Result<(), String> {
     }
     Ok(())
 }
-/// Finds the configured runner and remembers it as the last one used.
+/// Finds the configured runner. It does not remember it: the saved default is only what
+/// Settings choose, so a runner picked for one question never becomes the next launch default.
 pub(super) fn pick_runner(name: &str) -> Result<Runner, String> {
-    let runner: Runner = super::list_runners()?
+    super::list_runners()?
         .into_iter()
         .find(|r| r.name == name)
-        .ok_or("The selected runner is not configured")?;
-    super::runners::remember_runner(&runner.name)?;
-    Ok(runner)
+        .ok_or_else(|| "The selected runner is not configured".into())
 }
 /// Every Ask is read only, including if peer folders arrive while a runner is active.
 pub(super) fn read_only_runner(mut runner: Runner) -> Result<Runner, String> {
