@@ -1,6 +1,9 @@
 use super::Client;
 use serde_json::Value;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 fn key(client: Client) -> &'static str {
     if client == Client::OpenCode {
         "mcp"
@@ -80,31 +83,7 @@ pub(super) fn add(client: Client, path: &Path, exe: &Path) -> Result<String, Str
     section.insert("sidenote".into(), expected.clone());
     let parent = path.parent().ok_or("Config has no parent folder.")?;
     fs::create_dir_all(parent).map_err(|_| "Could not create config folder.")?;
-    let backup = if let Some(bytes) = &original {
-        let millis = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| "System clock unavailable.")?
-            .as_millis();
-        let mut name = path.as_os_str().to_os_string();
-        name.push(format!(".sidenote-backup-{millis}"));
-        let backup = std::path::PathBuf::from(name);
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(&backup)
-            .map_err(|_| "Could not create backup. Nothing was changed.")?;
-        file.write_all(bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| "Could not finish backup. Nothing was changed.")?;
-        Some(backup)
-    } else {
-        None
-    };
+    let backup = original.as_ref().map(|_| backup_path(path));
     let undo = backup
         .as_ref()
         .map(|p| format!("To undo, restore {}.", p.display()))
@@ -129,18 +108,13 @@ pub(super) fn add(client: Client, path: &Path, exe: &Path) -> Result<String, Str
     temp.as_file()
         .sync_all()
         .map_err(|_| "Could not flush temporary config.")?;
-    // Refuse an edit if the file changed while the backup was being prepared.
-    if fs::read(path).ok() != original {
-        return Err(format!(
-            "Config changed during setup. Nothing was replaced. {undo}"
-        ));
+    match (&original, &backup) {
+        (Some(bytes), Some(backup)) => swap(path, bytes, backup, temp)?,
+        _ => {
+            temp.persist_noclobber(path)
+                .map_err(|_| format!("Could not save config. {undo}"))?;
+        }
     }
-    let saved = if original.is_some() {
-        temp.persist(path).map(|_| ())
-    } else {
-        temp.persist_noclobber(path).map(|_| ())
-    };
-    saved.map_err(|_| format!("Could not save config. {undo}"))?;
     let (_, verified) =
         read(path).map_err(|e| format!("Write could not be verified. {e} {undo}"))?;
     if verified[key(client)]["sidenote"] != expected {
@@ -150,4 +124,64 @@ pub(super) fn add(client: Client, path: &Path, exe: &Path) -> Result<String, Str
         "Added to {}. Restart or reconnect the app. {undo}",
         client.name()
     ))
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut name = path.as_os_str().to_os_string();
+    name.push(format!(".sidenote-backup-{millis}-{n}"));
+    PathBuf::from(name)
+}
+/// Replace `path` only if it still holds `original` at the instant it is moved away. The moved
+/// file becomes the backup, so a save by the app is kept on disk and never overwritten.
+fn swap(
+    path: &Path,
+    original: &[u8],
+    backup: &Path,
+    temp: tempfile::NamedTempFile,
+) -> Result<(), String> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    // Reserve the backup name so two Adds cannot pick the same one.
+    options
+        .open(backup)
+        .map_err(|_| "Could not create backup. Nothing was changed.")?;
+    #[cfg(test)]
+    super::isolated_tests::race("before-swap", path);
+    if fs::rename(path, backup).is_err() {
+        let _ = fs::remove_file(backup);
+        return Err("Could not move the config aside. Nothing was changed. Try again.".into());
+    }
+    if fs::read(backup).ok().as_deref() != Some(original) {
+        return Err(put_back(path, backup));
+    }
+    #[cfg(test)]
+    super::isolated_tests::race("after-move", path);
+    temp.persist_noclobber(path)
+        .map(|_| ())
+        .map_err(|_| put_back(path, backup))
+}
+fn put_back(path: &Path, backup: &Path) -> String {
+    let why = "The file changed, try again. The config changed while Sidenote was saving";
+    let back = fs::hard_link(backup, path).is_ok() && fs::remove_file(backup).is_ok()
+        || !path.exists() && fs::rename(backup, path).is_ok();
+    if back {
+        format!("{why}. Nothing was replaced.")
+    } else {
+        format!(
+            "{why}. Both versions are kept: the newest is at {}, the earlier one at {}. Nothing was lost.",
+            path.display(),
+            backup.display()
+        )
+    }
 }

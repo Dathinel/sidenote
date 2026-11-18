@@ -34,6 +34,27 @@ pub(super) fn check_path(path: &Path) {
 pub(super) fn forbid_discovery() {
     panic!("tests must inject isolated paths and fake CLIs");
 }
+type Hook = Box<dyn FnMut(&str, &Path)>;
+thread_local! { static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) }; }
+/// Test-only stand-in for another writer: runs at named points inside the JSON writer.
+pub(super) fn race(stage: &str, path: &Path) {
+    if let Some(mut hook) = HOOK.with(|h| h.borrow_mut().take()) {
+        hook(stage, path);
+        HOOK.with(|h| *h.borrow_mut() = Some(hook));
+    }
+}
+fn at_stage(stage: &'static str, mut action: impl FnMut(&Path) + 'static) {
+    HOOK.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move |s, path| {
+            if s == stage {
+                action(path)
+            }
+        }))
+    });
+}
+fn clear_hook() {
+    HOOK.with(|h| *h.borrow_mut() = None);
+}
 struct Sandbox(tempfile::TempDir);
 impl Sandbox {
     fn new() -> Self {
@@ -476,4 +497,70 @@ fn linked_config_file_is_refused_and_stays_a_link() {
             .is_symlink()
     );
     assert_eq!(fs::read_dir(folder).unwrap().count(), 2);
+}
+
+const ORIGINAL: &[u8] = br#"{"keep":1,"mcpServers":{}}"#;
+const APP_SAVE: &[u8] = br#"{"keep":1,"added_by_the_app":true,"mcpServers":{}}"#;
+fn prepared(sandbox: &Sandbox, client: Client) -> Agent {
+    let agent = sandbox.agent(client);
+    fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
+    fs::write(&agent.path, ORIGINAL).unwrap();
+    agent
+}
+fn files_in(agent: &Agent) -> usize {
+    fs::read_dir(agent.path.parent().unwrap()).unwrap().count()
+}
+
+#[test]
+fn a_save_by_the_app_just_before_the_replace_is_kept() {
+    let sandbox = Sandbox::new();
+    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
+        let agent = prepared(&sandbox, client);
+        at_stage("before-swap", |path| fs::write(path, APP_SAVE).unwrap());
+        let error = agent.add(Path::new("sidenote")).unwrap_err();
+        clear_hook();
+        assert!(error.contains("The file changed, try again"), "{error}");
+        assert_eq!(fs::read(&agent.path).unwrap(), APP_SAVE);
+        assert_eq!(files_in(&agent), 1, "no backup or temporary file is left");
+    }
+}
+
+#[test]
+fn a_save_by_the_app_after_the_move_is_kept_beside_the_backup() {
+    let sandbox = Sandbox::new();
+    let agent = prepared(&sandbox, Client::Cursor);
+    at_stage("after-move", |path| fs::write(path, APP_SAVE).unwrap());
+    let error = agent.add(Path::new("sidenote")).unwrap_err();
+    clear_hook();
+    assert!(error.contains("Both versions are kept"), "{error}");
+    assert_eq!(fs::read(&agent.path).unwrap(), APP_SAVE);
+    let backup = fs::read_dir(agent.path.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().contains(".sidenote-backup-"))
+        .unwrap();
+    assert_eq!(fs::read(backup).unwrap(), ORIGINAL);
+    assert_eq!(files_in(&agent), 2);
+}
+
+#[test]
+fn two_adds_at_once_keep_one_entry_and_the_original_backup() {
+    let sandbox = Sandbox::new();
+    let agent = prepared(&sandbox, Client::OpenCode);
+    let second = agent.clone();
+    at_stage("before-swap", move |_| {
+        second.add(Path::new("second")).unwrap();
+    });
+    let error = agent.add(Path::new("first")).unwrap_err();
+    clear_hook();
+    assert!(error.contains("The file changed, try again"), "{error}");
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&agent.path).unwrap()).unwrap();
+    assert_eq!(value["mcp"]["sidenote"]["command"][0], "second");
+    assert_eq!(files_in(&agent), 2);
+    let backup = fs::read_dir(agent.path.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().contains(".sidenote-backup-"))
+        .unwrap();
+    assert_eq!(fs::read(backup).unwrap(), ORIGINAL);
 }
