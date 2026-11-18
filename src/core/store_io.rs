@@ -63,8 +63,8 @@ pub(crate) fn read<T: DeserializeOwned + Default>(path: &Path) -> io::Result<T> 
     }
 }
 
-struct Parent {
-    path: std::path::PathBuf,
+pub(super) struct Parent {
+    pub(super) path: std::path::PathBuf,
     _pins: Vec<fs::File>,
 }
 #[cfg(windows)]
@@ -170,6 +170,8 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
     Ok(temp)
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(all(test, target_os = "linux"))]
+    super::speech_sessions::tests::interrupt(path, None)?;
     let temp = temporary(path, bytes)?;
     #[cfg(windows)]
     let target = path.to_owned();
@@ -249,7 +251,7 @@ pub(crate) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn checked_parent(path: &Path) -> io::Result<Parent> {
+pub(super) fn checked_parent(path: &Path) -> io::Result<Parent> {
     use std::{
         ffi::CString,
         os::{
@@ -347,6 +349,8 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&name)?;
+    #[cfg(all(test, target_os = "linux"))]
+    super::speech_sessions::tests::interrupt(path, Some(&mut file))?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(Temp {

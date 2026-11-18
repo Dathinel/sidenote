@@ -3,7 +3,6 @@ use super::{meeting_watch::wav_header, store_io};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io, path::PathBuf};
-
 pub const MAX_PIECE_BYTES: usize = 10_000_000;
 const MAX_IN_FLIGHT: usize = 4;
 const SESSION_BYTES: u64 = 40_000_000;
@@ -134,7 +133,38 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
+        self.recover(&data)?;
         Ok((lock, data))
+    }
+    fn recover(&self, sessions: &Sessions) -> Result<(), Error> {
+        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+        let root = store_io::checked_parent(&self.0.join("sessions.json"))?;
+        for entry in std::fs::read_dir(&root.path)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if hex(&name) {
+                let pieces = sessions.get(&name).map(|s| &s.pieces);
+                let dir = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                    .open(entry.path())?;
+                for file in std::fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))? {
+                    let file = file?;
+                    let filename = file.file_name();
+                    let filename = filename.to_string_lossy();
+                    if filename.ends_with(".tmp")
+                        || filename
+                            .strip_suffix(".wav")
+                            .is_some_and(|p| !pieces.is_some_and(|s| s.contains_key(p)))
+                    {
+                        std::fs::remove_file(file.path())?;
+                    }
+                }
+            } else if name.ends_with(".tmp") {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(())
     }
     fn save(&self, sessions: &Sessions) -> Result<(), Error> {
         let bytes = serde_json::to_vec(sessions)?;
@@ -228,7 +258,6 @@ impl Store {
             return Err(Error::Full(queued + 1));
         }
         let path = self.0.join(id).join(format!("{piece}.wav"));
-        // Replaces only an uncommitted orphan from a crash before the ledger publish.
         store_io::atomic_write(&path, bytes)?;
         sessions.get_mut(id).ok_or(Error::Missing)?.pieces.insert(
             piece.into(),
@@ -253,10 +282,31 @@ impl Store {
         self.save(&sessions)
     }
 }
-
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+    thread_local! { static FAULT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+    pub(crate) fn interrupt(
+        path: &std::path::Path,
+        file: Option<&mut std::fs::File>,
+    ) -> io::Result<()> {
+        use std::io::Write;
+        let ledger = path.file_name().unwrap() == "sessions.json";
+        let stage = FAULT.get();
+        if matches!(
+            (stage, ledger, file.is_some()),
+            (1, false, true) | (2, true, false) | (3 | 4, true, true)
+        ) {
+            if let Some(file) = file {
+                file.write_all(b"partial")?;
+            }
+            if stage == 4 {
+                return Err(io::Error::other("interrupted ledger write"));
+            }
+            panic!("simulated interruption {stage}");
+        }
+        Ok(())
+    }
     #[test]
     fn durable_intake_validates_before_acceptance() {
         let root = tempfile::tempdir().unwrap();
@@ -274,17 +324,7 @@ mod tests {
             store.create("owner", request.clone()).unwrap(),
             (id.clone(), false)
         );
-        let mut wav = b"RIFF".to_vec();
-        wav.extend(38u32.to_le_bytes());
-        wav.extend(b"WAVEfmt ");
-        wav.extend(16u32.to_le_bytes());
-        wav.extend([1, 0, 1, 0]);
-        wav.extend(16_000u32.to_le_bytes());
-        wav.extend(32_000u32.to_le_bytes());
-        wav.extend([2, 0, 16, 0]);
-        wav.extend(b"data");
-        wav.extend(2u32.to_le_bytes());
-        wav.extend([0, 0]);
+        let mut wav = b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\x3e\0\0\0\x7d\0\0\x02\0\x10\0data\x02\0\0\0\0\0".to_vec();
         let metadata = PieceRequest {
             track: "system".into(),
             index: 0,
@@ -308,6 +348,25 @@ mod tests {
                 .unwrap()
                 .0
         );
+        let mut leftovers = Vec::new();
+        for stage in 1..=4 {
+            let mut next = metadata.clone();
+            next.index = stage;
+            let next_id = next.id(&request);
+            FAULT.set(stage);
+            let result = std::panic::catch_unwind(|| store.put("owner", &id, &next_id, next, &wav));
+            FAULT.set(0);
+            assert!(result.is_err() || matches!(result, Ok(Err(Error::Storage))));
+            let restarted = Store(store.0.clone());
+            restarted.create("owner", request.clone()).unwrap();
+            let files = std::fs::read_dir(store.0.join(&id)).unwrap().count();
+            leftovers.push((stage, files, std::fs::read_dir(&store.0).unwrap().count()));
+            assert_eq!(
+                std::fs::read(store.0.join(&id).join(format!("{piece}.wav"))).unwrap(),
+                wav
+            );
+        }
+        assert_eq!(leftovers, [(1, 1, 3), (2, 1, 3), (3, 1, 3), (4, 1, 3)]);
         wav[44] ^= 1;
         assert!(matches!(
             restarted.put("owner", &id, &piece, metadata.clone(), &wav),
