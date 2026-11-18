@@ -25,13 +25,15 @@ impl Form {
     }
 
     fn save(&mut self, wake: Waker) -> Result<(), String> {
-        let path = speech_host::settings_path()?;
-        let host =
-            Host::save_and_consent(&path, &self.url.text, self.token.text.trim().as_bytes())?;
-        self.url = TextEdit::new(host.recipient());
-        self.token = TextEdit::default();
-        self.token.set_secure(true);
+        let host = self.save_record(&speech_host::settings_path()?)?;
         self.activate(host, wake)
+    }
+
+    fn save_record(&mut self, path: &std::path::Path) -> Result<Host, String> {
+        let host = Host::save_and_consent(path, &self.url.text, self.token.text.trim().as_bytes())?;
+        self.url = TextEdit::new(host.recipient());
+        self.token.clear();
+        Ok(host)
     }
 
     fn clear(&mut self) -> Result<(), String> {
@@ -77,8 +79,8 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
         (None, _, _) => ("Status checks off", p.soft),
         (Some(_), None, _) => ("Status check unavailable", p.warn),
         (_, _, Status::Checking) => ("Checking host", p.soft),
-        (_, _, Status::Ready) => ("Host ready", p.soft),
-        (_, _, Status::Loading) => ("Host loading", p.soft),
+        (_, _, Status::Ready) => ("Speech runtime loaded", p.soft),
+        (_, _, Status::Rejected) => ("Token rejected", p.danger),
         (_, _, Status::Unavailable) => ("Host speech runtime unavailable", p.warn),
         (_, _, Status::Amber) => ("Host missed one check", p.warn),
         (_, _, Status::Away) => ("Host away", p.danger),
@@ -122,4 +124,23 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
         body = body.child(roles::SMALL.wrap(error, p.warn).role("alert"));
     }
     settings_card("Speech host", body, p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saving_clears_token_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut form = Form {
+            url: TextEdit::new("https://host.example"),
+            token: TextEdit::new("synthetic-token"),
+            ..Form::default()
+        };
+        form.token.set_secure(true);
+        form.token.focused = true;
+        form.save_record(&dir.path().join("host.dpapi")).unwrap();
+        assert!(form.token.text.is_empty() && form.token.focused);
+    }
 }

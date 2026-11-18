@@ -86,10 +86,18 @@ impl Host {
         Monitor::start(INTERVAL, move || self.probe(), wake)
     }
 
-    fn probe(&self) -> Option<Asr> {
-        let body = request(&self.endpoint, &self.token)?;
+    fn probe(&self) -> Option<Status> {
+        let (status, body) = request(&self.endpoint, &self.token)?;
+        match status {
+            401 | 403 => return Some(Status::Rejected),
+            200 => {}
+            _ => return None,
+        }
         let host: Reply = serde_json::from_slice(&body).ok()?;
-        (host.api == 1 && host.role == "server").then_some(host.asr.state)
+        (host.api == 1 && host.role == "server").then_some(match host.asr.state {
+            Asr::Ready => Status::Ready,
+            Asr::Unavailable => Status::Unavailable,
+        })
     }
 }
 
@@ -109,7 +117,6 @@ struct AsrReply {
 #[serde(rename_all = "lowercase")]
 enum Asr {
     Ready,
-    Loading,
     Unavailable,
 }
 
@@ -118,18 +125,16 @@ pub enum Status {
     #[default]
     Checking,
     Ready,
-    Loading,
+    Rejected,
     Unavailable,
     Amber,
     Away,
 }
 
 impl Status {
-    fn after(self, reply: Option<Asr>) -> Self {
+    fn after(self, reply: Option<Self>) -> Self {
         match reply {
-            Some(Asr::Ready) => Self::Ready,
-            Some(Asr::Loading) => Self::Loading,
-            Some(Asr::Unavailable) => Self::Unavailable,
+            Some(status) => status,
             None if matches!(self, Self::Amber | Self::Away) => Self::Away,
             None => Self::Amber,
         }
@@ -144,7 +149,7 @@ pub struct Monitor {
 impl Monitor {
     fn start(
         interval: Duration,
-        mut probe: impl FnMut() -> Option<Asr> + Send + 'static,
+        mut probe: impl FnMut() -> Option<Status> + Send + 'static,
         wake: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
         let (stop, cancel) = mpsc::channel();
@@ -192,7 +197,7 @@ pub fn clear(path: &Path, monitor: &mut Option<Monitor>) -> Result<(), String> {
     Ok(())
 }
 
-fn request(url: &url::Url, token: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
     use std::{ffi::c_void, ptr};
     use windows_sys::{Win32::Networking::WinHttp::*, core::w};
 
@@ -270,9 +275,11 @@ fn request(url: &url::Url, token: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
             &mut { option_bytes },
             ptr::null_mut(),
         ) == 0
-            || status != 200
         {
             return None;
+        }
+        if status != 200 {
+            return Some((status, Zeroizing::default()));
         }
         let mut bytes = Zeroizing::new(vec![0; 16 * 1024]);
         let mut len = 0;
@@ -291,7 +298,7 @@ fn request(url: &url::Url, token: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
             }
             if read == 0 {
                 bytes.truncate(len);
-                return Some(bytes);
+                return Some((status, bytes));
             }
             len += read as usize;
         }

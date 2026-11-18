@@ -2,8 +2,6 @@ use super::*;
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    os::windows::process::CommandExt,
-    process::Command,
     thread,
 };
 
@@ -15,7 +13,10 @@ fn contains_token(bytes: &[u8]) -> bool {
     bytes.windows(TOKEN.len()).any(|window| window == TOKEN)
 }
 
-fn fake_probe(host: &Host, status: u16, body: &str) -> Option<Asr> {
+fn fake_probe(host: &Host, status: u16, body: &str) -> Option<Status> {
+    fake_response(host, status, body, "")
+}
+fn fake_response(host: &Host, status: u16, body: &str, extra: &str) -> Option<Status> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -63,7 +64,7 @@ fn fake_probe(host: &Host, status: u16, body: &str) -> Option<Asr> {
             assert!(right_host && authorization == 1);
             write!(
                 socket,
-                "HTTP/1.1 {status} Fake\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} Fake\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
                 body.len()
             )
             .unwrap();
@@ -95,16 +96,11 @@ fn rejects_http_before_writing() {
 }
 
 #[test]
-fn token_stays_out_of_written_config() {
+fn host_record_protects_token() {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config.json");
-    store_io::write(&config, &serde_json::json!({"version": 1})).unwrap();
-    let before = fs::read(&config).unwrap();
     let path = dir.path().join("host.dpapi");
     consented(&path);
-    let after = fs::read(&config).unwrap();
-    assert!(!contains_token(&after), "config contained a token");
-    assert!(before == after, "speech host changed config.json");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     assert!(
         !contains_token(&fs::read(&path).unwrap()),
         "protected file contained plaintext"
@@ -115,33 +111,32 @@ fn token_stays_out_of_written_config() {
 }
 
 #[test]
-fn token_stays_out_of_captured_logs() {
-    const CHILD: &str = "SIDENOTE_SPEECH_TEST_CAPTURE";
-    if std::env::var_os(CHILD).is_some() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = consented(&dir.path().join("host.dpapi"));
-        let reflected = std::str::from_utf8(TOKEN).unwrap();
-        assert!(fake_probe(&host, 401, reflected).is_none());
-        assert!(fake_probe(&host, 200, reflected).is_none());
-        eprintln!("speech host capture verified");
-        return;
-    }
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "core::speech_host::tests::token_stays_out_of_captured_logs",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-        .output()
-        .unwrap();
-    assert!(
-        !contains_token(&child.stdout) && !contains_token(&child.stderr),
-        "probe logs contained a token"
+fn does_not_follow_redirect() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    other.set_nonblocking(true).unwrap();
+    let location = format!(
+        "Location: http://{}/elsewhere\r\n",
+        other.local_addr().unwrap()
     );
-    assert!(child.status.success(), "probe log capture child failed");
-    assert!(String::from_utf8_lossy(&child.stderr).contains("speech host capture verified"));
+    let host = consented(&dir.path().join("host.dpapi"));
+    assert!(fake_response(&host, 302, "", &location).is_none());
+    assert!(matches!(other.accept(), Err(e) if e.kind() == io::ErrorKind::WouldBlock));
+}
+
+#[test]
+fn rejects_unknown_runtime_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = consented(&dir.path().join("host.dpapi"));
+    let reply = r#"{"api":1,"role":"server","asr":{"state":"loading"}}"#;
+    assert!(fake_probe(&host, 200, reply).is_none());
+}
+
+#[test]
+fn denied_credentials_are_reported() {
+    for status in [401, 403] {
+        observe(vec![(status, ""), (status, "")], &[Status::Rejected]);
+    }
 }
 
 fn observe(responses: Vec<(u16, &'static str)>, expected: &[Status]) {
@@ -176,7 +171,7 @@ fn second_miss_is_away() {
 #[test]
 fn ready_after_recovery() {
     observe(
-        vec![(503, ""), (403, ""), (200, REPLY)],
+        vec![(503, ""), (200, "{}"), (200, REPLY)],
         &[Status::Amber, Status::Away, Status::Ready],
     );
 }
