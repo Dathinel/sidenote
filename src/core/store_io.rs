@@ -173,6 +173,10 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     #[cfg(all(test, target_os = "linux"))]
     super::speech_sessions::tests::interrupt(path, None)?;
     let temp = temporary(path, bytes)?;
+    #[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
+    if path.parent().is_some_and(|p| p.ends_with("input")) {
+        crate::service::speech::proofs::crash(path, "input");
+    }
     #[cfg(windows)]
     let target = path.to_owned();
     #[cfg(unix)]

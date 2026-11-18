@@ -276,6 +276,8 @@ pub(crate) fn produce_owned(
                 // Derived PCM is disposable: never bless cached damage into a new plan.
                 let slice = tempfile::NamedTempFile::new_in(work)?.into_temp_path();
                 asr::write_wav(&slice, &pcm(&path, range.context)?)?;
+                #[cfg(all(test, target_os = "linux"))]
+                crate::service::speech::proofs::crash(&slice, "cut");
                 store_io::atomic_write(&wav, &inputs::Snapshot::read_file(&slice, 1 << 20)?)?;
                 output.push(Range {
                     track: track.track.clone(),

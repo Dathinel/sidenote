@@ -102,6 +102,10 @@ pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
 pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
+    #[cfg(test)]
+    if crate::service::speech::proofs::active() {
+        return Ok(Box::new(crate::service::speech::proofs::Logits::new()));
+    }
     if !settings.model.is_absolute() {
         return Err("Language model needs an absolute path".into());
     }

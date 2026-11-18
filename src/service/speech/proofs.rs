@@ -345,6 +345,8 @@ fn events(root: &Path, id: &str) -> Vec<Value> {
         .map(|s| serde_json::from_str(s).unwrap())
         .collect()
 }
+mod faults;
+pub(crate) use faults::{Logits, crash};
 #[test]
 fn service_shutdown_replans_and_replays_over_http() {
     let _serial = SERIAL

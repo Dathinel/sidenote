@@ -232,3 +232,25 @@ fn host_status(last: &mut (serde_json::Value, Instant)) -> io::Result<()> {
     *last = (identity, Instant::now());
     Ok(())
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+    #[tokio::test]
+    async fn expired_stream_write_deadline_refuses_a_slow_socket() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _peer = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = Socket {
+            stream,
+            idle: Box::pin(tokio::time::sleep(Duration::ZERO)),
+        };
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(
+            socket.write_all(b"public").await.unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+    }
+}
