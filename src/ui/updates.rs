@@ -459,7 +459,7 @@ pub fn section(s: &State, p: Palette) -> El {
                             el().w(width * f32::from(status.progress) / 100.0)
                                 .h(5.0)
                                 .radius(3.0)
-                                .fill(p.accent),
+                                .fill(p.ink),
                         )
                         .role("progressbar")
                         .range_value(f64::from(status.progress), 0.0, 100.0)

@@ -250,8 +250,7 @@ fn language_column(s: &State, k: &Kit, p: Palette) -> El {
                     .gap(8.0)
                     .items_center()
                     .child(
-                        roles::CONTROL
-                            .line(if selected { "\u{2611}" } else { "\u{2610}" }, p.accent),
+                        roles::CONTROL.line(if selected { "\u{2611}" } else { "\u{2610}" }, p.ink),
                     )
                     .child(roles::CONTROL.line(name, p.ink)),
             )
@@ -454,7 +453,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                                         progress.downloaded as f64 / 1_000_000.0,
                                         progress.total as f64 / 1_000_000.0
                                     ),
-                                    p.accent,
+                                    p.ink,
                                 )
                                 .role("status"),
                         )
@@ -472,7 +471,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 card = card.child(
                     row()
                         .gap(14.0)
-                        .child(roles::CONTROL.wrap("Installed", p.accent))
+                        .child(roles::CONTROL.wrap("Installed", p.ink))
                         .child(
                             crate::ui::widgets::action("Remove", p)
                                 .key(format!("model-remove-{id}"))

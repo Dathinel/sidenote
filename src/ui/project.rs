@@ -355,7 +355,7 @@ fn chip_with(
             pressable(
                 roles::META
                     .bold()
-                    .wrap(if new_project { "Create" } else { "Add" }, p.ok),
+                    .wrap(if new_project { "Create" } else { "Add" }, p.ink),
             )
             .key(format!("project-accept-{id}"))
             .label(format!(
@@ -369,7 +369,7 @@ fn chip_with(
             })
             .px(8.0)
             .radius(999.0)
-            .hover(p.okbg)
+            .hover(p.chip)
             .on_press(move |s: &mut State| {
                 if new_project {
                     s.create_meeting_project(&id, &name);
@@ -414,7 +414,7 @@ pub fn form(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .height(34.0)
         .build(k)
         .key("project-input")
-        .border(1.0, p.accent)
+        .border(1.0, p.accent) // focus ring
         .radius(8.0)
         .fill(p.card)
         .grow(1.0)

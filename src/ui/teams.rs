@@ -196,7 +196,7 @@ fn editor(s: &State, k: &Kit, p: Palette) -> El {
                 false,
                 p,
             )
-            .border(1.0, if selected { p.accent } else { p.line })
+            .border(1.0, if selected { p.ink } else { p.line })
             .fill(if selected { p.sel } else { p.card })
             .role("checkbox")
             .checked(selected)

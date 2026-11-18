@@ -1431,7 +1431,7 @@ fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
                         roles::CONTROL.wrap(*name, p.soft)
                     })
                     .child(rune::el().w_full().h(2.0).fill(if tab == active {
-                        p.accent
+                        p.ink
                     } else {
                         p.bg
                     })),

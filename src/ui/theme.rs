@@ -1,7 +1,7 @@
 //! Colours, fonts and the type scale. Light and dark follow the system setting. Greys carry
 //! structure and hierarchy (`bg`, `card`, `side`, `line`, then the text greys `ink`, `soft`,
-//! `faint`); the accent marks the one main action and the focus ring; green, amber and
-//! red mean status only. Every text token keeps 4.5:1 on the fills it sits on, in both modes
+//! `faint`); the coral accent marks the one main action and the focus ring, and nothing
+//! else (not links, progress, selection or decoration); green, amber and red mean status only. Every text token keeps 4.5:1 on the fills it sits on, in both modes
 //! (`text_tokens_keep_four_and_a_half_to_one`). docs/design/typography.md lists the ratios.
 use rune::{Color, Family, TextStyle};
 use rune_kit::{Kit, PaletteSeed};
@@ -20,6 +20,7 @@ pub struct Palette {
     /// and in dark mode never below #a9a69f on a raised surface.
     pub faint: Color,
     pub line: Color,
+    /// Coral: the one main action on a screen (the primary button) and the focus ring.
     pub accent: Color,
     pub ok: Color,
     pub okbg: Color,
@@ -28,14 +29,18 @@ pub struct Palette {
     pub open: Color,
     /// Hover fills, count pills and quiet buttons.
     pub chip: Color,
-    /// The selected row in a list: the accent at 10% over the page.
+    /// The selected row in a list: a grey, never the accent.
     pub sel: Color,
     pub hit: Color,
     pub shadow: Color,
     /// Dims the page under a modal, dark enough that page headings do not compete with it.
     pub scrim: Color,
+    /// The primary button: the accent, with ink that keeps 4.5:1 on it.
     pub button_fill: Color,
     pub button_ink: Color,
+    /// A switch that is on: grey, so the accent stays the one main action.
+    pub switch_on: Color,
+    pub switch_knob: Color,
     pub button_border: Color,
     pub danger: Color,
     pub danger_border: Color,
@@ -59,14 +64,14 @@ pub fn palette(dark: bool) -> Palette {
             "#bcb9b0",
             "#b0ada4",
             "#302f2c",
-            "#8db5dc",
+            "#ee8566",
             "#69c995",
             "#1b2c22",
             "#e3aa55",
             "#33281a",
             "#b49ee3",
             "#2a2a27",
-            "#262a2c",
+            "#2f2f2c",
             "#363019",
             "#00000066",
             "#000000b3",
@@ -80,14 +85,14 @@ pub fn palette(dark: bool) -> Palette {
             "#5d5b55",
             "#6b6861",
             "#e6e3db",
-            "#2f5d8a",
+            "#b8452a",
             "#1d7a4c",
             "#e4f3eb",
             "#9a5800",
             "#fcf0dc",
             "#6a4ea3",
             "#efede7",
-            "#e8ebed",
+            "#eceae4",
             "#fff3c4",
             "#1e1e1c1f",
             "#1e1e1c73",
@@ -113,15 +118,17 @@ pub fn palette(dark: bool) -> Palette {
         hit: c[15],
         shadow: c[16],
         scrim: c[17],
-        button_fill: hex(if dark { "#ececec" } else { "#1f2328" }),
+        button_fill: c[7],
         button_ink: hex(if dark { "#1f2328" } else { "#ffffff" }),
+        switch_on: hex(if dark { "#ececec" } else { "#1f2328" }),
+        switch_knob: hex(if dark { "#1f2328" } else { "#ffffff" }),
         button_border: if dark { c[6] } else { hex("#dcd9d2") },
         danger: hex(if dark { "#f29b99" } else { "#a92b30" }),
         danger_border: hex(if dark { "#704345" } else { "#efc5c5" }),
         button_hover: hex(if dark { "#ffffff0f" } else { "#00000008" }),
         button_pressed: hex(if dark { "#ffffff1f" } else { "#00000014" }),
-        button_primary_hover: hex(if dark { "#0000000f" } else { "#ffffff14" }),
-        button_primary_pressed: hex(if dark { "#0000001f" } else { "#ffffff24" }),
+        button_primary_hover: hex(if dark { "#ffffff14" } else { "#00000014" }),
+        button_primary_pressed: hex(if dark { "#ffffff24" } else { "#00000029" }),
     }
 }
 
@@ -150,8 +157,10 @@ pub fn kit(p: &Palette) -> Kit {
         circle_x: &super::icons::CIRCLE_X,
         dash: &super::icons::DASH,
     };
-    kit.c.bg_accent = p.button_fill;
-    kit.c.knob_on = p.button_ink;
+    kit.c.bg_accent = p.switch_on;
+    kit.c.knob_on = p.switch_knob;
+    // Links and the text selection are not the main action: they draw in ink, not the accent.
+    kit.c.text_accent = p.ink;
     kit.c.knob = Color::WHITE;
     kit.c.text_faint = p.faint;
     kit.ty.small = super::roles::META.style();
@@ -243,13 +252,15 @@ mod quiet_ink_switch_tests {
     }
 
     #[test]
-    fn switches_use_primary_button_ink_in_both_themes() {
+    fn switches_stay_grey_and_never_use_the_accent_in_both_themes() {
         for dark in [false, true] {
             let p = palette(dark);
             let k = kit(&p);
-            assert_eq!(k.c.bg_accent, p.button_fill);
-            assert_eq!(k.c.knob_on, p.button_ink);
+            assert_eq!(k.c.bg_accent, p.switch_on);
+            assert_eq!(k.c.knob_on, p.switch_knob);
             assert_ne!(k.c.bg_accent, p.accent);
+            assert_ne!(k.c.bg_accent, p.button_fill);
+            assert_eq!(k.c.text_accent, p.ink);
         }
     }
 }
@@ -356,6 +367,17 @@ mod type_and_contrast_tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
+    /// `top` painted over `base`.
+    fn over(base: Color, top: Color) -> Color {
+        let a = top.a;
+        Color {
+            r: base.r * (1.0 - a) + top.r * a,
+            g: base.g * (1.0 - a) + top.g * a,
+            b: base.b * (1.0 - a) + top.b * a,
+            a: 1.0,
+        }
+    }
+
     /// Every text token against every fill it is drawn on, in both modes: at least 4.5:1.
     #[test]
     fn text_tokens_keep_four_and_a_half_to_one() {
@@ -374,6 +396,17 @@ mod type_and_contrast_tests {
                 ("ok", p.ok, vec![p.bg, p.card, p.okbg]),
                 ("warn", p.warn, vec![p.bg, p.card, p.side, p.chip, p.warnbg]),
                 ("button ink", p.button_ink, vec![p.button_fill]),
+                (
+                    "button ink pressed",
+                    p.button_ink,
+                    vec![over(p.button_fill, p.button_primary_pressed)],
+                ),
+                (
+                    "button ink hover",
+                    p.button_ink,
+                    vec![over(p.button_fill, p.button_primary_hover)],
+                ),
+                ("switch knob", p.switch_knob, vec![p.switch_on]),
                 ("kit base", k.c.text_base, vec![p.card]),
                 ("kit muted", k.c.text_muted, vec![p.card]),
                 ("kit faint", k.c.text_faint, vec![p.card]),
@@ -402,6 +435,57 @@ mod type_and_contrast_tests {
             let p = palette(dark);
             assert!(ratio(p.faint, p.bg) >= 3.0);
         }
+    }
+
+    /// The colour rules: the accent is coral, the focus ring clears 3:1 on every surface, the
+    /// primary button is the accent, and selection is a grey with no hue.
+    #[test]
+    fn the_accent_is_coral_the_primary_button_and_the_ring_and_selection_is_grey() {
+        for dark in [false, true] {
+            let p = palette(dark);
+            assert_eq!(p.button_fill, p.accent);
+            assert!(p.accent.r > p.accent.b * 1.8 && p.accent.r > p.accent.g * 1.4);
+            for fill in [p.bg, p.card, p.side, p.sel] {
+                assert!(ratio(p.accent, fill) >= 3.0, "ring on a surface");
+            }
+            // The old selection was blue-tinted (blue above red); the greys here are warm.
+            assert!(p.sel.b <= p.sel.r, "selection is blue-tinted");
+            assert_ne!(p.sel, p.accent);
+        }
+    }
+
+    /// The accent is the main action and the focus ring only. Every use of `p.accent` outside
+    /// this file sits on a focus ring (its line or the two before it say "focus"); links,
+    /// progress, selection and decoration draw in greys.
+    #[test]
+    fn the_accent_is_used_only_for_focus_rings() {
+        fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, hits);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| n != "theme.rs")
+                {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let lines: Vec<&str> = text.lines().collect();
+                    for (i, line) in lines.iter().enumerate() {
+                        let near = &lines[i.saturating_sub(2)..=i];
+                        if line.contains("p.accent")
+                            && !near.iter().any(|l| l.to_lowercase().contains("focus"))
+                        {
+                            hits.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut hits = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui"),
+            &mut hits,
+        );
+        assert!(hits.is_empty(), "accent outside a focus ring: {hits:#?}");
     }
 
     /// Small text on a raised surface in dark mode is at least #a9a69f, and the old

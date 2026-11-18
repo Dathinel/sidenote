@@ -490,7 +490,7 @@ fn number(n: usize, p: Palette) -> El {
         .h(24.0)
         .center()
         .radius(12.0)
-        .fill(p.accent)
+        .fill(p.ink)
         .child(roles::CAPTION.line(n.to_string(), p.card))
 }
 fn words_text(words: &[&Word]) -> String {
@@ -603,7 +603,7 @@ fn frame_image(
                     .absolute(x * width, y * height)
                     .w(bw)
                     .h(bh)
-                    .border(1.25, p.accent)
+                    .border(1.25, p.ink)
                     .radius(3.0),
             );
             canvas = canvas.child(

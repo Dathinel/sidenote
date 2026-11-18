@@ -847,7 +847,7 @@ fn row_shell(
     if selected {
         line = line
             .fill(p.sel)
-            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.accent).pin(
+            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.ink).pin(
                 Some(0.0),
                 Some(10.0),
                 None,
@@ -965,18 +965,19 @@ fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
                         p.faint,
                     )),
             )
-            .child(badge(op_name(pr.op), p.accent, Some(p.chip)))
+            .child(badge(op_name(pr.op), p.ink, Some(p.chip)))
     } else {
         let mut cells = row()
             .w_full()
             .h(38.0)
             .gap(10.0)
             .items_center()
-            .child(row().w(72.0).items_center().child(badge(
-                op_name(pr.op),
-                p.accent,
-                Some(p.chip),
-            )))
+            .child(
+                row()
+                    .w(72.0)
+                    .items_center()
+                    .child(badge(op_name(pr.op), p.ink, Some(p.chip))),
+            )
             .child(roles::SMALL.medium().line(&claim, p.ink).grow(1.0));
         if lay.project {
             cells = cells.child(
@@ -1851,7 +1852,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
             row()
                 .flex_wrap()
                 .gaps(6.0, 6.0)
-                .child(badge(op_name(pr.op), p.accent, Some(p.chip)))
+                .child(badge(op_name(pr.op), p.ink, Some(p.chip)))
                 .child(badge(kind_one(pr.record_type), p.soft, Some(p.chip)))
                 .child(match &pr.project {
                     Some(n) => badge(n.clone(), p.soft, Some(p.chip)),
@@ -1941,7 +1942,7 @@ fn candidate_panel(
             row()
                 .flex_wrap()
                 .gaps(6.0, 6.0)
-                .child(badge("Candidate", p.accent, Some(p.chip)))
+                .child(badge("Candidate", p.ink, Some(p.chip)))
                 .child(badge(kind_one(r.record_type), p.soft, Some(p.chip)))
                 .child(if c.ambiguous {
                     badge("May hold more than one claim", p.open, Some(p.chip))

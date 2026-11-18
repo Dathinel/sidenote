@@ -258,7 +258,7 @@ impl Status {
     fn badge(self, p: Palette) -> El {
         let (ink, fill) = match self {
             Status::Default => (p.soft, p.chip),
-            Status::Edited => (p.accent, p.sel),
+            Status::Edited => (p.ink, p.sel),
             Status::Unsaved => (p.warn, p.warnbg),
             Status::ReadOnly => (p.faint, p.chip),
         };

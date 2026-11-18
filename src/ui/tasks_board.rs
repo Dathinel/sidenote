@@ -717,9 +717,9 @@ fn card(
         shell = shell.dim(0.5);
     }
     if selected {
-        shell = shell.fill(p.sel).border(1.0, p.accent);
+        shell = shell.fill(p.sel).border(1.0, p.ink);
     } else if at_cursor {
-        shell = shell.outline(1.0, 0.0, p.accent);
+        shell = shell.outline(1.0, 0.0, p.accent); // focus ring
     }
     shell
 }
@@ -855,7 +855,7 @@ pub fn board(s: &State, k: &Kit, p: Palette, list_w: f32, side: f32, layer: &mut
                     .border(
                         1.0,
                         if over == Some(c) {
-                            p.accent
+                            p.ink
                         } else {
                             p.chip.alpha(0.0)
                         },
@@ -874,7 +874,7 @@ pub fn board(s: &State, k: &Kit, p: Palette, list_w: f32, side: f32, layer: &mut
     let names: Vec<&str> = labels.iter().map(String::as_str).collect();
     let mut selected = k.clone();
     selected.c.bg_base = p.sel;
-    selected.c.border_strong = p.accent;
+    selected.c.border_strong = p.ink;
     col()
         .key("tasks-board")
         .w_full()
@@ -911,7 +911,7 @@ pub fn live_line(s: &State, p: Palette) -> Option<El> {
 pub fn layout_toggle(s: &State, k: &Kit, p: Palette) -> El {
     let mut selected = k.clone();
     selected.c.bg_base = p.sel;
-    selected.c.border_strong = p.accent;
+    selected.c.border_strong = p.ink;
     SegmentedControl::new(
         &["List", "Board"],
         Some(usize::from(s.tasks.layout == core::TasksLayout::Board)),

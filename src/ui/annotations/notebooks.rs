@@ -694,7 +694,7 @@ pub(super) fn page(s: &State, width: f32, p: Palette) -> El {
         .border(
             1.0,
             if s.annotations.notebooks.dragging == Some(i) {
-                p.accent
+                p.ink
             } else {
                 p.line
             },

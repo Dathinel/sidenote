@@ -975,7 +975,7 @@ pub fn prose(s: &State, k: &Kit, p: Palette, md: &str, origin: &str, size: f32) 
             MarkdownStyle::from_kit(k)
                 .text(p.ink)
                 .muted(p.soft)
-                .link(p.accent)
+                .link(p.ink)
                 .body_font(if size >= roles::READ.size {
                     roles::READ.style()
                 } else {
@@ -1258,7 +1258,7 @@ fn brief(s: &State, k: &Kit, r: &DailyCheck, p: Palette) -> El {
         if let Some(Some(key)) = targets.get(n) {
             let key = key.clone();
             line_row = line_row.child(
-                pressable(roles::CONTROL.icon_label("Open \u{203a}", p.accent))
+                pressable(roles::CONTROL.icon_label("Open \u{203a}", p.ink))
                     .key(format!("brief-open-{n}"))
                     .label(format!("Open the finding for line {}", n + 1))
                     .px(6.0)
@@ -1278,7 +1278,7 @@ fn brief(s: &State, k: &Kit, r: &DailyCheck, p: Palette) -> El {
 
 fn change_badge(change: FindingChange, p: Palette) -> El {
     match change {
-        FindingChange::New => badge("New", p.accent, Some(p.chip)),
+        FindingChange::New => badge("New", p.ink, Some(p.chip)),
         FindingChange::Changed => badge("Changed", p.open, Some(p.chip)),
         FindingChange::StillOpen => badge("Still open", p.faint, None),
     }
@@ -1288,7 +1288,7 @@ fn due_chip(due: NaiveDate, today: NaiveDate, p: Palette) -> El {
     let (ink, bg, weight) = if due < today {
         (p.warn, Some(p.warnbg), 600.0)
     } else if due == today {
-        (p.accent, Some(p.chip), 600.0)
+        (p.ink, Some(p.chip), 600.0)
     } else {
         (p.soft, None, 500.0)
     };
@@ -1423,7 +1423,7 @@ fn finding_row(s: &State, r: &DailyCheck, i: usize, lay: Lay, p: Palette) -> El 
     if selected {
         line = line
             .fill(p.sel)
-            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.accent).pin(
+            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.ink).pin(
                 Some(0.0),
                 Some(10.0),
                 None,
@@ -1983,7 +1983,7 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
                 .key(format!("strip-{day}"))
                 .label(format!("Open the check of {name}"))
                 .fill(if on { p.card } else { p.side })
-                .border(1.0, if on { p.accent } else { p.line })
+                .border(1.0, if on { p.ink } else { p.line })
                 .hover(p.chip)
                 .on_press(move |s: &mut State| s.pick_check(day))
         } else {
@@ -2022,7 +2022,7 @@ pub fn source_row(s: &State, e: &str, key: String, p: Palette) -> El {
         let known = s.meetings.iter().any(|m| m.id == id);
         let target = cite.to_string();
         let origin = key.clone();
-        let ink = if known { p.accent } else { p.faint };
+        let ink = if known { p.ink } else { p.faint };
         let mut content = row().gap(6.0).items_center().child(
             rune::text(title)
                 .font(roles::CONTROL.style())

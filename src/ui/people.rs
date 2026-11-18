@@ -71,7 +71,7 @@ impl State {
 fn side_control(person: &Person, k: &Kit, p: Palette) -> El {
     let mut selected_kit = k.clone();
     selected_kit.c.bg_base = p.sel;
-    selected_kit.c.border_strong = p.accent;
+    selected_kit.c.border_strong = p.ink;
     let name = person.name.clone();
     SegmentedControl::new(
         &["Our team", "External"],
@@ -499,11 +499,11 @@ pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) 
                                     roles::NAME
                                         .wrap(
                                             format!("{} \u{b7} {} people", c.name, group.len()),
-                                            p.accent,
+                                            p.ink,
                                         )
                                         .max_lines(2),
                                 )
-                                .child(icons::draw(&icons::CHEVRON_RIGHT, 16.0, p.accent)),
+                                .child(icons::draw(&icons::CHEVRON_RIGHT, 16.0, p.ink)),
                         )
                         .key(format!("company-header-{}", c.id))
                         .label(format!("Open company {}", c.name))

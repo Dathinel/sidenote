@@ -55,7 +55,7 @@ impl ButtonDisabled for El {
 
 /// A text link with a quiet hover.
 pub fn link(s: impl Into<String>, p: Palette) -> El {
-    pressable(roles::CONTROL.icon_label(s, p.accent).px(4.0).radius(5.0)).hover(p.chip)
+    pressable(roles::CONTROL.icon_label(s, p.ink).px(4.0).radius(5.0)).hover(p.chip)
 }
 
 /// Drill-down navigation has one parent and one current item.
@@ -164,7 +164,7 @@ fn button_state(
     .label(accessible_name)
     .hover(hover)
     .press(pressed)
-    .focus_ring(2.0, 2.0, p.soft);
+    .focus_ring(2.0, 2.0, p.accent);
     if !key.is_empty() {
         b = b.key(key);
     }
@@ -187,7 +187,7 @@ fn button_state(
     }
     match state {
         rune_kit::State::Disabled => b.disabled(true).inert().dim(0.5),
-        rune_kit::State::Focus => b.outline(2.0, 2.0, p.soft),
+        rune_kit::State::Focus => b.outline(2.0, 2.0, p.accent),
         _ => b,
     }
 }
@@ -289,7 +289,7 @@ pub fn banner(title: &str, body: impl Into<String>, kind: BannerKind, p: Palette
         BannerKind::Info => roles::NAME.wrap("i", p.soft),
         BannerKind::Working => rune_kit::Spinner::new()
             .size(16.0)
-            .color(p.accent)
+            .color(p.ink)
             .build(&super::theme::kit(&p)),
     };
     col()
@@ -418,7 +418,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
             Link::new(range, format!("{key}\u{1f}{at}"))
                 .label(format!("Open the transcript at {}", recording_time(at)))
                 .help("Read this in the transcript")
-                .hover(LinkPaint::new().color(p.accent).bg(p.chip)),
+                .hover(LinkPaint::new().color(p.ink).bg(p.chip)),
         );
     }
     let mut body = text(content)

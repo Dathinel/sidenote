@@ -749,7 +749,7 @@ pub fn project_tools(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Opt
     {
         let id = area.id.clone();
         content = content.child(
-            pressable(roles::CONTROL.wrap(format!("{} › {}", area.name, project.name), p.accent))
+            pressable(roles::CONTROL.wrap(format!("{} › {}", area.name, project.name), p.ink))
                 .on_press(move |s: &mut State| s.set_filter(Filter::Area(id.clone()))),
         );
     } else {

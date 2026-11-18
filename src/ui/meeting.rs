@@ -111,7 +111,7 @@ fn counts(m: &Meeting, p: Palette) -> El {
             p.ok,
             "sec-decisions",
         ),
-        (m.summary.todo.len(), "tasks", p.accent, "sec-todo"),
+        (m.summary.todo.len(), "tasks", p.ink, "sec-todo"),
         (
             m.summary.to_settle.len(),
             "still open",
@@ -399,12 +399,13 @@ fn find_all(text_: &str, needle: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// Speakers keep one colour each, in the order they first speak. "You" is always the accent.
+/// Speakers keep one grey each, in the order they first speak. "You" is always the strongest.
+/// Status colours are not used here: a name is not a status.
 fn speaker_ink(m: &Meeting, who: &str, p: Palette) -> rune::Color {
     if who == "You" {
-        return p.accent;
+        return p.ink;
     }
-    let ring = [p.open, p.ok, p.warn, p.soft];
+    let ring = [p.soft, p.faint];
     let mut seen: Vec<&str> = Vec::new();
     for l in &m.lines {
         if l.who != "You" && !l.who.is_empty() && !seen.contains(&l.who.as_str()) {

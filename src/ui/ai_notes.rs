@@ -1011,9 +1011,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                             .flex_wrap()
                             .gap(8.0)
                             .child(roles::NAME.wrap(h.name(), p.ink))
-                            .children(
-                                (index == 0).then(|| roles::META.line("Recommended", p.accent)),
-                            ),
+                            .children((index == 0).then(|| roles::META.line("Recommended", p.ink))),
                     )
                     .child(roles::SMALL.wrap(help, p.soft))
                     .child(roles::META.wrap(

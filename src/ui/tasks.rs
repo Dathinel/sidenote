@@ -1743,7 +1743,7 @@ fn project_dot(name: &str, p: Palette) -> El {
         let h = name
             .bytes()
             .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
-        [p.accent, p.ok, p.open, p.soft][(h % 4) as usize]
+        [p.ink, p.soft, p.faint][(h % 3) as usize]
     };
     el().size(7.0, 7.0).radius(4.0).fill(ink)
 }
@@ -1765,7 +1765,7 @@ fn avatar(name: &str, me: bool, size: f32, p: Palette) -> El {
         name.chars().take(1).flat_map(char::to_uppercase).collect()
     };
     let (fill, ink) = if me {
-        (p.accent, p.card)
+        (p.ink, p.card)
     } else {
         (p.card, p.soft)
     };
@@ -1775,7 +1775,7 @@ fn avatar(name: &str, me: bool, size: f32, p: Palette) -> El {
         .radius(size / 2.0)
         .center()
         .fill(fill)
-        .border(1.0, if me { p.accent } else { p.faint })
+        .border(1.0, if me { p.ink } else { p.faint })
         .label(name)
         .help(name)
         .child(
@@ -1802,8 +1802,8 @@ fn date_chip(t: &TaskItem, today: NaiveDate, p: Palette) -> Option<El> {
     let guessed = t.due_default;
     let (ink, weight, fill) = match urgency {
         Urgency::Late => (p.warn, 600.0, Some(p.warnbg)),
-        Urgency::Today if guessed => (p.accent, 500.0, None),
-        Urgency::Today => (p.accent, 600.0, Some(p.chip)),
+        Urgency::Today if guessed => (p.ink, 500.0, None),
+        Urgency::Today => (p.ink, 600.0, Some(p.chip)),
         Urgency::Soon if guessed => (p.faint, 500.0, None),
         Urgency::Soon => (p.soft, 500.0, None),
         Urgency::Calm => (p.faint, 400.0, None),
@@ -2028,7 +2028,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     if selected {
         line = line
             .fill(p.sel)
-            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.accent).pin(
+            .child(el().w(2.0).h(18.0).radius(1.0).fill(p.ink).pin(
                 Some(0.0),
                 Some(10.0),
                 None,
@@ -2113,7 +2113,7 @@ fn rename_form(k: &Kit, s: &State, p: Palette) -> El {
         .height(34.0)
         .build(k)
         .key("rename-input")
-        .border(1.0, p.accent)
+        .border(1.0, p.accent) // focus ring
         .radius(8.0)
         .fill(p.card)
         .grow(1.0)
@@ -2939,7 +2939,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
         .unwrap_or_default();
     let id = m.id.clone();
     panel = panel.child(spaced_caps("From the meeting", p)).child(
-        pressable(roles::CONTROL.wrap(format!("{}{date}", m.title), p.accent))
+        pressable(roles::CONTROL.wrap(format!("{}{date}", m.title), p.ink))
             .key(format!("tsrc-meet-{}-{}", t.meeting_id, t.index))
             .label(format!("Open the meeting {}", m.title))
             .self_start()
@@ -2991,7 +2991,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
         let id = t.meeting_id.clone();
         let index = t.index;
         panel = panel.child(
-            pressable(roles::CONTROL.wrap("Read on in the transcript", p.accent))
+            pressable(roles::CONTROL.wrap("Read on in the transcript", p.ink))
                 .key(format!("tsrc-jump-{}-{}", t.meeting_id, t.index))
                 .self_start()
                 .px(4.0)

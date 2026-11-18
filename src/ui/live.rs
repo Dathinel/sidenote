@@ -1155,7 +1155,7 @@ fn transcript_panel(s: &State, p: Palette, cap: f32) -> El {
                                     Some(false) => "Others",
                                     None => "",
                                 },
-                                if who == Some(true) { p.accent } else { p.soft },
+                                if who == Some(true) { p.ink } else { p.soft },
                             )
                             .w(48.0),
                     )
@@ -1473,7 +1473,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
             .child(if done {
                 label("\u{2713}", 14.0, 700.0, p.ok).w(14.0)
             } else {
-                dot(8.0, p.accent).mx(3.0)
+                dot(8.0, p.ink).mx(3.0)
             })
             .child(if done {
                 roles::READ.wrap(text_, p.soft)
@@ -1486,7 +1486,7 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
         .h(4.0)
         .radius(2.0)
         .fill(p.chip)
-        .child(el().w(96.0).h(4.0).radius(2.0).fill(p.accent));
+        .child(el().w(96.0).h(4.0).radius(2.0).fill(p.ink));
     let mut c = col()
         .key("live-making")
         .w_full()

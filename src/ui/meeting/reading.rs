@@ -277,7 +277,7 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
         line = line.child(
-            pressable(roles::META.line(&shown, p.accent))
+            pressable(roles::META.line(&shown, p.ink))
                 .key(source_key)
                 .label(format!("Open source at {shown}"))
                 .help("Open this line in the transcript")

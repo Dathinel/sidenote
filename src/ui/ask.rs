@@ -110,7 +110,7 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
             MarkdownStyle::from_kit(k)
                 .text(p.ink)
                 .muted(p.soft)
-                .link(p.accent)
+                .link(p.ink)
                 .body_font(roles::READ.style()),
         )
         .on_link_tx(move |s: &mut State, url, tx| {

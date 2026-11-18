@@ -1445,7 +1445,7 @@ fn model_section(s: &State, p: Palette) -> El {
             None => badge("Install state unknown", p.soft, Some(p.chip)),
         });
         if m.preparing.is_some() {
-            r = r.child(badge("Preparing", p.accent, Some(p.chip)));
+            r = r.child(badge("Preparing", p.ink, Some(p.chip)));
         }
         sec = sec.child(r);
     }

@@ -260,7 +260,7 @@ pub(super) fn progress(title: &str, p: Palette) -> El {
         .gap(8.0)
         .items_center()
         .py(8.0)
-        .child(widgets::dot(6.0, p.accent))
+        .child(widgets::dot(6.0, p.ink))
         .child(roles::SMALL.wrap(title, p.soft).role("status"))
 }
 

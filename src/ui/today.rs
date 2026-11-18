@@ -59,7 +59,7 @@ fn items(s: &State, p: Palette) -> Vec<Item> {
         out.push(Item {
             key: "today-making",
             ink: p.ink,
-            mark: p.accent,
+            mark: p.ink,
             lead: Some(lead),
             words,
             action: "Open",
@@ -79,7 +79,7 @@ fn items(s: &State, p: Palette) -> Vec<Item> {
             out.push(Item {
                 key: "today-tasks",
                 ink: if late > 0 { p.warn } else { p.ink },
-                mark: if late > 0 { p.warn } else { p.accent },
+                mark: if late > 0 { p.warn } else { p.ink },
                 lead: None,
                 words: parts.join(", "),
                 action: "Open Tasks",
@@ -164,7 +164,7 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
                     .px(14.0)
                     .py(9.0)
                     .child(words)
-                    .child(roles::CONTROL.wrap(item.action, p.accent)),
+                    .child(roles::CONTROL.wrap(item.action, p.ink)),
             )
             .key(item.key)
             .label(format!("{said}. {}", item.action))
