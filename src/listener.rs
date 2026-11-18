@@ -56,6 +56,16 @@ impl Problem {
     }
 }
 /// Append a content-free diagnostic to the existing app log.
+pub fn log_process(message: &str) {
+    let role = if std::env::args_os().any(|arg| arg == "--listen") {
+        "listener"
+    } else {
+        "ui"
+    };
+    log(&format!("{message} role={role} pid={}", std::process::id()));
+}
+
+/// Append a content-free diagnostic to the existing app log.
 pub fn log(message: &str) {
     #[cfg(target_os = "linux")]
     if crate::service::role() != crate::service::DeviceRole::Full || crate::service::active() {

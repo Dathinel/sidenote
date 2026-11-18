@@ -32,6 +32,7 @@ pub fn load() -> Status {
 pub fn listener_status() -> ListenerStatus {
     ListenerStatus {
         ready: false,
+        preparing: false,
         error: Some("The desktop meeting listener is unavailable on Linux.".into()),
     }
 }
