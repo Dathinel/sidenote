@@ -152,10 +152,11 @@ Batches and the native Hindi/Telugu entry now compile on Linux. The speech worke
 `sidenote-linux-worker --speech`, the existing user-service cgroup check, private
 PID/user/network namespaces and parent-death checks. It refuses a missing launcher,
 non-user-service ownership or an unbounded cgroup. No speech listener is added.
-The unattended speech service budget is 1 GiB, 32 tasks and one CPU; the ordinary helper
-profile retains its 512 MiB/32-task admission ceiling. The user unit retains its
+The unattended worker retains its ordinary 512 MiB, 32-task and one-CPU budget.
+Unattended speech needs its own bounded service in L5. The user unit retains its
 existing 1 GiB/64-task budget. The speech launcher accepts at most 1 GiB/64 tasks
-and one CPU. The unattended worker unit has the speech budget; the outer credential launcher remains at 1 GiB/64 tasks.
+and one CPU, qualified separately in a 1 GiB user service. The outer credential
+launcher remains at 1 GiB/64 tasks.
 The speech child's address-space rlimit is 4 GiB, CPU rlimit 120 seconds, core limit
 zero, with no-new-privileges and nice +10. The existing namespace launcher's
 120-second wall deadline still applies. Cgroup memory bounds resident memory;
@@ -163,8 +164,9 @@ the larger address-space ceiling allows ONNX's mappings and thread stacks.
 A controller cancels and reaps the launcher on cancellation, error, timeout or Drop;
 namespace PID 1 death kills its remaining descendants. Cleanup waits at most 500 ms
 in the caller and keeps ownership in the controller if reaping takes longer.
-The public Hindi qualification is `cargo test --test linux_native_worker -- --ignored
---test-threads=1 --nocapture`, under a bounded systemd user service, with
+The public Hindi qualification is `cargo test --no-default-features --features
+server,asr-runtime --target x86_64-unknown-linux-gnu --test linux_native_worker --
+--ignored --test-threads=1 --nocapture`, under a bounded systemd user service, with
 `SIDENOTE_L4_RUNTIME` naming the pinned absolute L1 library. It downloads and hashes
 the catalogue Hindi graph/tokens and two pinned public Common Voice Hindi MP3s,
 converts those test inputs with contained `/usr/bin/ffmpeg`, and checks both real
