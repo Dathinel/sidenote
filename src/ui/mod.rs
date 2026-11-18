@@ -2917,6 +2917,7 @@ pub fn spec() -> AppSpec<State> {
             ("sync-task-kept", sync_scene::failed_task_scene),
             ("sync-arrival-draft", sync_scene::arrival_scene),
             ("listener-error", updates::listener_error_scene),
+            ("listener-preparing", updates::listener_preparing_scene),
             ("updates-settings", updates::settings_scene),
             ("updates-manual", |s| {
                 updates::scene(s, sidenote::updates::Phase::Manual)

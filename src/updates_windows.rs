@@ -268,7 +268,35 @@ pub fn installed() -> bool {
     })
 }
 pub fn directory() -> PathBuf {
+    #[cfg(feature = "recorder-ready-proof")]
+    if let Some(root) = recorder_ready_root() {
+        return root.join("updates");
+    }
     PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Sidenote/updates")
+}
+#[cfg(feature = "recorder-ready-proof")]
+fn recorder_ready_root() -> Option<PathBuf> {
+    let root = PathBuf::from(crate::env_var("SIDENOTE_RECORDER_READY_TEST")?);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .canonicalize()
+        .unwrap();
+    let root = root.canonicalize().unwrap();
+    assert!(root.starts_with(fixture));
+    assert!(
+        std::env::current_exe()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .starts_with(&root)
+    );
+    assert!(
+        crate::core::state_dir()
+            .canonicalize()
+            .unwrap()
+            .starts_with(&root)
+    );
+    Some(root)
 }
 fn local(name: &str) -> PathBuf {
     directory().join(name)
@@ -629,13 +657,20 @@ fn listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
         "--listen".into()
     };
 
+    #[cfg(feature = "recorder-ready-proof")]
+    let script = recorder_ready_root().map_or_else(
+        || LISTENER_TASK_SCRIPT.to_owned(),
+        |root| {
+            format!(
+                "{}\n{LISTENER_TASK_SCRIPT}",
+                fs::read_to_string(root.join("task-fixture.ps1")).unwrap()
+            )
+        },
+    );
+    #[cfg(not(feature = "recorder-ready-proof"))]
+    let script = LISTENER_TASK_SCRIPT.to_owned();
     let mut child = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            LISTENER_TASK_SCRIPT,
-        ])
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .env("SIDENOTE_TASK_NAME", name)
         .env("SIDENOTE_TASK_EXE", exe)
         .env("SIDENOTE_TASK_ARGS", expected_args)
@@ -674,20 +709,46 @@ fn listener_task(run: bool, register: bool) -> Result<(), ListenerTaskError> {
 
 impl ListenerStatus {
     fn complete(&mut self, result: &Result<(), String>) {
+        self.preparing = false;
         self.ready = result.is_ok();
         self.error = result.as_ref().err().cloned();
     }
 }
 static LISTENER: std::sync::Mutex<ListenerStatus> = std::sync::Mutex::new(ListenerStatus {
     ready: false,
+    preparing: true,
     error: None,
 });
+fn finish_listener(result: &Result<(), String>) -> ListenerStatus {
+    let (changed, status) = {
+        let mut status = LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = status.preparing
+            || status.ready != result.is_ok()
+            || status.error != result.as_ref().err().cloned();
+        status.complete(result);
+        (changed, status.clone())
+    };
+    if changed {
+        let reason = match result.as_ref().map_err(String::as_str) {
+            Ok(()) => "ready",
+            Err(
+                "The meeting listener is not running. Try again."
+                | "The meeting listener did not start. Try again, or reinstall it if this continues.",
+            ) => "lock_missing",
+            Err("Could not check whether the listener is running.") => "lock_check_failed",
+            Err(_) => "task_validation_failed",
+        };
+        crate::listener::log_process(&format!("listener readiness reason={reason}"));
+    }
+    status
+}
 // Preparation, recovery probes and apply must not compete for the listener lock.
 static LISTENER_CHECK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub fn listener_status() -> ListenerStatus {
     if !installed() {
         return ListenerStatus {
             ready: true,
+            preparing: false,
             error: None,
         };
     }
@@ -772,10 +833,7 @@ pub fn listener_lock() -> io::Result<Option<File>> {
 pub fn ensure_listener() -> Result<(), String> {
     let _check = LISTENER_CHECK.lock().unwrap_or_else(|e| e.into_inner());
     let result = prepare_listener();
-    LISTENER
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .complete(&result);
+    finish_listener(&result);
     result
 }
 /// The window's worker probes the lock and retries incomplete task validation.
@@ -810,9 +868,7 @@ pub fn probe_listener() -> Option<ListenerStatus> {
     if listener_stopping() {
         return None;
     }
-    let mut status = LISTENER.lock().unwrap_or_else(|e| e.into_inner());
-    status.complete(&result);
-    Some(status.clone())
+    Some(finish_listener(&result))
 }
 fn listener_probe(mut probe: impl FnMut() -> io::Result<Option<File>>) -> Result<(), String> {
     match probe() {
@@ -851,7 +907,13 @@ fn prepare_listener() -> Result<(), String> {
     if listener_stopping() {
         return Err("Sidenote is updating its meeting listener. Wait for the update to finish, then reopen Sidenote.".into());
     }
-    LISTENER.lock().unwrap_or_else(|e| e.into_inner()).ready = false;
+    {
+        let mut status = LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        status.ready = false;
+        status.preparing = true;
+        status.error = None;
+    }
+    crate::listener::log_process("listener readiness reason=preparing");
     match checked_listener_task(false, true) {
         Ok(()) => {}
         Err(ListenerTaskError::TimedOut) => {

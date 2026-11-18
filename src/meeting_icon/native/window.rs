@@ -217,6 +217,7 @@ impl NativeWindow {
             let instance = GetModuleHandleW(ptr::null());
             let icon_class = wide(&control.icon_class);
             let card_class = wide(&control.card_class);
+            control.startup.enter("position_read");
             let fraction = store_io::read::<Option<f32>>(
                 &core::state_dir().join("local/floating-icon-position.json"),
             )
@@ -250,6 +251,7 @@ impl NativeWindow {
                 icon_class,
                 card_class,
             };
+            window.view.control.startup.enter("class_registration");
             for (name, callback) in [
                 (
                     &window.icon_class,
@@ -271,6 +273,7 @@ impl NativeWindow {
                     return Err(io::Error::last_os_error());
                 }
             }
+            window.view.control.startup.enter("window_creation");
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 window.icon_class.as_ptr(),
@@ -290,9 +293,11 @@ impl NativeWindow {
             }
             window.view.icon.set(hwnd);
             window.view.control.publish(hwnd, false);
+            window.view.control.startup.enter("capture_exclusion");
             if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0 {
                 return Err(io::Error::last_os_error());
             }
+            window.view.control.startup.enter("geometry");
             window.view.geometry();
             Ok(window)
         }

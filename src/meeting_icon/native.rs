@@ -11,7 +11,7 @@ use std::{
         mpsc,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows_sys::Win32::{
     Foundation::{HWND, WAIT_OBJECT_0},
@@ -46,7 +46,44 @@ struct Handles {
     card: isize,
 }
 
+struct Startup {
+    at: Instant,
+    stage: Mutex<&'static str>,
+}
+impl Startup {
+    fn new() -> Self {
+        Self {
+            at: Instant::now(),
+            stage: Mutex::new("thread_pending"),
+        }
+    }
+    fn enter(&self, stage: &'static str) {
+        *self.stage.lock().unwrap_or_else(|e| e.into_inner()) = stage;
+        self.log("FI_START_STAGE");
+    }
+    fn log(&self, event: &str) {
+        let stage = *self.stage.lock().unwrap_or_else(|e| e.into_inner());
+        crate::listener::log_process(&format!(
+            "{event} stage={stage} elapsed_ms={}",
+            self.at.elapsed().as_millis()
+        ));
+    }
+    fn wait(&self, started: &mpsc::Receiver<io::Result<()>>) -> io::Result<()> {
+        match started.recv_timeout(JOIN_BOUND) {
+            Ok(result) => result,
+            Err(error) => {
+                self.log(match error {
+                    mpsc::RecvTimeoutError::Timeout => "FI_START_TIMEOUT",
+                    mpsc::RecvTimeoutError::Disconnected => "FI_START_CHANNEL_CLOSED",
+                });
+                Err(io::Error::other("Icon startup unavailable"))
+            }
+        }
+    }
+}
+
 struct Control {
+    startup: Startup,
     stop: AtomicBool,
     handles: Mutex<Handles>,
     icon_class: String,
@@ -56,6 +93,7 @@ impl Control {
     fn new() -> Self {
         let id = GENERATION.fetch_add(1, Ordering::Relaxed);
         Self {
+            startup: Startup::new(),
             stop: AtomicBool::new(false),
             handles: Mutex::new(Handles::default()),
             icon_class: format!("SidenoteListenerMeetingIcon-{id}"),
@@ -217,6 +255,7 @@ impl Host {
         let worker = std::thread::Builder::new()
             .name("meeting-icon-window".into())
             .spawn(move || {
+                worker_control.startup.enter("thread_entry");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let window = match window::NativeWindow::new(replay, worker_control.clone()) {
                         Ok(window) => window,
@@ -228,6 +267,7 @@ impl Host {
                     if ready.send(Ok(())).is_err() {
                         return;
                     }
+                    worker_control.startup.enter("ready_sent");
                     while !worker_control.stop.load(Ordering::Acquire) {
                         match receive.try_recv() {
                             Ok(frame) => window.update(frame),
@@ -249,15 +289,10 @@ impl Host {
             control,
             worker: Some(worker),
         };
-        match started.recv_timeout(JOIN_BOUND) {
-            Ok(Ok(())) => Ok(host),
-            Ok(Err(error)) => Err(error),
-            Err(_) => {
-                crate::listener::log("FI_START_TIMEOUT");
-                Err(io::Error::other("Icon startup unavailable"))
-            }
-        }
+        host.control.startup.wait(&started)?;
+        Ok(host)
     }
+
     pub(super) fn update(&self, frame: Frame) -> bool {
         reap();
         !self.control.stop.load(Ordering::Acquire)
@@ -291,5 +326,23 @@ impl Drop for Host {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    #[test]
+    fn recorder_ready_stalled_start_names_the_stage_and_closed_channel_is_distinct() {
+        let startup = Startup::new();
+        let (send, receive) = mpsc::sync_channel(1);
+        let stage = "class_registration";
+        startup.enter(stage);
+        assert!(startup.wait(&receive).is_err());
+        drop(send);
+        assert!(startup.wait(&receive).is_err());
+        let log = std::fs::read_to_string(crate::core::log_path()).unwrap();
+        assert!(log.contains("FI_START_TIMEOUT stage=class_registration elapsed_ms="));
+        assert!(log.contains("FI_START_CHANNEL_CLOSED stage=class_registration elapsed_ms="));
     }
 }
