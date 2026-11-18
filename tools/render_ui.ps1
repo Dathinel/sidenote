@@ -388,6 +388,14 @@ foreach ($n in 'meetings', 'meeting', 'tasks', 'memory', 'check', 'settings', 'u
 $shots += ,@('ask-narrow',         'ask',              '560x900', $null, @())
 $shots += ,@('ask-running-narrow', 'ask-running',      '560x900', $null, @())
 $shots += ,@('home-ask-running-narrow', 'home-ask-running', '560x900', $null, @())
+# v3 piece 1: the size scale, fonts and the Ask bar with its model picker, at a desktop width and
+# a phone width. The first six are the pages that follow the shared sizes; the rest are the Ask
+# bar closed and open, a new chat, the live screen, answers that name their model, and an answer
+# running while the choice has moved on.
+foreach ($n in 'list', 'tasks', 'memory', 'diary', 'annotations-list', 'settings-general', 'meeting', 'ask', 'ask-idle', 'ask-picker', 'live-recording', 'live-picker', 'ask-labelled', 'ask-next') {
+    $shots += ,@("v3-$n-1280", $n, '1280x800', $null, @())
+    $shots += ,@("v3-$n-390", $n, '390x844', $null, @())
+}
 # The dev3 matrix is one reproducible run, including the reviewer's unopened scenes.
 if ($Dev3) {
     $shots = @($shots | Where-Object { $_[0] -like 'tasks-v2-*' -or $_[0] -like 'listener-error*' -or $_[0] -like 'live-close-failure*' })
