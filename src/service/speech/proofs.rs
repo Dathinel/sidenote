@@ -347,6 +347,8 @@ fn events(root: &Path, id: &str) -> Vec<Value> {
 }
 mod faults;
 pub(crate) use faults::{Logits, crash};
+mod locking;
+pub(crate) use locking::{IntakeTrace, before_job_lock};
 #[test]
 fn service_shutdown_replans_and_replays_over_http() {
     let _serial = SERIAL

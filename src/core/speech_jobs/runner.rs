@@ -121,6 +121,8 @@ pub(crate) fn process(
     let input = work.join("input");
     let _job = {
         let _intake = store.load().map_err(|_| "EVENT_STORAGE")?;
+        #[cfg(test)]
+        crate::service::speech::proofs::before_job_lock(&work);
         store_io::lock(&work.join("processing.lock"))?
     };
     let audio = store_io::read_bounded(
