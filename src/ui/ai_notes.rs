@@ -588,6 +588,16 @@ impl State {
         }
     }
     pub fn request_notes(&mut self, id: String, mode: Request) {
+        if matches!(mode, Request::MakeNotes | Request::TryAgain)
+            && self.selected.as_ref() == Some(&id)
+            && sidenote::core::meeting_parts::read(&sidenote::core::state_dir(), &id)
+                .ok()
+                .flatten()
+                .is_some_and(|session| session.phase != sidenote::core::meeting_parts::Phase::Ended)
+        {
+            self.meeting_generate();
+            return;
+        }
         if let Some(problem) = self.notes_request_problem() {
             self.ai_notes.error = Some(problem);
             return;

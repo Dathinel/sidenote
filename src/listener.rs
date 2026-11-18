@@ -132,11 +132,31 @@ fn log_at(path: &std::path::Path, message: &str) {
     }
 }
 pub(crate) fn pipeline(meeting_id: Option<&str>) -> io::Result<()> {
-    pipeline_in(
-        &crate::core::state_dir(),
-        &crate::core::meetings_dir(),
-        meeting_id,
-    )
+    let root = crate::core::state_dir();
+    let hex = crate::core::meetings_dir();
+    let source = meeting_id
+        .map(|id| crate::core::meeting_parts::source(&root, &hex, id))
+        .unwrap_or(hex);
+    pipeline_in(&root, &source, meeting_id)
+}
+pub fn generate_meeting(id: &str) -> io::Result<()> {
+    if crate::core::notes::settings()?.engine() == crate::core::notes::Engine::App {
+        if crate::core::meeting_router::jobs::notes_enabled(&crate::core::state_dir())?
+            && let Some(meeting) = crate::core::meeting_parts::read(&crate::core::state_dir(), id)?
+        {
+            for part in meeting.parts.iter().take(meeting.requested_parts) {
+                crate::core::meeting_router::jobs::enqueue_automatic(&part.id)
+                    .map_err(io::Error::other)?;
+            }
+            crate::core::meeting_router::jobs::start_worker().map_err(io::Error::other)?;
+        }
+        crate::core::notes::request(id, crate::core::notes::Request::TryAgain)
+    } else if crate::core::notes::settings()?.engine() == crate::core::notes::Engine::Off {
+        Err(io::Error::other("Notes are off"))
+    } else {
+        crate::core::meeting_parts::prepare_script_update(&crate::core::state_dir(), id)?;
+        pipeline(Some(id))
+    }
 }
 fn pipeline_in(
     state: &std::path::Path,
@@ -153,6 +173,7 @@ fn pipeline_with(
 ) -> io::Result<()> {
     let activity = crate::updates::activity().at(Stage::CatchUpActivity)?;
     if let Some(id) = meeting_id
+        && !crate::core::meeting_parts::held_in(state, meetings, id)?
         && crate::core::meeting_router::jobs::configured()
     {
         let queued = if automatic {
@@ -270,6 +291,9 @@ fn script_folders(
                 .and_then(|n| n.to_str())
                 .is_some_and(|id| {
                     meeting_id.is_none_or(|requested| requested == id)
+                        && (meetings == crate::core::meeting_parts::inputs(state)
+                            || !crate::core::meeting_parts::held_in(state, meetings, id)
+                                .unwrap_or(true))
                         && crate::core::recording_guard::eligibility(state, meetings, id)
                             .is_ok_and(|e| e == crate::core::recording_guard::Eligibility::Eligible)
                 })
@@ -292,6 +316,7 @@ fn catch_up_routing(
         if !id.is_empty()
             && id.bytes().any(|b| b.is_ascii_digit())
             && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+            && !crate::core::meeting_parts::held(&crate::core::state_dir(), &id)?
         {
             enqueue(&id).at(Stage::CatchUpRouting)?;
         }
@@ -310,6 +335,12 @@ fn legacy_script_folders(
         .map(|entry| entry.path())
         .filter(|folder| {
             !folder.join("english-summary.json").is_file()
+                && (meetings == crate::core::meeting_parts::inputs(&crate::core::state_dir())
+                    || !crate::core::meeting_parts::held(
+                        &crate::core::state_dir(),
+                        folder.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                    )
+                    .unwrap_or(true))
                 && (meeting_id.is_some_and(|id| folder.file_name().is_some_and(|n| n == id))
                     || fs::read(folder.join("manifest.json"))
                         .ok()

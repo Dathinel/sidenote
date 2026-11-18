@@ -3020,6 +3020,12 @@ pub fn spec() -> AppSpec<State> {
             ("settings-hex-installed", |s| {
                 hex::settings::scene(s, "settings-hex-installed")
             }),
+            ("settings-hex-stale", |s| {
+                hex::settings::scene(s, "settings-hex-stale")
+            }),
+            ("settings-hex-update", |s| {
+                hex::settings::scene(s, "settings-hex-update")
+            }),
             ("settings-hex-meetings-off", |s| {
                 hex::settings::scene(s, "settings-hex-meetings-off")
             }),
@@ -3844,6 +3850,18 @@ pub fn spec() -> AppSpec<State> {
                     live.saving = live::Saving::Failed("Could not save your notes or a recovery copy. Keep this text before closing Sidenote.".into());
                 }
             }),
+            ("meeting-parts-failed", |s| live::parts_scene(s, "failed")),
+            ("meeting-parts-recording", |s| {
+                live::parts_scene(s, "recording")
+            }),
+            ("meeting-parts-resumed", |s| live::parts_scene(s, "resumed")),
+            ("meeting-parts-paused", |s| live::parts_scene(s, "paused")),
+            ("meeting-parts-transcript", |s| {
+                live::parts_scene(s, "transcript")
+            }),
+            ("meeting-parts-writing", |s| live::parts_scene(s, "writing")),
+            ("meeting-parts-done", |s| live::parts_scene(s, "done")),
+            ("meeting-parts-stale", |s| live::parts_scene(s, "stale")),
             ("live-recording", |s| scene_live(s, "", &[], false)),
             ("live-starting", |s| {
                 hex::scene(s, false);
@@ -4244,7 +4262,14 @@ pub fn idle_cpu_proof() -> bool {
 pub fn run() {
     // `tools/measure_launch.py` sets this to a file path to learn when the first frame was
     // encoded (a display proxy). The file gets Unix microseconds. Nothing is written otherwise.
-    let mut app = benchmark::configure(rune::App::new(spec()));
+    // Preserve the pre-update font smoothing defaults.
+    let mut app = benchmark::configure(rune::App::new(spec()).font_smoothing(
+        if cfg!(target_os = "macos") {
+            rune::FontSmoothing::On
+        } else {
+            rune::FontSmoothing::Off
+        },
+    ));
     let trace = sidenote::env_var("SIDENOTE_TRACE_FIRST_FRAME");
     let refresh_handle = app.handle();
     let mut first_frame = false;

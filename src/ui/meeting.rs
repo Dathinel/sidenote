@@ -23,6 +23,7 @@ pub struct ReadingUi {
     pub tabs: bool,
     pub templates: std::collections::BTreeMap<String, String>,
     pub time_open: bool,
+    pub recording_hover: bool,
     pub window_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
@@ -38,6 +39,7 @@ impl ReadingUi {
             tabs: prefs.meeting_tabs,
             templates: prefs.meeting_summary_templates.clone(),
             time_open: false,
+            recording_hover: false,
             window_h: std::cell::Cell::new(800.0),
         }
     }
@@ -427,7 +429,50 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
     let mut out = col().w_full().px(6.0).pb(16.0);
     let mut shown = 0;
     let mut previous_speaker = None;
-    for para in paragraphs::paragraphs(lines, s.highlight) {
+    let session = s
+        .live
+        .as_ref()
+        .and_then(|l| l.session.as_ref())
+        .filter(|session| session.id == m.id)
+        .cloned()
+        .or_else(|| {
+            core::meeting_parts::read(&core::state_dir(), &m.id)
+                .ok()
+                .flatten()
+        });
+    let mut boundaries = Vec::new();
+    if let Some(session) = session {
+        let mut offset = 0u64;
+        for part in session
+            .parts
+            .iter()
+            .take(session.parts.len().saturating_sub(1))
+        {
+            offset = offset.saturating_add(part.duration_ms);
+            if let Some(i) = lines
+                .iter()
+                .position(|line| line.seconds.is_some_and(|s| s >= offset / 1000))
+            {
+                boundaries.push(i);
+            }
+        }
+    }
+    let paragraphs = if boundaries.is_empty() {
+        paragraphs::paragraphs(lines, s.highlight)
+    } else {
+        paragraphs::paragraphs_between(lines, s.highlight, &boundaries)
+    };
+    for para in paragraphs {
+        if boundaries.contains(&para.first) {
+            previous_speaker = None;
+            out = out.child(
+                row().w_full().justify_center().py(8.0).child(
+                    roles::META
+                        .line("Recording resumed", p.faint)
+                        .key(format!("meeting-gap-{}", para.first)),
+                ),
+            );
+        }
         let (i, line) = (para.first, para.line);
         if !filter.is_empty()
             && !format!("{} {}", line.who, para.text)

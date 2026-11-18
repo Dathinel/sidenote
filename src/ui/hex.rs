@@ -79,10 +79,12 @@ pub enum Action {
 }
 
 pub enum Msg {
+    NotesRequested(Result<(), HexError>),
     Meetings(Result<EngineState, HexError>),
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
     RecheckStart(Result<EngineState, HexError>),
+    RecheckResume(Result<EngineState, HexError>),
     SettingsStatus(Result<EngineState, HexError>),
     Caps(String, Result<Capabilities, HexError>),
     Data {
@@ -128,6 +130,7 @@ fn plain(e: &HexError) -> &'static str {
 // ---- state ----------------------------------------------------------------------------------
 
 pub struct HexState {
+    pub(super) parts_restore_checked: bool,
     meetings_setup_checked: bool,
     installation: sidenote::hex_install::Installation,
     install: sidenote::hex_install::State,
@@ -180,6 +183,7 @@ thread_local! { pub(super) static SKIP_INSTALL_DETECT: std::cell::Cell<bool> = c
 impl Default for HexState {
     fn default() -> Self {
         Self {
+            parts_restore_checked: false,
             meetings_setup_checked: false,
             #[cfg(not(test))]
             installation: sidenote::hex_install::detect(),
@@ -260,6 +264,11 @@ impl HexState {
 
     fn running(&self) -> bool {
         self.state().is_some()
+    }
+
+    /// Hex answered that it is not running. A missing, slow or expired answer is not this.
+    fn stopped(&self) -> bool {
+        matches!(self.status, Some(Err(HexError::HexNotRunning)))
     }
 
     // A Stop target is an observation, not a claim that an expired recording is still live.
@@ -526,6 +535,30 @@ impl State {
                 self.hex.settings_status_at = Some(Instant::now());
                 self.hex_status(result);
             }
+            Msg::NotesRequested(result) => {
+                if result.is_err() {
+                    self.parts_notes_failed();
+                    self.hex.error = Some(
+                        "Notes could not start. Check the notes engine and try Generate notes again.",
+                    );
+                }
+            }
+            Msg::RecheckResume(result) => {
+                self.hex.record_busy = false;
+                match result {
+                    Ok(status) => {
+                        let recording = status.recording.is_some();
+                        self.hex_status(Ok(status));
+                        if recording {
+                            self.hex.error =
+                                Some("Hex is already recording. No new part was started.");
+                        } else {
+                            self.meeting_resume();
+                        }
+                    }
+                    Err(e) => self.hex.error = Some(plain(&e)),
+                }
+            }
             Msg::RecheckStart(result) => {
                 self.hex.record_busy = false;
                 match result {
@@ -788,6 +821,9 @@ impl State {
                         self.hex_spawn(|e| Msg::Status(e.status()));
                     }
                     Err(e) => {
+                        if matches!(action, Action::Start) {
+                            self.parts_start_failed();
+                        }
                         self.hex.error = Some(match (&action, &e) {
                             (
                                 Action::Stop(_),
@@ -810,7 +846,10 @@ impl State {
                             super::response_time::failed(live.take_notes_timing(recording));
                         }
                         // Even a failed start may have notes typed while waiting for Hex.
-                        if matches!(action, Action::Start) && self.live_close() {
+                        if matches!(action, Action::Start)
+                            && self.live.as_ref().is_none_or(|l| l.session.is_none())
+                            && self.live_close()
+                        {
                             self.live = None;
                             self.live_open = false;
                         }
@@ -909,6 +948,14 @@ impl State {
     pub(super) fn hex_connection_tick(&mut self, tx: &mut Tx) -> bool {
         self.hex.connection.tick(tx)
     }
+    pub(super) fn hex_recheck_resume(&mut self) {
+        if self.hex.record_busy {
+            return;
+        }
+        self.hex.record_busy = true;
+        self.hex.error = None;
+        self.hex_spawn(|engine| Msg::RecheckResume(engine.status_for_command()));
+    }
     pub(super) fn hex_recheck_start(&mut self) {
         self.hex.record_busy = true;
         self.hex.error = None;
@@ -980,8 +1027,10 @@ impl State {
         self.hex.error = None;
         let engine = self.hex.engine.clone();
         let recording = self.live.as_mut().map_or(0, |live| {
-            live.notes_response_time =
-                super::Operation::at(super::TimedAction::Notes, pressed).defer();
+            if live.session.is_none() {
+                live.notes_response_time =
+                    super::Operation::at(super::TimedAction::Notes, pressed).defer();
+            }
             live.recording_id
         });
         let events = self.events_tx.clone();
@@ -1194,6 +1243,13 @@ pub fn short_status(s: &State, p: Palette) -> (Color, String) {
 /// The id Hex gives the running recording, which is the name of its meeting folder.
 pub fn recording_id(s: &State) -> Option<String> {
     s.hex.recording().and_then(|r| r.id.clone())
+}
+
+pub(super) fn part_elapsed_ms(s: &State) -> Option<u64> {
+    s.hex
+        .recording()?
+        .elapsed_seconds
+        .map(|s| s.saturating_mul(1000))
 }
 
 /// The elapsed time of the running recording, as `12:34`.

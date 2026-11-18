@@ -7,7 +7,7 @@ resolver = "3"
 [package]
 name = "sidenote"
 default-run = "sidenote"
-version = "0.0.1-dev.37"
+version = "0.0.1-dev.38"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
@@ -43,10 +43,10 @@ zeroize = "1"
 rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["rt", "io-std", "signal"] }
 wgpu = { optional = true, version = "~30.0.1", default-features = false, features = ["std", "dx12", "vulkan"] }
-rune = { optional = true, git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", default-features = false, features = ["accessibility"] }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true, features = ["markdown"] }
-rune-motion = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "a138b97e654b8299b2a4cb518b8476b2b528c2c4", optional = true }
+rune = { optional = true, git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a", default-features = false, features = ["accessibility"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a", optional = true, features = ["markdown"] }
+rune-motion = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a", optional = true }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
@@ -97,3 +97,10 @@ tempfile = "3"
 
 [patch.crates-io]
 spake2 = { path = "crates/sidenote-sync/vendor/spake2" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+# Rune's workspace patches these crates to its vendor/ copies, and a dependency's [patch] does not
+# apply to the app that builds it, so the app repeats them at the same revision.
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
