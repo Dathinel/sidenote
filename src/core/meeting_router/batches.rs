@@ -76,18 +76,15 @@ pub fn spool(root: &Path, ranges: Vec<Range>) -> Result<Plan> {
     }
     Ok(plan)
 }
-#[cfg(windows)]
 fn path(root: &Path, plan: &Plan, id: &str, kind: &str) -> PathBuf {
     root.join(format!("{}-{id}.{kind}", plan.revision))
 }
-#[cfg(windows)]
 #[derive(Serialize, Deserialize)]
 struct Receipt {
     revision: String,
     range: String,
     sha256: String,
 }
-#[cfg(windows)]
 fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
     read_result(root, plan, id).ok().flatten().is_some()
 }
@@ -113,28 +110,20 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
     {
         return Err("Invalid plan/range identity".into());
     }
-    #[cfg(windows)]
-    {
-        let check = || -> Result<Option<Value>> {
-            let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
-            let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
-                &path(root, plan, id, "receipt"),
-                4096,
-            )?)?;
-            let value: Value = serde_json::from_slice(&bytes)?;
-            Ok((receipt.revision == plan.revision
-                && receipt.range == id
-                && receipt.sha256 == hash(&bytes)
-                && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
-            .then_some(value))
-        };
-        Ok(check().unwrap_or(None))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        Ok(None)
-    }
+    let check = || -> Result<Option<Value>> {
+        let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
+        let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
+            &path(root, plan, id, "receipt"),
+            4096,
+        )?)?;
+        let value: Value = serde_json::from_slice(&bytes)?;
+        Ok((receipt.revision == plan.revision
+            && receipt.range == id
+            && receipt.sha256 == hash(&bytes)
+            && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
+        .then_some(value))
+    };
+    Ok(check().unwrap_or(None))
 }
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
@@ -154,17 +143,8 @@ pub fn run(
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
 ) -> Result<()> {
-    #[cfg(not(windows))]
-    {
-        let _ = (root, plan, native, bridge);
-        Err(super::hex_bridge::HexFailure::Unsupported.into())
-    }
-    #[cfg(windows)]
-    {
-        run_windows(root, plan, native, bridge, None)
-    }
+    run_batches(root, plan, native, bridge, None)
 }
-#[cfg(windows)]
 pub fn run_until(
     root: &Path,
     plan: &Plan,
@@ -172,7 +152,7 @@ pub fn run_until(
     bridge: &mut impl EnglishBridge,
     timeout: std::time::Duration,
 ) -> Result<()> {
-    run_windows(
+    run_batches(
         root,
         plan,
         native,
@@ -180,7 +160,6 @@ pub fn run_until(
         Some(std::time::Instant::now() + timeout),
     )
 }
-#[cfg(windows)]
 fn remaining(deadline: Option<std::time::Instant>) -> Result<Option<std::time::Duration>> {
     deadline
         .map(|d| {
@@ -190,8 +169,7 @@ fn remaining(deadline: Option<std::time::Instant>) -> Result<Option<std::time::D
         })
         .transpose()
 }
-#[cfg(windows)]
-fn run_windows(
+fn run_batches(
     root: &Path,
     plan: &Plan,
     native: &mut impl NativeLoader,
@@ -258,7 +236,7 @@ fn run_windows(
     }
     Ok(())
 }
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests;
 #[cfg(windows)]
 pub mod worker;

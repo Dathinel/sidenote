@@ -204,3 +204,87 @@ fn expired_budget_never_loads_or_publishes() {
         assert!(read_result(dir.path(), &plan, id).unwrap().is_none());
     }
 }
+
+#[test]
+fn stopped_run_resumes_from_valid_receipts() {
+    struct StopAfterOne(Box<dyn Recognizer>, bool);
+    impl Recognizer for StopAfterOne {
+        fn recognize(&mut self, range: &Range) -> Result<Value> {
+            if self.1 {
+                return Err("stopped between ranges".into());
+            }
+            self.1 = true;
+            self.0.recognize(range)
+        }
+    }
+
+    struct Interrupt(Fakes);
+    impl NativeLoader for Interrupt {
+        fn load(&mut self, lang: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+            Ok(Box::new(StopAfterOne(self.0.load(lang, range)?, false)))
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let wav = root.join("audio.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(root, ranges(&wav)).unwrap();
+    let log = Log::default();
+    let error = run_until(
+        root,
+        &plan,
+        &mut Interrupt(Fakes(log.clone())),
+        &mut Fakes(log.clone()),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "stopped between ranges");
+
+    let mut hindi = plan.batches["hi"].iter();
+    let (first_id, first) = hindi.next().unwrap();
+    let (second_id, _) = hindi.next().unwrap();
+    assert_eq!(
+        read_result(root, &plan, first_id).unwrap(),
+        Some(serde_json::json!({"text":first.piece}))
+    );
+    assert!(read_result(root, &plan, second_id).unwrap().is_none());
+    assert!(
+        read_result(root, &plan, &id(&plan, "en"))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        *log.borrow(),
+        [
+            "English",
+            "load Hindi",
+            &format!("read {}", first.piece),
+            "unload"
+        ]
+    );
+
+    log.borrow_mut().clear();
+    let reopened = spool(root, ranges(&wav)).unwrap();
+    fake(root, &reopened, &log).unwrap();
+    let mut expected = vec!["load Hindi".to_owned()];
+    expected.extend(
+        reopened.batches["hi"]
+            .values()
+            .skip(1)
+            .map(|r| format!("read {}", r.piece)),
+    );
+    expected.extend(["unload", "load Telugu", "read te", "unload"].map(str::to_owned));
+    assert_eq!(*log.borrow(), expected);
+    for (id, range) in reopened.batches.values().flat_map(|batch| batch.iter()) {
+        let expected = if range.piece == "en" {
+            "English"
+        } else {
+            &range.piece
+        };
+        assert_eq!(
+            read_result(root, &reopened, id).unwrap(),
+            Some(serde_json::json!({"text":expected}))
+        );
+    }
+}

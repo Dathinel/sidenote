@@ -59,7 +59,7 @@
   "src/core/meeting_job/checkpoint/tests.rs": "897842550f58e485517b0025361589160f4a1c8c125635532853d3dd9d06a1b7",
   "src/core/meeting_parts.rs": "d6911655b74ea62f49639db7a288143fadcb24b912b4f65779a6cda1693a37f6",
   "src/core/meeting_parts_input.rs": "37c54e4872efef2fe5daef820c610b6e67cc6bec869a44cc30113d1c3a839467",
-  "src/core/meeting_router/batches.rs": "10f04e86745db9b898250137b62985bab18e40285e711171fd7b197b5f73b406",
+  "src/core/meeting_router/batches.rs": "cc7acf97b5e36ab754640a31ad293a7a7ecac6489bad2703d4a18cde8e0a3d77",
   "src/core/meeting_router/batches/worker.rs": "8458da2de47cc05963b052b82cab0f1d8d475728391da7667dce41ecf34bb999",
   "src/core/meeting_router/batches/worker/lifetime_tests.rs": "aba3924f11086f99cbf5710bcae1c974a0fbea86c6820e4aa043011aeb5f22f9",
   "src/core/meeting_router/batches/worker/tests.rs": "76aeecef3038d9b6aac12dab244c33da5e15403872d762babe7e9d28d0e19740",
