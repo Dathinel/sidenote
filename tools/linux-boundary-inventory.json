@@ -121,6 +121,7 @@
   "src/core/runners.rs": "2d5da961f2b69aabd32b2917ead3b779ffd918a37a945563590486f961a30872",
   "src/core/settle.rs": "b54fdc51adeebb328c76acc2788f9e3d5277eef45c03ec48fa9d6feec1e47c0f",
   "src/core/settle/tests.rs": "680a3699b5300b3411d2d0ea7f477c85b231478c70dff170c863c6b399378781",
+  "src/core/speech_sessions.rs": "4103a3b1e1f352404001e08046644839799123eef371f19c25a57193c1f8e9c7",
   "src/core/store_io.rs": "e252d771e828868eb98a55e950ac17fe3ae77953d54ec6da8c2fce566de395f7",
   "src/core/sync_state.rs": "7b6ca302bf5423a1e0d7d6aaf62325f2f4f20047716f6339d591175733ef6746",
   "src/core/tasks.rs": "0071ad0533947f13a2e69faedad2286213197648c5db7fc4540725f7c7b78dec",
