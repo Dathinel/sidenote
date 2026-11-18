@@ -38,6 +38,10 @@ fn in_parent(name: &str) -> bool {
 
 /// The meeting page over one invented meeting that has a structured summary.
 fn page() -> Runtime<State> {
+    page_at(DEFAULT_SIZE)
+}
+
+fn page_at(size: (f32, f32)) -> Runtime<State> {
     crate::test_paths::isolate();
     let folder = core::meetings_dir().join(MEETING);
     std::fs::create_dir_all(&folder).unwrap();
@@ -50,7 +54,7 @@ fn page() -> Runtime<State> {
     let mut rt = Runtime::with_text(
         State::new(),
         view,
-        DEFAULT_SIZE,
+        size,
         Env::default(),
         TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
     );
@@ -225,6 +229,68 @@ fn a_connected_endpoint_answer_names_the_model_it_reported_or_says_it_did_not() 
         assert_eq!(saved.model.as_deref(), reported);
         assert_eq!(ask::answer_label(s, saved).as_deref(), Some(want));
     }
+}
+
+/// At 390 wide the Ask panel keeps the page's 16 point gutter, Hide and Clear keep their own
+/// room inside it, the caption shrinks to what is left, and the page fades into the bar rather
+/// than being cut off at its edge.
+#[test]
+fn at_390_wide_the_ask_header_keeps_clear_off_the_edge_and_the_page_fades_out() {
+    if in_parent("at_390_wide_the_ask_header_keeps_clear_off_the_edge_and_the_page_fades_out") {
+        return;
+    }
+    let mut rt = page_at((390.0, 844.0));
+    let said = |role: &str, text: &str| Message {
+        role: role.into(),
+        text: text.into(),
+        ..Default::default()
+    };
+    rt.update(|s, _| {
+        s.saved.messages = vec![
+            said("user", "What did we decide about the launch date?"),
+            said("assistant", "The beta ships on Friday."),
+            said("user", "And who owns the follow up?"),
+            said("assistant", "Maya will send the draft."),
+        ]
+    });
+    // The panel rises in on its first frame; let that finish so the rects are the resting ones.
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let rect =
+        |rt: &Runtime<State>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key}")).0;
+    let (overlay, thread) = (rect(&rt, "ask-overlay"), rect(&rt, "ask-thread"));
+    assert_eq!(
+        (
+            thread[0] - overlay[0],
+            overlay[0] + overlay[2] - (thread[0] + thread[2])
+        ),
+        (16.0, 16.0),
+        "the panel keeps the 16 px gutter on both sides"
+    );
+    let (caption, hide, clear) = (
+        rect(&rt, "ask-caption"),
+        rect(&rt, "ask-toggle"),
+        rect(&rt, "ask-clear"),
+    );
+    let panel_right = thread[0] + thread[2];
+    assert!(
+        clear[0] + clear[2] <= panel_right - 4.0,
+        "Clear touches the edge"
+    );
+    assert!(
+        caption[0] + caption[2] <= hide[0] && hide[0] + hide[2] <= clear[0],
+        "the caption runs under Hide or Clear"
+    );
+    let (scroll, fade) = (
+        rect(&rt, "meeting-scroll"),
+        rect(&rt, "meeting-scroll-fade"),
+    );
+    assert_eq!(
+        fade[1] + fade[3],
+        scroll[1] + scroll[3],
+        "fade sits on the cut edge"
+    );
 }
 
 #[test]

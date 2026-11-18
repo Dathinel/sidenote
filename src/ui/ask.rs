@@ -277,11 +277,18 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         .pl(16.0)
         .pr(8.0)
         .py(8.0)
-        .child(if s.ask_current_live() {
-            roles::META.medium().wrap(&title, p.soft)
-        } else {
-            spaced_caps(&title, p)
-        })
+        .gap(8.0)
+        // The caption takes what the actions leave and wraps; Hide and Clear keep their own room.
+        .child(
+            if s.ask_current_live() {
+                roles::META.medium().wrap(&title, p.soft)
+            } else {
+                spaced_caps(&title, p)
+            }
+            .key("ask-caption")
+            .grow(1.0)
+            .min_w(0.0),
+        )
         .child(actions);
     let panel = raised(
         col()
@@ -738,7 +745,7 @@ pub fn overlay_with(
     if !s.companies.open {
         stack = stack
             .max_w(COLUMN)
-            .px(if narrow { 12.0 } else { 28.0 })
+            .px(if narrow { 16.0 } else { 28.0 })
             .items_center();
     }
     if s.back.is_some() && !(s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open) {

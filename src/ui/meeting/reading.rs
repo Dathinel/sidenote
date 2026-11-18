@@ -555,13 +555,35 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .grow(1.0)
         .min_w(0.0)
         .min_h(0.0)
-        .child(scroll(
-            doc.max_w(COLUMN)
-                .px(24.0)
-                .pt(6.0)
-                .pb(s.overlay_h.get() + 32.0),
-            "meeting-scroll",
-        ));
+        .child(
+            col()
+                .key("meeting-scroll-frame")
+                .w_full()
+                .grow(1.0)
+                .min_w(0.0)
+                .min_h(0.0)
+                .child(
+                    scroll(
+                        doc.max_w(COLUMN)
+                            .px(24.0)
+                            .pt(6.0)
+                            .pb(s.overlay_h.get() + 32.0),
+                        "meeting-scroll",
+                    )
+                    .grow(1.0),
+                )
+                // The page fades into the Ask bar, so a chip at the cut edge never shows as a
+                // sliver of a bar.
+                .child(
+                    el().key("meeting-scroll-fade")
+                        .pin(Some(0.0), None, Some(0.0), Some(0.0))
+                        .h(28.0)
+                        .linear_gradient(
+                            std::f32::consts::PI,
+                            [(0.0, p.bg.alpha(0.0)), (1.0, p.bg)],
+                        ),
+                ),
+        );
     let control = recording_control(s, k, p, layer);
     let panel = s.transcript_open.then(|| {
         col()
