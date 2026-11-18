@@ -152,7 +152,7 @@
   "src/response_time.rs": "508cc3d4ae57ac8277982199a998f222b8c1ffc2bccd11b55920ce3152c43540",
   "src/service.rs": "09e8646979beea832a021134c9f22386416d4057978a356d68b76e5d17758d89",
   "src/service/schedule.rs": "e2049ae50e264bf47e77ae366ef91a21e78203fa25362fbd5a53b332dc9cb5c3",
-  "src/service/speech/listener_tests.rs": "fd8eafd91128b77e9dc159845085c39b47b8f7fc919179e6399fc5f895deb6b4",
+  "src/service/speech/listener_tests.rs": "07e62438c58a1da83ab28200e1525e057e038a9e677aecff55d4866be5df68c6",
   "src/service/workers.rs": "d3e3abd1f69114ce2798268fdcbf9507b83b27a9137a40421367125b042dbc89",
   "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",

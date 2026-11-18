@@ -18,7 +18,7 @@ async fn authorize(
     root: Arc<PathBuf>,
     hosts: Arc<Vec<String>>,
     slots: Arc<tokio::sync::Semaphore>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
     let Ok(_slot) = slots.try_acquire_owned() else {
@@ -47,6 +47,14 @@ async fn authorize(
     let Some(grant) = grant else {
         return reject(StatusCode::UNAUTHORIZED);
     };
+    let Ok(identity) = serde_json::to_vec(&grant) else {
+        return reject(StatusCode::UNAUTHORIZED);
+    };
+    request
+        .extensions_mut()
+        .insert(super::routes::Owner(crate::core::speech_sessions::digest(
+            &identity,
+        )));
     if request
         .headers()
         .get("content-length")
@@ -148,6 +156,7 @@ pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
     let root = Arc::new(crate::core::state_dir());
     let slots = Arc::new(tokio::sync::Semaphore::new(8));
     let router = Router::new()
+        .merge(super::routes::router(root.join("local/speech")))
         .route(
             "/v1/host",
             get(move || {

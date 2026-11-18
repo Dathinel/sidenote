@@ -1,6 +1,7 @@
 //! Speech owns a separate service lifetime, never the ordinary routing supervisor.
 use std::io;
 mod listener;
+mod routes;
 
 pub(super) fn run() -> i32 {
     let result = (|| -> io::Result<()> {
