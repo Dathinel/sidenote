@@ -211,6 +211,46 @@ pub fn run(args: Vec<OsString>) -> io::Result<i32> {
 mod tests {
     use super::*;
     #[test]
+    fn packaged_service_admits_ordinary_helpers() {
+        let unit = include_str!("../../../packaging/systemd/sidenote-server@.service");
+        let property = |name: &str| {
+            let prefix = format!("--property={name}=");
+            unit.split_whitespace()
+                .find_map(|word| word.strip_prefix(&prefix))
+                .unwrap()
+        };
+        let memory = property("MemoryMax");
+        let (number, suffix) = memory.split_at(memory.len() - 1);
+        let bytes = number.parse::<u64>().unwrap()
+            * match suffix {
+                "M" => 1024 * 1024,
+                "G" => 1024 * 1024 * 1024,
+                _ => panic!("unsupported packaged memory unit"),
+            };
+        let (_, group) = owner_unit().unwrap();
+        let directory =
+            std::path::Path::new("/sys/fs/cgroup").join(group.strip_prefix("/").unwrap());
+        assert_eq!(
+            fs::read_to_string(directory.join("memory.max"))
+                .unwrap()
+                .trim()
+                .parse::<u64>()
+                .unwrap(),
+            bytes,
+            "run this test with the packaged worker's actual limits"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.join("pids.max"))
+                .unwrap()
+                .trim(),
+            property("TasksMax")
+        );
+        assert_eq!(property("CPUQuota"), "100%%");
+        speech_command(OsStr::new("/bin/true")).unwrap();
+        let ordinary = command(OsStr::new("/bin/true")).unwrap();
+        assert_eq!(ordinary.get_args().next(), Some(OsStr::new("--launch")));
+    }
+    #[test]
     fn speech_keeps_the_agent_runner_refusal() {
         for program in ["claude", "codex", "opencode", "opencode2"] {
             let error = speech_command(OsStr::new(program)).unwrap_err();

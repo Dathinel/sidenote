@@ -72,6 +72,11 @@ Dependency licenses and model performance remain separate checks before enabling
 inference, and the batch paths are still Windows-only (VAD and language ID run on Linux). Existing
 catalog license labels are metadata, not a new license review.
 
+The packaged unattended worker retains its ordinary 512 MiB, one CPU and 32-task
+budget so existing routing helpers remain admitted. Unattended speech needs its own
+bounded service in L5. The speech profile is qualified separately in a 1 GiB user
+service; those tests do not qualify the packaged unattended service for speech.
+
 ## System service, independent of login
 
 The `sidenote-server@.service` system template uses a dedicated non-root numeric uid,

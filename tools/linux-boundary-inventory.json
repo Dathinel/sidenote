@@ -9,7 +9,7 @@
   "crates/sidenote-sync/src/notes_supervisor.rs": "1d8676b4e06b05aaba83c2a64871d67f161d1717f19df19f3a7d00c0daac7edb",
   "crates/sidenote-sync/src/pairing.rs": "3c293e35bd29373eaece91fdc5ca7a0423c8fa896390ee5747cbd07fb0de97f3",
   "crates/sidenote-sync/src/pid_worker.rs": "a3453a6798b12d4801506a876a23d9862e52399b17a0afd55d2dfe5fa5899a8d",
-  "crates/sidenote-sync/src/tree_worker.rs": "c97dfacbb825cad2cc4b448ce06d82e127e2026f39b8ce532f04ed4bd4755094",
+  "crates/sidenote-sync/src/tree_worker.rs": "31663d4d73e6b89d182d0e30e32d41f5e1be5d1fb6e46dd7c1a829f836ded1e4",
   "crates/sidenote-sync/src/windows_launch.rs": "2e435b57c7c43749f62b03f53c5c4e969065ca4ac9f30b451ca0e3aff407059c",
   "crates/sidenote-sync/src/worker.rs": "61cc11362696f0a095bc0beebfed8bfd571e738874f44b73bf24810ab745da92",
   "crates/sidenote-sync/tests/round1_store.rs": "e1072d697e506f6ee4cba7d5bde4dbe4175788caafb02dee27a9d64a120b511e",
