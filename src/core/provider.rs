@@ -63,17 +63,7 @@ impl Settings {
             .map_err(|_| "Could not save Ask connection settings".into())
     }
     pub fn endpoint(&self) -> Result<url::Url, String> {
-        let mut url =
-            url::Url::parse(self.base_url.trim()).map_err(|_| "Enter a valid endpoint base URL")?;
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(
-                "Endpoint URLs cannot contain credentials, query strings or fragments".into(),
-            );
-        }
+        let mut url = parse_base_url(&self.base_url)?;
         if url.scheme() != "https" && !(url.scheme() == "http" && is_local(&url)) {
             return Err("Remote endpoints require HTTPS; HTTP is allowed only on localhost".into());
         }
@@ -120,6 +110,18 @@ impl Settings {
         }
     }
 }
+pub(super) fn parse_base_url(base: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(base.trim()).map_err(|_| "Enter a valid endpoint base URL")?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Endpoint URLs cannot contain credentials, query strings or fragments".into());
+    }
+    Ok(url)
+}
+
 pub fn is_local(url: &url::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
@@ -129,15 +131,18 @@ pub fn is_local(url: &url::Url) -> bool {
     }
 }
 fn directory() -> Result<PathBuf, String> {
+    secure_directory("cloud-ask")
+}
+pub(super) fn secure_directory(feature: &str) -> Result<PathBuf, String> {
     // Folder overrides isolate offscreen renders and qualification from installed state.
     if let Some(root) = super::paths::data() {
-        return Ok(root.join("local/cloud-ask"));
+        return Ok(root.join("local").join(feature));
     }
     let root = crate::platform::local_home();
     if !root.is_absolute() {
         return Err("Device-local secure store is unavailable".into());
     }
-    Ok(root.join("sidenote/cloud-ask"))
+    Ok(root.join("sidenote").join(feature))
 }
 
 fn key_path() -> Result<PathBuf, String> {

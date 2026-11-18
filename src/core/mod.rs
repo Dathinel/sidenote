@@ -26,6 +26,8 @@ pub mod provider;
 pub mod recording_guard;
 pub mod recording_source;
 pub mod relay_preview;
+#[cfg(windows)]
+pub mod speech_host;
 pub use config::{Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
