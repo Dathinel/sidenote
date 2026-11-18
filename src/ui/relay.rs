@@ -1,6 +1,7 @@
 use super::{
     Event, State,
-    hex::settings::{card, setting_row},
+    cards::{copy_column, icon_tile, row_shell},
+    hex::settings::{card, group_highlight, row_icon},
     roles,
     theme::Palette,
     widgets::ButtonDisabled,
@@ -8,11 +9,15 @@ use super::{
 use rune::{El, TextEdit, Tx, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::relay_preview::{
-    self as core, Conflict,
+    self as core, Conflict, Presence,
     pairing::{PairedDevice, Pairing, Update},
 };
 use sidenote_sync::pairing::SecretCode;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+/// An offline device older than this gets the lost-device warning (owner default, 18 Nov).
+const LOST_AFTER: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+const NO_PEERS: &str = "No other devices yet. Choose \"Show a pairing code\" here, then enter the code on the other device.";
 
 #[derive(Default)]
 pub struct RelayUi {
@@ -96,6 +101,26 @@ fn human_time_at(at: &str, now: chrono::DateTime<chrono::Local>) -> String {
         _ => time.format("%-d %b %Y").to_string(),
     };
     format!("{day}, {}", time.format("%H:%M"))
+}
+
+fn presence_text(presence: Presence, now: chrono::DateTime<chrono::Local>) -> String {
+    match presence {
+        Presence::Online => "Online".into(),
+        Presence::Unknown => "Not known".into(),
+        Presence::Offline(None) => "Offline, not seen yet".into(),
+        Presence::Offline(Some(at)) => {
+            let at = chrono::DateTime::<chrono::Local>::from(at).to_rfc3339();
+            format!("Offline, last seen {}", human_time_at(&at, now))
+        }
+    }
+}
+
+fn lost_days(presence: Presence, now: SystemTime) -> Option<u64> {
+    let Presence::Offline(Some(at)) = presence else {
+        return None;
+    };
+    let age = now.duration_since(at).ok()?;
+    (age > LOST_AFTER).then_some(age.as_secs() / 86_400)
 }
 
 fn field_name(field: &str) -> String {
@@ -265,8 +290,28 @@ pub fn tick(s: &mut State, tx: &mut Tx) -> bool {
             .is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
         {
             s.relay_ui.status_checked = Some(Instant::now());
+            let before: Vec<_> = s.relay_ui.peers.iter().map(|d| d.presence).collect();
+            // In memory only: the client already tracks pongs, so this adds no traffic.
+            if let Ok(Some(preview)) = core::get(&s.store.root) {
+                let presence = preview.presence();
+                for peer in s.relay_ui.peers.iter_mut().filter(|d| !d.local) {
+                    peer.presence = presence
+                        .get(&peer.token)
+                        .copied()
+                        .unwrap_or(Presence::Unknown);
+                }
+            }
+            let moved = before
+                != s.relay_ui
+                    .peers
+                    .iter()
+                    .map(|d| d.presence)
+                    .collect::<Vec<_>>();
             if let Ok(status) = core::operations::status(&s.store.root) {
                 s.relay_ui.operational = status;
+                return true;
+            }
+            if moved {
                 return true;
             }
         }
@@ -422,45 +467,7 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         }
     }
     out = out.child(card("Pair a device", pair, p).key("relay-pair-card"));
-    if !s.relay_ui.peers.is_empty() {
-        let mut peers = col().w_full();
-        for (index, peer) in s.relay_ui.peers.iter().enumerate() {
-            let control = col();
-            let mut device = col()
-                .w_full()
-                .min_w(0.0)
-                .key(format!("relay-device-{index}"))
-                .child(setting_row(
-                    s,
-                    &format!("relay-paired-device-{index}"),
-                    &peer.name,
-                    if peer.unconfirmed {
-                        "Pairing not confirmed"
-                    } else {
-                        "Paired for relay sync."
-                    },
-                    control,
-                    peer.local,
-                    p,
-                ));
-            if peer.unconfirmed {
-                device = device.child(
-                    roles::SMALL
-                        .wrap(core::pairing::UNCONFIRMED, p.warn)
-                        .padding(14.0)
-                        .key(format!("relay-unconfirmed-notice-{index}")),
-                );
-            }
-            peers = peers.child(device);
-        }
-        peers = peers.child(super::widgets::hairline(p)).child(
-            roles::SMALL
-                .wrap("Removing a device is not available in this preview", p.soft)
-                .padding(14.0)
-                .key("relay-removal-unavailable"),
-        );
-        out = out.child(card("Paired devices", peers, p).key("relay-peers-card"));
-    }
+    out = out.child(peers_card(s, p));
     if let Some(error) = &s.relay_ui.error
         && !matches!(
             error.as_str(),
@@ -470,6 +477,138 @@ pub fn section(s: &State, k: &Kit, p: Palette) -> El {
         out = out.child(roles::SMALL.wrap(error, p.warn).role("alert"));
     }
     out
+}
+
+fn note(text: &str, key: &str, p: Palette) -> El {
+    roles::SMALL.wrap(text, p.soft).padding(14.0).key(key)
+}
+
+/// Another device has the same name, so each of them also shows the end of its token.
+fn shares_name(peers: &[PairedDevice], peer: &PairedDevice) -> bool {
+    let name = peer.name.to_lowercase();
+    !peer.tag.is_empty()
+        && peers
+            .iter()
+            .filter(|o| o.name.to_lowercase() == name)
+            .count()
+            > 1
+}
+
+/// One device row. The name is one line that ends in an ellipsis, so a long or unbroken name stays
+/// inside the card; the tag that tells twins apart sits after it and is never cut. Wide: the state sits on the right. Narrow: it sits under the name, in line with
+/// the help text.
+fn peer_row(s: &State, index: usize, peer: &PairedDevice, help: &str, p: Palette) -> El {
+    let key = format!("relay-paired-device-{index}");
+    let mut name = row().w_full().gap(6.0).child(
+        roles::NAME
+            .line(&peer.name, p.ink)
+            .key(format!("relay-device-name-{index}")),
+    );
+    if shares_name(&s.relay_ui.peers, peer) {
+        name = name.child(
+            roles::NAME
+                .wrap(format!("({})", peer.tag), p.soft)
+                .key(format!("relay-device-tag-{index}")),
+        );
+    }
+    let status = presence_control(index, peer, p);
+    let help = roles::SMALL
+        .wrap(help, p.soft)
+        .key(format!("relay-device-help-{index}"));
+    let shell = row_shell()
+        .key(key.clone())
+        .fill(group_highlight(s, &key, p))
+        .child(icon_tile(row_icon(&key), p));
+    if s.narrow.get() {
+        shell.child(
+            copy_column()
+                .child(name)
+                .child(row().child(status))
+                .child(help),
+        )
+    } else {
+        shell
+            .child(copy_column().child(name).child(help))
+            .child(status)
+    }
+}
+
+fn presence_control(index: usize, peer: &PairedDevice, p: Palette) -> El {
+    let key = format!("relay-presence-{index}");
+    if peer.local {
+        return super::widgets::chip("This device", p).key(format!("relay-this-device-{index}"));
+    }
+    let text = presence_text(peer.presence, chrono::Local::now());
+    if peer.presence == Presence::Online {
+        super::widgets::badge(text, p.ok, Some(p.okbg)).key(key)
+    } else {
+        roles::SMALL.wrap(text, p.soft).key(key)
+    }
+}
+
+/// One row per device: name, "This device" tag or online state. Shown with relay off too, so the
+/// card can say why it is empty.
+pub fn peers_card(s: &State, p: Palette) -> El {
+    let mut body = col().w_full();
+    if !s.hex.shell.relay.enabled {
+        #[cfg(target_os = "linux")]
+        let line = s.hex.shell.relay.unavailable_reason.as_deref().map_or_else(
+            || "Relay sync is off.".to_owned(),
+            |reason| format!("{reason}, so there are no paired devices."),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let line = "Relay sync is off. Turn it on in Labs, then choose \"Show a pairing code\" to pair a device.".to_owned();
+        body = body.child(note(&line, "relay-off-notice", p));
+        return card("Paired devices", body, p).key("relay-peers-card");
+    }
+    for (index, peer) in s.relay_ui.peers.iter().enumerate() {
+        let lost = lost_days(peer.presence, SystemTime::now()).filter(|_| !peer.unconfirmed);
+        let help = if peer.unconfirmed {
+            "Pairing not confirmed"
+        } else if peer.local {
+            "Other devices show this name."
+        } else {
+            "Paired for relay sync."
+        };
+        let mut device = col()
+            .w_full()
+            .min_w(0.0)
+            .key(format!("relay-device-{index}"))
+            .child(peer_row(s, index, peer, help, p));
+        if peer.unconfirmed {
+            device = device.child(
+                roles::SMALL
+                    .wrap(core::pairing::UNCONFIRMED, p.warn)
+                    .padding(14.0)
+                    .key(format!("relay-unconfirmed-notice-{index}")),
+            );
+        }
+        if let Some(days) = lost {
+            device = device.child(
+                roles::SMALL
+                    .wrap(
+                        format!("Not seen for {days} days. If it is lost or stolen, turn off relay sync on all devices."),
+                        p.warn,
+                    )
+                    .padding(14.0)
+                    .key(format!("relay-lost-notice-{index}")),
+            );
+        }
+        body = body.child(device);
+    }
+    if s.relay_ui.peers.iter().all(|d| d.local) {
+        body = body
+            .child(super::widgets::hairline(p))
+            .child(note(NO_PEERS, "relay-no-peers", p));
+    }
+    if !s.relay_ui.peers.is_empty() {
+        body = body.child(super::widgets::hairline(p)).child(note(
+            "Removing a device is not available in this preview",
+            "relay-removal-unavailable",
+            p,
+        ));
+    }
+    card("Paired devices", body, p).key("relay-peers-card")
 }
 
 fn chooser(_s: &State, conflict: &Conflict, p: Palette) -> El {
@@ -668,6 +807,65 @@ pub fn scene(s: &mut State, kind: &str) {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Timelike};
+
+    #[test]
+    fn presence_lines_and_the_lost_device_threshold() {
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 11, 18, 12, 0, 0)
+            .single()
+            .unwrap();
+        let at =
+            SystemTime::from(now - chrono::Duration::hours(17) - chrono::Duration::minutes(20));
+        assert_eq!(presence_text(Presence::Online, now), "Online");
+        assert_eq!(presence_text(Presence::Unknown, now), "Not known");
+        assert_eq!(
+            presence_text(Presence::Offline(None), now),
+            "Offline, not seen yet"
+        );
+        assert_eq!(
+            presence_text(Presence::Offline(Some(at)), now),
+            "Offline, last seen yesterday, 18:40"
+        );
+        let clock = SystemTime::from(now);
+        let ago = |days: u64, extra: u64| {
+            Presence::Offline(Some(clock - Duration::from_secs(days * 86_400 + extra)))
+        };
+        assert_eq!(
+            lost_days(ago(14, 0), clock),
+            None,
+            "exactly 14 days is not lost"
+        );
+        assert_eq!(lost_days(ago(14, 1), clock), Some(14));
+        assert_eq!(lost_days(ago(30, 0), clock), Some(30));
+        assert_eq!(lost_days(Presence::Offline(None), clock), None);
+        assert_eq!(lost_days(Presence::Online, clock), None);
+        assert_eq!(lost_days(Presence::Unknown, clock), None);
+    }
+
+    #[test]
+    fn only_devices_with_the_same_name_get_a_tag() {
+        let device = |name: &str, tag: &str| PairedDevice {
+            token: format!("synthetic-{tag}"),
+            tag: tag.into(),
+            name: name.into(),
+            local: false,
+            unconfirmed: false,
+            presence: Presence::Unknown,
+        };
+        let peers = [
+            device("Laptop", "a1b2"),
+            device("laptop", "c3d4"),
+            device("Studio PC", "e5f6"),
+            device("Tablet", ""),
+            device("Tablet", ""),
+        ];
+        assert!(shares_name(&peers, &peers[0]) && shares_name(&peers, &peers[1]));
+        assert!(!shares_name(&peers, &peers[2]), "a unique name has no tag");
+        assert!(
+            !shares_name(&peers, &peers[3]),
+            "nothing to show without a tag"
+        );
+    }
 
     #[test]
     fn code_entry_groups_digits_and_keeps_the_pair_action_guarded() {
