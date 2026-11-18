@@ -73,6 +73,7 @@ pub(super) fn run() -> i32 {
                 result = tokio::signal::ctrl_c() => result,
                 result = &mut jobs => return result?,
             };
+            crate::core::speech_jobs::STOP.store(true, std::sync::atomic::Ordering::Release);
             drop(stop);
             jobs.await??;
             result

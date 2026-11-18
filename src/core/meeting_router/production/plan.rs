@@ -157,6 +157,10 @@ pub(crate) fn produce_owned(
             let contexts = ranges::padded((0, track.sample_count), ownership, &intervals)?;
             let mut decisions = Vec::new();
             for &context in &contexts {
+                #[cfg(target_os = "linux")]
+                if crate::core::speech_jobs::STOP.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err("CANCELLED".into());
+                }
                 let started = Instant::now();
                 let decision = if let Some(language) = &bypass {
                     if !languages.contains(language) {

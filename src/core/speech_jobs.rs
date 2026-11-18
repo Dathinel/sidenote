@@ -6,6 +6,8 @@ use super::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io;
+pub(crate) static STOP: std::sync::LazyLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
+    std::sync::LazyLock::new(|| Default::default());
 #[cfg(any(feature = "asr-runtime", test))]
 mod runner;
 #[cfg(feature = "asr-runtime")]
@@ -119,6 +121,9 @@ impl Store {
         };
         for (id, session) in &sessions {
             for (piece, accepted) in session.pieces.iter().filter(|(_, p)| !p.done) {
+                if STOP.load(std::sync::atomic::Ordering::Acquire) {
+                    return Ok(());
+                }
                 self.emit(
                     id,
                     "piece.accepted",
@@ -126,10 +131,15 @@ impl Store {
                     "index":accepted.metadata.index,"bytes":accepted.bytes,"queue_pos":1}),
                 )?;
                 let snapshot = self.snapshot(&session.owner, id, piece)?;
-                if snapshot["state"] != "done"
-                    && snapshot["state"] != "failed"
-                    && process(id, piece, session).is_err()
-                {
+                let result = if snapshot["state"] != "done" && snapshot["state"] != "failed" {
+                    process(id, piece, session)
+                } else {
+                    Ok(())
+                };
+                if STOP.load(std::sync::atomic::Ordering::Acquire) {
+                    return Ok(());
+                }
+                if result.is_err() {
                     self.emit(
                         id,
                         "piece.failed",

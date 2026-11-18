@@ -3,11 +3,9 @@ use super::{batches::*, hex_bridge::*, *};
 use crate::core::{Config, model_catalog};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{
-    num::NonZeroUsize,
-    sync::{Arc, atomic::AtomicBool},
-    time::Duration,
-};
+#[cfg(windows)]
+use std::sync::{Arc, atomic::AtomicBool};
+use std::{num::NonZeroUsize, time::Duration};
 #[cfg(windows)]
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
@@ -48,7 +46,16 @@ impl NativeLoader for Native<'_> {
             .arg(&config.pipeline.runtime_dll);
         Ok(Box::new(worker::Worker::spawn_with_threads(
             command,
-            Arc::new(AtomicBool::new(false)),
+            {
+                #[cfg(target_os = "linux")]
+                {
+                    crate::core::speech_jobs::STOP.clone()
+                }
+                #[cfg(windows)]
+                {
+                    Arc::new(AtomicBool::new(false))
+                }
+            },
             Duration::from_secs(u64::from(
                 config.engine_settings.stages.asr_request_deadline_seconds,
             )),

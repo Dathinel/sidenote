@@ -66,6 +66,24 @@ pub(crate) fn execute(
     );
     let mut count = 0;
     let mut failed = Vec::new();
+    if STOP.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("CANCELLED".into());
+    }
+    let gaps: Vec<crate::core::meeting_router::fallback::RoutingFallback> =
+        store_io::read(&work.join("uncertainty.json"))?;
+    for gap in gaps {
+        let key = crate::core::speech_sessions::digest(&serde_json::to_vec(&gap)?);
+        let interval = gap.interval.ok_or("MISSING_GAP_INTERVAL")?;
+        let data = json!({"piece":piece,"range":key,
+            "code":"LID_UNCERTAIN","reason":gap.reason,"track":interval.track,
+            "start_sample":metadata.context_start_sample + (interval.start*16000.0).round() as u64,
+            "end_sample":metadata.context_start_sample + (interval.end*16000.0).round() as u64});
+        store
+            .emit(session, "range.failed", data.clone())
+            .map_err(|_| "EVENT_STORAGE")?;
+        failed.push(data);
+    }
+    let rejected = failed.len();
     for (language, batch) in &plan.batches {
         for (key, range) in batch {
             let reading = if language == "en" {
@@ -81,7 +99,7 @@ pub(crate) fn execute(
             }
         }
     }
-    if result.is_err() && count == 0 {
+    if result.is_err() && count == 0 && rejected == 0 {
         return Err("ASR_UNAVAILABLE".into());
     }
     store.emit(session,"piece.done",json!({"piece":piece,"ranges_total":count+failed.len(),"ranges_ok":count,
@@ -101,7 +119,10 @@ pub(crate) fn process(
     let metadata = &session.pieces[piece].metadata;
     let work = store.0.join(id).join("jobs").join(piece);
     let input = work.join("input");
-    std::fs::create_dir_all(&input)?;
+    let _job = {
+        let _intake = store.load().map_err(|_| "EVENT_STORAGE")?;
+        store_io::lock(&work.join("processing.lock"))?
+    };
     let audio = store_io::read_bounded(
         &store.0.join(id).join(format!("{piece}.wav")),
         crate::core::speech_sessions::MAX_PIECE_BYTES as u64,
@@ -141,7 +162,8 @@ pub(crate) fn process(
         &input,
         &work,
         &config,
-        &[(metadata.track.clone(), metadata.origin_sample)].into(),
+        // Stage-local origins avoid losing sample precision in meeting-time gap metadata.
+        &[(metadata.track.clone(), 0)].into(),
         piece,
         &mut Default::default(),
         Some((

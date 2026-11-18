@@ -160,6 +160,10 @@ impl Silero {
         last: bool,
     ) -> Result<Vec<Span>, Error> {
         state.push(identity, start, sample_rate, audio, last, |state, frame| {
+            #[cfg(target_os = "linux")]
+            if crate::core::speech_jobs::STOP.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(Unavailable);
+            }
             #[cfg(feature = "asr-runtime")]
             {
                 use ort::value::Tensor;

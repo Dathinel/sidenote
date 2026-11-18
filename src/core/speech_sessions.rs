@@ -160,7 +160,34 @@ impl Store {
                     let file = file?;
                     let filename = file.file_name();
                     let filename = filename.to_string_lossy();
-                    if filename.ends_with(".tmp")
+                    if filename == "jobs" {
+                        let jobs_path = self.0.join(&name).join("jobs");
+                        let jobs = store_io::checked_parent(&jobs_path.join("unused"))?;
+                        for job in std::fs::read_dir(&jobs.path)? {
+                            let job = job?;
+                            if !job.file_type()?.is_dir() {
+                                return Err(Error::Storage);
+                            }
+                            let job_path = jobs_path.join(job.file_name());
+                            let lock = match store_io::lock(&job_path.join("processing.lock")) {
+                                Ok(lock) => lock,
+                                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                                Err(e) => return Err(e.into()),
+                            };
+                            for path in [job_path.clone(), job_path.join("input")] {
+                                let pinned = store_io::checked_parent(&path.join("unused"))?;
+                                for entry in std::fs::read_dir(&pinned.path)? {
+                                    let entry = entry?;
+                                    let name = entry.file_name();
+                                    let name = name.to_string_lossy();
+                                    if name.starts_with(".tmp") || name.ends_with(".tmp") {
+                                        std::fs::remove_file(entry.path())?;
+                                    }
+                                }
+                            }
+                            drop(lock);
+                        }
+                    } else if filename.ends_with(".tmp")
                         || filename
                             .strip_suffix(".wav")
                             .is_some_and(|p| !pieces.is_some_and(|s| s.contains_key(p)))
