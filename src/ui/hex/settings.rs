@@ -5,6 +5,8 @@ use sidenote::core::{Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
 mod engine;
+#[cfg(windows)]
+mod host;
 
 #[derive(Default)]
 pub struct Settings {
@@ -39,6 +41,8 @@ pub struct Settings {
     kb_base: Option<sidenote::core::Config>,
     kb_error: Option<String>,
     engine: engine::Engine,
+    #[cfg(windows)]
+    speech_host: host::Form,
 }
 
 struct ReturnTo {
@@ -250,6 +254,10 @@ fn back(s: &mut State) {
 
 pub fn tick(s: &mut State) -> bool {
     let mut changed = false;
+    #[cfg(windows)]
+    {
+        changed |= host::tick(s);
+    }
     if s.on_hex()
         && !super::super::isolated()
         && !s.hex.settings_status_pending
@@ -2398,7 +2406,12 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 p,
             ))
             .child(hex_summaries(s, k, p, layer)),
-        (Page::Meetings, 3) => engine::body(s, k, p, layer),
+        (Page::Meetings, 3) => {
+            let body = engine::body(s, k, p, layer);
+            #[cfg(windows)]
+            let body = body.child(host::card(s, k, p));
+            body
+        }
         (Page::Meetings, _) => col()
             .w_full()
             .child(card(
