@@ -181,3 +181,6 @@ pub(crate) fn process(
         &mut crate::core::meeting_router::production::Native(&config),
     )
 }
+
+#[cfg(test)]
+mod tests;

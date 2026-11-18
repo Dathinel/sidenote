@@ -43,7 +43,18 @@ fn send(
 }
 #[test]
 fn server_role_exposes_only_scoped_host_probe() {
+    exercise_server(false);
+}
+#[test]
+#[ignore = "public Hindi model fixture"]
+fn native_hindi_piece_streams_and_replays() {
+    exercise_server(true);
+}
+fn exercise_server(native: bool) {
     let root = tempfile::tempdir().unwrap();
+    if native {
+        native_setup(root.path());
+    }
     let binary = env!("CARGO_BIN_EXE_sidenote");
     let token_path = root.path().join("token");
     let cli = |action: &str, scope: bool| {
@@ -138,6 +149,10 @@ fn server_role_exposes_only_scoped_host_probe() {
     #[cfg(not(feature = "asr-runtime"))]
     assert_eq!(host["asr"]["state"], "unavailable");
     assert_eq!(host["speech_jobs"], true);
+    if native {
+        native_piece(address, auth, root.path());
+        return;
+    }
     let (session, piece, metadata, wav) = exercise_sessions(address, auth, root.path(), binary);
     drop(server);
     fs::remove_file(root.path().join("local/speech/endpoint.json")).unwrap();
@@ -348,3 +363,7 @@ fn exercise_sessions(
         wav,
     )
 }
+
+#[path = "native_tests.rs"]
+mod native_tests;
+use native_tests::{native_piece, native_setup};
