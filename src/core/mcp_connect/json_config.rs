@@ -8,9 +8,37 @@ fn key(client: Client) -> &'static str {
         "mcpServers"
     }
 }
+fn is_link(path: &Path) -> std::io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        #[cfg(windows)]
+        Ok(m) => {
+            use std::os::windows::fs::MetadataExt;
+            // Any reparse point, which includes junctions that symlink checks miss.
+            Ok(m.file_attributes() & 0x400 != 0)
+        }
+        #[cfg(not(windows))]
+        Ok(m) => Ok(m.file_type().is_symlink()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+/// The agent's config folder and file must be real, so no read or write leaves that folder.
+/// The backup and temporary file are created beside the file, inside the same checked folder.
+fn confine(path: &Path) -> Result<(), String> {
+    let folder = path.parent().ok_or("Config has no parent folder.")?;
+    for part in [folder, path] {
+        match is_link(part) {
+            Ok(false) => {}
+            Ok(true) => return Err("The config folder or file is a link to another place. Nothing was changed. Use the copyable config.".into()),
+            Err(_) => return Err("Could not check the config location. Nothing was changed.".into()),
+        }
+    }
+    Ok(())
+}
 fn read(path: &Path) -> Result<(Option<Vec<u8>>, Value), String> {
     #[cfg(test)]
     super::isolated_tests::check_path(path);
+    confine(path)?;
     match fs::read(path) {
         Ok(bytes) => {
             // Strict JSON refuses JSONC comments without stripping the user's text.

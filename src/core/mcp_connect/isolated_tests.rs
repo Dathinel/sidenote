@@ -417,3 +417,63 @@ fn parent_traversal_outside_test_home_fails_before_read() {
     let path = sandbox.0.path().join("..").join("owner-config.json");
     let _ = super::json_config::has_entry(Client::Cursor, &path);
 }
+
+#[cfg(windows)]
+fn link_folder(link: &Path, target: &Path) {
+    // A junction needs no privilege, unlike a Windows symlink, and is the case std misses.
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "could not create the test junction");
+}
+#[cfg(unix)]
+fn link_folder(link: &Path, target: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[test]
+fn linked_config_folder_is_refused_and_the_destination_is_untouched() {
+    let sandbox = Sandbox::new();
+    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
+        let elsewhere = sandbox
+            .0
+            .path()
+            .join(format!("elsewhere-{}", client.name()));
+        fs::create_dir(&elsewhere).unwrap();
+        let original = br#"{"keep":1}"#;
+        fs::write(elsewhere.join("config.json"), original).unwrap();
+        let agent = sandbox.agent(client);
+        link_folder(agent.path.parent().unwrap(), &elsewhere);
+        let error = agent.add(Path::new("sidenote")).unwrap_err();
+        assert!(error.contains("link"), "{error}");
+        assert!(super::json_config::has_entry(client, &agent.path).is_err());
+        assert_eq!(fs::read(elsewhere.join("config.json")).unwrap(), original);
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_config_file_is_refused_and_stays_a_link() {
+    let sandbox = Sandbox::new();
+    let agent = sandbox.agent(Client::Cursor);
+    let folder = agent.path.parent().unwrap();
+    fs::create_dir(folder).unwrap();
+    let real = folder.join("real.json");
+    fs::write(&real, br#"{"keep":1}"#).unwrap();
+    std::os::unix::fs::symlink(&real, &agent.path).unwrap();
+    assert!(agent.add(Path::new("sidenote")).is_err());
+    assert!(super::json_config::has_entry(Client::Cursor, &agent.path).is_err());
+    assert_eq!(fs::read(&real).unwrap(), br#"{"keep":1}"#);
+    assert!(
+        fs::symlink_metadata(&agent.path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_dir(folder).unwrap().count(), 2);
+}
