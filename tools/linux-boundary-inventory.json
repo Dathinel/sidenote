@@ -171,7 +171,7 @@
   "src/ui/mcp_connect.rs": "2c85add59135f086eafbf47ae8e26e12739fa8b65fcf52306ab5c538e4e1dd11",
   "src/ui/memory.rs": "f0b61f6408727f946349c001b25c3dd9b77378f635a3b86070bb029edf76dc69",
   "src/ui/memory/settled.rs": "b9b7344264f3b4270696b0f885922bbefa2a258cee19c72dabc2151bcf38e08a",
-  "src/ui/mod.rs": "11b7b5ed3cdc50b7955e1a3a1d39f1fc3e44c05d1ab8534d68b4ea5742f37c50",
+  "src/ui/mod.rs": "7ab6e8393d4e8e68f565b9c32664bf3f2cb9c1b17f16f932ec6d5283222ed0b3",
   "src/ui/models.rs": "05708ef9f7b76ee5b73b1c9c71b534b9a532d0866f55b9cc8369821fcb50abfa",
   "src/ui/project_merge.rs": "a0c33e2d9ad2754cc95fe3723cee82eea4a651ccd5357dfb9a5318873ed6707c",
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
