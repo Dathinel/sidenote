@@ -29,7 +29,7 @@ fn main() {
     if args.iter().any(|a| a == "--idle-cpu-proof") {
         std::process::exit(i32::from(!ui::idle_cpu_proof()));
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     if args.iter().any(|a| a == "--routing-native") {
         std::process::exit(i32::from(
             sidenote::core::meeting_router::production::native_worker().is_err(),

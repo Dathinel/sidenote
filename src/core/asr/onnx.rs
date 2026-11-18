@@ -281,7 +281,7 @@ impl IndicConformer {
             return Err("Invalid ASR thread count".into());
         }
         let start = Instant::now();
-        if !cfg!(windows) || RUNTIME.get().is_none_or(|r| r.is_err()) {
+        if RUNTIME.get().is_none_or(|r| r.is_err()) {
             return Err(IndicError::RuntimeUnavailable.into());
         }
         let graph = fs::read(model)?;

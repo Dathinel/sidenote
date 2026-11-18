@@ -240,3 +240,7 @@ fn run_batches(
 mod tests;
 #[cfg(windows)]
 pub mod worker;
+
+#[cfg(target_os = "linux")]
+#[path = "batches/linux_worker.rs"]
+pub mod worker;

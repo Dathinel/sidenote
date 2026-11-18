@@ -5,17 +5,18 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     num::NonZeroUsize,
-    process::Command,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+#[cfg(windows)]
 mod pipeline;
-#[cfg(feature = "asr-runtime")]
+#[cfg(all(windows, feature = "asr-runtime"))]
 mod plan;
+#[cfg(windows)]
 pub use pipeline::run;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod public_tests;
-#[cfg(all(test, feature = "asr-runtime"))]
+#[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(crate) mod regression;
 
 pub struct Native<'a>(pub &'a Config);
@@ -33,7 +34,11 @@ impl NativeLoader for Native<'_> {
         let paths = model_catalog::ModelStore::new(config.pipeline.model_state_dir.clone())
             .installed_paths(&range.model_id)?
             .ok_or("Native pack unavailable")?;
-        let mut command = Command::new(std::env::current_exe()?);
+        #[cfg(windows)]
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        #[cfg(target_os = "linux")]
+        let mut command =
+            sidenote_sync::tree_worker::speech_command(std::env::current_exe()?.as_os_str())?;
         command
             .args(["--routing-native", language, "--graph"])
             .arg(paths.first().ok_or("Native graph unavailable")?)

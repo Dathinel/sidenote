@@ -45,6 +45,10 @@ pub fn owner_unit() -> io::Result<(String, PathBuf)> {
 }
 
 pub fn command(program: &OsStr) -> io::Result<Command> {
+    command_profile(program, false)
+}
+
+fn command_profile(program: &OsStr, speech: bool) -> io::Result<Command> {
     if matches!(
         std::path::Path::new(program)
             .file_stem()
@@ -56,7 +60,7 @@ pub fn command(program: &OsStr) -> io::Result<Command> {
             "agent runners need network; not yet supported on Linux",
         ));
     }
-    budget().map_err(|_| unavailable())?;
+    budget(speech).map_err(|_| unavailable())?;
     let executable = std::env::current_exe()?;
     let parent = executable.parent().ok_or_else(unavailable)?;
     let folder = if parent
@@ -72,8 +76,30 @@ pub fn command(program: &OsStr) -> io::Result<Command> {
         return Err(unavailable());
     }
     let mut command = Command::new(helper);
-    command.arg("--launch").arg(program);
+    command
+        .arg(if speech { "--speech" } else { "--launch" })
+        .arg(program);
     Ok(command)
+}
+
+/// Native speech uses the same namespace launcher with a separately bounded memory profile.
+pub fn speech_command(program: &OsStr) -> io::Result<Command> {
+    command_profile(program, true)
+}
+
+pub fn spawn_speech(command: &mut Command) -> io::Result<std::process::Child> {
+    let expected = command_profile(OsStr::new("unused"), true)?;
+    if command.get_program() != expected.get_program()
+        || command.get_args().next() != Some(OsStr::new("--speech"))
+    {
+        return Err(unavailable());
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::containment::configure_speech(command);
+    command.spawn()
 }
 
 /// Small infrastructure probes use a deadline without entering a worker slice.
@@ -132,13 +158,20 @@ pub fn bounded_output(command: &mut Command, limit: Duration) -> io::Result<std:
     }
 }
 
-fn budget() -> io::Result<()> {
+fn budget(speech: bool) -> io::Result<()> {
     let (_, group) = owner_unit()?;
     let directory = std::path::Path::new("/sys/fs/cgroup")
         .join(group.strip_prefix("/").map_err(|_| unavailable())?);
     for (file, maximum) in [
-        ("memory.max", crate::containment::MEMORY_LIMIT),
-        ("pids.max", 32),
+        (
+            "memory.max",
+            if speech {
+                1024 * 1024 * 1024
+            } else {
+                crate::containment::MEMORY_LIMIT
+            },
+        ),
+        ("pids.max", if speech { 64 } else { 32 }),
     ] {
         let value: u64 = fs::read_to_string(directory.join(file))?
             .trim()
@@ -163,8 +196,12 @@ fn budget() -> io::Result<()> {
 pub fn run(args: Vec<OsString>) -> io::Result<i32> {
     match args.first().and_then(|a| a.to_str()) {
         Some("--direct" | "--launch") if args.len() >= 2 => {
-            budget()?;
+            budget(false)?;
             crate::pid_worker::run(&args[1..])
+        }
+        Some("--speech") if args.len() >= 2 => {
+            budget(true)?;
+            crate::pid_worker::speech(&args[1..])
         }
         _ => Err(unavailable()),
     }
@@ -173,6 +210,13 @@ pub fn run(args: Vec<OsString>) -> io::Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn speech_keeps_the_agent_runner_refusal() {
+        for program in ["claude", "codex", "opencode", "opencode2"] {
+            let error = speech_command(OsStr::new(program)).unwrap_err();
+            assert!(error.to_string().contains("agent runners need network"));
+        }
+    }
     #[test]
     fn infrastructure_probe_has_a_short_deadline() {
         let started = Instant::now();

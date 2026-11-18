@@ -5,6 +5,14 @@ pub const MEMORY_LIMIT: u64 = 512 * 1024 * 1024;
 pub const CPU_SECONDS: u64 = 120;
 
 pub fn configure(command: &mut Command) {
+    configure_limits(command, MEMORY_LIMIT, false);
+}
+
+pub(crate) fn configure_speech(command: &mut Command) {
+    configure_limits(command, 4 * 1024 * 1024 * 1024, true);
+}
+
+fn configure_limits(command: &mut Command, memory: u64, speech: bool) {
     let parent = unsafe { libc::getpid() };
     // Only async-signal-safe syscalls may run in this closure.
     unsafe {
@@ -16,8 +24,11 @@ pub fn configure(command: &mut Command) {
             {
                 return Err(io::Error::from_raw_os_error(libc::EPERM));
             }
+            if speech && libc::setpriority(libc::PRIO_PROCESS, 0, 10) != 0 {
+                return Err(io::Error::last_os_error());
+            }
             for (resource, value) in [
-                (libc::RLIMIT_AS, MEMORY_LIMIT),
+                (libc::RLIMIT_AS, memory),
                 (libc::RLIMIT_CPU, CPU_SECONDS),
                 (libc::RLIMIT_CORE, 0),
             ] {
