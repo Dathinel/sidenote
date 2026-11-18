@@ -43,7 +43,7 @@ async fn connection(
     })
     .await;
 }
-async fn serve(listener: tokio::net::TcpListener, router: Router) -> io::Result<()> {
+pub(crate) async fn serve(listener: tokio::net::TcpListener, router: Router) -> io::Result<()> {
     let slots = Arc::new(tokio::sync::Semaphore::new(CONNECTIONS));
     let mut tasks = tokio::task::JoinSet::new();
     loop {

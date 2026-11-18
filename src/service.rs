@@ -303,7 +303,7 @@ fn supervise() {
 
 pub fn run() -> i32 {
     #[cfg(target_os = "linux")]
-    if std::env::args_os().any(|a| a == "--speech-worker") {
+    if std::env::args_os().any(|a| a == "--speech-worker" || a == "--speech-port") {
         return speech::run();
     }
     #[cfg(target_os = "linux")]

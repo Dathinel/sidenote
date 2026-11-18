@@ -70,7 +70,7 @@ Files are not inference capability. The Linux ONNX loader accepts only the pinne
 sherpa-onnx v2.0.1 `libonnxruntime.so` (see `linux-server.md`); other builds are refused.
 Dependency licenses and model performance remain separate checks before enabling
 inference. VAD, language ID, batch receipts and the contained native Hindi/Telugu
-worker now run on Linux; the speech listener and remote protocol are later lanes. Existing
+worker now run on Linux; the speech host probe is available, jobs and remote uploads remain disabled. Existing
 catalog license labels are metadata, not a new license review.
 
 The packaged unattended worker retains its ordinary 512 MiB, one CPU and 32-task

@@ -151,13 +151,14 @@ the test process high-water mark was VmHWM 462,984 kB after one load and five se
 Batches and the native Hindi/Telugu entry now compile on Linux. The speech worker uses
 `sidenote-linux-worker --speech`, the existing user-service cgroup check, private
 PID/user/network namespaces and parent-death checks. It refuses a missing launcher,
-non-user-service ownership or an unbounded cgroup. No speech listener is added.
+non-user-service ownership or an unbounded cgroup.
 The unattended worker retains its ordinary 512 MiB, 32-task and one-CPU budget.
 `sidenote-speech@.service` launches only the speech lifetime in the separate
 `sidenote-speech-worker.service` user service, with 1 GiB, 64 tasks and one CPU.
 Speech admission requires that exact unit and those finite ceilings; ordinary
 helpers retain their existing admission. The speech template copies the unattended
 template's hardening. The outer credential launcher remains at 1 GiB/64 tasks.
+The Server role selects its speech-only lifetime with `--speech-port PORT` (0 chooses an ephemeral port); the packaged speech service defaults to loopback port 6792. `--speech-host box.tail-name.ts.net` adds exactly that HTTPS tailnet authority. Issue and revoke a separate token with `--mcp-access grant NAME /absolute/token speech` and `--mcp-access revoke NAME speech`. Existing grants remain MCP-only. `GET /v1/host` reports the hash-checked runtime probe (`--runtime-library PATH`, or the adjacent library); `ready` describes that runtime only. Languages and models remain empty and speech jobs are disabled. Requests have 8 slots, 32 connections, a 2-second header deadline, a 5-second handler/body deadline, a 10-second connection deadline and a 10,000,000-byte body cap. Uploads and SSE are later lanes.
 The speech child's address-space rlimit is 4 GiB, CPU rlimit 120 seconds, core limit
 zero, with no-new-privileges and nice +10. The existing namespace launcher's
 120-second wall deadline still applies. Cgroup memory bounds resident memory;
