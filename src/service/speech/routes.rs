@@ -13,7 +13,7 @@ use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone)]
 pub(super) struct Owner(pub String);
-fn failure(error: Error) -> Response {
+pub(super) fn failure(error: Error) -> Response {
     let status = match error {
         Error::Invalid => StatusCode::UNPROCESSABLE_ENTITY,
         Error::Missing => StatusCode::NOT_FOUND,
@@ -54,8 +54,7 @@ async fn create(
         .and_then(|(id, fresh)| {
             let events = store.events(&owner.0, &id, 0)?;
             Ok((id, fresh, events.last().map_or(0, |e| e.seq)))
-        })
-    {
+        }) {
         Ok((id, fresh, seq)) => reply(
             if fresh {
                 StatusCode::CREATED
@@ -136,6 +135,7 @@ pub(super) fn router(root: PathBuf) -> Router {
     Router::new()
         .route("/v1/sessions/{session}/pieces/{piece}", get(snapshot))
         .route("/v1/sessions", post(create))
+        .route("/v1/sessions/{session}/events", get(super::events::events))
         .route("/v1/sessions/{session}/pieces/{piece}", put(upload))
         .route("/v1/sessions/{session}/finish", post(finish))
         .layer(DefaultBodyLimit::max(MAX_PIECE_BYTES))

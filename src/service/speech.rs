@@ -1,5 +1,6 @@
 //! Speech owns a separate service lifetime, never the ordinary routing supervisor.
 use std::io;
+mod events;
 mod listener;
 mod routes;
 
@@ -68,7 +69,7 @@ pub(super) fn run() -> i32 {
                 Ok::<_, io::Error>(())
             });
             let result = tokio::select! {
-                result = crate::mcp::network::serve(socket, router) => result,
+                result = events::serve(socket, router) => result,
                 _ = terminate.recv() => Ok(()),
                 result = tokio::signal::ctrl_c() => result,
                 result = &mut jobs => return result?,

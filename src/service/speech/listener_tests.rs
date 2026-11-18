@@ -34,7 +34,8 @@ fn send(
     .unwrap();
     stream.write_all(body).unwrap();
     let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    let read = stream.read_to_string(&mut response);
+    assert!(read.is_ok(), "{method} {path}: {read:?}");
     (
         response.split_whitespace().nth(1).unwrap().parse().unwrap(),
         response,
@@ -136,7 +137,7 @@ fn server_role_exposes_only_scoped_host_probe() {
     }
     #[cfg(not(feature = "asr-runtime"))]
     assert_eq!(host["asr"]["state"], "unavailable");
-    assert_eq!(host["speech_jobs"], false);
+    assert_eq!(host["speech_jobs"], true);
     let (session, piece, metadata, wav) = exercise_sessions(address, auth, root.path(), binary);
     drop(server);
     fs::remove_file(root.path().join("local/speech/endpoint.json")).unwrap();

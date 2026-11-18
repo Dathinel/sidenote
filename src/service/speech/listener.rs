@@ -50,6 +50,7 @@ async fn authorize(
     let Ok(identity) = serde_json::to_vec(&grant) else {
         return reject(StatusCode::UNAUTHORIZED);
     };
+    request.extensions_mut().insert(grant.clone());
     request
         .extensions_mut()
         .insert(super::routes::Owner(crate::core::speech_sessions::digest(
@@ -103,13 +104,19 @@ pub(super) fn runtime_library() -> io::Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or(std::env::current_exe()?.with_file_name(crate::platform::asr_library_name())))
 }
-fn runtime_probe() -> io::Result<serde_json::Value> {
+pub(super) fn runtime_probe() -> io::Result<serde_json::Value> {
     let library = runtime_library()?;
     #[cfg(feature = "asr-runtime")]
-    let (state, reason, version) = if crate::core::asr::initialize(&library).is_ok() {
-        ("ready", None, crate::core::asr::runtime_version())
-    } else {
-        ("unavailable", Some("runtime-refused"), None)
+    let (state, reason, version) = {
+        static PROBE: std::sync::OnceLock<(&str, Option<&str>, Option<&str>)> =
+            std::sync::OnceLock::new();
+        *PROBE.get_or_init(|| {
+            if crate::core::asr::initialize(&library).is_ok() {
+                ("ready", None, crate::core::asr::runtime_version())
+            } else {
+                ("unavailable", Some("runtime-refused"), None)
+            }
+        })
     };
     #[cfg(not(feature = "asr-runtime"))]
     let (state, reason, version) = {
@@ -120,9 +127,20 @@ fn runtime_probe() -> io::Result<serde_json::Value> {
             None::<&str>,
         )
     };
+    let store = crate::core::model_catalog::ModelStore::default();
+    let mut languages = Vec::new();
+    let mut models = Vec::new();
+    if state == "ready" && store.installed_paths("silero-vad")?.is_some() {
+        for language in ["hi", "te"] {
+            let id = format!("indicconformer-{language}-ctc");
+            if store.installed_paths(&id)?.is_some() {
+                languages.push(language);
+                models.push(json!({"id":id,"sha256":crate::core::model_catalog::model(&id)?.files[0].sha256}));
+            }
+        }
+    }
     Ok(
-        json!({"state":state,"reason":reason,"runtime_version":version,
-        "languages":[],"models":[]}),
+        json!({"state":state,"reason":reason,"runtime_version":version,"languages":languages,"models":models}),
     )
 }
 pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
@@ -154,7 +172,7 @@ pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
         hosts.extend([host.to_owned(), format!("{host}:443")]);
     }
     let host = json!({"api":1,"role":"server","asr":runtime_probe()?,
-        "limits":{"max_piece_bytes":BODY_LIMIT},"speech_jobs":false});
+        "limits":{"max_piece_bytes":BODY_LIMIT},"speech_jobs":true});
     let hosts = Arc::new(hosts);
     let root = Arc::new(crate::core::state_dir());
     let slots = Arc::new(tokio::sync::Semaphore::new(8));
@@ -163,8 +181,16 @@ pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
         .route(
             "/v1/host",
             get(move || {
-                let body = host.to_string();
+                let mut host = host.clone();
                 async move {
+                    match super::events::host() {
+                        Ok(status) => {
+                            host["queue"] = status["queue"].clone();
+                            host["asr"] = status["asr"].clone();
+                        }
+                        Err(_) => return reject(StatusCode::SERVICE_UNAVAILABLE),
+                    }
+                    let body = host.to_string();
                     (
                         [
                             ("content-type", "application/json"),
@@ -172,6 +198,7 @@ pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
                         ],
                         body,
                     )
+                        .into_response()
                 }
             }),
         )
