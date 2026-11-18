@@ -85,7 +85,33 @@ fn claude() -> Result<PathBuf, String> {
     }).map_err(|_| "Claude Code was not found. Install its native Windows CLI, reopen Sidenote, or use the copyable command.".into())
 }
 fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output, String> {
+    run_within(program, args, Duration::from_secs(30))
+}
+fn collect(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+    index: usize,
+    sender: std::sync::mpsc::Sender<(usize, Vec<u8>)>,
+) {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        let _ = sender.send((index, bytes));
+    });
+}
+/// One deadline covers the child and the reading of its output. At the deadline the whole
+/// process job is killed, so a descendant that keeps the pipes open cannot hold the page.
+fn run_within(
+    program: &Path,
+    args: &[&std::ffi::OsStr],
+    limit: Duration,
+) -> Result<std::process::Output, String> {
     use crate::platform::CommandExt;
+    let timeout = || {
+        "The MCP client did not finish within 30 seconds. Check its MCP settings before retrying."
+            .to_string()
+    };
     let mut child = crate::platform::worker_command(program)
         .map_err(|_| "Could not prepare the MCP client command.".to_string())?
         .args(args)
@@ -97,22 +123,47 @@ fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output
         .map_err(|_| {
             "Could not start the MCP client. Check its installation and try again.".to_string()
         })?;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    let job = match crate::platform::ProcessJob::attach(&child) {
+        Ok(job) => job,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Could not prepare the MCP client command.".into());
+        }
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    collect(child.stdout.take(), 0, sender.clone());
+    collect(child.stderr.take(), 1, sender);
+    let deadline = Instant::now() + limit;
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|_| "Could not read the MCP client result.".into());
-            }
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                drop(job);
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("The MCP client did not finish within 30 seconds. Check its MCP settings before retrying.".into());
+                return Err(timeout());
+            }
+        }
+    };
+    let mut output = [Vec::new(), Vec::new()];
+    for _ in 0..2 {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((index, bytes)) => output[index] = bytes,
+            Err(_) => {
+                drop(job);
+                return Err(timeout());
             }
         }
     }
+    drop(job);
+    let [stdout, stderr] = output;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 pub fn add_to_claude(exe: &Path) -> Result<String, String> {
     let cli = claude()?;

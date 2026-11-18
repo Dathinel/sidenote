@@ -564,3 +564,102 @@ fn two_adds_at_once_keep_one_entry_and_the_original_backup() {
         .unwrap();
     assert_eq!(fs::read(backup).unwrap(), ORIGINAL);
 }
+
+#[cfg(windows)]
+fn powershell() -> PathBuf {
+    PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe")
+}
+#[cfg(windows)]
+fn fake_cli(sandbox: &Sandbox, name: &str, body: &str) -> (PathBuf, PathBuf) {
+    let root = sandbox.0.path().join(name);
+    fs::create_dir(&root).unwrap();
+    let script = root.join("fake-cli.ps1");
+    let pid_file = root.join("pid.txt");
+    let text = body
+        .replace("PIDFILE", &pid_file.to_string_lossy())
+        .replace("POWERSHELL", &powershell().to_string_lossy());
+    fs::write(&script, text).unwrap();
+    (script, pid_file)
+}
+#[cfg(windows)]
+fn run_fake(script: &Path, limit: Duration) -> (Result<std::process::Output, String>, Duration) {
+    let args: Vec<&std::ffi::OsStr> = vec![
+        "-NoProfile".as_ref(),
+        "-NonInteractive".as_ref(),
+        "-File".as_ref(),
+        script.as_os_str(),
+    ];
+    let started = Instant::now();
+    let result = super::run_within(&powershell(), &args, limit);
+    (result, started.elapsed())
+}
+#[cfg(windows)]
+fn assert_process_gone(pid_file: &Path) {
+    let pid: u32 = fs::read_to_string(pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    for _ in 0..50 {
+        if !crate::platform::process_running(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("process {pid} was still running after the deadline");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_cli_that_exits_but_leaves_a_descendant_holding_its_output_is_cut_off() {
+    let sandbox = Sandbox::new();
+    let (script, pid_file) = fake_cli(
+        &sandbox,
+        "fake-cli-grandchild",
+        r#"$info = New-Object System.Diagnostics.ProcessStartInfo
+$info.FileName = 'POWERSHELL'
+$info.Arguments = '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 40'
+$info.UseShellExecute = $false
+$child = [System.Diagnostics.Process]::Start($info)
+[IO.File]::WriteAllText('PIDFILE', [string]$child.Id)
+Write-Output 'done'
+exit 0
+"#,
+    );
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    assert!(result.unwrap_err().contains("did not finish"));
+    assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
+    assert_process_gone(&pid_file);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_slow_cli_is_killed_at_the_deadline() {
+    let sandbox = Sandbox::new();
+    let (script, pid_file) = fake_cli(
+        &sandbox,
+        "fake-cli-slow",
+        "[IO.File]::WriteAllText('PIDFILE', [string]$PID)\nStart-Sleep -Seconds 40\n",
+    );
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    assert!(result.unwrap_err().contains("did not finish"));
+    assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
+    assert_process_gone(&pid_file);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_cli_that_finishes_in_time_returns_its_output_and_status() {
+    let sandbox = Sandbox::new();
+    let (script, _) = fake_cli(
+        &sandbox,
+        "fake-cli-quick",
+        "Write-Output 'out-text'\n[Console]::Error.WriteLine('err-text')\nexit 1\n",
+    );
+    let (result, _) = run_fake(&script, Duration::from_secs(20));
+    let output = result.unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("out-text"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("err-text"));
+}
