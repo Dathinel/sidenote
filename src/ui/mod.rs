@@ -9,6 +9,8 @@ mod area_migration;
 mod area_scene;
 mod ask;
 mod ask_settings;
+#[cfg(test)]
+mod ask_switch_tests;
 mod benchmark;
 mod cards;
 mod check;
@@ -178,6 +180,10 @@ pub struct AskRun {
     pub starting_codex: bool,
     pub turn_started: bool,
     pub runner: String,
+    /// The model this run asked for, kept so a switch mid-answer cannot relabel it.
+    pub model: Option<String>,
+    fallback_model: Option<String>,
+    fell_back: bool,
     pub text: String,
     pub rx: Receiver<Result<String, String>>,
     pub steps: Vec<String>,
@@ -203,6 +209,9 @@ impl AskRun {
             starting_codex: false,
             turn_started: true,
             runner: runner.into(),
+            model: None,
+            fallback_model: None,
+            fell_back: false,
             text: String::new(),
             rx,
             steps: steps.iter().map(|s| s.to_string()).collect(),
@@ -1149,6 +1158,8 @@ impl State {
                 .ask_live_meeting()
                 .then(|| self.live_notes.text.clone()),
         };
+        let used_model = options.model.clone();
+        let fallback_model = options.fallback.as_ref().and_then(|f| f.model.clone());
         self.saved = saved.clone();
         self.question = TextEdit::new("");
         self.ask_errors.remove(&id);
@@ -1231,6 +1242,9 @@ impl State {
                 starting_codex: false,
                 turn_started: false,
                 runner,
+                model: used_model,
+                fallback_model,
+                fell_back: false,
                 text: String::new(),
                 rx,
                 steps: vec![first_step.into()],
@@ -1276,6 +1290,9 @@ impl State {
                 Message {
                     role: "assistant".into(),
                     text,
+                    runner: Some(run.runner.clone()),
+                    model: run.model.clone(),
+                    fallback: run.fell_back,
                     ..Default::default()
                 },
             ),
@@ -1594,6 +1611,8 @@ impl State {
                     AskProgress::Fallback { runner } => {
                         run.starting_codex = false;
                         run.runner = runner.clone();
+                        run.model = run.fallback_model.take();
+                        run.fell_back = true;
                         let name = self
                             .runners
                             .iter()
@@ -3500,6 +3519,46 @@ pub fn spec() -> AppSpec<State> {
                     "Start with a shorter onboarding flow. Test it with five customers next week."
                         .into();
                 s.asks.insert(core::ALL_KEY.into(), run);
+            }),
+            // Saved answers that name what wrote them: a normal one, one the helper gave no
+            // model for, and one a fallback helper wrote.
+            ("ask-labelled", |s| {
+                scene_meeting(s);
+                scene_agents(s, ALL_AGENTS);
+                for (text, runner, model, fallback) in [
+                    (
+                        "Send the survey results by Friday.",
+                        "Codex",
+                        Some("gpt-6.1-sol"),
+                        false,
+                    ),
+                    (
+                        "Book five customer tests next week.",
+                        "OpenCode",
+                        None,
+                        false,
+                    ),
+                    (
+                        "Share the pricing page copy on Thursday.",
+                        "Claude Sonnet",
+                        Some("claude-sonnet-5-5"),
+                        true,
+                    ),
+                ] {
+                    s.saved.messages.push(Message {
+                        role: "user".into(),
+                        text: "What do I need to do next?".into(),
+                        ..Default::default()
+                    });
+                    s.saved.messages.push(Message {
+                        role: "assistant".into(),
+                        text: text.into(),
+                        runner: Some(runner.into()),
+                        model: model.map(str::to_owned),
+                        fallback,
+                        ..Default::default()
+                    });
+                }
             }),
             ("ask-opencode", |s| {
                 scene_agents(s, ALL_AGENTS);

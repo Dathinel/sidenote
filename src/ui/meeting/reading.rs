@@ -255,7 +255,11 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
 fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
     let key = format!("meeting-point-{origin}");
     let source_key = format!("meeting-source-{origin}");
-    let mut body = roles::READ.wrap(&pt.text, p.ink).w_full();
+    let mut body = roles::READ
+        .wrap(&pt.text, p.ink)
+        .key(format!("meeting-point-text-{origin}"))
+        .selectable(true)
+        .w_full();
     if pt.kind == "decided" {
         body = body.font(roles::READ.bold().style());
     }
@@ -320,10 +324,16 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             roles::SECTION
                 .wrap("Context", p.ink)
                 .key("sec-context")
+                .selectable(true)
                 .mb(6.0),
         );
         for (i, line) in summary.context.iter().enumerate() {
-            body = body.child(roles::READ.wrap(line, p.ink).key(format!("ctx-{i}")));
+            body = body.child(
+                roles::READ
+                    .wrap(line, p.ink)
+                    .key(format!("ctx-{i}"))
+                    .selectable(true),
+            );
         }
     }
     for (ti, topic) in summary.topics.iter().enumerate() {
@@ -331,6 +341,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             roles::TITLE
                 .wrap(&topic.title, p.ink)
                 .key(format!("topic-{}", ti + 1))
+                .selectable(true)
                 .mt(22.0)
                 .mb(4.0),
         );
@@ -339,9 +350,19 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         }
     }
     if !summary.verify.is_empty() {
-        body = body.child(roles::TITLE.wrap("Check before acting", p.ink).mt(20.0));
+        body = body.child(
+            roles::TITLE
+                .wrap("Check before acting", p.ink)
+                .selectable(true)
+                .mt(20.0),
+        );
         for (i, line) in summary.verify.iter().enumerate() {
-            body = body.child(roles::READ.wrap(line, p.soft).key(format!("verify-{i}")));
+            body = body.child(
+                roles::READ
+                    .wrap(line, p.soft)
+                    .key(format!("verify-{i}"))
+                    .selectable(true),
+            );
         }
     }
     body.children(

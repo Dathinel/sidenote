@@ -17,6 +17,20 @@ pub struct Message {
     pub at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_order: Option<usize>,
+    /// The helper that wrote an answer, by runner name. Messages saved before this was
+    /// recorded have none, and still load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
+    /// The model the answer asked for. `None` is the helper's own default, which helpers do
+    /// not report, so it is shown as "provider default" and never guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// A fallback helper wrote this answer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fallback: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
