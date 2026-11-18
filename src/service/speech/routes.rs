@@ -5,7 +5,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{post, put},
+    routing::{get, post, put},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -51,14 +51,18 @@ async fn create(
     match serde_json::from_slice::<SessionRequest>(&bytes)
         .map_err(Error::from)
         .and_then(|request| store.create(&owner.0, request))
+        .and_then(|(id, fresh)| {
+            let events = store.events(&owner.0, &id, 0)?;
+            Ok((id, fresh, events.last().map_or(0, |e| e.seq)))
+        })
     {
-        Ok((id, fresh)) => reply(
+        Ok((id, fresh, seq)) => reply(
             if fresh {
                 StatusCode::CREATED
             } else {
                 StatusCode::OK
             },
-            json!({"session":id,"next_seq":0}),
+            json!({"next_seq":seq,"session":id}),
         ),
         Err(e) => failure(e),
     }
@@ -78,7 +82,14 @@ async fn upload(
         }
         let value = headers.get("x-piece").ok_or(Error::Invalid)?.as_bytes();
         let metadata: PieceRequest = serde_json::from_slice(value)?;
-        store.put(&owner.0, &session, &piece, metadata, &bytes)
+        let result = store.put(&owner.0, &session, &piece, metadata.clone(), &bytes)?;
+        store.emit(
+            &session,
+            "piece.accepted",
+            json!({"piece":piece,"track":metadata.track,
+            "index":metadata.index,"bytes":bytes.len(),"queue_pos":result.1.max(1)}),
+        )?;
+        Ok(result)
     })();
     match metadata {
         Ok((fresh, position)) => reply(
@@ -111,8 +122,19 @@ async fn finish(
         Err(e) => failure(e),
     }
 }
+async fn snapshot(
+    State(store): State<Arc<Store>>,
+    Extension(owner): Extension<Owner>,
+    Path((session, piece)): Path<(String, String)>,
+) -> Response {
+    match store.snapshot(&owner.0, &session, &piece) {
+        Ok(value) => reply(StatusCode::OK, value),
+        Err(e) => failure(e),
+    }
+}
 pub(super) fn router(root: PathBuf) -> Router {
     Router::new()
+        .route("/v1/sessions/{session}/pieces/{piece}", get(snapshot))
         .route("/v1/sessions", post(create))
         .route("/v1/sessions/{session}/pieces/{piece}", put(upload))
         .route("/v1/sessions/{session}/finish", post(finish))

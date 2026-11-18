@@ -59,6 +59,8 @@ pub(crate) struct Session {
     pub finished: Option<usize>,
 }
 type Sessions = BTreeMap<String, Session>;
+static INTAKE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+type IntakeLock = (std::sync::MutexGuard<'static, ()>, std::fs::File);
 pub struct Store(pub PathBuf);
 pub fn digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -128,8 +130,12 @@ impl PieceRequest {
     }
 }
 impl Store {
-    pub(crate) fn load(&self) -> Result<(std::fs::File, Sessions), Error> {
-        let lock = store_io::lock(&self.0.join("intake.lock"))?;
+    pub(crate) fn load(&self) -> Result<(IntakeLock, Sessions), Error> {
+        // Serialize service threads before taking the cross-process nonblocking lock.
+        let thread = INTAKE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lock = (thread, store_io::lock(&self.0.join("intake.lock"))?);
         let data = match store_io::read_bounded(&self.0.join("sessions.json"), 1_048_576) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),

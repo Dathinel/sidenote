@@ -6,6 +6,10 @@ use super::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io;
+#[cfg(any(feature = "asr-runtime", test))]
+mod runner;
+#[cfg(feature = "asr-runtime")]
+pub(crate) use runner::process;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,

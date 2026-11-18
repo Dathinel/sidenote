@@ -98,10 +98,13 @@ fn argument(name: &str) -> io::Result<Option<std::ffi::OsString>> {
         _ => Err(io::ErrorKind::InvalidInput.into()),
     }
 }
-fn runtime_probe() -> io::Result<serde_json::Value> {
-    let library = argument("--runtime-library")?
+pub(super) fn runtime_library() -> io::Result<PathBuf> {
+    Ok(argument("--runtime-library")?
         .map(PathBuf::from)
-        .unwrap_or(std::env::current_exe()?.with_file_name(crate::platform::asr_library_name()));
+        .unwrap_or(std::env::current_exe()?.with_file_name(crate::platform::asr_library_name())))
+}
+fn runtime_probe() -> io::Result<serde_json::Value> {
+    let library = runtime_library()?;
     #[cfg(feature = "asr-runtime")]
     let (state, reason, version) = if crate::core::asr::initialize(&library).is_ok() {
         ("ready", None, crate::core::asr::runtime_version())
