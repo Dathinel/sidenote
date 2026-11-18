@@ -90,15 +90,18 @@ fn preflight(dll: &Path) -> Result<()> {
     Ok(())
 }
 
-fn session(path: &Path) -> Result<Session> {
+fn builder() -> Result<ort::session::builder::SessionBuilder> {
     if RUNTIME.get().is_none_or(|r| r.is_err()) {
         return Err("Initialize the local ONNX runtime first".into());
     }
     Ok(Session::builder()?
         .with_intra_threads(1)?
         .with_inter_threads(1)?
-        .with_memory_pattern(false)?
-        .commit_from_file(path)?)
+        .with_memory_pattern(false)?)
+}
+
+fn session(path: &Path) -> Result<Session> {
+    Ok(builder()?.commit_from_file(path)?)
 }
 
 pub struct Anuvani {
@@ -108,7 +111,17 @@ pub struct Anuvani {
 impl Anuvani {
     pub fn load(model: &Path) -> Result<Self> {
         let start = Instant::now();
-        let session = session(model)?;
+        Self::checked(session(model)?, start)
+    }
+
+    /// Loads bytes the caller already hashed, so no later file edit can change the graph.
+    #[cfg(target_os = "linux")]
+    pub fn load_verified(model: &[u8]) -> Result<Self> {
+        let start = Instant::now();
+        Self::checked(builder()?.commit_from_memory(model)?, start)
+    }
+
+    fn checked(session: Session, start: Instant) -> Result<Self> {
         let meta = session.metadata()?;
         if meta.custom("model_name")?.as_deref() != Some("CIIL Anuvani-LID")
             || meta.custom("labels")?.is_none_or(|s| {
@@ -493,7 +506,7 @@ pub fn initialize(_library: &Path) -> Result<()> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-mod linux_tests;
+pub(crate) mod linux_tests;
 
 #[cfg(test)]
 mod indic_tests;

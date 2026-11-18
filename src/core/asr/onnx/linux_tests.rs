@@ -1,6 +1,10 @@
 //! Qualification of the pinned Linux ONNX Runtime through `initialize`, the production entry point.
 //! Public release assets are fetched and hash-checked; a mismatch fails the test, it never skips.
 use super::*;
+use crate::core::{
+    meeting_router::vad::{Checkpoint, Silero},
+    model_catalog::{self, ModelStore},
+};
 use std::{io::Write, os::fd::AsRawFd, path::PathBuf, process::Command};
 
 const RELEASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
@@ -9,23 +13,23 @@ const TARBALL: (&str, &str) = (
     "b3b095f619059d54914027ff38f8a0a132ea3bbc5df32a212a9743a8bd1467b2",
 );
 const LIBRARY_IN_TARBALL: &str = "sherpa-onnx-v2.0.1-linux-x64-shared-no-tts/lib/libonnxruntime.so";
-const SILERO: (&str, &str, usize) = (
-    "asr-models/silero_vad.onnx",
-    "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
-    643_854,
+/// Public 60 s mono PCM16 test clip; sha256 is the digest GitHub lists for the release asset.
+const WAV: (&str, &str) = (
+    "asr-models/test_silero_vad.wav",
+    "89f17d9c94c4b31eb320f424628bcbc920abaddbee6e2760fd868bfb1d9a2e47",
 );
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn fixtures() -> PathBuf {
+pub(crate) fn fixtures() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/l1-fixtures");
     fs::create_dir_all(&dir).unwrap();
     dir
 }
 
-fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
+pub(crate) fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
     let cached = fixtures().join(name);
     if let Ok(bytes) = fs::read(&cached)
         && sha256(&bytes) == sha
@@ -37,7 +41,7 @@ fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
         .unwrap_or_else(|e| panic!("download of {name} failed: {e}"))
         .into_body()
         .with_config()
-        .limit(64 << 20)
+        .limit(256 << 20)
         .read_to_vec()
         .unwrap();
     assert_eq!(
@@ -50,7 +54,7 @@ fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
 }
 
 /// The pinned library, extracted from the release tarball whose own hash is also pinned.
-fn library() -> PathBuf {
+pub(crate) fn library() -> PathBuf {
     fetch(
         "runtime.tar.bz2",
         &format!("{RELEASE}/{}", TARBALL.0),
@@ -68,6 +72,30 @@ fn library() -> PathBuf {
     out
 }
 
+/// The production Silero pack (catalogue url and hash), installed with a receipt in a temporary store.
+pub(crate) fn silero_store() -> (tempfile::TempDir, ModelStore) {
+    let file = &model_catalog::model("silero-vad").unwrap().files[0];
+    let bytes = fetch("silero_vad_catalogue.onnx", file.url, file.sha256);
+    assert_eq!(bytes.len() as u64, file.bytes);
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("models/silero-vad");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(file.name), &bytes).unwrap();
+    let receipt = serde_json::to_vec(&[(file.name, file.sha256, file.bytes)]).unwrap();
+    fs::write(dir.join("installed.json"), receipt).unwrap();
+    let store = ModelStore::new(temp.path().into());
+    (temp, store)
+}
+
+pub(crate) fn test_wav() -> Vec<f32> {
+    fetch(
+        "test_silero_vad.wav",
+        &format!("{RELEASE}/{}", WAV.0),
+        WAV.1,
+    );
+    read_wav(&fixtures().join("test_silero_vad.wav")).unwrap()
+}
+
 #[test]
 fn qualified_runtime_loads_and_runs_one_silero_frame() {
     let library = library();
@@ -76,31 +104,19 @@ fn qualified_runtime_loads_and_runs_one_silero_frame() {
     eprintln!("loaded ONNX Runtime {version} from sha256 {RUNTIME_SHA256}");
     assert!(version.starts_with("1."));
 
-    let model = fetch(
-        "silero_vad.onnx",
-        &format!("{RELEASE}/{}", SILERO.0),
-        SILERO.1,
+    // The sherpa asr-models silero_vad.onnx is an older (x, h, c) graph; the app pins the v5 file.
+    let (_temp, store) = silero_store();
+    let mut vad = Silero::load(&store, &library).expect("Silero::load on Linux");
+    // One 512 sample frame runs through the real session; any inference failure is an error here.
+    let spans = vad.push(
+        &mut Checkpoint::default(),
+        ("l1", "probe"),
+        0,
+        16000,
+        &[0.0; 512],
+        false,
     );
-    assert_eq!(model.len(), SILERO.2);
-    let path = fixtures().join("silero_vad.onnx");
-    let mut session = session(&path).expect("session through the production builder");
-    let names: Vec<_> = session.inputs.iter().map(|i| i.name.clone()).collect();
-    eprintln!("silero inputs {names:?}");
-    // The sherpa asr-models file is the three-input graph (x, h, c): one 512 sample frame, zero state.
-    assert_eq!(names, ["x", "h", "c"]);
-    let out = session
-        .run(ort::inputs![
-            "x" => Tensor::from_array(([1, 512], vec![0.0f32; 512])).unwrap(),
-            "h" => Tensor::from_array(([2, 1, 64], vec![0.0f32; 128])).unwrap(),
-            "c" => Tensor::from_array(([2, 1, 64], vec![0.0f32; 128])).unwrap()
-        ])
-        .unwrap();
-    let (_, probability) = out[0].try_extract_tensor::<f32>().unwrap();
-    assert_eq!(probability.len(), 1);
-    assert!(
-        (0.0..=1.0).contains(&probability[0]),
-        "probability {probability:?}"
-    );
+    assert_eq!(spans, Ok(vec![]));
 }
 
 #[test]

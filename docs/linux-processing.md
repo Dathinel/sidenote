@@ -69,7 +69,7 @@ The exact GCP host is documented by [Hugging Face](https://huggingface.co/docs/h
 Files are not inference capability. The Linux ONNX loader accepts only the pinned
 sherpa-onnx v2.0.1 `libonnxruntime.so` (see `linux-server.md`); other builds are refused.
 Dependency licenses and model performance remain separate checks before enabling
-inference, and the language-ID, VAD and batch paths are still Windows-only. Existing
+inference, and the batch paths are still Windows-only (VAD and language ID run on Linux). Existing
 catalog license labels are metadata, not a new license review.
 
 ## System service, independent of login

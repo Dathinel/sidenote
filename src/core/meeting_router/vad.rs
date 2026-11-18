@@ -1,6 +1,6 @@
 //! Frozen S45 Silero boundaries. Padding/joining belong to the next pipeline stage.
 use super::super::model_catalog;
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(feature = "asr-runtime")]
 use super::super::{asr, store_io};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -111,13 +111,13 @@ impl Checkpoint {
     }
 }
 pub struct Silero {
-    #[cfg(all(windows, feature = "asr-runtime"))]
+    #[cfg(feature = "asr-runtime")]
     session: ort::session::Session,
 }
 impl Silero {
     /// Only reads an explicitly installed pack; failures leave baseline coverage to the caller.
     pub fn load(store: &model_catalog::ModelStore, dll: &Path) -> Result<Self, Unavailable> {
-        #[cfg(all(windows, feature = "asr-runtime"))]
+        #[cfg(feature = "asr-runtime")]
         {
             use sha2::{Digest, Sha256};
             let load = || -> asr::Result<Self> {
@@ -143,7 +143,7 @@ impl Silero {
             };
             load().map_err(|_| Unavailable)
         }
-        #[cfg(not(all(windows, feature = "asr-runtime")))]
+        #[cfg(not(feature = "asr-runtime"))]
         {
             let _ = (store, dll);
             Err(Unavailable)
@@ -160,7 +160,7 @@ impl Silero {
         last: bool,
     ) -> Result<Vec<Span>, Error> {
         state.push(identity, start, sample_rate, audio, last, |state, frame| {
-            #[cfg(all(windows, feature = "asr-runtime"))]
+            #[cfg(feature = "asr-runtime")]
             {
                 use ort::value::Tensor;
                 let mut run = || -> asr::Result<f32> {
@@ -188,7 +188,7 @@ impl Silero {
                 };
                 run().map_err(|_| Unavailable)
             }
-            #[cfg(not(all(windows, feature = "asr-runtime")))]
+            #[cfg(not(feature = "asr-runtime"))]
             {
                 let _ = (state, frame);
                 Err(Unavailable)
@@ -196,6 +196,8 @@ impl Silero {
         })
     }
 }
+#[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
+mod linux_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -145,8 +145,10 @@ probes `OrtGetApiBase` and API 22. Any other `libonnxruntime.so` is refused with
 neither has been checked inside the service's private namespace yet. The library is not
 shipped or fetched by the server; the operator supplies an absolute path. The load is
 proved on the test box through `asr::initialize` and one Silero frame (class
-`asr::onnx::linux_tests`). Language ID, VAD, batches and the Hindi child still carry
-Windows-only gates, so Linux transcription stays unavailable until those lanes land.
+`asr::onnx::linux_tests`). Silero VAD (`Silero::load`, `Silero::push`) and Anuvani language
+ID (read once, hashed, loaded from those same bytes) now run on Linux with this runtime;
+the test process high-water mark was VmHWM 462,984 kB after one load and five seconds of audio. Batches and the Hindi
+child still carry Windows-only gates, so Linux transcription stays unavailable until those lanes land.
 `sidenote --cpu-models verify ID --runtime-library /abs/libonnxruntime.so` prints the
 version the library reports (`runtime=onnxruntime-<version>-linux-x64-api22 loaded`);
 without the flag the status line says `not-loaded` and names the pin.

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "asr-runtime")]
 mod onnx;
+#[cfg(all(test, feature = "asr-runtime", target_os = "linux"))]
+pub(crate) use onnx::linux_tests as fixtures;
 #[cfg(all(feature = "asr-runtime", target_os = "linux"))]
 pub use onnx::runtime_version;
 #[cfg(feature = "asr-runtime")]
