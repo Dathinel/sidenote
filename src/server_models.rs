@@ -3,7 +3,27 @@ use crate::core::{
     self,
     model_catalog::{self, ModelStore, Runtime},
 };
-use std::{ffi::OsString, io, sync::atomic::AtomicBool};
+use std::{ffi::OsString, io, path::Path, sync::atomic::AtomicBool};
+
+/// Runtime named in the status line. The pin is reported without loading anything; the version
+/// comes from the library itself, only after `--runtime-library` made `initialize` accept it.
+fn runtime_status(library: Option<&Path>) -> io::Result<String> {
+    #[cfg(feature = "asr-runtime")]
+    {
+        const PINNED: &str = "onnxruntime-sherpa-v2.0.1-linux-x64-api22";
+        let Some(library) = library else {
+            return Ok(format!("{PINNED} not-loaded"));
+        };
+        core::asr::initialize(library).map_err(|_| io::Error::other("RUNTIME_REFUSED"))?;
+        let version = core::asr::runtime_version().unwrap_or("unknown");
+        Ok(format!("onnxruntime-{version}-linux-x64-api22 loaded"))
+    }
+    #[cfg(not(feature = "asr-runtime"))]
+    {
+        let _ = library;
+        Ok("unavailable-built-without-asr-runtime".to_owned())
+    }
+}
 
 fn execute(args: &[OsString]) -> io::Result<()> {
     if crate::service::role() == crate::service::DeviceRole::Hub {
@@ -17,9 +37,19 @@ fn execute(args: &[OsString]) -> io::Result<()> {
         .get(position + 1)
         .and_then(|a| a.to_str())
         .ok_or(io::ErrorKind::InvalidInput)?;
+    let library = args
+        .iter()
+        .position(|a| a == "--runtime-library")
+        .map(|i| {
+            args.get(i + 1)
+                .map(Path::new)
+                .ok_or(io::ErrorKind::InvalidInput)
+        })
+        .transpose()?;
     if operation == "list" {
+        let runtime = runtime_status(None)?;
         let rows: Vec<_> = model_catalog::catalog().iter().filter(|m| m.runtime == Runtime::SherpaOnnx).map(|m| {
-            serde_json::json!({"id":m.id,"bytes":m.bytes(),"license":m.licence,"runtime":"unavailable-unqualified-linux-onnx"})
+            serde_json::json!({"id":m.id,"bytes":m.bytes(),"license":m.licence,"runtime":runtime})
         }).collect();
         println!("{}", serde_json::to_string(&rows)?);
         return Ok(());
@@ -47,7 +77,10 @@ fn execute(args: &[OsString]) -> io::Result<()> {
     if !store.verify_installed(id)? {
         return Err(io::Error::other("MODEL_NOT_VERIFIED"));
     }
-    println!("CPU_MODEL_FILES_VERIFIED runtime=unavailable-unqualified-linux-onnx");
+    println!(
+        "CPU_MODEL_FILES_VERIFIED runtime={}",
+        runtime_status(library)?
+    );
     Ok(())
 }
 pub fn cli(args: &[OsString]) -> i32 {

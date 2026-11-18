@@ -66,9 +66,10 @@ Storage must pass the private-directory check; partial files inherit umask 0077.
 
 The exact GCP host is documented by [Hugging Face](https://huggingface.co/docs/hub/models-downloading#downloading-behind-a-proxy-or-firewall); HTTP, arbitrary subdomains, userinfo and alternate ports remain denied.
 
-Files are not inference capability. The Linux ONNX loader still refuses the
-unqualified runtime. Validate the CPU libonnxruntime build/version, dependency
-licenses and model performance separately before enabling inference. Existing
+Files are not inference capability. The Linux ONNX loader accepts only the pinned
+sherpa-onnx v2.0.1 `libonnxruntime.so` (see `linux-server.md`); other builds are refused.
+Dependency licenses and model performance remain separate checks before enabling
+inference, and the language-ID, VAD and batch paths are still Windows-only. Existing
 catalog license labels are metadata, not a new license review.
 
 ## System service, independent of login

@@ -2,12 +2,11 @@ use super::*;
 use kaldi_fbank::{FbankOptions, OnlineFbank, WindowType};
 use ort::{session::Session, value::Tensor};
 use sha2::{Digest, Sha256};
-use std::{fs, sync::OnceLock, time::Instant};
+#[cfg(any(windows, target_os = "linux"))]
+use std::io::Read;
 #[cfg(windows)]
-use std::{
-    io::Read,
-    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt},
-};
+use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+use std::{fs, sync::OnceLock, time::Instant};
 #[cfg(windows)]
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
@@ -18,6 +17,19 @@ static RUNTIME: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// ONNX Runtime from sherpa-onnx v2.0.1 win-x64 shared MD no-TTS, API 22.
 #[cfg(windows)]
 pub const RUNTIME_SHA256: &str = "422d776ab0e3218260f7f628fcb84606aaa5c21116f720c8619a6da5e0b2e0f9";
+/// ONNX Runtime from sherpa-onnx v2.0.1 linux-x64 shared no-TTS, `lib/libonnxruntime.so`, API 22.
+#[cfg(target_os = "linux")]
+pub const RUNTIME_SHA256: &str = "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e";
+#[cfg(target_os = "linux")]
+pub const RUNTIME_BYTES: u64 = 27_026_609;
+#[cfg(target_os = "linux")]
+static VERSION: OnceLock<String> = OnceLock::new();
+
+/// Version string of the loaded runtime, read from the library itself; `None` until `initialize` succeeds.
+#[cfg(target_os = "linux")]
+pub fn runtime_version() -> Option<&'static str> {
+    VERSION.get().map(String::as_str)
+}
 
 #[cfg(windows)]
 pub fn initialize(dll: &Path) -> Result<()> {
@@ -388,20 +400,100 @@ impl SpeechEngine for IndicConformer {
     }
 }
 
-#[cfg(not(windows))]
-pub fn initialize(_library: &Path) -> Result<()> {
-    Err("ONNX_RUNTIME_UNAVAILABLE: no qualified pinned Linux runtime; ASR and language detection unavailable".into())
+#[cfg(target_os = "linux")]
+pub fn initialize(library: &Path) -> Result<()> {
+    if !library.is_absolute() || !library.is_file() {
+        return Err("Choose an absolute path to libonnxruntime.so".into());
+    }
+    // One bounded read feeds both the hash and the sealed copy, so later edits of the file change nothing.
+    let mut bytes = Vec::new();
+    fs::File::open(library)?
+        .take(RUNTIME_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    let actual: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if bytes.len() as u64 != RUNTIME_BYTES || actual != RUNTIME_SHA256 {
+        return Err("ONNX Runtime integrity check failed; model unavailable".into());
+    }
+    RUNTIME
+        .get_or_init(|| {
+            let path = load_sealed(&bytes).map_err(|_| {
+                "ONNX Runtime library or its dependencies are unavailable".to_owned()
+            })?;
+            std::panic::catch_unwind(|| ort::init_from(&path).commit())
+                .map_err(|_| "ONNX Runtime library is incompatible".to_string())?
+                .map(|_| ())
+                .map_err(|_| "ONNX Runtime initialization failed".to_string())
+        })
+        .clone()
+        .map_err(Into::into)
 }
 
-#[cfg(all(test, not(windows)))]
-mod linux_tests {
-    #[test]
-    fn unqualified_runtime_is_explicitly_unavailable() {
-        let error =
-            super::initialize(std::path::Path::new("/missing/libonnxruntime.so")).unwrap_err();
-        assert!(error.to_string().contains("ONNX_RUNTIME_UNAVAILABLE"));
+/// Sealed, anonymous copy of the verified bytes: nothing can rewrite it between the hash and `dlopen`.
+#[cfg(target_os = "linux")]
+fn sealed_memfd(bytes: &[u8]) -> Result<std::os::fd::OwnedFd> {
+    use std::{io::Write, os::fd::FromRawFd};
+    let fd = unsafe {
+        libc::memfd_create(
+            c"onnxruntime".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
+    let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    fs::File::from(owned.try_clone()?).write_all(bytes)?;
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, seals) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(owned)
 }
+
+/// Loads the sealed copy, probes API 22 before ort's panic-based loader, and returns the path ort must open.
+#[cfg(target_os = "linux")]
+fn load_sealed(bytes: &[u8]) -> Result<String> {
+    use std::os::fd::IntoRawFd;
+    // The descriptor stays open for the process lifetime: ort opens the same path again and glibc
+    // matches it to this mapping by inode, so only the verified bytes can run.
+    let fd = sealed_memfd(bytes)?.into_raw_fd();
+    let path = format!("/proc/self/fd/{fd}");
+    let c_path = std::ffi::CString::new(path.as_str())?;
+    let module = unsafe { libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    if module.is_null() {
+        return Err("ONNX Runtime could not load".into());
+    }
+    let get = unsafe { libc::dlsym(module, c"OrtGetApiBase".as_ptr()) };
+    if get.is_null() {
+        return Err("ONNX Runtime API is missing".into());
+    }
+    let get: unsafe extern "C" fn() -> *const ort::sys::OrtApiBase =
+        unsafe { std::mem::transmute(get) };
+    let base = unsafe { get().as_ref() }.ok_or("ONNX Runtime API is missing")?;
+    if unsafe { (base.GetApi)(ort::sys::ORT_API_VERSION) }.is_null() {
+        return Err("ONNX Runtime API version is unsupported".into());
+    }
+    let version = unsafe { (base.GetVersionString)() };
+    if !version.is_null() {
+        let _ = VERSION.set(
+            unsafe { std::ffi::CStr::from_ptr(version) }
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    Ok(path)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn initialize(_library: &Path) -> Result<()> {
+    Err("ONNX_RUNTIME_UNAVAILABLE: no qualified pinned runtime for this platform".into())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests;
 
 #[cfg(test)]
 mod indic_tests;

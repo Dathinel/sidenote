@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "asr-runtime")]
 mod onnx;
+#[cfg(all(feature = "asr-runtime", target_os = "linux"))]
+pub use onnx::runtime_version;
 #[cfg(feature = "asr-runtime")]
 pub use onnx::{Anuvani, IndicConformer, IndicError, initialize};
 

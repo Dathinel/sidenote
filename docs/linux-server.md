@@ -135,11 +135,21 @@ The informational loginctl probe runs once in a separate execution context with
 null stdin, rlimits/PDEATHSIG, a two-second deadline, explicit kill/reap and a cached
 unknown result on failure. It never runs inside the supervisor loop.
 
-The pinned Windows ONNX DLL is unchanged. No Linux runtime artifact has been qualified
-against that pin; `asr-runtime` therefore returns `ONNX_RUNTIME_UNAVAILABLE` explicitly.
-Both language-detector and recognition paths report unavailable/degraded output. Arbitrary
-`libonnxruntime.so` files are never loaded. Linux ASR execution remains unavailable in
-this step, which is one of the goal's permitted outcomes.
+The pinned Windows ONNX DLL is unchanged. Linux pins one runtime: `lib/libonnxruntime.so`
+(27,026,609 bytes, SHA-256 `4b3607ae...b566e`) from the sherpa-onnx v2.0.1 linux-x64 shared
+no-TTS release (tarball 25,289,904 bytes, SHA-256 `b3b095f6...67b2`). `asr::initialize`
+reads the file once, checks size and hash, copies those bytes into a sealed `memfd`
+(no write, grow, shrink or further seals), `dlopen`s `/proc/self/fd/N`, and only then
+probes `OrtGetApiBase` and API 22. Any other `libonnxruntime.so` is refused with
+`ONNX Runtime integrity check failed`. The service needs `/proc/self/fd` and `memfd_create`;
+neither has been checked inside the service's private namespace yet. The library is not
+shipped or fetched by the server; the operator supplies an absolute path. The load is
+proved on the test box through `asr::initialize` and one Silero frame (class
+`asr::onnx::linux_tests`). Language ID, VAD, batches and the Hindi child still carry
+Windows-only gates, so Linux transcription stays unavailable until those lanes land.
+`sidenote --cpu-models verify ID --runtime-library /abs/libonnxruntime.so` prints the
+version the library reports (`runtime=onnxruntime-<version>-linux-x64-api22 loaded`);
+without the flag the status line says `not-loaded` and names the pin.
 
 ## Install a user service with headless credentials
 

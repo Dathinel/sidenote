@@ -122,7 +122,7 @@ def qualify(binary):
 
 
             listing = run([binary,*paths,"--cpu-models","list"], env)
-            assert json.loads(listing) and b"unavailable-unqualified-linux-onnx" in listing
+            assert json.loads(listing) and b"onnxruntime-sherpa-v2.0.1-linux-x64-api22 not-loaded" in listing
             result = subprocess.run([binary,*paths,"--cpu-models","verify","indicconformer-hi-ctc"],
                                     env=env,capture_output=True,timeout=15)
             assert result.returncode == 2 and result.stderr == b"CPU_MODEL_OPERATION_FAILED\n"
