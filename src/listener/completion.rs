@@ -50,6 +50,9 @@ pub(crate) fn handoff_in(
     dispatch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Acceptance> {
     let _stage = core::idle_pass::Span::begin("completion_handoff");
+    if core::meeting_parts::held_in(state, meetings, id)? {
+        return Ok(Acceptance::AlreadyAccepted);
+    }
     let eligibility = recording_guard::eligibility(state, meetings, id)?;
     if eligibility == Eligibility::Unknown {
         return Ok(Acceptance::Deferred);
@@ -139,6 +142,26 @@ mod tests {
             Ok(vec![CompletedMeeting::capture(&self.0, "100-1")?])
         }
     }
+    #[test]
+    fn paused_part_never_dispatches_notes_or_loads_settings() {
+        let f = Fixture::new();
+        core::meeting_parts::Meeting::begin(f.root.path(), "100-1", 100)
+            .unwrap()
+            .pause(f.root.path())
+            .unwrap();
+        assert_eq!(
+            handoff_in(
+                f.root.path(),
+                &f.meetings,
+                "100-1",
+                || panic!("Pause loaded notes settings"),
+                || panic!("Pause started notes, title, tasks or Memory")
+            )
+            .unwrap(),
+            Acceptance::AlreadyAccepted
+        );
+    }
+
     #[test]
     fn unknown_idle_retry_does_not_load_settings() {
         let f = Fixture::new();

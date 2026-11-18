@@ -11,15 +11,38 @@ function Log($text) { Add-Content -LiteralPath $log -Value "$(Get-Date -Format s
 $notesEngine = Get-ScriptsNotesEngine
 if ($notesEngine -cne 'scripts') { Log (Format-NotesSkip $notesEngine); return }
 
+$stateRoot = if ($env:SIDENOTE_DATA_DIR) { $env:SIDENOTE_DATA_DIR } elseif (Test-Path (Join-Path $env:APPDATA 'sidenote')) { Join-Path $env:APPDATA 'sidenote' } else { Join-Path $env:APPDATA 'hex-meetings' }
+$ownedParts = @{}
+$pendingStarts = @()
+$partStore = Join-Path $stateRoot 'local/meeting-parts'
+if (Test-Path -LiteralPath $partStore) {
+    foreach ($file in Get-ChildItem -LiteralPath $partStore -Filter '*.json' -File) {
+        $session = [IO.File]::ReadAllText($file.FullName) | ConvertFrom-Json
+        if ($null -ne $session.pending_start_ms) { $pendingStarts += [long]$session.pending_start_ms }
+        foreach ($part in $session.parts) { $ownedParts[[string]$part.id] = $true }
+    }
+}
+function Test-PendingPart($Directory) {
+    if ($null -ne $allowed -or $pendingStarts.Count -eq 0) { return $false }
+    $manifest = Join-Path $Directory.FullName 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifest)) { return $false }
+    $created = ([IO.File]::ReadAllText($manifest) | ConvertFrom-Json).created_at_ms
+    foreach ($since in $pendingStarts) {
+        if ($null -ne $created -and [long]$created -ge $since -and [long]$created -le ($since + 25000)) { return $true }
+    }
+    return $false
+}
+$directories = if ($null -ne $allowed) { @($MeetingFolders | ForEach-Object { Get-Item -LiteralPath $_ }) } else { @(Get-ChildItem -LiteralPath $root -Directory) }
+
 $watcherClock = [Diagnostics.Stopwatch]::StartNew()
 $failed = $null
 try {
 $mutex = New-Object Threading.Mutex($false, 'Local\HexMeetingWatch')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 try {
-    foreach ($dir in Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name) {
+    foreach ($dir in $directories | Sort-Object Name) {
         $failed = $null
-        if ($null -ne $allowed -and $dir.Name -notin $allowed) { continue }
+        if (($ownedParts.ContainsKey($dir.Name) -and $null -eq $allowed) -or (Test-PendingPart $dir)) { continue }
         $manifestPath = Join-Path $dir.FullName 'manifest.json'
         if (-not (Test-Path -LiteralPath $manifestPath)) { continue }
         if (Test-Path -LiteralPath (Join-Path $dir.FullName 'english-summary.json')) { continue }
@@ -47,7 +70,31 @@ try {
         $pipelineClock = [Diagnostics.Stopwatch]::StartNew()
         try {
             $deferred = $false
-            & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName *>&1 | ForEach-Object {
+            $notesOnly = Test-Path -LiteralPath (Join-Path $dir.FullName 'sidenote-parts.json')
+            if ($notesOnly) {
+                $parts=[IO.File]::ReadAllText((Join-Path $dir.FullName 'sidenote-parts.json')) | ConvertFrom-Json
+                $joined=New-Object Text.StringBuilder
+                $offset=0L
+                foreach ($part in $parts) {
+                    if ([string]$part.id -cnotmatch '\A[0-9][0-9-]{0,99}\z') { throw 'Invalid meeting part' }
+                    $partFolder=Join-Path $root ([string]$part.id)
+                    & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $partFolder -TranscriptOnly
+                    $reading=Join-Path $partFolder 'english-transcript.md'
+                    if (-not $? -or -not (Test-Path -LiteralPath $reading)) { throw 'Part transcript is not ready' }
+                    foreach ($line in [IO.File]::ReadAllLines($reading,[Text.Encoding]::UTF8)) {
+                        if ($line -match '^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\](.*)$') {
+                            $fraction=([string]$Matches[4]).PadRight(3,'0').Substring(0,3)
+                            $ms=([long]$Matches[1]*3600000)+([long]$Matches[2]*60000)+([long]$Matches[3]*1000)+[long]$fraction+$offset
+                            $seconds=[long][Math]::Floor($ms/1000)
+                            $time='{0:00}:{1:00}:{2:00}.{3:000}' -f [Math]::Floor($seconds/3600),([Math]::Floor($seconds/60)%60),($seconds%60),($ms%1000)
+                            [void]$joined.AppendLine("[$time]$($Matches[5])")
+                        } elseif ($line.Trim() -and $line -notlike '# Full English transcript*') { [void]$joined.AppendLine($line) }
+                    }
+                    $offset += [long]$part.duration_ms
+                }
+                [IO.File]::WriteAllText((Join-Path $dir.FullName 'english-transcript.md'),$joined.ToString(),(New-Object Text.UTF8Encoding($false)))
+            }
+            & (Join-Path $PSScriptRoot 'hex-meeting-english.ps1') -MeetingDir $dir.FullName -NotesOnly:$notesOnly *>&1 | ForEach-Object {
                 $line = "$_"
                 if ($line -ceq 'notes deferred engine busy' -or $line -cmatch '\Anotes skipped (?:engine=(app|off)|category=(settings_invalid|settings_unavailable|query_unavailable))\z') { $deferred = $true; Log $line }
                 if ($line -cmatch '\Anotes engine=scripts meeting=[0-9][0-9-]{0,99}\z') { Log $line }
@@ -84,8 +131,8 @@ $failed = $null
 $titleMutex = New-Object Threading.Mutex($false, 'Local\HexMeetingQuickTitle')
 if ($titleMutex.WaitOne(0)) {
     try {
-        foreach ($dir in Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-2) } | Sort-Object Name) {
-            if ($null -ne $allowed -and $dir.Name -notin $allowed) { continue }
+        foreach ($dir in $directories | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-2) } | Sort-Object Name) {
+            if (($ownedParts.ContainsKey($dir.Name) -and $null -eq $allowed) -or (Test-PendingPart $dir)) { continue }
             $titleClock = [Diagnostics.Stopwatch]::StartNew()
             try {
                 $quick = Join-Path $dir.FullName 'quick-title.json'

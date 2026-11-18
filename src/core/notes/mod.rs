@@ -5,6 +5,7 @@ pub mod draft;
 mod helper;
 #[cfg(feature = "idle-cpu-proof")]
 pub mod idle_fixture;
+mod joined;
 mod prompt;
 pub mod queue;
 mod schema;
@@ -253,7 +254,7 @@ pub fn request(meeting_id: &str, mode: Request) -> io::Result<()> {
     }
     queue::enqueue_in(
         &super::state_dir(),
-        &super::meetings_dir(),
+        &super::meeting_parts::source(&super::state_dir(), &super::meetings_dir(), meeting_id),
         meeting_id,
         Some(mode),
         &settings,
@@ -311,4 +312,30 @@ pub fn scripts_policy() -> &'static str {
         }
         Err(_) => "settings_unavailable",
     }
+}
+
+pub(crate) fn render_joined_transcript(raw: &str) -> String {
+    transcript::render(raw)
+}
+
+pub(crate) fn shift_transcript(text: &str, offset: u64) -> io::Result<String> {
+    let mut out = String::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        if let Some((stamp, words)) = line.strip_prefix('[').and_then(|line| line.split_once(']')) {
+            let ms = super::meetings::milliseconds(stamp)
+                .ok_or_else(|| super::store_io::invalid("Invalid part time"))?
+                .saturating_add(offset);
+            out.push_str(&format!(
+                "[{:02}:{:02}:{:02}.{:03}]{words}\n",
+                ms / 3_600_000,
+                ms / 60_000 % 60,
+                ms / 1000 % 60,
+                ms % 1000
+            ));
+        } else if !line.starts_with("# Full English transcript") {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    Ok(out)
 }

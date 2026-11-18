@@ -78,6 +78,27 @@ pub(super) fn chosen(
         Vec<crate::core::meeting_router::fallback::RoutingFallback>,
     )>,
 > {
+    if crate::core::meeting_parts::read(root, id)?.is_some() {
+        return super::joined::chosen(
+            root,
+            &crate::core::meetings_dir(),
+            id,
+            folder,
+            chosen,
+            ended_ms,
+            now_ms,
+        );
+    }
+    chosen_part(root, id, folder, chosen, ended_ms, now_ms)
+}
+pub(super) fn chosen_part(
+    root: &Path,
+    id: &str,
+    folder: &Path,
+    chosen: Option<&str>,
+    ended_ms: i64,
+    now_ms: i64,
+) -> io::Result<super::joined::Chosen> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
     if !router::jobs::notes_enabled(root)? {

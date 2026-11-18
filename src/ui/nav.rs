@@ -588,7 +588,15 @@ pub(super) fn recording_words(s: &State, narrow: bool) -> String {
         }
         .into();
     }
-    let clock = hex::recording_clock(s);
+    let clock = s
+        .live
+        .as_ref()
+        .and_then(|live| live.session.as_ref())
+        .map(|m| {
+            let seconds = m.elapsed_ms() / 1000;
+            format!("{}:{:02}", seconds / 60, seconds % 60)
+        })
+        .or_else(|| hex::recording_clock(s));
     match (&clock, narrow) {
         (Some(c), true) => c.clone(),
         (Some(c), false) => format!("Recording {c}"),
@@ -615,13 +623,21 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
     .label(format!("{words}. Open the live meeting"))
     .help("Open the live meeting")
     .on_press(|s: &mut State| s.open_live());
+    if s.on_live()
+        || s.live
+            .as_ref()
+            .and_then(|l| l.session.as_ref())
+            .is_some_and(|m| s.selected.as_ref() == Some(&m.id))
+    {
+        return open;
+    }
     let expected_id = hex::recording_id(s);
     let why = hex::stop_blocked(s);
     let stop = super::widgets::button("Stop", "hex-stop", super::widgets::ButtonRole::Secondary, p);
     let stop = match why {
         None => stop
             .label("Stop recording")
-            .help("Stop recording and write the summary")
+            .help("Stop this recording part. Generate notes from the meeting page.")
             .on_press(move |s: &mut State| s.hex_record_stop(expected_id.clone())),
         Some(reason) => stop
             .label(format!("Stop ({reason})"))

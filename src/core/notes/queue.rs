@@ -81,6 +81,17 @@ impl Job {
     }
 }
 fn job_eligible(root: &Path, meetings: &Path, id: &str, job: &Job) -> io::Result<bool> {
+    let source = core::meeting_parts::source(root, meetings, id);
+    let meetings = source.as_path();
+    if let Some(m) = core::meeting_parts::read(root, id)? {
+        let revision = core::recording_source::revision::input(&meetings.join(id))?;
+        if m.requested_parts == 0
+            || job.request.is_none()
+            || job.input_revision.as_ref() != Some(&revision)
+        {
+            return Ok(false);
+        }
+    }
     let eligibility = core::recording_guard::eligibility(root, meetings, id)?;
     // Saved chosen revisions and explicit task redo survive missing Hex originals.
     Ok(eligibility == core::recording_guard::Eligibility::Eligible
@@ -221,6 +232,11 @@ pub(super) fn enqueue_in(
     settings: &NotesSettings,
 ) -> io::Result<()> {
     let _update_activity = crate::updates::activity()?;
+    if core::meeting_parts::held_in(root, meetings, id)?
+        && meetings != core::meeting_parts::inputs(root)
+    {
+        return Ok(());
+    }
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
@@ -238,6 +254,8 @@ pub(super) fn enqueue_in(
     {
         return Ok(());
     }
+    let source = core::meeting_parts::source(root, meetings, id);
+    let meetings = source.as_path();
     let revision = core::recording_source::revision::input(&meetings.join(id))?;
     let unchanged = |job: &Job| {
         job.input_revision.as_ref() == Some(&revision)
@@ -284,12 +302,13 @@ pub(super) fn enqueue_in(
         return Err(store_io::invalid("Meeting is not complete"));
     }
     let sorting = matches!(mode, Some(Request::SortAgain | Request::RedoTasks));
-    let changed = mode.is_none()
+    let changed = (mode.is_none() || core::meeting_parts::read(root, id)?.is_some())
         && (previous
             .as_ref()
             .is_some_and(|job| job.input_revision.as_ref() != Some(&revision))
             || (previous.is_none() && core::recording_source::input_changed(root, id, &revision)));
-    let replace_summary = changed
+    let replace_summary = (core::meeting_parts::read(root, id)?.is_some() && mode.is_some())
+        || changed
         || previous
             .as_ref()
             .is_some_and(|job| job.replace_summary && !matches!(job.state, JobState::Done { .. }));
@@ -410,6 +429,8 @@ fn process(
         job.transcript_revision = None;
         job.routing_fallbacks.clear();
     }
+    let source = core::meeting_parts::source(root, meetings, id);
+    let meetings = source.as_path();
     let folder = meetings.join(id);
     store_io::reject_reparse(&folder)?;
     // Both engines hold this OS lock until publication finishes; a crash releases it immediately.
@@ -952,7 +973,7 @@ pub fn enqueue(id: &str) -> io::Result<()> {
     };
     enqueue_in(
         &core::state_dir(),
-        &core::meetings_dir(),
+        &core::meeting_parts::source(&core::state_dir(), &core::meetings_dir(), id),
         id,
         None,
         &settings,
@@ -1216,5 +1237,20 @@ fn redo_tasks(job: &mut Job, run: &mut impl Run, redo: Redo<'_>) -> io::Result<(
             tasks_failed,
         },
         "tasks redone",
+    )
+}
+
+/// Publication must belong to this joined input, rather than the previous notes job.
+pub fn input_finished(root: &Path, folder: &Path, id: &str) -> io::Result<bool> {
+    let revision = core::recording_source::revision::input(folder)?;
+    Ok(read(root, id)?.is_some_and(|job| {
+        matches!(job.state, JobState::Done { .. }) && job.input_revision.as_ref() == Some(&revision)
+    }))
+}
+
+pub fn active(root: &Path, id: &str) -> io::Result<bool> {
+    Ok(
+        read(root, id)?
+            .is_some_and(|job| matches!(job.state, JobState::Queued | JobState::Running)),
     )
 }

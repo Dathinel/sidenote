@@ -610,3 +610,108 @@ fn preview_title_replaces_the_default_heading_without_publishing_a_final_summary
         "Final workshop decisions"
     );
 }
+#[test]
+fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
+    if isolated_api_test("meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting") {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start();
+    let hex = sidenote::core::meetings_dir();
+    for (id, status, duration) in [("100-1", "recording", 60000), ("300-3", "recording", 30000)] {
+        let folder = hex.join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("manifest.json"),
+            serde_json::json!({"status":status,"created_at_ms":100,"duration_ms":duration})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(folder.join("transcript.ndjson"),serde_json::json!({"start_ms":0,"end_ms":1000,"text":"Synthetic meeting part","source":"microphone"}).to_string()).unwrap();
+    }
+    state.live_notes = rune::TextEdit::new("Synthetic personal notes survive Pause.");
+    assert!(state.live_close());
+    let good = state.hex.engine.status_for_command().unwrap();
+    state.hex_status_at(Ok(good), Instant::now());
+    state.parts_sync();
+    assert_eq!(
+        state
+            .live
+            .as_ref()
+            .unwrap()
+            .session
+            .as_ref()
+            .unwrap()
+            .parts
+            .len(),
+        1
+    );
+    state.meeting_pause();
+    Fixture::finish(&mut state);
+    assert_eq!(api.data.lock().unwrap().stops, 1);
+    assert_eq!(
+        state.live.as_ref().unwrap().phase,
+        crate::ui::live::Phase::Paused
+    );
+    assert!(
+        !sidenote::core::state_dir()
+            .join("local/notes-jobs")
+            .exists()
+    );
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_status_at(Ok(idle), Instant::now());
+    let folder = sidenote::core::meeting_parts::inputs(&sidenote::core::state_dir()).join("100-1");
+    let paused = sidenote::core::Meeting::load_pending(&folder).unwrap();
+    assert!(
+        crate::ui::notes_status::job(&state, &paused).is_none(),
+        "paused meeting offered a notes job"
+    );
+    std::fs::write(
+        folder.join("english-summary.json"),
+        "{\"title\":\"Synthetic existing notes\"}",
+    )
+    .unwrap();
+    {
+        let session = state.live.as_mut().unwrap().session.as_mut().unwrap();
+        session.notes_parts = 1;
+        session.requested_parts = 1;
+        session.save(&sidenote::core::state_dir()).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(folder.join("notes.md")).unwrap(),
+        "Synthetic personal notes survive Pause."
+    );
+    state.live = None;
+    state.hex.parts_restore_checked = false;
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_status_at(Ok(idle), Instant::now());
+    assert_eq!(
+        state.live.as_ref().unwrap().phase,
+        crate::ui::live::Phase::Paused
+    );
+    state.meeting_resume();
+    Fixture::finish(&mut state);
+    let recording = state.hex.engine.status_for_command().unwrap();
+    state.hex_status_at(Ok(recording), Instant::now());
+    let session = state.live.as_ref().unwrap().session.as_ref().unwrap();
+    assert_eq!(session.id, "100-1");
+    assert!(session.stale());
+    assert_eq!(
+        session
+            .parts
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect::<Vec<_>>(),
+        ["100-1", "300-3"]
+    );
+    assert_eq!(api.data.lock().unwrap().starts, 1);
+    assert_eq!(
+        api.data.lock().unwrap().stops,
+        1,
+        "restored pause stopped the resumed part"
+    );
+    assert!(
+        !sidenote::core::state_dir()
+            .join("local/notes-jobs")
+            .exists()
+    );
+}

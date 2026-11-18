@@ -329,7 +329,7 @@ pub fn seconds(stamp: &str) -> Option<u64> {
         _ => None,
     }
 }
-fn milliseconds(stamp: &str) -> Option<u64> {
+pub(super) fn milliseconds(stamp: &str) -> Option<u64> {
     let whole = seconds(stamp)?.checked_mul(1000)?;
     let fraction = stamp.split_once('.').map_or("", |(_, fraction)| fraction);
     let mut millis = 0;
@@ -462,7 +462,14 @@ impl Meeting {
                 if e.kind() == io::ErrorKind::NotFound
                     && (pending || folder.join(super::live::NOTES_FILE).is_file()) =>
             {
-                None
+                match super::file_reads::text(
+                    &folder.join("previous-summary.json"),
+                    super::file_reads::SUMMARY_MAX,
+                ) {
+                    Ok(raw) => Some(raw),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e.into()),
+                }
             }
             Err(e) => return Err(e.into()),
         };
@@ -635,7 +642,29 @@ impl Meeting {
     }
 }
 pub fn scan() -> (Vec<Meeting>, Vec<String>) {
-    let (meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
+    let (mut meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
+    match super::meeting_parts::list(&state_dir()) {
+        Ok(parts) => {
+            meetings.retain(|m| {
+                m.device.is_some() || !parts.iter().any(|s| s.parts.iter().any(|p| p.id == m.id))
+            });
+            for session in parts {
+                let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
+                if let Ok(mut m) = Meeting::load_pending(&folder) {
+                    m.minutes = Some(session.elapsed_ms().div_ceil(60_000));
+                    if session.phase != super::meeting_parts::Phase::Ended
+                        && let Ok(text) = session.view_text(&meetings_dir())
+                    {
+                        m.lines = parse_transcript(&text);
+                        m.transcript_raw = text;
+                    }
+                    meetings.push(m);
+                }
+            }
+            meetings.sort_by_key(|m| std::cmp::Reverse(m.started));
+        }
+        Err(_) => errors.push("Could not read meeting parts".into()),
+    }
     if !super::file_reads::refreshing() {
         errors.extend(super::sync_state::reconcile(&state_dir()));
     }
