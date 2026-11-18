@@ -268,6 +268,13 @@ pub(super) fn closed() -> bool {
     CLOSED.load(Ordering::SeqCst)
 }
 
+/// Stands in for the helper, so a test can drive the real Ask path with no helper installed.
+/// Debug builds and tests only: a release build does not contain it.
+#[cfg(debug_assertions)]
+pub static STAND_IN: Mutex<Option<StandIn>> = Mutex::new(None);
+#[cfg(debug_assertions)]
+pub type StandIn = fn(&Runner, &str) -> Result<String, String>;
+
 /// Blocking on an Ask worker, never the UI thread. Cancellation also stops an in-flight transport.
 pub fn run(
     runner: &Runner,
@@ -275,6 +282,13 @@ pub fn run(
     chat: &str,
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
+    #[cfg(debug_assertions)]
+    if let Some(stand_in) = *STAND_IN.lock().unwrap() {
+        progress(AskProgress::Started {
+            runner: runner.name.clone(),
+        });
+        return stand_in(runner, &prompt);
+    }
     let _activity = crate::updates::activity()
         .map_err(|_| "An update is being installed. Try again after restart.")?;
     if !runner.stdin || !matches!(runners::kind(runner)?, "claude" | "codex") {

@@ -174,3 +174,115 @@ fn the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat() {
         "live screen"
     );
 }
+
+#[test]
+fn a_pick_applies_to_the_next_question_and_default_follows_settings() {
+    if in_parent("a_pick_applies_to_the_next_question_and_default_follows_settings") {
+        return;
+    }
+    let mut rt = page();
+    rt.update(|s, _| scene_agents(s, ALL_AGENTS));
+    let groups = ask_settings::picker_groups(&rt.state);
+    assert!(
+        groups.len() >= 2 && groups.iter().all(|g| !g.2.is_empty()),
+        "{groups:?}"
+    );
+    let before = rt.state.ask_runner_name().map(str::to_owned);
+    rt.update(|s, _| s.choose_ask_pick("Codex".into(), Some("gpt-test".into())));
+    assert_eq!(rt.state.ask_runner_name(), Some("Codex"));
+    assert_eq!(rt.state.ask_model().as_deref(), Some("gpt-test"));
+    assert!(ask::picker_label(&rt.state).contains("Codex"));
+    rt.update(|s, _| s.choose_ask_default());
+    assert_eq!(rt.state.ask_runner_name().map(str::to_owned), before);
+}
+
+static GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CALLS: std::sync::Mutex<Vec<(String, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The fake helper: records what it was started with. Helper A (Codex) holds its answer until the
+/// gate opens, so the test can switch the choice while it is still answering.
+fn fake_helper(runner: &core::Runner, _prompt: &str) -> Result<String, String> {
+    CALLS
+        .lock()
+        .unwrap()
+        .push((runner.name.clone(), runner.model.clone()));
+    if runner.name == "Codex" {
+        let end = Instant::now() + Duration::from_secs(20);
+        while !GATE.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if !GATE.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the gate never opened".into());
+        }
+    }
+    Ok(format!("answer from {}", runner.name))
+}
+
+fn first_model(s: &State, agent: &str) -> (String, Option<String>) {
+    let group = ask_settings::picker_groups(s)
+        .into_iter()
+        .find(|g| g.0 == agent)
+        .unwrap();
+    (group.1, group.2.into_iter().find_map(|m| m.1))
+}
+
+/// Applies events until the answer for the open meeting has been saved.
+fn finish_answer(rt: &mut Runtime<State>) {
+    while rt.state.asks.contains_key(MEETING) {
+        let event = rt
+            .state
+            .events_rx
+            .recv_timeout(Duration::from_secs(25))
+            .expect("no answer");
+        rt.update(|s, _| s.apply_event(event));
+    }
+}
+
+#[test]
+fn switching_helper_mid_answer_labels_each_answer_and_runs_the_next_on_the_new_one() {
+    if in_parent("switching_helper_mid_answer_labels_each_answer_and_runs_the_next_on_the_new_one")
+    {
+        return;
+    }
+    *core::ask_session::STAND_IN.lock().unwrap() = Some(fake_helper);
+    let mut rt = page();
+    rt.update(|s, _| scene_agents(s, ALL_AGENTS));
+    let (a, a_model) = first_model(&rt.state, "Codex");
+    let (b, b_model) = first_model(&rt.state, "OpenCode");
+    rt.update(|s, _| s.choose_ask_pick(a.clone(), a_model.clone()));
+    rt.update(|s, _| s.send("What do I need to do next?"));
+    let run = &rt.state.asks[MEETING];
+    assert_eq!((run.runner.as_str(), &run.model), (a.as_str(), &a_model));
+    // Switch to B while A is still answering: A keeps going, the control names the next answer.
+    rt.update(|s, _| s.choose_ask_pick(b.clone(), b_model.clone()));
+    assert!(ask::picker_label(&rt.state).starts_with("Next answer: "));
+    assert_eq!(rt.state.asks[MEETING].runner, a);
+    GATE.store(true, std::sync::atomic::Ordering::SeqCst);
+    finish_answer(&mut rt);
+    let first = rt.state.saved.messages.last().unwrap().clone();
+    assert_eq!(
+        (first.runner.as_deref(), &first.model),
+        (Some(a.as_str()), &a_model)
+    );
+    assert!(
+        ask::answer_label(&rt.state, &first)
+            .unwrap()
+            .starts_with("Codex")
+    );
+    rt.update(|s, _| s.send("And after that?"));
+    assert_eq!(rt.state.asks[MEETING].runner, b);
+    finish_answer(&mut rt);
+    let second = rt.state.saved.messages.last().unwrap().clone();
+    assert_eq!(
+        (second.runner.as_deref(), &second.model),
+        (Some(b.as_str()), &b_model)
+    );
+    assert!(
+        ask::answer_label(&rt.state, &second)
+            .unwrap()
+            .starts_with("OpenCode")
+    );
+    assert!(rt.state.ask_settings.pick.is_none());
+    let calls = CALLS.lock().unwrap().clone();
+    assert_eq!(calls, vec![(a, a_model), (b, b_model)]);
+}

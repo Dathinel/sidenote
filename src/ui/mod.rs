@@ -3574,6 +3574,22 @@ pub fn spec() -> AppSpec<State> {
                 scene_live(s, "", &[], false);
                 s.runner_open = true;
             }),
+            // An answer running on one model while the choice has moved to another.
+            ("ask-next", |s| {
+                scene_meeting(s);
+                scene_agents(s, ALL_AGENTS);
+                if let Some(id) = s.selected.clone() {
+                    s.saved.messages.push(Message {
+                        role: "user".into(),
+                        text: "What do I need to do next?".into(),
+                        ..Default::default()
+                    });
+                    let mut run = AskRun::stand_in("Claude Sonnet", &["Reading the meeting..."], 6);
+                    run.model = Some("claude-sonnet-5-5".into());
+                    s.asks.insert(id, run);
+                    s.choose_ask_pick("Codex".into(), Some("gpt-6.1-sol".into()));
+                }
+            }),
             ("ask-opencode", |s| {
                 scene_agents(s, ALL_AGENTS);
                 s.choose_ask_runner("OpenCode".into());
