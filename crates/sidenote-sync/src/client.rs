@@ -27,6 +27,9 @@ const PEER_OPERATIONS: usize = 256;
 const TOTAL_OPERATIONS: usize = 1024;
 const OPERATION_COST: usize = 256;
 const HEARTBEAT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+type RetryClock =
+    tokio::sync::mpsc::UnboundedSender<(Duration, tokio::sync::oneshot::Sender<Instant>)>;
 
 pub struct Device {
     store: Mutex<Store>,
@@ -77,6 +80,8 @@ pub struct SyncClient {
     relay_connected: AtomicBool,
     #[cfg(test)]
     retry_ceilings: Mutex<Vec<Duration>>,
+    #[cfg(test)]
+    retry_clock: Option<RetryClock>,
     pub connections: AtomicU64,
     pub applied: AtomicU64,
     pub rejected: AtomicU64,
@@ -147,6 +152,8 @@ impl SyncClient {
             relay_connected: AtomicBool::new(false),
             #[cfg(test)]
             retry_ceilings: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            retry_clock: None,
             connections: AtomicU64::new(0),
             applied: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
@@ -309,7 +316,21 @@ impl SyncClient {
                 .lock()
                 .expect("test trace")
                 .push(backoff.ceiling());
-            tokio::select! {_=stop.changed()=>return Ok(()),_=tokio::time::sleep(delay)=>{}}
+            let sleep = tokio::time::sleep(delay);
+            #[cfg(test)]
+            let sleep = if let Some(clock) = &self.retry_clock {
+                drop(sleep);
+                let (advance, ready) = tokio::sync::oneshot::channel();
+                clock.send((delay, advance)).expect("retry clock");
+                let deadline = tokio::select! {
+                    _ = stop.changed() => return Ok(()),
+                    result = ready => result.expect("retry clock advance"),
+                };
+                tokio::time::sleep_until(deadline)
+            } else {
+                sleep
+            };
+            tokio::select! {_=stop.changed()=>return Ok(()),_=sleep=>{}}
         }
     }
     fn reject(
@@ -1269,6 +1290,8 @@ mod tests {
             relay_connected: AtomicBool::new(false),
             #[cfg(test)]
             retry_ceilings: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            retry_clock: None,
             connections: AtomicU64::new(0),
             applied: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
@@ -1767,7 +1790,7 @@ mod tests {
         }
         Ok(())
     }
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn f8_short_authenticated_sessions_do_not_reset_run_backoff() -> Result<()> {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
@@ -1797,18 +1820,21 @@ mod tests {
         let device = Arc::new(Device::open(&dir.path().join("owner.sqlite"))?);
         let mut instance = client(device.clone(), Group::new(&device.identity))?;
         instance.relay = RelayUrl::local(&format!("ws://{address}"))?;
+        let (clock, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+        instance.retry_clock = Some(clock);
         let client = Arc::new(instance);
         let (stop, rx) = watch::channel(false);
         let run = tokio::spawn(client.clone().run(rx));
-        tokio::time::timeout(Duration::from_secs(3600), async {
-            loop {
-                if client.retry_ceilings.lock().expect("trace").len() >= 14 {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await?;
+        for _ in 0..14 {
+            let (delay, advance) = tokio::time::timeout(Duration::from_secs(120), attempts.recv())
+                .await?
+                .context("retry loop stopped")?;
+            // Advance only the registered backoff deadline; socket I/O uses real time.
+            tokio::time::pause();
+            advance.send(Instant::now() + delay).expect("advance retry");
+            tokio::time::advance(delay).await;
+            tokio::time::resume();
+        }
         stop.send(true)?;
         run.await??;
         server.abort();
