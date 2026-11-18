@@ -95,7 +95,7 @@ It refuses to reuse a service already listening on port 8787.
    Check the edit on the other installation. The local automated app test also
    checks offline field merges, migration, rollback and incompatible versions.
 
-**Last relay contact** in Advanced is this PC's last successful health check,
+**Last relay check** in Advanced is this PC's last successful health check,
 displayed in local time. It survives restarting Sidenote and is retained during
 an outage. It is not a delivery receipt. A bad address and an unreachable relay
 have separate messages. Local edits remain on this PC during an outage.

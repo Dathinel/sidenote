@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 use sidenote_sync::{
     client::{Device, SyncClient},
     identity::Group,
+    status::PeerStatus,
     transport::RelayUrl,
 };
 use std::{
@@ -14,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, mpsc},
     thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 mod migration;
 pub mod operations;
@@ -343,6 +345,63 @@ pub struct Preview {
     device: Arc<Device>,
     root: PathBuf,
     connection: Mutex<Option<Connection>>,
+    seen: Mutex<Seen>,
+}
+
+/// What this PC knows about another paired device right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presence {
+    Online,
+    /// Not answering. Holds the last time a pong arrived, if one was ever recorded.
+    Offline(Option<SystemTime>),
+    /// This PC has no relay session, so it cannot tell.
+    Unknown,
+}
+
+/// Last seen times by device token, kept in `local/relay/seen.json` across restarts.
+#[derive(Default)]
+struct Seen {
+    stored: BTreeMap<String, u64>,
+    online: BTreeSet<String>,
+    /// `stored` holds a change that is not in seen.json yet. Cleared only by a successful write.
+    dirty: bool,
+}
+fn seen_path(root: &Path) -> PathBuf {
+    root.join("local/relay/seen.json")
+}
+/// Epoch seconds as a time. None when the value does not fit a `SystemTime` or lies after `now`;
+/// a time in the future cannot be a past sighting, so it is ignored.
+fn time_at(secs: u64, now: SystemTime) -> Option<SystemTime> {
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(secs))
+        .filter(|at| *at <= now)
+}
+/// A missing or corrupt file is an empty history; it never stops sync. Entries with a time that
+/// is out of range or in the future are dropped.
+fn load_seen(root: &Path) -> BTreeMap<String, u64> {
+    let now = SystemTime::now();
+    let mut seen: BTreeMap<String, u64> = store_io::read(&seen_path(root)).unwrap_or_default();
+    seen.retain(|_, secs| time_at(*secs, now).is_some());
+    seen
+}
+fn secs(at: SystemTime) -> Option<u64> {
+    at.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+fn classify(status: Option<&PeerStatus>, stored: Option<u64>) -> Presence {
+    if status.is_some_and(|p| p.online) {
+        return Presence::Online;
+    }
+    let now = SystemTime::now();
+    let live = status.and_then(|p| p.last_seen).filter(|at| *at <= now);
+    let stored = stored.and_then(|s| time_at(s, now));
+    Presence::Offline(live.max(stored))
+}
+
+/// What the live session reports about the other devices at one moment.
+struct Observation {
+    statuses: Vec<PeerStatus>,
+    relay_connected: bool,
+    members: Vec<[u8; 32]>,
 }
 
 impl Preview {
@@ -381,7 +440,93 @@ impl Preview {
             device,
             root: root.into(),
             connection: Mutex::new(None),
+            seen: Mutex::new(Seen {
+                stored: load_seen(root),
+                ..Default::default()
+            }),
         })
+    }
+
+    /// Writes seen.json when a device goes from online to offline, or when the session ends.
+    /// A failed write stays pending and is tried again on the next call.
+    fn remember(&self, statuses: &[PeerStatus], ending: bool) {
+        let Ok(mut seen) = self.seen.lock() else {
+            return;
+        };
+        let now = SystemTime::now();
+        for p in statuses {
+            let token = pairing::token(&p.device);
+            let dropped = ending || (seen.online.contains(&token) && !p.online);
+            if let Some(at) = p
+                .last_seen
+                .and_then(secs)
+                .filter(|at| dropped && time_at(*at, now).is_some())
+                && seen.stored.get(&token).is_none_or(|old| *old < at)
+            {
+                seen.stored.insert(token, at);
+                seen.dirty = true;
+            }
+        }
+        seen.online = statuses
+            .iter()
+            .filter(|p| p.online)
+            .map(|p| pairing::token(&p.device))
+            .collect();
+        if seen.dirty && store_io::write(&seen_path(&self.root), &seen.stored).is_ok() {
+            seen.dirty = false;
+        }
+    }
+
+    /// Online state of the other devices, read from the pings the client already sends.
+    /// An empty map means this PC has no relay session, so every device is Unknown.
+    pub fn presence(&self) -> BTreeMap<String, Presence> {
+        let observation = {
+            let Ok(connection) = self.connection.lock() else {
+                return BTreeMap::new();
+            };
+            let Some(connection) = connection.as_ref() else {
+                return BTreeMap::new();
+            };
+            Observation {
+                statuses: connection.client.peer_statuses().unwrap_or_default(),
+                relay_connected: connection.client.relay_connected(),
+                members: connection
+                    .client
+                    .group()
+                    .map(|g| g.members())
+                    .unwrap_or_default(),
+            }
+        };
+        self.observe(&observation)
+    }
+
+    fn observe(&self, observation: &Observation) -> BTreeMap<String, Presence> {
+        self.remember(&observation.statuses, false);
+        if !observation.relay_connected {
+            return BTreeMap::new();
+        }
+        let me = self.device.identity.public();
+        let stored = self
+            .seen
+            .lock()
+            .map(|s| s.stored.clone())
+            .unwrap_or_default();
+        observation
+            .members
+            .iter()
+            .filter(|key| **key != me)
+            .map(|key| {
+                let token = pairing::token(key);
+                let status = observation.statuses.iter().find(|p| p.device == *key);
+                let presence = classify(status, stored.get(&token).copied());
+                (token, presence)
+            })
+            .collect()
+    }
+
+    /// The session ends in order: whatever the peers last reported is kept.
+    fn stopped(&self, statuses: &[PeerStatus]) {
+        self.remember(statuses, true);
     }
 
     pub fn online(&self, online: bool) -> io::Result<()> {
@@ -394,6 +539,7 @@ impl Preview {
         }
         let mut connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         if let Some(old) = connection.take() {
+            self.stopped(&old.client.peer_statuses().unwrap_or_default());
             let _ = old.stop.send(());
             old.thread.join().map_err(|_| failed("session stopped"))?;
         }
@@ -568,6 +714,7 @@ pub fn get(root: &Path) -> io::Result<Option<Arc<Preview>>> {
         return Ok(Some(preview.clone()));
     }
     let preview = Arc::new(Preview::open(root, settings)?);
+    preview.reconcile_name();
     preview.online(true)?;
     replicas.insert(root.to_owned(), preview.clone());
     Ok(Some(preview))
@@ -805,6 +952,7 @@ mod tests {
             device,
             root: root.path().into(),
             connection: Mutex::new(None),
+            seen: Mutex::new(Seen::default()),
         };
         let error =
             store_io::defer_busy(preview.shared_value("profile.json", Value::Null)).unwrap_err();
@@ -1036,6 +1184,242 @@ mod tests {
         apply(&mut stale, &[], &[task])?;
         a.merge(&mut stale)?;
         assert!(project(&a)?.is_empty());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    fn at(secs: u64) -> Option<SystemTime> {
+        Some(UNIX_EPOCH + Duration::from_secs(secs))
+    }
+    fn status(online: bool, last_seen: Option<u64>) -> PeerStatus {
+        PeerStatus {
+            device: [1; 32],
+            sending_bad_data: false,
+            reason: None,
+            last_synced: None,
+            online,
+            last_seen: last_seen.and_then(at),
+        }
+    }
+
+    #[test]
+    fn online_wins_and_offline_keeps_the_latest_known_time() {
+        assert_eq!(
+            classify(Some(&status(true, Some(5))), Some(9)),
+            Presence::Online
+        );
+        assert_eq!(
+            classify(Some(&status(false, Some(50))), Some(10)),
+            Presence::Offline(at(50))
+        );
+        assert_eq!(
+            classify(Some(&status(false, None)), Some(10)),
+            Presence::Offline(at(10))
+        );
+        assert_eq!(classify(None, None), Presence::Offline(None));
+    }
+
+    #[test]
+    fn seen_file_round_trips_and_a_corrupt_file_is_an_empty_history() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        assert!(load_seen(root.path()).is_empty());
+        let stored = BTreeMap::from([("aa".to_owned(), 1_700_000_000u64)]);
+        store_io::write(&seen_path(root.path()), &stored)?;
+        assert_eq!(load_seen(root.path()), stored);
+        std::fs::write(seen_path(root.path()), b"{not json")?;
+        assert!(load_seen(root.path()).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn last_seen_is_written_when_a_device_drops_and_a_corrupt_file_does_not_stop_sync()
+    -> anyhow::Result<()> {
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        std::fs::create_dir_all(root.join("local/relay"))?;
+        std::fs::write(seen_path(root), b"{broken")?;
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        let preview = get(root)?.expect("sync opens with a corrupt seen.json");
+        let token = pairing::token(&[1; 32]);
+        preview.remember(&[status(true, Some(100))], false);
+        assert!(
+            load_seen(root).is_empty(),
+            "an online device writes nothing"
+        );
+        preview.remember(&[status(false, Some(100))], false);
+        assert_eq!(load_seen(root).get(&token), Some(&100));
+        disconnect(root)?;
+        drop(preview);
+        let reopened = get(root)?.expect("reopens");
+        assert_eq!(reopened.seen.lock().unwrap().stored.get(&token), Some(&100));
+        disconnect(root)?;
+        Ok(())
+    }
+
+    fn observation(statuses: Vec<PeerStatus>, members: &[[u8; 32]]) -> Observation {
+        Observation {
+            statuses,
+            relay_connected: true,
+            members: members.to_vec(),
+        }
+    }
+    fn peer(key: u8, online: bool, last_seen: Option<u64>) -> PeerStatus {
+        PeerStatus {
+            device: [key; 32],
+            ..status(online, last_seen)
+        }
+    }
+    #[cfg(windows)]
+    fn open_with_seen_file(root: &Path, file: Option<&[u8]>) -> anyhow::Result<Arc<Preview>> {
+        std::fs::create_dir_all(root.join("local/relay"))?;
+        if let Some(file) = file {
+            std::fs::write(seen_path(root), file)?;
+        }
+        Settings {
+            enabled: true,
+            ..Default::default()
+        }
+        .save(root)?;
+        Ok(get(root)?.expect("sync opens"))
+    }
+
+    #[test]
+    fn a_time_outside_the_clock_range_or_in_the_future_is_ignored() {
+        let future = secs(SystemTime::now() + Duration::from_secs(86_400)).unwrap();
+        for bad in [u64::MAX, u64::MAX / 2, future] {
+            assert_eq!(
+                classify(Some(&status(false, None)), Some(bad)),
+                Presence::Offline(None),
+                "{bad}"
+            );
+            assert_eq!(
+                classify(Some(&status(false, Some(100))), Some(bad)),
+                Presence::Offline(at(100)),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            classify(
+                Some(&PeerStatus {
+                    last_seen: Some(SystemTime::now() + Duration::from_secs(86_400)),
+                    ..status(false, None)
+                }),
+                None
+            ),
+            Presence::Offline(None)
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn presence_lookup_survives_a_malformed_or_out_of_range_seen_file() -> anyhow::Result<()> {
+        let (one, two) = (pairing::token(&[1; 32]), pairing::token(&[2; 32]));
+        let members = [[1; 32], [2; 32]];
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        let preview = open_with_seen_file(root, Some(b"{\"unterminated\":"))?;
+        let found = preview.observe(&observation(vec![], &members));
+        assert_eq!(found.get(&one), Some(&Presence::Offline(None)));
+        disconnect(root)?;
+        drop(preview);
+        let valid_json = format!("{{\"{one}\":{},\"{two}\":100}}", u64::MAX);
+        let preview = open_with_seen_file(root, Some(valid_json.as_bytes()))?;
+        let found = preview.observe(&observation(vec![], &members));
+        assert_eq!(found.get(&one), Some(&Presence::Offline(None)));
+        assert_eq!(found.get(&two), Some(&Presence::Offline(at(100))));
+        disconnect(root)?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_failed_seen_write_is_tried_again_by_a_refresh_and_a_stop() -> anyhow::Result<()> {
+        let one = pairing::token(&[1; 32]);
+        let members = [[1; 32]];
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        let preview = open_with_seen_file(root, None)?;
+        std::fs::create_dir(seen_path(root))?;
+        preview.observe(&observation(vec![peer(1, true, Some(100))], &members));
+        preview.observe(&observation(vec![peer(1, false, Some(100))], &members));
+        assert!(seen_path(root).is_dir(), "the write could not happen");
+        assert!(
+            preview.seen.lock().unwrap().dirty,
+            "the change stays pending"
+        );
+        std::fs::remove_dir(seen_path(root))?;
+        preview.observe(&observation(vec![peer(1, false, Some(100))], &members));
+        assert_eq!(
+            load_seen(root).get(&one),
+            Some(&100),
+            "a later refresh retried it"
+        );
+        assert!(!preview.seen.lock().unwrap().dirty);
+        // An orderly stop retries a pending write too, even with nothing new to report.
+        std::fs::remove_file(seen_path(root))?;
+        std::fs::create_dir(seen_path(root))?;
+        preview.stopped(&[peer(1, false, Some(200))]);
+        assert!(preview.seen.lock().unwrap().dirty);
+        std::fs::remove_dir(seen_path(root))?;
+        preview.stopped(&[]);
+        assert_eq!(load_seen(root).get(&one), Some(&200), "the stop retried it");
+        disconnect(root)?;
+        drop(preview);
+        let reopened = get(root)?.expect("reopens");
+        let found = reopened.observe(&observation(vec![], &members));
+        assert_eq!(found.get(&one), Some(&Presence::Offline(at(200))));
+        disconnect(root)?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn presence_history_is_persisted_by_the_refresh_and_the_stop() -> anyhow::Result<()> {
+        let (one, two) = (pairing::token(&[1; 32]), pairing::token(&[2; 32]));
+        let members = [[1; 32], [2; 32]];
+        let d = tempfile::tempdir()?;
+        let root = d.path();
+        let preview = open_with_seen_file(root, None)?;
+        let online = observation(
+            vec![peer(1, true, Some(100)), peer(2, true, Some(100))],
+            &members,
+        );
+        let found = preview.observe(&online);
+        assert_eq!(found.get(&one), Some(&Presence::Online));
+        assert!(load_seen(root).is_empty(), "online devices write nothing");
+        let found = preview.observe(&observation(
+            vec![peer(1, false, Some(100)), peer(2, true, Some(150))],
+            &members,
+        ));
+        assert_eq!(found.get(&one), Some(&Presence::Offline(at(100))));
+        assert_eq!(
+            load_seen(root).get(&one),
+            Some(&100),
+            "the drop reached disk"
+        );
+        assert_eq!(load_seen(root).get(&two), None);
+        preview.stopped(&[peer(1, false, Some(100)), peer(2, true, Some(150))]);
+        assert_eq!(
+            load_seen(root).get(&two),
+            Some(&150),
+            "the stop reached disk"
+        );
+        disconnect(root)?;
+        drop(preview);
+        let reopened = get(root)?.expect("reopens");
+        let found = reopened.observe(&observation(vec![], &members));
+        assert_eq!(found.get(&one), Some(&Presence::Offline(at(100))));
+        assert_eq!(found.get(&two), Some(&Presence::Offline(at(150))));
+        disconnect(root)?;
         Ok(())
     }
 }
