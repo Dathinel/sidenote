@@ -143,7 +143,15 @@ pub fn run(
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
 ) -> Result<()> {
-    run_batches(root, plan, native, bridge, None)
+    run_batches(
+        root,
+        plan,
+        native,
+        bridge,
+        None,
+        &mut |_, _, _| Ok(()),
+        true,
+    )
 }
 pub fn run_until(
     root: &Path,
@@ -158,6 +166,32 @@ pub fn run_until(
         native,
         bridge,
         Some(std::time::Instant::now() + timeout),
+        &mut |_, _, _| Ok(()),
+        true,
+    )
+}
+#[cfg(all(target_os = "linux", any(feature = "asr-runtime", test)))]
+pub(crate) fn run_host(
+    root: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    timeout: std::time::Duration,
+    publish: &mut impl FnMut(&str, &Range, &Value) -> Result<()>,
+) -> Result<()> {
+    struct Disabled;
+    impl EnglishBridge for Disabled {
+        fn transcribe(&mut self, _: &Range) -> Result<Value> {
+            Err("HOST_ENGLISH_DISABLED".into())
+        }
+    }
+    run_batches(
+        root,
+        plan,
+        native,
+        &mut Disabled,
+        Some(std::time::Instant::now() + timeout),
+        publish,
+        false,
     )
 }
 fn remaining(deadline: Option<std::time::Instant>) -> Result<Option<std::time::Duration>> {
@@ -175,6 +209,8 @@ fn run_batches(
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
     deadline: Option<std::time::Instant>,
+    publish: &mut impl FnMut(&str, &Range, &Value) -> Result<()>,
+    english: bool,
 ) -> Result<()> {
     let _lock = store_io::lock(&root.join("job.lock"))?;
     if revision(&plan.batches)? != plan.revision
@@ -184,6 +220,9 @@ fn run_batches(
         return Err("Stale plan revision".into());
     }
     for (lang, ranges) in &plan.batches {
+        if lang == "en" && !english {
+            continue;
+        }
         let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
@@ -224,6 +263,7 @@ fn run_batches(
                     sha256: hash(&bytes),
                 },
             )?;
+            publish(id, r, &v)?;
         }
         if let Some(s) = &mut session {
             s.finish()?;

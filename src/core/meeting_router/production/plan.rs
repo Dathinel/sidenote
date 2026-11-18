@@ -23,13 +23,25 @@ fn own(mut range: ranges::AsrRange, piece: vad::Span) -> ranges::AsrRange {
     range
 }
 
-pub(super) fn produce(
+#[cfg(windows)]
+pub(crate) fn produce(
     folder: &Path,
     work: &Path,
     config: &Config,
     origins: &BTreeMap<String, i64>,
     input_revision: &str,
     clocks: &mut BTreeMap<String, f64>,
+) -> Result<(Plan, pieces::PieceManifest, Option<fs::File>)> {
+    produce_owned(folder, work, config, origins, input_revision, clocks, None)
+}
+pub(crate) fn produce_owned(
+    folder: &Path,
+    work: &Path,
+    config: &Config,
+    origins: &BTreeMap<String, i64>,
+    input_revision: &str,
+    clocks: &mut BTreeMap<String, f64>,
+    owned: Option<vad::Span>,
 ) -> Result<(Plan, pieces::PieceManifest, Option<fs::File>)> {
     let started = Instant::now();
     let mut manifest = pieces::plan(folder, origins, &config.pipeline)?;
@@ -113,24 +125,35 @@ pub(super) fn produce(
     let mut output = Vec::new();
     let mut coverage = Vec::new();
     let mut uncertain: Vec<RoutingFallback> = Vec::new();
+    #[cfg(windows)]
     let mut english_identity = None;
+    #[cfg(target_os = "linux")]
+    let english_identity: Option<(String, fs::File)> = None;
+    #[cfg(windows)]
     let mut pin_seconds = 0.0;
+    #[cfg(target_os = "linux")]
+    let pin_seconds = 0.0;
     let mut detection_seconds = started.elapsed().as_secs_f64();
     let mut range_seconds = 0.0;
     for (track, (path, spans)) in manifest.tracks.iter().zip(tracks) {
         for piece in &track.pieces {
+            let ownership = owned.map_or((piece.start_sample, piece.end_sample), |(a, b)| {
+                (a.max(piece.start_sample), b.min(piece.end_sample))
+            });
+            if ownership.0 >= ownership.1 {
+                continue;
+            }
             // Split long speech before LID so padded inference remains bounded to 24 seconds.
             let mut intervals = Vec::new();
             for &(start, end) in &spans {
-                let mut start = start.max(piece.start_sample);
-                let end = end.min(piece.end_sample);
+                let mut start = start.max(ownership.0);
+                let end = end.min(ownership.1);
                 while start < end {
                     let stop = (start + 23 * 16000).min(end);
                     intervals.push((start, stop));
                     start = stop;
                 }
             }
-            let ownership = (piece.start_sample, piece.end_sample);
             let contexts = ranges::padded((0, track.sample_count), ownership, &intervals)?;
             let mut decisions = Vec::new();
             for &context in &contexts {
@@ -224,16 +247,23 @@ pub(super) fn produce(
                     .ok_or("Missing configured model")?
                     .to_owned();
                 let model_sha256 = if language == "en" && model_id == "parakeet_unified_en" {
-                    if english_identity.is_none() {
-                        let pin_started = Instant::now();
-                        english_identity = Some(super::pipeline::english_pin(config)?);
-                        pin_seconds += pin_started.elapsed().as_secs_f64();
+                    #[cfg(target_os = "linux")]
+                    {
+                        crate::core::speech_sessions::digest(b"host-english-deferred-v1")
                     }
-                    english_identity
-                        .as_ref()
-                        .ok_or("Missing English identity")?
-                        .0
-                        .clone()
+                    #[cfg(windows)]
+                    {
+                        if english_identity.is_none() {
+                            let pin_started = Instant::now();
+                            english_identity = Some(super::pipeline::english_pin(config)?);
+                            pin_seconds += pin_started.elapsed().as_secs_f64();
+                        }
+                        english_identity
+                            .as_ref()
+                            .ok_or("Missing English identity")?
+                            .0
+                            .clone()
+                    }
                 } else {
                     model_catalog::model(&model_id)?.files[0].sha256.to_owned()
                 };

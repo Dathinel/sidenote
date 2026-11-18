@@ -10,8 +10,8 @@ use std::{
 };
 #[cfg(windows)]
 mod pipeline;
-#[cfg(all(windows, feature = "asr-runtime"))]
-mod plan;
+#[cfg(feature = "asr-runtime")]
+pub(crate) mod plan;
 #[cfg(windows)]
 pub use pipeline::run;
 #[cfg(all(test, windows))]

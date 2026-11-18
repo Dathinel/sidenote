@@ -3,7 +3,7 @@ use crate::core::asr::Result;
 
 pub(crate) trait Detector {
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>>;
-    #[cfg(all(windows, feature = "asr-runtime"))]
+    #[cfg(feature = "asr-runtime")]
     fn logits(&mut self, _samples: &[f32]) -> Result<Vec<f32>> {
         Err("Raw language logits unavailable".into())
     }
@@ -20,7 +20,6 @@ struct Runtime {
 }
 #[cfg(feature = "asr-runtime")]
 impl Detector for Runtime {
-    #[cfg(windows)]
     fn logits(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         self.model.logits(samples)
     }
