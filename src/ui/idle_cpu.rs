@@ -333,11 +333,37 @@ fn idle_cpu_hex_state_changes_reach_the_view() {
             .and_then(|r| r.as_ref().ok())
             .and_then(|s| s.dictating)
             != Some(active);
+        if changed && active {
+            // A poll applies at most 8 events, so a backlog of earlier samples (a hidden window
+            // shown again) leaves this one for a later frame; the waker repeats the poll.
+            let earlier = rt.state.hex.status.clone().unwrap();
+            for _ in 0..8 {
+                rt.state
+                    .events_tx
+                    .send(Event::Hex(hex::Msg::Status(earlier.clone())))
+                    .unwrap();
+            }
+        }
         rt.state
             .events_tx
             .send(Event::Hex(hex::Msg::Status(status)))
             .unwrap();
         rt.frame(1.5);
+        // Each frame applies at least one queued sample, so the queue (at most 9 here) drains
+        // in a few frames. The assertion below is unchanged.
+        for _ in 0..16 {
+            let seen = rt
+                .state
+                .hex
+                .status
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(|s| s.dictating);
+            if seen == Some(active) {
+                break;
+            }
+            rt.frame(0.0);
+        }
         assert_eq!(
             rt.state
                 .hex
