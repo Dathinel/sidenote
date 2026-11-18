@@ -12,7 +12,7 @@ const LIVE: &str = r#"{"status":"settings","settings":[{"key":"meetings.audio_re
 const WORKER_TIMEOUT: Duration = Duration::from_secs(5);
 const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
-const PROGRESS: &str = "audio-test-progress";
+const READY: &str = "audio-test-ready";
 
 #[test]
 fn keep_audio_contracts_through_hex_settings_api() {
@@ -35,17 +35,18 @@ fn keep_audio_contracts_through_hex_settings_api() {
         }
         let mut child = command.spawn().expect("spawn isolated Keep audio test");
         let output = child.stdout.take().unwrap();
-        let (ready, progress) = mpsc::channel();
+        let (ready, started) = mpsc::channel();
         let reader = thread::spawn(move || {
             for line in BufReader::new(output).lines() {
                 let line = line.unwrap();
                 eprintln!("{line}");
-                if line == PROGRESS {
+                if line == READY {
                     let _ = ready.send(());
                 }
             }
         });
         let mut deadline = Instant::now() + STARTUP_TIMEOUT;
+        let mut fixture_ready = false;
         let status = loop {
             if let Some(status) = child.try_wait().expect("check isolated Keep audio child") {
                 break status;
@@ -56,10 +57,15 @@ fn keep_audio_contracts_through_hex_settings_api() {
                     .expect("stalled Keep audio child could not be killed");
                 child.wait().expect("reap stalled Keep audio child");
                 reader.join().unwrap();
-                panic!("isolated Keep audio child stalled before its next progress signal");
+                panic!("isolated Keep audio child exceeded its startup or 30s body deadline");
             }
-            match progress.recv_timeout(Duration::from_millis(20)) {
-                Ok(()) => deadline = Instant::now() + CHILD_TIMEOUT,
+            match started.recv_timeout(Duration::from_millis(20)) {
+                Ok(()) => {
+                    if !fixture_ready {
+                        fixture_ready = true;
+                        deadline = Instant::now() + CHILD_TIMEOUT;
+                    }
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     thread::sleep(Duration::from_millis(2));
@@ -166,13 +172,12 @@ fn keep_audio_contracts_through_hex_settings_api() {
                 reply
             )
             .unwrap();
-            println!("{PROGRESS}");
         }
     });
     ready
         .recv_timeout(STARTUP_TIMEOUT)
         .expect("fake Hex server did not start");
-    println!("{PROGRESS}");
+    println!("{READY}");
     let engine = HexEngine::new();
     {
         let mut cache = engine.cache.lock().unwrap();
