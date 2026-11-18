@@ -38,6 +38,8 @@ pub mod project_merge;
 pub mod prompt_library;
 pub mod settle;
 #[cfg(target_os = "linux")]
+pub mod speech_jobs;
+#[cfg(target_os = "linux")]
 pub mod speech_sessions;
 pub use paths::{configure_paths, is_proof_path};
 pub mod agent_tools;

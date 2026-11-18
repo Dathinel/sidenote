@@ -44,17 +44,19 @@ pub struct PieceRequest {
     pub context_start_sample: u64,
     pub sha256: String,
 }
-#[derive(Serialize, Deserialize)]
-struct Accepted {
-    metadata: PieceRequest,
-    bytes: u64,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Accepted {
+    pub metadata: PieceRequest,
+    pub bytes: u64,
+    #[serde(default)]
+    pub done: bool,
 }
-#[derive(Serialize, Deserialize)]
-struct Session {
-    owner: String,
-    request: SessionRequest,
-    pieces: BTreeMap<String, Accepted>,
-    finished: Option<usize>,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Session {
+    pub owner: String,
+    pub request: SessionRequest,
+    pub pieces: BTreeMap<String, Accepted>,
+    pub finished: Option<usize>,
 }
 type Sessions = BTreeMap<String, Session>;
 pub struct Store(pub PathBuf);
@@ -126,7 +128,7 @@ impl PieceRequest {
     }
 }
 impl Store {
-    fn load(&self) -> Result<(std::fs::File, Sessions), Error> {
+    pub(crate) fn load(&self) -> Result<(std::fs::File, Sessions), Error> {
         let lock = store_io::lock(&self.0.join("intake.lock"))?;
         let data = match store_io::read_bounded(&self.0.join("sessions.json"), 1_048_576) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?,
@@ -166,7 +168,7 @@ impl Store {
         }
         Ok(())
     }
-    fn save(&self, sessions: &Sessions) -> Result<(), Error> {
+    pub(crate) fn save(&self, sessions: &Sessions) -> Result<(), Error> {
         let bytes = serde_json::to_vec(sessions)?;
         if bytes.len() > 1_048_576 {
             return Err(Error::Full(MAX_IN_FLIGHT + 1));
@@ -244,11 +246,14 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
-        let queued: usize = sessions.values().map(|s| s.pieces.len()).sum();
+        let queued: usize = sessions
+            .values()
+            .map(|s| s.pieces.values().filter(|p| !p.done).count())
+            .sum();
         let owned: usize = sessions
             .values()
             .filter(|s| s.owner == owner)
-            .map(|s| s.pieces.len())
+            .map(|s| s.pieces.values().filter(|p| !p.done).count())
             .sum();
         if queued >= MAX_IN_FLIGHT
             || owned >= 2
@@ -264,6 +269,7 @@ impl Store {
             Accepted {
                 metadata,
                 bytes: bytes.len() as u64,
+                done: false,
             },
         );
         self.save(&sessions)?;
