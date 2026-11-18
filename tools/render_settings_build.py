@@ -59,7 +59,7 @@ def render(job):
   assert any(n.get('text')=='Suggested: Our team' for n in elements), 'Suggestion missing'
   assert any(n.get('key')=='person-confirm-jamie' for n in elements), 'Confirm missing'
  print(base.name,flush=True)
- return str(base.with_suffix('.png').relative_to(ROOT))
+ return os.path.relpath(base.with_suffix('.png'), ROOT)
 
 def tap(key,t=.3):return dict(type='tap',key=key,t=t)
 def main():

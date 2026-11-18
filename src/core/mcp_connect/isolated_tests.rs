@@ -45,7 +45,10 @@ impl Sandbox {
         Self(temp)
     }
     fn path(&self, client: Client) -> PathBuf {
-        self.0.path().join(client.name()).join("config.json")
+        self.0
+            .path()
+            .join(format!("config-{}", client.name()))
+            .join("config.json")
     }
     fn agent(&self, client: Client) -> Agent {
         Agent {
@@ -260,7 +263,7 @@ fn fake_clis_record_production_process_arguments_in_isolated_homes() {
     let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
         .join("System32/WindowsPowerShell/v1.0/powershell.exe");
     for client in [Client::ClaudeCode, Client::Codex] {
-        let root = sandbox.0.path().join(client.name());
+        let root = sandbox.0.path().join(format!("fake-cli-{}", client.name()));
         fs::create_dir(&root).unwrap();
         let script = root.join("fake-cli.ps1");
         fs::write(&script, r#"$ErrorActionPreference = 'Stop'
@@ -328,7 +331,7 @@ fn cli_detection_reads_existing_without_adding() {
             Some(sandbox.0.path().join("fake-cli")),
             |_, args| {
                 calls += 1;
-                assert_eq!(args, ["mcp".as_ref(), "get".as_ref(), "sidenote".as_ref()]);
+                assert_eq!(args, ["mcp", "get", "sidenote"].map(std::ffi::OsStr::new));
                 Ok(output(true, "existing"))
             },
         );
