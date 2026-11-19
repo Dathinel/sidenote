@@ -505,7 +505,7 @@ fn provisioning_review_automatic_packs_keep_their_settings_controls() {
         .insert("indicconformer-te-ctc", "Connection failed".into());
     let mut runtime = rune::Runtime::new(
         state,
-        |s| view(s, super::theme::palette(false), rune::el()),
+        |s, _| view(s, super::theme::palette(false), rune::el()),
         (1000.0, 1000.0),
         rune::Env::default(),
     );
