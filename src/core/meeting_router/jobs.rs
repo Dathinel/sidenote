@@ -45,6 +45,38 @@ struct Outcome {
     error: Option<String>,
 }
 
+const CPU_ASSETS_UNAVAILABLE: &str = "cpu_language_assets_unavailable";
+
+#[derive(Debug)]
+struct CpuAssetsUnavailable;
+impl std::fmt::Display for CpuAssetsUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(CPU_ASSETS_UNAVAILABLE)
+    }
+}
+impl std::error::Error for CpuAssetsUnavailable {}
+
+#[cfg(all(windows, feature = "asr-runtime"))]
+fn cpu_assets_ready(config: &RoutingConfig) -> bool {
+    let Some(routes) = &config.after_stop_languages else {
+        return false;
+    };
+    let forced = config.language_mode.strip_prefix("forced:").or_else(|| {
+        (routes.supporting.is_empty() || config.language_mode == "off")
+            .then_some(routes.primary.as_str())
+    });
+    let store = super::super::model_catalog::ModelStore::new(config.model_state_dir.clone());
+    let mut models = std::iter::once(super::vad::MODEL_ID)
+        .chain(forced.is_none().then_some("anuvani-lid-int8"))
+        .chain(routes.routes.iter().filter_map(|(language, route)| {
+            (route.provider == "local" && forced.is_none_or(|only| language == only))
+                .then_some(route.model.as_str())
+        }));
+    config.runtime_dll.is_absolute()
+        && config.runtime_dll.is_file()
+        && models.all(|id| store.installed_paths(id).is_ok_and(|paths| paths.is_some()))
+}
+
 fn valid_id(id: &str) -> bool {
     id.len() <= 100
         && id.bytes().any(|b| b.is_ascii_digit())
@@ -611,7 +643,11 @@ pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
 }
 
 pub fn run_pending() -> Result<()> {
-    run_pending_with(|_, request| {
+    run_pending_with(|_job, request| {
+        #[cfg(all(windows, feature = "asr-runtime"))]
+        if notes_enabled(&super::super::state_dir())? && !cpu_assets_ready(&_job.config) {
+            return Err(CpuAssetsUnavailable.into());
+        }
         let mut command = Command::new(std::env::current_exe()?);
         command
             .arg("--route-one")
@@ -750,19 +786,33 @@ pub(crate) fn run_pending_with(
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
             cleanup_work(&work);
+            let request = work.join("request.json");
+            job.generation = pending.generation;
+            let mut command = match worker(&job, &request) {
+                Ok(command) => command,
+                Err(error) if error.is::<CpuAssetsUnavailable>() => {
+                    store_io::write(
+                        &work.join("attempt.json"),
+                        &serde_json::json!({
+                            "generation":pending.generation,
+                            "child":Outcome { error:Some(CPU_ASSETS_UNAVAILABLE.into()), ..Outcome::default() },
+                            "retry_after_ms":chrono::Utc::now().timestamp_millis()+30_000
+                        }),
+                    )?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let staged = job
                 .input
                 .as_mut()
                 .ok_or("Missing pinned inputs")?
                 .stage(&work)?;
             job.folder = staged.path().to_owned();
-            let request = work.join("request.json");
-            job.generation = pending.generation;
             store_io::write(&request, &job)?;
             let _ = fs::remove_file(work.join("result.json"));
             let _ = fs::remove_file(work.join("normalization-outcome.json"));
             let _ = fs::remove_file(work.join("failure.json"));
-            let mut command = worker(&job, &request)?;
             for flag in ["--ffmpeg", "--normalization-timeout-seconds", "--hex-cli"] {
                 if let Some(value) = args.windows(2).find(|a| a[0] == flag).map(|a| &a[1]) {
                     command.args([flag, value]);

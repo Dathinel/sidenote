@@ -90,22 +90,25 @@ pub(crate) fn notes_input(
     {
         return Ok(Some((chosen, r.transcript, reasons)));
     }
-    let mut failed_attempt = false;
+    let mut attempt_failure = None;
     let generation = if let Some(p) = &pending {
         #[derive(Deserialize)]
         struct Attempt {
             generation: u128,
             child: Outcome,
         }
-        let failed = super::super::inputs::Snapshot::read_file(
+        attempt_failure = super::super::inputs::Snapshot::read_file(
             &root.join("local/router-work").join(id).join("attempt.json"),
             file_reads::JOURNAL_MAX,
         )
         .ok()
         .and_then(|b| serde_json::from_slice::<Attempt>(&b).ok())
-        .is_some_and(|a| a.generation == p.generation && !a.child.success);
-        failed_attempt = failed;
-        if !failed && now_ms < deadline {
+        .filter(|a| a.generation == p.generation && !a.child.success)
+        .map(|a| match a.child.error.as_deref() {
+            Some(CPU_ASSETS_UNAVAILABLE) => Reason::CpuLanguageAssetsUnavailable,
+            _ => Reason::RoutingFailed,
+        });
+        if attempt_failure.is_none() && now_ms < deadline {
             return Err(waiting());
         }
         p.generation
@@ -131,11 +134,9 @@ pub(crate) fn notes_input(
         reasons.push(RoutingFallback::new(Reason::SelectedRevisionUnavailable));
     }
     if reasons.is_empty() {
-        reasons.push(RoutingFallback::new(if failed_attempt {
-            Reason::RoutingFailed
-        } else {
-            Reason::DeadlineExpired
-        }));
+        reasons.push(RoutingFallback::new(
+            attempt_failure.unwrap_or(Reason::DeadlineExpired),
+        ));
     }
     let mut data = revision::Revision {
         generation: generation.to_string(),

@@ -12,6 +12,7 @@ pub enum Reason {
     SelectedRevisionUnavailable,
     PendingRecordInvalid,
     RoutingFailed,
+    CpuLanguageAssetsUnavailable,
     DeadlineExpired,
 }
 impl Reason {
@@ -33,6 +34,9 @@ impl Reason {
                 "The language-routing request record was damaged. Notes use the captured Hex transcript."
             }
             Self::RoutingFailed => "A language pass failed. Notes use the captured Hex transcript.",
+            Self::CpuLanguageAssetsUnavailable => {
+                "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
+            }
             Self::DeadlineExpired => {
                 "Language routing missed the Stop deadline. Notes use the captured Hex transcript."
             }
