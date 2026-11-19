@@ -10,6 +10,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+pub mod journal;
 #[cfg(test)]
 mod tests;
 
