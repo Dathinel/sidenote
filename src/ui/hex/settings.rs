@@ -1759,7 +1759,8 @@ fn relay_labs(s: &State, k: &Kit, p: Palette) -> El {
                     }
                 }
             })
-            .build(k),
+            .build(k)
+            .key("relay-preview-toggle"),
         true,
         p,
     )
@@ -3049,6 +3050,7 @@ mod tests {
         assert_eq!(stored_device_name(root.path()), "Travel laptop");
     }
 
+    #[cfg(windows)]
     #[test]
     fn saving_the_device_name_is_blocked_while_pairing_is_busy() {
         let root = tempfile::tempdir().unwrap();
@@ -3078,6 +3080,67 @@ mod tests {
         assert_eq!(s.hex.shell.device_name_error, None);
         assert_eq!(stored_device_name(root.path()), "Travel laptop");
         sidenote::core::relay_preview::disconnect(root.path()).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_relay_settings_refuse_enable_and_allow_local_device_rename() {
+        use sidenote::core::relay_preview::Settings;
+
+        fn view(s: &State, _: &mut rune::Cx<State>) -> El {
+            let p = crate::ui::theme::palette(false);
+            relay_labs(s, &crate::ui::theme::kit(&p), p)
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        Settings {
+            address: "ws://127.0.0.1:9".into(),
+            ..Default::default()
+        }
+        .save(root.path())
+        .unwrap();
+        let settings = root.path().join("local/relay/settings.json");
+        let original = std::fs::read(&settings).unwrap();
+        let mut state = State::new();
+        state.store.root = root.path().to_path_buf();
+        state.relay_refresh();
+        state.hex.shell.device_name = TextEdit::new("Studio PC");
+        save_device_name(&mut state);
+        assert_eq!(stored_device_name(root.path()), "Studio PC");
+
+        let mut runtime = rune::Runtime::new(state, view, (600.0, 300.0), rune::Env::default());
+        runtime.frame(0.0);
+        let [left, top, width, height] = runtime
+            .elements()
+            .into_iter()
+            .find(|el| el.key.as_deref() == Some("relay-preview-toggle"))
+            .unwrap()
+            .rect;
+        let (x, y) = (left + width / 2.0, top + height / 2.0);
+        runtime.pointer_move(x, y);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+
+        let state = &mut runtime.state;
+        assert_eq!(
+            state.feature_error.as_deref(),
+            Some("Could not save relay preview settings.")
+        );
+        assert!(!state.hex.shell.relay.enabled);
+        assert_eq!(
+            state.hex.shell.relay.unavailable_reason.as_deref(),
+            Some(sidenote_sync::RELAY_UNAVAILABLE)
+        );
+        assert!(!state.relay_ui.pairing_busy());
+        assert_eq!(std::fs::read(&settings).unwrap(), original);
+        assert_eq!(stored_device_name(root.path()), "Studio PC");
+
+        state.hex.shell.device_name = TextEdit::new("Travel laptop");
+        save_device_name(state);
+        assert_eq!(state.hex.shell.device_name_error, None);
+        assert_eq!(stored_device_name(root.path()), "Travel laptop");
+        assert_eq!(std::fs::read(settings).unwrap(), original);
     }
 
     #[test]

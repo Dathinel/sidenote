@@ -190,7 +190,7 @@
   "src/ui/hex/connection/stop_tests.rs": "20f341d5095147e5d1e41d96bb12ea68fe097eb88a736633c79ee4a8d583722b",
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
   "src/ui/hex/connection/stop_tests/readiness.rs": "364d6e812b5131efe65314381fde0a9d4a1a77eb9d9cbab88b8ab9b83477a169",
-  "src/ui/hex/settings.rs": "d438478d293faa8235137b9118e6cee9e1109a5a78f22bda9aea807e7c945192",
+  "src/ui/hex/settings.rs": "2477f86b966d3f6e8f8387ad2b8d4d55dd34fc6854b5ec21c1420c00de14cf58",
   "src/ui/hex/setup.rs": "bba9c880a9c9b598e651c455b7ae387db766a7c9fffa7a99474ea76019c49e37",
   "src/ui/idle_cpu.rs": "ab45c9a037baff122cbbd3a35ef2de88d452a16666265c0e89166aa8624ff239",
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
