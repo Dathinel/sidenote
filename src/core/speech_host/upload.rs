@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     io,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 pub(in crate::core) const MAX_WAV: u64 = 10_000_000;
@@ -121,6 +122,7 @@ impl<'a> Upload<'a> {
         method: &str,
         headers: &str,
         body: &[u8],
+        deadline: Option<Instant>,
     ) -> io::Result<(u32, Value)> {
         if !self.still_allowed() {
             return Err(io::ErrorKind::PermissionDenied.into());
@@ -133,6 +135,7 @@ impl<'a> Upload<'a> {
                     path,
                     headers,
                     body,
+                    deadline,
                 },
                 16 << 20,
             )
@@ -217,12 +220,18 @@ impl<'a> Upload<'a> {
         directory: &Path,
         mut piece: Piece,
         wav: &Path,
-        expired: impl Fn() -> bool,
-        mut local: impl FnMut(&Journal, (u64, u64)) -> Option<Vec<Value>>,
+        (host_cutoff, deadline): (Instant, Instant),
+        mut local: impl FnMut(&Journal, (u64, u64), Instant) -> Option<Vec<Value>>,
     ) -> io::Result<Option<Journal>> {
         if !matches!(piece.track.as_str(), "microphone" | "system") {
             return Err(io::ErrorKind::InvalidData.into());
         }
+        let host_cutoff = if self.mode == WorkMode::HostOnly {
+            deadline
+        } else {
+            host_cutoff
+        };
+        let expired = || Instant::now() >= host_cutoff;
         let online = self.online.is_some() && !self.blocked;
         let journal_path = directory.join(format!("{}-{}.dpapi", piece.track, piece.index));
         if !online && self.mode != WorkMode::ThisDevice && !expired() && !journal_path.is_file() {
@@ -255,7 +264,7 @@ impl<'a> Upload<'a> {
         }
         if !journal.done()
             && online
-            && let Err(error) = self.transfer(meeting, wav, audio, &mut journal)
+            && let Err(error) = self.transfer(meeting, wav, audio, &mut journal, host_cutoff)
         {
             self.blocked = error.kind() == io::ErrorKind::WouldBlock;
             if journal.replacement()
@@ -274,12 +283,15 @@ impl<'a> Upload<'a> {
         }
         if self.mode != WorkMode::HostOnly {
             for span in journal.missing() {
-                if !journal.local(span)
+                if Instant::now() < deadline
+                    && !journal.local(span)
                     && !crate::updates::listener_stopping()
                     && WorkMode::load(self.settings).is_ok_and(|(mode, _)| mode == self.mode)
                 {
                     journal.record(vec![Change::Local(span, None)])?;
-                    if let Some(readings) = local(&journal, span) {
+                    if let Some(readings) = local(&journal, span, deadline)
+                        && Instant::now() < deadline
+                    {
                         journal.record(vec![Change::Local(span, Some(readings))])?;
                     }
                 }
@@ -297,6 +309,7 @@ impl<'a> Upload<'a> {
         wav: &Path,
         audio: Option<Vec<u8>>,
         journal: &mut Journal,
+        deadline: Instant,
     ) -> io::Result<()> {
         let piece = journal.piece();
         let config = self.online.as_deref().ok_or_else(remote_error)?;
@@ -322,6 +335,7 @@ impl<'a> Upload<'a> {
                 "client_session":client_session,"meeting_id":meeting,"languages":self.languages,
                 "language_mode":"auto","config_sha256":config
             }))?,
+            Some(deadline),
         )?;
         let session = reply["session"]
             .as_str()
@@ -358,7 +372,7 @@ impl<'a> Upload<'a> {
             if digest(&audio) != journal.piece().sha256 {
                 return Err(io::ErrorKind::InvalidData.into());
             }
-            let (code, result) = self.send(&piece_path, "PUT", &headers, &audio)?;
+            let (code, result) = self.send(&piece_path, "PUT", &headers, &audio, Some(deadline))?;
             if result["piece"] != id
                 || !matches!(
                     (code, result["state"].as_str()),
@@ -369,14 +383,14 @@ impl<'a> Upload<'a> {
             }
             journal.record(vec![Change::Ack(true)])?;
         }
-        self.consume(&path, &piece_path, &id, journal, latest)
+        self.consume(&path, &piece_path, &id, journal, latest, deadline)
     }
 
     fn retire(&self, journal: &mut Journal) -> io::Result<()> {
         if (journal.done() || journal.lost())
             && let Some(id) = journal.session()
         {
-            match self.send(&format!("/v1/sessions/{id}"), "DELETE", "", &[]) {
+            match self.send(&format!("/v1/sessions/{id}"), "DELETE", "", &[], None) {
                 Ok((204, _)) => {}
                 // Keep the session receipt for cleanup on a later poll.
                 _ if journal.host_failed() => return Ok(()),

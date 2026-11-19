@@ -170,18 +170,14 @@ pub fn run_until(
     plan: &Plan,
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
-    timeout: std::time::Duration,
+    deadline: std::time::Instant,
 ) -> Result<()> {
-    run_windows(
-        root,
-        plan,
-        native,
-        bridge,
-        Some(std::time::Instant::now() + timeout),
-    )
+    run_windows(root, plan, native, bridge, Some(deadline))
 }
 #[cfg(windows)]
-fn remaining(deadline: Option<std::time::Instant>) -> Result<Option<std::time::Duration>> {
+pub(in crate::core) fn remaining(
+    deadline: Option<std::time::Instant>,
+) -> Result<Option<std::time::Duration>> {
     deadline
         .map(|d| {
             d.checked_duration_since(std::time::Instant::now())

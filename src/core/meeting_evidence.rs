@@ -349,6 +349,7 @@ fn upload_windows(
         &super::speech_host::journal::Piece,
         (u64, u64),
         &super::Config,
+        Instant,
     ) -> super::asr::Result<Vec<Value>>,
 ) -> io::Result<()> {
     use super::{
@@ -460,18 +461,19 @@ fn upload_windows(
             };
             let wav = dir.join("audio.wav");
             let seconds = (job.end - job.start) as f64 / RATE as f64;
-            let deadline = job
-                .queued_ms
-                .saturating_add((config.asr_budget(seconds) * 1000.0).ceil() as i64);
+            let allowance = (config.asr_budget(seconds) * 1000.0).ceil() as u64;
+            let age = now().saturating_sub(job.queued_ms).max(0) as u64;
+            let tick = Instant::now();
+            let cutoff = |ms: u64| tick + Duration::from_millis(ms.saturating_sub(age));
             match upload.piece(
                 meeting,
                 &directory,
                 piece,
                 &wav,
-                || now() >= deadline,
-                |journal, span| {
+                (cutoff(allowance / 2), cutoff(allowance)),
+                |journal, span, deadline| {
                     progress.save(settings, Some(journal));
-                    local(&wav, journal.piece(), span, &config).ok()
+                    local(&wav, journal.piece(), span, &config, deadline).ok()
                 },
             ) {
                 Ok(Some(journal)) => {
@@ -530,11 +532,13 @@ fn run_local_span(
     piece: &super::speech_host::journal::Piece,
     (start, end): (u64, u64),
     config: &super::Config,
+    deadline: Instant,
 ) -> super::asr::Result<Vec<Value>> {
     use super::{
         meeting_router::{batches, inputs::Snapshot, jobs::BatchOutput, production},
         speech_host::upload::{MAX_WAV, digest},
     };
+    batches::remaining(Some(deadline))?;
     let temporary = tempfile::tempdir()?;
     let input = temporary.path().join("input");
     let work = temporary.path().join("job");
@@ -566,8 +570,8 @@ fn run_local_span(
         &[],
         config,
         &work,
-        &id,
-        0,
+        (&id, 0),
+        Some(deadline),
     )?;
     let output: BatchOutput =
         serde_json::from_slice(&Snapshot::read_file(&work.join("output.json"), 16 << 20)?)?;

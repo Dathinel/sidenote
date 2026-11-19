@@ -5,7 +5,7 @@ use crate::core::speech_host::{
     request,
 };
 use serde_json::Value;
-use std::{collections::BTreeSet, io};
+use std::{collections::BTreeSet, io, time::Instant};
 
 const FRAME_LIMIT: usize = 128 << 10;
 
@@ -17,9 +17,10 @@ impl Upload<'_> {
         id: &str,
         journal: &mut Journal,
         latest: u64,
+        deadline: Instant,
     ) -> io::Result<()> {
         if latest < journal.cursor() {
-            return self.snapshot(piece_path, id, journal, None, true);
+            return self.snapshot(piece_path, id, journal, None, true, deadline);
         }
         if !self.still_allowed() {
             return Err(io::ErrorKind::PermissionDenied.into());
@@ -44,10 +45,11 @@ impl Upload<'_> {
                 path: &events,
                 headers: &headers,
                 body: &[],
+                deadline: Some(deadline),
             },
             |_, data| stream.feed(data, journal).is_ok() && !stream.terminal,
         );
-        self.snapshot(piece_path, id, journal, stream.expected, false)
+        self.snapshot(piece_path, id, journal, stream.expected, false, deadline)
     }
 
     fn snapshot(
@@ -57,8 +59,9 @@ impl Upload<'_> {
         journal: &mut Journal,
         expected: Option<u64>,
         reset: bool,
+        deadline: Instant,
     ) -> io::Result<()> {
-        let (status, data) = self.send(path, "GET", "", &[])?;
+        let (status, data) = self.send(path, "GET", "", &[], Some(deadline))?;
         if status == 404 && !journal.replacement() {
             return journal.record(vec![Change::Ack(false), Change::Cursor(0)]);
         }

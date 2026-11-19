@@ -543,8 +543,8 @@ fn run_one_in(request: &Path, root: &Path) -> Result<()> {
                 &job.baseline,
                 &config,
                 &batches,
-                &job.input_revision,
-                job.generation,
+                (&job.input_revision, job.generation),
+                None,
             )?;
         }
         handoff::assembled(

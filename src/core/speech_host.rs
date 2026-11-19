@@ -185,6 +185,7 @@ impl Host {
                 path,
                 headers: "",
                 body: &[],
+                deadline: None,
             },
             16 * 1024,
         )
@@ -330,6 +331,7 @@ struct Request<'a> {
     path: &'a str,
     headers: &'a str,
     body: &'a [u8],
+    deadline: Option<Instant>,
 }
 
 fn request(
@@ -367,6 +369,17 @@ fn request(
         WINHTTP_FLAG_SECURE
     };
     let start = Instant::now();
+    let deadline = call
+        .deadline
+        .unwrap_or(start + Duration::from_secs(15))
+        .min(start + Duration::from_secs(15));
+    let timeout = || {
+        let ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(5000);
+        (ms > 0).then_some(ms as i32)
+    };
     // These buffers outlive the synchronous calls; each handle is closed in reverse order.
     unsafe {
         let handle = |raw| ptr::NonNull::new(raw).map(Handle);
@@ -377,7 +390,8 @@ fn request(
             ptr::null(),
             0,
         ))?;
-        if WinHttpSetTimeouts(session.0.as_ptr(), 5000, 5000, 5000, 5000) == 0 {
+        let ms = timeout()?;
+        if WinHttpSetTimeouts(session.0.as_ptr(), ms, ms, ms, ms) == 0 {
             return None;
         }
         let connection = handle(WinHttpConnect(
@@ -418,7 +432,13 @@ fn request(
                 len,
                 0,
             ) == 0
+        {
+            return None;
+        }
+        let ms = timeout()?;
+        if WinHttpSetTimeouts(raw, ms, ms, ms, ms) == 0
             || WinHttpReceiveResponse(raw, ptr::null_mut()) == 0
+            || Instant::now() >= deadline
         {
             return None;
         }
@@ -440,13 +460,15 @@ fn request(
         let mut bytes = Zeroizing::new([0u8; 4096]);
         loop {
             let mut read = 0;
-            if start.elapsed() >= Duration::from_secs(15)
+            let ms = timeout()?;
+            if WinHttpSetTimeouts(raw, ms, ms, ms, ms) == 0
                 || WinHttpReadData(
                     raw,
                     bytes.as_mut_ptr().cast(),
                     bytes.len() as u32,
                     &mut read,
                 ) == 0
+                || Instant::now() >= deadline
             {
                 return None;
             }

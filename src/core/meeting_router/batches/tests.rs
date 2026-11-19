@@ -192,7 +192,7 @@ fn expired_budget_never_loads_or_publishes() {
         &plan,
         &mut Fakes(log.clone()),
         &mut Fakes(log.clone()),
-        std::time::Duration::ZERO,
+        std::time::Instant::now(),
     )
     .unwrap_err();
     assert_eq!(

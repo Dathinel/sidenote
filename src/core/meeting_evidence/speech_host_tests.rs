@@ -145,6 +145,20 @@ impl Fixture {
         mode: Mode,
         mut local: impl FnMut(&Piece, (u64, u64)) -> super::super::asr::Result<Vec<Value>>,
     ) -> io::Result<()> {
+        self.run_using(mode, |_, piece, span, _, _| local(piece, span))
+    }
+
+    fn run_using(
+        &mut self,
+        mode: Mode,
+        local: impl FnMut(
+            &Path,
+            &Piece,
+            (u64, u64),
+            &super::super::Config,
+            Instant,
+        ) -> super::super::asr::Result<Vec<Value>>,
+    ) -> io::Result<()> {
         let (active, stopped) = mpsc::channel::<()>();
         let listener = &self.listener;
         let evidence = &self.collector.root;
@@ -159,7 +173,7 @@ impl Fixture {
                 host,
                 &self.source,
                 || chrono::Utc::now().timestamp_millis() + self.forward_ms,
-                |_, piece, span, _| local(piece, span),
+                local,
             );
             drop(active);
             server.join().unwrap();
@@ -538,7 +552,7 @@ fn speech_host_stall_and_death_fall_back_once_and_ignore_late_ranges() {
     fixture.run(Mode::Stall).unwrap();
     assert_eq!(fixture.server.uploads.len(), 1);
     assert!(speech_host::progress(&fixture.settings).contains("Sent 1 of 1"));
-    fixture.forward_ms = 31_000;
+    fixture.forward_ms = 16_000;
     let settings = fixture.settings.clone();
     let mut calls = Vec::new();
     for mode in [Mode::Dead, Mode::Dead, Mode::Normal] {
@@ -621,20 +635,64 @@ fn speech_host_only_reports_gaps_at_the_pipeline_budget() {
 }
 
 #[test]
+fn speech_host_wait_and_local_spans_share_one_deadline() {
+    let mut fixture = Fixture::finished();
+    fixture.run(Mode::Stall).unwrap();
+    fixture.forward_ms = 21_000;
+    let mut deadlines = Vec::new();
+    fixture
+        .run_using(Mode::Dead, |_, piece, span, _, deadline| {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero() && left <= Duration::from_secs(10),
+                "Host wait must reduce the local allowance"
+            );
+            deadlines.push(deadline);
+            Ok(vec![local_reading(piece, span)])
+        })
+        .unwrap();
+    assert_eq!(
+        deadlines.len(),
+        2,
+        "Auto must leave part of the budget for local work"
+    );
+    assert_eq!(
+        deadlines[0], deadlines[1],
+        "Both local spans must share the deadline"
+    );
+
+    let mut expired = Fixture::finished();
+    expired.run(Mode::Stall).unwrap();
+    expired.forward_ms = 31_000;
+    expired
+        .run_with(Mode::Dead, |_, _| {
+            panic!("Local work started after the shared deadline")
+        })
+        .unwrap();
+    assert_eq!(
+        expired.revision().provenance["missing_ranges"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn speech_host_auto_restages_a_host_only_gap() {
     let mut fixture = Fixture::finished();
     WorkMode::HostOnly.save(&fixture.settings).unwrap();
-    fixture.run(Mode::Stall).unwrap();
-    fixture.forward_ms = 31_000;
-    fixture.run(Mode::Dead).unwrap();
+    for mode in [Mode::Partial, Mode::Lost(0), Mode::Failed] {
+        fixture.run(mode).unwrap();
+    }
     let before = fixture.revision();
-    assert_eq!(before.evidence.len(), 1);
+    assert_eq!(before.evidence.len(), 2);
     assert_eq!(
         before.provenance["missing_ranges"]
             .as_array()
             .unwrap()
             .len(),
-        2
+        1
     );
 
     WorkMode::Auto.save(&fixture.settings).unwrap();
