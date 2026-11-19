@@ -203,6 +203,49 @@ class Packaging(unittest.TestCase):
             paths.extend(matches)
         self.assertNotEqual(*paths)
 
+    def test_llvm_exception(self):
+        p = fixture('llvm-exception')
+        term = 'Apache-2.0 WITH LLVM-exception'
+        packages = {'exact': (term, {'Apache-2.0', 'LLVM-exception'}),
+                    'alternatives': (term + ' OR Apache-2.0 OR MIT', {'Apache-2.0', 'LLVM-exception', 'MIT'})}
+        root = p / 'Cargo.toml'
+        workspace = root.read_text().replace('[workspace]\n', '[workspace]\nexclude=["deps/exact", "deps/alternatives"]\n')
+        remove(root)
+        put(root, workspace + '\n[dependencies]\nexact={path="deps/exact"}\nalternatives={path="deps/alternatives"}\n')
+        for name, (expression, _) in packages.items():
+            put(p / f'deps/{name}/Cargo.toml',
+                f'[package]\nname="{name}"\nversion="0.1.0"\nedition="2024"\nlicense="{expression}"\nauthors=["Fixture"]\n')
+            put(p / f'deps/{name}/src/lib.rs', 'pub fn fixture() {}\n')
+        lock = p / 'Cargo.lock'
+        remove(lock)
+        put(lock, 'version=4\n\n[[package]]\nname="alternatives"\nversion="0.1.0"\n'
+                  '\n[[package]]\nname="exact"\nversion="0.1.0"\n'
+                  '\n[[package]]\nname="sidenote"\nversion="0.0.1"\ndependencies=["alternatives", "exact"]\n')
+        commit(p)
+        r, out = cli(p)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        stage = binary(out).parents[1]
+        rows = {row['name']: row for row in json.loads((stage / 'DEPENDENCY_NOTICE_COVERAGE.json').read_text())}
+        for name, (expression, ids) in packages.items():
+            row = rows[name]
+            self.assertEqual(row['license'], expression)
+            self.assertEqual(len(row['notice_paths']), 1)
+            self.assertIn(f'Included: {expression}', (stage / row['notice_paths'][0]).read_text())
+            self.assertEqual({Path(path).stem for path in row['standard_license_paths']}, ids)
+            for path in row['standard_license_paths']:
+                self.assertEqual((stage / path).read_bytes(), (p / 'tools/licenses' / Path(path).name).read_bytes())
+
+        manifest = p / 'deps/exact/Cargo.toml'
+        for expression in ('MIT WITH LLVM-exception', 'Apache-2.0 WITH Unknown-exception', term + ' AND MIT'):
+            text = manifest.read_text()
+            remove(manifest)
+            put(manifest, re.sub(r'^license=.*$', f'license="{expression}"', text, flags=re.MULTILINE))
+            commit(p)
+            rejected, out = cli(p)
+            self.assertIn(b'uncovered licence', rejected.stderr)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertFalse(out.exists())
+
     def test_archive(self):
         p = REPO if MODE == 'HEAD' else fixture('archive')
         sha = git(p, 'rev-parse', 'HEAD') if MODE == 'HEAD' else commit(p)

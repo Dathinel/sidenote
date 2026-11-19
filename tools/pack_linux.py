@@ -87,9 +87,15 @@ def notices(source, stage, cache, metadata, archive, git_archives):
             selected = next((c for c in choices if (c['name'], c['version']) == (p['name'], p['version'])), None)
             if selected and (selected['declared'] != expression or selected['selected'] not in expression.split(' OR ')): raise ValueError('invalid licence choice')
             effective = selected['selected'] if selected else expression
-            tokens = re.findall(r'[A-Za-z0-9.+-]+|[()]', effective)
-            ids = set(tokens) - {'AND', 'OR', '(', ')'}
-            if ''.join(tokens) != re.sub(r'\s', '', effective) or not ids or not ids <= {'MIT', 'Apache-2.0', 'BSL-1.0', 'Zlib'}: raise ValueError('uncovered licence')
+            exception = 'Apache-2.0 WITH LLVM-exception'
+            if effective == exception:
+                ids = {'Apache-2.0', 'LLVM-exception'}
+            elif effective == f'{exception} OR Apache-2.0 OR MIT':
+                ids = {'Apache-2.0', 'LLVM-exception', 'MIT'}
+            else:
+                tokens = re.findall(r'[A-Za-z0-9.+-]+|[()]', effective)
+                ids = set(tokens) - {'AND', 'OR', '(', ')'}
+                if ''.join(tokens) != re.sub(r'\s', '', effective) or not ids or not ids <= {'MIT', 'Apache-2.0', 'BSL-1.0', 'Zlib'}: raise ValueError('uncovered licence')
             holder = '; '.join(p['authors']) or p['repository']
             if not holder: raise ValueError('missing attribution')
             relative_standards = os.path.relpath(standards_dir, destination)
