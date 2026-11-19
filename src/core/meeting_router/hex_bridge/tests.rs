@@ -53,6 +53,7 @@ fn status(id: &str, pending: u32, version: u32) -> Result<String> {
 }
 #[test]
 fn fake_hex_contract() {
+    let _guard = test_dispatch_guard();
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("range.wav");
     crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
@@ -71,7 +72,7 @@ fn fake_hex_contract() {
             (vec![h(), s(), ok(TEXT)], Ok(Some(TEXT))),
             (vec![h(), s(), ok(TIMED)], Ok(Some(TIMED))),
             (vec![h(), busy(), s(), ok(TEXT)], Ok(Some(TEXT))),
-            (vec![h(), s(), race(), s(), ok(TEXT)], Ok(Some(TEXT))),
+            (vec![h(), s(), race()], Err(Busy)),
             (vec![h(), s(), Err(Timeout)], Err(Timeout)),
             (vec![h(), status(selected, 0, 3)], Err(Unsupported)),
             (vec![ok("--model")], Err(Unsupported)),

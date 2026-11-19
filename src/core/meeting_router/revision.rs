@@ -11,7 +11,10 @@ use std::{collections::BTreeMap, path::Path};
 mod publication;
 pub use publication::{begin, commit, load, retain};
 
-#[derive(Serialize, Deserialize)]
+pub(crate) mod gaps;
+mod reconciliation;
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Revision {
     pub generation: String,
     pub plan_revision: String,
@@ -124,6 +127,7 @@ fn segment(id: &str, r: &super::batches::Range, origin: i64, value: &Value) -> R
         translate: lang != "en",
     })
 }
+#[cfg(windows)]
 fn select(transcript: &mut Transcript, baseline: &[Chunk]) -> Vec<Segment> {
     let candidates = transcript.segments.clone();
     transcript.segments.retain(|a| {
@@ -234,8 +238,14 @@ pub fn assemble(
     transcript.input_checksum = manifest.source_revision.clone();
     transcript.config_checksum = manifest.config_checksum.clone();
     let mut evidence = BTreeMap::new();
+    let mut no_speech = BTreeMap::new();
     for (id, range) in plan.batches.values().flat_map(|b| b.iter()) {
         let reading = super::batches::read_result(root, plan, id)?;
+        if reading.is_none()
+            && let Some(reason) = super::batches::read_no_speech(root, plan, id)
+        {
+            no_speech.insert(id.clone(), reason);
+        }
         let track = manifest
             .tracks
             .iter()
@@ -266,7 +276,46 @@ pub fn assemble(
             evidence.insert(id.clone(), value);
         }
     }
-    let candidates = select(&mut transcript, baseline);
+    let candidates = transcript.segments.clone();
+    let routing: Vec<super::fallback::RoutingFallback> =
+        match super::inputs::Snapshot::read_file(&root.join("uncertainty.json"), 16 << 20) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+    let mut transport: Value =
+        match super::inputs::Snapshot::read_file(&root.join("english-transport.json"), 16 << 20) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
+            Err(e) => return Err(e.into()),
+        };
+    if let Some(ranges) = transport.get_mut("ranges").and_then(Value::as_object_mut) {
+        ranges.retain(|id, _| plan.batches.get("en").is_some_and(|b| b.contains_key(id)));
+    }
+    let mut coverage =
+        reconciliation::from_router_records(plan, manifest, &no_speech, &routing, &transport)?;
+    reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
+    transcript.segments.sort_by(|a, b| {
+        a.start
+            .total_cmp(&b.start)
+            .then(a.track.cmp(&b.track))
+            .then(a.sources[0].chunk.id.cmp(&b.sources[0].chunk.id))
+    });
+    let mut provenance = serde_json::to_value(manifest)?;
+    provenance["no_speech"] = serde_json::to_value(no_speech)?;
+    provenance["plan"] = serde_json::to_value(plan)?;
+    provenance["assembly_coverage"] = serde_json::to_value(coverage)?;
+    provenance["english_transport"] = transport;
+    let mut revision = Revision {
+        generation: generation.to_string(),
+        plan_revision: plan.revision.clone(),
+        transcript,
+        alternatives: candidates,
+        evidence,
+        provenance,
+    };
+    super::fallback::attach(&mut revision, &routing)?;
+    gaps::from_files(root, &mut revision)?;
     for range in plan.batches.values().flat_map(|b| b.values()) {
         let track = manifest
             .tracks
@@ -284,29 +333,19 @@ pub fn assemble(
                 english: String::new(),
                 audio_start: None,
             };
-            if !super::baseline::source_covered(&owned, &transcript.segments) {
-                return Err("Owned interval lacks routed or baseline coverage".into());
+            if !super::baseline::source_covered(&owned, &revision.transcript.segments) {
+                return Err(format!("Owned interval lacks routed or baseline coverage: track={} language={:?} samples=[{start},{end}] seconds=[{},{}]", range.track, range.range.language, owned.start, owned.end).into());
             }
         }
     }
-    transcript.segments.sort_by(|a, b| {
-        a.start
-            .total_cmp(&b.start)
-            .then(a.track.cmp(&b.track))
-            .then(a.sources[0].chunk.id.cmp(&b.sources[0].chunk.id))
-    });
-    Ok(Revision {
-        generation: generation.to_string(),
-        plan_revision: plan.revision.clone(),
-        transcript,
-        alternatives: candidates,
-        evidence,
-        provenance: serde_json::to_value(manifest)?,
-    })
+    Ok(revision)
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+mod captured_tests;
 
 #[cfg(all(test, windows))]
 mod receipts;

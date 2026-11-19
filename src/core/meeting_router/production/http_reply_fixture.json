@@ -1,0 +1,44 @@
+{
+  "hex_version": "0.0.0-dev-1057",
+  "health": {
+    "version": "0.0.0-dev-1057",
+    "apiVersion": "2"
+  },
+  "ready": {
+    "type": "ready",
+    "url": "http://127.0.0.1:51963",
+    "token": "[redacted ephemeral credential]",
+    "apiVersion": "2",
+    "pid": 32876
+  },
+  "transcription": {
+    "durationMs": 1056,
+    "transcript": "Rather"
+  },
+  "top_level": {
+    "version": 4,
+    "status": "transcript",
+    "text": "Rather"
+  },
+  "status_fields": {
+    "version": 4,
+    "capture": {
+      "state": "idle",
+      "pending_jobs": 0
+    },
+    "meeting": {
+      "state": "idle"
+    },
+    "model": {
+      "preparing": null
+    }
+  },
+  "help": "Transcribe a WAV file with an installed model here. Linux and Windows\n\nUsage: hex.exe model transcribe [OPTIONS] <WAV>\n\nArguments:\n  <WAV>  \n\nOptions:\n      --model <MODEL>        \n      --language <LANGUAGE>  \n  -h, --help                 Print help\n",
+  "http_error": {
+    "version": "0.0.0-dev-1057",
+    "status": 409,
+    "reply": {
+      "code": "model-not-ready"
+    }
+  }
+}

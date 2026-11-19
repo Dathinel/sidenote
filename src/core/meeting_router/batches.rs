@@ -126,9 +126,35 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
     };
     Ok(check().unwrap_or(None))
 }
+#[cfg(windows)]
+fn no_speech(plan: &Plan, id: &str) -> Value {
+    serde_json::json!({"revision":plan.revision,"range":id,"reason":"no-speech",
+        "source":"captured-hex-baseline"})
+}
+pub(super) fn read_no_speech(root: &Path, plan: &Plan, id: &str) -> Option<Value> {
+    #[cfg(windows)]
+    {
+        let value: Value = serde_json::from_slice(
+            &Snapshot::read_file(&path(root, plan, id, "fallback"), 4096).ok()?,
+        )
+        .ok()?;
+        (value == no_speech(plan, id)).then_some(value)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (root, plan, id);
+        None
+    }
+}
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
+    fn can_reuse(&self, _id: &str, _range: &Range) -> bool {
+        true
+    }
     fn limit(&mut self, _remaining: std::time::Duration) {}
+    fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum NativeLanguage {
@@ -240,7 +266,7 @@ fn run_batches(
         let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
-            .filter(|(id, _)| !cached(root, plan, id))
+            .filter(|(id, r)| !cached(root, plan, id) || (lang == "en" && !bridge.can_reuse(id, r)))
             .collect();
         let Some((_, first)) = pending.first() else {
             continue;
@@ -253,20 +279,55 @@ fn run_batches(
             _ => return Err("Unknown language".into()),
         };
         for (id, r) in pending {
+            if lang == "en" && !bridge.can_reuse(id, r) {
+                match std::fs::remove_file(path(root, plan, id, "receipt")) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
             if let Some(left) = remaining(deadline)? {
                 match &mut session {
                     Some(s) => s.limit(left),
                     None => bridge.limit(left),
                 }
             }
-            let v = match &mut session {
-                Some(s) => s.recognize(r)?,
-                None => bridge.transcribe(r)?,
+            let result = match &mut session {
+                Some(s) => s.recognize(r),
+                None => bridge.transcribe(r),
+            }
+            .and_then(|value| {
+                let text = value["text"].as_str().ok_or("Empty result")?;
+                if text.trim().is_empty() {
+                    Err(super::hex_bridge::HexFailure::NoSpeech.into())
+                } else {
+                    Ok(value)
+                }
+            });
+            let v = match result {
+                Ok(value) => value,
+                Err(error)
+                    if error
+                        .downcast_ref::<super::hex_bridge::HexFailure>()
+                        .is_some_and(|e| e.kind() == &super::hex_bridge::HexFailure::NoSpeech) =>
+                {
+                    remaining(deadline)?;
+                    store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
+                    continue;
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<super::hex_bridge::HexFailure>()
+                        .is_some_and(|e| {
+                            e.kind() == &super::hex_bridge::HexFailure::HelperFailed
+                        }) =>
+                {
+                    remaining(deadline)?;
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             remaining(deadline)?;
-            if v["text"].as_str().is_none_or(|s| s.trim().is_empty()) {
-                return Err("Empty result".into());
-            }
             let bytes = serde_json::to_vec(&v)?;
             store_io::atomic_write(&path(root, plan, id, "result"), &bytes)?;
             store_io::write(
@@ -281,6 +342,8 @@ fn run_batches(
         }
         if let Some(s) = &mut session {
             s.finish()?;
+        } else {
+            bridge.finish()?;
         }
         drop(session);
         store_io::write(

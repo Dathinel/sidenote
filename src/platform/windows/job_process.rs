@@ -16,7 +16,31 @@ pub struct JobProcess {
     pub input: std::io::PipeWriter,
 }
 impl ProcessJob {
+    #[cfg(feature = "asr-runtime")]
+    pub(crate) fn contains_pid(&self, pid: u32) -> io::Result<bool> {
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        use std::os::windows::io::FromRawHandle;
+        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let mut inside = 0;
+        if unsafe { IsProcessInJob(process.as_raw_handle(), self.0.as_raw_handle(), &mut inside) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(inside != 0)
+    }
     pub fn spawn(&self, command: &Command) -> io::Result<JobProcess> {
+        self.spawn_output(command, None)
+    }
+    pub(crate) fn spawn_output(
+        &self,
+        command: &Command,
+        stdout: Option<&std::io::PipeWriter>,
+    ) -> io::Result<JobProcess> {
         if !Path::new(command.get_program()).is_absolute() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -26,11 +50,8 @@ impl ProcessJob {
         let (input, writer) = std::io::pipe()?;
         let output = File::options().write(true).open("NUL")?;
         let error = output.try_clone()?;
-        for h in [
-            input.as_raw_handle(),
-            output.as_raw_handle(),
-            error.as_raw_handle(),
-        ] {
+        let stdout = stdout.map_or(output.as_raw_handle(), AsRawHandle::as_raw_handle);
+        for h in [input.as_raw_handle(), stdout, error.as_raw_handle()] {
             if unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -49,7 +70,11 @@ impl ProcessJob {
             &wide(command.get_program()),
             &mut sidenote_sync::windows_launch::command_line(command)?,
             &environment,
-            [input.as_handle(), output.as_handle(), error.as_handle()],
+            [
+                input.as_handle(),
+                unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(stdout) },
+                error.as_handle(),
+            ],
             directory.as_deref(),
             CREATE_NO_WINDOW,
             Some(self.0.as_handle()),

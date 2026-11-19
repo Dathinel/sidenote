@@ -8,6 +8,8 @@ mod config;
 pub mod fallback;
 mod hex;
 pub mod hex_bridge;
+#[cfg(all(windows, feature = "asr-runtime"))]
+mod hex_http;
 pub(crate) mod inputs;
 pub mod jobs;
 pub mod pieces;

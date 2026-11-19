@@ -3,21 +3,39 @@ use super::{batches::*, hex_bridge::*, *};
 use crate::core::{Config, model_catalog};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(all(test, windows))]
+use std::process::Command;
 #[cfg(windows)]
 use std::sync::{Arc, atomic::AtomicBool};
 use std::{num::NonZeroUsize, time::Duration};
+#[cfg(all(windows, feature = "asr-runtime"))]
+mod english_http;
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+mod gap_tests;
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+mod http_tests;
 #[cfg(windows)]
 mod pipeline;
 #[cfg(feature = "asr-runtime")]
 pub(crate) mod plan;
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub use pipeline::assemble_saved;
 #[cfg(windows)]
 pub use pipeline::run;
+#[cfg(all(test, windows))]
+mod fixture_tools;
+#[cfg(all(test, windows))]
+mod no_speech_tests;
+#[cfg(all(test, windows))]
+mod probe_tests;
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(in crate::core) mod proof;
 #[cfg(all(test, windows))]
 mod public_tests;
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(crate) mod regression;
+#[cfg(all(test, windows))]
+mod round2_tests;
 
 pub struct Native<'a>(pub &'a Config);
 impl NativeLoader for Native<'_> {
@@ -74,8 +92,18 @@ impl NativeLoader for Native<'_> {
     }
 }
 
-pub struct English(pub HexBridge<HexSpeech>);
-impl EnglishBridge for English {
+pub struct English<C = HexSpeech>(pub HexBridge<C>);
+impl<C: HexCommand> EnglishBridge for English<C> {
+    fn can_reuse(&self, id: &str, range: &Range) -> bool {
+        self.0.can_reuse(&HexRequest {
+            range_id: id.into(),
+            model_id: range.model_id.clone(),
+            language: "en".into(),
+        })
+    }
+    fn finish(&mut self) -> Result<()> {
+        Ok(self.0.finish()?)
+    }
     fn limit(&mut self, remaining: Duration) {
         self.0.limit(remaining);
     }
