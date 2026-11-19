@@ -749,10 +749,13 @@ impl Drop for Collector {
     }
 }
 
+#[cfg(all(test, windows))]
+mod speech_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn audio(path: &Path, seconds: u64) {
+    pub(super) fn audio(path: &Path, seconds: u64) {
         let mut w = hound::WavWriter::create(
             path,
             hound::WavSpec {
