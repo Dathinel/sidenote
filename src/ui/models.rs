@@ -22,8 +22,6 @@ pub enum Msg {
 enum Action {
     Remove,
     Install,
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    Automatic(bool),
 }
 
 struct Job {
@@ -35,10 +33,6 @@ struct Job {
 #[derive(Default)]
 pub struct Models {
     store: ModelStore,
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    state_root: std::path::PathBuf,
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    provisioning: Option<std::fs::File>,
     languages: Vec<String>,
     installed: HashSet<&'static str>,
     partial: HashSet<&'static str>,
@@ -88,14 +82,10 @@ impl Models {
             .collect();
         Self {
             store,
-            #[cfg(all(windows, feature = "asr-runtime"))]
-            state_root: root.to_owned(),
             languages,
             installed,
             partial,
             preference_error,
-            #[cfg(all(windows, feature = "asr-runtime"))]
-            provisioning: None,
             progress: HashMap::new(),
             errors: HashMap::new(),
             jobs: HashMap::new(),
@@ -108,12 +98,9 @@ impl Models {
                 self.progress.insert(id, progress);
             }
             Msg::Finished(id, result) => {
-                let installed_by_request = self.jobs.remove(id).is_some_and(|job| {
-                    let requested =
-                        job.action == Action::Install && !job.cancel.load(Ordering::Relaxed);
+                if let Some(job) = self.jobs.remove(id) {
                     let _ = job.worker.join();
-                    requested
-                });
+                }
                 self.progress.remove(id);
                 let store = &self.store;
                 if store.installed_paths(id).ok().flatten().is_some() {
@@ -129,13 +116,8 @@ impl Models {
                 match result {
                     Ok(()) => {
                         self.errors.remove(id);
-                        if installed_by_request {
-                            self.remember_choice(id, false);
-                        }
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                        // A failed cancellation preference can still need to be shown.
-                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(error) => {
                         self.errors.insert(id, error.to_string());
                     }
@@ -148,8 +130,6 @@ impl Models {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let store = self.store.clone();
-        #[cfg(all(windows, feature = "asr-runtime"))]
-        let state_root = self.state_root.clone();
         self.errors.remove(id);
         self.progress.insert(
             id,
@@ -164,15 +144,6 @@ impl Models {
             let result = match action {
                 Action::Remove => store.remove(id),
                 Action::Install => store.install(id, &worker_cancel, progress),
-                #[cfg(all(windows, feature = "asr-runtime"))]
-                Action::Automatic(cache_only) => provisioning::install(
-                    &store,
-                    &state_root,
-                    id,
-                    &worker_cancel,
-                    cache_only,
-                    progress,
-                ),
             };
             notify(Msg::Finished(id, result));
         });
@@ -192,7 +163,7 @@ impl Models {
         remove: bool,
         notify: impl Fn(Msg) + Send + 'static,
     ) -> bool {
-        if self.scene || self.jobs.contains_key(id) || (remove && !self.remember_choice(id, true)) {
+        if self.scene || self.jobs.contains_key(id) {
             return false;
         }
         self.start(
@@ -207,73 +178,10 @@ impl Models {
         true
     }
 
-    fn remember_choice(&mut self, id: &'static str, off: bool) -> bool {
-        #[cfg(all(windows, feature = "asr-runtime"))]
-        if let Err(error) = provisioning::opt_out(&self.store, id, off) {
-            self.preference_error = Some(format!("Could not save the model choice: {error}"));
-            return false;
-        }
-        let _ = (id, off);
-        true
-    }
-
     fn cancel(&mut self, id: &'static str) {
         if let Some(job) = self.jobs.get(id) {
             job.cancel.store(true, Ordering::Relaxed);
-            if !self.remember_choice(id, true) {
-                self.errors.insert(
-                    id,
-                    "Download stopped. This choice could not be saved for restart.".into(),
-                );
-            }
         }
-    }
-
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    fn provision(
-        &mut self,
-        config: &sidenote::core::Config,
-        recording: bool,
-        cache_only: bool,
-        notify: impl Fn(Msg) + Send + 'static,
-    ) -> bool {
-        if self.scene {
-            return false;
-        }
-        if let Some(job) = self
-            .jobs
-            .values()
-            .find(|job| matches!(job.action, Action::Automatic(_)))
-        {
-            if recording || !provisioning::enabled(config) {
-                job.cancel.store(true, Ordering::Relaxed);
-            }
-            return false;
-        }
-        let Some(id) =
-            provisioning::next_pack(&self.store, config, |id| self.errors.contains_key(id))
-        else {
-            self.provisioning = None;
-            return false;
-        };
-        if self.provisioning.is_none() {
-            match provisioning::reserve(&self.store) {
-                Ok(lock) => self.provisioning = Some(lock),
-                Err(error) if matches!(error.raw_os_error(), Some(32 | 33)) => return false,
-                Err(error) => {
-                    self.errors.insert(id, error.to_string());
-                    return true;
-                }
-            }
-        }
-        if recording
-            || !self.jobs.is_empty()
-            || (!cache_only && !provisioning::recording_idle(&self.state_root))
-        {
-            return false;
-        }
-        self.start(id, Action::Automatic(cache_only), notify);
-        true
     }
 }
 impl Drop for Models {
@@ -311,19 +219,6 @@ impl State {
     fn model_download(&mut self, id: &'static str, remove: bool) {
         self.models.request_download(id, remove, model_notify(self));
     }
-
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    pub(super) fn provision_models(&mut self, tx: &mut rune::Tx) -> bool {
-        let recording = self.hex_record_busy();
-        let notify = model_notify(self);
-        let changed = self
-            .models
-            .provision(&self.config, recording, false, notify);
-        if self.models.provisioning.is_some() && self.models.jobs.is_empty() {
-            tx.wake_after(std::time::Duration::from_secs(1));
-        }
-        changed
-    }
 }
 
 fn model_notify(s: &State) -> impl Fn(Msg) + Send + 'static {
@@ -336,128 +231,47 @@ fn model_notify(s: &State) -> impl Fn(Msg) + Send + 'static {
         }
     }
 }
-/// Runs one Settings or automatic job in an isolated proof process.
-#[cfg(all(windows, feature = "asr-runtime"))]
-pub(crate) fn provision_for_proof(
-    root: &Path,
-    mode: &str,
-    cancel_at: Option<u64>,
-) -> std::io::Result<()> {
-    use std::{
-        io,
-        time::{Duration, Instant},
-    };
-    let config = sidenote::core::Config::load_in(root)?;
-    if !root.is_absolute() || !config.pipeline.model_state_dir.as_os_str().is_empty() {
-        return Err(io::Error::other(
-            "The model check needs an absolute, isolated state folder",
-        ));
-    }
-    if mode != "cache"
-        && !root
-            .canonicalize()?
-            .starts_with(std::env::temp_dir().canonicalize()?)
-    {
-        return Err(io::Error::other(
-            "The catalog check needs a temporary state folder",
-        ));
-    }
-    let mut models = Models::load(root, &config);
-    let (tx, rx) = std::sync::mpsc::channel();
-    let notify = || {
-        let sender = tx.clone();
-        move |msg| {
-            let _ = sender.send(msg);
-        }
-    };
-    if matches!(mode, "cache" | "catalog") {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !models.provision(&config, false, mode == "cache", notify()) {
-            if mode == "cache"
-                || Instant::now() >= deadline
-                || provisioning::next_pack(&models.store, &config, |id| {
-                    models.errors.contains_key(id)
-                })
-                .is_none()
-            {
-                return Err(io::Error::other("No automatic model install could start"));
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-    } else {
-        let (action, id) = mode
-            .split_once(':')
-            .ok_or_else(|| io::Error::other("Unknown model check action"))?;
-        let id = provisioning::PACKS
-            .into_iter()
-            .find(|pack| *pack == id)
-            .ok_or_else(|| io::Error::other("Unknown automatic model pack"))?;
-        if !matches!(action, "install" | "remove")
-            || !models.request_download(id, action == "remove", notify())
-        {
-            return Err(io::Error::other(
-                "Could not start the requested Settings action",
-            ));
-        }
-    }
-    drop(tx);
-    for msg in rx {
-        if let Msg::Progress(id, ref progress) = msg {
-            println!(
-                "{id} {:?} {}/{}",
-                progress.phase, progress.downloaded, progress.total
-            );
-            if matches!(progress.phase, Phase::Downloading)
-                && cancel_at.is_some_and(|at| progress.downloaded >= at)
-            {
-                models.cancel(id);
-            }
-        } else if let Msg::Finished(_, ref outcome) = msg {
-            let result = outcome
-                .as_ref()
-                .map(|()| ())
-                .map_err(|e| io::Error::new(e.kind(), e.to_string()));
-            models.apply(msg);
-            return result;
-        }
-        models.apply(msg);
-    }
-    Err(std::io::Error::other("Automatic model worker disconnected"))
-}
-
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 #[test]
-fn automatic_model_startup_respects_recording_and_saved_choices() {
-    let state = tempfile::tempdir().unwrap();
-    let root = state.path();
-    let mut config = sidenote::core::Config::load_in(root).unwrap();
-    let mut models = Models::load(root, &config);
-    assert!(!models.provision(&config, true, true, |_| {}));
-    assert!(models.jobs.is_empty());
+fn dev40_startup_does_not_download() {
+    let mut state = State::new();
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path();
+    let config = sidenote::core::Config::default();
+    state.models = Models::load(root, &config);
+    state.config = config;
 
-    let silero = provisioning::PACKS[0];
-    assert!(models.provision(&config, false, true, |_| {}));
-    assert_eq!(models.jobs.len(), 1);
-    assert!(models.progress.contains_key(silero));
-    assert!(!models.provision(&config, false, true, |_| {}));
-    models.cancel(silero);
-    drop(models);
-
-    let mut models = Models::load(root, &config);
-    assert!(models.provision(&config, false, true, |_| {}));
-    assert!(models.jobs.contains_key(provisioning::PACKS[1]));
-    drop(models);
-
-    let mut models = Models::load(root, &config);
-    assert!(models.remember_choice(silero, false));
-    config.pipeline.language_mode = "forced:te".into();
-    assert!(!models.provision(&config, false, true, |_| {}));
-    config.pipeline.language_mode = "auto".into();
-    config.labs.after_stop_language_routing = false;
-    assert!(!models.provision(&config, false, true, |_| {}));
-    assert_eq!(
-        provisioning::next_pack(&models.store, &sidenote::core::Config::default(), |_| false),
-        Some(silero)
+    // Make the old startup path eligible without allowing an HTTP request.
+    let model = model_catalog::model("silero-vad").unwrap();
+    let file = &model.files[0];
+    let pack = root.join("models").join(model.id);
+    std::fs::create_dir_all(&pack).unwrap();
+    std::fs::File::create(pack.join(format!("{}.part", file.name)))
+        .unwrap()
+        .set_len(file.bytes)
+        .unwrap();
+    std::fs::create_dir_all(root.join("local")).unwrap();
+    std::fs::write(
+        root.join("local/status.ndjson"),
+        serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "protocol": 4, "meeting_state": "idle", "status_error": null,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    state.store.root = root.to_owned();
+    let mut runtime = rune::Runtime::new(
+        state,
+        |_, _| rune::el(),
+        (800.0, 600.0),
+        rune::Env::default(),
+    );
+    runtime.poll = Some(super::poll);
+    runtime.frame(0.0);
+    assert!(
+        runtime.state.models.jobs.is_empty(),
+        "startup queued a model download"
     );
 }
 
@@ -465,14 +279,12 @@ fn automatic_model_startup_respects_recording_and_saved_choices() {
 #[test]
 fn provisioning_review_cancel_stops_even_when_saving_fails() {
     let root = tempfile::tempdir().unwrap();
-    let config = sidenote::core::Config::default();
-    let mut models = Models::load(root.path(), &config);
-    let id = provisioning::PACKS[0];
-    models.start(id, Action::Automatic(true), |_| {});
+
     let blocked = root.path().join("not-a-directory");
     std::fs::write(&blocked, b"fixture").unwrap();
-    models.store = ModelStore::new(blocked);
-
+    let mut models = Models::load(&blocked, &sidenote::core::Config::default());
+    let id = "silero-vad";
+    assert!(models.request_download(id, false, |_| {}));
     models.cancel(id);
 
     assert!(models.jobs[id].cancel.load(Ordering::Relaxed));
@@ -480,9 +292,8 @@ fn provisioning_review_cancel_stops_even_when_saving_fails() {
         models
             .preference_error
             .as_deref()
-            .is_some_and(|e| e.contains("Could not save"))
+            .is_some_and(|e| e.contains("Could not read meeting languages"))
     );
-    assert!(models.errors.contains_key(id));
 }
 
 #[cfg(all(test, windows, feature = "asr-runtime"))]
@@ -921,10 +732,6 @@ pub fn scene(s: &mut State, name: &str) {
     s.hex.section = hex::Section::MeetingModels;
     s.models = Models {
         store: ModelStore::new(s.store.root.clone()),
-        #[cfg(all(windows, feature = "asr-runtime"))]
-        state_root: s.store.root.clone(),
-        #[cfg(all(windows, feature = "asr-runtime"))]
-        provisioning: None,
         languages: vec!["en".into(), "hi".into()],
         scene: true,
         installed: HashSet::new(),

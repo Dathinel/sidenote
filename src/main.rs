@@ -101,30 +101,6 @@ fn main() {
         eprintln!("{code}");
         std::process::exit(2);
     }
-    #[cfg(all(windows, feature = "desktop", feature = "asr-runtime"))]
-    if let Some(index) = args
-        .iter()
-        .position(|arg| arg == "--model-provisioning-check")
-    {
-        if !args.windows(2).any(|pair| pair[0] == "--data-dir") {
-            std::process::exit(2);
-        }
-        let mode = args
-            .get(index + 1)
-            .and_then(|arg| arg.to_str())
-            .filter(|arg| !arg.starts_with("--"))
-            .unwrap_or("cache");
-        let cancel_at = args
-            .windows(2)
-            .find(|pair| pair[0] == "--cancel-after-bytes")
-            .and_then(|pair| pair[1].to_str())
-            .and_then(|value| value.parse().ok());
-        let result = ui::models::provision_for_proof(&sidenote::core::state_dir(), mode, cancel_at);
-        if let Err(error) = &result {
-            eprintln!("{error}");
-        }
-        std::process::exit(i32::from(result.is_err()));
-    }
     if args.iter().any(|a| a == "--sync-control") {
         #[cfg(target_os = "linux")]
         std::process::exit(sidenote::sync_owner::cli());
