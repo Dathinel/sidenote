@@ -55,6 +55,9 @@ impl Form {
     }
 
     fn mode(&mut self, mode: WorkMode, wake: Waker) -> Result<(), String> {
+        if self.mode == mode {
+            return Ok(());
+        }
         let path = speech_host::settings_path()?;
         mode.save(&path)
             .map_err(|_| "Could not save the speech work location.")?;
@@ -78,8 +81,7 @@ impl Form {
     }
 }
 
-pub(super) fn tick(s: &mut State) -> bool {
-    let on_hex = s.on_hex();
+pub(super) fn tick(s: &mut State, speech: bool) -> bool {
     let form = &mut s.hex.shell.speech_host;
     if !form.loaded
         && let Some(wake) = s.waker.clone()
@@ -107,7 +109,7 @@ pub(super) fn tick(s: &mut State) -> bool {
         form.status = status;
         return true;
     }
-    if on_hex
+    if speech
         && form
             .progress_at
             .is_none_or(|at| at.elapsed().as_secs() >= 1)

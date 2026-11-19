@@ -65,7 +65,10 @@ impl Progress {
             "Sent {} of {}. Host finished {}. Running {} here. Finished here {}. Gaps {}.",
             sent, self.total, self.host, running, self.local, self.gaps
         );
-        let _ = store_io::atomic_write(&settings.with_file_name("progress.txt"), text.as_bytes());
+        if progress(settings) != text {
+            let _ =
+                store_io::atomic_write(&settings.with_file_name("progress.txt"), text.as_bytes());
+        }
     }
 }
 

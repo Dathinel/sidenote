@@ -404,6 +404,7 @@ fn upload_windows(
         return Ok(());
     };
     let mut failure = None;
+    let mut latest_progress = None;
     for folder in folders(evidence) {
         let Some(meeting) = folder
             .file_name()
@@ -486,7 +487,7 @@ fn upload_windows(
                 }
             }
         }
-        progress.save(settings, None);
+        latest_progress = Some(progress);
         if folder.join("collection.json").exists()
             && manifest["status"] == "complete"
             && journals.len() == total
@@ -516,6 +517,9 @@ fn upload_windows(
                 upload.stage(&directory, &journals, &origins, &bytes)?;
             }
         }
+    }
+    if let Some(progress) = latest_progress {
+        progress.save(settings, None);
     }
     failure.map_or(Ok(()), Err)
 }

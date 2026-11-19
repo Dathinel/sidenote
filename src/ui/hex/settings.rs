@@ -252,11 +252,15 @@ fn back(s: &mut State) {
     }
 }
 
-pub fn tick(s: &mut State) -> bool {
+pub fn tick(s: &mut State, _tx: &mut Tx) -> bool {
     let mut changed = false;
     #[cfg(windows)]
     {
-        changed |= host::tick(s);
+        let speech = s.on_hex() && active(s) == (Page::Meetings, 3) && !super::super::isolated();
+        if speech {
+            _tx.wake_after(Duration::from_secs(1));
+        }
+        changed |= host::tick(s, speech);
     }
     if s.on_hex()
         && !super::super::isolated()
