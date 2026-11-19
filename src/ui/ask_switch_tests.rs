@@ -583,3 +583,40 @@ fn a_one_question_pick_leaves_the_saved_default_alone_after_submit_and_restart()
     finish_answer(&mut rt);
     assert_eq!(saved().as_deref(), Some("Claude Sonnet"));
 }
+
+/// The Ask pill and the suggestion chip start where the notes column starts. The thread above
+/// keeps the 16 point gutter the 390 wide test checks; the bar does not follow it.
+fn the_bar_starts_at_the_notes_column(name: &str, size: (f32, f32)) {
+    if in_parent(name) {
+        return;
+    }
+    let mut rt = page_at(size);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let rect = |key: &str| {
+        rt.presented(key)
+            .unwrap_or_else(|| panic!("{key} at {size:?}"))
+            .0
+    };
+    let notes = rect("meeting-view");
+    let (chip, pill) = (rect("suggest-0"), rect("ask-pill"));
+    assert_eq!(chip[0], notes[0], "the chip starts at the notes column");
+    assert_eq!(pill[0], notes[0], "the pill starts at the notes column");
+}
+
+#[test]
+fn the_ask_bar_starts_at_the_notes_column_at_390_wide() {
+    the_bar_starts_at_the_notes_column(
+        "the_ask_bar_starts_at_the_notes_column_at_390_wide",
+        (390.0, 844.0),
+    );
+}
+
+#[test]
+fn the_ask_bar_starts_at_the_notes_column_at_the_default_width() {
+    the_bar_starts_at_the_notes_column(
+        "the_ask_bar_starts_at_the_notes_column_at_the_default_width",
+        DEFAULT_SIZE,
+    );
+}
