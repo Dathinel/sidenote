@@ -4,7 +4,24 @@ use super::*;
 #[cfg(feature = "asr-runtime")]
 use std::collections::BTreeMap;
 
-/// Called only by the Labs job. The parent rechecks the captured input before publication.
+impl Config {
+    pub(in crate::core) fn asr_budget(&self, audio_seconds: f64) -> f64 {
+        let stages = &self.engine_settings.stages;
+        self.engine_settings
+            .stage_deadline_seconds
+            .filter(|s| *s > 0)
+            .map(f64::from)
+            .unwrap_or(
+                (audio_seconds
+                    * stages.asr_seconds_per_audio_second_per_pass
+                    * stages.asr_deadline_headroom
+                    + 15.0)
+                    .clamp(30.0, 7200.0),
+            )
+    }
+}
+
+/// The caller owns the inputs and decides when to publish the result.
 pub fn run(
     folder: &Path,
     paths: &[(String, PathBuf)],
@@ -51,25 +68,13 @@ pub fn run(
             origins: &origins,
         };
         let batches_started = Instant::now();
-        let stages = &config.engine_settings.stages;
         let audio_seconds: f64 = plan
             .batches
             .values()
             .flat_map(|b| b.values())
             .map(|r| (r.range.context.1 - r.range.context.0) as f64 / 16000.0)
             .sum();
-        let seconds = config
-            .engine_settings
-            .stage_deadline_seconds
-            .filter(|s| *s > 0)
-            .map(f64::from)
-            .unwrap_or(
-                (audio_seconds
-                    * stages.asr_seconds_per_audio_second_per_pass
-                    * stages.asr_deadline_headroom
-                    + 15.0)
-                    .clamp(30.0, 7200.0),
-            );
+        let seconds = config.asr_budget(audio_seconds);
         clocks.insert("asr_budget_seconds".into(), seconds);
         batches::run_until(
             work,

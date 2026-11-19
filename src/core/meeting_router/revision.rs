@@ -144,7 +144,7 @@ fn select(transcript: &mut Transcript, baseline: &[Chunk]) -> Vec<Segment> {
 
 #[cfg(windows)]
 pub(in crate::core) fn assemble_host(
-    ranges: BTreeMap<String, (i64, &Value)>,
+    ranges: BTreeMap<String, (i64, &Value, bool)>,
     config: &str,
     source: &str,
     baseline: &[Chunk],
@@ -156,9 +156,9 @@ pub(in crate::core) fn assemble_host(
     transcript.config_checksum = config.into();
     transcript.warnings.clear();
     let mut evidence = BTreeMap::new();
-    for (id, (origin, value)) in ranges {
+    for (id, (origin, value, local)) in ranges {
         evidence.insert(id.clone(), value.clone());
-        if value["route"] == "en" {
+        if value["route"] == "en" && !local {
             continue;
         }
         let read = || -> Result<Segment> {
@@ -184,7 +184,9 @@ pub(in crate::core) fn assemble_host(
                 origin,
                 value,
             )?;
-            reading.provider = "speech-host".into();
+            if !local {
+                reading.provider = "speech-host".into();
+            }
             Ok(reading)
         };
         match read() {

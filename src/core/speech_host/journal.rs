@@ -28,6 +28,7 @@ pub enum Change {
     Session(Option<String>),
     Lost,
     HostFailed,
+    Local((u64, u64), Option<Vec<Value>>),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -203,6 +204,49 @@ impl Journal {
         ))?))
     }
 
+    pub fn local(&self, span: (u64, u64)) -> bool {
+        self.log
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Local(s, _) if *s == span))
+    }
+
+    pub fn finished_here(&self) -> bool {
+        self.log
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Local(_, Some(_))))
+    }
+
+    pub fn missing(&self) -> Vec<(u64, u64)> {
+        if !self.host_failed() {
+            return Vec::new();
+        }
+        let piece = self.piece();
+        let mut covered: Vec<_> = self
+            .ranges()
+            .values()
+            .filter_map(|v| v["start_sample"].as_u64().zip(v["end_sample"].as_u64()))
+            .chain(self.log.changes.iter().filter_map(|c| match c {
+                Change::Local(span, Some(_)) => Some(*span),
+                _ => None,
+            }))
+            .collect();
+        covered.sort_unstable();
+        let mut until = piece.start_sample;
+        let mut missing = Vec::new();
+        for (start, end) in covered
+            .into_iter()
+            .chain([(piece.end_sample, piece.end_sample)])
+        {
+            if start > until {
+                missing.push((until, start));
+            }
+            until = until.max(end);
+        }
+        missing
+    }
+
     pub fn ranges(&self) -> BTreeMap<String, &Value> {
         let mut ranges = BTreeMap::new();
         for rec in &self.log.changes {
@@ -231,27 +275,22 @@ pub fn assemble<'a>(
             .get(&journal.piece().track)
             .ok_or("Missing final track origin")?;
         let readings = journal.ranges();
-        if journal.host_failed() {
-            let piece = journal.piece();
-            let mut covered: Vec<_> = readings
-                .values()
-                .filter_map(|v| v["start_sample"].as_u64().zip(v["end_sample"].as_u64()))
-                .collect();
-            covered.sort_unstable();
-            let mut until = piece.start_sample;
-            for (start, end) in covered
-                .into_iter()
-                .chain([(piece.end_sample, piece.end_sample)])
-            {
-                if start > until {
-                    missing.push(serde_json::json!({"track":piece.track,"start_sample":until,
-                        "end_sample":start,"origin_sample":origin}));
-                }
-                until = until.max(end);
-            }
+        for (start, end) in journal.missing() {
+            missing.push(
+                serde_json::json!({"track":journal.piece().track,"start_sample":start,
+                "end_sample":end,"origin_sample":origin}),
+            );
         }
         for (id, value) in readings {
-            ranges.entry(id).or_insert((origin, value));
+            ranges.entry(id).or_insert((origin, value, false));
+        }
+        for change in &journal.log.changes {
+            if let Change::Local(_, Some(values)) = change {
+                for value in values {
+                    let id = journal.range(value)?;
+                    ranges.entry(id).or_insert((origin, value, true));
+                }
+            }
         }
     }
     let mut revision =

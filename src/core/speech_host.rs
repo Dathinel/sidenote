@@ -1,6 +1,6 @@
 //! Device-local consent and credential for the speech host's status endpoint.
 use super::{provider, store_io};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sidenote_sync::identity::{protect, unprotect};
 use std::{
     fs, io,
@@ -21,6 +21,59 @@ const STORE_ERROR: &str = "Could not save or read the protected speech host sett
 
 pub fn settings_path() -> Result<PathBuf, String> {
     Ok(provider::secure_directory("speech-host")?.join("host.dpapi"))
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WorkMode {
+    #[default]
+    Auto,
+    HostOnly,
+    ThisDevice,
+}
+
+impl WorkMode {
+    pub fn load(settings: &Path) -> io::Result<(Self, i64)> {
+        match store_io::read_bounded(&settings.with_file_name("work-mode.json"), 256) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((Self::Auto, 0)),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn save(self, settings: &Path) -> io::Result<()> {
+        store_io::write(
+            &settings.with_file_name("work-mode.json"),
+            &(self, chrono::Utc::now().timestamp_millis()),
+        )
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Progress {
+    pub total: usize,
+    pub sent: usize,
+    pub host: usize,
+    pub local: usize,
+    pub gaps: usize,
+}
+
+impl Progress {
+    pub fn save(&self, settings: &Path, active: Option<&journal::Journal>) {
+        let running = usize::from(active.is_some());
+        let sent = self.sent + usize::from(active.is_some_and(journal::Journal::acknowledged));
+        let text = format!(
+            "Sent {} of {}. Host finished {}. Running {} here. Finished here {}. Gaps {}.",
+            sent, self.total, self.host, running, self.local, self.gaps
+        );
+        let _ = store_io::atomic_write(&settings.with_file_name("progress.txt"), text.as_bytes());
+    }
+}
+
+pub fn progress(settings: &Path) -> String {
+    store_io::read_bounded(&settings.with_file_name("progress.txt"), 256)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_default()
 }
 
 pub struct Host {
