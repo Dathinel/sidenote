@@ -30,7 +30,9 @@ pub(super) fn produce(
     origins: &BTreeMap<String, i64>,
     input_revision: &str,
     clocks: &mut BTreeMap<String, f64>,
+    deadline: Option<Instant>,
 ) -> Result<(Plan, pieces::PieceManifest, Option<fs::File>)> {
+    remaining(deadline)?;
     let started = Instant::now();
     let mut manifest = pieces::plan(folder, origins, &config.pipeline)?;
     // Staging/normalization changes file identities. Cache against the parent's pinned input.
@@ -54,6 +56,7 @@ pub(super) fn produce(
     clocks.insert("pieces".into(), started.elapsed().as_secs_f64());
     let store = model_catalog::ModelStore::new(config.pipeline.model_state_dir.clone());
     let started = Instant::now();
+    remaining(deadline)?;
     let mut vad =
         vad::Silero::load(&store, &config.pipeline.runtime_dll).map_err(|_| "VAD unavailable")?;
     let mut tracks = Vec::new();
@@ -62,17 +65,25 @@ pub(super) fn produce(
         let mut state = vad::Checkpoint::default();
         let mut spans = Vec::new();
         for piece in &track.pieces {
-            spans.extend(
-                vad.push(
-                    &mut state,
-                    (&manifest.source_revision, &track.track),
-                    piece.start_sample,
-                    16000,
-                    &pcm(&path, (piece.start_sample, piece.end_sample))?,
-                    piece.end_sample == track.sample_count,
-                )
-                .map_err(|_| "VAD inference failed")?,
-            );
+            remaining(deadline)?;
+            let audio = pcm(&path, (piece.start_sample, piece.end_sample))?;
+            let mut start = piece.start_sample;
+            for chunk in audio.chunks(16000) {
+                remaining(deadline)?;
+                let end = start + chunk.len() as u64;
+                spans.extend(
+                    vad.push(
+                        &mut state,
+                        (&manifest.source_revision, &track.track),
+                        start,
+                        16000,
+                        chunk,
+                        end == track.sample_count,
+                    )
+                    .map_err(|_| "VAD inference failed")?,
+                );
+                start = end;
+            }
         }
         tracks.push((path, spans));
     }
@@ -101,6 +112,7 @@ pub(super) fn produce(
     let mut settings = config.labs.language_detection_settings.clone();
     settings.runtime_dll = config.pipeline.runtime_dll.clone();
     settings.validate()?;
+    remaining(deadline)?;
     let mut detector = if bypass.is_none() {
         settings.model = store
             .installed_paths("anuvani-lid-int8")?
@@ -134,6 +146,7 @@ pub(super) fn produce(
             let contexts = ranges::padded((0, track.sample_count), ownership, &intervals)?;
             let mut decisions = Vec::new();
             for &context in &contexts {
+                remaining(deadline)?;
                 let started = Instant::now();
                 let decision = if let Some(language) = &bypass {
                     if !languages.contains(language) {
@@ -182,6 +195,7 @@ pub(super) fn produce(
                 })
                 .collect();
             for range in ranges::plan((0, track.sample_count), ownership, &speech)? {
+                remaining(deadline)?;
                 let rejected: Vec<_> = range
                     .members
                     .iter()
@@ -263,6 +277,7 @@ pub(super) fn produce(
     store_io::write(&work.join("uncertainty.json"), &uncertain)?;
     let started = Instant::now();
     let plan = spool(work, output)?;
+    remaining(deadline)?;
     clocks.insert("spool".into(), started.elapsed().as_secs_f64());
     Ok((plan, manifest, english_identity.map(|(_, file)| file)))
 }

@@ -4,21 +4,39 @@ use super::*;
 #[cfg(feature = "asr-runtime")]
 use std::collections::BTreeMap;
 
-/// Called only by the Labs job. The parent rechecks the captured input before publication.
+impl Config {
+    pub(in crate::core) fn asr_budget(&self, audio_seconds: f64) -> f64 {
+        let stages = &self.engine_settings.stages;
+        self.engine_settings
+            .stage_deadline_seconds
+            .filter(|s| *s > 0)
+            .map(f64::from)
+            .unwrap_or(
+                (audio_seconds
+                    * stages.asr_seconds_per_audio_second_per_pass
+                    * stages.asr_deadline_headroom
+                    + 15.0)
+                    .clamp(30.0, 7200.0),
+            )
+    }
+}
+
+/// The caller owns the inputs and decides when to publish the result.
 pub fn run(
     folder: &Path,
     paths: &[(String, PathBuf)],
     baseline: &[Chunk],
     config: &Config,
     work: &Path,
-    input_revision: &str,
-    generation: u128,
+    (input_revision, generation): (&str, u128),
+    deadline: Option<Instant>,
 ) -> Result<()> {
     #[cfg(feature = "asr-runtime")]
     {
         if !config.validate_engine_settings().is_empty() {
             return Err("Invalid engine settings".into());
         }
+        remaining(deadline)?;
         let started = Instant::now();
         let mut clocks = BTreeMap::new();
         let normalized = work.join("normalized");
@@ -29,6 +47,7 @@ pub fn run(
         let manifest: Value = serde_json::from_slice(&input.manifest)?;
         let mut origins = BTreeMap::new();
         for (track, path) in paths {
+            remaining(deadline)?;
             fs::copy(path, normalized.join(format!("{track}.wav")))?;
             origins.insert(track.clone(), origin(&manifest[track]["first_arrival_us"])?);
         }
@@ -39,6 +58,7 @@ pub fn run(
             &origins,
             input_revision,
             &mut clocks,
+            deadline,
         )?;
         store_io::write(&work.join("batch-plan.json"), &plan)?;
         let mut bridge = Reuse {
@@ -51,33 +71,24 @@ pub fn run(
             origins: &origins,
         };
         let batches_started = Instant::now();
-        let stages = &config.engine_settings.stages;
         let audio_seconds: f64 = plan
             .batches
             .values()
             .flat_map(|b| b.values())
             .map(|r| (r.range.context.1 - r.range.context.0) as f64 / 16000.0)
             .sum();
-        let seconds = config
-            .engine_settings
-            .stage_deadline_seconds
-            .filter(|s| *s > 0)
-            .map(f64::from)
-            .unwrap_or(
-                (audio_seconds
-                    * stages.asr_seconds_per_audio_second_per_pass
-                    * stages.asr_deadline_headroom
-                    + 15.0)
-                    .clamp(30.0, 7200.0),
-            );
-        clocks.insert("asr_budget_seconds".into(), seconds);
+        let budget = remaining(deadline)?
+            .unwrap_or_else(|| Duration::from_secs_f64(config.asr_budget(audio_seconds)));
+        let batch_deadline = deadline.unwrap_or(batches_started + budget);
+        clocks.insert("asr_budget_seconds".into(), budget.as_secs_f64());
         batches::run_until(
             work,
             &plan,
             &mut Native(config),
             &mut bridge,
-            Duration::from_secs_f64(seconds),
+            batch_deadline,
         )?;
+        remaining(deadline)?;
         clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());
         let assemble_started = Instant::now();
         let mut revision = revision::assemble(work, &plan, &pieces, baseline, generation)?;
@@ -95,6 +106,7 @@ pub fn run(
         {
             return Err("Speech lacks routed or explicit baseline coverage".into());
         }
+        remaining(deadline)?;
         clocks.insert("assembly".into(), assemble_started.elapsed().as_secs_f64());
         clocks.insert("worker_total".into(), started.elapsed().as_secs_f64());
         store_io::write(&work.join("clocks.json"), &clocks)?;
@@ -120,6 +132,7 @@ pub fn run(
             work,
             input_revision,
             generation,
+            deadline,
         );
         Err("Production routing requires asr-runtime".into())
     }

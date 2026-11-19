@@ -1849,7 +1849,7 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
     }
     changed |= s.live_tick();
     changed |= s.expire_toast();
-    changed |= hex::settings_tick(s);
+    changed |= hex::settings_tick(s, tx);
     changed |= prompt_library::tick(s, tx);
     changed |= relay::tick(s, tx);
     changed |= tasks::board_live_tick(s, tx);

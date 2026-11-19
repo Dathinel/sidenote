@@ -124,7 +124,20 @@ pub(super) fn start() -> std::thread::JoinHandle<()> {
         let evidence_worker = std::thread::spawn(move || {
             let mut evidence = crate::core::meeting_evidence::Collector::new(&evidence_state);
             let mut failed = false;
-            while let Ok((status, enabled)) = samples.recv() {
+            loop {
+                let sample = if cfg!(windows) {
+                    samples.recv_timeout(Duration::from_secs(3))
+                } else {
+                    samples
+                        .recv()
+                        .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                };
+                let (status, enabled) = match sample {
+                    Ok(sample) => sample,
+                    // A restarted laptop can resume saved uploads while Hex is unavailable.
+                    Err(mpsc::RecvTimeoutError::Timeout) => (Value::Null, false),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
                 let error = evidence.tick(&status, enabled).is_err();
                 if error && !failed {
                     super::log("window measurement pending; retrying");

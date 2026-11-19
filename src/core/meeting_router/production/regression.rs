@@ -59,6 +59,7 @@ impl Fixture {
             &BTreeMap::from([("system".into(), 0)]),
             "same-captured-input",
             &mut BTreeMap::new(),
+            None,
         )
         .unwrap()
         .0
@@ -148,6 +149,7 @@ fn production_planner_owns_real_speech_across_piece_seams() {
         &BTreeMap::from([("system".into(), 16000)]),
         "public-seam",
         &mut BTreeMap::new(),
+        None,
     )
     .unwrap();
     let track = &manifest.tracks[0];

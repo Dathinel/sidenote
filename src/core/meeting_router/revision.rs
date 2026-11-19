@@ -124,6 +124,87 @@ fn segment(id: &str, r: &super::batches::Range, origin: i64, value: &Value) -> R
         translate: lang != "en",
     })
 }
+fn select(transcript: &mut Transcript, baseline: &[Chunk]) -> Vec<Segment> {
+    let candidates = transcript.segments.clone();
+    transcript.segments.retain(|a| {
+        a.status != "unresolved-context"
+            && !candidates.iter().any(|b| {
+                a.sources[0].chunk.id != b.sources[0].chunk.id
+                    && a.track == b.track
+                    && a.sources.iter().any(|x| {
+                        b.sources
+                            .iter()
+                            .any(|y| x.chunk.start < y.chunk.end && y.chunk.start < x.chunk.end)
+                    })
+            })
+    });
+    reconcile(transcript, baseline);
+    candidates
+}
+
+#[cfg(windows)]
+pub(in crate::core) fn assemble_host(
+    ranges: BTreeMap<String, (i64, &Value, bool)>,
+    config: &str,
+    source: &str,
+    baseline: &[Chunk],
+    generation: u128,
+) -> Result<Revision> {
+    let mut transcript =
+        english_fallback(baseline, &Default::default(), source.into(), "speech host");
+    transcript.segments.clear();
+    transcript.config_checksum = config.into();
+    transcript.warnings.clear();
+    let mut evidence = BTreeMap::new();
+    for (id, (origin, value, local)) in ranges {
+        evidence.insert(id.clone(), value.clone());
+        if value["route"] == "en" && !local {
+            continue;
+        }
+        let read = || -> Result<Segment> {
+            let start = value["start_sample"].as_u64().ok_or("Missing start")?;
+            let end = value["end_sample"].as_u64().ok_or("Missing end")?;
+            let mut reading = segment(
+                &id,
+                &super::batches::Range {
+                    track: value["track"].as_str().ok_or("Missing track")?.into(),
+                    piece: String::new(),
+                    wav: Default::default(),
+                    range: super::ranges::AsrRange {
+                        context: (start, end),
+                        members: vec![(0, (start, end))],
+                        language: value["language"].as_str().map(str::to_owned),
+                    },
+                    model_id: value["model_sha256"]
+                        .as_str()
+                        .ok_or("Missing model")?
+                        .into(),
+                    model_sha256: String::new(),
+                },
+                origin,
+                value,
+            )?;
+            if !local {
+                reading.provider = "speech-host".into();
+            }
+            Ok(reading)
+        };
+        match read() {
+            Ok(reading) => transcript.segments.push(reading),
+            Err(_) => transcript.warnings.push(format!("fallback: {id}")),
+        }
+    }
+    let alternatives = select(&mut transcript, baseline);
+    Ok(Revision {
+        generation: generation.to_string(),
+        plan_revision: config.into(),
+        transcript,
+        alternatives,
+        evidence,
+        provenance: serde_json::json!({"provider":"speech-host","config_sha256":config}),
+    })
+}
+
 /// Failed receipts and unresolved competition preserve the complete baseline unit.
 pub fn assemble(
     root: &Path,
@@ -185,20 +266,7 @@ pub fn assemble(
             evidence.insert(id.clone(), value);
         }
     }
-    let candidates = transcript.segments.clone();
-    transcript.segments.retain(|a| {
-        a.status != "unresolved-context"
-            && !candidates.iter().any(|b| {
-                a.sources[0].chunk.id != b.sources[0].chunk.id
-                    && a.track == b.track
-                    && a.sources.iter().any(|x| {
-                        b.sources
-                            .iter()
-                            .any(|y| x.chunk.start < y.chunk.end && y.chunk.start < x.chunk.end)
-                    })
-            })
-    });
-    reconcile(&mut transcript, baseline);
+    let candidates = select(&mut transcript, baseline);
     for range in plan.batches.values().flat_map(|b| b.values()) {
         let track = manifest
             .tracks

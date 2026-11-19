@@ -84,6 +84,8 @@ pub(crate) struct Collector {
     root: PathBuf,
     active: Option<Active>,
     worker: Option<std::thread::JoinHandle<()>>,
+    #[cfg(windows)]
+    uploader: Option<std::thread::JoinHandle<()>>,
 }
 impl Collector {
     pub(crate) fn new(state: &Path) -> Self {
@@ -103,26 +105,34 @@ impl Collector {
             root,
             active,
             worker: None,
+            #[cfg(windows)]
+            uploader: None,
         }
     }
     pub(crate) fn tick(&mut self, status: &Value, enabled: bool) -> io::Result<()> {
-        if !enabled {
+        #[cfg(windows)]
+        let upload = self.upload_tick();
+        #[cfg(not(windows))]
+        let upload = false;
+        if !enabled && !upload {
             return Ok(());
         }
-        if self.worker.is_none() {
+        if enabled && self.worker.is_none() {
             self.worker = Some(start_worker(self.root.clone()));
         }
+        self.capture(status, &super::meetings_dir(), upload)
+    }
+
+    fn capture(&mut self, status: &Value, meetings: &Path, upload: bool) -> io::Result<()> {
         let recording = matches!(
             status["meeting_state"].as_str(),
             Some("starting" | "recording" | "paused" | "stopping" | "finishing")
         );
-        let source = recording
-            .then(|| discover(&super::meetings_dir(), status))
-            .flatten();
+        let source = recording.then(|| discover(meetings, status)).flatten();
         if let Some(source) = source {
             if self.active.as_ref().is_some_and(|a| a.source != source) {
                 let previous = self.active.take().unwrap();
-                self.collect(&previous.source, true)?;
+                self.collect_with_limit(&previous.source, true, upload)?;
             }
             self.active.get_or_insert(Active {
                 source,
@@ -146,7 +156,7 @@ impl Collector {
         }
         if recording {
             sample_lag(&source, &dest, status["elapsed"].as_u64())?;
-            return self.collect(&source, false);
+            return self.collect_with_limit(&source, false, upload);
         }
         if !matches!(
             status["meeting_state"].as_str(),
@@ -164,12 +174,17 @@ impl Collector {
         active.last_lengths = lengths;
         // Status can turn idle before the writer finalizes. Wait for two stable polls.
         if active.stable >= 2 {
-            self.collect(&source, true)?;
+            self.collect_with_limit(&source, true, upload)?;
             self.active = None;
         }
         Ok(())
     }
+    #[cfg(test)]
     fn collect(&self, source: &Path, stopped: bool) -> io::Result<()> {
+        self.collect_with_limit(source, stopped, false)
+    }
+
+    fn collect_with_limit(&self, source: &Path, stopped: bool, uploading: bool) -> io::Result<()> {
         let dest = self
             .root
             .join(source.file_name().ok_or(io::ErrorKind::InvalidInput)?);
@@ -212,6 +227,7 @@ impl Collector {
                 return Err(io::ErrorKind::InvalidData.into());
             }
             while available > cursor && (stopped || available - cursor >= WINDOW + SEARCH) {
+                let cap = if uploading { WINDOW } else { WINDOW + SEARCH };
                 let audio_start = if cursor == 0 {
                     0
                 } else {
@@ -219,12 +235,14 @@ impl Collector {
                 };
                 let limit = (cursor + WINDOW + SEARCH).min(available);
                 let audio = reader.read(audio_start, limit)?;
-                let end = if available - cursor >= WINDOW + SEARCH {
+                let end = if available - cursor >= WINDOW + SEARCH
+                    || (uploading && available - cursor > WINDOW)
+                {
                     audio_start
                         + low_energy_cut(
                             &audio,
                             (cursor + WINDOW - SEARCH - audio_start) as usize,
-                            (cursor + WINDOW + SEARCH - audio_start) as usize,
+                            (cursor + cap - audio_start) as usize,
                         ) as u64
                 } else {
                     available
@@ -271,6 +289,335 @@ impl Collector {
         Ok(())
     }
 }
+#[cfg(windows)]
+impl Collector {
+    fn upload_tick(&mut self) -> bool {
+        use super::speech_host::{self, Host, WorkMode};
+        let Ok(settings) = speech_host::settings_path() else {
+            return false;
+        };
+        let host = Host::load(&settings).ok().flatten();
+        if !WorkMode::load(&settings).is_ok_and(|(mode, _)| {
+            mode == WorkMode::ThisDevice || host.as_ref().is_some_and(Host::upload_enabled)
+        }) {
+            return false;
+        }
+        if self
+            .uploader
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+        {
+            return true;
+        }
+        if let Some(worker) = self.uploader.take() {
+            let _ = worker.join();
+        }
+        let evidence = self.root.clone();
+        let data = evidence
+            .parent()
+            .and_then(Path::parent)
+            .expect("collector data root")
+            .to_owned();
+        self.uploader = std::thread::Builder::new()
+            .name("speech-host-upload".into())
+            .spawn(move || {
+                let _ = upload_windows(
+                    &evidence,
+                    &data,
+                    &settings,
+                    host,
+                    &super::meetings_dir(),
+                    || chrono::Utc::now().timestamp_millis(),
+                    local_span_runner(),
+                );
+            })
+            .ok();
+        true
+    }
+}
+
+#[cfg(windows)]
+fn upload_windows(
+    evidence: &Path,
+    data: &Path,
+    settings: &Path,
+    host: Option<super::speech_host::Host>,
+    source: &Path,
+    now: impl Fn() -> i64,
+    mut local: Option<
+        impl FnMut(
+            &Path,
+            &super::speech_host::journal::Piece,
+            (u64, u64),
+            &super::Config,
+            Instant,
+        ) -> super::asr::Result<Vec<Value>>,
+    >,
+) -> io::Result<()> {
+    use super::{
+        meeting_router::ProviderRoute,
+        speech_host::{Progress, WorkMode, journal::Piece, upload::Upload},
+    };
+    let mut config = super::Config::load_in(data)?;
+    let mut routes = config
+        .pipeline
+        .after_stop_languages
+        .clone()
+        .map_or_else(|| super::model_catalog::load_language_routes(data), Ok)?;
+    let languages: Vec<_> = std::iter::once(&routes.primary)
+        .chain(&routes.supporting)
+        .cloned()
+        .collect();
+    if (config.pipeline.language_mode != "auto"
+        && WorkMode::load(settings)?.0 != WorkMode::ThisDevice)
+        || languages
+            .iter()
+            .any(|l| !matches!(l.as_str(), "en" | "hi" | "te"))
+    {
+        return Ok(());
+    }
+    if config.pipeline.after_stop_languages.is_none() {
+        for language in &languages {
+            let model = match language.as_str() {
+                "en" => "parakeet_unified_en",
+                "hi" => "indicconformer-hi-ctc",
+                _ => "indicconformer-te-ctc",
+            };
+            routes
+                .routes
+                .entry(language.clone())
+                .or_insert_with(|| ProviderRoute {
+                    model: config.engine_model(language).unwrap_or(model).into(),
+                    provider: if language == "en" { "hex" } else { "local" }.into(),
+                });
+        }
+    }
+    config.pipeline.after_stop_languages = Some(routes);
+    config.pipeline.meeting_languages.clone_from(&languages);
+    if config.pipeline.model_state_dir.as_os_str().is_empty() {
+        config.pipeline.model_state_dir = data.to_owned();
+    }
+    if config.pipeline.runtime_dll.as_os_str().is_empty() {
+        config.pipeline.runtime_dll =
+            std::env::current_exe()?.with_file_name(crate::platform::asr_library_name());
+    }
+    let Some(mut upload) =
+        Upload::new(host, settings, data.join("local/speech-uploads"), languages)
+    else {
+        return Ok(());
+    };
+    let mut failure = None;
+    let mut latest_progress = None;
+    for folder in folders(evidence) {
+        let Some(meeting) = folder
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|id| valid_id(id))
+        else {
+            continue;
+        };
+        let pending: Vec<_> = jobs(&folder)?
+            .into_iter()
+            .filter(|(_, j)| {
+                j.queued_ms > upload.since()
+                    && j.end.checked_sub(j.start).is_some_and(|n| n <= WINDOW)
+            })
+            .collect();
+        if pending.is_empty() {
+            continue;
+        }
+        let manifest = source.join(meeting).join("manifest.json");
+        let Ok(bytes) = super::meeting_router::inputs::Snapshot::read_file(&manifest, 1 << 20)
+        else {
+            continue;
+        };
+        let manifest: Value = serde_json::from_slice(&bytes)?;
+        if manifest["created_at_ms"]
+            .as_i64()
+            .is_none_or(|ms| ms <= upload.since())
+        {
+            continue;
+        }
+        let total = pending.len();
+        let directory = match upload.directory(meeting) {
+            Ok(directory) => directory,
+            Err(error) => {
+                failure.get_or_insert(error);
+                continue;
+            }
+        };
+        let mut progress = Progress {
+            total,
+            ..Progress::default()
+        };
+        let mut journals = Vec::with_capacity(total);
+        for (dir, job) in pending {
+            let piece = Piece {
+                track: job.track,
+                index: u32::try_from(job.index).map_err(io::Error::other)?,
+                origin_sample: 0,
+                start_sample: job.start,
+                end_sample: job.end,
+                context_start_sample: job.audio_start,
+                sha256: String::new(),
+            };
+            let wav = dir.join("audio.wav");
+            let seconds = (job.end - job.start) as f64 / RATE as f64;
+            let allowance = (config.asr_budget(seconds) * 1000.0).ceil() as u64;
+            let age = now().saturating_sub(job.queued_ms).max(0) as u64;
+            let tick = Instant::now();
+            let cutoff = |ms: u64| tick + Duration::from_millis(ms.saturating_sub(age));
+            match upload.piece(
+                meeting,
+                &directory,
+                piece,
+                &wav,
+                (cutoff(allowance / 2), cutoff(allowance)),
+                local.as_mut().map(|run| {
+                    let (wav, config, progress) = (&wav, &config, &progress);
+                    move |journal: &super::speech_host::journal::Journal, span, deadline| {
+                        progress.save(settings, Some(journal));
+                        run(wav, journal.piece(), span, config, deadline).ok()
+                    }
+                }),
+            ) {
+                Ok(Some(journal)) => {
+                    progress.sent += usize::from(journal.acknowledged());
+                    progress.host += usize::from(journal.done() && !journal.host_failed());
+                    progress.local += usize::from(journal.finished_here());
+                    progress.gaps += journal.missing().len();
+                    journals.push(journal);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        latest_progress = Some(progress);
+        if folder.join("collection.json").exists()
+            && manifest["status"] == "complete"
+            && journals.len() == total
+            && journals.iter().all(|journal| journal.done())
+        {
+            let origins: std::collections::BTreeMap<_, _> = journals
+                .iter()
+                .filter_map(|journal| {
+                    let track = &journal.piece().track;
+                    let us = manifest[track]["first_arrival_us"].as_u64()?;
+                    Some((
+                        track.clone(),
+                        i64::try_from((us / 1000).checked_mul(16)?).ok()?,
+                    ))
+                })
+                .collect();
+            if !journals
+                .iter()
+                .all(|journal| origins.contains_key(&journal.piece().track))
+            {
+                continue;
+            }
+            let transcript = source.join(meeting).join("transcript.ndjson");
+            if let Ok(bytes) =
+                super::meeting_router::inputs::Snapshot::read_file(&transcript, 16 << 20)
+            {
+                upload.stage(&directory, &journals, &origins, &bytes)?;
+            }
+        }
+    }
+    if let Some(progress) = latest_progress {
+        progress.save(settings, None);
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+#[cfg(windows)]
+type LocalSpan = fn(
+    &Path,
+    &super::speech_host::journal::Piece,
+    (u64, u64),
+    &super::Config,
+    Instant,
+) -> super::asr::Result<Vec<Value>>;
+
+#[cfg(windows)]
+fn local_span_runner() -> Option<LocalSpan> {
+    cfg!(feature = "asr-runtime").then_some(run_local_span)
+}
+
+#[cfg(windows)]
+fn run_local_span(
+    wav: &Path,
+    piece: &super::speech_host::journal::Piece,
+    (start, end): (u64, u64),
+    config: &super::Config,
+    deadline: Instant,
+) -> super::asr::Result<Vec<Value>> {
+    use super::{
+        meeting_router::{batches, inputs::Snapshot, jobs::BatchOutput, production},
+        speech_host::upload::{MAX_WAV, digest},
+    };
+    batches::remaining(Some(deadline))?;
+    let temporary = tempfile::tempdir()?;
+    let input = temporary.path().join("input");
+    let work = temporary.path().join("job");
+    fs::create_dir(&input)?;
+    let cut = input.join(format!("{}.wav", piece.track));
+    let bytes = Snapshot::read_file(wav, MAX_WAV)?;
+    if digest(&bytes) != piece.sha256 {
+        return Err("Collector WAV changed".into());
+    }
+    let mut reader = hound::WavReader::new(io::Cursor::new(bytes))?;
+    let offset = start
+        .checked_sub(piece.context_start_sample)
+        .ok_or("Invalid local audio start")?;
+    if end <= start || offset.saturating_add(end - start) > u64::from(reader.duration()) {
+        return Err("Local span exceeds collector WAV".into());
+    }
+    reader.seek(u32::try_from(offset)?)?;
+    let mut writer = hound::WavWriter::create(&cut, reader.spec())?;
+    for sample in reader.samples::<i16>().take(usize::try_from(end - start)?) {
+        writer.write_sample(sample?)?;
+    }
+    writer.finalize()?;
+    store_io::write(&input.join("manifest.json"), &json!({"status":"complete"}))?;
+    store_io::atomic_write(&input.join("transcript.ndjson"), b"")?;
+    let id = digest(&serde_json::to_vec(&(&piece.sha256, start, end))?);
+    production::run(
+        &input,
+        &[(piece.track.clone(), cut)],
+        &[],
+        config,
+        &work,
+        (&id, 0),
+        Some(deadline),
+    )?;
+    let output: BatchOutput =
+        serde_json::from_slice(&Snapshot::read_file(&work.join("output.json"), 16 << 20)?)?;
+    if !output.fallbacks.is_empty() {
+        return Err("Unrouted speech on this device".into());
+    }
+    output
+        .plan
+        .batches
+        .values()
+        .flatten()
+        .map(|(key, range)| {
+            let mut value =
+                batches::read_result(&work, &output.plan, key)?.ok_or("Missing local reading")?;
+            value["piece"] = json!(id);
+            value["range"] = json!(key);
+            value["track"] = json!(piece.track);
+            value["route"] = json!(range.range.language);
+            value["language"] = json!(range.range.language);
+            value["model_sha256"] = json!(range.model_sha256);
+            value["start_sample"] = json!(start + range.range.context.0);
+            value["end_sample"] = json!(start + range.range.context.1);
+            Ok(value)
+        })
+        .collect()
+}
+
 fn low_energy_cut(audio: &[f32], left: usize, right: usize) -> usize {
     let candidates = (left..=right.min(audio.len())).step_by(320);
     let mut best = (left, f64::INFINITY, usize::MAX);
@@ -599,10 +946,13 @@ impl Drop for Collector {
     }
 }
 
+#[cfg(all(test, windows))]
+mod speech_host_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn audio(path: &Path, seconds: u64) {
+    pub(super) fn audio(path: &Path, seconds: u64) {
         let mut w = hound::WavWriter::create(
             path,
             hound::WavSpec {
