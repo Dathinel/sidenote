@@ -1,7 +1,7 @@
 mod events;
 
 use super::{
-    Asr, Host, Reply, Request,
+    Asr, Host, Reply, Request, WorkMode,
     journal::{Change, Journal, Piece, key},
     store_io,
 };
@@ -15,11 +15,15 @@ use std::{
 pub(in crate::core) const MAX_WAV: u64 = 10_000_000;
 
 pub(in crate::core) struct Upload<'a> {
-    host: Host,
+    host: Option<Host>,
     settings: &'a Path,
     root: PathBuf,
     languages: Vec<String>,
-    config: String,
+    online: Option<String>,
+    offline: String,
+    mode: WorkMode,
+    since: i64,
+    blocked: bool,
     ready_at: std::time::Instant,
 }
 
@@ -32,13 +36,35 @@ fn remote_error() -> io::Error {
 }
 
 impl<'a> Upload<'a> {
-    pub(in crate::core) fn ready(
-        host: Host,
+    pub(in crate::core) fn new(
+        host: Option<Host>,
         settings: &'a Path,
         root: PathBuf,
         languages: Vec<String>,
     ) -> Option<Self> {
-        host.upload_since?;
+        let (mode, selected_at) = WorkMode::load(settings).ok()?;
+        let (since, online) = if mode == WorkMode::ThisDevice {
+            (selected_at, None)
+        } else {
+            let host = host.as_ref()?;
+            (host.upload_since?, Self::probe_config(host, &languages))
+        };
+        let offline = digest(&serde_json::to_vec(&("offline", &languages)).ok()?);
+        Some(Self {
+            host,
+            settings,
+            root,
+            languages,
+            online,
+            offline,
+            mode,
+            since,
+            blocked: false,
+            ready_at: std::time::Instant::now(),
+        })
+    }
+
+    fn probe_config(host: &Host, languages: &[String]) -> Option<String> {
         let (200, bytes) = host.get("/v1/host")? else {
             return None;
         };
@@ -51,39 +77,41 @@ impl<'a> Upload<'a> {
         {
             return None;
         }
-        let native: Vec<_> = languages
+        let mut native = languages
             .iter()
             .filter(|l| matches!(l.as_str(), "hi" | "te"))
-            .collect();
-        if native.is_empty() || native.iter().any(|l| !reply.asr.languages.contains(l)) {
+            .peekable();
+        if native.peek().is_none() || native.any(|l| !reply.asr.languages.contains(l)) {
             return None;
         }
-        let config = digest(&serde_json::to_vec(&(&languages, reply.asr.models)).ok()?);
-        Some(Self {
-            host,
-            settings,
-            root,
-            languages,
-            config,
-            ready_at: std::time::Instant::now(),
-        })
+        Some(digest(
+            &serde_json::to_vec(&(languages, reply.asr.models)).ok()?,
+        ))
     }
 
     pub(in crate::core) fn since(&self) -> i64 {
-        self.host.upload_since.expect("only consented uploads")
+        self.since
+    }
+
+    fn host(&self) -> io::Result<&Host> {
+        self.host.as_ref().ok_or_else(remote_error)
     }
 
     fn still_allowed(&self) -> bool {
         if self.ready_at.elapsed() >= super::INTERVAL || crate::updates::listener_stopping() {
             return false;
         }
+        let Some(host) = &self.host else { return false };
+        if !WorkMode::load(self.settings).is_ok_and(|(mode, _)| mode != WorkMode::ThisDevice) {
+            return false;
+        }
         Host::load(self.settings)
             .ok()
             .flatten()
             .is_some_and(|loaded| {
-                self.host.recipient() == loaded.recipient()
-                    && self.host.upload_since == loaded.upload_since
-                    && self.host.token.as_slice() == loaded.token.as_slice()
+                host.recipient() == loaded.recipient()
+                    && host.upload_since == loaded.upload_since
+                    && host.token.as_slice() == loaded.token.as_slice()
             })
     }
 
@@ -98,7 +126,7 @@ impl<'a> Upload<'a> {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         let (status, data) = self
-            .host
+            .host()?
             .bytes(
                 Request {
                     method,
@@ -115,50 +143,83 @@ impl<'a> Upload<'a> {
         Ok((status, serde_json::from_slice(&data).unwrap_or(Value::Null)))
     }
 
-    pub(in crate::core) fn directory(&self, meeting: &str) -> PathBuf {
-        self.root
-            .join(meeting)
-            .join(&self.config)
-            .join(self.since().to_string())
+    pub(in crate::core) fn directory(&self, meeting: &str) -> io::Result<PathBuf> {
+        let root = self.root.join(meeting);
+        let since = self.since.to_string();
+        let offline = root.join(&self.offline).join(&since);
+        if let Some(config) = &self.online {
+            let target = root.join(config).join(&since);
+            if offline.is_dir() && !target.exists() {
+                let _lock = store_io::lock(&self.root.join("upload.lock"))?;
+                std::fs::create_dir_all(root.join(config))?;
+                std::fs::rename(&offline, &target)?;
+                let _ = std::fs::remove_dir(root.join(&self.offline));
+            }
+            return Ok(target);
+        }
+        if self.mode != WorkMode::ThisDevice {
+            let mut prior = std::fs::read_dir(&root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name().to_str().is_some_and(key))
+                .map(|e| e.path().join(&since))
+                .filter(|p| p.is_dir());
+            if let Some(dir) = prior.next() {
+                return if prior.next().is_none() {
+                    Ok(dir)
+                } else {
+                    Err(remote_error())
+                };
+            }
+        }
+        Ok(offline)
     }
 
     pub(in crate::core) fn stage(
         &self,
-        meeting: &str,
+        directory: &Path,
         journals: &[Journal],
         origins: &std::collections::BTreeMap<String, i64>,
         transcript: &[u8],
     ) -> io::Result<()> {
         let source = digest(transcript);
-        let destination = self
-            .directory(meeting)
-            .join(format!("revision-{source}.dpapi"));
+        let destination = directory.join(format!("revision-{source}.dpapi"));
+        let config = directory
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|n| n.to_str())
+            .ok_or_else(remote_error)?;
         if destination.exists() {
             return Ok(());
         }
         let baseline = crate::core::meeting_router::jobs::read_baseline(transcript)
             .map_err(|_| remote_error())?;
-        let revision =
-            super::journal::assemble(journals, origins, &self.config, &source, &baseline, 0)
-                .map_err(|_| remote_error())?;
+        let revision = super::journal::assemble(journals, origins, config, &source, &baseline, 0)
+            .map_err(|_| remote_error())?;
         let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&revision)?);
         let encrypted = sidenote_sync::identity::protect(&bytes).map_err(|_| remote_error())?;
         store_io::atomic_write(&destination, &encrypted)
     }
 
     pub(in crate::core) fn piece(
-        &self,
+        &mut self,
         meeting: &str,
+        directory: &Path,
         mut piece: Piece,
         wav: &Path,
-    ) -> io::Result<Journal> {
-        let _lock = store_io::lock(&self.root.join("upload.lock"))?;
+        expired: impl Fn() -> bool,
+        mut local: impl FnMut(&Journal, (u64, u64)) -> Option<Vec<Value>>,
+    ) -> io::Result<Option<Journal>> {
         if !matches!(piece.track.as_str(), "microphone" | "system") {
             return Err(io::ErrorKind::InvalidData.into());
         }
-        let journal_path = self
-            .directory(meeting)
-            .join(format!("{}-{}.dpapi", piece.track, piece.index));
+        let online = self.online.is_some() && !self.blocked;
+        let journal_path = directory.join(format!("{}-{}.dpapi", piece.track, piece.index));
+        if !online && self.mode != WorkMode::ThisDevice && !expired() && !journal_path.is_file() {
+            return Ok(None);
+        }
+        let _lock = store_io::lock(&self.root.join("upload.lock"))?;
         let mut audio = None;
         let mut journal = match Journal::load(journal_path.clone())? {
             Some(journal) => {
@@ -177,23 +238,48 @@ impl<'a> Upload<'a> {
                 Journal::create(journal_path, piece)?
             }
         };
-        self.retire(&mut journal)?;
-        if journal.done() {
-            return Ok(journal);
+        if !journal.done() && (expired() || self.mode == WorkMode::ThisDevice) {
+            journal.record(vec![Change::HostFailed])?;
         }
-        if let Err(error) = self.transfer(meeting, wav, audio, &mut journal) {
-            if !journal.replacement()
-                || !matches!(
+        if online && journal.lost() {
+            self.retire(&mut journal)?;
+        }
+        if !journal.done()
+            && online
+            && let Err(error) = self.transfer(meeting, wav, audio, &mut journal)
+        {
+            self.blocked = error.kind() == io::ErrorKind::WouldBlock;
+            if journal.replacement()
+                && matches!(
                     error.kind(),
                     io::ErrorKind::ConnectionAborted | io::ErrorKind::WouldBlock
                 )
             {
+                journal.record(vec![Change::HostFailed])?;
+            } else if !expired() {
                 return Err(error);
             }
+        }
+        if !journal.done() && expired() {
             journal.record(vec![Change::HostFailed])?;
         }
-        self.retire(&mut journal)?;
-        Ok(journal)
+        if self.mode != WorkMode::HostOnly {
+            for span in journal.missing() {
+                if !journal.local(span)
+                    && !crate::updates::listener_stopping()
+                    && WorkMode::load(self.settings).is_ok_and(|(mode, _)| mode == self.mode)
+                {
+                    journal.record(vec![Change::Local(span, None)])?;
+                    if let Some(readings) = local(&journal, span) {
+                        journal.record(vec![Change::Local(span, Some(readings))])?;
+                    }
+                }
+            }
+        }
+        if online && !self.blocked {
+            self.retire(&mut journal)?;
+        }
+        Ok(Some(journal))
     }
 
     fn transfer(
@@ -204,6 +290,7 @@ impl<'a> Upload<'a> {
         journal: &mut Journal,
     ) -> io::Result<()> {
         let piece = journal.piece();
+        let config = self.online.as_deref().ok_or_else(remote_error)?;
         let id = digest(&serde_json::to_vec(&(
             meeting,
             &piece.track,
@@ -211,7 +298,7 @@ impl<'a> Upload<'a> {
             piece.start_sample,
             piece.end_sample,
             &piece.sha256,
-            &self.config,
+            config,
         ))?);
         let client_session = digest(&serde_json::to_vec(&(
             self.since(),
@@ -224,7 +311,7 @@ impl<'a> Upload<'a> {
             "Content-Type: application/json\r\n",
             &serde_json::to_vec(&json!({
                 "client_session":client_session,"meeting_id":meeting,"languages":self.languages,
-                "language_mode":"auto","config_sha256":self.config
+                "language_mode":"auto","config_sha256":config
             }))?,
         )?;
         let session = reply["session"]

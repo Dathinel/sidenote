@@ -35,9 +35,10 @@ impl Upload<'_> {
             journal.cursor()
         );
         let events = format!("{path}/events");
+        let host = self.host()?;
         let _ = request(
-            &self.host.endpoint,
-            &self.host.token,
+            &host.endpoint,
+            &host.token,
             Request {
                 method: "GET",
                 path: &events,
@@ -88,7 +89,8 @@ impl Upload<'_> {
             {
                 changes.push(Change::HostFailed)
             }
-            Some("done" | "failed") if complete => changes.push(Change::Done(failures.clone())),
+            Some("failed") if complete => changes.push(Change::HostFailed),
+            Some("done") if complete => changes.push(Change::Done(failures.clone())),
             Some("lost") if journal.replacement() => changes.push(Change::HostFailed),
             Some("lost") => changes.push(Change::Lost),
             _ => {}
