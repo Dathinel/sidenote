@@ -16,7 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Labs {
     pub language_detection: bool,
@@ -26,6 +26,19 @@ pub struct Labs {
     pub silence_minutes: SilenceMinutes,
     pub measure_recording_files: bool,
     pub process_meeting_windows: bool,
+}
+impl Default for Labs {
+    fn default() -> Self {
+        Self {
+            language_detection: false,
+            after_stop_language_routing: super::meeting_router::DEFAULT_CPU_PASSES,
+            language_detection_settings: Default::default(),
+            stop_forgotten_recordings: false,
+            silence_minutes: Default::default(),
+            measure_recording_files: false,
+            process_meeting_windows: false,
+        }
+    }
 }
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(try_from = "u64", into = "u64")]

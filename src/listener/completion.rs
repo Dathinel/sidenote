@@ -115,6 +115,7 @@ mod tests {
         }
         fn config(&self) -> Config {
             let mut config = Config::default();
+            config.pipeline.profile = "compat".into();
             config.notes = Some(notes::NotesSettings {
                 engine: "scripts".into(),
                 script: Some(self.root.path().join("synthetic.ps1")),

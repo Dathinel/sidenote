@@ -82,10 +82,10 @@ fn acknowledge(root: &Path, id: &str, path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 pub fn configured() -> bool {
-    super::super::config::read(&super::super::state_dir())
+    super::super::Config::read_config(&super::super::state_dir())
         .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .is_some_and(|v| v["pipeline"]["profile"] == "experimental")
+        .flatten()
+        .is_some_and(|config| config.pipeline.enabled())
 }
 pub fn enqueue(id: &str) -> Result<()> {
     enqueue_in(
@@ -196,8 +196,28 @@ fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
 }
 
 fn load_config(root: &Path) -> Result<RoutingConfig> {
-    let mut config = super::super::Config::load_in(root)?.pipeline;
+    let app = super::super::Config::load_in(root)?;
+    let mut config = app.pipeline;
     config.meeting_languages = super::super::model_catalog::load_meeting_languages(root)?;
+    #[cfg(windows)]
+    if app.labs.after_stop_language_routing && config.enabled() {
+        config
+            .after_stop_languages
+            .get_or_insert_with(LanguageRoutes::cpu_after_stop);
+        if config.model_state_dir.as_os_str().is_empty() {
+            config.model_state_dir = root.to_owned();
+        }
+        if config.runtime_dll.as_os_str().is_empty() {
+            let installed = config
+                .model_state_dir
+                .join(crate::platform::asr_library_name());
+            config.runtime_dll = if installed.is_file() {
+                installed
+            } else {
+                std::env::current_exe()?.with_file_name(crate::platform::asr_library_name())
+            };
+        }
+    }
     config.validate()?;
     Ok(config)
 }
@@ -1078,6 +1098,7 @@ mod recording_guard_tests {
         .unwrap();
         let mut config = core::Config::load().unwrap();
         config.pipeline.profile = "experimental".into();
+        config.labs.after_stop_language_routing = false;
         store_io::write(&root.join("config.json"), &config).unwrap();
         let dest = destination(&root, ID);
         write_transcript(
@@ -1137,6 +1158,7 @@ mod recording_guard_tests {
         .unwrap();
         let mut config = core::Config::load().unwrap();
         config.pipeline.profile = "experimental".into();
+        config.labs.after_stop_language_routing = false;
         store_io::write(&root.join("config.json"), &config).unwrap();
         let dest = destination(&root, ID);
         write_transcript(

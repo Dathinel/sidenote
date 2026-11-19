@@ -25,6 +25,7 @@ use super::{
 pub use audio::Audio;
 pub use baseline::{english_fallback, reconcile};
 pub use cli::run_cli;
+pub(super) use config::DEFAULT_CPU_PASSES;
 pub use config::{LanguageRoutes, ProviderRoute, RoutingConfig};
 pub use hex::HexSpeech;
 use serde::{Deserialize, Serialize};

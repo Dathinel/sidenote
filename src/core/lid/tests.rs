@@ -186,6 +186,7 @@ fn standalone_sidecars_preserve_audio_and_cover_bypass_silence_and_missing_model
 #[test]
 fn labs_settings_preserve_existing_asr_configuration_identity() {
     let mut config = crate::core::Config::default();
+    config.pipeline.profile = "compat".into();
     let serialize = |c: &crate::core::Config| serde_json::to_string(&c.pipeline).unwrap();
     let expected = r#"{"schema":1,"profile":"compat","language_mode":"auto","model_state_dir":"","runtime_dll":""}"#;
     assert_eq!(serialize(&config), expected);

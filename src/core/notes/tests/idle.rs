@@ -77,6 +77,7 @@ fn changed_same_name_input_replaces_production_done_notes_after_restart() {
     let cursor = root.0.join("local/recording-source.json");
     let discover = || {
         let mut config = crate::core::Config::default();
+        config.pipeline.profile = "compat".into();
         config.notes = Some(settings.clone());
         Session::open(Discovery::new(meetings.clone()).unwrap(), cursor.clone())
             .unwrap()

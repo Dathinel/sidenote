@@ -21,7 +21,7 @@ Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
     if (-not $version) { throw 'Cargo.toml has no package version.' }
-    $metadataJson = & cargo metadata --offline --locked --filter-platform x86_64-pc-windows-gnu --format-version 1
+    $metadataJson = & cargo metadata --offline --locked --features asr-runtime --filter-platform x86_64-pc-windows-gnu --format-version 1
     if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
     $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
     $stage = "$root/artifacts/updates-core/package-$version-$([guid]::NewGuid().ToString('N'))"
@@ -32,7 +32,7 @@ try {
         $uncovered = @($noticesResult.uncovered | ForEach-Object { "$($_.name) $($_.version): $($_.license) ($($_.reason))" })
         throw "Dependency notices are incomplete: $($uncovered -join '; '). Coverage: $stage/DEPENDENCY_NOTICE_COVERAGE.json"
     }
-    & cargo +stable-x86_64-pc-windows-gnu build --release --workspace --locked --bins --target x86_64-pc-windows-gnu
+    & cargo +stable-x86_64-pc-windows-gnu build --release --workspace --locked --bins --target x86_64-pc-windows-gnu --features asr-runtime
     if ($LASTEXITCODE) { throw 'Release build failed.' }
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force

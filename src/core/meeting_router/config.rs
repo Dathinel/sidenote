@@ -2,6 +2,8 @@ use super::super::{asr::Result, lid::LANGUAGES, model_catalog as models};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
+pub(crate) const DEFAULT_CPU_PASSES: bool = cfg!(all(windows, feature = "asr-runtime"));
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RoutingConfig {
@@ -21,7 +23,12 @@ impl Default for RoutingConfig {
     fn default() -> Self {
         Self {
             schema: 1,
-            profile: "compat".into(),
+            profile: if DEFAULT_CPU_PASSES {
+                "experimental"
+            } else {
+                "compat"
+            }
+            .into(),
             meeting_languages: vec!["en".into()],
             language_mode: "auto".into(),
             after_stop_languages: None,
@@ -74,6 +81,30 @@ fn unique_routes<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_map(Routes)
 }
 impl LanguageRoutes {
+    #[cfg(windows)]
+    pub(super) fn cpu_after_stop() -> Self {
+        Self {
+            primary: "en".into(),
+            supporting: vec!["hi".into(), "te".into()],
+            routes: [
+                ("en", "hex", "parakeet_unified_en"),
+                ("hi", "local", "indicconformer-hi-ctc"),
+                ("te", "local", "indicconformer-te-ctc"),
+            ]
+            .into_iter()
+            .map(|(language, provider, model)| {
+                (
+                    language.into(),
+                    ProviderRoute {
+                        provider: provider.into(),
+                        model: model.into(),
+                    },
+                )
+            })
+            .collect(),
+        }
+    }
+
     pub fn from_legacy(languages: Vec<String>) -> Result<Self> {
         let (primary, supporting) = languages
             .split_first()
@@ -197,7 +228,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn after_stop_flag_is_independent_and_default_false() {
+    fn after_stop_defaults_to_cpu_on_windows_asr_and_preserves_explicit_choices() {
         for labs in [
             json!({}),
             json!({
@@ -206,20 +237,26 @@ mod tests {
         ] {
             let config: Config =
                 serde_json::from_value(json!({"version":1, "features":{}, "labs":labs})).unwrap();
-            assert!(!config.labs.after_stop_language_routing);
-            assert_eq!(config.pipeline.profile, "compat");
-            assert!(!config.pipeline.enabled());
+            assert_eq!(config.labs.after_stop_language_routing, DEFAULT_CPU_PASSES);
+            assert_eq!(config.pipeline.enabled(), DEFAULT_CPU_PASSES);
+            assert_eq!(config.pipeline.language_mode, "auto");
+            assert_eq!(
+                config.engine_settings.stages.translation_enabled_at_ms,
+                None
+            );
         }
         let labs: Labs =
             serde_json::from_value(json!({"after_stop_language_routing":true})).unwrap();
         assert!(labs.after_stop_language_routing);
         assert!(!labs.language_detection && !labs.process_meeting_windows);
         let old: Config = serde_json::from_value(json!({
-            "version":1, "features":{}, "pipeline":{"profile":"experimental"},
-            "labs":{"language_detection":true}
+            "version":1, "features":{}, "pipeline":{"profile":"compat"},
+            "labs":{"language_detection":true, "after_stop_language_routing":false}
         }))
         .unwrap();
         assert!(!old.labs.after_stop_language_routing);
+        assert!(!old.pipeline.enabled());
+        assert!(old.labs.language_detection);
     }
     #[test]
     fn legacy_declarations_and_explicit_routes_round_trip() {
@@ -237,6 +274,7 @@ mod tests {
             languages
         );
         let config = RoutingConfig {
+            profile: "compat".into(),
             after_stop_languages: Some(routes()),
             ..Default::default()
         };

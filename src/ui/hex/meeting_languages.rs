@@ -2,8 +2,8 @@ use super::*;
 
 pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let options = [
-        "Existing pipeline (default)",
-        "Automatic (experimental)",
+        "Existing pipeline",
+        "Automatic",
         "Off: first declared language",
         "Always English",
         "Always Hindi",
@@ -38,7 +38,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         .on_close(|s: &mut State| s.hex.select_open = None)
         .on_choose(|s: &mut State, value: &str, _: &mut Tx| {
             let result = sidenote::core::Config::load_in(&s.store.root).and_then(|mut config| {
-                config.pipeline.profile = if value == "Existing pipeline (default)" {
+                config.pipeline.profile = if value == "Existing pipeline" {
                     "compat"
                 } else {
                     "experimental"
@@ -72,7 +72,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         s,
         "meeting-language-mode",
         "Language handling",
-        "Experimental English and Hindi routing; forced modes use the selected language for every part. The Labs language stage also records these choices as advisory labels without changing transcription.",
+        "Automatic after-Stop routing uses English, Hindi and Telugu. Forced modes use the selected language for every part. The Labs language stage records advisory labels.",
         control,
         false,
         p,
