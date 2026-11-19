@@ -312,6 +312,7 @@ fn run_batches(
                         .is_some_and(|e| e.kind() == &super::hex_bridge::HexFailure::NoSpeech) =>
                 {
                     remaining(deadline)?;
+                    #[cfg(windows)]
                     store_io::write(&path(root, plan, id, "fallback"), &no_speech(plan, id))?;
                     continue;
                 }
