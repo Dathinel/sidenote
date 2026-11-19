@@ -1,0 +1,4 @@
+{"events": [
+ {"t": 0.3, "type": "move", "key": "meeting-point-pt-0-1"},
+ {"t": 1.0, "type": "mark", "name": "end"}
+]}
