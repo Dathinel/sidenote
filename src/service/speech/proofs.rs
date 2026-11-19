@@ -153,7 +153,18 @@ impl Service {
             address: String::new(),
             auth: zeroize::Zeroizing::new(String::new()),
         };
-        wait(|| endpoint.is_file());
+        wait(|| {
+            if endpoint.is_file() {
+                return true;
+            }
+            if let Some(exit) = service.child.try_wait().unwrap() {
+                panic!(
+                    "speech service exited before publishing the endpoint ({exit}): {}",
+                    service.log()
+                );
+            }
+            false
+        });
         let endpoint: Value = serde_json::from_slice(&fs::read(endpoint).unwrap()).unwrap();
         service.address = endpoint["address"].as_str().unwrap().into();
         service.auth = zeroize::Zeroizing::new(format!(
@@ -174,10 +185,15 @@ impl Service {
         wait(|| self.child.try_wait().unwrap().is_some());
         assert!(self.child.wait().unwrap().success());
     }
+    fn log(&self) -> String {
+        fs::read_to_string(self.root.join("service.log")).unwrap()
+    }
     fn send(&self, method: &str, path: &str, body: &[u8], extra: &str) -> (u16, Value) {
         let mut stream = self.stream(method, path, body, extra);
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
+        stream
+            .read_to_string(&mut response)
+            .unwrap_or_else(|error| panic!("{method} {path}: {error}: {}", self.log()));
         let status = response.split_whitespace().nth(1).unwrap().parse().unwrap();
         (
             status,
@@ -185,7 +201,8 @@ impl Service {
         )
     }
     fn stream(&self, method: &str, path: &str, body: &[u8], extra: &str) -> TcpStream {
-        let mut stream = TcpStream::connect(&self.address).unwrap();
+        let mut stream = TcpStream::connect(&self.address)
+            .unwrap_or_else(|error| panic!("{method} {path}: {error}: {}", self.log()));
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
@@ -231,12 +248,7 @@ impl Service {
     #[track_caller]
     fn snapshot(&self, id: &str, piece: &str) -> Value {
         let (s, v) = self.send("GET", &format!("/v1/sessions/{id}/pieces/{piece}"), &[], "");
-        assert_eq!(
-            s,
-            200,
-            "{}",
-            fs::read_to_string(self.root.join("service.log")).unwrap()
-        );
+        assert_eq!(s, 200, "{}", self.log());
         v
     }
     fn replay(&self, id: &str, after: u64, count: usize) -> Vec<Value> {

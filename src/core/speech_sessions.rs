@@ -69,14 +69,13 @@ pub(crate) struct Session {
 }
 type Sessions = BTreeMap<String, Session>;
 static INTAKE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(not(all(test, feature = "asr-runtime")))]
-type IntakeLock = (std::sync::MutexGuard<'static, ()>, std::fs::File);
-#[cfg(all(test, feature = "asr-runtime"))]
-type IntakeLock = (
-    std::sync::MutexGuard<'static, ()>,
-    std::fs::File,
-    crate::service::speech::proofs::IntakeTrace,
-);
+pub(crate) struct IntakeLock {
+    // Fields drop in this order. Keep the mutex held until the file lock is gone.
+    _file: std::fs::File,
+    #[cfg(all(test, feature = "asr-runtime"))]
+    _trace: crate::service::speech::proofs::IntakeTrace,
+    _thread: std::sync::MutexGuard<'static, ()>,
+}
 pub struct Store(pub PathBuf);
 pub fn digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -151,15 +150,14 @@ impl Store {
         let thread = INTAKE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let file = store_io::lock(&self.0.join("intake.lock"))?;
-        #[cfg(all(test, feature = "asr-runtime"))]
-        let lock = (
-            thread,
-            file,
-            crate::service::speech::proofs::IntakeTrace::new(),
-        );
-        #[cfg(not(all(test, feature = "asr-runtime")))]
-        let lock = (thread, file);
+        let path = self.0.join("intake.lock");
+        let file = store_io::lock(&path)?;
+        let lock = IntakeLock {
+            _file: file,
+            #[cfg(all(test, feature = "asr-runtime"))]
+            _trace: crate::service::speech::proofs::IntakeTrace::new(&INTAKE, path),
+            _thread: thread,
+        };
         let data = match store_io::read_bounded(&self.0.join("sessions.json"), 1_048_576) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
