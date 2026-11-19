@@ -99,6 +99,7 @@ fn memory_changes(store: &TaskStore, changes: Value) {
         &json!({"version":2,"device":device,"id":id,"store":"memory/records.json","changes":changes,"sources":[],"checksum":checksum}),
     );
 }
+#[cfg(windows)]
 fn junction(link: &Path, target: &Path) {
     use std::os::windows::process::CommandExt;
     let output = Command::new("powershell.exe")
@@ -113,6 +114,16 @@ fn junction(link: &Path, target: &Path) {
         "Synthetic junction creation failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+#[cfg(unix)]
+fn junction(link: &Path, target: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+fn remove_junction(link: &Path) {
+    #[cfg(windows)]
+    fs::remove_dir(link).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(link).unwrap();
 }
 pub fn run(mode: &str, store: &TaskStore) {
     let root = &store.root;
@@ -283,7 +294,7 @@ pub fn run(mode: &str, store: &TaskStore) {
                 store.undo_area(&id).is_err(),
                 "A backup reached through a junction must be rejected"
             );
-            fs::remove_dir(&dir).unwrap();
+            remove_junction(&dir);
             fs::rename(saved, &dir).unwrap();
             assert!(core::area_ops::receipt_backup(root, &id, &receipt, &own).is_ok());
             let mut enlarged = receipt.clone();
@@ -382,7 +393,7 @@ pub fn run(mode: &str, store: &TaskStore) {
             junction(dir, &saved);
             assert!(store.local_project_merge_backup(SOURCE, &receipt).is_err());
             assert!(store.undo_project_merge(SOURCE, &receipt.id).is_err());
-            fs::remove_dir(dir).unwrap();
+            remove_junction(dir);
             fs::rename(&saved, dir).unwrap();
             let forger = peer(store, "merge-receipt-peer");
             let mut fake = receipt.clone();
@@ -583,6 +594,13 @@ pub fn run(mode: &str, store: &TaskStore) {
                 "No import journal published after failed read-back"
             );
         }
+        #[cfg(not(windows))]
+        "r2-sharing-retry" => {
+            panic!(
+                "UNSUPPORTED: r2-sharing-retry requires Windows deny-sharing file handles; Unix open handles do not block rename"
+            );
+        }
+        #[cfg(windows)]
         "r2-sharing-retry" => {
             use std::os::windows::fs::OpenOptionsExt;
             let own = own(store);
