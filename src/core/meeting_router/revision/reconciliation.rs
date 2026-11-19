@@ -160,6 +160,37 @@ pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<(
     {
         return Err("Fallback reason was not recorded by the router".into());
     }
+    for overlap in &coverage.overlaps {
+        let Some(source) = overlap["english_source"].as_str() else {
+            continue;
+        };
+        let (id, _) = source
+            .split_once('-')
+            .ok_or("Invalid English source identity")?;
+        let range = plan
+            .batches
+            .get("en")
+            .and_then(|b| b.get(id))
+            .ok_or("Missing English range")?;
+        let origin = manifest
+            .tracks
+            .iter()
+            .find(|t| t.track == range.track)
+            .ok_or("Missing English track")?
+            .origin_sample;
+        let reading = data.evidence.get(id).ok_or("Missing English reading")?;
+        let pinned = super::segment(id, range, origin, reading)?;
+        let mut alternatives = data
+            .alternatives
+            .iter()
+            .filter(|s| s.sources.first().is_some_and(|o| o.chunk.id == source));
+        if alternatives.next().map(serde_json::to_value).transpose()?
+            != Some(serde_json::to_value(pinned)?)
+            || alternatives.next().is_some()
+        {
+            return Err("English overlap disagrees with the pinned reading".into());
+        }
+    }
     Ok(())
 }
 
@@ -201,21 +232,22 @@ pub(super) fn receipt(
     baseline: &[Chunk],
     coverage: &Coverage,
 ) -> Option<Value> {
-    let (fallback, native, unit) = if let Some(unit) = baseline_of(a, baseline) {
+    let (fallback, routed, unit) = if let Some(unit) = baseline_of(a, baseline) {
         (a, b, unit)
     } else {
         (b, a, baseline_of(b, baseline)?)
     };
-    if !matches!(native.route.as_str(), "hi" | "te")
-        || native.provider != "local"
-        || !matches!(
-            native.status.as_str(),
-            "segment-level" | "validated-samples"
-        )
-        || !native.sources.iter().any(|o| {
-            o.chunk.track == unit.track && (o.chunk.start < unit.start || o.chunk.end > unit.end)
-        })
-        || !overlaps(fallback, native)
+    let source_key = match (routed.route.as_str(), routed.provider.as_str()) {
+        ("hi" | "te", "local") => "native_source",
+        ("en", "hex") => "english_source",
+        _ => return None,
+    };
+    if !matches!(
+        routed.status.as_str(),
+        "segment-level" | "validated-samples"
+    ) || !routed.sources.iter().any(|o| {
+        o.chunk.track == unit.track && (o.chunk.start < unit.start || o.chunk.end > unit.end)
+    }) || !overlaps(fallback, routed)
     {
         return None;
     }
@@ -224,10 +256,19 @@ pub(super) fn receipt(
         .iter()
         .filter(|r| fallback_intersection(r, unit).is_some())
         .collect();
-    if required.is_empty() {
+    if required.is_empty()
+        || (routed.route == "en"
+            && required.iter().any(|r| {
+                routed.sources.iter().any(|o| {
+                    o.chunk.track == r.interval.track
+                        && o.chunk.start < r.interval.end
+                        && r.interval.start < o.chunk.end
+                })
+            }))
+    {
         return None;
     }
-    let intervals: Vec<_> = native
+    let intervals: Vec<_> = routed
         .sources
         .iter()
         .filter(|o| o.chunk.track == unit.track)
@@ -236,7 +277,7 @@ pub(super) fn receipt(
         .collect();
     let seconds: f64 = intervals.iter().map(|(start, end)| end - start).sum();
     Some(
-        serde_json::json!({"baseline":unit.id,"native_source":native.sources.first()?.chunk.id,
+        serde_json::json!({"baseline":unit.id,(source_key):routed.sources.first()?.chunk.id,
         "track":unit.track,"intervals":intervals,"seconds":seconds,"fallback_required":required}),
     )
 }

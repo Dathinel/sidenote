@@ -173,3 +173,37 @@ fn production_gap_requires_a_verified_recognizer_no_speech_record() {
     fs::remove_file(f.work.join(format!("{}-{id}.fallback", f.plan.revision))).unwrap();
     assert!(pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).is_err());
 }
+
+#[test]
+fn captured_sentence_can_straddle_an_independently_pinned_english_range() {
+    let mut f = Fixture::new(b"public routed words", 0, b"");
+    f.baseline = jobs::read_baseline(
+        br#"{"source":"system","start_ms":1000,"end_ms":1500,"text":"public captured words"}"#,
+    )
+    .unwrap();
+    record_coverage(&f, 1.1, 2.0, true);
+    f.run(&mut super::no_speech_tests::NativeFake::default())
+        .unwrap();
+    let mut saved = publish_capture(&f);
+    let overlaps = saved.provenance["assembly_coverage"]["overlaps"]
+        .as_array()
+        .unwrap();
+    assert_eq!(overlaps.len(), 1);
+    assert!(overlaps[0]["english_source"].is_string());
+    for segment in saved
+        .transcript
+        .segments
+        .iter_mut()
+        .chain(&mut saved.alternatives)
+    {
+        if (segment.start, segment.end) == (0.9, 1.1) {
+            segment.text_original = "changed after pinning".into();
+        }
+    }
+    assert_eq!(
+        revision::commit(&f.root.path().join("published"), &saved)
+            .unwrap_err()
+            .to_string(),
+        "Invalid recorded fallback overlap evidence"
+    );
+}
