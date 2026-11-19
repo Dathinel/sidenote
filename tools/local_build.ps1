@@ -5,13 +5,6 @@ $Pack = $false
 $Arguments = @($args)
 if ($Arguments.Count -and $Arguments[0] -ceq '-Pack') { $Pack = $true; $Arguments = @($Arguments | Select-Object -Skip 1) }
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'release_lock.ps1')
-$slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
-$watchLog = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
-$mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
-$slot = $null
-$child = $null
-$marker = $null
 
 function Alive([string]$Identity) {
     if ($Identity -notmatch '^(\d+)-(\d+)$') { return $false }
@@ -25,11 +18,39 @@ function LockSlots {
     try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] { }
 }
 function BusyMeeting {
-    if (-not (Test-Path -LiteralPath $watchLog)) { return $false }
-    $item = Get-Item -LiteralPath $watchLog
-    if ($item.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-2)) { return $false }
-    $last = Get-Content -LiteralPath $watchLog -Tail 1
-    return $last -notmatch '^done\b'
+    try {
+        # Match the Windows Hex process names in src/platform/windows.rs.
+        $filter = "Name='hex.exe' OR Name='hex.com' OR Name='sidenote.exe' OR Name='hex-meetings.exe'"
+        $processes = @(Get-CimInstance Win32_Process -Property Name,CommandLine -Filter $filter -ErrorAction Stop)
+    } catch { return 'cannot check whether Hex is running' }
+    $listener = $processes | Where-Object {
+        $_.Name -in 'sidenote.exe','hex-meetings.exe' -and
+        $_.CommandLine -match '(?:^|\s)"?--(?:listen|server)"?(?=\s|$)' -and
+        $_.CommandLine -notmatch '(?:^|\s)"?--listener-isolated"?(?=\s|$)'
+    }
+    if ($listener) {
+        try {
+            $state = Join-Path $env:APPDATA 'sidenote'
+            if (-not (Test-Path -LiteralPath $state -ErrorAction Stop)) { $state = Join-Path $env:APPDATA 'hex-meetings' }
+            $statusPath = Join-Path $state 'local\status.ndjson'
+            $status = Get-Content -LiteralPath $statusPath -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $age = ([DateTimeOffset](Get-Date) - [DateTimeOffset]$status.timestamp).TotalSeconds
+            # The listener polls every three seconds, plus the status request time.
+            if ($age -ge 0 -and $age -le 15 -and $status.protocol -eq 4 -and $null -eq $status.status_error) {
+                switch -CaseSensitive -Regex ($status.meeting_state) {
+                    '^(starting|recording|paused|stopping|finishing)$' { return 'Hex reports an active meeting' }
+                    '^(idle|stopped|complete|finished|transcribing)$' { return }
+                }
+            }
+        } catch { }
+    }
+    if ($processes.Name -match '^hex\.(exe|com)$') { return 'Hex is running and meeting status is unavailable' }
+}
+function Report-BuildWait([string]$Reason) {
+    if ($waitClock.Elapsed -ge $script:nextWaitReport) {
+        Write-Host "local_build: waiting: $Reason"
+        $script:nextWaitReport = $waitClock.Elapsed.Add([TimeSpan]::FromMinutes(10))
+    }
 }
 function QuoteArg([string]$Value) {
     # Windows command-line quoting: preserve backslashes before quotes and at the end.
@@ -71,6 +92,16 @@ function Assert-TargetSpace {
     $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($targetDirectory))
     if ($drive.AvailableFreeSpace -lt 40GB) { throw 'At least 40 GB free is required on the target drive.' }
 }
+if ($Arguments.Count -eq 1 -and $Arguments[0] -ceq '-MeetingStatus') {
+    [bool](BusyMeeting)
+    return
+}
+. (Join-Path $PSScriptRoot 'release_lock.ps1')
+$slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
+$mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
+$slot = $null
+$child = $null
+$marker = $null
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
     $targetDirectory = Resolve-TargetDirectory
@@ -83,8 +114,13 @@ try {
     Assert-TargetSpace
     New-Item -ItemType Directory -Force -Path $slotRoot | Out-Null
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+    $waitClock = [Diagnostics.Stopwatch]::StartNew()
+    $nextWaitReport = [TimeSpan]::FromMinutes(10)
     while (-not $slot) {
-        while (BusyMeeting) { Start-Sleep -Seconds 10 }
+        while ($waitReason = BusyMeeting) {
+            Report-BuildWait $waitReason
+            Start-Sleep -Seconds 10
+        }
         LockSlots
         try {
             foreach ($dir in @(Get-ChildItem -LiteralPath $slotRoot -Directory)) {
@@ -95,18 +131,19 @@ try {
                     Remove-Item -LiteralPath $dir.FullName -Recurse -Force
                 }
             }
-            if (@(Get-ChildItem -LiteralPath $slotRoot -Directory).Count -lt 2 -and -not (BusyMeeting)) {
+            $waitReason = 'both local build slots are occupied'
+            if (@(Get-ChildItem -LiteralPath $slotRoot -Directory).Count -lt 2 -and -not ($waitReason = BusyMeeting)) {
                 $slot = Join-Path $slotRoot (Identity (Get-Process -Id $PID))
                 New-Item -ItemType Directory -Path $slot | Out-Null
+                if (-not $env:CARGO_BUILD_JOBS -and ($Pack -or -not @($Arguments | Where-Object { $_ -match '^(--jobs(?:=|$)|-j)' }).Count)) {
+                    $env:CARGO_BUILD_JOBS = '4'
+                }
                 if ($Pack) {
                     $exe = (Get-Command powershell.exe -ErrorAction Stop).Source
                     $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'release_pack.ps1')) + $Arguments
                 } else {
                     $exe = (Get-Command cargo.exe -ErrorAction Stop).Source
                     $runArgs = @($Arguments)
-                    if (-not $env:CARGO_BUILD_JOBS -and -not @($Arguments | Where-Object { $_ -match '^(--jobs(?:=|$)|-j)' }).Count) {
-                        $env:CARGO_BUILD_JOBS = '1'
-                    }
                 }
                 Assert-TargetSpace
                 $info = New-Object Diagnostics.ProcessStartInfo
@@ -124,7 +161,10 @@ try {
                 [IO.File]::WriteAllText((Join-Path $slot 'child'), (Identity $child))
             }
         } finally { $mutex.ReleaseMutex() }
-        if (-not $slot) { Start-Sleep -Seconds 5 }
+        if (-not $slot) {
+            Report-BuildWait $waitReason
+            Start-Sleep -Seconds 5
+        }
     }
     $child.WaitForExit()
     exit $child.ExitCode

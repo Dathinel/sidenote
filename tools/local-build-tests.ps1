@@ -3,11 +3,83 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('local-build-test-' + [guid]::NewGuid().ToString('N'))
 $saved = @{}
-foreach ($name in 'PATH','LOCALAPPDATA','CARGO_TARGET_DIR','CARGO_BUILD_TARGET_DIR') {
+foreach ($name in 'PATH','APPDATA','LOCALAPPDATA','CARGO_BUILD_JOBS','CARGO_TARGET_DIR','CARGO_BUILD_TARGET_DIR') {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+function Get-CimInstance {
+    if ($listenerRunning) { [pscustomobject]@{ Name = 'sidenote.exe'; CommandLine = 'sidenote.exe --listen' } }
+    if ($hexName) { [pscustomobject]@{ Name = $hexName; CommandLine = $hexName } }
+}
+function Assert-MeetingStatus([bool]$Expected, [string]$Case, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow) {
+    function Get-Date { $Now.UtcDateTime }
+    if ((& "$PSScriptRoot\local_build.ps1" -MeetingStatus) -cne $Expected) { throw "Wrong meeting status: $Case" }
+}
+function Write-MeetingStatus([string]$State, [DateTimeOffset]$Time = [DateTimeOffset]::UtcNow, $StatusError = $null) {
+    @{
+        timestamp = $Time.ToString('o'); app_version = '0.0.0-dev-1109'; protocol = 4
+        meeting_state = $State; capture_state = 'idle'; capture_kind = $null
+        has_elapsed = $false; has_id = $false; status_error = $StatusError
+        window_visible = $false
+    } | ConvertTo-Json -Compress | Add-Content -LiteralPath $statusFile
 }
 try {
     New-Item -ItemType Directory -Path $temp | Out-Null
+    $env:APPDATA = $temp
+    $env:LOCALAPPDATA = $temp
+    $statusDir = Join-Path $temp 'hex-meetings\local'
+    New-Item -ItemType Directory -Path $statusDir | Out-Null
+    $statusFile = Join-Path $statusDir 'status.ndjson'
+    $listenerRunning = $false
+    $hexName = 'hex.exe'
+    Write-MeetingStatus recording -Time ([DateTimeOffset]::UtcNow.AddMinutes(-1))
+    Assert-MeetingStatus $true 'stale recording without the listener, with Hex running'
+    $hexName = $null
+    Assert-MeetingStatus $false 'stale recording without the listener or Hex'
+
+    $listenerRunning = $true
+    $hexName = 'hex.exe'
+    foreach ($state in 'starting','recording','paused','stopping','finishing') {
+        Write-MeetingStatus $state
+        Assert-MeetingStatus $true "fresh $state row"
+    }
+    Write-MeetingStatus idle
+    Assert-MeetingStatus $false 'fresh idle row'
+    $listenerRunning = $false
+    Assert-MeetingStatus $true 'fresh idle row from a stopped listener'
+
+    $listenerRunning = $true
+    $now = [DateTimeOffset]::UtcNow
+    Write-MeetingStatus idle -Time ($now.AddSeconds(-15))
+    Assert-MeetingStatus $false '15 seconds old is fresh' -Now $now
+    Assert-MeetingStatus $true '15 seconds plus one tick is stale' -Now ($now.AddTicks(1))
+    foreach ($hexName in @($null, 'hex.com')) {
+        foreach ($poll in 1..2) {
+            Write-MeetingStatus -StatusError 'not_running'
+            Assert-MeetingStatus ([bool]$hexName) "not_running poll $poll with Hex presence $([bool]$hexName)"
+        }
+    }
+
+    Write-MeetingStatus idle
+    [IO.File]::AppendAllText($statusFile, '{"timestamp":')
+    Assert-MeetingStatus $true 'partial last line with Hex running'
+    $hexName = $null
+    Assert-MeetingStatus $false 'partial last line with Hex closed'
+    [IO.File]::AppendAllText($statusFile, [Environment]::NewLine)
+    Write-MeetingStatus idle
+    $hexName = 'hex.exe'
+    $held = [IO.File]::Open($statusFile, 'Open', 'ReadWrite', 'None')
+    try {
+        Assert-MeetingStatus $true 'unreadable status file with Hex running'
+        $hexName = $null
+        Assert-MeetingStatus $false 'unreadable status file with Hex closed'
+    } finally { $held.Dispose() }
+    Remove-Item -LiteralPath $statusFile
+    Assert-MeetingStatus $false 'absent status file with Hex closed'
+    $hexName = 'hex.exe'
+    Assert-MeetingStatus $true 'absent status file with Hex running'
+
+    $processMock = 'function Get-CimInstance { ' + (Get-Command Get-CimInstance).Definition + ' }; $listenerRunning = $true; $hexName = ''hex.exe''; '
+    Write-MeetingStatus idle
     Add-Type -OutputAssembly (Join-Path $temp 'cargo.exe') -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 class CargoArgs {
@@ -15,11 +87,12 @@ class CargoArgs {
         foreach (string arg in args) Console.WriteLine("arg:" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(arg)));
         foreach (string name in new [] {"CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"})
             Console.WriteLine("target:" + Environment.GetEnvironmentVariable(name));
+        Console.WriteLine("jobs:" + Environment.GetEnvironmentVariable("CARGO_BUILD_JOBS"));
     }
 }
 '@
     $env:PATH = "$temp;" + $env:PATH
-    $env:LOCALAPPDATA = $temp
+    $env:CARGO_BUILD_JOBS = $null
     # local_build refuses targets outside the worktree, so the fallbacks live inside it.
     $fallback = Join-Path $root ('target\local-build-test-' + [guid]::NewGuid().ToString('N'))
     $env:CARGO_TARGET_DIR = Join-Path $fallback 'fallback'
@@ -31,8 +104,11 @@ class CargoArgs {
     $commands += "& tools/local_build.ps1 clippy --target-dir 'target with spaces\' '--' -D warnings --config tool-only"
     $commands += "& tools/local_build.ps1 clippy '--target-dir=target equals' '--' -D warnings"
     foreach ($command in $commands) {
-        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $command)
+        Write-MeetingStatus idle
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $command))
         if ($LASTEXITCODE) { throw "Wrapper exited $LASTEXITCODE" }
+        $expectedJobs = if ($command -match ' -j 1 ') { 'jobs:' } else { 'jobs:4' }
+        if ($output -cnotcontains $expectedJobs) { throw "Wrong Cargo jobs default: $command" }
         $actual = @($output | Where-Object { $_.StartsWith('arg:') } | ForEach-Object {
             [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Substring(4)))
         })
@@ -49,16 +125,32 @@ class CargoArgs {
             throw 'Checked target directory did not reach the child.'
         }
     }
+    $env:CARGO_BUILD_JOBS = '2'
+    Write-MeetingStatus -StatusError 'not_running'
+    $waitCommand = @'
+function Start-Sleep([int]$Seconds) {
+    if ($Seconds -ne 10 -or $script:waited) { throw 'Unexpected wrapper wait.' }
+    $script:waited = $true
+    $script:hexName = $null
+    'waited for meeting'
+}
+& tools/local_build.ps1 check
+'@
+    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $waitCommand))
+    if ($LASTEXITCODE -or $output[0] -cne 'waited for meeting' -or $output -cnotcontains 'jobs:2') {
+        throw 'Wrapper must wait while Hex is running and preserve the caller job count.'
+    }
+    Write-MeetingStatus idle
     $ErrorActionPreference = 'Continue'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '& tools/local_build.ps1 check --config build.target-dir=unchecked' 2>$null
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + '& tools/local_build.ps1 check --config build.target-dir=unchecked') 2>$null
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1) { throw 'Unchecked Cargo config was accepted.' }
     $ErrorActionPreference = 'Continue'
     $outside = Join-Path $temp 'outside'
-    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& tools/local_build.ps1 check --target-dir '$outside'" 2>$null)
+    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + "& tools/local_build.ps1 check --target-dir '$outside'") 2>$null)
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1 -or @($output | Where-Object { $_.StartsWith('arg:') }).Count) { throw 'Target outside the worktree was accepted.' }
-    Write-Output 'PASS: both gate calls, separator suffix, target overrides, config rejection, and outside-target rejection.'
+    Write-Output 'PASS: meeting status, Cargo job counts, both gate calls, separator suffix, target overrides, config rejection, and outside-target rejection.'
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
