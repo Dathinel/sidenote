@@ -120,13 +120,15 @@ impl Collector {
         if enabled && self.worker.is_none() {
             self.worker = Some(start_worker(self.root.clone()));
         }
+        self.capture(status, &super::meetings_dir(), upload)
+    }
+
+    fn capture(&mut self, status: &Value, meetings: &Path, upload: bool) -> io::Result<()> {
         let recording = matches!(
             status["meeting_state"].as_str(),
             Some("starting" | "recording" | "paused" | "stopping" | "finishing")
         );
-        let source = recording
-            .then(|| discover(&super::meetings_dir(), status))
-            .flatten();
+        let source = recording.then(|| discover(meetings, status)).flatten();
         if let Some(source) = source {
             if self.active.as_ref().is_some_and(|a| a.source != source) {
                 let previous = self.active.take().unwrap();
@@ -354,6 +356,7 @@ fn upload_windows(
     else {
         return Ok(());
     };
+    let mut failure = None;
     for folder in folders(evidence) {
         let Some(meeting) = folder
             .file_name()
@@ -387,38 +390,53 @@ fn upload_windows(
         let total = pending.len();
         let mut journals = Vec::with_capacity(total);
         for (dir, job) in pending {
-            let Some(origin) = manifest[&job.track]["first_arrival_us"]
-                .as_u64()
-                .and_then(|us| (us / 1000).checked_mul(16))
-                .and_then(|sample| i64::try_from(sample).ok())
-            else {
-                continue;
-            };
             let piece = Piece {
                 track: job.track,
                 index: u32::try_from(job.index).map_err(io::Error::other)?,
-                origin_sample: origin,
+                origin_sample: 0,
                 start_sample: job.start,
                 end_sample: job.end,
                 context_start_sample: job.audio_start,
                 sha256: String::new(),
             };
-            journals.push(upload.piece(meeting, piece, &dir.join("audio.wav"))?);
+            match upload.piece(meeting, piece, &dir.join("audio.wav")) {
+                Ok(journal) => journals.push(journal),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
         }
         if folder.join("collection.json").exists()
             && manifest["status"] == "complete"
             && journals.len() == total
             && journals.iter().all(|journal| journal.done())
         {
+            let origins: std::collections::BTreeMap<_, _> = journals
+                .iter()
+                .filter_map(|journal| {
+                    let track = &journal.piece().track;
+                    let us = manifest[track]["first_arrival_us"].as_u64()?;
+                    Some((
+                        track.clone(),
+                        i64::try_from((us / 1000).checked_mul(16)?).ok()?,
+                    ))
+                })
+                .collect();
+            if !journals
+                .iter()
+                .all(|journal| origins.contains_key(&journal.piece().track))
+            {
+                continue;
+            }
             let transcript = source.join(meeting).join("transcript.ndjson");
             if let Ok(bytes) =
                 super::meeting_router::inputs::Snapshot::read_file(&transcript, 16 << 20)
             {
-                upload.stage(meeting, &journals, &bytes)?;
+                upload.stage(meeting, &journals, &origins, &bytes)?;
             }
         }
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 fn low_energy_cut(audio: &[f32], left: usize, right: usize) -> usize {

@@ -181,6 +181,7 @@ impl Journal {
 
 pub fn assemble<'a>(
     journals: impl IntoIterator<Item = &'a Journal>,
+    origins: &BTreeMap<String, i64>,
     config: &str,
     source: &str,
     baseline: &[meeting_router::Chunk],
@@ -188,10 +189,11 @@ pub fn assemble<'a>(
 ) -> super::super::asr::Result<meeting_router::revision::Revision> {
     let mut ranges = BTreeMap::new();
     for journal in journals {
+        let origin = *origins
+            .get(&journal.piece().track)
+            .ok_or("Missing final track origin")?;
         for (id, value) in journal.ranges() {
-            ranges
-                .entry(id)
-                .or_insert((journal.piece().origin_sample, value));
+            ranges.entry(id).or_insert((origin, value));
         }
     }
     meeting_router::revision::assemble_host(ranges, config, source, baseline, generation)
@@ -235,7 +237,15 @@ mod tests {
         assert!(reopened.done());
         assert_eq!(reopened.cursor(), 1);
         assert_eq!(reopened.ranges().len(), 1);
-        let revision = assemble([&reopened], "config", "source", &[], 1).unwrap();
+        let revision = assemble(
+            [&reopened],
+            &[("system".into(), 0)].into(),
+            "config",
+            "source",
+            &[],
+            1,
+        )
+        .unwrap();
         assert_eq!(
             revision.transcript.segments[0].text_original,
             "first reading"

@@ -287,7 +287,15 @@ impl Fixture {
         let receipts = folders(&config).swap_remove(0);
         let journal = receipts.join("microphone-0.dpapi");
         let journal = Journal::load(journal).unwrap().unwrap();
-        let revision = journal::assemble([&journal], "fake config", "fake source", &[], 0).unwrap();
+        let revision = journal::assemble(
+            [&journal],
+            &[("microphone".into(), 0)].into(),
+            "fake config",
+            "fake source",
+            &[],
+            0,
+        )
+        .unwrap();
         let text: Vec<_> = revision
             .transcript
             .segments

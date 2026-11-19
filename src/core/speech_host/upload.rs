@@ -132,6 +132,7 @@ impl<'a> Upload<'a> {
         &self,
         meeting: &str,
         journals: &[Journal],
+        origins: &std::collections::BTreeMap<String, i64>,
         transcript: &[u8],
     ) -> io::Result<()> {
         let source = digest(transcript);
@@ -143,8 +144,9 @@ impl<'a> Upload<'a> {
         }
         let baseline = crate::core::meeting_router::jobs::read_baseline(transcript)
             .map_err(|_| remote_error())?;
-        let revision = super::journal::assemble(journals, &self.config, &source, &baseline, 0)
-            .map_err(|_| remote_error())?;
+        let revision =
+            super::journal::assemble(journals, origins, &self.config, &source, &baseline, 0)
+                .map_err(|_| remote_error())?;
         let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&revision)?);
         let encrypted = sidenote_sync::identity::protect(&bytes).map_err(|_| remote_error())?;
         store_io::atomic_write(&destination, &encrypted)
@@ -166,6 +168,8 @@ impl<'a> Upload<'a> {
         let mut audio = None;
         let mut journal = match Journal::load(journal_path.clone())? {
             Some(journal) => {
+                // A pre-existing cut keeps exactly the metadata previously sent.
+                piece.origin_sample = journal.piece().origin_sample;
                 piece.sha256.clone_from(&journal.piece().sha256);
                 if journal.piece() != &piece {
                     return Err(io::ErrorKind::InvalidData.into());
