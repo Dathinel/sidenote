@@ -12,6 +12,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub(crate) mod proof;
+
 const CPU_DOWNLOAD_KEY: &str = "download-cpu-language-packs";
 const CPU_DOWNLOAD_LABEL: &str = "Download Hindi and Telugu (567 MB)";
 
@@ -459,7 +462,7 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     let (installed_tx, installed_rx) = std::sync::mpsc::channel();
     state.models.install_fixture = Some(installed_tx);
     let mut runtime = settings_models_runtime(state);
-    assert!(click_cpu_download(&mut runtime));
+    assert!(click_model_control(&mut runtime, CPU_DOWNLOAD_KEY));
     let timeout = std::time::Duration::from_secs(5);
     for id in [
         "silero-vad",
@@ -493,7 +496,7 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     assert!(installed_rx.try_recv().is_err());
 }
 
-#[cfg(all(windows, feature = "asr-runtime", test))]
+#[cfg(all(windows, feature = "asr-runtime"))]
 fn settings_models_runtime(state: State) -> rune::Runtime<State> {
     let mut runtime = rune::Runtime::new(
         state,
@@ -505,9 +508,9 @@ fn settings_models_runtime(state: State) -> rune::Runtime<State> {
     runtime
 }
 
-#[cfg(all(windows, feature = "asr-runtime", test))]
-fn click_cpu_download(runtime: &mut rune::Runtime<State>) -> bool {
-    let Some((x, y)) = runtime.find(CPU_DOWNLOAD_KEY) else {
+#[cfg(all(windows, feature = "asr-runtime"))]
+fn click_model_control(runtime: &mut rune::Runtime<State>, key: &str) -> bool {
+    let Some((x, y)) = runtime.find(key) else {
         return false;
     };
     runtime.pointer_move(x, y);
