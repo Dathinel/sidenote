@@ -27,6 +27,7 @@ pub enum Change {
     NewSession,
     Session(Option<String>),
     Lost,
+    HostFailed,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -64,13 +65,7 @@ impl Journal {
         }
     }
 
-    pub fn open(path: PathBuf, piece: Piece) -> io::Result<Self> {
-        if let Some(journal) = Self::load(path.clone())? {
-            if journal.log.cut != piece {
-                return Err(invalid());
-            }
-            return Ok(journal);
-        }
+    pub fn create(path: PathBuf, piece: Piece) -> io::Result<Self> {
         let journal = Self {
             path,
             log: Log {
@@ -144,32 +139,32 @@ impl Journal {
             .flatten()
     }
 
-    pub fn lost(&self) -> bool {
-        self.log
-            .changes
-            .iter()
-            .rev()
-            .find_map(|change| match change {
-                Change::Lost => Some(true),
-                Change::NewSession => Some(false),
-                _ => None,
-            })
-            .unwrap_or(false)
+    fn state(&self) -> Option<&Change> {
+        self.log.changes.iter().rev().find(|change| {
+            matches!(
+                change,
+                Change::Lost | Change::NewSession | Change::Done(_) | Change::HostFailed
+            )
+        })
     }
 
-    pub fn session_generation(&self) -> usize {
+    pub fn lost(&self) -> bool {
+        matches!(self.state(), Some(Change::Lost))
+    }
+
+    pub fn replacement(&self) -> bool {
         self.log
             .changes
             .iter()
-            .filter(|c| matches!(c, Change::NewSession))
-            .count()
+            .any(|c| matches!(c, Change::NewSession))
+    }
+
+    pub fn host_failed(&self) -> bool {
+        matches!(self.state(), Some(Change::HostFailed))
     }
 
     pub fn done(&self) -> bool {
-        self.log
-            .changes
-            .iter()
-            .any(|c| matches!(c, Change::Done(_)))
+        matches!(self.state(), Some(Change::Done(_) | Change::HostFailed))
     }
 
     pub fn range(&self, value: &Value) -> io::Result<String> {
@@ -230,15 +225,41 @@ pub fn assemble<'a>(
     generation: u128,
 ) -> super::super::asr::Result<meeting_router::revision::Revision> {
     let mut ranges = BTreeMap::new();
+    let mut missing = Vec::new();
     for journal in journals {
         let origin = *origins
             .get(&journal.piece().track)
             .ok_or("Missing final track origin")?;
-        for (id, value) in journal.ranges() {
+        let readings = journal.ranges();
+        if journal.host_failed() {
+            let piece = journal.piece();
+            let mut covered: Vec<_> = readings
+                .values()
+                .filter_map(|v| v["start_sample"].as_u64().zip(v["end_sample"].as_u64()))
+                .collect();
+            covered.sort_unstable();
+            let mut until = piece.start_sample;
+            for (start, end) in covered
+                .into_iter()
+                .chain([(piece.end_sample, piece.end_sample)])
+            {
+                if start > until {
+                    missing.push(serde_json::json!({"track":piece.track,"start_sample":until,
+                        "end_sample":start,"origin_sample":origin}));
+                }
+                until = until.max(end);
+            }
+        }
+        for (id, value) in readings {
             ranges.entry(id).or_insert((origin, value));
         }
     }
-    meeting_router::revision::assemble_host(ranges, config, source, baseline, generation)
+    let mut revision =
+        meeting_router::revision::assemble_host(ranges, config, source, baseline, generation)?;
+    if !missing.is_empty() {
+        revision.provenance["missing_ranges"] = missing.into();
+    }
+    Ok(revision)
 }
 
 #[cfg(test)]
@@ -259,7 +280,7 @@ mod tests {
             context_start_sample: 0,
             sha256: "a".repeat(64),
         };
-        let mut journal = Journal::open(path.clone(), piece).unwrap();
+        let mut journal = Journal::create(path.clone(), piece).unwrap();
         let key = "b".repeat(64);
         let mut range = json!({"piece":"d".repeat(64),"range":key,"track":"system","start_sample":0,"end_sample":16000,
             "model_sha256":"c".repeat(64),"route":"hi","language":"hi","timing":"range","text":"first reading"});

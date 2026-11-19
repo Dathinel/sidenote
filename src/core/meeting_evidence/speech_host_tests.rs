@@ -16,7 +16,7 @@ const MEETING: &str = "100-1";
 const TOKEN: &[u8] = b"synthetic-device";
 const READY: &str = r#"{"api":1,"role":"server","speech_jobs":true,"session_retirement":true,"asr":{"state":"ready","languages":["hi"],"models":[]}}"#;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     Normal,
     CutPut,
@@ -27,6 +27,7 @@ enum Mode {
     Malformed,
     Truncated,
     Empty,
+    Failed,
     Unready,
 }
 
@@ -37,7 +38,9 @@ struct Server {
     peak: usize,
     full: usize,
     uploads: Vec<(String, String)>,
+    connections: usize,
     snapshots: usize,
+    replayed: bool,
     raw_keys: BTreeSet<String>,
 }
 
@@ -80,6 +83,12 @@ impl Fixture {
             listener,
             server: Server::default(),
         }
+    }
+
+    fn finished() -> Self {
+        let mut fixture = Self::new(true, 3);
+        fixture.capture(false);
+        fixture
     }
 
     fn capture(&mut self, recording: bool) {
@@ -208,6 +217,7 @@ impl Server {
                     socket.set_nonblocking(false).unwrap();
                     socket.set_read_timeout(Some(WAIT)).unwrap();
                     socket.set_write_timeout(Some(WAIT)).unwrap();
+                    self.connections += 1;
                     if self.request(&mut socket, evidence, mode) {
                         idle = Some(socket);
                     }
@@ -326,15 +336,24 @@ impl Server {
         if parts[4] == "pieces" {
             assert_eq!(parts[5], piece);
             self.snapshots += 1;
-            let (state, rows) = match mode {
-                Mode::Lost(_) => ("lost", &readings[..0]),
-                Mode::Partial | Mode::Replay => ("running", &readings[..1]),
-                _ => ("done", readings.as_slice()),
+            let (state, rows, failed) = match mode {
+                Mode::Lost(_) => ("lost", &readings[..0], json!([])),
+                Mode::Partial => ("running", &readings[..1], json!([])),
+                Mode::Replay if !self.replayed => ("running", &readings[..1], json!([])),
+                Mode::Failed => (
+                    "failed",
+                    &readings[2..],
+                    json!([{"piece":piece,"code":"ASR_UNAVAILABLE","retryable":false}]),
+                ),
+                _ => {
+                    readings.push(readings[0].clone());
+                    ("done", readings.as_slice(), json!([]))
+                }
             };
             reply(
                 socket,
                 200,
-                json!({"state":state,"ranges":rows,"failed":[]}),
+                json!({"state":state,"ranges":rows,"failed":failed}),
             );
             return false;
         }
@@ -358,6 +377,7 @@ impl Server {
                 result(1, 0) + &result(2, 1) + &result(3, 2) + &frame(4, "piece.done", &done)
             }
             Mode::Replay if cursor == 1 => {
+                self.replayed = true;
                 result(3, 2)
                     + &result(1, 0)
                     + &result(2, 1)
@@ -369,7 +389,7 @@ impl Server {
             }
             Mode::Malformed => "id: broken\n\n:".to_owned() + &" ".repeat(4200),
             Mode::Lost(2) => frame(2, "host.status", &json!({})),
-            Mode::Lost(_) | Mode::Empty => return false,
+            Mode::Lost(_) | Mode::Empty | Mode::Failed => return false,
             _ => unreachable!(),
         };
         let terminal = matches!(mode, Mode::Normal) || matches!(mode, Mode::Replay) && cursor == 1;
@@ -410,8 +430,7 @@ fn speech_host_uploads_before_stop_and_releases_at_the_cap() {
 
 #[test]
 fn speech_host_retries_put_and_replays_after_a_drop() {
-    let mut fixture = Fixture::new(true, 3);
-    fixture.capture(false);
+    let mut fixture = Fixture::finished();
     assert!(fixture.run(Mode::CutPut).is_err());
     fixture.run(Mode::Partial).unwrap();
     fixture.run(Mode::Replay).unwrap();
@@ -420,13 +439,11 @@ fn speech_host_retries_put_and_replays_after_a_drop() {
 
 #[test]
 fn speech_host_recovers_lost_log_with_stable_range_keys() {
-    let mut reference = Fixture::new(true, 3);
-    reference.capture(false);
+    let mut reference = Fixture::finished();
     reference.run(Mode::Normal).unwrap();
     let golden = reference.golden();
     for next in [0, 1, 2] {
-        let mut fixture = Fixture::new(true, 3);
-        fixture.capture(false);
+        let mut fixture = Fixture::finished();
         fixture.run(Mode::Partial).unwrap();
         fixture.run(Mode::Lost(next)).unwrap();
         fixture.run(Mode::Normal).unwrap();
@@ -441,43 +458,47 @@ fn speech_host_recovers_lost_log_with_stable_range_keys() {
     }
 }
 
-fn check_incomplete_stream(mode: Mode) {
-    let mut fixture = Fixture::new(true, 3);
-    fixture.capture(false);
-    fixture.run(mode).unwrap();
-    assert_eq!(fixture.server.snapshots, 1);
-    fixture.golden();
+#[test]
+fn speech_host_stages_missing_range_after_replacement_fails() {
+    let mut fixture = Fixture::finished();
+    for mode in [Mode::Partial, Mode::Lost(0), Mode::Failed] {
+        fixture.run(mode).unwrap();
+    }
+    let revision = fixture.revision();
+    assert_eq!(
+        revision.provenance["missing_ranges"],
+        json!([{"track":"microphone","start_sample":16000,"end_sample":32000,"origin_sample":16000}])
+    );
+    assert_eq!(
+        revision
+            .evidence
+            .values()
+            .map(|v| v["text"].as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["first", "third"])
+    );
+    fixture.run(Mode::Normal).unwrap();
+    assert_eq!(fixture.server.uploads.len(), 2);
+    assert_eq!(fixture.server.retired, 2);
 }
 
 #[test]
-fn speech_host_snapshots_after_read_timeout() {
-    check_incomplete_stream(Mode::Idle);
-}
-
-#[test]
-fn speech_host_snapshots_after_empty_disconnect() {
-    check_incomplete_stream(Mode::Empty);
-}
-
-#[test]
-fn speech_host_snapshots_after_partial_frame() {
-    check_incomplete_stream(Mode::Truncated);
-}
-
-#[test]
-fn speech_host_snapshots_after_malformed_frame() {
-    check_incomplete_stream(Mode::Malformed);
+fn speech_host_snapshots_after_interrupted_streams() {
+    for mode in [Mode::Idle, Mode::Empty, Mode::Truncated, Mode::Malformed] {
+        let mut fixture = Fixture::finished();
+        fixture.run(mode).unwrap();
+        assert_eq!(fixture.server.snapshots, 1, "{mode:?}");
+        fixture.golden();
+    }
 }
 
 #[test]
 fn speech_host_off_and_unready_send_no_audio() {
-    let mut off = Fixture::new(false, 3);
-    off.capture(false);
-    off.run(Mode::Unready).unwrap();
-    assert!(off.server.sessions.is_empty());
-    let mut unavailable = Fixture::new(true, 3);
-    unavailable.capture(false);
-    unavailable.run(Mode::Unready).unwrap();
-    assert!(unavailable.server.sessions.is_empty());
-    assert!(!unavailable.data.join("local/speech-uploads").exists());
+    for (consent, mode, connections) in [(false, Mode::Normal, 0), (true, Mode::Unready, 1)] {
+        let mut fixture = Fixture::new(consent, 3);
+        fixture.capture(false);
+        fixture.run(mode).unwrap();
+        assert_eq!(fixture.server.connections, connections);
+        assert!(!fixture.data.join("local/speech-uploads").exists());
+    }
 }

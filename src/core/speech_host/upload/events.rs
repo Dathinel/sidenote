@@ -27,9 +27,8 @@ impl Upload<'_> {
         let mut stream = Stream {
             id,
             bytes: Vec::new(),
-            received: BTreeSet::new(),
-            terminal: None,
-            failed: false,
+            expected: None,
+            terminal: false,
         };
         let headers = format!(
             "Accept: text/event-stream\r\nLast-Event-ID: {}\r\n",
@@ -45,19 +44,9 @@ impl Upload<'_> {
                 headers: &headers,
                 body: &[],
             },
-            |_, data| stream.feed(data, journal).is_ok() && !journal.done() && !stream.failed,
+            |_, data| stream.feed(data, journal).is_ok() && !stream.terminal,
         );
-        if !journal.done() {
-            // Timeouts, malformed frames and disconnects all leave the same recovery path.
-            self.snapshot(
-                piece_path,
-                id,
-                journal,
-                stream.terminal.map(|(_, count, _)| count),
-                false,
-            )?;
-        }
-        Ok(())
+        self.snapshot(piece_path, id, journal, stream.expected, false)
     }
 
     fn snapshot(
@@ -65,11 +54,11 @@ impl Upload<'_> {
         path: &str,
         id: &str,
         journal: &mut Journal,
-        expected: Option<usize>,
+        expected: Option<u64>,
         reset: bool,
     ) -> io::Result<()> {
         let (status, data) = self.send(path, "GET", "", &[])?;
-        if status == 404 {
+        if status == 404 && !journal.replacement() {
             return journal.record(vec![Change::Ack(false), Change::Cursor(0)]);
         }
         if status != 200 {
@@ -77,28 +66,35 @@ impl Upload<'_> {
         }
         let ranges = data["ranges"].as_array().ok_or_else(remote_error)?;
         let failures = data["failed"].as_array().ok_or_else(remote_error)?;
+        let saved = journal.ranges();
         let mut seen = BTreeSet::new();
         let mut changes = Vec::new();
         for value in ranges {
             if value["piece"] != id {
                 return Err(remote_error());
             }
-            let key = journal.range(value)?;
-            if seen.insert(key.clone()) && !journal.ranges().contains_key(&key) {
+            let key = journal.range(value).map_err(|_| remote_error())?;
+            if seen.insert(key.clone()) && !saved.contains_key(&key) {
                 changes.push(Change::Range(value.clone()));
             }
         }
-        if matches!(data["state"].as_str(), Some("done" | "failed"))
-            && seen.len() == journal.ranges().len() + changes.len()
-            && expected.is_none_or(|count| count == seen.len())
-        {
-            changes.push(Change::Done(failures.clone()));
+        let state = data["state"].as_str();
+        let complete = seen.len() == saved.len() + changes.len()
+            && expected.is_none_or(|count| count == seen.len() as u64);
+        match state {
+            Some("done" | "failed")
+                if journal.replacement()
+                    && (!complete || state == Some("failed") || !failures.is_empty()) =>
+            {
+                changes.push(Change::HostFailed)
+            }
+            Some("done" | "failed") if complete => changes.push(Change::Done(failures.clone())),
+            Some("lost") if journal.replacement() => changes.push(Change::HostFailed),
+            Some("lost") => changes.push(Change::Lost),
+            _ => {}
         }
         if reset {
             changes.push(Change::Cursor(0));
-        }
-        if data["state"] == "lost" {
-            changes.push(Change::Lost);
         }
         journal.record(changes)
     }
@@ -107,9 +103,8 @@ impl Upload<'_> {
 struct Stream<'a> {
     id: &'a str,
     bytes: Vec<u8>,
-    received: BTreeSet<u64>,
-    terminal: Option<(u64, usize, Vec<Value>)>,
-    failed: bool,
+    expected: Option<u64>,
+    terminal: bool,
 }
 
 impl Stream<'_> {
@@ -134,31 +129,23 @@ impl Stream<'_> {
             return Ok(());
         }
         let mut lines = frame.lines();
-        let seq: u64 = lines
-            .next()
-            .and_then(|line| line.strip_prefix("id: "))
-            .and_then(|n| n.parse().ok())
-            .filter(|seq| *seq > 0)
-            .ok_or_else(remote_error)?;
-        let event = lines
-            .next()
-            .and_then(|line| line.strip_prefix("event: "))
-            .ok_or_else(remote_error)?;
-        let value: Value = serde_json::from_str(
+        let mut field = |prefix| {
             lines
                 .next()
-                .and_then(|line| line.strip_prefix("data: "))
-                .ok_or_else(remote_error)?,
-        )?;
-        let cursor = journal.cursor();
-        if seq <= cursor || !self.received.insert(seq) {
-            return Ok(());
-        }
-        if self.received.len() > 4096 {
+                .and_then(|line| line.strip_prefix(prefix))
+                .ok_or_else(remote_error)
+        };
+        let seq: u64 = field("id: ")?.parse().map_err(|_| remote_error())?;
+        if seq == 0 {
             return Err(remote_error());
         }
+        let event = field("event: ")?;
+        let value: Value = serde_json::from_str(field("data: ")?)?;
+        let cursor = journal.cursor();
+        if seq <= cursor {
+            return Ok(());
+        }
         let mut changes = Vec::new();
-        let count = journal.ranges().len();
         if value["piece"] == self.id {
             match event {
                 "range.result" => {
@@ -167,37 +154,16 @@ impl Stream<'_> {
                         changes.push(Change::Range(value));
                     }
                 }
-                "piece.done" => {
-                    let ok = value["ranges_ok"]
-                        .as_u64()
-                        .and_then(|n| usize::try_from(n).ok())
-                        .ok_or_else(remote_error)?;
-                    let failures = value["failed"].as_array().ok_or_else(remote_error)?;
-                    if value["ranges_total"].as_u64() != Some(ok as u64 + failures.len() as u64) {
-                        return Err(remote_error());
-                    }
-                    self.terminal = Some((seq, ok, failures.clone()));
+                "piece.done" | "piece.failed" => {
+                    self.expected = value["ranges_ok"].as_u64();
+                    self.terminal = true;
                 }
-                "piece.failed" => self.failed = true,
                 _ => {}
             }
         }
-        let mut next = cursor;
-        while next
-            .checked_add(1)
-            .is_some_and(|seq| self.received.remove(&seq))
-        {
-            next += 1;
-        }
-        if let Some((seq, wanted, failures)) = &self.terminal
-            && next >= *seq
-            && *wanted == count + changes.len()
-            && !journal.done()
-        {
-            changes.push(Change::Done(failures.clone()));
-        }
-        if next != cursor {
-            changes.push(Change::Cursor(next));
+        // Replaying a gap is cheap: applying a range twice keeps its first reading.
+        if cursor.checked_add(1) == Some(seq) {
+            changes.push(Change::Cursor(seq));
         }
         journal.record(changes)
     }

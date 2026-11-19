@@ -5,8 +5,7 @@ use super::{
     journal::{Change, Journal, Piece, key},
     store_io,
 };
-use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     io,
@@ -14,15 +13,6 @@ use std::{
 };
 
 pub(in crate::core) const MAX_WAV: u64 = 10_000_000;
-
-#[derive(Serialize)]
-struct Session<'a> {
-    client_session: String,
-    meeting_id: &'a str,
-    languages: &'a [String],
-    language_mode: &'static str,
-    config_sha256: &'a str,
-}
 
 pub(in crate::core) struct Upload<'a> {
     host: Host,
@@ -38,7 +28,7 @@ pub(in crate::core) fn digest(bytes: &[u8]) -> String {
 }
 
 fn remote_error() -> io::Error {
-    io::Error::other("Speech host request did not complete")
+    io::ErrorKind::ConnectionAborted.into()
 }
 
 impl<'a> Upload<'a> {
@@ -119,6 +109,9 @@ impl<'a> Upload<'a> {
                 16 << 20,
             )
             .ok_or_else(remote_error)?;
+        if status == 429 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
         Ok((status, serde_json::from_slice(&data).unwrap_or(Value::Null)))
     }
 
@@ -181,13 +174,35 @@ impl<'a> Upload<'a> {
                 let bytes = store_io::read_bounded(wav, MAX_WAV)?;
                 piece.sha256 = digest(&bytes);
                 audio = Some(bytes);
-                Journal::open(journal_path, piece)?
+                Journal::create(journal_path, piece)?
             }
         };
         self.retire(&mut journal)?;
         if journal.done() {
             return Ok(journal);
         }
+        if let Err(error) = self.transfer(meeting, wav, audio, &mut journal) {
+            if !journal.replacement()
+                || !matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionAborted | io::ErrorKind::WouldBlock
+                )
+            {
+                return Err(error);
+            }
+            journal.record(vec![Change::HostFailed])?;
+        }
+        self.retire(&mut journal)?;
+        Ok(journal)
+    }
+
+    fn transfer(
+        &self,
+        meeting: &str,
+        wav: &Path,
+        audio: Option<Vec<u8>>,
+        journal: &mut Journal,
+    ) -> io::Result<()> {
         let piece = journal.piece();
         let id = digest(&serde_json::to_vec(&(
             meeting,
@@ -201,23 +216,17 @@ impl<'a> Upload<'a> {
         let client_session = digest(&serde_json::to_vec(&(
             self.since(),
             &id,
-            journal.session_generation(),
+            u8::from(journal.replacement()),
         ))?);
         let (status, reply) = self.send(
             "/v1/sessions",
             "POST",
             "Content-Type: application/json\r\n",
-            &serde_json::to_vec(&Session {
-                client_session,
-                meeting_id: meeting,
-                languages: &self.languages,
-                language_mode: "auto",
-                config_sha256: &self.config,
-            })?,
+            &serde_json::to_vec(&json!({
+                "client_session":client_session,"meeting_id":meeting,"languages":self.languages,
+                "language_mode":"auto","config_sha256":self.config
+            }))?,
         )?;
-        if status == 429 {
-            return Err(io::ErrorKind::WouldBlock.into());
-        }
         let session = reply["session"]
             .as_str()
             .filter(|s| key(s))
@@ -235,6 +244,9 @@ impl<'a> Upload<'a> {
             _ => {}
         }
         if status == 201 && journal.acknowledged() {
+            if journal.replacement() {
+                return Err(remote_error());
+            }
             changes.extend([Change::Ack(false), Change::Cursor(0)]);
         }
         journal.record(changes)?;
@@ -251,9 +263,6 @@ impl<'a> Upload<'a> {
                 return Err(io::ErrorKind::InvalidData.into());
             }
             let (code, result) = self.send(&piece_path, "PUT", &headers, &audio)?;
-            if code == 429 {
-                return Err(io::ErrorKind::WouldBlock.into());
-            }
             if result["piece"] != id
                 || !matches!(
                     (code, result["state"].as_str()),
@@ -264,18 +273,19 @@ impl<'a> Upload<'a> {
             }
             journal.record(vec![Change::Ack(true)])?;
         }
-        self.consume(&path, &piece_path, &id, &mut journal, latest)?;
-        self.retire(&mut journal)?;
-        Ok(journal)
+        self.consume(&path, &piece_path, &id, journal, latest)
     }
 
     fn retire(&self, journal: &mut Journal) -> io::Result<()> {
         if (journal.done() || journal.lost())
             && let Some(id) = journal.session()
         {
-            let (code, _) = self.send(&format!("/v1/sessions/{id}"), "DELETE", "", &[])?;
-            if code != 204 {
-                return Err(remote_error());
+            match self.send(&format!("/v1/sessions/{id}"), "DELETE", "", &[]) {
+                Ok((204, _)) => {}
+                // Keep the session receipt for cleanup on a later poll.
+                _ if journal.host_failed() => return Ok(()),
+                Err(error) => return Err(error),
+                _ => return Err(remote_error()),
             }
             let mut changes = vec![Change::Session(None)];
             if journal.lost() {
