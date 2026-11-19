@@ -10,6 +10,24 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+mod translation;
+#[derive(Clone, Copy)]
+pub(super) enum Invocation<'a> {
+    General(&'a Runner),
+    Translation {
+        model: &'a str,
+        capability: Option<&'a str>,
+        location: &'a str,
+        payment: &'a str,
+        authorize: &'a dyn Fn() -> bool,
+    },
+}
+#[cfg(test)]
+type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_CHILD: std::cell::RefCell<Option<ChildFactory>> = const { std::cell::RefCell::new(None) };
+}
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Result<Self, String> {
@@ -91,7 +109,9 @@ pub(super) struct RunnerFailure {
 impl From<String> for RunnerFailure {
     fn from(message: String) -> Self {
         Self {
-            category: if message == "The runner exceeded its time limit." {
+            category: if message == "Translation helper used a tool." {
+                "HELPER_TOOL_USE"
+            } else if message == "The runner exceeded its time limit." {
                 "HELPER_TIMEOUT"
             } else {
                 "HELPER_BACKEND"
@@ -396,7 +416,7 @@ pub(super) fn run_runner_with_timeout(
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
     run_classified(
-        runner,
+        Invocation::General(runner),
         prompt,
         working_dir,
         timeout,
@@ -407,14 +427,29 @@ pub(super) fn run_runner_with_timeout(
 }
 
 pub(super) fn run_classified(
-    runner: &Runner,
+    invocation: Invocation<'_>,
     prompt: String,
     working_dir: &Path,
     timeout: Duration,
     read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
-    runners::validate(runner)?;
+    let mut prepared;
+    let (runner, text_only) = match invocation {
+        Invocation::General(r) => {
+            runners::validate(r)?;
+            (r, false)
+        }
+        Invocation::Translation {
+            model, capability, ..
+        } => {
+            prepared = translation::runner(model)?;
+            if capability.is_none() {
+                prepared.args.push("--sidenote-capability".into());
+            }
+            (&prepared, true)
+        }
+    };
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
         return Err(RunnerFailure {
@@ -427,6 +462,30 @@ pub(super) fn run_classified(
         .map_err(|_| "An update is being installed. Try again after restart.")?;
     let harness = runners::kind(runner)?;
     let program = runners::executable(runner)?;
+    let qualification = if text_only {
+        Some(translation::qualification::admit(&program, runner)?)
+    } else {
+        None
+    };
+    let capability = if let Invocation::Translation {
+        model,
+        capability: Some(capability),
+        location,
+        payment,
+        ..
+    } = invocation
+    {
+        let approved = qualification
+            .as_ref()
+            .ok_or_else(translation::qualification::refusal)?;
+        let cap = translation::qualification::capability(capability, model, approved)?;
+        if !translation::qualification::payment_allowed(&cap, approved, location, payment) {
+            return Err(translation::qualification::payment_refusal());
+        }
+        Some(cap)
+    } else {
+        None
+    };
     let scratch = if runner.args.iter().any(|a| a.contains("{prompt_file}")) {
         Some(Scratch::new()?)
     } else {
@@ -462,19 +521,37 @@ pub(super) fn run_classified(
     progress(AskProgress::Started {
         runner: runner.name.clone(),
     });
-    let mut child = crate::platform::UserRunner::spawn(
-        std::process::Command::new(program)
-            .args(&args)
-            .current_dir(working_dir),
-        runner.stdin,
-    )
-    .map_err(|e| {
-        format!(
-            "Could not start {} (OS error {})",
-            runner.name,
-            e.raw_os_error().unwrap_or(0)
-        )
-    })?;
+    let mut command = std::process::Command::new(program);
+    command.args(&args).current_dir(working_dir);
+    if text_only {
+        translation::configure(
+            &mut command,
+            working_dir,
+            capability.as_ref().and_then(|c| c.route.as_ref()),
+            runner.model.as_deref().unwrap_or(""),
+        )?;
+    }
+    #[cfg(test)]
+    let mut command = TEST_CHILD
+        .with(|c| c.borrow().as_ref().map(|f| f(&command)))
+        .unwrap_or(command);
+    if let Invocation::Translation { authorize, .. } = invocation
+        && !authorize()
+    {
+        return Err(RunnerFailure {
+            category: "HELPER_CONSENT",
+            exit: None,
+            message: "Translation permission changed.".into(),
+        });
+    }
+    let mut child =
+        crate::platform::UserRunner::spawn(&mut command, runner.stdin).map_err(|e| {
+            format!(
+                "Could not start {} (OS error {})",
+                runner.name,
+                e.raw_os_error().unwrap_or(0)
+            )
+        })?;
     let stdout = child
         .stdout
         .take()
@@ -516,8 +593,11 @@ pub(super) fn run_classified(
     let mut done = false;
     let mut status = None;
     let mut too_large = false;
+    let mut tool_rejected = false;
     loop {
-        let stop = if too_large {
+        let stop = if tool_rejected {
+            Some("Translation helper used a tool.")
+        } else if too_large {
             Some("The runner exceeded its output limit.")
         } else if super::ask::stop_requested() {
             Some("Stopped because the window was closed.")
@@ -539,7 +619,20 @@ pub(super) fn run_classified(
             return Err(message.into());
         }
         match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Stream::Line(line)) => output.line(&line, harness, structured, &progress),
+            Ok(Stream::Line(line)) => {
+                tool_rejected = text_only
+                    && serde_json::from_str::<serde_json::Value>(&line)
+                        .ok()
+                        .is_some_and(|e| {
+                            e["type"] == "tool_use"
+                                || e.pointer("/part/tool")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some()
+                        });
+                if !tool_rejected {
+                    output.line(&line, harness, structured, &progress);
+                }
+            }
             Ok(Stream::TooLarge) => too_large = true,
             Ok(Stream::Done) | Err(mpsc::RecvTimeoutError::Disconnected) => done = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}

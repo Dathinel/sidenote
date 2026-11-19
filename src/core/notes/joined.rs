@@ -105,16 +105,16 @@ pub(super) fn chosen(
         if !queue::valid_id(&part.id) {
             return Err(store_io::invalid("Invalid meeting part"));
         }
-        let Some((revision, text, reasons)) =
+        let Some(selection) =
             transcript::chosen_part(root, &part.id, &hex.join(&part.id), None, requested, now_ms)?
         else {
             return Ok(None);
         };
         reading
             .text
-            .push_str(&core::notes::shift_transcript(&text, offset)?);
-        reading.parts.push((part.id, revision));
-        reading.reasons.extend(reasons);
+            .push_str(&core::notes::shift_transcript(&selection.render(), offset)?);
+        reading.parts.push((part.id, selection.revision));
+        reading.reasons.extend(selection.reasons);
         offset = offset.saturating_add(part.duration_ms);
         if reading.text.len() as u64 > file_reads::STORE_MAX {
             return Err(store_io::invalid("Meeting transcript is too large"));

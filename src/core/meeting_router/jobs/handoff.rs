@@ -13,6 +13,12 @@ pub struct BatchOutput {
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub english_transport: serde_json::Value,
 }
+#[cfg(all(windows, any(feature = "asr-runtime", test)))]
+impl BatchOutput {
+    pub(crate) fn publish(&self, path: &Path) -> io::Result<()> {
+        store_io::write(path, self)
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(super) struct Released {
     pub generation: String,

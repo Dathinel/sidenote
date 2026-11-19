@@ -99,6 +99,13 @@ pub(super) use crate::core::meeting_job::Failure;
 
 /// The test seam never launches a CLI or inspects the host's helper installation.
 pub(super) trait Run {
+    fn translate(
+        &mut self,
+        _snapshot: &super::translation::Snapshot,
+        _prompt: String,
+    ) -> Result<String, &'static str> {
+        Err("helper_not_text_only")
+    }
     fn installed(&self, helper: Helper) -> bool;
     fn glossary(&self) -> Vec<String> {
         Vec::new()
@@ -153,6 +160,54 @@ impl Drop for Scratch {
     }
 }
 impl Run for Cli {
+    fn translate(
+        &mut self,
+        snapshot: &super::translation::Snapshot,
+        prompt: String,
+    ) -> Result<String, &'static str> {
+        let root = self.root.as_ref().ok_or("translation_consent_changed")?;
+        if !crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c)) {
+            return Err("translation_consent_changed");
+        }
+        if snapshot.helper != Helper::OpenCode {
+            return Err("helper_not_text_only");
+        }
+        let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
+        let authorize =
+            || crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c));
+        let invoke = |capability, input| {
+            runner_process::run_classified(
+                runner_process::Invocation::Translation {
+                    model: &snapshot.model,
+                    capability,
+                    location: &snapshot.location,
+                    payment: &snapshot.payment,
+                    authorize: &authorize,
+                },
+                input,
+                &scratch.0,
+                Duration::from_secs(u64::from(snapshot.deadline_seconds)),
+                false,
+                |_| {},
+            )
+            .map_err(|e| match e.category {
+                "HELPER_TOOL_USE" => "helper_tool_use",
+                "HELPER_TIMEOUT" => "translation_timed_out",
+                "HELPER_AUTH" => "helper_auth",
+                "HELPER_LIMIT" => "helper_limit",
+                "HELPER_UNAVAILABLE_LINUX" => "helper_unavailable_linux",
+                "HELPER_UNQUALIFIED" => "helper_unqualified",
+                "HELPER_PAYMENT" => "translation_payment_route_unavailable",
+                "HELPER_CONSENT" => "translation_consent_changed",
+                _ => "helper_unsupported",
+            })
+        };
+        let capability = invoke(
+            None,
+            serde_json::json!({"model":snapshot.model}).to_string(),
+        )?;
+        invoke(Some(capability.as_str()), prompt)
+    }
     fn installed(&self, helper: Helper) -> bool {
         runners::installed(&runner(helper, ""))
     }
@@ -189,7 +244,7 @@ impl Run for Cli {
         }
         let scratch = Scratch::new().map_err(|_| Failure::Backend { exit: None })?;
         runner_process::run_classified(
-            &runner(helper, model),
+            runner_process::Invocation::General(&runner(helper, model)),
             prompt,
             &scratch.0,
             timeout,

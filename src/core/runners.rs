@@ -224,6 +224,10 @@ pub fn installed(runner: &Runner) -> bool {
 }
 #[cfg(windows)]
 pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if super::runner_process::TEST_CHILD.with(|c| c.borrow().is_some()) {
+        return std::env::current_exe().map_err(|_| "fixture executable".into());
+    }
     fn windows_exe(path: &Path) -> bool {
         use std::io::{Read, Seek, SeekFrom};
         let Ok(mut file) = fs::File::open(path) else {
@@ -266,6 +270,12 @@ pub(super) fn executable(runner: &Runner) -> Result<PathBuf, String> {
         };
         if windows_exe(&native) {
             return Ok(native);
+        }
+        if runner.program == "opencode2" {
+            let native = dir.join("node_modules/@opencode/cli/bin/opencode.exe");
+            if windows_exe(&native) {
+                return Ok(native);
+            }
         }
     }
     Err(format!("{} is not available on PATH", runner.program))

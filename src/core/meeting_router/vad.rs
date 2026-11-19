@@ -13,6 +13,10 @@ pub enum Error {
     Unavailable,
 }
 pub type Span = (u64, u64);
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+thread_local! {
+    pub(crate) static TEST_PROBABILITY: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
 /// Persist with the piece receipt; create a fresh checkpoint for independent runs.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -117,6 +121,10 @@ pub struct Silero {
 impl Silero {
     /// Only reads an explicitly installed pack; failures leave baseline coverage to the caller.
     pub fn load(store: &model_catalog::ModelStore, dll: &Path) -> Result<Self, Unavailable> {
+        #[cfg(all(test, windows, feature = "asr-runtime"))]
+        if TEST_PROBABILITY.with(|p| p.get().is_some()) {
+            return Ok(Self { session: None });
+        }
         #[cfg(feature = "asr-runtime")]
         {
             use sha2::{Digest, Sha256};
@@ -167,7 +175,10 @@ impl Silero {
     ) -> Result<Vec<Span>, Error> {
         #[cfg(all(test, windows, feature = "asr-runtime"))]
         if self.session.is_none() {
-            return state.push(identity, start, sample_rate, audio, last, |_, _| Ok(1.0));
+            let probability = TEST_PROBABILITY.with(|p| p.get()).unwrap_or(1.0);
+            return state.push(identity, start, sample_rate, audio, last, |_, _| {
+                Ok(probability)
+            });
         }
         state.push(identity, start, sample_rate, audio, last, |state, frame| {
             #[cfg(target_os = "linux")]

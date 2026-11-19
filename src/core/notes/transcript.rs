@@ -11,6 +11,35 @@ struct Row {
     speaker: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Source {
+    Compatibility,
+    HexBaseline,
+    ReleasedRevision,
+}
+#[derive(Debug)]
+pub(super) struct Selection {
+    pub revision: String,
+    pub transcript: Option<crate::core::meeting_router::Transcript>,
+    pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    rendered: String,
+}
+impl Selection {
+    pub fn segment_key(&self, ordinal: usize) -> String {
+        format!("{}:{ordinal}", self.revision)
+    }
+    pub fn source(&self) -> Source {
+        match &self.transcript {
+            None => Source::Compatibility,
+            Some(transcript) if transcript.input_checksum == "compatibility" => Source::HexBaseline,
+            Some(_) => Source::ReleasedRevision,
+        }
+    }
+    pub fn render(&self) -> String {
+        self.rendered.clone()
+    }
+}
 pub(super) fn render(raw: &str) -> String {
     let mut rows: Vec<Row> = raw
         .lines()
@@ -71,13 +100,7 @@ pub(super) fn chosen(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<
-    Option<(
-        String,
-        String,
-        Vec<crate::core::meeting_router::fallback::RoutingFallback>,
-    )>,
-> {
+) -> io::Result<Option<Selection>> {
     if crate::core::meeting_parts::read(root, id)?.is_some() {
         return super::joined::chosen(
             root,
@@ -87,7 +110,15 @@ pub(super) fn chosen(
             chosen,
             ended_ms,
             now_ms,
-        );
+        )
+        .map(|reading| {
+            reading.map(|(revision, rendered, reasons)| Selection {
+                revision,
+                transcript: None,
+                reasons,
+                rendered,
+            })
+        });
     }
     chosen_part(root, id, folder, chosen, ended_ms, now_ms)
 }
@@ -98,7 +129,7 @@ pub(super) fn chosen_part(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
-) -> io::Result<super::joined::Chosen> {
+) -> io::Result<Option<Selection>> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
     if !router::jobs::notes_enabled(root)? {
@@ -143,7 +174,7 @@ pub(super) fn chosen_part(
     router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
         .map(|(id, t, reasons)| {
             let mut text = String::new();
-            for s in t.segments {
+            for s in &t.segments {
                 let lang = match s.lang.as_str() {
                     "en" => "English",
                     "hi" => "Hindi",
@@ -173,7 +204,12 @@ pub(super) fn chosen_part(
                         .join(" ")
                 ));
             }
-            Ok((id, text, reasons))
+            Ok(Selection {
+                revision: id,
+                transcript: Some(t),
+                reasons,
+                rendered: text,
+            })
         })
         .transpose()
 }

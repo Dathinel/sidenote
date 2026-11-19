@@ -224,7 +224,7 @@ pub fn run(
             })
         })?;
         remaining(deadline)?;
-        store_io::write(&work.join("output.json"), &output)?;
+        output.publish(&work.join("output.json"))?;
         Ok(())
     }
     #[cfg(not(feature = "asr-runtime"))]

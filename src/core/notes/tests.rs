@@ -9,6 +9,8 @@ mod idle;
 mod review;
 #[cfg(windows)]
 mod routing;
+#[cfg(windows)]
+mod translation;
 use crate::core::{
     agent_instructions::{self, Agent},
     store_io,
@@ -355,7 +357,7 @@ fn drain(root: &Path, settings: &NotesSettings, fake: &mut Fake) {
 }
 
 #[test]
-fn busy_settings_and_authorization_defer_without_changing_the_job() {
+fn busy_settings_and_authorization_preserve_job_and_prepared_translation() {
     let root = Temp::new();
     meeting(&root.0, PRIVATE);
     let settings = settings_fixture();
@@ -371,7 +373,17 @@ fn busy_settings_and_authorization_defer_without_changing_the_job() {
     assert_eq!(fs::read(&path).unwrap(), before);
     let mut fake = Fake::new(vec![Err(Failure::Busy)]);
     drain(&root.0, &settings, &mut fake);
-    assert_eq!(fs::read(&path).unwrap(), before);
+    let mut expected: queue::Job = serde_json::from_slice(&before).unwrap();
+    expected.translation = Some(super::translation::Disposition {
+        reason: "language_passes_not_available".into(),
+        source: transcript::Source::Compatibility,
+        segment_keys: vec![],
+        snapshot: None,
+    });
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        serde_json::to_vec_pretty(&expected).unwrap()
+    );
     let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
     drain(&root.0, &settings, &mut fake);
     assert!(matches!(

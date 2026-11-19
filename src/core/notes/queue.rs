@@ -1,7 +1,7 @@
 use super::{
     Engine, Helper, JobState, NotesSettings, Request,
     helper::{self, Failure, Run},
-    prompt, schema, transcript,
+    prompt, schema, transcript, translation,
 };
 use crate::core::failure::{AtStage, Stage};
 use crate::core::meeting_job::{self, Stage as JobStage};
@@ -42,6 +42,8 @@ pub(super) struct Job {
     pub input_revision: Option<String>,
     #[serde(default)]
     pub replace_summary: bool,
+    #[serde(default)]
+    pub translation: Option<translation::Disposition>,
 }
 impl Job {
     fn new(request: Option<Request>, settings: &NotesSettings) -> Self {
@@ -70,6 +72,7 @@ impl Job {
             routing_fallbacks: Vec::new(),
             input_revision: None,
             replace_summary: false,
+            translation: None,
         }
     }
     fn ready(&self, time: i64, root: &Path) -> bool {
@@ -328,6 +331,9 @@ pub(super) fn enqueue_in(
     let mut next = Job::new(mode, settings);
     next.input_revision = Some(revision);
     next.replace_summary = replace_summary;
+    if !changed {
+        next.translation = previous.as_ref().and_then(|job| job.translation.clone());
+    }
     if !changed && core::meeting_router::jobs::notes_enabled(root)? {
         next.transcript_revision = previous
             .as_ref()
@@ -515,11 +521,25 @@ fn process(
         end.unwrap_or(job.updated_at),
         now(),
     )?;
-    let mut transcript = if let Some((revision, text, reasons)) = routed {
-        job.transcript_revision = Some(revision);
-        job.routing_fallbacks = reasons;
+    if let Some(selection) = &routed {
+        job.transcript_revision = Some(selection.revision.clone());
+        job.routing_fallbacks = selection.reasons.clone();
+    }
+    if !sort_only {
+        job.translation = Some(translation::prepare(
+            root,
+            routed.as_ref(),
+            job.translation.as_ref(),
+            end.unwrap_or(job.updated_at),
+        )?);
+    }
+    store_io::write(&job_path(root, id), job)?;
+    if !sort_only && let Some(state) = job.translation.as_mut() {
+        translation::invoke(routed.as_ref(), state, run);
         store_io::write(&job_path(root, id), job)?;
-        text
+    }
+    let mut transcript = if let Some(selection) = routed {
+        selection.render()
     } else if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {
@@ -935,6 +955,7 @@ pub(super) fn drain_locked(
                 .is_err_and(|e| store_io::message(e) == Some("routing_pending"));
             before.transcript_revision = job.transcript_revision;
             before.routing_fallbacks = job.routing_fallbacks;
+            before.translation = job.translation;
             if routing_pending {
                 before.next_try_at = Some(now().saturating_add(1000));
                 before.message = "waiting for transcript revision".into();

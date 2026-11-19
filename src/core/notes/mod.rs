@@ -11,6 +11,7 @@ pub mod queue;
 mod schema;
 mod status_detail;
 mod transcript;
+mod translation;
 pub use status_detail::{StatusDetail, status_record, status_records};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -10,6 +10,11 @@ pub struct StageSettings {
     pub translation_helper: Helper,
     pub translation_model: String,
     pub translation_deadline_seconds: u32,
+    pub translation_enabled_at_ms: Option<i64>,
+    pub translation_location: String,
+    pub translation_payment: String,
+    pub translation_batch_chars: u32,
+    pub translation_include_context: bool,
     pub title_helper: Helper,
     pub title_model: String,
     pub title_deadline_seconds: u32,
@@ -48,6 +53,11 @@ impl Default for StageSettings {
             translation_helper: Helper::OpenCode,
             translation_model: "openai/gpt-6.1-terra-fast".into(),
             translation_deadline_seconds: 240,
+            translation_enabled_at_ms: None,
+            translation_location: "hosted".into(),
+            translation_payment: "subscription".into(),
+            translation_batch_chars: 18_000,
+            translation_include_context: false,
             title_helper: Helper::Claude,
             title_model: "claude-haiku-5-5".into(),
             title_deadline_seconds: 60,
@@ -86,6 +96,11 @@ impl StageSettings {
         "stages.translation_helper",
         "stages.translation_model",
         "stages.translation_deadline_seconds",
+        "stages.translation_enabled_at_ms",
+        "stages.translation_location",
+        "stages.translation_payment",
+        "stages.translation_batch_chars",
+        "stages.translation_include_context",
         "stages.title_helper",
         "stages.title_model",
         "stages.title_deadline_seconds",
@@ -130,6 +145,19 @@ impl StageSettings {
                     !current.as_u64().is_some_and(|v| (1..=3600).contains(&v))
                 } else {
                     match key {
+                        "translation_enabled_at_ms" => {
+                            self.translation_enabled_at_ms.is_some_and(|at| at <= 0)
+                        }
+                        "translation_location" => {
+                            !matches!(self.translation_location.as_str(), "hosted" | "local_only")
+                        }
+                        "translation_payment" => !matches!(
+                            self.translation_payment.as_str(),
+                            "subscription" | "no_paid"
+                        ),
+                        "translation_batch_chars" => {
+                            !(1..=18_000).contains(&self.translation_batch_chars)
+                        }
                         "comparison_delay_seconds" => self.comparison_delay_seconds > 86400,
                         "asr_seconds_per_audio_second_per_pass" => {
                             !(0.01..=10.0).contains(&self.asr_seconds_per_audio_second_per_pass)

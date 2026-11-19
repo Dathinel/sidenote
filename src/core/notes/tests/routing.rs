@@ -24,10 +24,12 @@ pub(super) fn dir(root: &Path) -> PathBuf {
     root.join("local/transcripts").join(ID)
 }
 pub(super) fn selected(root: &Path, folder: &Path) -> (String, Revision) {
-    let (id, _, _) = transcript::chosen(root, ID, folder, None, 0, 10_000)
+    let selection = transcript::chosen(root, ID, folder, None, 0, 10_000)
         .unwrap()
         .unwrap();
-    let (_, data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
+    let (_, data) = revision::load(&dir(root), Some(&selection.revision))
+        .unwrap()
+        .unwrap();
     let id = crate::core::meeting_router::jobs::handoff::tests::complete(
         root,
         ID,
@@ -65,7 +67,7 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
         transcript::chosen(&root.0, ID, &folder, Some(&later), 0, 0)
             .unwrap()
             .unwrap()
-            .1
+            .render()
             .contains("(Hindi): हिंदी")
     );
     let work = root.0.join("local/router-work");
@@ -107,7 +109,7 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
         transcript::chosen(&root.0, ID, &folder, Some(&first), 0, 0)
             .unwrap()
             .unwrap()
-            .1
+            .render()
             .contains("తెలుగు")
     );
     assert!(!folder.join("system.wav").exists());
@@ -144,7 +146,7 @@ fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
             )
             .unwrap();
         }
-        let (id, text, _) = transcript::chosen(
+        let selection = transcript::chosen(
             &root.0,
             ID,
             &folder,
@@ -154,9 +156,12 @@ fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
         )
         .unwrap()
         .unwrap();
-        assert!(text.contains(PRIVATE));
-        assert!(text.contains("(English)"));
-        let (_, mut data) = revision::load(&dir(&root.0), Some(&id)).unwrap().unwrap();
+        assert!(selection.render().contains(PRIVATE));
+        assert_eq!(selection.source(), transcript::Source::HexBaseline);
+        assert!(selection.render().contains("(English)"));
+        let (_, mut data) = revision::load(&dir(&root.0), Some(&selection.revision))
+            .unwrap()
+            .unwrap();
         fs::write(folder.join("english-summary.json"), summary()).unwrap();
         let edited = fs::read(folder.join("english-summary.json")).unwrap();
         data.transcript.segments[0].status = "checked".into();
@@ -251,7 +256,7 @@ fn joined_parts_keep_their_language_readings_and_pin_the_combined_text() {
     for name in ["manifest.json", "transcript.ndjson"] {
         fs::copy(first.join(name), second.join(name)).unwrap();
     }
-    let (_, _, _) = transcript::chosen_part(&root.0, second_id, &second, None, 0, 10000)
+    let _selection = transcript::chosen_part(&root.0, second_id, &second, None, 0, 10000)
         .unwrap()
         .unwrap();
     crate::core::meeting_router::jobs::handoff::tests::complete(
@@ -279,4 +284,14 @@ fn joined_parts_keep_their_language_readings_and_pin_the_combined_text() {
         .unwrap()
         .unwrap();
     assert_eq!(again.1, text);
+    let selected = transcript::chosen(&root.0, ID, &folder, Some(&pin), 0, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.revision, pin);
+    assert_eq!(selected.render(), text);
+    assert!(selected.transcript.is_none());
+    let disposition =
+        super::super::translation::prepare(&root.0, Some(&selected), None, now).unwrap();
+    assert_eq!(disposition.reason, "language_passes_not_available");
+    assert!(disposition.segment_keys.is_empty());
 }

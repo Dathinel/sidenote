@@ -1367,6 +1367,7 @@ mod tests {
                 request: Some(Request::FirstPart),
                 transcript_revision: None,
                 routing_fallbacks: Vec::new(),
+                translation: None,
             },
         );
         assert!(a.saved_recovery_request().is_none()); // A limit alone cannot schedule recovery.

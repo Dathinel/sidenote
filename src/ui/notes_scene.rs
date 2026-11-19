@@ -62,6 +62,7 @@ pub fn settings(s: &mut State, mode: &str) {
                     request: None,
                     transcript_revision: None,
                     routing_fallbacks: Vec::new(),
+                    translation: None,
                 },
             );
         }
@@ -248,6 +249,7 @@ pub fn meeting(s: &mut State, name: &str) {
             request: None,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         },
     );
     if name == "no-notes" {
@@ -310,6 +312,7 @@ pub fn list(s: &mut State) {
                     request: None,
                     transcript_revision: None,
                     routing_fallbacks: Vec::new(),
+                    translation: None,
                 },
             );
             m

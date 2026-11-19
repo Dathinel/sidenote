@@ -24,7 +24,7 @@ struct Pending {
     generation: u128,
 }
 #[derive(Serialize, Deserialize)]
-struct Job {
+pub(crate) struct Job {
     id: String,
     folder: PathBuf,
     baseline: Vec<Chunk>,
@@ -94,7 +94,7 @@ pub fn enqueue(id: &str) -> Result<()> {
         id,
     )
 }
-fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
+pub(crate) fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     enqueue_with(root, meetings, id, false)
 }
 fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Result<()> {
@@ -469,7 +469,7 @@ pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
     run_one_in(&request, &super::super::state_dir())
 }
-fn run_one_in(request: &Path, root: &Path) -> Result<()> {
+pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
     let mut job: Job =
         serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;
@@ -603,7 +603,9 @@ pub fn run_pending() -> Result<()> {
         Ok(command)
     })
 }
-fn run_pending_with(mut worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
+pub(crate) fn run_pending_with(
+    mut worker: impl FnMut(&Job, &Path) -> Result<Command>,
+) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -1003,7 +1005,7 @@ fn prepared_chunks(
 
 // These fixtures mutate process-wide paths/config and drain every queued job.
 #[cfg(test)]
-fn isolated_test() -> bool {
+pub(crate) fn isolated_test() -> bool {
     const FLAG: &str = "SIDENOTE_ISOLATED_ROUTER_TEST";
     let thread = thread::current();
     let name = thread.name().unwrap();

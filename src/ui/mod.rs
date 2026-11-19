@@ -3100,6 +3100,7 @@ pub fn spec() -> AppSpec<State> {
                         request: None,
                         transcript_revision: None,
                         routing_fallbacks: Vec::new(),
+                        translation: None,
                     },
                 );
             }),

@@ -38,11 +38,23 @@ pub(crate) mod regression;
 mod round2_tests;
 
 pub struct Native<'a>(pub &'a Config);
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+thread_local! {
+    pub(crate) static TEST_NATIVE: std::cell::Cell<Option<fn() -> Command>> = const { std::cell::Cell::new(None) };
+}
 impl NativeLoader for Native<'_> {
     fn load(&mut self, language: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
         #[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
         if crate::service::speech::proofs::active() {
             return crate::service::speech::proofs::recognizer();
+        }
+        #[cfg(all(test, windows, feature = "asr-runtime"))]
+        if let Some(command) = TEST_NATIVE.with(|f| f.get().map(|f| f())) {
+            return Ok(Box::new(worker::Worker::spawn(
+                command,
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(10),
+            )?));
         }
         let language = match language {
             NativeLanguage::Hindi => "hi",

@@ -105,6 +105,11 @@ pub fn status_records<'a>(
     result
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct TranslationStatus {
+    reason: String,
+}
+
 /// The persisted pin and its routing warning travel together to every notes surface.
 #[derive(Clone, Debug, Deserialize)]
 pub struct StatusDetail {
@@ -120,6 +125,8 @@ pub struct StatusDetail {
     pub transcript_revision: Option<String>,
     #[serde(default)]
     pub routing_fallbacks: Vec<RoutingFallback>,
+    #[serde(default)]
+    pub translation: Option<TranslationStatus>,
 }
 impl StatusDetail {
     pub fn retry_request(&self) -> Request {
@@ -133,6 +140,7 @@ impl StatusDetail {
             request: None,
             transcript_revision: None,
             routing_fallbacks: Vec::new(),
+            translation: None,
         }
     }
     pub fn routing_message(&self) -> String {
@@ -140,6 +148,23 @@ impl StatusDetail {
             fallback::message(&self.routing_fallbacks)
         } else {
             String::new()
+        }
+    }
+    pub fn translation_message(&self) -> &'static str {
+        match self.translation.as_ref().map(|t| t.reason.as_str()) {
+            None | Some("translation_off" | "no_non_english" | "language_passes_not_available") => {
+                ""
+            }
+            Some("helper_unqualified") => {
+                "Translation provider is not qualified. Notes use the original transcript."
+            }
+            Some("translation_consent_changed") => {
+                "Translation permission changed. Notes use the original transcript."
+            }
+            Some("translation_payment_route_unavailable") => {
+                "Translation subscription route could not be verified. Notes use the original transcript."
+            }
+            Some(_) => "Translation is unavailable. Notes use the original transcript.",
         }
     }
 }
