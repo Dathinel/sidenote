@@ -1824,7 +1824,33 @@ mod tests {
         use futures_util::{SinkExt, StreamExt};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio_tungstenite::tungstenite::Message;
-        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+        use tokio_tungstenite::tungstenite::handshake::server::{
+            Callback, ErrorResponse, Request, Response,
+        };
+
+        struct CheckEndpoint<'a> {
+            path: &'a str,
+            own_client: &'a mut bool,
+        }
+
+        impl Callback for CheckEndpoint<'_> {
+            fn on_request(
+                self,
+                request: &Request,
+                response: Response,
+            ) -> std::result::Result<Response, ErrorResponse> {
+                *self.own_client = request.uri() == self.path;
+                if *self.own_client {
+                    Ok(response)
+                } else {
+                    Err(Response::builder()
+                        .status(403)
+                        .body(None)
+                        .expect("reject foreign endpoint"))
+                }
+            }
+        }
+
         let dir = tempfile::tempdir()?;
         let device = Arc::new(Device::open(&dir.path().join("owner.sqlite"))?);
         let group = Group::new(&device.identity);
@@ -1849,16 +1875,9 @@ mod tests {
                     let mut own_client = false;
                     let handshake = tokio_tungstenite::accept_hdr_async(
                         stream,
-                        |request: &Request, response: Response| {
-                            own_client = request.uri().to_string() == path;
-                            if own_client {
-                                Ok(response)
-                            } else {
-                                Err(tokio_tungstenite::tungstenite::http::Response::builder()
-                                    .status(403)
-                                    .body(None)
-                                    .expect("reject foreign endpoint"))
-                            }
+                        CheckEndpoint {
+                            path: &path,
+                            own_client: &mut own_client,
                         },
                     )
                     .await;
