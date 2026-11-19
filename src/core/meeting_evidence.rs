@@ -84,6 +84,8 @@ pub(crate) struct Collector {
     root: PathBuf,
     active: Option<Active>,
     worker: Option<std::thread::JoinHandle<()>>,
+    #[cfg(windows)]
+    uploader: Option<std::thread::JoinHandle<()>>,
 }
 impl Collector {
     pub(crate) fn new(state: &Path) -> Self {
@@ -103,13 +105,19 @@ impl Collector {
             root,
             active,
             worker: None,
+            #[cfg(windows)]
+            uploader: None,
         }
     }
     pub(crate) fn tick(&mut self, status: &Value, enabled: bool) -> io::Result<()> {
-        if !enabled {
+        #[cfg(windows)]
+        let upload = self.upload_tick();
+        #[cfg(not(windows))]
+        let upload = false;
+        if !enabled && !upload {
             return Ok(());
         }
-        if self.worker.is_none() {
+        if enabled && self.worker.is_none() {
             self.worker = Some(start_worker(self.root.clone()));
         }
         let recording = matches!(
@@ -122,7 +130,7 @@ impl Collector {
         if let Some(source) = source {
             if self.active.as_ref().is_some_and(|a| a.source != source) {
                 let previous = self.active.take().unwrap();
-                self.collect(&previous.source, true)?;
+                self.collect_with_limit(&previous.source, true, upload)?;
             }
             self.active.get_or_insert(Active {
                 source,
@@ -146,7 +154,7 @@ impl Collector {
         }
         if recording {
             sample_lag(&source, &dest, status["elapsed"].as_u64())?;
-            return self.collect(&source, false);
+            return self.collect_with_limit(&source, false, upload);
         }
         if !matches!(
             status["meeting_state"].as_str(),
@@ -164,12 +172,17 @@ impl Collector {
         active.last_lengths = lengths;
         // Status can turn idle before the writer finalizes. Wait for two stable polls.
         if active.stable >= 2 {
-            self.collect(&source, true)?;
+            self.collect_with_limit(&source, true, upload)?;
             self.active = None;
         }
         Ok(())
     }
+    #[cfg(test)]
     fn collect(&self, source: &Path, stopped: bool) -> io::Result<()> {
+        self.collect_with_limit(source, stopped, false)
+    }
+
+    fn collect_with_limit(&self, source: &Path, stopped: bool, uploading: bool) -> io::Result<()> {
         let dest = self
             .root
             .join(source.file_name().ok_or(io::ErrorKind::InvalidInput)?);
@@ -212,6 +225,7 @@ impl Collector {
                 return Err(io::ErrorKind::InvalidData.into());
             }
             while available > cursor && (stopped || available - cursor >= WINDOW + SEARCH) {
+                let cap = if uploading { WINDOW } else { WINDOW + SEARCH };
                 let audio_start = if cursor == 0 {
                     0
                 } else {
@@ -219,12 +233,14 @@ impl Collector {
                 };
                 let limit = (cursor + WINDOW + SEARCH).min(available);
                 let audio = reader.read(audio_start, limit)?;
-                let end = if available - cursor >= WINDOW + SEARCH {
+                let end = if available - cursor >= WINDOW + SEARCH
+                    || (uploading && available - cursor > WINDOW)
+                {
                     audio_start
                         + low_energy_cut(
                             &audio,
                             (cursor + WINDOW - SEARCH - audio_start) as usize,
-                            (cursor + WINDOW + SEARCH - audio_start) as usize,
+                            (cursor + cap - audio_start) as usize,
                         ) as u64
                 } else {
                     available
@@ -271,6 +287,126 @@ impl Collector {
         Ok(())
     }
 }
+#[cfg(windows)]
+impl Collector {
+    fn upload_tick(&mut self) -> bool {
+        use super::speech_host::{self, Host};
+        let Ok(settings) = speech_host::settings_path() else {
+            return false;
+        };
+        let Ok(Some(host)) = Host::load(&settings) else {
+            return false;
+        };
+        if !host.upload_enabled() {
+            return false;
+        }
+        if self
+            .uploader
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+        {
+            return true;
+        }
+        if let Some(worker) = self.uploader.take() {
+            let _ = worker.join();
+        }
+        let evidence = self.root.clone();
+        let data = evidence
+            .parent()
+            .and_then(Path::parent)
+            .expect("collector data root")
+            .to_owned();
+        self.uploader = std::thread::Builder::new()
+            .name("speech-host-upload".into())
+            .spawn(move || {
+                let _ = upload_windows(&evidence, &data, &settings, host, &super::meetings_dir());
+            })
+            .ok();
+        true
+    }
+}
+
+#[cfg(windows)]
+fn upload_windows(
+    evidence: &Path,
+    data: &Path,
+    settings: &Path,
+    host: super::speech_host::Host,
+    source: &Path,
+) -> io::Result<()> {
+    use super::speech_host::{journal::Piece, upload::Upload};
+    let config = super::Config::load_in(data)?;
+    let languages = if let Some(routes) = config.pipeline.after_stop_languages {
+        std::iter::once(routes.primary)
+            .chain(routes.supporting)
+            .collect()
+    } else {
+        super::model_catalog::load_meeting_languages(data)?
+    };
+    if config.pipeline.language_mode != "auto"
+        || languages
+            .iter()
+            .any(|l| !matches!(l.as_str(), "en" | "hi" | "te"))
+    {
+        return Ok(());
+    }
+    let Some(upload) = Upload::ready(host, settings, data.join("local/speech-uploads"), languages)
+    else {
+        return Ok(());
+    };
+    for folder in folders(evidence) {
+        let Some(meeting) = folder
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|id| valid_id(id))
+        else {
+            continue;
+        };
+        let pending: Vec<_> = jobs(&folder)?
+            .into_iter()
+            .filter(|(_, j)| {
+                j.queued_ms > upload.since()
+                    && j.end.checked_sub(j.start).is_some_and(|n| n <= WINDOW)
+            })
+            .collect();
+        if pending.is_empty() {
+            continue;
+        }
+        let manifest = source.join(meeting).join("manifest.json");
+        let Ok(bytes) = super::meeting_router::inputs::Snapshot::read_file(&manifest, 1 << 20)
+        else {
+            continue;
+        };
+        let manifest: Value = serde_json::from_slice(&bytes)?;
+        if manifest["created_at_ms"]
+            .as_i64()
+            .is_none_or(|ms| ms <= upload.since())
+        {
+            continue;
+        }
+        for (dir, job) in pending {
+            let Some(origin) = manifest[&job.track]["first_arrival_us"]
+                .as_u64()
+                .and_then(|us| (us / 1000).checked_mul(16))
+                .and_then(|sample| i64::try_from(sample).ok())
+            else {
+                continue;
+            };
+            let piece = Piece {
+                track: job.track,
+                index: u32::try_from(job.index).map_err(io::Error::other)?,
+                origin_sample: origin,
+                start_sample: job.start,
+                end_sample: job.end,
+                context_start_sample: job.audio_start,
+                sha256: String::new(),
+            };
+            upload.piece(meeting, piece, &dir.join("audio.wav"))?;
+        }
+    }
+    Ok(())
+}
+
 fn low_energy_cut(audio: &[f32], left: usize, right: usize) -> usize {
     let candidates = (left..=right.min(audio.len())).step_by(320);
     let mut best = (left, f64::INFINITY, usize::MAX);

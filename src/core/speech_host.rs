@@ -14,6 +14,8 @@ pub mod journal;
 #[cfg(test)]
 mod tests;
 
+pub(super) mod upload;
+
 const INTERVAL: Duration = Duration::from_secs(30);
 const STORE_ERROR: &str = "Could not save or read the protected speech host settings.";
 
@@ -168,11 +170,17 @@ struct Reply {
     api: u32,
     role: String,
     asr: AsrReply,
+    #[serde(default)]
+    speech_jobs: bool,
 }
 
 #[derive(Deserialize)]
 struct AsrReply {
     state: Asr,
+    #[serde(default)]
+    languages: Vec<String>,
+    #[serde(default)]
+    models: serde_json::Value,
 }
 
 #[derive(Deserialize)]
