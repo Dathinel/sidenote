@@ -57,6 +57,19 @@ pub fn reserve(store: &ModelStore) -> io::Result<File> {
     store_io::lock(&lock_path(store))
 }
 
+pub(crate) fn ready_while_provisioning(store: &ModelStore) -> Option<u8> {
+    if !File::open(lock_path(store))
+        .is_err_and(|error| matches!(error.raw_os_error(), Some(32 | 33)))
+    {
+        return None;
+    }
+    let ready = PACKS
+        .iter()
+        .filter(|id| store.installed_paths(id).is_ok_and(|paths| paths.is_some()))
+        .count();
+    (ready < PACKS.len()).then_some(ready as u8)
+}
+
 pub fn install(
     store: &ModelStore,
     id: &str,

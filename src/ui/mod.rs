@@ -28,7 +28,7 @@ mod live;
 mod mcp_connect;
 mod meeting;
 mod memory;
-mod models;
+pub(crate) mod models;
 mod more;
 mod nav;
 mod notes_scene;

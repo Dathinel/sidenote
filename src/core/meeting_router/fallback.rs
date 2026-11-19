@@ -13,6 +13,7 @@ pub enum Reason {
     PendingRecordInvalid,
     RoutingFailed,
     CpuLanguageAssetsUnavailable,
+    CpuLanguageModelsDownloading { ready: u8 },
     DeadlineExpired,
 }
 impl Reason {
@@ -37,6 +38,12 @@ impl Reason {
             Self::CpuLanguageAssetsUnavailable => {
                 "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
             }
+            Self::CpuLanguageModelsDownloading { ready } => [
+                "Language models are downloading (0 of 4 ready). Notes use the captured Hex transcript.",
+                "Language models are downloading (1 of 4 ready). Notes use the captured Hex transcript.",
+                "Language models are downloading (2 of 4 ready). Notes use the captured Hex transcript.",
+                "Language models are downloading (3 of 4 ready). Notes use the captured Hex transcript.",
+            ].get(usize::from(ready)).copied().unwrap_or(Self::CpuLanguageAssetsUnavailable.message()),
             Self::DeadlineExpired => {
                 "Language routing missed the Stop deadline. Notes use the captured Hex transcript."
             }

@@ -96,6 +96,7 @@ pub(crate) fn notes_input(
         struct Attempt {
             generation: u128,
             child: Outcome,
+            cpu_models_ready: Option<u8>,
         }
         attempt_failure = super::super::inputs::Snapshot::read_file(
             &root.join("local/router-work").join(id).join("attempt.json"),
@@ -105,7 +106,10 @@ pub(crate) fn notes_input(
         .and_then(|b| serde_json::from_slice::<Attempt>(&b).ok())
         .filter(|a| a.generation == p.generation && !a.child.success)
         .map(|a| match a.child.error.as_deref() {
-            Some(CPU_ASSETS_UNAVAILABLE) => Reason::CpuLanguageAssetsUnavailable,
+            Some(CPU_ASSETS_UNAVAILABLE) => match a.cpu_models_ready {
+                Some(ready @ 0..=3) => Reason::CpuLanguageModelsDownloading { ready },
+                _ => Reason::CpuLanguageAssetsUnavailable,
+            },
             _ => Reason::RoutingFailed,
         });
         if attempt_failure.is_none() && now_ms < deadline {
@@ -153,4 +157,49 @@ pub(crate) fn notes_input(
     fallback::attach(&mut data, &reasons)?;
     let id = revision::retain(&dir, &data)?;
     Ok(Some((id, data.transcript, reasons)))
+}
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn notes_while_cpu_models_provision_keep_the_capture_and_show_the_count() {
+    use crate::core::model_catalog::{ModelStore, provisioning};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let store = ModelStore::new(root.to_owned());
+    store_io::write(&root.join("config.json"), &Config::load_in(root).unwrap()).unwrap();
+    let capture =
+        br#"{"source":"system","text":"Synthetic baseline survives.","start_ms":0,"end_ms":3000}"#;
+    let mut lease = Some(provisioning::reserve(&store).unwrap());
+    for (id, wanted) in [
+        ("100-1", Reason::CpuLanguageModelsDownloading { ready: 0 }),
+        ("100-2", Reason::CpuLanguageAssetsUnavailable),
+    ] {
+        let pending = Pending {
+            id: id.into(),
+            generation: 7,
+        };
+        store_io::write(&queue(root).join(format!("{id}.json")), &pending).unwrap();
+        let work = root.join("local/router-work").join(id);
+        let failure = CpuAssetsUnavailable(provisioning::ready_while_provisioning(&store));
+        record_cpu_assets_failure(&work, pending.generation, &failure).unwrap();
+        let (_, reading, reasons) = notes_input(
+            root,
+            id,
+            None,
+            || read_baseline(capture).map_err(|e| io::Error::other(e.to_string())),
+            10_000,
+            11_000,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            reading.segments[0].text_original,
+            "Synthetic baseline survives."
+        );
+        assert_eq!(reasons, [RoutingFallback::new(wanted)]);
+        assert!(reading.warnings.iter().any(|text| text == wanted.message()));
+        if id == "100-1" {
+            drop(lease.take());
+        }
+    }
 }

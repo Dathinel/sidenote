@@ -101,6 +101,17 @@ fn main() {
         eprintln!("{code}");
         std::process::exit(2);
     }
+    #[cfg(all(windows, feature = "desktop", feature = "asr-runtime"))]
+    if args.iter().any(|arg| arg == "--model-provisioning-check") {
+        if !args.windows(2).any(|pair| pair[0] == "--data-dir") {
+            std::process::exit(2);
+        }
+        let result = ui::models::provision_from_cache(&sidenote::core::state_dir());
+        if let Err(error) = &result {
+            eprintln!("{error}");
+        }
+        std::process::exit(i32::from(result.is_err()));
+    }
     if args.iter().any(|a| a == "--sync-control") {
         #[cfg(target_os = "linux")]
         std::process::exit(sidenote::sync_owner::cli());

@@ -301,6 +301,32 @@ fn model_notify(s: &State) -> impl Fn(Msg) + Send + 'static {
         }
     }
 }
+/// Headless startup check with preseeded, checksum-verified files. It cannot fetch.
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub(crate) fn provision_from_cache(root: &Path) -> std::io::Result<()> {
+    let config = sidenote::core::Config::load_in(root)?;
+    if !root.is_absolute() || !config.pipeline.model_state_dir.as_os_str().is_empty() {
+        return Err(std::io::Error::other(
+            "The cache check needs an absolute, isolated state folder",
+        ));
+    }
+    let mut models = Models::load(root, &config);
+    let (tx, rx) = std::sync::mpsc::channel();
+    if !models.provision(&config, false, true, move |msg| {
+        let _ = tx.send(msg);
+    }) {
+        return Err(std::io::Error::other(
+            "No automatic model install could start",
+        ));
+    }
+    for msg in rx {
+        if let Msg::Finished(_, result) = msg {
+            return result;
+        }
+    }
+    Err(std::io::Error::other("Automatic model worker disconnected"))
+}
+
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 #[test]
 fn automatic_model_startup_respects_recording_and_saved_choices() {

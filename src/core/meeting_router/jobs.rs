@@ -48,7 +48,7 @@ struct Outcome {
 const CPU_ASSETS_UNAVAILABLE: &str = "cpu_language_assets_unavailable";
 
 #[derive(Debug)]
-struct CpuAssetsUnavailable;
+struct CpuAssetsUnavailable(Option<u8>);
 impl std::fmt::Display for CpuAssetsUnavailable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(CPU_ASSETS_UNAVAILABLE)
@@ -57,23 +57,48 @@ impl std::fmt::Display for CpuAssetsUnavailable {
 impl std::error::Error for CpuAssetsUnavailable {}
 
 #[cfg(all(windows, feature = "asr-runtime"))]
-fn cpu_assets_ready(config: &RoutingConfig) -> bool {
+fn require_cpu_assets(config: &RoutingConfig) -> std::result::Result<(), CpuAssetsUnavailable> {
+    use super::super::model_catalog::{ModelStore, provisioning};
+    if crate::core::asr::verify_runtime(&config.runtime_dll).is_err() {
+        return Err(CpuAssetsUnavailable(None));
+    }
     let Some(routes) = &config.after_stop_languages else {
-        return false;
+        return Err(CpuAssetsUnavailable(None));
     };
     let forced = config.language_mode.strip_prefix("forced:").or_else(|| {
         (routes.supporting.is_empty() || config.language_mode == "off")
             .then_some(routes.primary.as_str())
     });
-    let store = super::super::model_catalog::ModelStore::new(config.model_state_dir.clone());
+    let store = ModelStore::new(config.model_state_dir.clone());
     let mut models = std::iter::once(super::vad::MODEL_ID)
         .chain(forced.is_none().then_some("anuvani-lid-int8"))
         .chain(routes.routes.iter().filter_map(|(language, route)| {
             (route.provider == "local" && forced.is_none_or(|only| language == only))
                 .then_some(route.model.as_str())
         }));
-    crate::core::asr::verify_runtime(&config.runtime_dll).is_ok()
-        && models.all(|id| store.installed_paths(id).is_ok_and(|paths| paths.is_some()))
+    if models.all(|id| store.installed_paths(id).is_ok_and(|paths| paths.is_some())) {
+        return Ok(());
+    }
+    let ready = (forced.is_none() && config.language_mode == "auto")
+        .then(|| provisioning::ready_while_provisioning(&store))
+        .flatten();
+    Err(CpuAssetsUnavailable(ready))
+}
+
+fn record_cpu_assets_failure(
+    work: &Path,
+    generation: u128,
+    failure: &CpuAssetsUnavailable,
+) -> io::Result<()> {
+    let mut attempt = serde_json::json!({
+        "generation": generation,
+        "child": Outcome { error:Some(CPU_ASSETS_UNAVAILABLE.into()), ..Outcome::default() },
+        "retry_after_ms": chrono::Utc::now().timestamp_millis()+30_000
+    });
+    if let Some(ready) = failure.0 {
+        attempt["cpu_models_ready"] = ready.into();
+    }
+    store_io::write(&work.join("attempt.json"), &attempt)
 }
 
 fn valid_id(id: &str) -> bool {
@@ -660,8 +685,8 @@ pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
 pub fn run_pending() -> Result<()> {
     run_pending_with(|_job, request| {
         #[cfg(all(windows, feature = "asr-runtime"))]
-        if notes_enabled(&super::super::state_dir())? && !cpu_assets_ready(&_job.config) {
-            return Err(CpuAssetsUnavailable.into());
+        if notes_enabled(&super::super::state_dir())? {
+            require_cpu_assets(&_job.config)?;
         }
         let mut command = Command::new(std::env::current_exe()?);
         command
@@ -805,18 +830,13 @@ pub(crate) fn run_pending_with(
             job.generation = pending.generation;
             let mut command = match worker(&job, &request) {
                 Ok(command) => command,
-                Err(error) if error.is::<CpuAssetsUnavailable>() => {
-                    store_io::write(
-                        &work.join("attempt.json"),
-                        &serde_json::json!({
-                            "generation":pending.generation,
-                            "child":Outcome { error:Some(CPU_ASSETS_UNAVAILABLE.into()), ..Outcome::default() },
-                            "retry_after_ms":chrono::Utc::now().timestamp_millis()+30_000
-                        }),
-                    )?;
-                    continue;
-                }
-                Err(error) => return Err(error),
+                Err(error) => match error.downcast_ref::<CpuAssetsUnavailable>() {
+                    Some(failure) => {
+                        record_cpu_assets_failure(&work, pending.generation, failure)?;
+                        continue;
+                    }
+                    None => return Err(error),
+                },
             };
             let staged = job
                 .input
