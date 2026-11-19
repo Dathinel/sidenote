@@ -170,26 +170,27 @@ impl State {
         self.updates.listener_busy = false;
         self.updates.listener = updates::ListenerStatus {
             ready: result.is_ok(),
+            preparing: false,
             error: result.err(),
         };
     }
-    fn retry_listener(&mut self) {
+    pub(super) fn retry_listener(&mut self) -> Option<std::thread::JoinHandle<()>> {
         if self.updates.scene
             || self.updates.listener_busy
             || self.updates.applying
             || rune::tooling::headless_run().is_some()
         {
-            return;
+            return None;
         }
         self.updates.listener_busy = true;
         let events = self.events_tx.clone();
         let wake = self.waker.clone();
-        std::thread::spawn(move || {
+        Some(std::thread::spawn(move || {
             let _ = events.send(Event::ListenerFinished(updates::ensure_listener()));
             if let Some(wake) = wake {
                 wake();
             }
-        });
+        }))
     }
     fn check_updates(&mut self) {
         if self.updates.scene
@@ -610,7 +611,9 @@ pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
     if s.updates.listener_busy {
         retry = retry.dim(0.5);
     } else {
-        retry = retry.on_press(|s: &mut State| s.retry_listener());
+        retry = retry.on_press(|s: &mut State| {
+            let _ = s.retry_listener();
+        });
     }
     Some(
         super::widgets::banner(
@@ -627,7 +630,33 @@ pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
 pub fn listener_error_scene(s: &mut State) {
     hex::scene(s, false);
     s.updates.scene = true;
-    s.updates.listener = updates::ListenerStatus { ready: false, error: Some("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into()) };
+    s.updates.listener = updates::ListenerStatus { ready: false,
+            preparing: false, error: Some("Sidenote could not prepare its meeting listener. Try again. If this continues, reinstall Sidenote for your Windows account.".into()) };
+}
+
+pub fn listener_preparing_scene(s: &mut State) {
+    hex::scene(s, false);
+    s.updates.scene = true;
+    s.updates.listener = updates::ListenerStatus {
+        ready: false,
+        preparing: true,
+        error: None,
+    };
+}
+
+pub fn listener_start_blocked(s: &State) -> Option<&'static str> {
+    let status = if s.updates.scene {
+        s.updates.listener.clone()
+    } else {
+        updates::listener_status()
+    };
+    if status.preparing {
+        Some("Checking the meeting listener")
+    } else if !status.ready {
+        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+    } else {
+        None
+    }
 }
 
 pub fn listener_ready(s: &State) -> bool {
@@ -646,6 +675,7 @@ mod listener_tests {
         let mut updates = Updates {
             listener: updates::ListenerStatus {
                 ready: false,
+                preparing: false,
                 error: Some("The meeting listener did not start.".into()),
             },
             listener_probe_busy: true,
@@ -653,6 +683,7 @@ mod listener_tests {
         };
         updates.listener_probed(Some(updates::ListenerStatus {
             ready: true,
+            preparing: false,
             error: None,
         }));
         assert!(updates.listener.ready);
@@ -660,6 +691,7 @@ mod listener_tests {
         assert!(!updates.listener_probe_busy);
         updates.listener_probed(Some(updates::ListenerStatus {
             ready: false,
+            preparing: false,
             error: Some("The meeting listener is not running. Try again.".into()),
         }));
         assert!(!updates.listener.ready);
@@ -673,12 +705,14 @@ mod listener_tests {
                 applying,
                 listener: updates::ListenerStatus {
                     ready: false,
+                    preparing: false,
                     error: Some("retry in progress".into()),
                 },
                 ..Default::default()
             };
             updates.listener_probed(Some(updates::ListenerStatus {
                 ready: true,
+                preparing: false,
                 error: None,
             }));
             assert!(!updates.listener.ready);
@@ -690,6 +724,7 @@ mod listener_tests {
         let mut updates = Updates {
             listener: updates::ListenerStatus {
                 ready: false,
+                preparing: false,
                 error: Some("mismatched task".into()),
             },
             ..Default::default()

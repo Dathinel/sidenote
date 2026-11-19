@@ -1,17 +1,10 @@
 use super::super::tests::ranges;
+use super::signals::Signal;
 use super::tests::{command, start};
 use super::*;
-fn wait(path: &Path, bound: Duration) {
-    let deadline = Instant::now() + bound;
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "supervised deadline");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
 pub(super) fn drive(mode: &str, output: &Path) {
     let mut worker = start("hang");
-    wait(&worker.output.path().join("pid"), Duration::from_secs(10));
-    store_io::write(&output.join("ready"), &true).unwrap();
+    Signal::notify("fixture-ready");
     let started = Instant::now();
     match mode {
         "deadline-cancel" => {
@@ -64,13 +57,15 @@ fn cleanup_deadline() -> Duration {
         .env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
     let child = blocker_job.spawn(&c).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
+    let job = Arc::new(crate::platform::ProcessJob::new().unwrap());
     let (stop, cleanup) = controller(
-        crate::platform::ProcessJob::new().unwrap(),
+        job.clone(),
         child.handle.try_clone().unwrap(),
         cancel.clone(),
     )
     .unwrap();
     let mut worker = Worker {
+        job,
         child,
         stop,
         cleanup,
@@ -106,9 +101,13 @@ fn externally_supervised_idle_cancel_timeout_drop_and_deferred_reap_deadlines() 
         "deadline-cleanup",
     ] {
         let owner = start(mode);
-        wait(&owner.output.path().join("ready"), Duration::from_secs(10));
+        let status = owner
+            .child
+            .wait_for(120_000)
+            .unwrap()
+            .expect("fixture hung");
+        assert!(status.success(), "{mode} fixture failed: {status}");
         let elapsed = owner.output.path().join("elapsed");
-        wait(&elapsed, Duration::from_secs(2));
         let elapsed: u64 =
             serde_json::from_slice(&store_io::read_bounded(&elapsed, 4096).unwrap()).unwrap();
         assert!(elapsed < 1000, "{mode} exceeded caller deadline");

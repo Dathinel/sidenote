@@ -140,7 +140,7 @@ pub struct HexState {
     visible: bool,
     /// Latest result, separate from the bounded last-known-good snapshot.
     pub status: Option<Result<EngineState, HexError>>,
-    connection: connection::Connection,
+    pub(super) connection: connection::Connection,
     was_running: bool,
     settings_status_pending: bool,
     settings_status_at: Option<Instant>,
@@ -560,6 +560,7 @@ impl State {
                 }
             }
             Msg::RecheckStart(result) => {
+                self.hex.connection.action_stage("recheck_done");
                 self.hex.record_busy = false;
                 match result {
                     Ok(status) => {
@@ -571,7 +572,7 @@ impl State {
                         } else if let Some(reason) = start_blocked(self) {
                             self.hex.error = Some(reason);
                         } else {
-                            self.new_meeting();
+                            self.new_meeting_continue();
                         }
                     }
                     Err(error) => {
@@ -579,6 +580,9 @@ impl State {
                         self.hex.error =
                             Some("Could not check Hex. New meeting was not started. Try again.");
                     }
+                }
+                if !self.hex.record_busy {
+                    self.hex.connection.finish_action();
                 }
             }
             Msg::Caps(version, r) => {
@@ -803,6 +807,9 @@ impl State {
     }
 
     fn hex_done(&mut self, action: Action, r: Result<(), HexError>) {
+        if matches!(action, Action::Start) {
+            self.hex.connection.finish_action();
+        }
         match action {
             Action::Start | Action::Stop(_) => {
                 self.hex.record_busy = false;
@@ -990,6 +997,7 @@ impl State {
         self.hex.record_busy = true;
         self.hex.error = None;
         let cached = self.hex.caps.clone().unwrap_or_default();
+        self.hex.connection.action_stage("request_sent");
         self.hex_spawn(move |e| Msg::Done(Action::Start, e.record_start(None, &cached)));
     }
 
@@ -1282,8 +1290,8 @@ fn start_block_reason(s: &State) -> Option<&'static str> {
     let h = &s.hex;
     if cfg!(target_os = "linux") {
         Some("Recording control is unavailable in this Linux desktop launch layer.")
-    } else if !super::updates::listener_ready(s) {
-        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+    } else if let Some(reason) = super::updates::listener_start_blocked(s) {
+        Some(reason)
     } else if h.connection.expired() {
         if h.record_busy {
             Some("Checking Hex before New meeting")

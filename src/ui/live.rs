@@ -527,7 +527,13 @@ impl State {
 
     /// The New meeting button: start Hex recording and show the live page.
     pub fn new_meeting(&mut self) {
+        if self.hex.connection.begin_action() {
+            self.new_meeting_continue();
+        }
+    }
+    pub(super) fn new_meeting_continue(&mut self) {
         if hex::start_blocked(self).is_some() {
+            self.hex.connection.finish_action();
             return;
         }
         if self.hex_status_unknown() {
@@ -536,6 +542,7 @@ impl State {
         }
         if !self.live_begin(Phase::Starting, self.known_ids()) {
             self.hex.error = Some("Save these notes before starting another meeting.");
+            self.hex.connection.finish_action();
             return;
         }
         self.go_home();
@@ -555,10 +562,14 @@ impl State {
             }
             Err(_) => {
                 self.hex.error = Some("Could not save meeting before recording.");
+                self.hex.connection.finish_action();
                 return;
             }
         }
         self.hex_record_start();
+        if !self.hex_record_busy() {
+            self.hex.connection.finish_action();
+        }
         self.nav_done();
     }
 

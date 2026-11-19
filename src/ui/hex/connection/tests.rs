@@ -174,3 +174,17 @@ fn unknown_status_does_not_offer_to_open_an_installed_hex() {
     state.hex_apply(Msg::Status(Err(HexError::HexNotRunning)));
     assert!(hex::setup::card(&state, theme::palette(false)).is_some());
 }
+
+#[test]
+fn recorder_ready_duplicate_entry_keeps_the_pending_action_sequence() {
+    crate::test_paths::isolate();
+    let mut connection = Connection::default();
+    assert!(connection.begin_action());
+    let pending = connection.action;
+    assert!(!connection.begin_action());
+    assert_eq!(connection.action, pending);
+    connection.finish_action();
+    assert!(connection.begin_action());
+    assert_ne!(connection.action, pending);
+    connection.finish_action();
+}

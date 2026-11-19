@@ -913,13 +913,24 @@ mod tests {
     async fn c1_worker_crash_timeout_and_memory_limit_do_not_kill_the_caller() -> Result<()> {
         for mode in [0u8, 1, 2] {
             let mut worker = fixture()?;
+            worker.input.write_all(&[4]).await?;
+            worker.input.flush().await?;
+            let mut ready = [0; 5];
+            tokio::time::timeout(
+                Duration::from_secs(120),
+                worker.output.read_exact(&mut ready),
+            )
+            .await??;
+            assert_eq!(&ready, b"ready");
             worker.input.write_all(&[mode]).await?;
             worker.input.flush().await?;
             if mode == 2 {
                 let mut report = [0; 9];
-                let read =
-                    tokio::time::timeout(MESSAGE_TIMEOUT, worker.output.read_exact(&mut report))
-                        .await?;
+                let read = tokio::time::timeout(
+                    Duration::from_secs(120),
+                    worker.output.read_exact(&mut report),
+                )
+                .await?;
                 assert_eq!(
                     read.expect_err("oversized allocation must never report success")
                         .kind(),

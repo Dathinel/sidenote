@@ -7,6 +7,15 @@ fn main() {
     if std::io::stdin().read_exact(&mut mode).is_err() {
         return;
     }
+    if mode[0] == 4 {
+        std::io::stdout()
+            .write_all(b"ready")
+            .expect("fixture ready");
+        std::io::stdout().flush().expect("fixture ready flush");
+        if std::io::stdin().read_exact(&mut mode).is_err() {
+            return;
+        }
+    }
     match mode[0] {
         0 => std::process::abort(),
         1 => std::thread::sleep(std::time::Duration::from_secs(60)),

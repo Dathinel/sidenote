@@ -1,4 +1,5 @@
 use super::super::tests::{Fakes, fake, id, ranges};
+use super::signals::Signal;
 use super::*;
 use std::{io::BufRead, os::windows::process::CommandExt, process::Stdio};
 #[test]
@@ -24,19 +25,16 @@ fn worker_child() {
     if mode == "owner" {
         let inner = start("hang");
         let pid = inner.output.path().join("pid");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !pid.exists() {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
         let grandchild: u32 = std::fs::read_to_string(pid).unwrap().parse().unwrap();
         store_io::write(&output.join("tree"), &[inner.child.id(), grandchild]).unwrap();
+        Signal::notify("fixture-ready");
         std::thread::sleep(Duration::from_secs(60));
         return;
     }
     // Deliberately spawn before reading any handshake.
     let mut grandchild = command("grandchild").spawn().unwrap();
     store_io::write(&output.join("pid"), &grandchild.id()).unwrap();
+    Signal::notify("fixture-ready");
     let mut lines = std::io::stdin().lock().lines();
     assert_eq!(lines.next().unwrap().unwrap(), "start");
     for line in lines {
@@ -46,7 +44,7 @@ fn worker_child() {
         )
         .unwrap();
         if mode == "hang" {
-            std::fs::write(output.join("active"), b"").unwrap();
+            Signal::notify("fixture-active");
             std::thread::sleep(Duration::from_secs(60));
         }
         if mode == "crash" {
@@ -83,17 +81,15 @@ fn cancel_timeout_drop_reap_worker_tree() {
         System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
     };
     for mode in ["cancel", "timeout", "drop"] {
-        let mut worker = start("hang");
+        let mut command = command("hang");
+        let active = (mode == "cancel").then(|| Signal::attach(&mut command, "fixture-active"));
+        let mut worker = start_ready(command);
         let cancel = worker.cancel.clone();
         if mode == "timeout" {
             worker.timeout = Duration::from_millis(100);
         }
         let started = Instant::now();
         let pid = worker.output.path().join("pid");
-        while !pid.exists() {
-            assert!(started.elapsed() < Duration::from_secs(10));
-            std::thread::sleep(Duration::from_millis(10));
-        }
         let pid: u32 = std::fs::read_to_string(pid).unwrap().parse().unwrap();
         let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
         assert!(!handle.is_null());
@@ -101,13 +97,9 @@ fn cancel_timeout_drop_reap_worker_tree() {
         let worker_handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, worker.child.id()) };
         assert!(!worker_handle.is_null());
         if mode != "drop" {
-            let active = worker.output.path().join("active");
             let cancelling = std::thread::spawn(move || {
-                if mode == "cancel" {
-                    while !active.exists() {
-                        assert!(started.elapsed() < Duration::from_secs(10));
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
+                if let Some(active) = active {
+                    active.wait_active();
                     cancel.store(true, Ordering::Release);
                 }
             });
@@ -128,7 +120,13 @@ fn cancel_timeout_drop_reap_worker_tree() {
                 );
             }
             cancelling.join().unwrap();
-            assert!(worker.child.try_wait().unwrap().is_some());
+            let exited = worker.child.try_wait().unwrap();
+            eprintln!(
+                "reap mode={mode} cleanup={:?} exited={exited:?} elapsed={:?}",
+                worker.cleaned,
+                started.elapsed()
+            );
+            assert!(exited.is_some(), "{mode}: cleanup={:?}", worker.cleaned);
         }
         drop(worker);
         unsafe {
@@ -167,6 +165,29 @@ fn process_crash_preserves_completed_receipts() {
     }
 }
 struct Loader(&'static str);
+#[test]
+fn shutdown_terminates_child_even_when_controller_is_delayed() {
+    let (release, gate) = mpsc::channel();
+    super::CONTROLLER_GATE.with(|slot| *slot.borrow_mut() = Some(gate));
+    let mut worker = start("hang");
+    worker.timeout = Duration::from_millis(50);
+    let started = Instant::now();
+    let error = worker
+        .recognize(&ranges(Path::new("unused.wav")).remove(1))
+        .unwrap_err();
+    assert_eq!(error.downcast_ref::<Failure>(), Some(&Failure::Timeout));
+    assert_eq!(worker.cleaned, Some(Err(WorkerFailure::CleanupTimeout)));
+    assert!(
+        worker.child.try_wait().unwrap().is_some(),
+        "queued controller left the child live"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    release.send(()).unwrap();
+    assert_eq!(
+        worker.cleanup.recv_timeout(Duration::from_secs(1)).unwrap(),
+        Ok(())
+    );
+}
 impl NativeLoader for Loader {
     fn load(&mut self, _: NativeLanguage, _: &Range) -> Result<Box<dyn Recognizer>> {
         Ok(Box::new(start(self.0)))
@@ -174,12 +195,18 @@ impl NativeLoader for Loader {
 }
 
 pub(super) fn start(mode: &str) -> Worker {
-    Worker::spawn(
-        command(mode),
+    start_ready(command(mode))
+}
+fn start_ready(mut command: Command) -> Worker {
+    let ready = Signal::attach(&mut command, "fixture-ready");
+    let worker = Worker::spawn(
+        command,
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(120),
     )
-    .unwrap()
+    .unwrap();
+    ready.wait(&worker.child.handle);
+    worker
 }
 #[test]
 fn worker_thread_default_and_override_reach_child() {
@@ -205,6 +232,7 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
     };
     let output = tempfile::tempdir().unwrap();
     let mut c = command("owner");
+    let ready = Signal::attach(&mut c, "fixture-ready");
     c.env_clear()
         .env("SIDENOTE_BATCH_OUTPUT", output.path())
         .env("SIDENOTE_BATCH_THREADS", "4");
@@ -215,12 +243,8 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
     }
     let owner_job = crate::platform::ProcessJob::new().unwrap();
     let owner = owner_job.spawn(&c).unwrap();
+    ready.wait(&owner.handle);
     let path = output.path().join("tree");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(10));
-    }
     let pids: Vec<u32> =
         serde_json::from_slice(&store_io::read_bounded(&path, 4096).unwrap()).unwrap();
     let handles: Vec<_> = pids

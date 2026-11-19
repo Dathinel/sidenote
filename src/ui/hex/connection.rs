@@ -8,7 +8,7 @@ pub(super) const UNKNOWN: &str =
 pub(super) const SLOW: &str = "Hex is slow to answer, trying again";
 
 #[derive(Default)]
-pub(super) struct Connection {
+pub(in crate::ui) struct Connection {
     good: Option<EngineState>,
     good_at: Option<Instant>,
     slow_at: Option<Instant>,
@@ -16,9 +16,36 @@ pub(super) struct Connection {
     sampled_at: Option<Instant>,
     phase: &'static str,
     blocked: Cell<Option<&'static str>>,
+    action: Option<u64>,
 }
 
 impl Connection {
+    pub(crate) fn begin_action(&mut self) -> bool {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self::log_action(sequence, "entry");
+        if self.action.is_some() {
+            Self::log_action(sequence, "completed");
+            return false;
+        }
+        self.action = Some(sequence);
+        true
+    }
+    fn log_action(sequence: u64, stage: &'static str) {
+        sidenote::listener::log_process(&format!(
+            "hex new_meeting action seq={sequence} stage={stage}"
+        ));
+    }
+    pub(crate) fn action_stage(&self, stage: &'static str) {
+        if let Some(sequence) = self.action {
+            Self::log_action(sequence, stage);
+        }
+    }
+    pub(crate) fn finish_action(&mut self) {
+        self.action_stage("completed");
+        self.action = None;
+    }
+
     fn age(&self) -> Duration {
         self.good_at.map_or(Duration::ZERO, |at| {
             at.elapsed()
@@ -137,8 +164,8 @@ impl Connection {
         if self.blocked.replace(reason) != reason
             && let Some(reason) = reason
         {
-            sidenote::listener::log(&format!(
-                "hex new_meeting blocked reason={reason} last_ok_age_ms={}",
+            sidenote::listener::log_process(&format!(
+                "hex new_meeting availability reason={reason} last_ok_age_ms={}",
                 self.age().as_millis()
             ));
         }

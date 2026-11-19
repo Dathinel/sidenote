@@ -29,6 +29,12 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub fn start() -> (Self, State, Instant) {
+        Self::with_recording(Some("100-1"))
+    }
+    pub fn start_idle() -> (Self, State, Instant) {
+        Self::with_recording(None)
+    }
+    fn with_recording(id: Option<&'static str>) -> (Self, State, Instant) {
         // Discovery and worker paths are process-wide, so each API test needs its own process.
         let current = thread::current();
         assert_eq!(
@@ -41,7 +47,7 @@ impl Fixture {
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let data = Arc::new(Mutex::new(Data {
-            id: Some("100-1"),
+            id,
             omit_id: false,
             meeting_state: None,
             stop_changed: true,

@@ -66,6 +66,8 @@ rmcp = { version = "=3.9.0", default-features = false, features = ["transport-st
 
 [features]
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
+# Isolated recorder qualification with mocked scheduled-task cmdlets.
+recorder-ready-proof = []
 # Qualification build with a higher relay capability floor; no app version change.
 relay-capability-v2 = []
 # Explicit opt-in for synthetic headless qualification in optimized builds.
