@@ -79,6 +79,15 @@ fn pending_notes(state: &mut State, api: &Fixture, text: &str) -> u64 {
     state.live.as_ref().unwrap().recording_id
 }
 
+fn active_recheck(state: &mut State) {
+    // Linux can read this status. The New meeting action itself remains unavailable.
+    #[cfg(target_os = "linux")]
+    state.hex_recheck_start();
+    #[cfg(not(target_os = "linux"))]
+    state.new_meeting();
+    Fixture::finish(state);
+}
+
 #[test]
 fn active_recheck_preserves_pending_notes() {
     if isolated_api_test("active_recheck_preserves_pending_notes") {
@@ -86,8 +95,7 @@ fn active_recheck_preserves_pending_notes() {
     }
     let (api, mut state, _) = Fixture::start();
     let old = pending_notes(&mut state, &api, "Synthetic notes inside autosave delay");
-    state.new_meeting();
-    Fixture::finish(&mut state);
+    active_recheck(&mut state);
     assert_eq!(api.data.lock().unwrap().starts, 0);
     let recovery = sidenote::core::state_dir().join("unsaved-notes");
     let files: Vec<_> = std::fs::read_dir(recovery)
@@ -123,8 +131,7 @@ fn active_recheck_failed_save_keeps_pending_notes() {
     let recovery = sidenote::core::state_dir().join("unsaved-notes");
     std::fs::create_dir_all(recovery.parent().unwrap()).unwrap();
     std::fs::write(&recovery, "synthetic blocker").unwrap();
-    state.new_meeting();
-    Fixture::finish(&mut state);
+    active_recheck(&mut state);
     assert_eq!(api.data.lock().unwrap().starts, 0);
     let live = state.live.as_ref().unwrap();
     assert_eq!(live.recording_id, old);
@@ -142,8 +149,7 @@ fn active_recheck_replaces_empty_page() {
     }
     let (api, mut state, _) = Fixture::start();
     let old = pending_notes(&mut state, &api, "");
-    state.new_meeting();
-    Fixture::finish(&mut state);
+    active_recheck(&mut state);
     assert_eq!(api.data.lock().unwrap().starts, 0);
     assert_ne!(state.live.as_ref().unwrap().recording_id, old);
     assert_eq!(
@@ -153,6 +159,7 @@ fn active_recheck_replaces_empty_page() {
     assert!(!state.live.as_ref().unwrap().close_failed);
 }
 
+#[cfg(windows)]
 fn saved_removal_notes(text: &str) {
     let recovery = sidenote::core::state_dir().join("unsaved-notes");
     assert!(
@@ -163,6 +170,7 @@ fn saved_removal_notes(text: &str) {
     );
 }
 
+#[cfg(windows)]
 fn start_removal_cases(failed_start: bool) {
     use crate::ui::live::{Phase, Saving};
     for (text, fail_save) in [
@@ -242,6 +250,7 @@ fn start_removal_cases(failed_start: bool) {
     }
 }
 
+#[cfg(windows)]
 #[test]
 fn start_timeout_preserves_pending_notes_before_removal() {
     if isolated_api_test("start_timeout_preserves_pending_notes_before_removal") {
@@ -250,6 +259,7 @@ fn start_timeout_preserves_pending_notes_before_removal() {
     start_removal_cases(false);
 }
 
+#[cfg(windows)]
 #[test]
 fn failed_start_preserves_pending_notes_before_removal() {
     if isolated_api_test("failed_start_preserves_pending_notes_before_removal") {
@@ -396,6 +406,7 @@ fn stop_keeps_the_identity_captured_by_the_rendered_button() {
     assert!(state.hex.error.unwrap().contains("Stop it from Hex"));
 }
 
+#[cfg(windows)]
 #[test]
 fn expired_recording_is_unknown_and_new_meeting_rechecks_then_starts() {
     if isolated_api_test("expired_recording_is_unknown_and_new_meeting_rechecks_then_starts") {
@@ -447,8 +458,45 @@ fn successful_snapshot_expires_without_another_poll() {
         crate::ui::nav::recording_words(&state, false),
         "Recording status unknown"
     );
-    assert_eq!(start_blocked(&state), None);
+    assert_eq!(recorder_start_block_reason(&state), None);
     assert_eq!(stop_blocked(&state), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_meeting_refuses_on_linux_without_rechecking_or_replacing_pending_notes() {
+    if isolated_api_test(
+        "new_meeting_refuses_on_linux_without_rechecking_or_replacing_pending_notes",
+    ) {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start();
+    let notes = "Synthetic pending notes on Linux";
+    let page = pending_notes(&mut state, &api, notes);
+    api.data.lock().unwrap().commands.clear();
+
+    let refusal = "Recording control is unavailable in this Linux desktop launch layer.";
+    assert_eq!(start_blocked(&state), Some(refusal));
+    let mut runtime =
+        rune::Runtime::new(state, meeting_control, (500.0, 160.0), rune::Env::default());
+    runtime.frame(0.0);
+    assert!(
+        runtime
+            .elements()
+            .iter()
+            .any(|el| el.text.as_deref() == Some(refusal))
+    );
+    runtime.state.new_meeting();
+    let state = &runtime.state;
+    let live = state.live.as_ref().unwrap();
+    assert!(state.hex_status_unknown());
+    assert!(!state.hex_record_busy());
+    assert_eq!(live.recording_id, page);
+    assert_eq!(live.phase, crate::ui::live::Phase::Making);
+    assert_eq!(live.saving, crate::ui::live::Saving::Pending);
+    assert_eq!(state.live_notes.text, notes);
+    assert!(!sidenote::core::state_dir().join("unsaved-notes").exists());
+    assert!(api.data.lock().unwrap().commands.is_empty());
 }
 
 #[test]
@@ -635,6 +683,7 @@ fn preview_title_replaces_the_default_heading_without_publishing_a_final_summary
         "Final workshop decisions"
     );
 }
+#[cfg(windows)]
 #[test]
 fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
     if isolated_api_test("meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting") {
@@ -741,6 +790,7 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn recorder_ready_new_meeting_logs_one_correlated_action_through_recheck() {
     if isolated_api_test("recorder_ready_new_meeting_logs_one_correlated_action_through_recheck") {
@@ -810,6 +860,7 @@ fn recorder_ready_new_meeting_logs_one_correlated_action_through_recheck() {
     assert!(!log.contains("hex new_meeting blocked"));
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn meeting_control(state: &State, _: &mut rune::Cx<State>) -> rune::El {
     crate::ui::nav::new_meeting_button(state, crate::ui::theme::palette(false), false)
 }

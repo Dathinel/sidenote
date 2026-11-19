@@ -79,7 +79,10 @@ fn timeout_and_transport_keep_recording_until_recovery() {
         assert!(state.hex_running());
         assert!(state.hex_recording());
         assert_eq!(hex::stop_blocked(&state), None);
-        assert_eq!(hex::start_blocked(&state), Some(SLOW));
+        assert_eq!(
+            super::super::recorder_start_block_reason(&state),
+            Some(SLOW)
+        );
         assert!(
             hex::indicator(&state, theme::palette(false))
                 .1
@@ -115,11 +118,14 @@ fn not_running_clears_immediately_and_initial_timeout_never_says_open_hex() {
     // Exercise the ordinary installed case independently of this laptop's installation.
     state.hex.installation = sidenote::hex_install::Installation::Incomplete;
     assert_eq!(
-        hex::start_blocked(&state),
+        super::super::recorder_start_block_reason(&state),
         Some("Open Hex, then try New meeting again.")
     );
     state.hex_apply(Msg::Status(Err(HexError::Timeout)));
-    assert_eq!(hex::start_blocked(&state), Some(SLOW));
+    assert_eq!(
+        super::super::recorder_start_block_reason(&state),
+        Some(SLOW)
+    );
     assert_eq!(hex::indicator(&state, theme::palette(false)).1, SLOW);
 }
 
@@ -142,7 +148,7 @@ fn stale_bound_expires_availability_but_keeps_stop() {
         !state.hex_running(),
         "expired status must not claim availability"
     );
-    assert_eq!(hex::start_blocked(&state), None);
+    assert_eq!(super::super::recorder_start_block_reason(&state), None);
     assert!(
         hex::indicator(&state, theme::palette(false))
             .1

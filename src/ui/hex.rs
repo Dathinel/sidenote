@@ -1287,12 +1287,16 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
 }
 
 fn start_block_reason(s: &State) -> Option<&'static str> {
-    let h = &s.hex;
     if cfg!(target_os = "linux") {
         Some("Recording control is unavailable in this Linux desktop launch layer.")
-    } else if let Some(reason) = super::updates::listener_start_blocked(s) {
-        Some(reason)
-    } else if h.connection.expired() {
+    } else {
+        super::updates::listener_start_blocked(s).or_else(|| recorder_start_block_reason(s))
+    }
+}
+
+fn recorder_start_block_reason(s: &State) -> Option<&'static str> {
+    let h = &s.hex;
+    if h.connection.expired() {
         if h.record_busy {
             Some("Checking Hex before New meeting")
         } else {

@@ -31,6 +31,7 @@ impl Fixture {
     pub fn start() -> (Self, State, Instant) {
         Self::with_recording(Some("100-1"))
     }
+    #[cfg(windows)]
     pub fn start_idle() -> (Self, State, Instant) {
         Self::with_recording(None)
     }
