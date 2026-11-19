@@ -94,9 +94,10 @@ impl Store {
     }
     pub fn snapshot(&self, owner: &str, session: &str, piece: &str) -> Result<Value, Error> {
         let (_lock, sessions) = self.load()?;
-        sessions
+        let accepted = sessions
             .get(session)
-            .filter(|s| s.owner == owner && s.pieces.contains_key(piece))
+            .filter(|s| s.owner == owner)
+            .and_then(|s| s.pieces.get(piece))
             .ok_or(Error::Missing)?;
         let events = self.log(session)?;
         let mut state = "queued";
@@ -116,6 +117,9 @@ impl Store {
                 }
                 _ => {}
             }
+        }
+        if accepted.done && matches!(state, "queued" | "running") {
+            state = "lost";
         }
         Ok(json!({"state":state,"ranges":ranges,"failed":failed}))
     }

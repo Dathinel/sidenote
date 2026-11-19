@@ -180,7 +180,7 @@ pub(super) fn bind() -> io::Result<(tokio::net::TcpListener, Router)> {
         hosts.extend([host.to_owned(), format!("{host}:443")]);
     }
     let host = json!({"api":1,"role":"server","asr":runtime_probe()?,
-        "limits":{"max_piece_bytes":BODY_LIMIT},"speech_jobs":true});
+        "limits":{"max_piece_bytes":BODY_LIMIT},"speech_jobs":true,"session_retirement":true});
     let hosts = Arc::new(hosts);
     let root = Arc::new(crate::core::state_dir());
     let slots = Arc::new(tokio::sync::Semaphore::new(8));

@@ -175,7 +175,14 @@ impl Store {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if hex(&name) {
-                let pieces = sessions.get(&name).map(|s| &s.pieces);
+                let Some(session) = sessions.get(&name) else {
+                    // The ledger is committed first. A crash before unlink leaves an orphan.
+                    if !entry.file_type()?.is_dir() {
+                        return Err(Error::Storage);
+                    }
+                    std::fs::remove_dir_all(entry.path())?;
+                    continue;
+                };
                 let dir = std::fs::OpenOptions::new()
                     .read(true)
                     .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
@@ -214,7 +221,7 @@ impl Store {
                     } else if filename.ends_with(".tmp")
                         || filename
                             .strip_suffix(".wav")
-                            .is_some_and(|p| !pieces.is_some_and(|s| s.contains_key(p)))
+                            .is_some_and(|p| !session.pieces.contains_key(p))
                     {
                         std::fs::remove_file(file.path())?;
                     }
@@ -332,6 +339,25 @@ impl Store {
         self.save(&sessions)?;
         Ok((true, queued + 1))
     }
+    pub fn retire(&self, owner: &str, id: &str) -> Result<(), Error> {
+        if !hex(id) {
+            return Err(Error::Invalid);
+        }
+        let (_lock, mut sessions) = self.load()?;
+        let Some(session) = sessions.get(id) else {
+            return Ok(());
+        };
+        if session.owner != owner {
+            return Err(Error::Missing);
+        }
+        if session.pieces.is_empty() || session.pieces.values().any(|piece| !piece.done) {
+            return Err(Error::Conflict);
+        }
+        sessions.remove(id);
+        self.save(&sessions)?;
+        self.recover(&sessions)
+    }
+
     pub fn finish(&self, owner: &str, id: &str, total: usize) -> Result<(), Error> {
         let (_lock, mut sessions) = self.load()?;
         let session = sessions
@@ -370,6 +396,68 @@ pub(super) mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn terminal_session_retirement_reclaims_audio_and_capacity() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store(root.path().join("speech"));
+        let mut request = SessionRequest {
+            client_session: String::new(),
+            meeting_id: "public".into(),
+            languages: vec!["hi".into()],
+            language_mode: "auto".into(),
+            config_sha256: "a".repeat(64),
+        };
+        let wav = b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\x3e\0\0\0\x7d\0\0\x02\0\x10\0data\x02\0\0\0\0\0";
+        let metadata = PieceRequest {
+            track: "system".into(),
+            index: 0,
+            origin_sample: 0,
+            start_sample: 0,
+            end_sample: 1,
+            context_start_sample: 0,
+            sha256: digest(wav),
+        };
+        let piece = metadata.id(&request);
+        for n in 0..129 {
+            request.client_session = format!("round-{n}");
+            let (id, fresh) = store.create("owner", request.clone()).unwrap();
+            assert!(fresh);
+            store
+                .put("owner", &id, &piece, metadata.clone(), wav)
+                .unwrap();
+            assert!(matches!(store.retire("owner", &id), Err(Error::Conflict)));
+            assert!(matches!(store.retire("other", &id), Err(Error::Missing)));
+            store
+                .tick(|id, piece, _| {
+                    store
+                        .emit(
+                            id,
+                            "piece.done",
+                            serde_json::json!({"piece":piece,"failed":[]}),
+                        )
+                        .map_err(|_| "fixture publish failed".into())
+                })
+                .unwrap();
+            assert_eq!(
+                store.snapshot("owner", &id, &piece).unwrap()["state"],
+                "done"
+            );
+            if n == 0 {
+                std::fs::remove_file(store.0.join(&id).join("events.ndjson")).unwrap();
+                store
+                    .emit(&id, "host.status", serde_json::json!({}))
+                    .unwrap();
+                assert_eq!(
+                    store.snapshot("owner", &id, &piece).unwrap()["state"],
+                    "lost"
+                );
+            }
+            store.retire("owner", &id).unwrap();
+            assert!(!store.0.join(&id).exists());
+            store.retire("owner", &id).unwrap();
+        }
+    }
+
     #[test]
     fn durable_intake_validates_before_acceptance() {
         let root = tempfile::tempdir().unwrap();

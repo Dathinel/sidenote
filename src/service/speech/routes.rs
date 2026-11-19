@@ -5,7 +5,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -131,10 +131,22 @@ async fn snapshot(
         Err(e) => failure(e),
     }
 }
+async fn retire(
+    State(store): State<Arc<Store>>,
+    Extension(owner): Extension<Owner>,
+    Path(session): Path<String>,
+) -> Response {
+    match store.retire(&owner.0, &session) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => failure(e),
+    }
+}
+
 pub(super) fn router(root: PathBuf) -> Router {
     Router::new()
         .route("/v1/sessions/{session}/pieces/{piece}", get(snapshot))
         .route("/v1/sessions", post(create))
+        .route("/v1/sessions/{session}", delete(retire))
         .route("/v1/sessions/{session}/events", get(super::events::events))
         .route("/v1/sessions/{session}/pieces/{piece}", put(upload))
         .route("/v1/sessions/{session}/finish", post(finish))
