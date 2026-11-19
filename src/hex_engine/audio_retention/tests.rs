@@ -206,6 +206,25 @@ fn keep_audio_contracts_through_hex_settings_api() {
             (Feature::SettingsSet, Support::Supported),
         ]));
     }
+    let mut foreign = TcpStream::connect_timeout(&address, Duration::from_secs(1))
+        .expect("connect foreign HEAD probe");
+    foreign
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    foreign
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    foreign
+        .write_all(b"HEAD / HTTP/1.1\r\nHost: foreign-probe\r\n\r\n")
+        .unwrap();
+    let mut status_line = String::new();
+    BufReader::new(foreign).read_line(&mut status_line).unwrap();
+    assert!(
+        engine.settings_list().is_ok(),
+        "fake Hex stopped serving control after the foreign request"
+    );
+    assert_eq!(status_line, "HTTP/1.1 404 Not Found\r\n");
+    println!("foreign HEAD returned 404 and control still responds");
     for (value, lab, expected, writes) in [
         (
             Value::Null,
@@ -294,6 +313,10 @@ fn keep_audio_contracts_through_hex_settings_api() {
         matches!(audio.set(&engine, "day"), Err(HexError::Failed { code: Some(code), .. }) if code == "invalid-value")
     );
     assert_eq!(data.lock().unwrap().1.len(), 1);
+    assert!(
+        matches!(eof.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the forced-EOF probe must supply its own signal"
+    );
     let started = Instant::now();
     let deadline = started + WORKER_TIMEOUT;
     let mut probe = TcpStream::connect_timeout(&address, Duration::from_secs(1))
