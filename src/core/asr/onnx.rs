@@ -32,12 +32,15 @@ pub fn runtime_version() -> Option<&'static str> {
 }
 
 #[cfg(windows)]
-pub fn initialize(dll: &Path) -> Result<()> {
+pub(crate) fn verify_runtime(dll: &Path) -> Result<fs::File> {
     if !dll.is_absolute() || !dll.is_file() {
         return Err("Choose an absolute path to the ONNX Runtime DLL".into());
     }
     // Deny writes/deletion between hashing and LoadLibrary; never load arbitrary DLL code.
     let mut verified = fs::OpenOptions::new().read(true).share_mode(1).open(dll)?;
+    if verified.metadata()?.len() != 17_136_128 {
+        return Err("ONNX Runtime integrity check failed; model unavailable".into());
+    }
     let mut hash = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
@@ -51,6 +54,12 @@ pub fn initialize(dll: &Path) -> Result<()> {
     if actual != RUNTIME_SHA256 {
         return Err("ONNX Runtime integrity check failed; model unavailable".into());
     }
+    Ok(verified)
+}
+
+#[cfg(windows)]
+pub fn initialize(dll: &Path) -> Result<()> {
+    let _verified = verify_runtime(dll)?;
     RUNTIME
         .get_or_init(|| {
             preflight(dll)

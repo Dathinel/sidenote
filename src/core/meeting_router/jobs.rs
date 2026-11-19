@@ -72,8 +72,7 @@ fn cpu_assets_ready(config: &RoutingConfig) -> bool {
             (route.provider == "local" && forced.is_none_or(|only| language == only))
                 .then_some(route.model.as_str())
         }));
-    config.runtime_dll.is_absolute()
-        && config.runtime_dll.is_file()
+    crate::core::asr::verify_runtime(&config.runtime_dll).is_ok()
         && models.all(|id| store.installed_paths(id).is_ok_and(|paths| paths.is_some()))
 }
 
@@ -240,19 +239,35 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
             config.model_state_dir = root.to_owned();
         }
         if config.runtime_dll.as_os_str().is_empty() {
-            let installed = config
-                .model_state_dir
-                .join(crate::platform::asr_library_name());
-            config.runtime_dll = if installed.is_file() {
-                installed
-            } else {
-                std::env::current_exe()?.with_file_name(crate::platform::asr_library_name())
-            };
+            config.runtime_dll =
+                std::env::current_exe()?.with_file_name(crate::platform::asr_library_name());
         }
     }
     config.validate()?;
     Ok(config)
 }
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn automatic_runtime_comes_from_the_package_and_explicit_path_wins() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path();
+    let name = crate::platform::asr_library_name();
+    let old_state_dll = root.join(name);
+    fs::write(&old_state_dll, b"old unverified runtime").unwrap();
+    let app = std::env::current_exe().unwrap();
+    assert_eq!(
+        load_config(root).unwrap().runtime_dll,
+        app.with_file_name(name)
+    );
+
+    let explicit = root.join("explicit.dll");
+    let mut config = crate::core::Config::load_in(root).unwrap();
+    config.pipeline.runtime_dll = explicit.clone();
+    store_io::write(&root.join("config.json"), &config).unwrap();
+    assert_eq!(load_config(root).unwrap().runtime_dll, explicit);
+}
+
 pub(crate) fn read_baseline(bytes: &[u8]) -> Result<Vec<Chunk>> {
     let mut baseline = Vec::new();
     for (i, line) in std::str::from_utf8(bytes)?.lines().enumerate() {

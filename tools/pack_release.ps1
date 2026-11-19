@@ -17,6 +17,47 @@ $env:PATH = "$env:USERPROFILE/.cargo/bin;$env:PATH"
 if ($GnuBin) { $env:PATH = "$GnuBin;$env:PATH" }
 if (-not (Get-Command as.exe -ErrorAction SilentlyContinue)) { throw 'Set RUST_GNU_BIN to a full MinGW GNU bin folder, or put it on PATH.' }
 (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+
+function Copy-CpuRuntime([string]$Destination, [string]$Target) {
+    # This is the CPU archive used by sherpa-onnx v2.0.1 for Windows x64 Release /MD.
+    $name = 'onnxruntime-win-x64-MD-Release-1.28.2'
+    $url = "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/$name.tar.bz2"
+    $hash = 'cdb3c68e317db991f85504e0f0ce5959528fba2c240b6c22e93366e80b3d2d58'
+    $cache = Join-Path $Target 'cpu-runtime'
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    $archive = Join-Path $cache "$name.tar.bz2"
+    if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+        $download = "$archive.$PID.part"
+        try {
+            & curl.exe --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 120 --output $download $url
+            if ($LASTEXITCODE -or (Get-FileHash -LiteralPath $download).Hash -ne $hash) {
+                throw 'The pinned ONNX Runtime download failed verification.'
+            }
+            Move-Item -LiteralPath $download -Destination $archive
+        } finally {
+            if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download }
+        }
+    }
+    if ((Get-FileHash -LiteralPath $archive).Hash -ne $hash) {
+        throw 'The cached ONNX Runtime archive failed verification.'
+    }
+    $files = @("$name/lib/onnxruntime.dll", "$name/lib/onnxruntime_providers_shared.dll",
+        "$name/LICENSE", "$name/ThirdPartyNotices.txt")
+    $extract = Join-Path $cache ([guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $extract | Out-Null
+    & tar.exe -xf $archive -C $extract @files
+    if ($LASTEXITCODE) { throw 'Extracting the pinned ONNX Runtime failed.' }
+    $dll = Join-Path $extract $files[0]
+    if ((Get-Item -LiteralPath $dll).Length -ne 17136128 -or
+        (Get-FileHash -LiteralPath $dll).Hash -ne '422d776ab0e3218260f7f628fcb84606aaa5c21116f720c8619a6da5e0b2e0f9') {
+        throw 'The bundled ONNX Runtime DLL does not match the app pin.'
+    }
+    Copy-Item -LiteralPath $dll -Destination (Join-Path $Destination 'onnxruntime.dll')
+    Copy-Item -LiteralPath (Join-Path $extract $files[1]) -Destination (Join-Path $Destination 'onnxruntime_providers_shared.dll')
+    Copy-Item -LiteralPath (Join-Path $extract $files[2]) -Destination (Join-Path $Destination 'ONNXRuntime-LICENSE.txt')
+    Copy-Item -LiteralPath (Join-Path $extract $files[3]) -Destination (Join-Path $Destination 'ONNXRuntime-ThirdPartyNotices.txt')
+}
+
 Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
@@ -37,6 +78,7 @@ try {
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote-sync-worker.exe" -Destination "$stage/sidenote-sync-worker.exe" -Force
+    Copy-CpuRuntime $stage $metadata.target_directory
     $notices = @('LICENSE', 'THIRD_PARTY.md', 'assets/fonts/Inter-LICENSE.txt',
         'assets/fonts/Fraunces-LICENSE.txt', 'assets/fonts/Figtree-LICENSE.txt',
         'assets/fonts/NotoSansDevanagari-LICENSE.txt', 'assets/fonts/NotoSansTelugu-LICENSE.txt',

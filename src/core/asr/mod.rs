@@ -8,6 +8,8 @@ mod onnx;
 pub(crate) use onnx::linux_tests as fixtures;
 #[cfg(all(feature = "asr-runtime", target_os = "linux"))]
 pub use onnx::runtime_version;
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub(crate) use onnx::verify_runtime;
 #[cfg(feature = "asr-runtime")]
 pub use onnx::{Anuvani, IndicConformer, IndicError, initialize};
 
