@@ -621,6 +621,44 @@ fn speech_host_only_reports_gaps_at_the_pipeline_budget() {
 }
 
 #[test]
+fn speech_host_auto_restages_a_host_only_gap() {
+    let mut fixture = Fixture::finished();
+    WorkMode::HostOnly.save(&fixture.settings).unwrap();
+    fixture.run(Mode::Stall).unwrap();
+    fixture.forward_ms = 31_000;
+    fixture.run(Mode::Dead).unwrap();
+    let before = fixture.revision();
+    assert_eq!(before.evidence.len(), 1);
+    assert_eq!(
+        before.provenance["missing_ranges"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    WorkMode::Auto.save(&fixture.settings).unwrap();
+    fixture
+        .run_with(Mode::Dead, |piece, span| {
+            Ok(vec![local_reading(piece, span)])
+        })
+        .unwrap();
+    let after = fixture.revision();
+    assert_eq!(
+        after.evidence.len(),
+        3,
+        "Accepted local receipts must restage the revision"
+    );
+    assert!(after.provenance["missing_ranges"].is_null());
+    for (id, value) in before.evidence {
+        assert_eq!(after.evidence[&id], value);
+    }
+    fixture
+        .run_with(Mode::Dead, |_, _| panic!("An accepted span ran twice"))
+        .unwrap();
+}
+
+#[test]
 fn speech_host_this_device_uses_no_connection() {
     let mut fixture = Fixture::new(true, 3);
     WorkMode::ThisDevice.save(&fixture.settings).unwrap();

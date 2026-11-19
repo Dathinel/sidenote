@@ -190,7 +190,14 @@ impl<'a> Upload<'a> {
             .and_then(Path::file_name)
             .and_then(|n| n.to_str())
             .ok_or_else(remote_error)?;
-        if destination.exists() {
+        let receipts: Vec<_> = journals.iter().map(Journal::staged_receipts).collect();
+        let version = digest(&zeroize::Zeroizing::new(serde_json::to_vec(&(
+            origins, receipts,
+        ))?));
+        let stamp = destination.with_extension("sha256");
+        if destination.is_file()
+            && store_io::read_bounded(&stamp, 64).is_ok_and(|bytes| bytes == version.as_bytes())
+        {
             return Ok(());
         }
         let baseline = crate::core::meeting_router::jobs::read_baseline(transcript)
@@ -199,7 +206,9 @@ impl<'a> Upload<'a> {
             .map_err(|_| remote_error())?;
         let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&revision)?);
         let encrypted = sidenote_sync::identity::protect(&bytes).map_err(|_| remote_error())?;
-        store_io::atomic_write(&destination, &encrypted)
+        store_io::atomic_write(&destination, &encrypted)?;
+        // A crash between writes leaves a stale stamp, so the next poll stages again.
+        store_io::atomic_write(&stamp, version.as_bytes())
     }
 
     pub(in crate::core) fn piece(

@@ -247,6 +247,19 @@ impl Journal {
         missing
     }
 
+    pub(super) fn staged_receipts(&self) -> impl Serialize + '_ {
+        let local: Vec<_> = self
+            .log
+            .changes
+            .iter()
+            .filter_map(|c| match c {
+                Change::Local(span, Some(readings)) => Some((span, readings)),
+                _ => None,
+            })
+            .collect();
+        (&self.log.cut, self.host_failed(), self.ranges(), local)
+    }
+
     pub fn ranges(&self) -> BTreeMap<String, &Value> {
         let mut ranges = BTreeMap::new();
         for rec in &self.log.changes {
