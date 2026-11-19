@@ -210,6 +210,15 @@ fn captured_sentence_can_straddle_an_independently_pinned_english_range() {
 
 fn notes_at_routed_boundary(capture: &[u8]) -> String {
     let mut f = Fixture::new(b"public routed words", 0, b"");
+    let boundary = f
+        .plan
+        .batches
+        .remove("en")
+        .unwrap()
+        .into_values()
+        .find(|range| range.range.context == (14_400, 17_600))
+        .unwrap();
+    f.plan = batches::spool(&f.work, vec![boundary]).unwrap();
     f.baseline = jobs::read_baseline(capture).unwrap();
     record_coverage(&f, 0.9, 1.1, false);
     f.run(&mut super::no_speech_tests::NativeFake::default())
