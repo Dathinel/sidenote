@@ -142,20 +142,33 @@ impl Agent {
             .ok_or("CLI unavailable. Use the copyable config.")?;
         self.add_cli(exe, |args| run(cli, args))
     }
-    /// The exact text to paste into an app that Sidenote does not edit.
+    /// The text Copy config copies. For an app Sidenote does not edit it is only the inner
+    /// `"sidenote"` entry, to be pasted inside the app's own server section.
     pub fn paste_config(&self, exe: &Path) -> String {
-        self.client.config(exe)
+        if self.client.adds_by_cli() {
+            return self.client.config(exe);
+        }
+        let whole: serde_json::Value = serde_json::from_str(&self.client.config(exe)).unwrap();
+        let entry = &whole[super::json_config::key(self.client)]["sidenote"];
+        format!(
+            "\"sidenote\": {}",
+            serde_json::to_string_pretty(entry).unwrap()
+        )
     }
     /// Tells the owner where to paste, in one line.
     pub fn paste_note(&self) -> String {
-        let place = match self.client {
-            Client::OpenCode => "mcp",
-            _ => "mcpServers",
-        };
         format!(
-            "Paste it into {} inside \"{place}\", keep the other entries, then restart {}.",
+            "Paste this inside the \"{}\" section of {}, comma-separated from other entries, then restart {}.",
+            super::json_config::key(self.client),
             self.path.display(),
             self.client.name()
+        )
+    }
+    /// Shown as text, never copied: what to write when the app's config file is empty.
+    pub fn empty_file_note(&self) -> String {
+        format!(
+            "If the file is empty, use: {{\"{}\": {{ ...paste here... }}}}",
+            super::json_config::key(self.client)
         )
     }
     pub(super) fn add_cli(

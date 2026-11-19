@@ -164,7 +164,9 @@ pub fn section(s: &State, p: Palette) -> El {
             );
         } else {
             if paste {
-                body = body.child(roles::SMALL.wrap(agent.paste_note(), p.soft).role("status"));
+                body = body
+                    .child(roles::SMALL.wrap(agent.paste_note(), p.soft).role("status"))
+                    .child(roles::META.wrap(agent.empty_file_note(), p.soft));
             }
             if let Some(detail) = &agent.detail {
                 body = body.child(roles::SMALL.wrap(detail.clone(), p.warn).role("status"));
@@ -226,7 +228,7 @@ pub fn section(s: &State, p: Palette) -> El {
     let config = agent.paste_config(&exe);
     body = body.child(roles::NAME.wrap(client.name(), p.ink));
     body.child(roles::META.wrap(format!("Config file: {}", agent.path.display()), p.soft))
-        .child(roles::SMALL.wrap(if matches!(client, Client::ClaudeCode) { "Or run this command in PowerShell:" } else { "Merge this into your config, keeping the other entries:" }, p.soft))
+        .child(roles::SMALL.wrap(if matches!(client, Client::ClaudeCode) { "Or run this command in PowerShell:" } else if client.adds_by_cli() { "Merge this into your config, keeping the other entries:" } else { "The entry that Copy config copies:" }, p.soft))
         .child(col().w_full().px(12.0).py(12.0).radius(8.0).fill(p.chip).child(roles::SMALL.wrap(config.clone(), p.ink)))
         .child(area::button(if matches!(client, Client::ClaudeCode) { "Copy command" } else { "Copy config" }, "connect-copy", p).on_press_tx(move |s: &mut State, tx| { tx.copy(config.clone()); s.show_toast("Copied", tx); }))
         .child(roles::META.wrap(if matches!(client, Client::ClaudeCode) { "Restart its MCP session after setup. The button uses Claude Code to manage its own config." } else { "Restart or reconnect your AI app after pasting. Sidenote does not edit this app's config." }, p.soft))

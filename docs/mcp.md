@@ -39,17 +39,18 @@ command is `codex mcp add sidenote -- <executable> --mcp`. To undo, run
 Sidenote never writes another app's config file. Claude Desktop, Cursor and OpenCode
 read their own JSON config, so Sidenote only reads it to show whether a `sidenote`
 entry exists (a config that is a link, has comments or is not an object is reported,
-never changed). Those rows show Copy config, which copies the exact entry, Open config
-folder, and one line saying where to paste it. Add to all adds only Claude Code and
+never changed). Those rows show Copy config, which copies only the `"sidenote": {...}`
+entry, Open config folder, one line saying which section of which file to paste it into,
+and the text to use if the file is empty (shown, not copied). Add to all adds only Claude Code and
 Codex and reports which apps need a paste. Claude Desktop is hidden on Linux.
 
 | Client | Config location | Setup |
 | --- | --- | --- |
 | Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button (Claude Code writes its own file), or copy a PowerShell command. |
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy `mcpServers` JSON and paste it. |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy the `sidenote` entry and paste it inside `mcpServers`. |
 | Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Add button (Codex writes its own file), or copy a `[mcp_servers.sidenote]` TOML block. |
-| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy `mcpServers` JSON and paste it. |
-| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy local `mcp.sidenote` JSON and paste it. Project or managed settings may override it. |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy the `sidenote` entry and paste it inside `mcpServers`. |
+| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy the `sidenote` entry and paste it inside `mcp`. Project or managed settings may override it. |
 
 The locations displayed in the app are expanded for this user. Restart or reconnect
 the client after setup. This local stdio connection has no network listener, ports,

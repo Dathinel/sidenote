@@ -158,14 +158,20 @@ fn json_agents_are_never_written_by_add_or_add_all() {
         assert_eq!(files_in(&agent), 1, "no backup or temporary file");
     }
 }
+/// Does what the row's line says: put the copied text inside the named section.
+fn paste_inside_section(existing: &str, key: &str, pasted: &str) -> String {
+    let open = format!("\"{key}\": {{");
+    let at = existing.find(&open).unwrap() + open.len();
+    format!("{} {pasted}, {}", &existing[..at], &existing[at..])
+}
 #[test]
-fn paste_config_parses_and_names_the_sidenote_server() {
+fn paste_config_is_the_inner_entry_and_names_the_sidenote_server() {
     let sandbox = Sandbox::new();
     let exe = Path::new("C:/A B/sidenote.exe");
     for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
         let text = sandbox.agent(client).paste_config(exe);
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let entry = &value[super::json_config::key(client)]["sidenote"];
+        let value: serde_json::Value = serde_json::from_str(&format!("{{{text}}}")).unwrap();
+        let entry = &value["sidenote"];
         let (command, args) = if client == Client::OpenCode {
             assert_eq!(entry["type"], "local");
             (&entry["command"][0], &entry["command"][1])
@@ -174,6 +180,46 @@ fn paste_config_parses_and_names_the_sidenote_server() {
         };
         assert_eq!(command, "C:/A B/sidenote.exe");
         assert_eq!(args, "--mcp");
+    }
+}
+#[test]
+fn pasting_where_the_line_says_keeps_the_other_server() {
+    let sandbox = Sandbox::new();
+    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
+        let agent = sandbox.agent(client);
+        let key = super::json_config::key(client);
+        assert!(
+            agent
+                .paste_note()
+                .contains(&format!("inside the \"{key}\" section"))
+        );
+        let existing = format!(r#"{{"keep": 1, "{key}": {{"other": {{"command": "keep"}}}}}}"#);
+        let merged =
+            paste_inside_section(&existing, key, &agent.paste_config(Path::new("sidenote")));
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["keep"], 1);
+        assert_eq!(value[key]["other"]["command"], "keep");
+        assert!(value[key]["sidenote"].is_object(), "{merged}");
+        assert_eq!(value[key].as_object().unwrap().len(), 2);
+    }
+}
+#[test]
+fn pasting_into_the_empty_file_text_parses_with_only_the_sidenote_server() {
+    let sandbox = Sandbox::new();
+    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
+        let agent = sandbox.agent(client);
+        let key = super::json_config::key(client);
+        let note = agent.empty_file_note();
+        let template = note.split_once("use: ").unwrap().1;
+        assert!(template.contains("...paste here..."));
+        let file = template.replace(
+            "...paste here...",
+            &agent.paste_config(Path::new("sidenote")),
+        );
+        let value: serde_json::Value = serde_json::from_str(&file).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(value[key].as_object().unwrap().len(), 1);
+        assert!(value[key]["sidenote"].is_object(), "{file}");
     }
 }
 #[test]

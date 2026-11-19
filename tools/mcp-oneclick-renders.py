@@ -26,7 +26,8 @@ def main():
                 for control in status + copy + folder:
                     x, y, w, h = control["rect"]
                     assert 0 <= x < x+w <= width and 0 <= y < y+h <= 2200, (state, width, control)
-                assert sum("Paste it into" in t for t in texts) == len(copy), (state, width)
+                assert sum("Paste this inside" in t for t in texts) == len(copy), (state, width)
+                assert sum("If the file is empty, use:" in t for t in texts) == len(copy), (state, width)
                 assert all(c.get("focusable") and c.get("label") == "Copy config" for c in copy)
                 assert all(c.get("focusable") and c.get("label") == "Open config folder" for c in folder)
                 if state == "added": assert all(c.get("label") == "Added ✓" for c in status)
