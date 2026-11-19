@@ -2,7 +2,7 @@
   "crates/sidenote-sync/examples/linux_notes_root.rs": "43609a6e9bea12083a12fd1af239cc45205c89147ec8ba1787f875e23902f738",
   "crates/sidenote-sync/examples/linux_platform_proof.rs": "0e4ac3c683d5b431e35c3b5615969b843670656ca37d104117e263603bbc5771",
   "crates/sidenote-sync/examples/local_e2e.rs": "b4568096ac1d5a4a8424f4e01d136212fcd58f77abd2594af5c5125c06545527",
-  "crates/sidenote-sync/src/client.rs": "70ce72a37d020b55d00310b8521ff5cc9173d3e9ce43fdf0a49f731a3939ce9f",
+  "crates/sidenote-sync/src/client.rs": "9fa85a6dcb51af2d85c3b756751262449d7e086af1e0edbe2eac8f3d50dd8938",
   "crates/sidenote-sync/src/containment.rs": "09d4f871114f3972b91914f32578df22f46fa0cdd4efdd25f1e79052932527c5",
   "crates/sidenote-sync/src/linux_secret.rs": "31c0168b38b8fe175c33b8dc74a84a6e98428518a13e42801148f3259bd1639c",
   "crates/sidenote-sync/src/notes_cgroup.rs": "99446f7bca46b9a31a1cec1b7aa5afbc1b23c3ff79608ca0fdc52b177dc008c9",

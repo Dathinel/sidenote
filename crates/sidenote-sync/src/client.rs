@@ -1822,32 +1822,79 @@ mod tests {
     #[tokio::test]
     async fn f8_short_authenticated_sessions_do_not_reset_run_backoff() -> Result<()> {
         use futures_util::{SinkExt, StreamExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio_tungstenite::tungstenite::Message;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let server = tokio::spawn(async move {
-            loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(error) => return Err::<(), anyhow::Error>(error.into()),
-                };
-                let mut ws = tokio_tungstenite::accept_async(stream).await?;
-                ws.send(Message::Text(
-                    serde_json::json!({"type":"challenge","nonce":"c".repeat(64)})
-                        .to_string()
-                        .into(),
-                ))
-                .await?;
-                let auth = ws.next().await.context("auth missing")??;
-                ensure!(auth.is_text(), "expected auth");
-                ws.send(Message::Text("{\"type\":\"ready\",\"peers\":[]}".into()))
-                    .await?;
-                ws.close(None).await?;
-            }
-        });
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
         let dir = tempfile::tempdir()?;
         let device = Arc::new(Device::open(&dir.path().join("owner.sqlite"))?);
-        let mut instance = client(device.clone(), Group::new(&device.identity))?;
+        let group = Group::new(&device.identity);
+        let path = format!("/sync/{}?role=device", group.room());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let mut server = tokio::spawn(async move {
+            let mut sessions = tokio::task::JoinSet::new();
+            loop {
+                let (stream, _) = tokio::select! {
+                    accepted = listener.accept() => match accepted {
+                        Ok(pair) => pair,
+                        Err(error) => return Err::<(), anyhow::Error>(error.into()),
+                    },
+                    completed = sessions.join_next(), if !sessions.is_empty() => {
+                        completed.context("mock session missing")???;
+                        continue;
+                    }
+                };
+                let path = path.clone();
+                sessions.spawn(async move {
+                    let mut own_client = false;
+                    let handshake = tokio_tungstenite::accept_hdr_async(
+                        stream,
+                        |request: &Request, response: Response| {
+                            own_client = request.uri().to_string() == path;
+                            if own_client {
+                                Ok(response)
+                            } else {
+                                Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                                    .status(403)
+                                    .body(None)
+                                    .expect("reject foreign endpoint"))
+                            }
+                        },
+                    )
+                    .await;
+                    if !own_client {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    let mut ws = handshake?;
+                    ws.send(Message::Text(
+                        serde_json::json!({"type":"challenge","nonce":"c".repeat(64)})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await?;
+                    let auth = ws.next().await.context("auth missing")??;
+                    ensure!(auth.is_text(), "expected auth");
+                    ws.send(Message::Text("{\"type\":\"ready\",\"peers\":[]}".into()))
+                        .await?;
+                    ws.close(None).await?;
+                    Ok(())
+                });
+            }
+        });
+        // A port scan's ordinary HTTP probe must not end the mock relay.
+        let mut probe = tokio::net::TcpStream::connect(address).await?;
+        probe
+            .write_all(b"HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await?;
+        probe.read_to_end(&mut Vec::new()).await?;
+
+        assert!(
+            tokio_tungstenite::connect_async(format!("ws://{address}/foreign"))
+                .await
+                .is_err(),
+            "mock relay admitted the wrong endpoint"
+        );
+        let mut instance = client(device, group)?;
         instance.relay = RelayUrl::local(&format!("ws://{address}"))?;
         let (clock, mut attempts) = tokio::sync::mpsc::unbounded_channel();
         instance.retry_clock = Some(clock);
@@ -1855,9 +1902,15 @@ mod tests {
         let (stop, rx) = watch::channel(false);
         let run = tokio::spawn(client.clone().run(rx));
         for _ in 0..14 {
-            let (delay, advance) = tokio::time::timeout(Duration::from_secs(120), attempts.recv())
-                .await?
-                .context("retry loop stopped")?;
+            let (delay, advance) = tokio::select! {
+                stopped = &mut server => {
+                    stopped.context("mock relay task failed")??;
+                    anyhow::bail!("mock relay stopped before the backoff check finished");
+                }
+                attempt = tokio::time::timeout(Duration::from_secs(120), attempts.recv()) => {
+                    attempt?.context("retry loop stopped")?
+                }
+            };
             // Advance only the registered backoff deadline; socket I/O uses real time.
             tokio::time::pause();
             advance.send(Instant::now() + delay).expect("advance retry");
