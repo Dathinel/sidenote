@@ -544,6 +544,14 @@ impl State {
             waker: None,
         };
         s.load_annotation_options();
+        let device_name = if rune::tooling::headless_run().is_some() {
+            "DEMO-PC".to_owned()
+        } else {
+            core::DeviceSettings::load()
+                .map(|d| d.name)
+                .unwrap_or_default()
+        };
+        s.hex.shell.device_name = TextEdit::new(&device_name);
         match core::relay_preview::Settings::load(&s.store.root) {
             Ok(settings) => {
                 s.hex.shell.relay_address = TextEdit::new(&settings.address);
@@ -2912,6 +2920,7 @@ pub fn spec() -> AppSpec<State> {
             ("sync-task-kept", sync_scene::failed_task_scene),
             ("sync-arrival-draft", sync_scene::arrival_scene),
             ("listener-error", updates::listener_error_scene),
+            ("listener-preparing", updates::listener_preparing_scene),
             ("updates-settings", updates::settings_scene),
             ("updates-manual", |s| {
                 updates::scene(s, sidenote::updates::Phase::Manual)
@@ -3084,6 +3093,22 @@ pub fn spec() -> AppSpec<State> {
             ("relay-pair-code", |s| relay::scene(s, "code")),
             ("relay-pair-confirm", |s| relay::scene(s, "confirm")),
             ("relay-paired", |s| relay::scene(s, "paired")),
+            ("relay-devices-none", |s| relay::scene(s, "devices-none")),
+            ("relay-devices-mixed", |s| relay::scene(s, "devices-mixed")),
+            ("relay-devices-long", |s| relay::scene(s, "devices-long")),
+            ("relay-devices-unknown", |s| {
+                relay::scene(s, "devices-unknown")
+            }),
+            ("relay-devices-renamed", |s| {
+                relay::scene(s, "devices-renamed")
+            }),
+            ("relay-devices-twins", |s| relay::scene(s, "devices-twins")),
+            ("relay-devices-rename", |s| {
+                relay::scene(s, "devices-rename")
+            }),
+            ("relay-devices-rename-empty", |s| {
+                relay::scene(s, "devices-rename-empty")
+            }),
             ("relay-conflict", |s| relay::scene(s, "conflict")),
             ("relay-shared-conflict", |s| {
                 relay::scene(s, "shared-conflict")

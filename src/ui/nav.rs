@@ -548,7 +548,7 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
     new_meeting_button(s, p, narrow)
 }
 
-fn new_meeting_button(s: &State, p: Palette, narrow: bool) -> El {
+pub(super) fn new_meeting_button(s: &State, p: Palette, narrow: bool) -> El {
     let blocked = hex::start_blocked(s);
     let b = super::widgets::button(
         if narrow { "+ New" } else { "+ New meeting" },

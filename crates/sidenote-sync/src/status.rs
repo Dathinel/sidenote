@@ -43,6 +43,10 @@ pub struct PeerStatus {
     pub sending_bad_data: bool,
     pub reason: Option<Reason>,
     pub last_synced: Option<SystemTime>,
+    /// An encrypted pong arrived within two heartbeats in the live session.
+    pub online: bool,
+    /// Time of the latest pong seen from this peer by this process.
+    pub last_seen: Option<SystemTime>,
 }
 
 /// Full jitter in [0, ceiling], with reset only after a healthy minute.

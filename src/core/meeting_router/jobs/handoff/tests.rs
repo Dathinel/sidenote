@@ -201,28 +201,16 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     .unwrap();
     assert_eq!(reading.segments[0].text_original, words);
     let scripts = tempfile::tempdir().unwrap();
-    let script = scripts.path().join("worker.ps1");
-    fs::write(
-        &script,
-        r#"[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'started'), 'started')"#,
-    )
-    .unwrap();
     run_pending_with(|job, _| {
         produce(&root, id, &job.baseline, "te")?;
         let path = work(&root, id).join("batches/output.json");
         let mut out: BatchOutput = serde_json::from_slice(&fs::read(&path)?)?;
         out.source_revision = job.input_revision.clone();
         store_io::write(&path, &out)?;
-        let mut command = Command::new("powershell.exe");
+        let mut command = Command::new("cmd.exe");
         command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(&script);
+            .current_dir(scripts.path())
+            .args(["/D", "/C", "echo", "started>started"]);
         Ok(command)
     })
     .unwrap();

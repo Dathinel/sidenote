@@ -33,5 +33,6 @@ pub struct Status {
 #[derive(Clone, Debug, Default)]
 pub struct ListenerStatus {
     pub ready: bool,
+    pub preparing: bool,
     pub error: Option<String>,
 }

@@ -11,6 +11,8 @@ const LIVE: &str = r#"{"status":"settings","settings":[{"key":"meetings.audio_re
 
 const WORKER_TIMEOUT: Duration = Duration::from_secs(5);
 const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+const READY: &str = "audio-test-ready";
 
 #[test]
 fn keep_audio_contracts_through_hex_settings_api() {
@@ -23,6 +25,7 @@ fn keep_audio_contracts_through_hex_settings_api() {
                 "hex_engine::audio_retention::tests::keep_audio_contracts_through_hex_settings_api",
                 "--nocapture",
             ])
+            .stdout(std::process::Stdio::piped())
             .env("SIDENOTE_AUDIO_TEST", "1")
             .env("SIDENOTE_DATA_DIR", root.path().join("data"));
         #[cfg(windows)]
@@ -31,7 +34,19 @@ fn keep_audio_contracts_through_hex_settings_api() {
             command.creation_flags(0x08000000);
         }
         let mut child = command.spawn().expect("spawn isolated Keep audio test");
-        let deadline = Instant::now() + CHILD_TIMEOUT;
+        let output = child.stdout.take().unwrap();
+        let (ready, started) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            for line in BufReader::new(output).lines() {
+                let line = line.unwrap();
+                eprintln!("{line}");
+                if line == READY {
+                    let _ = ready.send(());
+                }
+            }
+        });
+        let mut deadline = Instant::now() + STARTUP_TIMEOUT;
+        let mut fixture_ready = false;
         let status = loop {
             if let Some(status) = child.try_wait().expect("check isolated Keep audio child") {
                 break status;
@@ -39,11 +54,25 @@ fn keep_audio_contracts_through_hex_settings_api() {
             if Instant::now() >= deadline {
                 child
                     .kill()
-                    .expect("Keep audio child exceeded 30s and could not be killed");
-                panic!("isolated Keep audio test exceeded its 30s deadline; child killed");
+                    .expect("stalled Keep audio child could not be killed");
+                child.wait().expect("reap stalled Keep audio child");
+                reader.join().unwrap();
+                panic!("isolated Keep audio child exceeded its startup or 30s body deadline");
             }
-            thread::sleep(Duration::from_millis(2));
+            match started.recv_timeout(Duration::from_millis(20)) {
+                Ok(()) => {
+                    if !fixture_ready {
+                        fixture_ready = true;
+                        deadline = Instant::now() + CHILD_TIMEOUT;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
         };
+        reader.join().unwrap();
         assert!(
             status.success(),
             "isolated Keep audio test failed: {status}"
@@ -70,7 +99,9 @@ fn keep_audio_contracts_through_hex_settings_api() {
     let shared = data.clone();
     let stopping = shutdown.clone();
     let (closed, eof) = mpsc::channel::<()>();
+    let (listening, ready) = mpsc::channel();
     let worker = thread::spawn(move || {
+        listening.send(()).unwrap();
         'connections: while !stopping.load(Ordering::Relaxed) {
             let Ok((stream, _)) = listener.accept() else {
                 thread::sleep(Duration::from_millis(2));
@@ -143,6 +174,10 @@ fn keep_audio_contracts_through_hex_settings_api() {
             .unwrap();
         }
     });
+    ready
+        .recv_timeout(STARTUP_TIMEOUT)
+        .expect("fake Hex server did not start");
+    println!("{READY}");
     let engine = HexEngine::new();
     {
         let mut cache = engine.cache.lock().unwrap();

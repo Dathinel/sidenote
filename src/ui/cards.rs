@@ -36,6 +36,12 @@ pub fn copy(title: El, help: &str, p: Palette) -> El {
         .child(roles::SMALL.wrap(help, p.soft))
 }
 
+/// The text column of a row whose lines the caller adds. It may shrink to nothing, so an
+/// ellipsis name never pushes the row wider than its card.
+pub fn copy_column() -> El {
+    col().grow(1.0).min_w(0.0).gap(4.0)
+}
+
 pub fn fold_control(title: &str, key: &str, open: bool, p: Palette) -> El {
     super::widgets::pressable(
         row()

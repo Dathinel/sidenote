@@ -1,6 +1,8 @@
 use super::super::*;
 mod api;
 use api::Fixture;
+#[cfg(all(windows, feature = "recorder-ready-proof"))]
+mod readiness;
 use std::sync::atomic::Ordering;
 
 fn isolated_api_test(name: &str) -> bool {
@@ -11,7 +13,20 @@ fn isolated_api_test(name: &str) -> bool {
         .prefix("live-replacement-")
         .tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts"))
         .unwrap();
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    let mut exe = std::env::current_exe().unwrap();
+    if name
+        == "recorder_ready_installed_preparation_disables_the_real_control_until_validation_finishes"
+    {
+        std::fs::create_dir_all(root.path().join("data")).unwrap();
+        let current = root.path().join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(root.path().join("Update.exe"), []).unwrap();
+        std::fs::write(current.join("sq.version"), "<package><metadata><id>Fixture</id><version>1.0.0</version><mainExe>proof.exe</mainExe></metadata></package>").unwrap();
+        let copied = current.join("proof.exe");
+        std::fs::copy(exe, &copied).unwrap();
+        exe = copied;
+    }
+    let mut command = std::process::Command::new(exe);
     command
         .args([
             "--exact",
@@ -23,6 +38,16 @@ fn isolated_api_test(name: &str) -> bool {
         .env("SIDENOTE_STATE_DIR", root.path().join("state"))
         .env("SIDENOTE_HEX_DIR", root.path().join("hex"))
         .env("SIDENOTE_PEERS_DIR", root.path().join("peers"));
+    if name
+        == "recorder_ready_installed_preparation_disables_the_real_control_until_validation_finishes"
+    {
+        command
+            .env("SIDENOTE_RECORDER_READY_TEST", root.path())
+            .env(
+                "SIDENOTE_LISTENER_TASK",
+                "Sidenote recorder readiness fixture",
+            );
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -714,4 +739,88 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
             .join("local/notes-jobs")
             .exists()
     );
+}
+
+#[test]
+fn recorder_ready_new_meeting_logs_one_correlated_action_through_recheck() {
+    if isolated_api_test("recorder_ready_new_meeting_logs_one_correlated_action_through_recheck") {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start_idle();
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_status_at(Ok(idle), Instant::now() - Duration::from_secs(11));
+    let (release, wait) = std::sync::mpsc::channel();
+    api.data.lock().unwrap().start_release = Some(wait);
+    state.new_meeting();
+    let mut runtime =
+        rune::Runtime::new(state, meeting_control, (500.0, 160.0), rune::Env::default());
+    runtime.frame(0.0);
+    assert!(
+        runtime
+            .elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Checking Hex before New meeting"))
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let event = runtime
+            .state
+            .events_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        let rechecked = matches!(&event, Event::Hex(Msg::RecheckStart(_)));
+        runtime.update(|state, _| state.apply_event(event));
+        if rechecked {
+            break;
+        }
+    }
+    runtime.frame(0.0);
+    assert!(
+        runtime
+            .elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Working")),
+        "busy={} blocked={:?} error={:?}",
+        runtime.state.hex_record_busy(),
+        start_blocked(&runtime.state),
+        runtime.state.hex.error
+    );
+    release.send(()).unwrap();
+    Fixture::finish(&mut runtime.state);
+    assert_eq!(api.data.lock().unwrap().starts, 1);
+    let log = std::fs::read_to_string(sidenote::core::log_path()).unwrap();
+    let actions: Vec<_> = log
+        .lines()
+        .filter(|line| line.contains("hex new_meeting action "))
+        .collect();
+    assert_eq!(actions.len(), 4, "{actions:?}");
+    for (line, stage) in actions
+        .iter()
+        .zip(["entry", "recheck_done", "request_sent", "completed"])
+    {
+        assert!(
+            line.contains(&format!(
+                "seq=1 stage={stage} role=ui pid={}",
+                std::process::id()
+            )),
+            "{line}"
+        );
+    }
+    assert!(log.contains("hex new_meeting availability reason="));
+    assert!(!log.contains("hex new_meeting blocked"));
+}
+
+fn meeting_control(state: &State, _: &mut rune::Cx<State>) -> rune::El {
+    crate::ui::nav::new_meeting_button(state, crate::ui::theme::palette(false), false)
+}
+
+#[cfg(all(windows, feature = "recorder-ready-proof"))]
+#[test]
+fn recorder_ready_installed_preparation_disables_the_real_control_until_validation_finishes() {
+    if isolated_api_test(
+        "recorder_ready_installed_preparation_disables_the_real_control_until_validation_finishes",
+    ) {
+        return;
+    }
+    readiness::run();
 }

@@ -26,11 +26,17 @@ impl std::fmt::Display for WorkerFailure {
 impl std::error::Error for WorkerFailure {}
 type Cleanup = std::result::Result<(), WorkerFailure>;
 const SHUTDOWN_BOUND: Duration = Duration::from_millis(500);
+#[cfg(test)]
+std::thread_local! {
+    static CONTROLLER_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
+}
 fn controller(
-    job: crate::platform::ProcessJob,
+    job: Arc<crate::platform::ProcessJob>,
     process: std::os::windows::io::OwnedHandle,
     cancel: Arc<AtomicBool>,
 ) -> std::io::Result<(Sender<()>, Receiver<Cleanup>)> {
+    #[cfg(test)]
+    let gate = CONTROLLER_GATE.with(|slot| slot.borrow_mut().take());
     let (stop, requests) = mpsc::channel();
     let (finished, cleanup) = mpsc::channel();
     drop(
@@ -38,6 +44,10 @@ fn controller(
             .name("batch-owner".into())
             .spawn(move || {
                 use crate::platform::JobProcess;
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    let _ = gate.recv();
+                }
                 while !cancel.load(Ordering::Acquire)
                     && matches!(JobProcess::wait_handle(&process, 0), Ok(None))
                 {
@@ -77,6 +87,7 @@ fn controller(
     Ok((stop, cleanup))
 }
 pub struct Worker {
+    job: Arc<crate::platform::ProcessJob>,
     child: crate::platform::JobProcess,
     stop: Sender<()>,
     cleanup: Receiver<Cleanup>,
@@ -112,10 +123,11 @@ impl Worker {
         command
             .env("SIDENOTE_BATCH_OUTPUT", output.path())
             .env("SIDENOTE_BATCH_THREADS", threads.to_string());
-        let job = crate::platform::ProcessJob::new()?;
+        let job = Arc::new(crate::platform::ProcessJob::new()?);
         let child = job.spawn(&command)?;
-        let (stop, cleanup) = controller(job, child.handle.try_clone()?, cancel.clone())?;
+        let (stop, cleanup) = controller(job.clone(), child.handle.try_clone()?, cancel.clone())?;
         let mut worker = Self {
+            job,
             child,
             stop,
             cleanup,
@@ -146,8 +158,18 @@ impl Worker {
     /// Wait at most 500 ms; a cleanup failure leaves the controller owning deferred reaping.
     pub fn shutdown(&mut self) -> Result<()> {
         let result = *self.cleaned.get_or_insert_with(|| {
+            let deadline = Instant::now() + SHUTDOWN_BOUND;
+            // Request termination before waiting for a potentially unscheduled controller.
+            let terminated = self
+                .job
+                .terminate()
+                .map_err(|_| WorkerFailure::CleanupFailed);
             let _ = self.stop.send(());
-            match self.cleanup.recv_timeout(SHUTDOWN_BOUND) {
+            terminated?;
+            match self
+                .cleanup
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
                 Ok(result) => result,
                 Err(mpsc::RecvTimeoutError::Timeout) => Err(WorkerFailure::CleanupTimeout),
                 Err(_) => Err(WorkerFailure::CleanupFailed),
@@ -208,3 +230,6 @@ mod tests;
 
 #[cfg(test)]
 mod lifetime_tests;
+
+#[cfg(test)]
+mod signals;
