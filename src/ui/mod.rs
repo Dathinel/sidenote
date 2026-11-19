@@ -152,7 +152,7 @@ pub enum Event {
     /// A Hex engine result from a worker thread.
     Hex(hex::Msg),
     Models(models::Msg),
-    McpConnected(Result<String, String>),
+    McpConnected(mcp_connect::Update),
     /// The scan, its errors, and the pipeline's `tasks.json` of each meeting.
     Refreshed(refresh::Result),
     Progress {
@@ -1412,7 +1412,10 @@ impl State {
             Event::Annotations(msg) => self.apply_annotations(msg),
             Event::McpConnected(result) => {
                 self.connection.busy = false;
-                self.connection.result = Some(result);
+                self.connection.agents = result.agents;
+                if !result.results.is_empty() {
+                    self.connection.results = result.results;
+                }
             }
             Event::MigrationPrepared(result) => {
                 self.memory.preview_running = false;
@@ -3043,6 +3046,15 @@ pub fn spec() -> AppSpec<State> {
             }),
             ("settings-people", |s| {
                 hex::settings::scene(s, "settings-people")
+            }),
+            ("settings-mcp-added", |s| {
+                hex::settings::scene(s, "settings-mcp-added")
+            }),
+            ("settings-mcp-mixed", |s| {
+                hex::settings::scene(s, "settings-mcp-mixed")
+            }),
+            ("settings-mcp-none", |s| {
+                hex::settings::scene(s, "settings-mcp-none")
             }),
             ("settings-hex", |s| hex::settings::scene(s, "settings-hex")),
             ("settings-hex-setup", |s| {

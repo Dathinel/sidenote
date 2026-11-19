@@ -1,8 +1,13 @@
-//! Local client setup. Only the explicit Claude Code action changes client state.
+//! Local client setup. Writes happen only after an explicit Add action.
+mod agents;
+#[cfg(test)]
+mod isolated_tests;
+mod json_config;
+pub use agents::{Agent, Status, add_all, discover};
 use serde_json::json;
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 
@@ -39,7 +44,7 @@ impl Client {
             Self::ClaudeDesktop => {
                 crate::platform::data_home().join("Claude/claude_desktop_config.json")
             }
-            Self::Codex => std::env::var_os("CODEX_HOME")
+            Self::Codex => codex_home()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".codex"))
@@ -65,7 +70,6 @@ impl Client {
         }
     }
 }
-#[cfg(windows)]
 fn claude() -> Result<PathBuf, String> {
     let runner = super::Runner {
         name: "Claude Code".into(),
@@ -76,43 +80,124 @@ fn claude() -> Result<PathBuf, String> {
         model: None,
     };
     super::runners::executable(&runner).or_else(|_| {
-        let path = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join(".local/bin/claude.exe");
+        let path = crate::platform::home().join(if cfg!(windows) { ".local/bin/claude.exe" } else { ".local/bin/claude" });
         super::runners::executable(&super::Runner { program: path.to_string_lossy().into_owned(), ..runner })
     }).map_err(|_| "Claude Code was not found. Install its native Windows CLI, reopen Sidenote, or use the copyable command.".into())
 }
 fn run(program: &Path, args: &[&std::ffi::OsStr]) -> Result<std::process::Output, String> {
+    run_within(program, args, Duration::from_secs(30))
+}
+fn collect(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+    index: usize,
+    sender: std::sync::mpsc::Sender<(usize, Vec<u8>)>,
+) {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        let _ = sender.send((index, bytes));
+    });
+}
+/// One deadline covers the child and the reading of its output. At the deadline the whole
+/// process job is killed, so a descendant that keeps the pipes open cannot hold the page.
+fn run_within(
+    program: &Path,
+    args: &[&std::ffi::OsStr],
+    limit: Duration,
+) -> Result<std::process::Output, String> {
     use crate::platform::CommandExt;
-    let mut child = Command::new(program)
+    let timeout = || {
+        "The MCP client did not finish within 30 seconds. Check its MCP settings before retrying."
+            .to_string()
+    };
+    let mut child = crate::platform::worker_command(program)
+        .map_err(|_| "Could not prepare the MCP client command.".to_string())?
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
+        // CREATE_NO_WINDOW | CREATE_SUSPENDED: the child joins its job before it runs, so no
+        // descendant can start outside the job and escape the deadline kill.
+        .creation_flags(0x08000004)
         .spawn()
         .map_err(|_| {
-            "Could not start Claude Code. Check its installation and try again.".to_string()
+            "Could not start the MCP client. Check its installation and try again.".to_string()
         })?;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    #[cfg(test)]
+    isolated_tests::before_attach();
+    let job = match crate::platform::ProcessJob::attach(&child) {
+        Ok(job) => job,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Could not prepare the MCP client command.".into());
+        }
+    };
+    if crate::platform::resume_suspended(&child).is_err() {
+        drop(job);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Could not prepare the MCP client command.".into());
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    collect(child.stdout.take(), 0, sender.clone());
+    collect(child.stderr.take(), 1, sender);
+    #[cfg(test)]
+    isolated_tests::after_resume();
+    let deadline = Instant::now() + limit;
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|_| "Could not read the Claude Code result.".into());
-            }
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => {
+                drop(job);
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("Claude Code did not finish within 30 seconds. Check its MCP settings before retrying.".into());
+                return Err(timeout());
+            }
+        }
+    };
+    let mut output = [Vec::new(), Vec::new()];
+    for _ in 0..2 {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((index, bytes)) => output[index] = bytes,
+            Err(_) => {
+                drop(job);
+                return Err(timeout());
             }
         }
     }
+    drop(job);
+    let [stdout, stderr] = output;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 pub fn add_to_claude(exe: &Path) -> Result<String, String> {
     let cli = claude()?;
     register(exe, |args| run(&cli, args))
 }
+fn missing(output: &std::process::Output) -> bool {
+    if output.status.code() != Some(1) {
+        return false;
+    }
+    [&output.stdout, &output.stderr].iter().any(|bytes| {
+        let text = String::from_utf8_lossy(bytes).to_lowercase();
+        let old = "no mcp server found with name: sidenote";
+        text.match_indices(old).any(|(i, _)| {
+            text[i + old.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || c == '.')
+        }) || text.contains("no mcp server named \"sidenote\"")
+            || text.contains("no mcp server named 'sidenote'")
+    })
+}
+
 fn register(
     exe: &Path,
     mut command: impl FnMut(&[&std::ffi::OsStr]) -> Result<std::process::Output, String>,
@@ -121,12 +206,7 @@ fn register(
     if check.status.success() {
         return Err("Claude Code already has a sidenote connection. Nothing was replaced. Check it with claude mcp get sidenote.".into());
     }
-    let absent = String::from_utf8_lossy(&check.stderr)
-        .to_lowercase()
-        .contains("no mcp server found with name")
-        || String::from_utf8_lossy(&check.stdout)
-            .to_lowercase()
-            .contains("no mcp server found with name");
+    let absent = missing(&check);
     if !absent {
         return Err("Could not check existing Claude Code connections. Nothing was added. Run claude mcp get sidenote to check.".into());
     }
@@ -150,6 +230,17 @@ fn register(
         return Err("Claude Code accepted the command, but the connection could not be verified. Check claude mcp get sidenote.".into());
     }
     Ok("Added to Claude Code for your user account. Restart its MCP session to connect. To undo, run claude mcp remove --scope user sidenote.".into())
+}
+
+fn codex_home() -> Option<std::ffi::OsString> {
+    #[cfg(test)]
+    {
+        Some(crate::test_home().join("codex").into_os_string())
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var_os("CODEX_HOME")
+    }
 }
 
 #[cfg(test)]
@@ -192,10 +283,63 @@ mod registration_tests {
     use std::os::windows::process::ExitStatusExt;
     fn output(ok: bool, stderr: &str) -> std::process::Output {
         std::process::Output {
-            status: std::process::ExitStatus::from_raw(if ok { 0 } else { 1 }),
+            status: std::process::ExitStatus::from_raw(if ok {
+                0
+            } else if cfg!(windows) {
+                1
+            } else {
+                1 << 8
+            }),
             stdout: vec![],
             stderr: stderr.as_bytes().to_vec(),
         }
+    }
+    #[test]
+    fn known_missing_replies_allow_add_but_other_failures_do_not() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("sidenote.exe");
+        let missing_replies = [
+            "No MCP server found with name: sidenote",
+            "No MCP server named \"sidenote\". Configured servers: ...",
+            "Error: No MCP server named 'sidenote' found.",
+        ];
+        for text in missing_replies {
+            for text in [text.to_string(), text.to_uppercase()] {
+                let mut calls = 0;
+                assert!(
+                    register(&exe, |_| {
+                        calls += 1;
+                        Ok(if calls == 1 {
+                            output(false, &text)
+                        } else {
+                            output(true, "")
+                        })
+                    })
+                    .is_ok()
+                );
+                assert_eq!(calls, 3);
+            }
+        }
+        for text in [
+            "No MCP server named 'another' found.",
+            "No MCP server named sidenote",
+            "No MCP server found with name: sidenote-other",
+            "config unreadable",
+        ] {
+            let mut calls = 0;
+            assert!(
+                register(&exe, |_| {
+                    calls += 1;
+                    Ok(output(false, text))
+                })
+                .is_err()
+            );
+            assert_eq!(calls, 1);
+        }
+        let mut wrong_exit = output(false, missing_replies[1]);
+        wrong_exit.status =
+            std::process::ExitStatus::from_raw(if cfg!(windows) { 2 } else { 2 << 8 });
+        assert!(!missing(&wrong_exit));
     }
     #[test]
     fn existing_entry_or_inconclusive_check_never_adds() {
@@ -244,9 +388,4 @@ mod registration_tests {
             assert_eq!(step, if add_ok { 3 } else { 2 });
         }
     }
-}
-
-#[cfg(not(windows))]
-fn claude() -> Result<PathBuf, String> {
-    Err(crate::platform::UNAVAILABLE.into())
 }

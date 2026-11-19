@@ -8,7 +8,7 @@ STATE=ROOT/'target/settings-build-render'
 EXE=Path(os.environ.get('CARGO_TARGET_DIR',str(ROOT/'target')))/'x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
 from prepare_people_fixture import prepare
-PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
+PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('connected-apps','settings-mcp-mixed',2200),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
@@ -30,7 +30,7 @@ def render(job):
   summary=meetings/'1793955600000-1/english-summary.json'
   value=json.loads(summary.read_text(encoding='utf-8'));value['title']='Planning the next Northwind workshop, partner review, delivery timeline and follow-up decisions for the whole team'
   summary.write_text(json.dumps(value),encoding='utf-8')
- env=os.environ|{'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
+ env=os.environ|{'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
  args=[str(EXE),'--meetings-dir',str(meetings),'--data-dir',str(state),'--peers-dir',str(state/'peers'),'--scene',scene,'--theme',theme,'--size',f'{width}x{height}','--scale','1','--snap',str(base)+'.png','--tree',str(base)+'.json']
  if events:
   script=state/'events.json';script.write_text(json.dumps(dict(events=events+[dict(t=max(e['t'] for e in events)+1,type='mark',name='end')])),encoding='utf-8')
@@ -59,7 +59,7 @@ def render(job):
   assert any(n.get('text')=='Suggested: Our team' for n in elements), 'Suggestion missing'
   assert any(n.get('key')=='person-confirm-jamie' for n in elements), 'Confirm missing'
  print(base.name,flush=True)
- return str(base.with_suffix('.png').relative_to(ROOT))
+ return os.path.relpath(base.with_suffix('.png'), ROOT)
 
 def tap(key,t=.3):return dict(type='tap',key=key,t=t)
 def main():
@@ -80,6 +80,8 @@ def main():
  # Existing legacy search proof keeps its original 800px viewport and exact interaction.
  events=json.loads((ROOT/'tools/ui-scripts/settings-search.json').read_text())['events'][:-1]
  jobs.append(('search','settings-search',1280,'light',800,events))
+ for query in ('MCP','connect','Claude','Codex','Cursor','OpenCode'):
+  jobs.append(('mcp-search-'+query,'settings-mcp-mixed',1280,'light',1200,[tap('hex-filter',.2),dict(type='type',text=query,t=.4)]))
  if args.cloud_ask:
   jobs=[('cloud-ask','settings-cloud-ask',1280,'dark',1400,None),('cloud-ask-label','cloud-ask-answer',1280,'dark',900,None)]
  if args.search_keys:

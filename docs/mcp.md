@@ -12,11 +12,12 @@ connection, and send what they read to their AI provider. Meeting text is data, 
 
 ## Setup
 
-Open **Settings > Connect AI apps** for the actual expanded path of this running
-executable, an Add to Claude Code button, and copy-ready setup text for all five
-clients below. Installed builds use their own runtime path, including custom install
-locations. Dev builds are explicitly labelled; keep that executable at the shown
-path or reconnect with the installed copy after installation. The usual per-user
+Open **Settings > Connected apps** for installed clients, their connection status,
+an Add button for Claude Code and Codex, **Add to all installed** (those two), and
+Copy config and Open config folder for the apps Sidenote does not edit. Show all reveals
+missing clients, and selecting a row reveals copy-ready setup text. Installed builds use
+their own runtime path, including custom install locations. Keep that executable
+at the configured path or reconnect with the installed copy after installation. The usual per-user
 installed path is `%LOCALAPPDATA%\sidenote\current\sidenote.exe`, but the page does
 not assume that location. Clients may need to reconnect after Sidenote updates.
 
@@ -31,18 +32,25 @@ showing potentially private CLI config output. To undo a successful add, run
 `claude mcp remove --scope user sidenote`. Real CLI registration remains a manual
 integration check.
 
-For the other clients the page only copies text. Merge it with the existing config;
-keep other entries and resolve an existing `sidenote` entry yourself. No client config
-files are edited automatically in this version. The path in the copied text is
-expanded and escaped for PowerShell, JSON or TOML as appropriate.
+Codex uses the same check, add and recheck pattern through its own CLI. Its add
+command is `codex mcp add sidenote -- <executable> --mcp`. To undo, run
+`codex mcp remove sidenote`.
+
+Sidenote never writes another app's config file. Claude Desktop, Cursor and OpenCode
+read their own JSON config, so Sidenote only reads it to show whether a `sidenote`
+entry exists (a config that is a link, has comments or is not an object is reported,
+never changed). Those rows show Copy config, which copies only the `"sidenote": {...}`
+entry, Open config folder, one line saying which section of which file to paste it into,
+and the text to use if the file is empty (shown, not copied). Add to all adds only Claude Code and
+Codex and reports which apps need a paste. Claude Desktop is hidden on Linux.
 
 | Client | Config location | Setup |
 | --- | --- | --- |
-| Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button, or copy a PowerShell command. |
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy `mcpServers` JSON and merge it. |
-| Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Copy a `[mcp_servers.sidenote]` TOML block. |
-| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy `mcpServers` JSON and merge it. |
-| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy local `mcp.sidenote` JSON and merge it. Project or managed settings may override it. |
+| Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button (Claude Code writes its own file), or copy a PowerShell command. |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy the `sidenote` entry and paste it inside `mcpServers`. |
+| Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Add button (Codex writes its own file), or copy a `[mcp_servers.sidenote]` TOML block. |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy the `sidenote` entry and paste it inside `mcpServers`. |
+| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy the `sidenote` entry and paste it inside `mcp`. Project or managed settings may override it. |
 
 The locations displayed in the app are expanded for this user. Restart or reconnect
 the client after setup. This local stdio connection has no network listener, ports,
