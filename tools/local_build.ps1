@@ -5,13 +5,7 @@ $Pack = $false
 $Arguments = @($args)
 if ($Arguments.Count -and $Arguments[0] -ceq '-Pack') { $Pack = $true; $Arguments = @($Arguments | Select-Object -Skip 1) }
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'release_lock.ps1')
-$slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
 $watchLog = Join-Path $env:LOCALAPPDATA 'hex-meeting-watch.log'
-$mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
-$slot = $null
-$child = $null
-$marker = $null
 
 function Alive([string]$Identity) {
     if ($Identity -notmatch '^(\d+)-(\d+)$') { return $false }
@@ -24,7 +18,37 @@ function Identity($Process) { return "$($Process.Id)-$($Process.StartTime.ToUniv
 function LockSlots {
     try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] { }
 }
+function MeetingListenerRunning {
+    try {
+        foreach ($process in Get-CimInstance Win32_Process -Filter "Name='sidenote.exe' OR Name='hex-meetings.exe'" -ErrorAction Stop) {
+            $command = $process.CommandLine
+            if (-not $command) { return $true }
+            if ($command -match '(?:^|\s)"?--(?:listen|server)"?(?=\s|$)' -and
+                $command -notmatch '(?:^|\s)"?--listener-isolated"?(?=\s|$)') { return $true }
+        }
+        return $false
+    } catch { return $true }
+}
 function BusyMeeting {
+    $absent = $false
+    try {
+        $state = Join-Path $env:APPDATA 'sidenote'
+        if (-not (Test-Path -LiteralPath $state -ErrorAction Stop)) { $state = Join-Path $env:APPDATA 'hex-meetings' }
+        $statusPath = Join-Path $state 'local\status.ndjson'
+        $status = Get-Content -LiteralPath $statusPath -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]$status.timestamp).TotalSeconds
+        # The listener polls every three seconds, plus the status request time.
+        if ($age -ge 0 -and $age -le 15 -and $status.protocol -eq 4 -and $null -eq $status.status_error) {
+            switch -CaseSensitive -Regex ($status.meeting_state) {
+                '^(starting|recording|paused|stopping|finishing)$' { return $true }
+                '^(idle|stopped|complete|finished|transcribing)$' { return $false }
+            }
+        }
+    } catch [Management.Automation.ItemNotFoundException] {
+        $absent = $true
+    } catch { }
+    if (MeetingListenerRunning) { return $true }
+    if (-not $absent) { return $false }
     if (-not (Test-Path -LiteralPath $watchLog)) { return $false }
     $item = Get-Item -LiteralPath $watchLog
     if ($item.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-2)) { return $false }
@@ -71,6 +95,16 @@ function Assert-TargetSpace {
     $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($targetDirectory))
     if ($drive.AvailableFreeSpace -lt 40GB) { throw 'At least 40 GB free is required on the target drive.' }
 }
+if ($Arguments.Count -eq 1 -and $Arguments[0] -ceq '-MeetingStatus') {
+    BusyMeeting
+    return
+}
+. (Join-Path $PSScriptRoot 'release_lock.ps1')
+$slotRoot = Join-Path $env:LOCALAPPDATA 'sidenote-dev\build-slots'
+$mutex = New-Object Threading.Mutex($false, 'Local\SidenoteBuildSlots')
+$slot = $null
+$child = $null
+$marker = $null
 try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
     $targetDirectory = Resolve-TargetDirectory
@@ -98,15 +132,15 @@ try {
             if (@(Get-ChildItem -LiteralPath $slotRoot -Directory).Count -lt 2 -and -not (BusyMeeting)) {
                 $slot = Join-Path $slotRoot (Identity (Get-Process -Id $PID))
                 New-Item -ItemType Directory -Path $slot | Out-Null
+                if (-not $env:CARGO_BUILD_JOBS -and ($Pack -or -not @($Arguments | Where-Object { $_ -match '^(--jobs(?:=|$)|-j)' }).Count)) {
+                    $env:CARGO_BUILD_JOBS = '4'
+                }
                 if ($Pack) {
                     $exe = (Get-Command powershell.exe -ErrorAction Stop).Source
                     $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'release_pack.ps1')) + $Arguments
                 } else {
                     $exe = (Get-Command cargo.exe -ErrorAction Stop).Source
                     $runArgs = @($Arguments)
-                    if (-not $env:CARGO_BUILD_JOBS -and -not @($Arguments | Where-Object { $_ -match '^(--jobs(?:=|$)|-j)' }).Count) {
-                        $env:CARGO_BUILD_JOBS = '1'
-                    }
                 }
                 Assert-TargetSpace
                 $info = New-Object Diagnostics.ProcessStartInfo
