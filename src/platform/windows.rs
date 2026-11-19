@@ -297,6 +297,47 @@ impl ProcessJob {
         Ok(job)
     }
 }
+/// Resumes a process started with CREATE_SUSPENDED (0x4), after it joined its job.
+pub fn resume_suspended(child: &std::process::Child) -> io::Result<()> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        System::{
+            Diagnostics::ToolHelp::*,
+            Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
+        },
+    };
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut result = Err(io::Error::other("Suspended thread unavailable"));
+        let mut next = Thread32First(snapshot, &mut entry);
+        while next != 0 {
+            if entry.th32OwnerProcessID == child.id() {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                result = if thread.is_null() {
+                    Err(io::Error::last_os_error())
+                } else {
+                    let value = ResumeThread(thread);
+                    let error = io::Error::last_os_error();
+                    CloseHandle(thread);
+                    if value == u32::MAX {
+                        Err(error)
+                    } else {
+                        Ok(())
+                    }
+                };
+                break;
+            }
+            next = Thread32Next(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+        result
+    }
+}
 impl Drop for Instance {
     fn drop(&mut self) {
         unsafe {

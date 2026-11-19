@@ -118,11 +118,15 @@ fn run_within(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
+        // CREATE_NO_WINDOW | CREATE_SUSPENDED: the child joins its job before it runs, so no
+        // descendant can start outside the job and escape the deadline kill.
+        .creation_flags(0x08000004)
         .spawn()
         .map_err(|_| {
             "Could not start the MCP client. Check its installation and try again.".to_string()
         })?;
+    #[cfg(test)]
+    isolated_tests::before_attach();
     let job = match crate::platform::ProcessJob::attach(&child) {
         Ok(job) => job,
         Err(_) => {
@@ -131,6 +135,12 @@ fn run_within(
             return Err("Could not prepare the MCP client command.".into());
         }
     };
+    if crate::platform::resume_suspended(&child).is_err() {
+        drop(job);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Could not prepare the MCP client command.".into());
+    }
     let (sender, receiver) = std::sync::mpsc::channel();
     collect(child.stdout.take(), 0, sender.clone());
     collect(child.stderr.take(), 1, sender);

@@ -85,6 +85,10 @@ impl Drop for ProcessJob {
         sidenote_sync::containment::kill_group(self.0);
     }
 }
+/// Unix children are contained by the worker before they run, so there is nothing to resume.
+pub fn resume_suspended(_child: &std::process::Child) -> io::Result<()> {
+    Ok(())
+}
 pub fn set_window_icon(_hwnd: isize) {}
 pub fn fit_to_work_area(_hwnd: isize, want: (f32, f32)) -> (f32, f32) {
     want

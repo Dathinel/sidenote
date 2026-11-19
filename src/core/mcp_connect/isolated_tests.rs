@@ -34,6 +34,13 @@ pub(super) fn check_path(path: &Path) {
 pub(super) fn forbid_discovery() {
     panic!("tests must inject isolated paths and fake CLIs");
 }
+thread_local! { static BEFORE_ATTACH: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
+/// Test-only stand-in for a slow scheduler: runs between the spawn and the job assignment.
+pub(super) fn before_attach() {
+    if let Some(hook) = BEFORE_ATTACH.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
 struct Sandbox(tempfile::TempDir);
 impl Sandbox {
     fn new() -> Self {
@@ -561,6 +568,43 @@ exit 0
     let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
     assert!(result.unwrap_err().contains("did not finish"));
     assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
+    assert_process_gone(&pid_file);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_descendant_started_before_the_job_exists_is_still_killed_at_the_deadline() {
+    let sandbox = Sandbox::new();
+    // The CLI starts its helper as its first act and then keeps running, so only a child that
+    // joins the job before it executes can bring the helper into the job.
+    let (script, pid_file) = fake_cli(
+        &sandbox,
+        "fake-cli-early",
+        r#"$info = New-Object System.Diagnostics.ProcessStartInfo
+$info.FileName = 'POWERSHELL'
+$info.Arguments = '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 40'
+$info.UseShellExecute = $false
+$child = [System.Diagnostics.Process]::Start($info)
+[IO.File]::WriteAllText('PIDFILE', [string]$child.Id)
+Start-Sleep -Seconds 40
+"#,
+    );
+    // Give a child that is already running up to 5 seconds to start its helper before the
+    // job assignment happens. A suspended child cannot, so it waits the full time.
+    let waited = pid_file.clone();
+    BEFORE_ATTACH.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            for _ in 0..50 {
+                if waited.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }))
+    });
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    assert!(result.unwrap_err().contains("did not finish"));
+    assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
     assert_process_gone(&pid_file);
 }
 
