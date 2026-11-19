@@ -973,13 +973,6 @@ impl State {
         self.hex.recording().is_some()
     }
 
-    #[cfg(all(windows, feature = "asr-runtime"))]
-    pub(super) fn pause_background_model_install(&self) -> bool {
-        self.hex_recording()
-            || self.hex_record_busy()
-            || !(self.hex.running() || self.hex.stopped())
-    }
-
     pub fn hex_running(&self) -> bool {
         self.hex.running()
     }

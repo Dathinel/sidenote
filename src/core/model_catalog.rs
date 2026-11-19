@@ -179,9 +179,8 @@ impl ModelStore {
         let Some(paths) = self.installed_paths(id)? else {
             return Ok(false);
         };
-        let cancel = AtomicBool::new(false);
         for (path, file) in paths.iter().zip(m.files) {
-            if !verify(path, file, &cancel)? {
+            if !verify(path, file, &|| Ok(()))? {
                 return Ok(false);
             }
         }
@@ -231,12 +230,12 @@ impl ModelStore {
         cancel: &AtomicBool,
         progress: impl FnMut(Progress),
     ) -> io::Result<()> {
-        self.install_files(id, cancel, true, progress)
+        self.install_files(id, &|| check_cancel(cancel), true, progress)
     }
     fn install_files(
         &self,
         id: &str,
-        cancel: &AtomicBool,
+        check: &impl Fn() -> io::Result<()>,
         allow_download: bool,
         mut progress: impl FnMut(Progress),
     ) -> io::Result<()> {
@@ -248,7 +247,7 @@ impl ModelStore {
         let _lock = self.lock(m)?;
         let dir = self.dir(m);
         reject_link(&dir)?;
-        check_cancel(cancel)?;
+        check()?;
         fs::create_dir_all(&dir)?;
         let receipt = dir.join("installed.json");
         if receipt.exists() {
@@ -269,11 +268,11 @@ impl ModelStore {
             .new_agent();
         let mut completed = 0;
         for f in m.files {
-            check_cancel(cancel)?;
+            check()?;
             let dest = dir.join(f.name);
             reject_link(&dest)?;
             if dest.exists() {
-                if verify(&dest, f, cancel)? {
+                if verify(&dest, f, check)? {
                     completed += f.bytes;
                     continue;
                 }
@@ -293,8 +292,8 @@ impl ModelStore {
                         "File absent from cache",
                     ));
                 }
-                let mut response = request(&agent, f.url, offset, cancel)?;
-                check_cancel(cancel)?;
+                let mut response = request(&agent, f.url, offset, check)?;
+                check()?;
                 if response.status() == 200 {
                     offset = 0;
                 } else if response.status() == 206 {
@@ -322,6 +321,7 @@ impl ModelStore {
                 {
                     return Err(store_io::invalid("Download exceeds catalogue size"));
                 }
+                check()?;
                 let mut output = OpenOptions::new()
                     .create(true)
                     .write(true)
@@ -341,9 +341,7 @@ impl ModelStore {
                     phase: Phase::Downloading,
                 });
                 loop {
-                    check_cancel(cancel)?;
-                    let n = reader.read(&mut buffer)?;
-                    check_cancel(cancel)?;
+                    let n = read_download_chunk(&mut reader, &mut buffer, check)?;
                     if n == 0 {
                         break;
                     }
@@ -356,6 +354,7 @@ impl ModelStore {
                     offset += n as u64;
                     let secs = started.elapsed().as_secs();
                     if secs >= 60 && offset - start_offset < secs * MIN_BYTES_PER_SEC {
+                        check()?;
                         output.sync_all()?;
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
@@ -371,6 +370,7 @@ impl ModelStore {
                         last = Instant::now();
                     }
                 }
+                check()?;
                 output.sync_all()?;
             }
             progress(Progress {
@@ -378,17 +378,17 @@ impl ModelStore {
                 total: m.bytes(),
                 phase: Phase::Verifying,
             });
-            if !verify(&part, f, cancel)? {
+            if !verify(&part, f, check)? {
                 fs::remove_file(&part)?;
                 return Err(store_io::invalid(
                     "Checksum verification failed. The downloaded file was deleted. Try again.",
                 ));
             }
-            check_cancel(cancel)?;
+            check()?;
             fs::rename(&part, &dest)?;
             completed += f.bytes;
         }
-        check_cancel(cancel)?;
+        check()?;
         let expected: Vec<_> = m
             .files
             .iter()
@@ -425,7 +425,18 @@ fn check_cancel(cancel: &AtomicBool) -> io::Result<()> {
         Ok(())
     }
 }
-fn verify(path: &Path, f: &ModelFile, cancel: &AtomicBool) -> io::Result<bool> {
+fn read_download_chunk(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    check: &impl Fn() -> io::Result<()>,
+) -> io::Result<usize> {
+    check()?;
+    let read = reader.read(buffer);
+    check()?;
+    read
+}
+
+fn verify(path: &Path, f: &ModelFile, check: &impl Fn() -> io::Result<()>) -> io::Result<bool> {
     let mut input = File::open(path)?;
     if input.metadata()?.len() != f.bytes {
         return Ok(false);
@@ -433,7 +444,7 @@ fn verify(path: &Path, f: &ModelFile, cancel: &AtomicBool) -> io::Result<bool> {
     let mut hash = Sha256::new();
     let mut buffer = [0; 64 * 1024];
     loop {
-        check_cancel(cancel)?;
+        check()?;
         let n = input.read(&mut buffer)?;
         if n == 0 {
             break;
@@ -471,11 +482,11 @@ fn request(
     agent: &ureq::Agent,
     source: &str,
     offset: u64,
-    cancel: &AtomicBool,
+    check: &impl Fn() -> io::Result<()>,
 ) -> io::Result<ureq::http::Response<ureq::Body>> {
     let mut url = url::Url::parse(source).map_err(|_| store_io::invalid("Invalid model URL"))?;
     for _ in 0..8 {
-        check_cancel(cancel)?;
+        check()?;
         if !allowed(&url) {
             return Err(store_io::invalid("Model download host is not allowed"));
         }
@@ -486,7 +497,9 @@ fn request(
             req = req.header("Range", &format!("bytes={offset}-"));
         }
         // Do not surface HTTP errors containing signed CDN URLs in the UI or logs.
-        let response = req.call().map_err(|_| {
+        let response = req.call();
+        check()?;
+        let response = response.map_err(|_| {
             io::Error::other("Could not download model. Check your connection and retry.")
         })?;
         if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
@@ -572,6 +585,7 @@ mod integrity_tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(FILE.name);
         let cancel = AtomicBool::new(false);
+        let check = || check_cancel(&cancel);
         for (bytes, accepted) in [
             (b"abc".as_slice(), true),
             (b"abd", false),
@@ -579,12 +593,12 @@ mod integrity_tests {
             (b"abcd", false),
         ] {
             fs::write(&path, bytes).unwrap();
-            assert_eq!(verify(&path, &FILE, &cancel).unwrap(), accepted);
+            assert_eq!(verify(&path, &FILE, &check).unwrap(), accepted);
         }
         fs::write(&path, b"abc").unwrap();
         cancel.store(true, Ordering::Relaxed);
         assert_eq!(
-            verify(&path, &FILE, &cancel).unwrap_err().kind(),
+            verify(&path, &FILE, &check).unwrap_err().kind(),
             io::ErrorKind::Interrupted
         );
         assert!(

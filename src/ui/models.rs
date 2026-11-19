@@ -36,6 +36,8 @@ struct Job {
 pub struct Models {
     store: ModelStore,
     #[cfg(all(windows, feature = "asr-runtime"))]
+    state_root: std::path::PathBuf,
+    #[cfg(all(windows, feature = "asr-runtime"))]
     provisioning: Option<std::fs::File>,
     languages: Vec<String>,
     installed: HashSet<&'static str>,
@@ -86,6 +88,8 @@ impl Models {
             .collect();
         Self {
             store,
+            #[cfg(all(windows, feature = "asr-runtime"))]
+            state_root: root.to_owned(),
             languages,
             installed,
             partial,
@@ -144,6 +148,8 @@ impl Models {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let store = self.store.clone();
+        #[cfg(all(windows, feature = "asr-runtime"))]
+        let state_root = self.state_root.clone();
         self.errors.remove(id);
         self.progress.insert(
             id,
@@ -159,9 +165,14 @@ impl Models {
                 Action::Remove => store.remove(id),
                 Action::Install => store.install(id, &worker_cancel, progress),
                 #[cfg(all(windows, feature = "asr-runtime"))]
-                Action::Automatic(cache_only) => {
-                    provisioning::install(&store, id, &worker_cancel, cache_only, progress)
-                }
+                Action::Automatic(cache_only) => provisioning::install(
+                    &store,
+                    &state_root,
+                    id,
+                    &worker_cancel,
+                    cache_only,
+                    progress,
+                ),
             };
             notify(Msg::Finished(id, result));
         });
@@ -228,7 +239,10 @@ impl Models {
                 }
             }
         }
-        if recording || !self.jobs.is_empty() {
+        if recording
+            || !self.jobs.is_empty()
+            || (!cache_only && !provisioning::recording_idle(&self.state_root))
+        {
             return false;
         }
         self.start(id, Action::Automatic(cache_only), notify);
@@ -283,11 +297,16 @@ impl State {
     }
 
     #[cfg(all(windows, feature = "asr-runtime"))]
-    pub(super) fn provision_models(&mut self) -> bool {
-        let recording = self.pause_background_model_install();
+    pub(super) fn provision_models(&mut self, tx: &mut rune::Tx) -> bool {
+        let recording = self.hex_record_busy();
         let notify = model_notify(self);
-        self.models
-            .provision(&self.config, recording, false, notify)
+        let changed = self
+            .models
+            .provision(&self.config, recording, false, notify);
+        if self.models.provisioning.is_some() && self.models.jobs.is_empty() {
+            tx.wake_after(std::time::Duration::from_secs(1));
+        }
+        changed
     }
 }
 
@@ -748,6 +767,8 @@ pub fn scene(s: &mut State, name: &str) {
     s.hex.section = hex::Section::MeetingModels;
     s.models = Models {
         store: ModelStore::new(s.store.root.clone()),
+        #[cfg(all(windows, feature = "asr-runtime"))]
+        state_root: s.store.root.clone(),
         #[cfg(all(windows, feature = "asr-runtime"))]
         provisioning: None,
         languages: vec!["en".into(), "hi".into()],

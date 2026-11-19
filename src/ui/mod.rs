@@ -1808,7 +1808,7 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
     changed |= s.hex_connection_tick(tx);
     #[cfg(all(windows, feature = "asr-runtime"))]
     if !headless && !cfg!(test) {
-        changed |= s.provision_models();
+        changed |= s.provision_models(tx);
     }
     if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
         s.show_toast(message, tx);

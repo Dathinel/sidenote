@@ -57,6 +57,44 @@ pub fn reserve(store: &ModelStore) -> io::Result<File> {
     store_io::lock(&lock_path(store))
 }
 
+pub fn recording_idle(state: &Path) -> bool {
+    use chrono::{DateTime, Utc};
+    use serde_json::Value;
+    use std::io::{Seek, SeekFrom};
+    let status = (|| {
+        let mut journal = File::open(state.join("local/status.ndjson")).ok()?;
+        let start = journal.metadata().ok()?.len().saturating_sub(2048);
+        journal.seek(SeekFrom::Start(start)).ok()?;
+        let mut tail = Vec::new();
+        journal.take(4096).read_to_end(&mut tail).ok()?;
+        let last = tail.trim_ascii_end().rsplit(|b| *b == b'\n').next()?;
+        serde_json::from_slice::<Value>(last).ok()
+    })();
+    status.is_some_and(|entry| {
+        let timestamp = entry["timestamp"]
+            .as_str()
+            .and_then(|text| text.parse::<DateTime<Utc>>().ok());
+        timestamp.is_some_and(|at| (0..=5000).contains(&(Utc::now() - at).num_milliseconds()))
+            && entry["protocol"] == 4
+            && entry.get("status_error").is_some_and(Value::is_null)
+            && matches!(
+                entry["meeting_state"].as_str(),
+                Some("idle" | "stopped" | "complete" | "finished" | "transcribing")
+            )
+    })
+}
+
+fn check_download(state: &Path, cancel: &AtomicBool, cache_only: bool) -> io::Result<()> {
+    check_cancel(cancel)?;
+    if !cache_only && !recording_idle(state) {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Model setup paused until recording is idle",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn ready_while_provisioning(store: &ModelStore) -> Option<u8> {
     if !File::open(lock_path(store))
         .is_err_and(|error| matches!(error.raw_os_error(), Some(32 | 33)))
@@ -72,6 +110,7 @@ pub(crate) fn ready_while_provisioning(store: &ModelStore) -> Option<u8> {
 
 pub fn install(
     store: &ModelStore,
+    state: &Path,
     id: &str,
     cancel: &AtomicBool,
     cache_only: bool,
@@ -83,5 +122,46 @@ pub fn install(
     if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    store.install_files(id, cancel, !cache_only, progress)
+    store.install_files(
+        id,
+        &|| check_download(state, cancel, cache_only),
+        !cache_only,
+        progress,
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn provisioning_review_recording_during_read_pauses_the_hidden_transfer() {
+    struct RecordingStarts<'a>(&'a Path);
+    impl Read for RecordingStarts<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            write_status(self.0, "recording");
+            b"new bytes".as_slice().read(buffer)
+        }
+    }
+    fn write_status(root: &Path, state: &str) {
+        let record = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(), "protocol": 4,
+            "meeting_state": state, "status_error": null, "window_visible": false
+        });
+        fs::write(root.join("local/status.ndjson"), format!("{record}\n")).unwrap();
+    }
+    let state = tempfile::tempdir().unwrap();
+    fs::create_dir(state.path().join("local")).unwrap();
+    write_status(state.path(), "idle");
+    let cancel = AtomicBool::new(false);
+    let check = || check_download(state.path(), &cancel, false);
+    let mut chunk = [0; 64];
+    assert_eq!(
+        read_download_chunk(&mut RecordingStarts(state.path()), &mut chunk, &check)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Interrupted
+    );
+    write_status(state.path(), "idle");
+    assert_eq!(
+        read_download_chunk(&mut b"resume".as_slice(), &mut chunk, &check).unwrap(),
+        6
+    );
 }
