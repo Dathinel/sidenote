@@ -384,6 +384,8 @@ fn upload_windows(
         {
             continue;
         }
+        let total = pending.len();
+        let mut journals = Vec::with_capacity(total);
         for (dir, job) in pending {
             let Some(origin) = manifest[&job.track]["first_arrival_us"]
                 .as_u64()
@@ -401,7 +403,19 @@ fn upload_windows(
                 context_start_sample: job.audio_start,
                 sha256: String::new(),
             };
-            upload.piece(meeting, piece, &dir.join("audio.wav"))?;
+            journals.push(upload.piece(meeting, piece, &dir.join("audio.wav"))?);
+        }
+        if folder.join("collection.json").exists()
+            && manifest["status"] == "complete"
+            && journals.len() == total
+            && journals.iter().all(|journal| journal.done())
+        {
+            let transcript = source.join(meeting).join("transcript.ndjson");
+            if let Ok(bytes) =
+                super::meeting_router::inputs::Snapshot::read_file(&transcript, 16 << 20)
+            {
+                upload.stage(meeting, &journals, &bytes)?;
+            }
         }
     }
     Ok(())

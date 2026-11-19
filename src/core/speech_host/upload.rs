@@ -1,10 +1,12 @@
+mod events;
+
 use super::{
     Asr, Host, Reply, Request,
     journal::{Change, Journal, Piece, key},
     store_io,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     io,
@@ -119,11 +121,33 @@ impl<'a> Upload<'a> {
         Ok((status, serde_json::from_slice(&data).unwrap_or(Value::Null)))
     }
 
-    fn directory(&self, meeting: &str) -> PathBuf {
+    pub(in crate::core) fn directory(&self, meeting: &str) -> PathBuf {
         self.root
             .join(meeting)
             .join(&self.config)
             .join(self.since().to_string())
+    }
+
+    pub(in crate::core) fn stage(
+        &self,
+        meeting: &str,
+        journals: &[Journal],
+        transcript: &[u8],
+    ) -> io::Result<()> {
+        let source = digest(transcript);
+        let destination = self
+            .directory(meeting)
+            .join(format!("revision-{source}.dpapi"));
+        if destination.exists() {
+            return Ok(());
+        }
+        let baseline = crate::core::meeting_router::jobs::read_baseline(transcript)
+            .map_err(|_| remote_error())?;
+        let revision = super::journal::assemble(journals, &self.config, &source, &baseline, 0)
+            .map_err(|_| remote_error())?;
+        let bytes = zeroize::Zeroizing::new(serde_json::to_vec(&revision)?);
+        let encrypted = sidenote_sync::identity::protect(&bytes).map_err(|_| remote_error())?;
+        store_io::atomic_write(&destination, &encrypted)
     }
 
     pub(in crate::core) fn piece(
@@ -131,7 +155,7 @@ impl<'a> Upload<'a> {
         meeting: &str,
         mut piece: Piece,
         wav: &Path,
-    ) -> io::Result<()> {
+    ) -> io::Result<Journal> {
         let _lock = store_io::lock(&self.root.join("upload.lock"))?;
         if !matches!(piece.track.as_str(), "microphone" | "system") {
             return Err(io::ErrorKind::InvalidData.into());
@@ -156,7 +180,7 @@ impl<'a> Upload<'a> {
             }
         };
         if journal.done() {
-            return Ok(());
+            return Ok(journal);
         }
         let piece = journal.piece();
         let id = digest(&serde_json::to_vec(&(
@@ -168,7 +192,11 @@ impl<'a> Upload<'a> {
             &piece.sha256,
             &self.config,
         ))?);
-        let client_session = digest(&serde_json::to_vec(&(self.since(), &id, 0))?);
+        let client_session = digest(&serde_json::to_vec(&(
+            self.since(),
+            &id,
+            journal.session_generation(),
+        ))?);
         let (status, reply) = self.send(
             "/v1/sessions",
             "POST",
@@ -189,6 +217,7 @@ impl<'a> Upload<'a> {
             return Err(remote_error());
         }
         let path = format!("/v1/sessions/{session}");
+        let latest = reply["next_seq"].as_u64().ok_or_else(remote_error)?;
         let piece_path = format!("{path}/pieces/{id}");
         if status == 201 && journal.acknowledged() {
             journal.record(vec![Change::Ack(false), Change::Cursor(0)])?;
@@ -228,6 +257,7 @@ impl<'a> Upload<'a> {
         if code != 200 {
             return Err(remote_error());
         }
-        Ok(())
+        self.consume(&path, &piece_path, &id, &mut journal, latest)?;
+        Ok(journal)
     }
 }

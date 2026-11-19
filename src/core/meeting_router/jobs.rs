@@ -201,23 +201,9 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
     config.validate()?;
     Ok(config)
 }
-fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
-    if !valid_id(id) {
-        return Err("Invalid meeting id".into());
-    }
-    let folder = super::super::meetings_dir().join(id);
-    let input = super::inputs::Snapshot::capture(&folder)?;
-    if super::super::recording_guard::eligibility_captured(
-        root,
-        id,
-        &input.manifest,
-        &input.transcript,
-    )? != super::super::recording_guard::Eligibility::Eligible
-    {
-        return Ok(None);
-    }
+pub(crate) fn read_baseline(bytes: &[u8]) -> Result<Vec<Chunk>> {
     let mut baseline = Vec::new();
-    for (i, line) in std::str::from_utf8(&input.transcript)?.lines().enumerate() {
+    for (i, line) in std::str::from_utf8(bytes)?.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -242,6 +228,25 @@ fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
             audio_start: None,
         });
     }
+    Ok(baseline)
+}
+
+fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
+    if !valid_id(id) {
+        return Err("Invalid meeting id".into());
+    }
+    let folder = super::super::meetings_dir().join(id);
+    let input = super::inputs::Snapshot::capture(&folder)?;
+    if super::super::recording_guard::eligibility_captured(
+        root,
+        id,
+        &input.manifest,
+        &input.transcript,
+    )? != super::super::recording_guard::Eligibility::Eligible
+    {
+        return Ok(None);
+    }
+    let baseline = read_baseline(&input.transcript)?;
     let config = load_config(root)?;
     let windows = input.windows.clone();
     let revision = cache::key(
