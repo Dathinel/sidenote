@@ -586,6 +586,26 @@ fn saved_fallback_crossing_two_baseline_sentences_publishes_exact_bounds() {
     expanded.end += 1.0;
     expanded.sources[0].chunk.end += 1.0;
     assert!(revision::commit(&dest, &invalid).is_err());
+
+    let mut stale = saved.clone();
+    stale.provenance["routing_fallbacks"] = json!([]);
+    stale.provenance["assembly_coverage"]["fallback_required"] = json!([]);
+    assert_eq!(
+        revision::commit(&dest, &stale).unwrap_err().to_string(),
+        "Competing selected readings"
+    );
+
     store_io::write(&f.work.join("uncertainty.json"), &json!([])).unwrap();
-    assert!(pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).is_err());
+    let assembled =
+        pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let saved = publish(&f, &assembled);
+    for unit in &f.baseline {
+        assert!(saved.transcript.segments.iter().any(|s| {
+            s.text_original == unit.english && (s.start, s.end) == (unit.start, unit.end)
+        }));
+    }
+    assert_eq!(
+        saved.provenance["assembly_coverage"]["overlaps"][0]["fallback_required"],
+        json!([])
+    );
 }
