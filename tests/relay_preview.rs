@@ -1,24 +1,26 @@
 //! Real headless app processes, isolated stores, real local Worker and encrypted sessions.
+#![cfg(any(windows, target_os = "linux"))]
 mod common;
-use serde_json::{Value, json};
+#[cfg(windows)]
+use serde_json::Value;
+use serde_json::json;
 use sidenote::core::relay_preview;
 #[cfg(windows)]
 use sidenote::core::{ManualTask, TaskStore};
 
-use std::{
-    io::{BufRead, BufReader, Write},
-    path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver},
-    thread,
-    time::{Duration, Instant},
-};
-
 #[cfg(windows)]
 use std::{
-    io::Read,
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
+    process::ChildStdin,
+    sync::mpsc::{self, Receiver},
+};
+use std::{
+    path::Path,
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 struct Process(Child);
@@ -42,11 +44,13 @@ impl Drop for Process {
     }
 }
 
+#[cfg(windows)]
 struct App {
     process: Process,
     input: ChildStdin,
     output: Receiver<String>,
 }
+#[cfg(windows)]
 impl App {
     fn start(root: &Path) -> Self {
         Self::start_binary(root, Path::new(env!("CARGO_BIN_EXE_sidenote")))
@@ -57,14 +61,7 @@ impl App {
         app
     }
     fn spawn(root: &Path, binary: &Path) -> Self {
-        let mut child = Command::new(binary)
-            .arg("--relay-preview-headless")
-            .arg("--data-dir")
-            .arg(root)
-            .arg("--meetings-dir")
-            .arg(root.join("meetings"))
-            .arg("--peers-dir")
-            .arg(root.join("peers"))
+        let mut child = headless_command(root, binary)
             .env("APPDATA", root.join("appdata"))
             .env("LOCALAPPDATA", root.join("localappdata"))
             .env("USERPROFILE", root.join("home"))
@@ -112,7 +109,6 @@ impl App {
         );
         result["value"].clone()
     }
-    #[cfg(windows)]
     fn rejected(&mut self, request: Value) {
         serde_json::to_writer(&mut self.input, &request).unwrap();
         writeln!(self.input).unwrap();
@@ -126,6 +122,19 @@ impl App {
         self.request(json!({"op":"quit"}));
         assert!(self.process.0.wait().unwrap().success());
     }
+}
+
+fn headless_command(root: &Path, binary: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg("--relay-preview-headless")
+        .arg("--data-dir")
+        .arg(root)
+        .arg("--meetings-dir")
+        .arg(root.join("meetings"))
+        .arg("--peers-dir")
+        .arg(root.join("peers"));
+    command
 }
 
 #[track_caller]
@@ -1011,45 +1020,58 @@ fn pair_apps(owner: &mut App, guest: &mut App, owner_root: &Path) {
     status(owner, "paired");
     status(guest, "paired");
 }
-#[test]
-fn migration_recovers_after_process_kill_at_durable_boundaries() {
+const MIGRATION_CHECKPOINTS: [&str; 3] = ["migration-backup", "migration-import", "shared-import"];
+const MIGRATION_SETTINGS: &[u8] = br#"{"enabled":true}"#;
+
+fn migration_fixture() -> tempfile::TempDir {
     common::isolate();
     let parent = std::env::temp_dir().join("sidenote-relay-preview");
     std::fs::create_dir_all(&parent).unwrap();
-    let fixture = tempfile::tempdir_in(parent).unwrap();
-    for point in ["migration-backup", "migration-import", "shared-import"] {
+    tempfile::tempdir_in(parent).unwrap()
+}
+
+fn seed_migration_checkpoint(root: &Path, point: &str) -> Vec<u8> {
+    let relay = root.join("local/relay");
+    std::fs::create_dir_all(&relay).unwrap();
+    std::fs::write(
+        root.join("device.json"),
+        serde_json::to_vec(
+            &json!({"name":"Synthetic migration PC","id":"e".repeat(32),"daily_check":false}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let original = serde_json::to_vec(
+        &json!({"manual":[{"id":"synthetic-migrated-id","task":"Synthetic migration source"}]}),
+    )
+    .unwrap();
+    std::fs::write(root.join("task-overrides.json"), &original).unwrap();
+    std::fs::write(relay.join("settings.json"), MIGRATION_SETTINGS).unwrap();
+    std::fs::write(
+        relay.join("qualification-control.json"),
+        serde_json::to_vec(&json!({"pause":point})).unwrap(),
+    )
+    .unwrap();
+    original
+}
+
+#[cfg(windows)]
+#[test]
+fn migration_recovers_after_process_kill_at_durable_boundaries() {
+    let fixture = migration_fixture();
+    for point in MIGRATION_CHECKPOINTS {
         let root = fixture.path().join(point);
-        std::fs::create_dir_all(root.join("local/relay")).unwrap();
-        std::fs::write(
-            root.join("device.json"),
-            serde_json::to_vec(
-                &json!({"name":"Synthetic migration PC","id":"e".repeat(32),"daily_check":false}),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let original = serde_json::to_vec(
-            &json!({"manual":[{"id":"synthetic-migrated-id","task":"Synthetic migration source"}]}),
-        )
-        .unwrap();
-        std::fs::write(root.join("task-overrides.json"), &original).unwrap();
-        std::fs::write(
-            root.join("local/relay/settings.json"),
-            br#"{"enabled":true}"#,
-        )
-        .unwrap();
+        let original = seed_migration_checkpoint(&root, point);
         let control = root.join("local/relay/qualification-control.json");
-        std::fs::write(
-            &control,
-            serde_json::to_vec(&json!({"pause":point})).unwrap(),
-        )
-        .unwrap();
-        let crashed = App::spawn(&root, Path::new(env!("CARGO_BIN_EXE_sidenote")));
+        let mut crashed = App::spawn(&root, Path::new(env!("CARGO_BIN_EXE_sidenote")));
         let deadline = Instant::now() + Duration::from_secs(20);
         while !root.join("local/relay/qualification-state.json").exists() {
+            if let Some(status) = crashed.process.0.try_wait().unwrap() {
+                panic!("headless app exited before {point} checkpoint: {status}");
+            }
             assert!(
                 Instant::now() < deadline,
-                "migration did not reach crash boundary"
+                "migration did not reach {point} crash boundary"
             );
             thread::sleep(Duration::from_millis(30));
         }
@@ -1076,6 +1098,65 @@ fn migration_recovers_after_process_kill_at_durable_boundaries() {
         recovered.stop();
     }
 }
+#[cfg(target_os = "linux")]
+#[test]
+fn headless_relay_refuses_migration_before_ready_on_linux() {
+    let fixture = migration_fixture();
+    for point in MIGRATION_CHECKPOINTS {
+        let root = fixture.path().join(point);
+        let original = seed_migration_checkpoint(&root, point);
+        let stdout = fixture.path().join(format!("{point}-stdout"));
+        let mut child = Process(
+            headless_command(&root, Path::new(env!("CARGO_BIN_EXE_sidenote")))
+                .stdin(Stdio::null())
+                .stdout(std::fs::File::create(&stdout).unwrap())
+                .spawn()
+                .expect("start isolated headless app"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "headless app did not refuse {point}"
+            );
+            thread::sleep(Duration::from_millis(30));
+        };
+        assert_eq!(status.code(), Some(1), "{point}");
+        assert!(
+            std::fs::read(stdout).unwrap().is_empty(),
+            "headless app sent output at {point}"
+        );
+        assert!(root.join("meetings").is_dir());
+        assert!(root.join("peers").is_dir());
+
+        let relay = root.join("local/relay");
+        assert_eq!(
+            std::fs::read(root.join("task-overrides.json")).unwrap(),
+            original,
+            "{point}"
+        );
+        assert_eq!(
+            std::fs::read(relay.join("settings.json")).unwrap(),
+            MIGRATION_SETTINGS,
+            "{point}"
+        );
+        // A checkpoint marker, either backup tree, or a replica would add a relay entry.
+        let mut entries: Vec<_> = std::fs::read_dir(relay)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries.sort();
+        assert_eq!(
+            entries,
+            ["qualification-control.json", "settings.json"],
+            "{point}"
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn three_peers_refuse_unavailable_removal_without_claiming_revocation() {
