@@ -123,3 +123,51 @@ fn busy_retry_preserves_translation_snapshot_and_notice() {
         }
     }
 }
+
+#[test]
+fn manual_retry_uses_translation_snapshot_for_new_capture() {
+    let (root, folder, settings) = routing::setup();
+    let (first, _) = routing::selected(&root.0, &folder);
+    let mut config = crate::core::Config::load_in(&root.0).unwrap();
+    config.engine_settings.steps.translation = true;
+    config.engine_settings.stages.translation_enabled_at_ms = Some(1);
+    config.engine_settings.stages.translation_model = "translation-original".into();
+    config.save(&root.0).unwrap();
+
+    let meetings = root.0.join("meetings");
+    let mut run = BusyNotes {
+        notes: Fake::new(vec![Err(Failure::BadOutput)]),
+        translations: vec![],
+    };
+    enqueue(&root.0, &settings, None);
+    queue::drain(&root.0, &meetings, &mut run, || Ok(settings.clone())).unwrap();
+    assert_eq!(run.translations[0]["revision"], first);
+
+    let transcript = folder.join("transcript.ndjson");
+    let raw = fs::read_to_string(&transcript).unwrap();
+    fs::write(&transcript, raw.replace(PRIVATE, "New synthetic capture")).unwrap();
+    config.labs.after_stop_language_routing = false;
+    config.save(&root.0).unwrap();
+    enqueue(&root.0, &settings, Some(Request::TryAgain));
+    let queued = queue::read(&root.0, ID).unwrap().unwrap();
+    assert!(queued.transcript_revision.is_none());
+
+    config.labs.after_stop_language_routing = true;
+    config.engine_settings.stages.translation_model = "translation-new".into();
+    config.save(&root.0).unwrap();
+    let baseline = jobs::read_baseline(&fs::read(transcript).unwrap()).unwrap();
+    let second = jobs::handoff::tests::complete(&root.0, ID, &baseline, "hi").unwrap();
+    assert_ne!(first, second);
+    run.notes = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    queue::drain(&root.0, &meetings, &mut run, || Ok(settings.clone())).unwrap();
+    let completed = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(
+        completed.transcript_revision.as_deref(),
+        Some(second.as_str())
+    );
+    let disposition = completed.translation.unwrap();
+    assert_eq!(disposition.reason, "helper_unqualified");
+    assert_eq!(run.translations.len(), 2);
+    assert_eq!(run.translations[1]["revision"], second);
+    assert_eq!(run.translations[1]["model"], "translation-new");
+}

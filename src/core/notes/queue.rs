@@ -526,10 +526,17 @@ fn process(
         job.routing_fallbacks = selection.reasons.clone();
     }
     if !sort_only {
+        let previous = job.translation.as_ref().filter(|state| {
+            state.snapshot.as_ref().is_some_and(|snapshot| {
+                routed
+                    .as_ref()
+                    .is_some_and(|selection| selection.revision == snapshot.revision)
+            })
+        });
         job.translation = Some(translation::prepare(
             root,
             routed.as_ref(),
-            job.translation.as_ref(),
+            previous,
             end.unwrap_or(job.updated_at),
         )?);
     }
