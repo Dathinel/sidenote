@@ -1,4 +1,5 @@
 use super::super::fallback::{Interval, RoutingFallback};
+use super::reconciliation::{Coverage, FallbackKind};
 use super::*;
 #[cfg(all(windows, feature = "asr-runtime"))]
 use sha2::{Digest, Sha256};
@@ -53,7 +54,39 @@ fn intersects(c: &Chunk, track: &str, start: f64, end: f64) -> bool {
     c.track == track && c.start < end && start < c.end
 }
 
-pub(crate) fn attach(data: &mut Revision, coverage: &[Chunk], replies: &[NoSpeech]) -> Result<()> {
+fn uncovered(c: &Chunk, segments: &[Segment]) -> Vec<Chunk> {
+    let mut covered: Vec<_> = segments
+        .iter()
+        .flat_map(|s| &s.sources)
+        .map(|o| &o.chunk)
+        .filter(|o| intersects(c, &o.track, o.start, o.end))
+        .collect();
+    covered.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut start = c.start;
+    let mut missing = Vec::new();
+    for (next, end) in covered
+        .into_iter()
+        .map(|o| (o.start, o.end))
+        .chain(std::iter::once((c.end, c.end)))
+    {
+        if start < next {
+            missing.push(Chunk {
+                start,
+                end: next,
+                ..c.clone()
+            });
+        }
+        start = start.max(end);
+    }
+    missing
+}
+
+fn attach(
+    data: &mut Revision,
+    coverage: &[Chunk],
+    replies: &[NoSpeech],
+    reconciliation: &Coverage,
+) -> Result<()> {
     let routing = super::super::fallback::read(data)?;
     let manifest: super::super::pieces::PieceManifest =
         serde_json::from_value(if data.provenance["pieces"].is_object() {
@@ -76,20 +109,8 @@ pub(crate) fn attach(data: &mut Revision, coverage: &[Chunk], replies: &[NoSpeec
         {
             return Err("Invalid speech coverage interval".into());
         }
-        if super::super::baseline::source_covered(c, &data.transcript.segments) {
-            continue;
-        }
-        if data
-            .transcript
-            .baseline
-            .iter()
-            .any(|b| intersects(c, &b.track, b.start, b.end))
-            || data
-                .alternatives
-                .iter()
-                .flat_map(|s| &s.sources)
-                .any(|o| intersects(c, &o.chunk.track, o.chunk.start, o.chunk.end))
-        {
+        let missing = uncovered(c, &data.transcript.segments);
+        if missing.is_empty() {
             continue;
         }
         let reasons: Vec<&RoutingFallback> = routing
@@ -106,54 +127,86 @@ pub(crate) fn attach(data: &mut Revision, coverage: &[Chunk], replies: &[NoSpeec
                     .is_some_and(|i| i.track == c.track && i.start == c.start && i.end == c.end)
             })
             .collect();
-        let Some(reply) = replies.iter().find(|r| {
-            r.code == "no-speech"
-                && r.reply_sha256.len() == 64
-                && r.reply_sha256.bytes().all(|b| b.is_ascii_hexdigit())
-                && r.interval.track == c.track
-                && r.interval.start <= c.start
-                && c.end <= r.interval.end
-        }) else {
-            continue;
-        };
-        if reasons.is_empty() {
-            continue;
-        }
-        let text = format!(
-            "[Speech unavailable: {:.3}-{:.3}s; baseline no-speech; router {}]",
-            c.start,
-            c.end,
-            reasons
+        let (evidence, disposition) = if !reasons.is_empty() {
+            let labels = reasons
                 .iter()
                 .map(|r| serde_json::to_string(&r.reason))
                 .collect::<std::result::Result<Vec<_>, _>>()?
-                .join(", ")
-        );
-        gaps.push(
-            serde_json::json!({"id":c.id,"track":c.track,"start":c.start,"end":c.end,
-            "reasons":reasons,"baseline":reply}),
-        );
-        data.transcript.segments.push(Segment {
-            start: c.start,
-            end: c.end,
-            track: c.track.clone(),
-            route: "en".into(),
-            lang: "en".into(),
-            lang_conf: None,
-            text_original: text.clone(),
-            text_en: Some(text),
-            english_reading: String::new(),
-            provider: "sidenote".into(),
-            model: "none".into(),
-            status: "marked-gap".into(),
-            translate: false,
-            sources: vec![Offset {
-                chunk: c.clone(),
-                joined_start: 0.0,
-                joined_end: c.end - c.start,
-                scores: None,
-            }],
-        });
+                .join(", ");
+            (serde_json::to_value(reasons)?, format!("router {labels}"))
+        } else if let Some(record) = reconciliation.fallback_required.iter().find(|r| {
+            matches!(
+                r.reason,
+                FallbackKind::NoSpeech | FallbackKind::HelperFailed
+            ) && r.interval.track == c.track
+                && r.interval.start == c.start
+                && r.interval.end == c.end
+        }) {
+            let label = serde_json::to_string(&record.reason)?;
+            (serde_json::json!([record]), format!("recognizer {label}"))
+        } else {
+            continue;
+        };
+        for gap in missing {
+            if data
+                .transcript
+                .baseline
+                .iter()
+                .chain(
+                    data.alternatives
+                        .iter()
+                        .flat_map(|s| &s.sources)
+                        .map(|o| &o.chunk),
+                )
+                .any(|b| intersects(&gap, &b.track, b.start, b.end))
+            {
+                continue;
+            }
+            let reply = replies.iter().find(|r| {
+                r.code == "no-speech"
+                    && r.reply_sha256.len() == 64
+                    && r.reply_sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                    && r.interval.track == gap.track
+                    && r.interval.start <= gap.start
+                    && gap.end <= r.interval.end
+            });
+            let (baseline, baseline_label) = match reply {
+                Some(r) => (serde_json::to_value(r)?, "baseline no-speech"),
+                None => (
+                    serde_json::json!({"code":"no-overlapping-baseline-text"}),
+                    "no captured words",
+                ),
+            };
+            let text = format!(
+                "[Speech unavailable: {:.3}-{:.3}s; {baseline_label}; {disposition}]",
+                gap.start, gap.end
+            );
+            gaps.push(
+                serde_json::json!({"id":gap.id,"track":gap.track,"start":gap.start,"end":gap.end,
+                "reasons":evidence,"baseline":baseline}),
+            );
+            data.transcript.segments.push(Segment {
+                start: gap.start,
+                end: gap.end,
+                track: gap.track.clone(),
+                route: "en".into(),
+                lang: "en".into(),
+                lang_conf: None,
+                text_original: text.clone(),
+                text_en: Some(text),
+                english_reading: String::new(),
+                provider: "sidenote".into(),
+                model: "none".into(),
+                status: "marked-gap".into(),
+                translate: false,
+                sources: vec![Offset {
+                    joined_start: 0.0,
+                    joined_end: gap.end - gap.start,
+                    chunk: gap,
+                    scores: None,
+                }],
+            });
+        }
     }
     data.provenance["speech_coverage"] = serde_json::to_value(coverage)?;
     data.provenance["baseline_no_speech"] = serde_json::to_value(replies)?;
@@ -179,7 +232,11 @@ pub(crate) fn attach(data: &mut Revision, coverage: &[Chunk], replies: &[NoSpeec
     Ok(())
 }
 
-pub(super) fn from_files(root: &Path, data: &mut Revision) -> Result<()> {
+pub(super) fn from_files(
+    root: &Path,
+    data: &mut Revision,
+    reconciliation: &Coverage,
+) -> Result<()> {
     let read = |name: &str| -> Result<Option<Vec<u8>>> {
         match super::super::inputs::Snapshot::read_file(&root.join(name), 16 << 20) {
             Ok(bytes) => Ok(Some(bytes)),
@@ -195,15 +252,19 @@ pub(super) fn from_files(root: &Path, data: &mut Revision) -> Result<()> {
         .map(|b| serde_json::from_slice(&b))
         .transpose()?
         .unwrap_or_default();
-    attach(data, &coverage, &replies)
+    attach(data, &coverage, &replies, reconciliation)
 }
 
-pub(super) fn validate(data: &Revision, expected: &mut Revision) -> Result<()> {
+pub(super) fn validate(
+    data: &Revision,
+    expected: &mut Revision,
+    reconciliation: &Coverage,
+) -> Result<()> {
     if let Some(coverage) = data.provenance.get("speech_coverage") {
         let coverage: Vec<Chunk> = serde_json::from_value(coverage.clone())?;
         let replies: Vec<NoSpeech> =
             serde_json::from_value(data.provenance["baseline_no_speech"].clone())?;
-        attach(expected, &coverage, &replies)?;
+        attach(expected, &coverage, &replies, reconciliation)?;
         if expected.provenance["marked_gaps"] != data.provenance["marked_gaps"] {
             return Err("Invalid marked gap evidence".into());
         }

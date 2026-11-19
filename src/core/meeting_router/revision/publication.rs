@@ -97,10 +97,10 @@ fn validate(data: &Revision) -> io::Result<()> {
         expected.transcript.segments = data.alternatives.clone();
         super::reconciliation::reconcile(&mut expected.transcript, &t.baseline, &mut coverage);
         super::super::fallback::attach(&mut expected, &super::super::fallback::read(data)?)?;
-        if serde_json::to_value(coverage)? != recorded {
+        if serde_json::to_value(&coverage)? != recorded {
             return Err(store_io::invalid("Invalid overlap receipt"));
         }
-        super::gaps::validate(data, &mut expected)
+        super::gaps::validate(data, &mut expected, &coverage)
             .map_err(|_| store_io::invalid("Invalid marked gap evidence"))?;
         check = expected.transcript;
     } else {

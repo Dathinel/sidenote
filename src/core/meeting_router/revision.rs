@@ -304,7 +304,7 @@ pub fn assemble(
     let mut provenance = serde_json::to_value(manifest)?;
     provenance["no_speech"] = serde_json::to_value(no_speech)?;
     provenance["plan"] = serde_json::to_value(plan)?;
-    provenance["assembly_coverage"] = serde_json::to_value(coverage)?;
+    provenance["assembly_coverage"] = serde_json::to_value(&coverage)?;
     provenance["english_transport"] = transport;
     let mut revision = Revision {
         generation: generation.to_string(),
@@ -315,7 +315,7 @@ pub fn assemble(
         provenance,
     };
     super::fallback::attach(&mut revision, &routing)?;
-    gaps::from_files(root, &mut revision)?;
+    gaps::from_files(root, &mut revision, &coverage)?;
     for range in plan.batches.values().flat_map(|b| b.values()) {
         let track = manifest
             .tracks

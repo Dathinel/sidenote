@@ -12,8 +12,8 @@ pub(super) enum FallbackKind {
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct RequiredFallback {
-    reason: FallbackKind,
-    interval: Interval,
+    pub(super) reason: FallbackKind,
+    pub(super) interval: Interval,
     record: Value,
 }
 

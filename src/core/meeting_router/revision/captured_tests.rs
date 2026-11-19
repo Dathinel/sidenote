@@ -245,9 +245,12 @@ fn saved_public_full_guard_marks_exact_four_missing_baseline_intervals() {
         .retain(|s| s.status != "marked-gap");
     assert!(commit(&dest, &tampered).is_err());
     std::fs::remove_file(temp.path().join("baseline-no-speech.json")).unwrap();
-    assert!(
+    let inferred =
         super::super::production::assemble_saved(temp.path(), &plan, &pieces, &baseline, 1)
-            .is_err()
+            .unwrap();
+    assert_eq!(
+        inferred.provenance["marked_gaps"][0]["baseline"]["code"],
+        "no-overlapping-baseline-text"
     );
     std::fs::write(
         temp.path().join("baseline-no-speech.json"),
