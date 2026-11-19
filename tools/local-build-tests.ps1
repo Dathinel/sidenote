@@ -7,9 +7,11 @@ foreach ($name in 'PATH','APPDATA','LOCALAPPDATA','CARGO_BUILD_JOBS','CARGO_TARG
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 function Get-CimInstance {
-    if ($listenerRunning) { [pscustomobject]@{ CommandLine = 'sidenote.exe --listen' } }
+    if ($listenerRunning) { [pscustomobject]@{ Name = 'sidenote.exe'; CommandLine = 'sidenote.exe --listen' } }
+    if ($hexName) { [pscustomobject]@{ Name = $hexName; CommandLine = $hexName } }
 }
-function Assert-MeetingStatus([bool]$Expected, [string]$Case) {
+function Assert-MeetingStatus([bool]$Expected, [string]$Case, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow) {
+    function Get-Date { $Now.UtcDateTime }
     if ((& "$PSScriptRoot\local_build.ps1" -MeetingStatus) -cne $Expected) { throw "Wrong meeting status: $Case" }
 }
 function Write-MeetingStatus([string]$State, [DateTimeOffset]$Time = [DateTimeOffset]::UtcNow, $StatusError = $null) {
@@ -27,30 +29,56 @@ try {
     $statusDir = Join-Path $temp 'hex-meetings\local'
     New-Item -ItemType Directory -Path $statusDir | Out-Null
     $statusFile = Join-Path $statusDir 'status.ndjson'
-    $legacy = Join-Path $temp 'hex-meeting-watch.log'
-    $listenerRunning = $true
-    Write-MeetingStatus idle
-    Write-MeetingStatus recording
-    Assert-MeetingStatus $true 'latest row is recording'
-    Set-Content -LiteralPath $legacy -Value 'recording'
-    Write-MeetingStatus idle
-    Assert-MeetingStatus $false 'latest row is idle despite the legacy log'
-    Write-MeetingStatus idle -Time ([DateTimeOffset]::UtcNow.AddMinutes(-1))
-    Assert-MeetingStatus $true 'stale idle row with listener running'
-    Write-MeetingStatus idle -StatusError 'timeout'
-    Assert-MeetingStatus $true 'status error with listener running'
-    Add-Content -LiteralPath $statusFile -Value '{"timestamp":'
-    Assert-MeetingStatus $true 'unreadable row with listener running'
     $listenerRunning = $false
-    Assert-MeetingStatus $false 'unreadable row without listener ignores legacy log'
+    $hexName = 'hex.exe'
+    Write-MeetingStatus recording -Time ([DateTimeOffset]::UtcNow.AddMinutes(-1))
+    Assert-MeetingStatus $true 'stale recording without the listener, with Hex running'
+    $hexName = $null
+    Assert-MeetingStatus $false 'stale recording without the listener or Hex'
+
+    $listenerRunning = $true
+    $hexName = 'hex.exe'
+    foreach ($state in 'starting','recording','paused','stopping','finishing') {
+        Write-MeetingStatus $state
+        Assert-MeetingStatus $true "fresh $state row"
+    }
+    Write-MeetingStatus idle
+    Assert-MeetingStatus $false 'fresh idle row'
+    $listenerRunning = $false
+    Assert-MeetingStatus $true 'fresh idle row from a stopped listener'
+
+    $listenerRunning = $true
+    $now = [DateTimeOffset]::UtcNow
+    Write-MeetingStatus idle -Time ($now.AddSeconds(-15))
+    Assert-MeetingStatus $false '15 seconds old is fresh' -Now $now
+    Assert-MeetingStatus $true '15 seconds plus one tick is stale' -Now ($now.AddTicks(1))
+    foreach ($hexName in @($null, 'hex.com')) {
+        foreach ($poll in 1..2) {
+            Write-MeetingStatus -StatusError 'not_running'
+            Assert-MeetingStatus ([bool]$hexName) "not_running poll $poll with Hex presence $([bool]$hexName)"
+        }
+    }
+
+    Write-MeetingStatus idle
+    [IO.File]::AppendAllText($statusFile, '{"timestamp":')
+    Assert-MeetingStatus $true 'partial last line with Hex running'
+    $hexName = $null
+    Assert-MeetingStatus $false 'partial last line with Hex closed'
+    [IO.File]::AppendAllText($statusFile, [Environment]::NewLine)
+    Write-MeetingStatus idle
+    $hexName = 'hex.exe'
+    $held = [IO.File]::Open($statusFile, 'Open', 'ReadWrite', 'None')
+    try {
+        Assert-MeetingStatus $true 'unreadable status file with Hex running'
+        $hexName = $null
+        Assert-MeetingStatus $false 'unreadable status file with Hex closed'
+    } finally { $held.Dispose() }
     Remove-Item -LiteralPath $statusFile
-    $listenerRunning = $true
-    Set-Content -LiteralPath $legacy -Value 'done'
-    Assert-MeetingStatus $true 'missing file with listener running despite legacy done'
-    $listenerRunning = $false
-    Assert-MeetingStatus $false 'legacy done when status file is absent'
-    Set-Content -LiteralPath $legacy -Value 'recording'
-    Assert-MeetingStatus $true 'legacy active when status file is absent'
+    Assert-MeetingStatus $false 'absent status file with Hex closed'
+    $hexName = 'hex.exe'
+    Assert-MeetingStatus $true 'absent status file with Hex running'
+
+    $processMock = 'function Get-CimInstance { ' + (Get-Command Get-CimInstance).Definition + ' }; $listenerRunning = $true; $hexName = ''hex.exe''; '
     Write-MeetingStatus idle
     Add-Type -OutputAssembly (Join-Path $temp 'cargo.exe') -OutputType ConsoleApplication -TypeDefinition @'
 using System;
@@ -77,7 +105,7 @@ class CargoArgs {
     $commands += "& tools/local_build.ps1 clippy '--target-dir=target equals' '--' -D warnings"
     foreach ($command in $commands) {
         Write-MeetingStatus idle
-        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $command)
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $command))
         if ($LASTEXITCODE) { throw "Wrapper exited $LASTEXITCODE" }
         $expectedJobs = if ($command -match ' -j 1 ') { 'jobs:' } else { 'jobs:4' }
         if ($output -cnotcontains $expectedJobs) { throw "Wrong Cargo jobs default: $command" }
@@ -98,31 +126,28 @@ class CargoArgs {
         }
     }
     $env:CARGO_BUILD_JOBS = '2'
-    Set-Content -LiteralPath $legacy -Value 'done'
-    Write-MeetingStatus recording
-    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command @'
+    Write-MeetingStatus -StatusError 'not_running'
+    $waitCommand = @'
 function Start-Sleep([int]$Seconds) {
     if ($Seconds -ne 10 -or $script:waited) { throw 'Unexpected wrapper wait.' }
     $script:waited = $true
-    $file = Join-Path $env:APPDATA 'hex-meetings\local\status.ndjson'
-    $status = Get-Content -LiteralPath $file -Tail 1 | ConvertFrom-Json
-    $status.meeting_state = 'idle'
-    $status.timestamp = [DateTimeOffset]::UtcNow.ToString('o')
-    $status | ConvertTo-Json -Compress | Add-Content -LiteralPath $file
+    $script:hexName = $null
     'waited for meeting'
 }
 & tools/local_build.ps1 check
-'@)
+'@
+    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $waitCommand))
     if ($LASTEXITCODE -or $output[0] -cne 'waited for meeting' -or $output -cnotcontains 'jobs:2') {
-        throw 'Wrapper must wait for the meeting to end and preserve the caller job count.'
+        throw 'Wrapper must wait while Hex is running and preserve the caller job count.'
     }
+    Write-MeetingStatus idle
     $ErrorActionPreference = 'Continue'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '& tools/local_build.ps1 check --config build.target-dir=unchecked' 2>$null
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + '& tools/local_build.ps1 check --config build.target-dir=unchecked') 2>$null
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1) { throw 'Unchecked Cargo config was accepted.' }
     $ErrorActionPreference = 'Continue'
     $outside = Join-Path $temp 'outside'
-    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& tools/local_build.ps1 check --target-dir '$outside'" 2>$null)
+    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + "& tools/local_build.ps1 check --target-dir '$outside'") 2>$null)
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1 -or @($output | Where-Object { $_.StartsWith('arg:') }).Count) { throw 'Target outside the worktree was accepted.' }
     Write-Output 'PASS: meeting status, Cargo job counts, both gate calls, separator suffix, target overrides, config rejection, and outside-target rejection.'
