@@ -130,7 +130,11 @@ impl Agent {
             return Err("This app is not installed.".into());
         }
         if !self.client.adds_by_cli() {
-            return Err(self.paste_note());
+            return Err(format!(
+                "Needs a paste: Sidenote does not edit {}'s config. {}",
+                self.client.name(),
+                self.paste_note()
+            ));
         }
         let cli = self
             .cli
@@ -138,15 +142,18 @@ impl Agent {
             .ok_or("CLI unavailable. Use the copyable config.")?;
         self.add_cli(exe, |args| run(cli, args))
     }
+    /// The exact text to paste into an app that Sidenote does not edit.
+    pub fn paste_config(&self, exe: &Path) -> String {
+        self.client.config(exe)
+    }
     /// Tells the owner where to paste, in one line.
     pub fn paste_note(&self) -> String {
         let place = match self.client {
-            Client::OpenCode => "inside \"mcp\"",
-            _ => "inside \"mcpServers\"",
+            Client::OpenCode => "mcp",
+            _ => "mcpServers",
         };
         format!(
-            "Needs a paste: Sidenote does not edit {}'s config. Copy the config, add the sidenote entry {place} in {}, keep the other entries, then restart {}.",
-            self.client.name(),
+            "Paste it into {} inside \"{place}\", keep the other entries, then restart {}.",
             self.path.display(),
             self.client.name()
         )

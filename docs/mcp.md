@@ -13,8 +13,9 @@ connection, and send what they read to their AI provider. Meeting text is data, 
 ## Setup
 
 Open **Settings > Connected apps** for installed clients, their connection status,
-an Add button for each, and **Add to all installed**. Show all reveals missing
-clients, and selecting a row reveals copy-ready setup text. Installed builds use
+an Add button for Claude Code and Codex, **Add to all installed** (those two), and
+Copy config and Open config folder for the apps Sidenote does not edit. Show all reveals
+missing clients, and selecting a row reveals copy-ready setup text. Installed builds use
 their own runtime path, including custom install locations. Keep that executable
 at the configured path or reconnect with the installed copy after installation. The usual per-user
 installed path is `%LOCALAPPDATA%\sidenote\current\sidenote.exe`, but the page does
@@ -35,24 +36,20 @@ Codex uses the same check, add and recheck pattern through its own CLI. Its add
 command is `codex mcp add sidenote -- <executable> --mcp`. To undo, run
 `codex mcp remove sidenote`.
 
-Claude Desktop, Cursor and OpenCode add through their JSON config files. An
-existing `sidenote` entry is kept. Comments, invalid JSON or an invalid MCP section
-stop the edit and leave the copyable config available. Before changing an existing
-file, Sidenote saves its original bytes to `<file>.sidenote-backup-<unix ms>`.
-It merges only the new entry, saves through a temporary file in the same folder,
-then rereads the entry. Other values survive; JSON key order may change because
-`serde_json` does not enable `preserve_order`. The result gives the backup path
-to restore. New files contain only the Sidenote configuration and report how to
-remove the entry. Add to all runs clients in sequence and reports each result,
-continuing after a failure. Claude Desktop is hidden on Linux.
+Sidenote never writes another app's config file. Claude Desktop, Cursor and OpenCode
+read their own JSON config, so Sidenote only reads it to show whether a `sidenote`
+entry exists (a config that is a link, has comments or is not an object is reported,
+never changed). Those rows show Copy config, which copies the exact entry, Open config
+folder, and one line saying where to paste it. Add to all adds only Claude Code and
+Codex and reports which apps need a paste. Claude Desktop is hidden on Linux.
 
 | Client | Config location | Setup |
 | --- | --- | --- |
-| Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button, or copy a PowerShell command. |
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Add button, or copy `mcpServers` JSON. |
-| Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Add button, or copy a `[mcp_servers.sidenote]` TOML block. |
-| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Add button, or copy `mcpServers` JSON. |
-| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Add button for strict JSON, or copy local `mcp.sidenote` JSON. Project or managed settings may override it. |
+| Claude Code | `%USERPROFILE%\.claude.json` (user scope) | Add button (Claude Code writes its own file), or copy a PowerShell command. |
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | Copy `mcpServers` JSON and paste it. |
+| Codex | `%CODEX_HOME%\config.toml`, or `%USERPROFILE%\.codex\config.toml` | Add button (Codex writes its own file), or copy a `[mcp_servers.sidenote]` TOML block. |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | Copy `mcpServers` JSON and paste it. |
+| OpenCode | `%USERPROFILE%\.config\opencode\opencode.jsonc` if present, otherwise `opencode.json` | Copy local `mcp.sidenote` JSON and paste it. Project or managed settings may override it. |
 
 The locations displayed in the app are expanded for this user. Restart or reconnect
 the client after setup. This local stdio connection has no network listener, ports,

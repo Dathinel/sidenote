@@ -152,6 +152,24 @@ fn json_agents_are_never_written_by_add_or_add_all() {
     }
 }
 #[test]
+fn paste_config_parses_and_names_the_sidenote_server() {
+    let sandbox = Sandbox::new();
+    let exe = Path::new("C:/A B/sidenote.exe");
+    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
+        let text = sandbox.agent(client).paste_config(exe);
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let entry = &value[super::json_config::key(client)]["sidenote"];
+        let (command, args) = if client == Client::OpenCode {
+            assert_eq!(entry["type"], "local");
+            (&entry["command"][0], &entry["command"][1])
+        } else {
+            (&entry["command"], &entry["args"][0])
+        };
+        assert_eq!(command, "C:/A B/sidenote.exe");
+        assert_eq!(args, "--mcp");
+    }
+}
+#[test]
 fn unreadable_configs_are_reported_and_never_changed() {
     let sandbox = Sandbox::new();
     let agent = sandbox.agent(Client::OpenCode);
