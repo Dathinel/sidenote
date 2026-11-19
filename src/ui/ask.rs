@@ -397,6 +397,21 @@ fn recipe(i: usize, text: &'static str, p: Palette) -> El {
     .on_press(move |s: &mut State| s.send(text))
 }
 
+/// Gutter of the notes column at normal widths. The saved meeting page's Ask bar uses it, so the bar
+/// lines up with the notes text; at 390 wide the Ask panel keeps its 16 point gutter.
+const NOTES_GUTTER: f32 = 24.0;
+
+/// The suggestion a meeting offers, left-aligned in a row above the Ask bar.
+fn meeting_chips(p: Palette) -> El {
+    row()
+        .key("ask-suggestions")
+        .w_full()
+        .items_center()
+        .gap(8.0)
+        .pb(8.0)
+        .child(recipe(0, "Draft a follow-up", p))
+}
+
 /// A few ideas to ask, floating above the pill while its box has focus and is empty.
 fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
     let list: &[&str] = if s.companies.open {
@@ -741,8 +756,19 @@ pub fn overlay_with(
     let id = s.ask_key();
     let pending = s.asks.contains_key(&id);
     let meeting_bar = s.selected.is_some();
+    // On the saved meeting page the bar is the notes column's width and shares its left edge.
+    let notes_column = meeting_bar && !s.on_live() && !s.companies.open && !s.meeting_ui.tabs;
+    let bar_inset = if notes_column && narrow {
+        NOTES_GUTTER - 16.0
+    } else {
+        0.0
+    };
     let mut stack = col().w_full().gap(if meeting_bar { 0.0 } else { 10.0 });
-    if !s.companies.open {
+    if notes_column {
+        stack = stack
+            .max_w(COLUMN)
+            .px(if narrow { 16.0 } else { NOTES_GUTTER });
+    } else if !s.companies.open {
         stack = stack
             .max_w(COLUMN)
             .px(if narrow { 16.0 } else { 28.0 })
@@ -959,13 +985,10 @@ pub fn overlay_with(
         )
         .children(lead)
         .child(input)
-        .children(
-            (in_meeting && empty && !pending && !narrow).then(|| recipe(0, "Draft a follow-up", p)),
-        )
         .children(model)
         .child(action(s, p, ready, pending));
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
-    pill = if s.companies.open {
+    pill = if s.companies.open || notes_column {
         pill.w_full()
     } else {
         pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
@@ -978,7 +1001,17 @@ pub fn overlay_with(
                 .child(scope_choice(s, k, p, layer)),
         );
     }
-    let stack = stack.child(pill);
+    // A meeting offers one suggestion today, in a row above the bar.
+    if in_meeting && empty && !pending {
+        stack = stack.child(meeting_chips(p).px(bar_inset));
+    }
+    // The thread keeps the page's 16 point gutter at 390 wide; the bar still starts where the
+    // notes do, so it steps in by the difference.
+    let stack = stack.child(if bar_inset > 0.0 {
+        col().w_full().px(bar_inset).child(pill)
+    } else {
+        pill
+    });
     place(s, stack, narrow, p)
 }
 
@@ -1005,10 +1038,11 @@ fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
     } else if s.companies.open {
         col().key("company-ask").w_full().min_w(0.0).child(stack)
     } else if s.selected.is_some() && !s.meeting_ui.tabs {
+        // Left-aligned, like the notes above it.
         col()
             .key("ask-overlay")
             .w_full()
-            .items_center()
+            .items_start()
             .shrink()
             .py(12.0)
             .child(stack)

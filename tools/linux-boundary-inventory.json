@@ -197,7 +197,7 @@
   "src/ui/area.rs": "da05f2b3e47fd1ae111ccc45dbc6227260f6fc319a7c41387926c4e3017ac5f7",
   "src/ui/area_scene.rs": "ed9d0a3291369f5ab6a8a3e2c0da8a04bb05ba7155a065cd2604c9da7b1bf160",
   "src/ui/ask_settings.rs": "9f224b3d477bf938277064c440f99f4191e43b037b5c51282cb29713525f1b84",
-  "src/ui/ask_switch_tests.rs": "ec310888ed11e99ef359d24d6c233ab09d5529f4c879e055d903f2eecc85d840",
+  "src/ui/ask_switch_tests.rs": "55850d6671f18f335aaf8335814fe3492453de2be8808124f9255e680f079f91",
   "src/ui/benchmark.rs": "3eea004745d87db3e40f407a7d320827a47772f1185355a0c6397be3df15e9ff",
   "src/ui/check.rs": "99a63145026da06e0119fce3e965ab04f12c164319f82884724cd387ee061557",
   "src/ui/cloud_ask.rs": "19f3464bf233e66ba570830d018e9fde4fb7c5d9a0ea1a7e24fd9fe7525f5117",

@@ -177,35 +177,32 @@ fn picked_template(s: &State, m: &Meeting) -> &'static str {
     }
 }
 
-/// "15 Nov · 2 min · 3 people". A part that is not known is left out, so nobody sees
-/// "0 people" or "Length not recorded".
-fn facts_line(date: Option<String>, minutes: Option<u64>, people: usize) -> String {
-    [
-        date,
-        minutes.map(|n| format!("{n} min")),
-        match people {
-            0 => None,
-            1 => Some("1 person".into()),
-            n => Some(format!("{n} people")),
-        },
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" \u{b7} ")
+/// "15 Nov · 2 min". A part that is not known is left out, so nobody sees "Length not recorded".
+fn facts_line(date: Option<String>, minutes: Option<u64>) -> String {
+    [date, minutes.map(|n| format!("{n} min"))]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
+}
+
+/// A small icon and its words on the meta row.
+fn fact(icon: &'static rune::Icon, words: String, p: Palette) -> El {
+    row()
+        .gap(5.0)
+        .items_center()
+        .child(icons::draw(icon, 14.0, p.faint))
+        .child(roles::META.line(words, p.soft))
 }
 
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
-    let facts = facts_line(
-        m.started.map(|d| d.format("%-d %b").to_string()),
-        m.minutes,
-        m.summary.people.len(),
-    );
+    let facts = facts_line(m.started.map(|d| d.format("%-d %b").to_string()), m.minutes);
+    let people = m.summary.people.len();
     let mut controls = row()
         .key("meeting-controls")
         .w_full()
         .flex_wrap()
-        .gap(8.0)
+        .gap(12.0)
         .items_center()
         .child(
             SegmentedControl::new(
@@ -213,7 +210,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 Some(usize::from(s.meeting_tab == Tab::Notes)),
             )
             .label("Meeting view")
-            .width(Some(188.0))
+            .fit()
             .on_pick::<State>(|s, i, tx| {
                 s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
                 tx.blur();
@@ -222,10 +219,16 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
             .key("meeting-view"),
         );
     if !facts.is_empty() {
+        controls = controls.child(fact(&icons::DIARY, facts, p).key("meeting-facts"));
+    }
+    if people > 0 {
         controls = controls.child(
-            roles::META
-                .line(facts, p.soft)
-                .key("meeting-facts")
+            fact(&icons::PEOPLE, people.to_string(), p)
+                .key("meeting-people")
+                .label(match people {
+                    1 => "1 person".to_string(),
+                    n => format!("{n} people"),
+                })
                 .help(m.summary.people.join(", ")),
         );
     }
@@ -268,7 +271,11 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .w_full()
         .gap(8.0)
         .py(4.0)
+        .px(6.0)
+        .radius(6.0)
         .items_start()
+        // Pointing at the line, or keyboard focus on its time, tints the row and shows the time.
+        .hover(p.chip)
         .hover_group()
         .child(roles::READ.wrap("•", p.soft).w(12.0))
         .child(body.grow(1.0).min_w(0.0));
@@ -284,8 +291,9 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
                 .px(6.0)
                 .py(2.0)
                 .radius(5.0)
-                .fill(p.chip)
+                .fill(p.sel)
                 .hover(p.hit)
+                .group_opacity(0.0, 1.0)
                 .on_press_tx(move |s: &mut State, tx| {
                     s.jump(&time, back.clone(), tx);
                 }),
@@ -681,12 +689,9 @@ mod tests {
     #[test]
     fn the_facts_line_leaves_out_what_is_not_known() {
         let date = || Some("17 Nov".to_string());
-        assert_eq!(facts_line(date(), Some(2), 0), "17 Nov \u{b7} 2 min");
-        assert_eq!(
-            facts_line(date(), Some(2), 1),
-            "17 Nov \u{b7} 2 min \u{b7} 1 person"
-        );
-        assert_eq!(facts_line(date(), None, 3), "17 Nov \u{b7} 3 people");
-        assert_eq!(facts_line(None, None, 0), "");
+        assert_eq!(facts_line(date(), Some(2)), "17 Nov \u{b7} 2 min");
+        assert_eq!(facts_line(date(), None), "17 Nov");
+        assert_eq!(facts_line(None, Some(22)), "22 min");
+        assert_eq!(facts_line(None, None), "");
     }
 }
