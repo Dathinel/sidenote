@@ -78,4 +78,48 @@ $destination = Join-Path $root 'changed-choice'
 New-Item -ItemType Directory -Path $destination | Out-Null
 $result = Write-DependencyNotices -Metadata (Graph @($approved)) -Destination $destination
 Assert ($result.uncovered.Count -eq 1) 'A changed declaration must invalidate the recorded choice.'
+$withCases = @(
+    @{ expression='Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT'; passes=$true },
+    @{ expression='MIT WITH Unknown-exception'; passes=$false },
+    @{ expression='Apache-2.0 WITH'; passes=$false },
+    @{ expression='LicenseRef-Unknown WITH LLVM-exception'; passes=$false },
+    @{ expression='LicenseRef-Unknown'; passes=$false },
+    @{ expression='LLVM-exception'; passes=$false },
+    @{ expression='Apache-2.0 WITH MIT'; passes=$false },
+    @{ expression='Apache-2.0 WITH LLVM-exception WITH LLVM-exception'; passes=$false },
+    @{ expression='(Apache-2.0 OR MIT) WITH LLVM-exception'; passes=$false },
+    @{ expression='Apache-2.0 with LLVM-exception'; passes=$false },
+    @{ expression='Apache-2.0 WITH llvm-exception'; passes=$false },
+    @{ expression='Apache-2.0 WITH LLVM-exception OR LicenseRef-Unknown'; passes=$false },
+    @{ expression='(Apache-2.0 WITH LLVM-exception OR MIT) AND Zlib'; passes=$true }
+)
+foreach ($case in $withCases) {
+    $package = Package 'with-case' $case.expression
+    $destination = Join-Path $root ('with-case-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $destination | Out-Null
+    $result = Write-DependencyNotices -Metadata (Graph @($package)) -Destination $destination
+    $row = $result.coverage[0]
+    Write-Output "CASE: $($case.expression) => $($row.kind); files=$($row.notice_files); reason=$($row.reason)"
+    Assert (($result.uncovered.Count -eq 0) -eq $case.passes) "Unexpected notice coverage: $($case.expression)"
+    if ($case.passes) {
+        $notice = [IO.File]::ReadAllText("$destination/dependency-notices/with-case-1.0.0/NOTICE.md")
+        Assert ($notice.Contains("Declared licence expression: $($case.expression)")) 'WITH must remain attached to its licence in the notice.'
+        Assert ([string]::IsNullOrEmpty($row.selected_license)) 'No OR alternative is selected without a recorded choice.'
+        foreach ($id in @('Apache-2.0', 'LLVM-exception', 'MIT')) {
+            Assert ($notice.Contains("- ../standard-licenses/$id.txt")) 'Each declared licence and exception needs a notice link.'
+            Assert ((Get-FileHash "$destination/dependency-notices/standard-licenses/$id.txt").Hash -ceq (Get-FileHash "$PSScriptRoot/licenses/$id.txt").Hash) 'Shipped standard and exception texts must match the checked-in files.'
+        }
+    } else {
+        Assert (@(Get-ChildItem $destination -Recurse -Filter NOTICE.md).Count -eq 0) 'Invalid WITH terms must not receive notices.'
+    }
+}
+$missingExceptionRoot = Join-Path $root 'missing-exception-text'
+New-Item -ItemType Directory -Path $missingExceptionRoot | Out-Null
+Copy-Item "$PSScriptRoot/licenses/Apache-2.0.txt" -Destination $missingExceptionRoot
+$destination = Join-Path $root 'missing-exception-notice'
+New-Item -ItemType Directory -Path $destination | Out-Null
+$result = Write-DependencyNotices -Metadata (Graph @((Package 'missing-exception' 'Apache-2.0 WITH LLVM-exception'))) -Destination $destination -StandardLicenseRoot $missingExceptionRoot
+Assert ($result.uncovered.Count -eq 1) 'Missing exception text must leave the dependency uncovered.'
+Assert ($result.uncovered[0].reason -ceq 'Standard licence text is missing: LLVM-exception') 'The missing exception text must be identified.'
+Write-Output "CASE: missing LLVM-exception.txt => uncovered; reason=$($result.uncovered[0].reason)"
 Write-Output "PASS: platform graph, metadata attribution, complete SPDX expressions, explicit OR choices, shared texts, upstream preservation, deterministic output and refusal cases. Evidence: $root"

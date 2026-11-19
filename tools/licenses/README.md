@@ -14,9 +14,15 @@ The initial texts came from this device's cached published crates:
 | Apache-2.0 | `sha2 0.11.1/LICENSE-APACHE` | Complete file, including the standard appendix. |
 | BSL-1.0 | `error-code 3.4.0/LICENSE` | Complete Boost Software License 1.0 text. |
 | Zlib | `zlib-rs 0.6.8/LICENSE` | Unchanged terms starting at `This software is provided`. The dependency notice supplies its own attribution instead of borrowing Trifecta's copyright line. |
+| LLVM-exception | [SPDX license-list-data v3.27.0](https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/LLVM-exception.txt) | Complete exception text. |
 
 Line endings are normalized to LF. MIT and Zlib have descriptive headings.
-Unknown identifiers, exceptions, incomplete expressions and missing copyright
+`WITH` attaches an explicitly allowed exception to a licence identifier. The only
+allowed exception is `LLVM-exception`; its complete text is shipped alongside the
+base licence text. Without a recorded OR choice, all declared licence and exception
+texts are shipped and the complete expression is retained.
+
+Unknown identifiers, unknown exceptions, incomplete expressions and missing copyright
 attribution remain uncovered. An expression containing an unsupported identifier
 is not silently reduced to one of its alternatives. An owner-approved choice of a
 standalone OR alternative can be recorded per name, version and exact expression

@@ -1,5 +1,6 @@
 function Get-StandardLicenseIds([string]$Expression) {
     $supported = @('MIT', 'Apache-2.0', 'BSL-1.0', 'Zlib')
+    $supportedExceptions = @('LLVM-exception')
     $tokens = @([regex]::Matches($Expression, '[A-Za-z0-9.+-]+|[()]') | ForEach-Object Value)
     if (-not $tokens.Count -or (($tokens -join '') -ne ($Expression -replace '\s', ''))) {
         throw "Unsupported licence expression: $Expression"
@@ -7,11 +8,18 @@ function Get-StandardLicenseIds([string]$Expression) {
     $expectLicense = $true
     $depth = 0
     $ids = @()
-    foreach ($token in $tokens) {
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        $token = $tokens[$index]
         if ($expectLicense) {
             if ($token -eq '(') { $depth++; continue }
             if ($token -cnotin $supported) { throw "Unsupported licence expression: $Expression" }
             $ids += $token
+            if ($index + 1 -lt $tokens.Count -and $tokens[$index + 1] -ceq 'WITH') {
+                $index += 2
+                if ($index -ge $tokens.Count) { throw "Incomplete licence expression: $Expression" }
+                if ($tokens[$index] -cnotin $supportedExceptions) { throw "Unsupported licence exception: $Expression" }
+                $ids += $tokens[$index]
+            }
             $expectLicense = $false
         } elseif ($token -eq ')') {
             $depth--
