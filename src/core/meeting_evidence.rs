@@ -435,7 +435,13 @@ fn upload_windows(
             continue;
         }
         let total = pending.len();
-        let directory = upload.directory(meeting)?;
+        let directory = match upload.directory(meeting) {
+            Ok(directory) => directory,
+            Err(error) => {
+                failure.get_or_insert(error);
+                continue;
+            }
+        };
         let mut progress = Progress {
             total,
             ..Progress::default()

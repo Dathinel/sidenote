@@ -2,7 +2,7 @@ use super::*;
 use crate::core::{
     meeting_router::{batches::Range, ranges::AsrRange, revision::Revision},
     model_catalog,
-    speech_host::{Host, journal::Piece, upload::digest},
+    speech_host::{self, Host, WorkMode, journal::Piece, upload::digest},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,6 +29,8 @@ enum Mode {
     Empty,
     Failed,
     Unready,
+    Stall,
+    Dead,
 }
 
 #[derive(Default)]
@@ -52,6 +54,7 @@ struct Fixture {
     collector: Collector,
     listener: TcpListener,
     server: Server,
+    forward_ms: i64,
 }
 
 impl Fixture {
@@ -82,6 +85,7 @@ impl Fixture {
             collector,
             listener,
             server: Server::default(),
+            forward_ms: 0,
         }
     }
 
@@ -133,14 +137,30 @@ impl Fixture {
     }
 
     fn run(&mut self, mode: Mode) -> io::Result<()> {
+        self.run_with(mode, |_, _| Err("Fake local failure".into()))
+    }
+
+    fn run_with(
+        &mut self,
+        mode: Mode,
+        mut local: impl FnMut(&Piece, (u64, u64)) -> super::super::asr::Result<Vec<Value>>,
+    ) -> io::Result<()> {
         let (active, stopped) = mpsc::channel::<()>();
         let listener = &self.listener;
         let evidence = &self.collector.root;
         let state = &mut self.server;
         thread::scope(|scope| {
             let server = scope.spawn(move || state.serve(listener, evidence, mode, stopped));
-            let host = Host::load(&self.settings).unwrap().unwrap();
-            let result = upload_windows(evidence, &self.data, &self.settings, host, &self.source);
+            let host = Host::load(&self.settings).unwrap();
+            let result = upload_windows(
+                evidence,
+                &self.data,
+                &self.settings,
+                host,
+                &self.source,
+                || chrono::Utc::now().timestamp_millis() + self.forward_ms,
+                |_, piece, span, _| local(piece, span),
+            );
             drop(active);
             server.join().unwrap();
             result
@@ -272,6 +292,9 @@ impl Server {
         ];
         reader.read_exact(&mut body).unwrap();
         if path == "/v1/host" {
+            if matches!(mode, Mode::Dead) {
+                return false;
+            }
             let mut status: Value = serde_json::from_str(READY).unwrap();
             if matches!(mode, Mode::Unready) {
                 status["asr"]["state"] = "unavailable".into();
@@ -339,6 +362,7 @@ impl Server {
             let (state, rows, failed) = match mode {
                 Mode::Lost(_) => ("lost", &readings[..0], json!([])),
                 Mode::Partial => ("running", &readings[..1], json!([])),
+                Mode::Stall => ("running", &readings[1..2], json!([])),
                 Mode::Replay if !self.replayed => ("running", &readings[..1], json!([])),
                 Mode::Failed => (
                     "failed",
@@ -389,7 +413,7 @@ impl Server {
             }
             Mode::Malformed => "id: broken\n\n:".to_owned() + &" ".repeat(4200),
             Mode::Lost(2) => frame(2, "host.status", &json!({})),
-            Mode::Lost(_) | Mode::Empty | Mode::Failed => return false,
+            Mode::Lost(_) | Mode::Empty | Mode::Failed | Mode::Stall => return false,
             _ => unreachable!(),
         };
         let terminal = matches!(mode, Mode::Normal) || matches!(mode, Mode::Replay) && cursor == 1;
@@ -501,4 +525,113 @@ fn speech_host_off_and_unready_send_no_audio() {
         assert_eq!(fixture.server.connections, connections);
         assert!(!fixture.data.join("local/speech-uploads").exists());
     }
+}
+
+fn local_reading(piece: &Piece, (start, end): (u64, u64)) -> Value {
+    json!({"piece":"a".repeat(64),"range":"b".repeat(64),"track":piece.track,"start_sample":start,
+        "end_sample":end,"language":"hi","route":"hi","model_sha256":"c".repeat(64),"text":"local","timing":"range"})
+}
+
+#[test]
+fn speech_host_stall_and_death_fall_back_once_and_ignore_late_ranges() {
+    let mut fixture = Fixture::finished();
+    fixture.run(Mode::Stall).unwrap();
+    assert_eq!(fixture.server.uploads.len(), 1);
+    assert!(speech_host::progress(&fixture.settings).contains("Sent 1 of 1"));
+    fixture.forward_ms = 31_000;
+    let settings = fixture.settings.clone();
+    let mut calls = Vec::new();
+    for mode in [Mode::Dead, Mode::Dead, Mode::Normal] {
+        fixture
+            .run_with(mode, |piece, span| {
+                assert!(speech_host::progress(&settings).contains("Running 1 here"));
+                calls.push(span);
+                Ok(vec![local_reading(piece, span)])
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        calls,
+        [(0, 16000), (32000, 48000)],
+        "Queued spans must run once"
+    );
+    let revision = fixture.revision();
+    assert!(revision.provenance["missing_ranges"].is_null());
+    assert_eq!(revision.evidence.len(), 3);
+    assert_eq!(
+        revision
+            .transcript
+            .segments
+            .iter()
+            .take(3)
+            .map(|s| s.text_original.as_str())
+            .collect::<Vec<_>>(),
+        ["local", "second", "local"]
+    );
+    assert_eq!(fixture.server.uploads.len(), 1);
+    assert_eq!(
+        fixture.server.snapshots, 1,
+        "Late ranges must stay on the host"
+    );
+    assert_eq!(fixture.server.retired, 1);
+}
+
+#[test]
+fn speech_host_failed_replacement_fills_its_gap_before_the_deadline() {
+    let mut fixture = Fixture::finished();
+    fixture.run(Mode::Partial).unwrap();
+    fixture.run(Mode::Lost(0)).unwrap();
+    let mut count = 0;
+    fixture
+        .run_with(Mode::Failed, |piece, span| {
+            assert_eq!(span, (16000, 32000));
+            count += 1;
+            Ok(vec![local_reading(piece, span)])
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(fixture.revision().provenance["missing_ranges"].is_null());
+}
+
+#[test]
+fn speech_host_only_reports_gaps_at_the_pipeline_budget() {
+    let mut fixture = Fixture::finished();
+    WorkMode::HostOnly.save(&fixture.settings).unwrap();
+    let mut config = super::super::Config::load_in(&fixture.data).unwrap();
+    config.engine_settings.stage_deadline_seconds = Some(120);
+    config.save(&fixture.data).unwrap();
+    fixture.run(Mode::Stall).unwrap();
+    fixture.forward_ms = 31_000;
+    fixture
+        .run_with(Mode::Dead, |_, _| panic!("Host only started local work"))
+        .unwrap();
+    assert!(speech_host::progress(&fixture.settings).contains("Gaps 0"));
+    fixture.forward_ms = 121_000;
+    fixture
+        .run_with(Mode::Dead, |_, _| panic!("Host only started local work"))
+        .unwrap();
+    assert!(speech_host::progress(&fixture.settings).contains("Gaps 2"));
+    assert_eq!(
+        fixture.revision().provenance["missing_ranges"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn speech_host_this_device_uses_no_connection() {
+    let mut fixture = Fixture::new(true, 3);
+    WorkMode::ThisDevice.save(&fixture.settings).unwrap();
+    fixture.capture(false);
+    fixture
+        .run_with(Mode::Normal, |piece, span| {
+            assert_eq!(span, (0, 48000));
+            Ok(vec![local_reading(piece, span)])
+        })
+        .unwrap();
+    assert_eq!(fixture.server.connections, 0);
+    assert_eq!(fixture.revision().evidence.len(), 1);
+    assert!(speech_host::progress(&fixture.settings).contains("Finished here 1"));
 }

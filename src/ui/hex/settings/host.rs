@@ -2,7 +2,7 @@ use super::{State, card as settings_card, roles};
 use crate::ui::{theme::Palette, widgets::action};
 use rune::{El, TextEdit, Waker, col, row};
 use rune_kit::{Kit, TextInput};
-use sidenote::core::speech_host::{self, Host, Monitor, Status};
+use sidenote::core::speech_host::{self, Host, Monitor, Status, WorkMode};
 
 #[derive(Default)]
 pub(super) struct Form {
@@ -13,6 +13,9 @@ pub(super) struct Form {
     recipient: Option<String>,
     monitor: Option<Monitor>,
     status: Status,
+    mode: WorkMode,
+    progress: String,
+    progress_at: Option<std::time::Instant>,
     error: Option<String>,
 }
 
@@ -22,7 +25,9 @@ impl Form {
         self.recipient = Some(host.recipient().into());
         self.status = Status::Checking;
         self.upload = host.upload_enabled();
-        self.monitor = Some(host.monitor(move || wake())?);
+        if self.mode != WorkMode::ThisDevice {
+            self.monitor = Some(host.monitor(move || wake())?);
+        }
         Ok(())
     }
 
@@ -49,10 +54,23 @@ impl Form {
         self.activate(host.stop_audio_uploads(&path)?, wake)
     }
 
+    fn mode(&mut self, mode: WorkMode, wake: Waker) -> Result<(), String> {
+        let path = speech_host::settings_path()?;
+        mode.save(&path)
+            .map_err(|_| "Could not save the speech work location.")?;
+        self.mode = mode;
+        self.progress.clear();
+        if let Some(host) = Host::load(&path)? {
+            self.activate(host, wake)?;
+        }
+        Ok(())
+    }
+
     fn clear(&mut self) -> Result<(), String> {
         speech_host::clear(&speech_host::settings_path()?, &mut self.monitor)?;
         *self = Self {
             loaded: true,
+            mode: self.mode,
             ..Self::default()
         };
         self.token.set_secure(true);
@@ -61,13 +79,19 @@ impl Form {
 }
 
 pub(super) fn tick(s: &mut State) -> bool {
+    let on_hex = s.on_hex();
     let form = &mut s.hex.shell.speech_host;
     if !form.loaded
         && let Some(wake) = s.waker.clone()
     {
         form.loaded = true;
         form.token.set_secure(true);
-        let result = speech_host::settings_path().and_then(|path| Host::load(&path));
+        let result = speech_host::settings_path().and_then(|path| {
+            form.mode = WorkMode::load(&path)
+                .map_err(|_| "Could not load the speech work location.")?
+                .0;
+            Host::load(&path)
+        });
         form.error = result
             .and_then(|host| {
                 if let Some(host) = host {
@@ -82,6 +106,20 @@ pub(super) fn tick(s: &mut State) -> bool {
     if let Some(status) = form.monitor.as_ref().and_then(Monitor::take_status) {
         form.status = status;
         return true;
+    }
+    if on_hex
+        && form
+            .progress_at
+            .is_none_or(|at| at.elapsed().as_secs() >= 1)
+    {
+        form.progress_at = Some(std::time::Instant::now());
+        let progress = speech_host::settings_path()
+            .map(|path| speech_host::progress(&path))
+            .unwrap_or_default();
+        if progress != form.progress {
+            form.progress = progress;
+            return true;
+        }
     }
     false
 }
@@ -102,10 +140,33 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
         Some(recipient) => format!("{status} ({recipient})"),
         None => status.into(),
     };
+    let mut work = row().gap(8.0).flex_wrap();
+    for (mode, label) in [
+        (WorkMode::Auto, "Auto"),
+        (WorkMode::HostOnly, "Host only"),
+        (WorkMode::ThisDevice, "This device"),
+    ] {
+        let label = if form.mode == mode {
+            format!("{label} (selected)")
+        } else {
+            label.into()
+        };
+        work = work.child(action(&label, p).on_press(move |s: &mut State| {
+            if let Some(wake) = s.waker.clone() {
+                let form = &mut s.hex.shell.speech_host;
+                form.error = form.mode(mode, wake).err();
+            }
+        }));
+    }
     let mut body = col()
         .padding(14.0)
         .gap(8.0)
-        .child(roles::SMALL.wrap(status, color).role("status"))
+        .child(roles::SMALL.wrap("Do the work on", p.soft))
+        .child(work)
+        .child(roles::SMALL.wrap(
+            if form.mode == WorkMode::ThisDevice { "Speech runs on this device".into() } else { status },
+            color,
+        ).role("status"))
         .child(TextInput::new(&form.url)
             .label("Speech host URL")
             .placeholder("https://host.example")
@@ -117,7 +178,9 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
             .on_edit(|s: &mut State| &mut s.hex.shell.speech_host.token)
             .build(k).key("speech-host-token"))
         .child(roles::SMALL.wrap(
-            if form.upload {
+            if form.mode == WorkMode::ThisDevice {
+                "This device sends no audio or status checks to the speech host."
+            } else if form.upload {
                 "Audio uploads are on for the saved host. Sidenote sends audio windows from new meetings and the device token when the host is ready."
             } else {
                 "Allow audio uploads to send audio windows from new meetings and the device token to the HTTPS host above when it is ready. Status checks start when Sidenote opens."
@@ -145,6 +208,9 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
                     form.error = form.clear().err();
                 }
             })));
+    if !form.progress.is_empty() {
+        body = body.child(roles::SMALL.wrap(&form.progress, p.soft).role("status"));
+    }
     if let Some(error) = &form.error {
         body = body.child(roles::SMALL.wrap(error, p.warn).role("alert"));
     }
