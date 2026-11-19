@@ -144,6 +144,8 @@ fn run_within(
     let (sender, receiver) = std::sync::mpsc::channel();
     collect(child.stdout.take(), 0, sender.clone());
     collect(child.stderr.take(), 1, sender);
+    #[cfg(test)]
+    isolated_tests::after_resume();
     let deadline = Instant::now() + limit;
     let status = loop {
         match child.try_wait() {

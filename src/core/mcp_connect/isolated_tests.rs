@@ -41,6 +41,29 @@ pub(super) fn before_attach() {
         hook();
     }
 }
+thread_local! { static READY_FILE: RefCell<Option<PathBuf>> = const { RefCell::new(None) }; }
+thread_local! { static READY_AT: RefCell<Option<Instant>> = const { RefCell::new(None) }; }
+/// Test-only: a PowerShell fake can take seconds to start on a cold machine. The product
+/// deadline is unchanged; the test starts it only once the fake says it is running, by
+/// writing its process id to this file as its first act.
+pub(super) fn after_resume() {
+    let Some(file) = READY_FILE.with(|f| f.borrow_mut().take()) else {
+        return;
+    };
+    let started = Instant::now();
+    while fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| t.trim().parse::<u32>().ok())
+        .is_none()
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "the fake CLI never reported that it started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    READY_AT.with(|t| *t.borrow_mut() = Some(Instant::now()));
+}
 struct Sandbox(tempfile::TempDir);
 impl Sandbox {
     fn new() -> Self {
@@ -567,7 +590,12 @@ fn fake_cli(sandbox: &Sandbox, name: &str, body: &str) -> (PathBuf, PathBuf) {
     (script, pid_file)
 }
 #[cfg(windows)]
-fn run_fake(script: &Path, limit: Duration) -> (Result<std::process::Output, String>, Duration) {
+fn run_fake(
+    script: &Path,
+    limit: Duration,
+    ready: Option<&Path>,
+) -> (Result<std::process::Output, String>, Duration) {
+    READY_FILE.with(|f| *f.borrow_mut() = ready.map(Path::to_path_buf));
     let args: Vec<&std::ffi::OsStr> = vec![
         "-NoProfile".as_ref(),
         "-NonInteractive".as_ref(),
@@ -576,7 +604,9 @@ fn run_fake(script: &Path, limit: Duration) -> (Result<std::process::Output, Str
     ];
     let started = Instant::now();
     let result = super::run_within(&powershell(), &args, limit);
-    (result, started.elapsed())
+    // Time the deadline from the moment the fake reported that it started.
+    let from = READY_AT.with(|t| t.borrow_mut().take()).unwrap_or(started);
+    (result, from.elapsed())
 }
 #[cfg(windows)]
 fn assert_process_gone(pid_file: &Path) {
@@ -611,7 +641,7 @@ Write-Output 'done'
 exit 0
 "#,
     );
-    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3), Some(&pid_file));
     assert!(result.unwrap_err().contains("did not finish"));
     assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
     assert_process_gone(&pid_file);
@@ -648,7 +678,7 @@ Start-Sleep -Seconds 40
             }
         }))
     });
-    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3), Some(&pid_file));
     assert!(result.unwrap_err().contains("did not finish"));
     assert!(elapsed < Duration::from_secs(20), "{elapsed:?}");
     assert_process_gone(&pid_file);
@@ -663,7 +693,7 @@ fn a_slow_cli_is_killed_at_the_deadline() {
         "fake-cli-slow",
         "[IO.File]::WriteAllText('PIDFILE', [string]$PID)\nStart-Sleep -Seconds 40\n",
     );
-    let (result, elapsed) = run_fake(&script, Duration::from_secs(3));
+    let (result, elapsed) = run_fake(&script, Duration::from_secs(3), Some(&pid_file));
     assert!(result.unwrap_err().contains("did not finish"));
     assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
     assert_process_gone(&pid_file);
@@ -678,7 +708,7 @@ fn a_cli_that_finishes_in_time_returns_its_output_and_status() {
         "fake-cli-quick",
         "Write-Output 'out-text'\n[Console]::Error.WriteLine('err-text')\nexit 1\n",
     );
-    let (result, _) = run_fake(&script, Duration::from_secs(20));
+    let (result, _) = run_fake(&script, Duration::from_secs(20), None);
     let output = result.unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("out-text"));
