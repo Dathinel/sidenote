@@ -461,8 +461,12 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     state.models = Models::load(root.path(), &state.config);
     let (installed_tx, installed_rx) = std::sync::mpsc::channel();
     state.models.install_fixture = Some(installed_tx);
+    state.hex.shell.model_query.text = "unmatched search".into();
     let mut runtime = settings_models_runtime(state);
     assert!(click_model_control(&mut runtime, CPU_DOWNLOAD_KEY));
+    runtime.invalidate();
+    runtime.frame(0.01);
+    assert!(runtime.find("model-cancel-silero-vad").is_some());
     let timeout = std::time::Duration::from_secs(5);
     for id in [
         "silero-vad",
@@ -689,6 +693,9 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                     && (m.role == model_catalog::Role::LanguageId
                         || !cfg!(feature = "asr-runtime"))
                     && (models.installed.contains(m.id) || models.partial.contains(m.id));
+            }
+            if cpu_language && !models.pack_queue.is_empty() {
+                return true;
             }
             if m.role == model_catalog::Role::LanguageId && !cpu_language {
                 return false;
