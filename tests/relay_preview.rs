@@ -1,16 +1,24 @@
 //! Real headless app processes, isolated stores, real local Worker and encrypted sessions.
 mod common;
 use serde_json::{Value, json};
-use sidenote::core::{ManualTask, TaskStore, relay_preview};
+use sidenote::core::relay_preview;
+#[cfg(windows)]
+use sidenote::core::{ManualTask, TaskStore};
 
 use std::{
-    io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, Write},
+    path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
     time::{Duration, Instant},
+};
+
+#[cfg(windows)]
+use std::{
+    io::Read,
+    net::{TcpListener, TcpStream},
+    path::PathBuf,
 };
 
 struct Process(Child);
@@ -104,6 +112,7 @@ impl App {
         );
         result["value"].clone()
     }
+    #[cfg(windows)]
     fn rejected(&mut self, request: Value) {
         serde_json::to_writer(&mut self.input, &request).unwrap();
         writeln!(self.input).unwrap();
@@ -120,6 +129,7 @@ impl App {
 }
 
 #[track_caller]
+#[cfg(windows)]
 fn wait_for(app: &mut App, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
@@ -133,6 +143,7 @@ fn wait_for(app: &mut App, predicate: impl Fn(&Value) -> bool) -> Value {
 }
 
 #[track_caller]
+#[cfg(windows)]
 fn wait_shared(app: &mut App, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
@@ -144,12 +155,14 @@ fn wait_shared(app: &mut App, predicate: impl Fn(&Value) -> bool) -> Value {
         thread::sleep(Duration::from_millis(60));
     }
 }
+#[cfg(windows)]
 fn meeting(value: &Value) -> Option<&Value> {
     value["overrides"]["tasks"]["100-2"]
         .as_object()?
         .values()
         .find(|v| v["task"] == "Synthetic generated task")
 }
+#[cfg(windows)]
 fn available_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -158,12 +171,15 @@ fn available_port() -> u16 {
         .port()
 }
 
+#[cfg(windows)]
 static RELAY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(windows)]
 struct LocalRelay {
     _process: Process,
     _lease: std::sync::MutexGuard<'static, ()>,
 }
 
+#[cfg(windows)]
 fn start_relay(state: &Path) -> (LocalRelay, String) {
     // Each case still runs isolated peers; avoid four competing Workerd startups.
     let lease = RELAY_TEST_LOCK
@@ -250,6 +266,7 @@ fn start_relay(state: &Path) -> (LocalRelay, String) {
     )
 }
 
+#[cfg(windows)]
 fn journals(root: &Path) -> BTreeFiles {
     fn collect(root: &Path, output: &mut BTreeFiles) {
         if !root.exists() {
@@ -268,9 +285,11 @@ fn journals(root: &Path) -> BTreeFiles {
     collect(&root.join("state"), &mut output);
     output
 }
+#[cfg(windows)]
 type BTreeFiles = std::collections::BTreeMap<PathBuf, Vec<u8>>;
 
 #[track_caller]
+#[cfg(windows)]
 fn status(app: &mut App, phase: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -293,11 +312,13 @@ fn status(app: &mut App, phase: &str) -> Value {
         thread::sleep(Duration::from_millis(30));
     }
 }
+#[cfg(windows)]
 fn confirmation(root: &Path) -> Value {
     let bytes = std::fs::read(root.join("local/relay/test-confirm.dpapi")).unwrap();
     let plain = sidenote_sync::identity::unprotect(&bytes).expect("protected confirmation");
     serde_json::from_slice(&plain).expect("confirmation shape")
 }
+#[cfg(windows)]
 fn expire_invitation(root: &Path, address: &str) {
     let encrypted = std::fs::read(root.join("local/relay/test-code.dpapi")).unwrap();
     let code = sidenote_sync::identity::unprotect(&encrypted).expect("protected invitation");
@@ -323,10 +344,12 @@ fn expire_invitation(root: &Path, address: &str) {
         "test invitation expiry failed"
     );
 }
+#[cfg(windows)]
 fn find<'a>(tasks: &'a Value, id: &Value) -> Option<&'a Value> {
     tasks.as_array()?.iter().find(|t| &t["id"] == id)
 }
 
+#[cfg(windows)]
 #[test]
 fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
     common::isolate();
@@ -812,6 +835,7 @@ fn two_apps_real_pairing_migration_rollback_conflict_resolution_and_removal() {
     app_b.stop();
 }
 
+#[cfg(windows)]
 #[test]
 fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
     common::isolate();
@@ -959,6 +983,7 @@ fn newer_group_refuses_older_writer_across_offline_restart_and_downgrade() {
     }
 }
 
+#[cfg(windows)]
 fn synthetic_root(root: &Path, name: &str, id: &str, address: &str) {
     std::fs::create_dir_all(root).unwrap();
     std::fs::write(
@@ -974,6 +999,7 @@ fn synthetic_root(root: &Path, name: &str, id: &str, address: &str) {
     .save(root)
     .unwrap();
 }
+#[cfg(windows)]
 fn pair_apps(owner: &mut App, guest: &mut App, owner_root: &Path) {
     owner.request(json!({"op":"host"}));
     status(owner, "code");
@@ -1050,6 +1076,7 @@ fn migration_recovers_after_process_kill_at_durable_boundaries() {
         recovered.stop();
     }
 }
+#[cfg(windows)]
 #[test]
 fn three_peers_refuse_unavailable_removal_without_claiming_revocation() {
     common::isolate();
@@ -1089,6 +1116,7 @@ fn three_peers_refuse_unavailable_removal_without_claiming_revocation() {
     cc.stop();
 }
 
+#[cfg(windows)]
 fn sync_control(address: &str, root: &Path, action: &str) -> Value {
     let room = relay_preview::Settings::load(root).unwrap().room;
     let url = format!(
@@ -1109,6 +1137,7 @@ fn sync_control(address: &str, root: &Path, action: &str) -> Value {
         .unwrap();
     serde_json::from_str(&response).unwrap()
 }
+#[cfg(windows)]
 #[test]
 fn killed_sender_recovers_after_relay_observed_an_interrupted_exchange() {
     common::isolate();
@@ -1161,4 +1190,38 @@ fn killed_sender_recovers_after_relay_observed_an_interrupted_exchange() {
     wait_for(&mut restarted, |t| find(t, &after).is_some());
     restarted.stop();
     bb.stop();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn enabling_relay_preserves_existing_settings_on_linux() {
+    common::isolate();
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path();
+    let relay = root.join("local/relay");
+    std::fs::create_dir_all(&relay).unwrap();
+    let path = relay.join("settings.json");
+    let original = br#"{
+  "enabled": true,
+  "address": "ws://127.0.0.1:1"
+}"#;
+    std::fs::write(&path, original).unwrap();
+
+    let error = relay_preview::Settings {
+        enabled: true,
+        address: "ws://127.0.0.1:2".into(),
+        ..Default::default()
+    }
+    .save(root)
+    .unwrap_err();
+    let unavailable = "Relay sync is not yet available on Linux";
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert_eq!(error.to_string(), unavailable);
+
+    let status = relay_preview::operations::status(root).unwrap();
+    assert!(status.read_only);
+    assert_eq!(status.message, unavailable);
+    assert_eq!(status.last_contact, None);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(!relay.join("replica.sqlite").try_exists().unwrap());
 }
