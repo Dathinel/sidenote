@@ -143,9 +143,9 @@ pub(super) fn chosen_part(
             .filter_map(|(i, line)| {
                 let r: Row = serde_json::from_str(line).ok()?;
                 let start = r.start_ms / 1000.0;
-                let end = serde_json::from_str::<serde_json::Value>(line)
-                    .ok()
-                    .and_then(|v| v["end_ms"].as_f64())
+                let row: serde_json::Value = serde_json::from_str(line).ok()?;
+                let end = row["end_ms"]
+                    .as_f64()
                     .map(|v| v / 1000.0)
                     .filter(|v| v.is_finite() && *v > start)
                     .unwrap_or(start + 0.1);
@@ -165,8 +165,9 @@ pub(super) fn chosen_part(
                     },
                     speaker: r.speaker,
                     turn: None,
-                    english: r.text,
                     audio_start: None,
+                    words: router::capture_words(&row, start, end, &r.text),
+                    english: r.text,
                 })
             })
             .collect())

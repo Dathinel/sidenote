@@ -231,6 +231,7 @@ mod tests {
             turn: None,
             english: "Baseline".into(),
             audio_start: None,
+            words: Vec::new(),
         };
         let mut data = Revision {
             generation: "1".into(),

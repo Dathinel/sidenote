@@ -29,6 +29,7 @@ fn new_english_coverage_outside_baseline_is_selected() {
         turn: None,
         english: "Existing".into(),
         audio_start: None,
+        words: Vec::new(),
     };
     let mut t = english_fallback(
         std::slice::from_ref(&b),
@@ -89,6 +90,7 @@ fn partial_and_one_sample_gaps_preserve_whole_baseline() {
         turn: None,
         english: "Whole baseline".into(),
         audio_start: None,
+        words: Vec::new(),
     };
     let mut t = english_fallback(
         std::slice::from_ref(&baseline),

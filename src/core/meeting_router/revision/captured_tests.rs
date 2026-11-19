@@ -275,9 +275,17 @@ fn saved_public_fallback_overlap_without_router_reason_is_refused() {
     let dest = temp.path().join("published");
     begin(&dest, 1).unwrap();
     let chosen = commit(&dest, &revision).unwrap();
-    let id = revision.provenance["assembly_coverage"]["overlaps"][0]["baseline"]
-        .as_str()
+    let overlap = revision.provenance["assembly_coverage"]["overlaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| {
+            o["fallback_required"]
+                .as_array()
+                .is_some_and(|records| !records.is_empty())
+        })
         .unwrap();
+    let id = overlap["baseline"].as_str().unwrap();
     let unit = baseline.iter().find(|b| b.id == id).unwrap();
     let required = revision.provenance["assembly_coverage"]["fallback_required"]
         .as_array()

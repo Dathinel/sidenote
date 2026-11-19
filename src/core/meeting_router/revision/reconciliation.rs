@@ -214,15 +214,66 @@ fn overlaps(a: &Segment, b: &Segment) -> bool {
 }
 
 fn baseline_of<'a>(s: &Segment, baseline: &'a [Chunk]) -> Option<&'a Chunk> {
+    let [source] = s.sources.as_slice() else {
+        return None;
+    };
+    let part = &source.chunk;
+    if s.route != "en"
+        || s.track != part.track
+        || s.start != part.start
+        || s.end != part.end
+        || s.text_original != part.english
+        || part.english.is_empty()
+    {
+        return None;
+    }
     baseline.iter().find(|b| {
-        s.route == "en"
-            && s.sources.len() == 1
-            && s.track == b.track
-            && s.start == b.start
-            && s.end == b.end
-            && s.text_original == b.english
-            && serde_json::to_value(&s.sources[0].chunk).ok() == serde_json::to_value(b).ok()
+        b.id == part.id
+            && b.track == part.track
+            && (serde_json::to_value(part).ok() == serde_json::to_value(b).ok()
+                || (!part.words.is_empty()
+                    && part.start >= b.start
+                    && part.end <= b.end
+                    && super::super::baseline::valid_words(
+                        &part.words,
+                        part.start,
+                        part.end,
+                        &part.english,
+                    )
+                    && b.words
+                        .windows(part.words.len())
+                        .any(|run| run == part.words)))
     })
+}
+
+fn timed_fallback(unit: &Chunk, routed: &[Segment]) -> Option<Vec<Chunk>> {
+    if !super::super::baseline::valid_words(&unit.words, unit.start, unit.end, &unit.english) {
+        return None;
+    }
+    let mut last_word_end = unit.start;
+    super::gaps::uncovered(unit, routed)
+        .into_iter()
+        .map(|mut part| {
+            part.words
+                .retain(|w| w.start < part.end && part.start < w.end);
+            let first = part.words.first()?;
+            let last = part.words.last()?;
+            // Keep the whole row if the same word would span two fallback fragments.
+            if first.start < last_word_end {
+                return None;
+            }
+            last_word_end = last.end;
+            part.start = part.start.min(first.start);
+            part.end = part.end.max(last.end);
+            part.english = part
+                .words
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some(part)
+        })
+        .collect()
 }
 
 fn fallback_intersection(required: &RequiredFallback, unit: &Chunk) -> Option<Interval> {
@@ -279,11 +330,12 @@ pub(super) fn receipt(
     {
         return None;
     }
+    let part = &fallback.sources[0].chunk;
     let intervals: Vec<_> = routed
         .sources
         .iter()
         .filter(|o| o.chunk.track == unit.track)
-        .map(|o| (o.chunk.start.max(unit.start), o.chunk.end.min(unit.end)))
+        .map(|o| (o.chunk.start.max(part.start), o.chunk.end.min(part.end)))
         .filter(|(start, end)| start < end)
         .collect();
     let seconds: f64 = intervals.iter().map(|(start, end)| end - start).sum();
@@ -340,19 +392,28 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
             .filter(|s| baseline_of(s, baseline).is_none())
             .cloned()
             .collect();
-        t.segments.retain_mut(|s| {
-            let Some(unit) = baseline_of(s, baseline) else {
-                return true;
+        for mut s in std::mem::take(&mut t.segments) {
+            let Some(unit) = baseline_of(&s, baseline) else {
+                t.segments.push(s);
+                continue;
             };
             if super::super::baseline::source_covered(unit, &routed) {
-                return false;
+                continue;
             }
-            if routed.iter().any(|reading| overlaps(s, reading)) {
+            if routed.iter().any(|reading| overlaps(&s, reading)) {
                 s.status =
                     "captured Hex retained: routed text covers only part of this entry".into();
+                if let Some(parts) = timed_fallback(unit, &routed) {
+                    t.segments.extend(
+                        parts
+                            .iter()
+                            .map(|part| super::super::english(part, None, &s.status)),
+                    );
+                    continue;
+                }
             }
-            true
-        });
+            t.segments.push(s);
+        }
     }
     t.segments.sort_by(|a, b| {
         a.start

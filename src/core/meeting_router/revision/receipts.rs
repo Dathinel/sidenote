@@ -131,6 +131,7 @@ fn receipts_out_of_order_cross_track_and_partial_failure_keep_coverage() {
             turn: None,
             english: format!("baseline {}", r.piece),
             audio_start: None,
+            words: Vec::new(),
         });
         if r.piece == "failed" {
             continue;

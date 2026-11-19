@@ -246,6 +246,7 @@ pub(crate) fn read_baseline(bytes: &[u8]) -> Result<Vec<Chunk>> {
             turn: None,
             english: text.into(),
             audio_start: None,
+            words: super::capture_words(&v, start, end, text),
         });
     }
     Ok(baseline)
@@ -1016,6 +1017,7 @@ fn prepared_chunks(
                 turn: Some(format!("{track}-{turn}")),
                 english: String::new(),
                 audio_start: None,
+                words: Vec::new(),
             });
             start = cut;
         }

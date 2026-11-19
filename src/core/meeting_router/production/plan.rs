@@ -286,6 +286,7 @@ fn produce_plan(
                     turn: None,
                     english: String::new(),
                     audio_start: None,
+                    words: Vec::new(),
                 });
                 let Some(language) = &range.language else {
                     let c = coverage.last().ok_or("Missing uncertain interval")?;

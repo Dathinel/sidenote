@@ -57,6 +57,7 @@ fn segment(id: &str, r: &super::batches::Range, origin: i64, value: &Value) -> R
                 turn: None,
                 english: String::new(),
                 audio_start: None,
+                words: Vec::new(),
             },
             joined_start: (start - r.range.context.0) as f64 / 16_000.0,
             joined_end: (end - r.range.context.0) as f64 / 16_000.0,
@@ -333,6 +334,7 @@ pub fn assemble(
                 turn: None,
                 english: String::new(),
                 audio_start: None,
+                words: Vec::new(),
             };
             if !super::baseline::source_covered(&owned, &revision.transcript.segments) {
                 return Err(format!("Owned interval lacks routed or baseline coverage: track={} language={:?} samples=[{start},{end}] seconds=[{},{}]", range.track, range.range.language, owned.start, owned.end).into());

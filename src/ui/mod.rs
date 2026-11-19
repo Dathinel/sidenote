@@ -3847,6 +3847,7 @@ pub fn spec() -> AppSpec<State> {
                                         turn: None,
                                         english: l.text.clone(),
                                         audio_start: None,
+                                        words: Vec::new(),
                                     },
                                     joined_start: 0.0,
                                     joined_end: 3.0,

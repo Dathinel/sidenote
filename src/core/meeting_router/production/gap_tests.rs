@@ -241,3 +241,29 @@ fn routed_boundary_preserves_captured_words_in_notes_input() {
         "{rendered}"
     );
 }
+
+#[test]
+fn timed_captured_words_are_split_at_the_routed_boundary_in_notes_input() {
+    let mut capture = json!({"source":"system","start_ms":750,"end_ms":1050,"text":"keep first replace tail",
+            "words":[{"text":"keep","startMs":750,"endMs":810},
+                {"text":"first","startMs":810,"endMs":900},
+                {"text":"replace","startMs":900,"endMs":980},
+                {"text":"tail","startMs":980,"endMs":1050}]});
+    for word_end in [900, 910] {
+        capture["words"][1]["endMs"] = word_end.into();
+        capture["words"][2]["startMs"] = word_end.into();
+        let rendered = notes_at_routed_boundary(&serde_json::to_vec(&capture).unwrap());
+        assert!(
+            rendered.contains("[00:00:00.750] Them (English): keep first\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[00:00:00.900] Them (English): public routed words"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("replace tail"), "{rendered}");
+    }
+    capture["words"][0]["text"] = "mismatched".into();
+    let rendered = notes_at_routed_boundary(&serde_json::to_vec(&capture).unwrap());
+    assert!(rendered.contains("keep first replace tail"), "{rendered}");
+}

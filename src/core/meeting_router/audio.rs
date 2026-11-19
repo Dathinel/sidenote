@@ -119,6 +119,7 @@ impl Audio {
                                 turn: None,
                                 english: String::new(),
                                 audio_start: None,
+                                words: Vec::new(),
                             });
                         }
                     }

@@ -54,7 +54,7 @@ fn intersects(c: &Chunk, track: &str, start: f64, end: f64) -> bool {
     c.track == track && c.start < end && start < c.end
 }
 
-fn uncovered(c: &Chunk, segments: &[Segment]) -> Vec<Chunk> {
+pub(super) fn uncovered(c: &Chunk, segments: &[Segment]) -> Vec<Chunk> {
     let mut covered: Vec<_> = segments
         .iter()
         .flat_map(|s| &s.sources)

@@ -79,6 +79,7 @@ fn chunk(id: &str, start: f64, end: f64) -> Chunk {
         turn: Some("one".into()),
         english: String::new(),
         audio_start: None,
+        words: Vec::new(),
     }
 }
 

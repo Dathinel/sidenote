@@ -23,6 +23,7 @@ use super::{
     store_io,
 };
 pub use audio::Audio;
+pub(crate) use baseline::capture_words;
 pub use baseline::{english_fallback, reconcile};
 pub use cli::run_cli;
 pub(super) use config::DEFAULT_CPU_PASSES;
@@ -39,6 +40,13 @@ use std::{
 pub const HINDI_THRESHOLD: f32 = 0.9;
 const MAX_SAMPLES: usize = 24 * asr::SAMPLE_RATE as usize;
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CapturedWord {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Chunk {
     pub id: String,
@@ -54,6 +62,8 @@ pub struct Chunk {
     pub english: String,
     #[serde(default)]
     pub audio_start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<CapturedWord>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Offset {

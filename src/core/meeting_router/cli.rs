@@ -69,6 +69,7 @@ fn run(args: &[OsString]) -> Result<()> {
             turn: None,
             english: baseline.clone(),
             audio_start: None,
+            words: Vec::new(),
         }]
     };
     let work = out

@@ -512,6 +512,7 @@ mod tests {
             turn: None,
             english: text.into(),
             audio_start: None,
+            words: Vec::new(),
         };
         let baseline = [
             chunk(1.5, 2.5, "system", "public one"),

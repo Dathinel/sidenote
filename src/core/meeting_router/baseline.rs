@@ -1,5 +1,42 @@
 use super::*;
 
+pub(crate) fn capture_words(
+    row: &serde_json::Value,
+    start: f64,
+    end: f64,
+    text: &str,
+) -> Vec<CapturedWord> {
+    row["words"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|w| {
+                    let ms = |snake, camel| w.get(snake).or_else(|| w.get(camel))?.as_f64();
+                    Some(CapturedWord {
+                        text: w["text"].as_str()?.to_owned(),
+                        start: ms("start_ms", "startMs")? / 1000.0,
+                        end: ms("end_ms", "endMs")? / 1000.0,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .filter(|words| valid_words(words, start, end, text))
+        .unwrap_or_default()
+}
+
+pub(super) fn valid_words(words: &[CapturedWord], start: f64, end: f64, text: &str) -> bool {
+    !words.is_empty()
+        && words
+            .iter()
+            .map(|w| w.text.as_str())
+            .eq(text.split_whitespace())
+        && words
+            .iter()
+            .all(|w| start <= w.start && w.start < w.end && w.end <= end)
+        && words.windows(2).all(|pair| pair[0].end <= pair[1].start)
+}
+
 pub fn english_fallback(
     baseline: &[Chunk],
     config: &RoutingConfig,
