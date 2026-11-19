@@ -32,13 +32,44 @@ pub fn runtime_version() -> Option<&'static str> {
 }
 
 #[cfg(windows)]
-pub(crate) fn verify_runtime(dll: &Path) -> Result<fs::File> {
+fn pin_runtime_path(input: &Path) -> Result<(PathBuf, Vec<fs::File>)> {
+    let resolved = fs::canonicalize(input)?;
+    let directories: Vec<_> = resolved.ancestors().skip(1).collect();
+    let mut options = fs::OpenOptions::new();
+    options.read(true).share_mode(1).custom_flags(0x02200000);
+    let mut pins = Vec::new();
+    for path in directories.into_iter().rev() {
+        let pin = options.open(path)?;
+        let metadata = pin.metadata()?;
+        if !metadata.is_dir() || crate::platform::linked(&metadata) {
+            return Err("Unsafe ONNX Runtime directory".into());
+        }
+        pins.push(pin);
+    }
+    Ok((resolved, pins))
+}
+
+#[cfg(all(windows, test))]
+#[test]
+fn provisioning_review_load_uses_the_resolved_path() {
+    let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    let resolved = path.canonicalize().unwrap();
+    assert_eq!(pin_runtime_path(&path).unwrap().0, resolved);
+}
+
+#[cfg(windows)]
+pub(crate) fn verify_runtime(dll: &Path) -> Result<(PathBuf, Vec<fs::File>)> {
     if !dll.is_absolute() || !dll.is_file() {
         return Err("Choose an absolute path to the ONNX Runtime DLL".into());
     }
-    // Deny writes/deletion between hashing and LoadLibrary; never load arbitrary DLL code.
-    let mut verified = fs::OpenOptions::new().read(true).share_mode(1).open(dll)?;
-    if verified.metadata()?.len() != 17_136_128 {
+    let (path, mut pins) = pin_runtime_path(dll)?;
+    let mut verified = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .custom_flags(0x00200000)
+        .open(&path)?;
+    let metadata = verified.metadata()?;
+    if !metadata.is_file() || crate::platform::linked(&metadata) || metadata.len() != 17_136_128 {
         return Err("ONNX Runtime integrity check failed; model unavailable".into());
     }
     let mut hash = Sha256::new();
@@ -54,15 +85,16 @@ pub(crate) fn verify_runtime(dll: &Path) -> Result<fs::File> {
     if actual != RUNTIME_SHA256 {
         return Err("ONNX Runtime integrity check failed; model unavailable".into());
     }
-    Ok(verified)
+    pins.push(verified);
+    Ok((path, pins))
 }
 
 #[cfg(windows)]
 pub fn initialize(dll: &Path) -> Result<()> {
-    let _verified = verify_runtime(dll)?;
+    let (dll, _pins) = verify_runtime(dll)?;
     RUNTIME
         .get_or_init(|| {
-            preflight(dll)
+            preflight(&dll)
                 .map_err(|_| "ONNX Runtime DLL or its dependencies are unavailable".to_owned())?;
             std::panic::catch_unwind(|| ort::init_from(dll.to_string_lossy()).commit())
                 .map_err(|_| "ONNX Runtime DLL is incompatible".to_string())?
