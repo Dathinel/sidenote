@@ -939,13 +939,15 @@ impl SyncClient {
                 let _permit = permit;
                 let result = worker.request(&request).await;
                 Completed {
-                    id,
-                    session,
-                    domain,
-                    version,
-                    incoming_bytes,
                     worker,
-                    result,
+                    reply: Completion {
+                        id,
+                        session,
+                        domain,
+                        version,
+                        incoming_bytes,
+                        result,
+                    },
                 }
             });
         }
@@ -957,21 +959,31 @@ impl SyncClient {
         completed: Completed,
         bans: &mut BTreeMap<[u8; 32], Ban>,
     ) -> Result<()> {
-        let Completed {
+        let Completed { worker, reply } = completed;
+        self.apply_completion(s, reply, bans, |peer| peer.worker = Some(worker))
+    }
+
+    fn apply_completion(
+        &self,
+        s: &mut Session,
+        reply: Completion,
+        bans: &mut BTreeMap<[u8; 32], Ban>,
+        restore_worker: impl FnOnce(&mut Peer),
+    ) -> Result<()> {
+        let Completion {
             id,
             session,
             domain,
             version,
             incoming_bytes,
-            worker,
             result,
-        } = completed;
+        } = reply;
         s.inflight_bytes = s.inflight_bytes.saturating_sub(incoming_bytes);
         let Some(peer) = s.peers.get_mut(&id).filter(|p| p.cipher.session == session) else {
             return Ok(());
         };
         peer.busy = false;
-        peer.worker = Some(worker);
+        restore_worker(peer);
         let reply = match result {
             Ok(reply) => reply,
             Err(error) => {
@@ -1248,12 +1260,15 @@ impl Session {
     }
 }
 struct Completed {
+    worker: Worker,
+    reply: Completion,
+}
+struct Completion {
     id: [u8; 32],
     session: [u8; 32],
     domain: String,
     version: i64,
     incoming_bytes: usize,
-    worker: Worker,
     result: Result<WorkResponse>,
 }
 fn decode_key(value: &str) -> Option<[u8; 32]> {
@@ -1622,6 +1637,23 @@ mod tests {
         }
         Ok(())
     }
+    fn complete_reply(
+        client: &SyncClient,
+        session: &mut Session,
+        reply: Completion,
+        bans: &mut BTreeMap<[u8; 32], Ban>,
+    ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            client.apply_completion(session, reply, bans, |_| {})
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let worker = Pool::adjacent()?.spawn()?;
+            client.completed(session, Completed { worker, reply }, bans)
+        }
+    }
+
     #[tokio::test]
     async fn f1_peer_quota_completion_keeps_other_peers_and_owner_running() -> Result<()> {
         use crate::store::Limits;
@@ -1651,13 +1683,12 @@ mod tests {
         session
             .peers
             .insert(other, peer(&group, other, owner.identity.public())?);
-        let completed = Completed {
+        let reply = Completion {
             id,
             session: session.peers[&id].cipher.session,
             domain: "tasks".into(),
             version: 0,
             incoming_bytes: 1,
-            worker: Pool::adjacent()?.spawn()?,
             result: Ok(WorkResponse {
                 creator: Some(id),
                 delta: Vec::new(),
@@ -1670,7 +1701,7 @@ mod tests {
                 received: true,
             }),
         };
-        client.completed(&mut session, completed, &mut BTreeMap::new())?;
+        complete_reply(&client, &mut session, reply, &mut BTreeMap::new())?;
         assert!(!session.peers.contains_key(&id));
         assert!(session.peers.contains_key(&other));
         assert_eq!(client.fatal()?, None);
@@ -1692,13 +1723,12 @@ mod tests {
         session
             .peers
             .insert(relay, peer(&group, relay, owner.identity.public())?);
-        let completed = Completed {
+        let reply = Completion {
             id: relay,
             session: session.peers[&relay].cipher.session,
             domain: "tasks".into(),
             version: 0,
             incoming_bytes: 1,
-            worker: Pool::adjacent()?.spawn()?,
             result: Ok(WorkResponse {
                 creator: Some(author),
                 delta: Vec::new(),
@@ -1711,7 +1741,7 @@ mod tests {
                 received: true,
             }),
         };
-        client.completed(&mut session, completed, &mut BTreeMap::new())?;
+        complete_reply(&client, &mut session, reply, &mut BTreeMap::new())?;
         let db = rusqlite::Connection::open(path)?;
         let creator: Vec<u8> =
             db.query_row("SELECT creator FROM doc_meta WHERE id='tasks'", [], |r| {
@@ -1740,17 +1770,16 @@ mod tests {
         session
             .peers
             .insert(good, peer(&group, good, owner.identity.public())?);
-        let completed = Completed {
+        let reply = Completion {
             id: bad,
             session: session.peers[&bad].cipher.session,
             domain: "tasks".into(),
             version: 0,
             incoming_bytes: 1,
-            worker: Pool::adjacent()?.spawn()?,
             result: Err(Failure(Reason::CorruptDocument).into()),
         };
         let mut bans = BTreeMap::new();
-        client.completed(&mut session, completed, &mut bans)?;
+        complete_reply(&client, &mut session, reply, &mut bans)?;
         assert!(!session.peers.contains_key(&bad));
         assert!(session.peers.contains_key(&good));
         assert_eq!(bans.len(), 1);
