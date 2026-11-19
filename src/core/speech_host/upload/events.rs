@@ -36,8 +36,7 @@ impl Upload<'_> {
             journal.cursor()
         );
         let events = format!("{path}/events");
-        let mut result = Ok(());
-        let status = request(
+        let _ = request(
             &self.host.endpoint,
             &self.host.token,
             Request {
@@ -46,24 +45,15 @@ impl Upload<'_> {
                 headers: &headers,
                 body: &[],
             },
-            |_, data| {
-                result = stream.feed(data, journal);
-                result.is_ok() && !journal.done() && !stream.failed
-            },
+            |_, data| stream.feed(data, journal).is_ok() && !journal.done() && !stream.failed,
         );
-        result?;
-        if journal.done() {
-            return Ok(());
-        }
-        if stream.terminal.is_some()
-            || stream.failed
-            || (status == Some(200) && stream.bytes.is_empty())
-        {
+        if !journal.done() {
+            // Timeouts, malformed frames and disconnects all leave the same recovery path.
             self.snapshot(
                 piece_path,
                 id,
                 journal,
-                stream.terminal.map(|(count, _)| count),
+                stream.terminal.map(|(_, count, _)| count),
                 false,
             )?;
         }
@@ -94,22 +84,21 @@ impl Upload<'_> {
                 return Err(remote_error());
             }
             let key = journal.range(value)?;
-            if seen.insert(key) && !journal.ranges().contains_key(key) {
+            if seen.insert(key.clone()) && !journal.ranges().contains_key(&key) {
                 changes.push(Change::Range(value.clone()));
             }
         }
         if matches!(data["state"].as_str(), Some("done" | "failed"))
-            && expected.is_none_or(|count| count == journal.ranges().len() + changes.len())
+            && seen.len() == journal.ranges().len() + changes.len()
+            && expected.is_none_or(|count| count == seen.len())
         {
             changes.push(Change::Done(failures.clone()));
         }
         if reset {
             changes.push(Change::Cursor(0));
-            if data["state"] == "queued" && ranges.is_empty() {
-                // The server's snapshot also lost its results. Re-submit the collector's WAV
-                // under a new session while keeping the same piece and range identities.
-                changes.extend([Change::Ack(false), Change::NewSession]);
-            }
+        }
+        if data["state"] == "lost" {
+            changes.push(Change::Lost);
         }
         journal.record(changes)
     }
@@ -119,7 +108,7 @@ struct Stream<'a> {
     id: &'a str,
     bytes: Vec<u8>,
     received: BTreeSet<u64>,
-    terminal: Option<(usize, Vec<Value>)>,
+    terminal: Option<(u64, usize, Vec<Value>)>,
     failed: bool,
 }
 
@@ -174,7 +163,7 @@ impl Stream<'_> {
             match event {
                 "range.result" => {
                     let key = journal.range(&value)?;
-                    if !journal.ranges().contains_key(key) {
+                    if !journal.ranges().contains_key(&key) {
                         changes.push(Change::Range(value));
                     }
                 }
@@ -187,17 +176,11 @@ impl Stream<'_> {
                     if value["ranges_total"].as_u64() != Some(ok as u64 + failures.len() as u64) {
                         return Err(remote_error());
                     }
-                    self.terminal = Some((ok, failures.clone()));
+                    self.terminal = Some((seq, ok, failures.clone()));
                 }
                 "piece.failed" => self.failed = true,
                 _ => {}
             }
-        }
-        if let Some((wanted, failures)) = &self.terminal
-            && *wanted == count + changes.len()
-            && !journal.done()
-        {
-            changes.push(Change::Done(failures.clone()));
         }
         let mut next = cursor;
         while next
@@ -205,6 +188,13 @@ impl Stream<'_> {
             .is_some_and(|seq| self.received.remove(&seq))
         {
             next += 1;
+        }
+        if let Some((seq, wanted, failures)) = &self.terminal
+            && next >= *seq
+            && *wanted == count + changes.len()
+            && !journal.done()
+        {
+            changes.push(Change::Done(failures.clone()));
         }
         if next != cursor {
             changes.push(Change::Cursor(next));

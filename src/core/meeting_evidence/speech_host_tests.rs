@@ -353,7 +353,7 @@ impl Server {
         if matches!(mode, Mode::Idle | Mode::Lost(1)) {
             return true;
         }
-        let payload = match mode {
+        let mut payload = match mode {
             Mode::Normal => {
                 result(1, 0) + &result(2, 1) + &result(3, 2) + &frame(4, "piece.done", &done)
             }
@@ -368,10 +368,116 @@ impl Server {
                 result(1, 0) + ":" + &" ".repeat(4200) + "\n\nid: "
             }
             Mode::Malformed => "id: broken\n\n:".to_owned() + &" ".repeat(4200),
+            Mode::Lost(2) => frame(2, "host.status", &json!({})),
             Mode::Lost(_) | Mode::Empty => return false,
             _ => unreachable!(),
         };
-        write!(socket, "{:x}\r\n{payload}\r\n", payload.len()).unwrap();
-        false
+        let terminal = matches!(mode, Mode::Normal) || matches!(mode, Mode::Replay) && cursor == 1;
+        if terminal {
+            // Let the client read terminal frames while the HTTP stream remains open.
+            payload.push(':');
+            payload.push_str(&" ".repeat(4200));
+            payload.push_str("\n\n");
+        }
+        let chunk = format!("{:x}\r\n{payload}\r\n", payload.len());
+        socket.write_all(chunk.as_bytes()).unwrap();
+        terminal
     }
+}
+
+#[test]
+fn speech_host_uploads_before_stop_and_releases_at_the_cap() {
+    let mut fixture = Fixture::new(true, 302);
+    fixture.capture(true);
+    fixture.run(Mode::Normal).unwrap();
+    assert_eq!(
+        fixture.server.uploads.len(),
+        1,
+        "First window must upload while recording"
+    );
+    fixture.capture(false);
+    let result = fixture.run(Mode::Normal);
+    assert_eq!(
+        fixture.server.full, 0,
+        "Retained session cap blocked a later window"
+    );
+    result.unwrap();
+    assert_eq!(fixture.server.uploads.len(), 2);
+    assert_eq!(fixture.server.retired, 2);
+    assert_eq!(fixture.server.peak, 1);
+    assert_eq!(fixture.revision().transcript.segments[0].start, 1.0);
+}
+
+#[test]
+fn speech_host_retries_put_and_replays_after_a_drop() {
+    let mut fixture = Fixture::new(true, 3);
+    fixture.capture(false);
+    assert!(fixture.run(Mode::CutPut).is_err());
+    fixture.run(Mode::Partial).unwrap();
+    fixture.run(Mode::Replay).unwrap();
+    fixture.golden();
+}
+
+#[test]
+fn speech_host_recovers_lost_log_with_stable_range_keys() {
+    let mut reference = Fixture::new(true, 3);
+    reference.capture(false);
+    reference.run(Mode::Normal).unwrap();
+    let golden = reference.golden();
+    for next in [0, 1, 2] {
+        let mut fixture = Fixture::new(true, 3);
+        fixture.capture(false);
+        fixture.run(Mode::Partial).unwrap();
+        fixture.run(Mode::Lost(next)).unwrap();
+        fixture.run(Mode::Normal).unwrap();
+        assert_eq!(fixture.server.uploads.len(), 2);
+        let [(old, piece), (new, same_piece)] = fixture.server.uploads.as_slice() else {
+            unreachable!()
+        };
+        assert_ne!(old, new);
+        assert_eq!(piece, same_piece);
+        assert_eq!(fixture.server.raw_keys.len(), 6);
+        assert_eq!(fixture.golden(), golden);
+    }
+}
+
+fn check_incomplete_stream(mode: Mode) {
+    let mut fixture = Fixture::new(true, 3);
+    fixture.capture(false);
+    fixture.run(mode).unwrap();
+    assert_eq!(fixture.server.snapshots, 1);
+    fixture.golden();
+}
+
+#[test]
+fn speech_host_snapshots_after_read_timeout() {
+    check_incomplete_stream(Mode::Idle);
+}
+
+#[test]
+fn speech_host_snapshots_after_empty_disconnect() {
+    check_incomplete_stream(Mode::Empty);
+}
+
+#[test]
+fn speech_host_snapshots_after_partial_frame() {
+    check_incomplete_stream(Mode::Truncated);
+}
+
+#[test]
+fn speech_host_snapshots_after_malformed_frame() {
+    check_incomplete_stream(Mode::Malformed);
+}
+
+#[test]
+fn speech_host_off_and_unready_send_no_audio() {
+    let mut off = Fixture::new(false, 3);
+    off.capture(false);
+    off.run(Mode::Unready).unwrap();
+    assert!(off.server.sessions.is_empty());
+    let mut unavailable = Fixture::new(true, 3);
+    unavailable.capture(false);
+    unavailable.run(Mode::Unready).unwrap();
+    assert!(unavailable.server.sessions.is_empty());
+    assert!(!unavailable.data.join("local/speech-uploads").exists());
 }

@@ -144,7 +144,7 @@ fn select(transcript: &mut Transcript, baseline: &[Chunk]) -> Vec<Segment> {
 
 #[cfg(windows)]
 pub(in crate::core) fn assemble_host(
-    ranges: BTreeMap<&str, (i64, &Value)>,
+    ranges: BTreeMap<String, (i64, &Value)>,
     config: &str,
     source: &str,
     baseline: &[Chunk],
@@ -157,7 +157,7 @@ pub(in crate::core) fn assemble_host(
     transcript.warnings.clear();
     let mut evidence = BTreeMap::new();
     for (id, (origin, value)) in ranges {
-        evidence.insert(id.to_owned(), value.clone());
+        evidence.insert(id.clone(), value.clone());
         if value["route"] == "en" {
             continue;
         }
@@ -165,7 +165,7 @@ pub(in crate::core) fn assemble_host(
             let start = value["start_sample"].as_u64().ok_or("Missing start")?;
             let end = value["end_sample"].as_u64().ok_or("Missing end")?;
             let mut reading = segment(
-                id,
+                &id,
                 &super::batches::Range {
                     track: value["track"].as_str().ok_or("Missing track")?.into(),
                     piece: String::new(),

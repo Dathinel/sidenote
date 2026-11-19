@@ -57,6 +57,7 @@ impl<'a> Upload<'a> {
             || reply.role != "server"
             || !matches!(reply.asr.state, Asr::Ready)
             || !reply.speech_jobs
+            || !reply.session_retirement
         {
             return None;
         }
@@ -183,6 +184,7 @@ impl<'a> Upload<'a> {
                 Journal::open(journal_path, piece)?
             }
         };
+        self.retire(&mut journal)?;
         if journal.done() {
             return Ok(journal);
         }
@@ -213,6 +215,9 @@ impl<'a> Upload<'a> {
                 config_sha256: &self.config,
             })?,
         )?;
+        if status == 429 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
         let session = reply["session"]
             .as_str()
             .filter(|s| key(s))
@@ -223,9 +228,16 @@ impl<'a> Upload<'a> {
         let path = format!("/v1/sessions/{session}");
         let latest = reply["next_seq"].as_u64().ok_or_else(remote_error)?;
         let piece_path = format!("{path}/pieces/{id}");
-        if status == 201 && journal.acknowledged() {
-            journal.record(vec![Change::Ack(false), Change::Cursor(0)])?;
+        let mut changes = Vec::new();
+        match journal.session() {
+            Some(saved) if saved != session => return Err(remote_error()),
+            None => changes.push(Change::Session(Some(session.to_owned()))),
+            _ => {}
         }
+        if status == 201 && journal.acknowledged() {
+            changes.extend([Change::Ack(false), Change::Cursor(0)]);
+        }
+        journal.record(changes)?;
         if !journal.acknowledged() {
             let headers = format!(
                 "Content-Type: audio/wav\r\nX-Piece: {}\r\n",
@@ -252,16 +264,25 @@ impl<'a> Upload<'a> {
             }
             journal.record(vec![Change::Ack(true)])?;
         }
-        let (code, _) = self.send(
-            &format!("{path}/finish"),
-            "POST",
-            "Content-Type: application/json\r\n",
-            br#"{"pieces_total":1}"#,
-        )?;
-        if code != 200 {
-            return Err(remote_error());
-        }
         self.consume(&path, &piece_path, &id, &mut journal, latest)?;
+        self.retire(&mut journal)?;
         Ok(journal)
+    }
+
+    fn retire(&self, journal: &mut Journal) -> io::Result<()> {
+        if (journal.done() || journal.lost())
+            && let Some(id) = journal.session()
+        {
+            let (code, _) = self.send(&format!("/v1/sessions/{id}"), "DELETE", "", &[])?;
+            if code != 204 {
+                return Err(remote_error());
+            }
+            let mut changes = vec![Change::Session(None)];
+            if journal.lost() {
+                changes.extend([Change::Ack(false), Change::Cursor(0), Change::NewSession]);
+            }
+            journal.record(changes)?;
+        }
+        Ok(())
     }
 }

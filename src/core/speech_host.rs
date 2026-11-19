@@ -172,6 +172,8 @@ struct Reply {
     asr: AsrReply,
     #[serde(default)]
     speech_jobs: bool,
+    #[serde(default)]
+    session_retirement: bool,
 }
 
 #[derive(Deserialize)]

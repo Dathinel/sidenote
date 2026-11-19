@@ -401,6 +401,7 @@ fn upload_windows(
             };
             match upload.piece(meeting, piece, &dir.join("audio.wav")) {
                 Ok(journal) => journals.push(journal),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
                 Err(error) => {
                     failure.get_or_insert(error);
                 }
@@ -768,7 +769,7 @@ impl Drop for Collector {
 }
 
 #[cfg(all(test, windows))]
-mod speech_tests;
+mod speech_host_tests;
 
 #[cfg(test)]
 mod tests {

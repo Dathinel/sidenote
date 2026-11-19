@@ -25,6 +25,8 @@ pub enum Change {
     Done(Vec<Value>),
     Cursor(u64),
     NewSession,
+    Session(Option<String>),
+    Lost,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -130,6 +132,31 @@ impl Journal {
             .unwrap_or(0)
     }
 
+    pub fn session(&self) -> Option<&str> {
+        self.log
+            .changes
+            .iter()
+            .rev()
+            .find_map(|change| match change {
+                Change::Session(id) => Some(id.as_deref()),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    pub fn lost(&self) -> bool {
+        self.log
+            .changes
+            .iter()
+            .rev()
+            .find_map(|change| match change {
+                Change::Lost => Some(true),
+                Change::NewSession => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
     pub fn session_generation(&self) -> usize {
         self.log
             .changes
@@ -145,9 +172,17 @@ impl Journal {
             .any(|c| matches!(c, Change::Done(_)))
     }
 
-    pub fn range<'a>(&self, value: &'a Value) -> io::Result<&'a str> {
+    pub fn range(&self, value: &Value) -> io::Result<String> {
         let piece = &self.log.cut;
-        let id = value["range"]
+        value["range"]
+            .as_str()
+            .filter(|s| key(s))
+            .ok_or_else(invalid)?;
+        let piece_id = value["piece"]
+            .as_str()
+            .filter(|s| key(s))
+            .ok_or_else(invalid)?;
+        let model = value["model_sha256"]
             .as_str()
             .filter(|s| key(s))
             .ok_or_else(invalid)?;
@@ -155,7 +190,6 @@ impl Journal {
         let end = value["end_sample"].as_u64().ok_or_else(invalid)?;
         if !matches!(value["language"].as_str(), Some("en" | "hi" | "te"))
             || value["route"] != value["language"]
-            || !value["model_sha256"].as_str().is_some_and(key)
             || value["track"] != piece.track
             || start < piece.start_sample
             || start >= end
@@ -163,10 +197,18 @@ impl Journal {
         {
             return Err(invalid());
         }
-        Ok(id)
+        // L7 hashes a batch WAV path into its receipt key. Ownership survives a new session.
+        Ok(super::upload::digest(&serde_json::to_vec(&(
+            piece_id,
+            &piece.track,
+            start,
+            end,
+            &value["language"],
+            model,
+        ))?))
     }
 
-    pub fn ranges(&self) -> BTreeMap<&str, &Value> {
+    pub fn ranges(&self) -> BTreeMap<String, &Value> {
         let mut ranges = BTreeMap::new();
         for rec in &self.log.changes {
             if let Change::Range(value) = rec
@@ -219,7 +261,7 @@ mod tests {
         };
         let mut journal = Journal::open(path.clone(), piece).unwrap();
         let key = "b".repeat(64);
-        let mut range = json!({"range":key,"track":"system","start_sample":0,"end_sample":16000,
+        let mut range = json!({"piece":"d".repeat(64),"range":key,"track":"system","start_sample":0,"end_sample":16000,
             "model_sha256":"c".repeat(64),"route":"hi","language":"hi","timing":"range","text":"first reading"});
         journal
             .record(vec![
