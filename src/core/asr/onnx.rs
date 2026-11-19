@@ -92,11 +92,12 @@ pub(crate) fn verify_runtime(dll: &Path) -> Result<(PathBuf, Vec<fs::File>)> {
 #[cfg(windows)]
 pub fn initialize(dll: &Path) -> Result<()> {
     let (dll, _pins) = verify_runtime(dll)?;
+    let load_path = dll.to_str().ok_or("ONNX Runtime path is not Unicode")?;
     RUNTIME
         .get_or_init(|| {
             preflight(&dll)
                 .map_err(|_| "ONNX Runtime DLL or its dependencies are unavailable".to_owned())?;
-            std::panic::catch_unwind(|| ort::init_from(dll.to_string_lossy()).commit())
+            std::panic::catch_unwind(|| ort::init_from(load_path).commit())
                 .map_err(|_| "ONNX Runtime DLL is incompatible".to_string())?
                 .map(|_| ())
                 .map_err(|_| "ONNX Runtime initialization failed".to_string())
