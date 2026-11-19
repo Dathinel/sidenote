@@ -186,6 +186,27 @@ impl Models {
         );
     }
 
+    fn request_download(
+        &mut self,
+        id: &'static str,
+        remove: bool,
+        notify: impl Fn(Msg) + Send + 'static,
+    ) -> bool {
+        if self.scene || self.jobs.contains_key(id) || (remove && !self.remember_choice(id, true)) {
+            return false;
+        }
+        self.start(
+            id,
+            if remove {
+                Action::Remove
+            } else {
+                Action::Install
+            },
+            notify,
+        );
+        true
+    }
+
     fn remember_choice(&mut self, id: &'static str, off: bool) -> bool {
         #[cfg(all(windows, feature = "asr-runtime"))]
         if let Err(error) = provisioning::opt_out(&self.store, id, off) {
@@ -288,18 +309,7 @@ impl State {
         self.hex.shell.saved = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
     }
     fn model_download(&mut self, id: &'static str, remove: bool) {
-        if self.models.scene
-            || self.models.jobs.contains_key(id)
-            || (remove && !self.models.remember_choice(id, true))
-        {
-            return;
-        }
-        let action = if remove {
-            Action::Remove
-        } else {
-            Action::Install
-        };
-        self.models.start(id, action, model_notify(self));
+        self.models.request_download(id, remove, model_notify(self));
     }
 
     #[cfg(all(windows, feature = "asr-runtime"))]
@@ -326,28 +336,91 @@ fn model_notify(s: &State) -> impl Fn(Msg) + Send + 'static {
         }
     }
 }
-/// Headless startup check with preseeded, checksum-verified files. It cannot fetch.
+/// Runs one Settings or automatic job in an isolated proof process.
 #[cfg(all(windows, feature = "asr-runtime"))]
-pub(crate) fn provision_from_cache(root: &Path) -> std::io::Result<()> {
+pub(crate) fn provision_for_proof(
+    root: &Path,
+    mode: &str,
+    cancel_at: Option<u64>,
+) -> std::io::Result<()> {
+    use std::{
+        io,
+        time::{Duration, Instant},
+    };
     let config = sidenote::core::Config::load_in(root)?;
     if !root.is_absolute() || !config.pipeline.model_state_dir.as_os_str().is_empty() {
-        return Err(std::io::Error::other(
-            "The cache check needs an absolute, isolated state folder",
+        return Err(io::Error::other(
+            "The model check needs an absolute, isolated state folder",
+        ));
+    }
+    if mode != "cache"
+        && !root
+            .canonicalize()?
+            .starts_with(std::env::temp_dir().canonicalize()?)
+    {
+        return Err(io::Error::other(
+            "The catalog check needs a temporary state folder",
         ));
     }
     let mut models = Models::load(root, &config);
     let (tx, rx) = std::sync::mpsc::channel();
-    if !models.provision(&config, false, true, move |msg| {
-        let _ = tx.send(msg);
-    }) {
-        return Err(std::io::Error::other(
-            "No automatic model install could start",
-        ));
+    let notify = || {
+        let sender = tx.clone();
+        move |msg| {
+            let _ = sender.send(msg);
+        }
+    };
+    if matches!(mode, "cache" | "catalog") {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !models.provision(&config, false, mode == "cache", notify()) {
+            if mode == "cache"
+                || Instant::now() >= deadline
+                || provisioning::next_pack(&models.store, &config, |id| {
+                    models.errors.contains_key(id)
+                })
+                .is_none()
+            {
+                return Err(io::Error::other("No automatic model install could start"));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    } else {
+        let (action, id) = mode
+            .split_once(':')
+            .ok_or_else(|| io::Error::other("Unknown model check action"))?;
+        let id = provisioning::PACKS
+            .into_iter()
+            .find(|pack| *pack == id)
+            .ok_or_else(|| io::Error::other("Unknown automatic model pack"))?;
+        if !matches!(action, "install" | "remove")
+            || !models.request_download(id, action == "remove", notify())
+        {
+            return Err(io::Error::other(
+                "Could not start the requested Settings action",
+            ));
+        }
     }
+    drop(tx);
     for msg in rx {
-        if let Msg::Finished(_, result) = msg {
+        if let Msg::Progress(id, ref progress) = msg {
+            println!(
+                "{id} {:?} {}/{}",
+                progress.phase, progress.downloaded, progress.total
+            );
+            if matches!(progress.phase, Phase::Downloading)
+                && cancel_at.is_some_and(|at| progress.downloaded >= at)
+            {
+                models.cancel(id);
+            }
+        } else if let Msg::Finished(_, ref outcome) = msg {
+            let result = outcome
+                .as_ref()
+                .map(|()| ())
+                .map_err(|e| io::Error::new(e.kind(), e.to_string()));
+            models.apply(msg);
             return result;
         }
+        models.apply(msg);
     }
     Err(std::io::Error::other("Automatic model worker disconnected"))
 }
