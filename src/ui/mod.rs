@@ -1408,7 +1408,7 @@ impl State {
             Event::ListenerFinished(result) => self.listener_finished(result),
             Event::ListenerProbed(status, gap) => self.listener_probed(status, gap),
             Event::Hex(msg) => self.hex_apply(msg),
-            Event::Models(msg) => self.models.apply(msg),
+            Event::Models(msg) => self.model_event(msg),
             Event::Annotations(msg) => self.apply_annotations(msg),
             Event::McpConnected(result) => {
                 self.connection.busy = false;

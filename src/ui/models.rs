@@ -3,7 +3,7 @@ use rune::{El, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::Path,
     sync::{
         Arc,
@@ -11,6 +11,9 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
+
+const CPU_DOWNLOAD_KEY: &str = "download-cpu-language-packs";
+const CPU_DOWNLOAD_LABEL: &str = "Download Hindi and Telugu (567 MB)";
 
 pub enum Msg {
     Progress(&'static str, Progress),
@@ -37,6 +40,9 @@ pub struct Models {
     progress: HashMap<&'static str, Progress>,
     errors: HashMap<&'static str, String>,
     jobs: HashMap<&'static str, Job>,
+    pack_queue: VecDeque<&'static str>,
+    #[cfg(test)]
+    install_fixture: Option<std::sync::mpsc::Sender<&'static str>>,
     preference_error: Option<String>,
     scene: bool,
 }
@@ -87,17 +93,30 @@ impl Models {
             progress: HashMap::new(),
             errors: HashMap::new(),
             jobs: HashMap::new(),
+            pack_queue: VecDeque::new(),
+            #[cfg(test)]
+            install_fixture: None,
             scene: false,
         }
     }
-    pub fn apply(&mut self, msg: Msg) {
+    fn apply(&mut self, msg: Msg) -> bool {
         match msg {
             Msg::Progress(id, progress) => {
                 self.progress.insert(id, progress);
             }
             Msg::Finished(id, result) => {
+                let mut continue_queue = false;
                 if let Some(job) = self.jobs.remove(id) {
+                    let cancelled = job.cancel.load(Ordering::Relaxed);
                     let _ = job.worker.join();
+                    if self.pack_queue.front() == Some(&id) {
+                        if cancelled || result.is_err() {
+                            self.pack_queue.clear();
+                        } else {
+                            self.pack_queue.pop_front();
+                            continue_queue = !self.pack_queue.is_empty();
+                        }
+                    }
                 }
                 self.progress.remove(id);
                 let store = &self.store;
@@ -120,14 +139,18 @@ impl Models {
                         self.errors.insert(id, error.to_string());
                     }
                 }
+                return continue_queue;
             }
         }
+        false
     }
 
     fn start(&mut self, id: &'static str, action: Action, notify: impl Fn(Msg) + Send + 'static) {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         let store = self.store.clone();
+        #[cfg(test)]
+        let install_fixture = self.install_fixture.clone();
         self.errors.remove(id);
         self.progress.insert(
             id,
@@ -141,7 +164,17 @@ impl Models {
             let progress = |p| notify(Msg::Progress(id, p));
             let result = match action {
                 Action::Remove => store.remove(id),
-                Action::Install => store.install(id, &worker_cancel, progress),
+                Action::Install => {
+                    #[cfg(test)]
+                    if let Some(fixture) = install_fixture {
+                        notify(Msg::Finished(
+                            id,
+                            fixture.send(id).map_err(std::io::Error::other),
+                        ));
+                        return;
+                    }
+                    store.install(id, &worker_cancel, progress)
+                }
             };
             notify(Msg::Finished(id, result));
         });
@@ -174,6 +207,26 @@ impl Models {
             notify,
         );
         true
+    }
+
+    fn can_download_cpu_packs(&self, config: &sidenote::core::Config) -> bool {
+        cfg!(all(windows, feature = "asr-runtime"))
+            && config.labs.after_stop_language_routing
+            && config.pipeline.enabled()
+            && config.pipeline.language_mode == "auto"
+            && self.pack_queue.is_empty()
+            && self.jobs.keys().all(|id| !cpu_language_pack(id))
+            && model_catalog::CPU_LANGUAGE_PACKS
+                .iter()
+                .any(|id| !self.installed.contains(id))
+    }
+
+    fn start_next_cpu_pack(&mut self, notify: impl Fn(Msg) + Send + 'static) {
+        if let Some(id) = self.pack_queue.front().copied()
+            && !self.request_download(id, false, notify)
+        {
+            self.pack_queue.clear();
+        }
     }
 
     fn cancel(&mut self, id: &'static str) {
@@ -215,7 +268,26 @@ impl State {
         self.hex.shell.saved = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
     }
     fn model_download(&mut self, id: &'static str, remove: bool) {
-        self.models.request_download(id, remove, model_notify(self));
+        if self.models.pack_queue.is_empty() || !cpu_language_pack(id) {
+            self.models.request_download(id, remove, model_notify(self));
+        }
+    }
+
+    fn download_cpu_packs(&mut self) {
+        if !self.models.can_download_cpu_packs(&self.config) {
+            return;
+        }
+        self.models.pack_queue = model_catalog::CPU_LANGUAGE_PACKS
+            .into_iter()
+            .filter(|id| !self.models.installed.contains(id))
+            .collect();
+        self.models.start_next_cpu_pack(model_notify(self));
+    }
+
+    pub(super) fn model_event(&mut self, msg: Msg) {
+        if self.models.apply(msg) {
+            self.models.start_next_cpu_pack(model_notify(self));
+        }
     }
 }
 
@@ -280,17 +352,21 @@ fn provisioning_review_cancel_stops_even_when_saving_fails() {
 
     let blocked = root.path().join("not-a-directory");
     std::fs::write(&blocked, b"fixture").unwrap();
-    let mut models = Models::load(&blocked, &sidenote::core::Config::default());
+    let mut state = State::new();
+    state.models = Models::load(&blocked, &sidenote::core::Config::default());
+    state.store.root = blocked;
     let id = "silero-vad";
-    assert!(models.request_download(id, false, |_| {}));
-    models.cancel(id);
+    assert!(state.models.request_download(id, false, |_| {}));
+    state.model_language("hi");
+    state.models.cancel(id);
 
-    assert!(models.jobs[id].cancel.load(Ordering::Relaxed));
+    assert!(state.models.jobs[id].cancel.load(Ordering::Relaxed));
     assert!(
-        models
+        state
+            .models
             .preference_error
             .as_deref()
-            .is_some_and(|e| e.contains("Could not read meeting languages"))
+            .is_some_and(|e| e.contains("Could not save meeting languages"))
     );
 }
 
@@ -331,6 +407,114 @@ fn provisioning_review_cpu_language_packs_keep_their_settings_controls() {
             .find("model-download-indicconformer-te-ctc")
             .is_some()
     );
+}
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn dev40_prompt_matches_routing_and_installed_packs() {
+    let mut state = State::new();
+    state.config = sidenote::core::Config::default();
+    state.models.installed.clear();
+    let mut runtime = settings_models_runtime(state);
+    assert!(runtime.find(CPU_DOWNLOAD_KEY).is_some());
+
+    runtime.state.config.labs.after_stop_language_routing = false;
+    runtime.invalidate();
+    runtime.frame(0.01);
+    assert!(runtime.find(CPU_DOWNLOAD_KEY).is_none());
+
+    runtime.state.config.labs.after_stop_language_routing = true;
+    runtime.state.config.pipeline.language_mode = "forced:te".into();
+    runtime.invalidate();
+    runtime.frame(0.01);
+    assert!(runtime.find(CPU_DOWNLOAD_KEY).is_none());
+
+    runtime.state.config.pipeline.language_mode = "auto".into();
+    runtime
+        .state
+        .models
+        .installed
+        .extend(model_catalog::CPU_LANGUAGE_PACKS);
+    runtime.invalidate();
+    runtime.frame(0.01);
+    assert!(runtime.find(CPU_DOWNLOAD_KEY).is_none());
+
+    runtime
+        .state
+        .models
+        .installed
+        .remove("indicconformer-te-ctc");
+    runtime.invalidate();
+    runtime.frame(0.01);
+    assert!(runtime.find(CPU_DOWNLOAD_KEY).is_some());
+}
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn dev40_prompt_queues_exactly_four_manual_installs() {
+    let mut state = State::new();
+    let root = tempfile::tempdir().unwrap();
+    state.config = sidenote::core::Config::default();
+    state.models = Models::load(root.path(), &state.config);
+    let (installed_tx, installed_rx) = std::sync::mpsc::channel();
+    state.models.install_fixture = Some(installed_tx);
+    let mut runtime = settings_models_runtime(state);
+    assert!(click_cpu_download(&mut runtime));
+    let timeout = std::time::Duration::from_secs(5);
+    for id in [
+        "silero-vad",
+        "anuvani-lid-int8",
+        "indicconformer-hi-ctc",
+        "indicconformer-te-ctc",
+    ] {
+        assert_eq!(runtime.state.models.jobs.len(), 1);
+        assert!(
+            runtime
+                .state
+                .models
+                .jobs
+                .get(id)
+                .is_some_and(|job| job.action == Action::Install),
+            "expected the manual worker for {id}"
+        );
+        assert_eq!(installed_rx.recv_timeout(timeout).unwrap(), id);
+        loop {
+            let event = runtime.state.events_rx.recv_timeout(timeout).unwrap();
+            let finished =
+                matches!(&event, Event::Models(Msg::Finished(done, Ok(()))) if *done == id);
+            runtime.state.apply_event(event);
+            if finished {
+                break;
+            }
+        }
+    }
+    assert!(runtime.state.models.jobs.is_empty());
+    assert!(runtime.state.models.pack_queue.is_empty());
+    assert!(installed_rx.try_recv().is_err());
+}
+
+#[cfg(all(windows, feature = "asr-runtime", test))]
+fn settings_models_runtime(state: State) -> rune::Runtime<State> {
+    let mut runtime = rune::Runtime::new(
+        state,
+        |s, _| view(s, super::theme::palette(false), rune::el()),
+        (1200.0, 1000.0),
+        rune::Env::default(),
+    );
+    runtime.frame(0.0);
+    runtime
+}
+
+#[cfg(all(windows, feature = "asr-runtime", test))]
+fn click_cpu_download(runtime: &mut rune::Runtime<State>) -> bool {
+    let Some((x, y)) = runtime.find(CPU_DOWNLOAD_KEY) else {
+        return false;
+    };
+    runtime.pointer_move(x, y);
+    runtime.pointer_down(x, y);
+    runtime.pointer_up(x, y);
+    runtime.frame(0.01);
+    true
 }
 
 pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
@@ -475,6 +659,13 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                     ),
             )
             .child(routing);
+        if models.can_download_cpu_packs(&s.config) {
+            body = body.child(
+                super::widgets::action(CPU_DOWNLOAD_LABEL, p)
+                    .key(CPU_DOWNLOAD_KEY)
+                    .on_press(State::download_cpu_packs),
+            );
+        }
     }
     if let Some(e) = &models.preference_error {
         body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
@@ -627,6 +818,15 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                                 .on_press(move |s: &mut State| s.models.cancel(id)),
                         );
                 }
+            } else if cpu_language_pack(id) && !models.pack_queue.is_empty() {
+                card = card.child(roles::CONTROL.wrap(
+                    if models.installed.contains(id) {
+                        "Installed"
+                    } else {
+                        "Waiting to download"
+                    },
+                    p.soft,
+                ));
             } else if models.installed.contains(id) {
                 card = card.child(
                     row()
@@ -660,6 +860,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 );
             }
             if models.partial.contains(id)
+                && (!cpu_language_pack(id) || models.pack_queue.is_empty())
                 && !models.installed.contains(id)
                 && !models.progress.contains_key(id)
             {
@@ -738,6 +939,9 @@ pub fn scene(s: &mut State, name: &str) {
         progress: HashMap::new(),
         errors: HashMap::new(),
         jobs: HashMap::new(),
+        pack_queue: VecDeque::new(),
+        #[cfg(test)]
+        install_fixture: None,
         preference_error: None,
     };
     let id = "indicconformer-hi-ctc";
