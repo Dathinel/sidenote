@@ -2533,7 +2533,8 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .w_full()
             .child(sync_page(s, k, p))
             .child(named_folder(s, k, p)),
-        (Page::ConnectedApps, _) => card("Connected apps", super::super::mcp_connect::section(s, p).key("mcp-connect").fill(highlight(s, "mcp-connect", p)), p),
+        // The page title already says "Connected apps" and the page has only this section.
+        (Page::ConnectedApps, _) => col().w_full().min_w(0.0).mt(18.0).child(panel(p).child(super::super::mcp_connect::section(s, p).key("mcp-connect").fill(highlight(s, "mcp-connect", p)).w_full())),
         (Page::Privacy, _) => col()
             .w_full()
             .child(privacy(s, k, p))

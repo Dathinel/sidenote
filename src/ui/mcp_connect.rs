@@ -59,6 +59,24 @@ impl State {
         });
     }
 }
+/// A line under a row, indented to the row's content edge (the rows pad 14). The text may hold a
+/// long path, so it gets break points; they are for display only and never reach a copy.
+fn note(line: El) -> El {
+    col().w_full().min_w(0.0).px(14.0).child(line)
+}
+fn breakable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut run = 0;
+    for c in text.chars() {
+        out.push(c);
+        run = if c.is_whitespace() { 0 } else { run + 1 };
+        if matches!(c, '\\' | '/') || run == 20 {
+            out.push('\u{200b}');
+            run = 0;
+        }
+    }
+    out
+}
 pub fn section(s: &State, p: Palette) -> El {
     let mut body = col().w_full().gap(8.0)
         .child(roles::SMALL.wrap("Connected apps can read your meetings, typed notes, tasks and memory through this connection, and send what they read to their AI provider.",p.soft).padding(14.0));
@@ -157,19 +175,25 @@ pub fn section(s: &State, p: Palette) -> El {
         );
         if let Some((_, result)) = s.connection.results.iter().find(|(c, _)| *c == client) {
             let (Ok(text) | Err(text)) = result;
-            body = body.child(
+            body = body.child(note(
                 roles::SMALL
-                    .wrap(text.clone(), if result.is_ok() { p.ink } else { p.warn })
+                    .wrap(breakable(text), if result.is_ok() { p.ink } else { p.warn })
                     .role("status"),
-            );
+            ));
         } else {
             if paste {
                 body = body
-                    .child(roles::SMALL.wrap(agent.paste_note(), p.soft).role("status"))
-                    .child(roles::META.wrap(agent.empty_file_note(), p.soft));
+                    .child(note(
+                        roles::SMALL
+                            .wrap(breakable(&agent.paste_note()), p.soft)
+                            .role("status"),
+                    ))
+                    .child(note(roles::META.wrap(agent.empty_file_note(), p.soft)));
             }
             if let Some(detail) = &agent.detail {
-                body = body.child(roles::SMALL.wrap(detail.clone(), p.warn).role("status"));
+                body = body.child(note(
+                    roles::SMALL.wrap(breakable(detail), p.warn).role("status"),
+                ));
             }
         }
         body = body.child(super::widgets::hairline(p));
@@ -263,4 +287,20 @@ pub fn scene(s: &mut State, name: &str) {
             detail: None,
         })
         .collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::breakable;
+    #[test]
+    fn a_long_unbroken_path_gets_break_points_and_the_text_is_unchanged() {
+        let path = format!("E:\\{}\\{}", "A".repeat(120), "b".repeat(50));
+        let shown = breakable(&path);
+        assert_eq!(shown.replace('\u{200b}', ""), path);
+        assert!(
+            shown
+                .split(['\u{200b}', ' '])
+                .all(|part| part.chars().count() <= 20)
+        );
+    }
 }
