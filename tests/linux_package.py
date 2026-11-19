@@ -163,6 +163,46 @@ class Packaging(unittest.TestCase):
             workspace = re.search(rb'Workspace: (/tmp/sidenote-release\.\w+)', r.stderr)
             self.assertIsNotNone(workspace, 'release did not use a disposable /tmp workspace')
             self.assertFalse(Path(os.fsdecode(workspace[1])).exists()); self.assertEqual(sentinel.read_bytes(), b'public sentinel')
+    def test_notice_collision(self):
+        p = fixture('notice-collision')
+        mirror = ROOT / 'collision-mirror'
+        local = p / 'deps/local'
+        for dependency, notice in ((mirror, b'Mirror license\n'), (local, b'Local license\n')):
+            put(dependency / 'Cargo.toml', '[package]\nname="duplicate"\nversion="0.1.0"\nedition="2024"\nlicense-file="LICENSE"\n')
+            put(dependency / 'src/lib.rs', 'pub fn fixture() {}\n')
+            put(dependency / 'LICENSE', notice)
+        git(mirror, 'init', '-q')
+        revision = commit(mirror)
+        url = 'https://example.invalid/sidenote-notice-fixture'
+        source = f'git+{url}?rev={revision}#{revision}'
+        manifest = p / 'Cargo.toml'
+        data = manifest.read_text().replace('[workspace]\n', '[workspace]\nexclude=["deps/local"]\n')
+        remove(manifest)
+        put(manifest, data + f'\n[dependencies]\nlocal = {{ package="duplicate", path="deps/local" }}\n'
+                         f'mirror = {{ package="duplicate", git="{url}", rev="{revision}" }}\n')
+        lock = p / 'Cargo.lock'
+        remove(lock)
+        put(lock, 'version=4\n\n[[package]]\nname="duplicate"\nversion="0.1.0"\n'
+                  f'\n[[package]]\nname="duplicate"\nversion="0.1.0"\nsource="{source}"\n'
+                  '\n[[package]]\nname="sidenote"\nversion="0.0.1"\n'
+                  f'dependencies=["duplicate 0.1.0", "duplicate 0.1.0 ({source})"]\n')
+        commit(p)
+        r, out = cli(p, env=dict(os.environ, SIDENOTE_GIT_MIRROR=str(mirror)))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        stage = binary(out).parents[1]
+        coverage = json.loads((stage / 'DEPENDENCY_NOTICE_COVERAGE.json').read_text())
+        rows = {row['source']: row for row in coverage if row['name'] == 'duplicate'}
+        self.assertEqual(set(rows), {None, source})
+        paths = []
+        for identity, expected in ((None, b'Local license\n'), (source, b'Mirror license\n')):
+            row = rows[identity]
+            self.assertEqual(row['notice_files'], len(row['notice_paths']))
+            matches = [stage / name for name in row['notice_paths'] if Path(name).name == 'LICENSE']
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].read_bytes(), expected)
+            paths.extend(matches)
+        self.assertNotEqual(*paths)
+
     def test_archive(self):
         p = REPO if MODE == 'HEAD' else fixture('archive')
         sha = git(p, 'rev-parse', 'HEAD') if MODE == 'HEAD' else commit(p)

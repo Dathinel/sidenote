@@ -50,9 +50,14 @@ def notices(source, stage, cache, metadata, archive, git_archives):
     choices = json.loads((source / 'tools/license_choices.json').read_text())
     resolved = {p['id'] for p in metadata['resolve']['nodes']}
     coverage, standards = [], set()
-    for p in sorted(metadata['packages'], key=lambda p: (p['name'], p['version'])):
+    notice_root = stage / 'dependency-notices'
+    standards_dir = notice_root / 'standard-licenses'
+    for p in sorted(metadata['packages'], key=lambda p: (p['name'], p['version'], p['source'] or '')):
         if p['id'] in metadata['workspace_members'] or p['id'] not in resolved: continue
         lock = locked[(p['name'], p['version'], p['source'])]
+        package_name = f"{p['name']}-{p['version']}"
+        source_key = 'path' if p['source'] is None else hashlib.sha256(p['source'].encode()).hexdigest()
+        destination = notice_root / 'sources' / source_key / package_name
         if p['source'] in git_archives:
             data, prefix = git_archives[p['source']], ''
         elif p['source']:
@@ -61,10 +66,11 @@ def notices(source, stage, cache, metadata, archive, git_archives):
             data, prefix = crate.read_bytes(), f"{p['name']}-{p['version']}/"
         else:
             data, prefix = archive.read_bytes(), Path(p['manifest_path']).parent.relative_to(source).as_posix() + '/'
-        destination = stage / f"dependency-notices/{p['name']}-{p['version']}"
-        notice_root = Path(p['manifest_path']).parent
-        if p['source'] in git_archives and p['license_file']: notice_root = Path(git(notice_root, 'rev-parse', '--show-toplevel').decode().strip())
-        declared = (Path(p['manifest_path']).parent / p['license_file']).resolve().relative_to(notice_root.resolve()).as_posix() if p['license_file'] else None
+        manifest_dir = Path(p['manifest_path']).parent
+        archive_root = manifest_dir
+        if p['source'] in git_archives and p['license_file']:
+            archive_root = Path(git(manifest_dir, 'rev-parse', '--show-toplevel').decode().strip())
+        declared = (manifest_dir / p['license_file']).resolve().relative_to(archive_root.resolve()).as_posix() if p['license_file'] else None
         files = []
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for item in tar:
@@ -74,6 +80,8 @@ def notices(source, stage, cache, metadata, archive, git_archives):
                     put(destination / name, tar.extractfile(item).read())
                     files.append(name)
         if declared and declared not in files: raise ValueError('declared notice absent from immutable source')
+        kind = 'upstream' if files else 'metadata'
+        standard_paths = []
         if not files:
             expression = p['license'] or ''
             selected = next((c for c in choices if (c['name'], c['version']) == (p['name'], p['version'])), None)
@@ -84,11 +92,20 @@ def notices(source, stage, cache, metadata, archive, git_archives):
             if ''.join(tokens) != re.sub(r'\s', '', effective) or not ids or not ids <= {'MIT', 'Apache-2.0', 'BSL-1.0', 'Zlib'}: raise ValueError('uncovered licence')
             holder = '; '.join(p['authors']) or p['repository']
             if not holder: raise ValueError('missing attribution')
-            put(destination / 'NOTICE.txt', f"{p['name']} {p['version']}\nCopyright holder (Cargo metadata): {holder}\nDeclared: {expression}\nIncluded: {effective}\nStandard texts: ../standard-licenses/\n")
+            relative_standards = os.path.relpath(standards_dir, destination)
+            put(destination / 'NOTICE.txt', f"{p['name']} {p['version']}\nCopyright holder (Cargo metadata): {holder}\nDeclared: {expression}\nIncluded: {effective}\nStandard texts: {relative_standards}/\n")
+            files.append('NOTICE.txt')
             for identifier in sorted(ids):
-                target = stage / f'dependency-notices/standard-licenses/{identifier}.txt'
-                if identifier not in standards: copy(source / f'tools/licenses/{identifier}.txt', target); standards.add(identifier)
-        coverage.append(dict(name=p['name'], version=p['version'], license=p['license'], kind='upstream' if files else 'metadata', notice_files=len(files) or 1))
+                target = standards_dir / f'{identifier}.txt'
+                if identifier not in standards:
+                    copy(source / f'tools/licenses/{identifier}.txt', target)
+                    standards.add(identifier)
+                standard_paths.append(target.relative_to(stage).as_posix())
+        coverage.append(dict(
+            name=p['name'], version=p['version'], source=p['source'], license=p['license'], kind=kind,
+            notice_files=len(files), notice_paths=[(destination / name).relative_to(stage).as_posix() for name in files],
+            standard_license_paths=standard_paths,
+        ))
     put((stage / 'DEPENDENCY_NOTICE_COVERAGE.json'), json.dumps(coverage, indent=2) + '\n')
 
 def git_source(source, work):
