@@ -32,6 +32,7 @@ impl HexSpeech {
     ) -> Result<String> {
         self.run_command(args, wav, timeout, false)
     }
+    #[cfg(windows)]
     pub(super) fn run_for_bridge(&self, args: &[&str], timeout: Duration) -> Result<String> {
         self.run_command(args, None, timeout, true)
     }

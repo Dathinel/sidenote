@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io;
 pub(crate) static STOP: std::sync::LazyLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
-    std::sync::LazyLock::new(|| Default::default());
+    std::sync::LazyLock::new(Default::default);
 #[cfg(any(feature = "asr-runtime", test))]
 mod runner;
 #[cfg(feature = "asr-runtime")]
