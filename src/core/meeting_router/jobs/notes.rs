@@ -161,7 +161,7 @@ pub(crate) fn notes_input(
 
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 #[test]
-fn notes_while_cpu_models_provision_keep_the_capture_and_show_the_count() {
+fn provisioning_review_paused_setup_keeps_the_capture_and_shows_the_count() {
     use crate::core::model_catalog::{ModelStore, provisioning};
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -199,6 +199,9 @@ fn notes_while_cpu_models_provision_keep_the_capture_and_show_the_count() {
         assert_eq!(reasons, [RoutingFallback::new(wanted)]);
         assert!(reading.warnings.iter().any(|text| text == wanted.message()));
         if id == "100-1" {
+            assert!(reading.warnings.iter().any(|warning| {
+                warning.contains("Language models are still being set up (0 of 4 ready)")
+            }));
             drop(lease.take());
         }
     }
