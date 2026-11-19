@@ -173,14 +173,27 @@ impl Store {
         let root = store_io::checked_parent(&self.0.join("sessions.json"))?;
         for entry in std::fs::read_dir(&root.path)? {
             let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id) = name.strip_suffix(".retired").filter(|id| hex(id))
+                && !sessions.contains_key(id)
+            {
+                if !entry.file_type()?.is_file() {
+                    return Err(Error::Storage);
+                }
+                match std::fs::remove_dir_all(root.path.join(id)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        for entry in std::fs::read_dir(&root.path)? {
+            let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if hex(&name) {
                 let Some(session) = sessions.get(&name) else {
-                    // The ledger is committed first. A crash before unlink leaves an orphan.
-                    if !entry.file_type()?.is_dir() {
-                        return Err(Error::Storage);
-                    }
-                    std::fs::remove_dir_all(entry.path())?;
                     continue;
                 };
                 let dir = std::fs::OpenOptions::new()
@@ -353,6 +366,8 @@ impl Store {
         if session.pieces.is_empty() || session.pieces.values().any(|piece| !piece.done) {
             return Err(Error::Conflict);
         }
+        // Mark explicit retirement before changing the ledger. Only marked data is reaped.
+        store_io::atomic_write(&self.0.join(format!("{id}.retired")), b"")?;
         sessions.remove(id);
         self.save(&sessions)?;
         self.recover(&sessions)
@@ -450,6 +465,13 @@ pub(super) mod tests {
                 assert_eq!(
                     store.snapshot("owner", &id, &piece).unwrap()["state"],
                     "lost"
+                );
+                let unindexed = store.0.join("d".repeat(64));
+                std::fs::create_dir(&unindexed).unwrap();
+                store.retire("owner", &id).unwrap();
+                assert!(
+                    unindexed.is_dir(),
+                    "Missing ledger entries are not consent to retire"
                 );
             }
             store.retire("owner", &id).unwrap();
