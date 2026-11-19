@@ -31,6 +31,10 @@ impl Client {
     pub fn visible(self, linux: bool) -> bool {
         !(linux && self == Self::ClaudeDesktop)
     }
+    /// Only an app with its own CLI is added by Sidenote, and that CLI writes its own config.
+    pub fn adds_by_cli(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::Codex)
+    }
     fn program(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude",
@@ -94,7 +98,7 @@ impl Agent {
             detail: None,
         };
         if installed {
-            let result = if matches!(client, Client::ClaudeCode | Client::Codex) {
+            let result = if client.adds_by_cli() {
                 agent
                     .cli
                     .as_ref()
@@ -125,15 +129,27 @@ impl Agent {
         if self.status == Status::NotInstalled {
             return Err("This app is not installed.".into());
         }
-        if matches!(self.client, Client::ClaudeCode | Client::Codex) {
-            let cli = self
-                .cli
-                .as_ref()
-                .ok_or("CLI unavailable. Use the copyable config.")?;
-            self.add_cli(exe, |args| run(cli, args))
-        } else {
-            super::json_config::add(self.client, &self.path, exe)
+        if !self.client.adds_by_cli() {
+            return Err(self.paste_note());
         }
+        let cli = self
+            .cli
+            .as_ref()
+            .ok_or("CLI unavailable. Use the copyable config.")?;
+        self.add_cli(exe, |args| run(cli, args))
+    }
+    /// Tells the owner where to paste, in one line.
+    pub fn paste_note(&self) -> String {
+        let place = match self.client {
+            Client::OpenCode => "inside \"mcp\"",
+            _ => "inside \"mcpServers\"",
+        };
+        format!(
+            "Needs a paste: Sidenote does not edit {}'s config. Copy the config, add the sidenote entry {place} in {}, keep the other entries, then restart {}.",
+            self.client.name(),
+            self.path.display(),
+            self.client.name()
+        )
     }
     pub(super) fn add_cli(
         &self,

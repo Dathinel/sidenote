@@ -34,27 +34,6 @@ pub(super) fn check_path(path: &Path) {
 pub(super) fn forbid_discovery() {
     panic!("tests must inject isolated paths and fake CLIs");
 }
-type Hook = Box<dyn FnMut(&str, &Path)>;
-thread_local! { static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) }; }
-/// Test-only stand-in for another writer: runs at named points inside the JSON writer.
-pub(super) fn race(stage: &str, path: &Path) {
-    if let Some(mut hook) = HOOK.with(|h| h.borrow_mut().take()) {
-        hook(stage, path);
-        HOOK.with(|h| *h.borrow_mut() = Some(hook));
-    }
-}
-fn at_stage(stage: &'static str, mut action: impl FnMut(&Path) + 'static) {
-    HOOK.with(|h| {
-        *h.borrow_mut() = Some(Box::new(move |s, path| {
-            if s == stage {
-                action(path)
-            }
-        }))
-    });
-}
-fn clear_hook() {
-    HOOK.with(|h| *h.borrow_mut() = None);
-}
 struct Sandbox(tempfile::TempDir);
 impl Sandbox {
     fn new() -> Self {
@@ -141,45 +120,39 @@ fn config_folder_and_existing_entry_detection() {
             .status,
             Status::NotAdded
         );
-        agent.add(Path::new("sidenote")).unwrap();
+        fs::write(&agent.path, client.config(Path::new("sidenote"))).unwrap();
         assert_eq!(
             Agent::inspect(client, agent.path, None, |_, _| panic!("no CLI for JSON")).status,
             Status::Added
         );
     }
 }
+const ORIGINAL: &[u8] = br#"{"keep":1,"mcpServers":{}}"#;
+fn prepared(sandbox: &Sandbox, client: Client) -> Agent {
+    let agent = sandbox.agent(client);
+    fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
+    fs::write(&agent.path, ORIGINAL).unwrap();
+    agent
+}
+fn files_in(agent: &Agent) -> usize {
+    fs::read_dir(agent.path.parent().unwrap()).unwrap().count()
+}
 #[test]
-fn every_json_client_preserves_original_backup_and_other_keys() {
+fn json_agents_are_never_written_by_add_or_add_all() {
     let sandbox = Sandbox::new();
     for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
-        let agent = sandbox.agent(client);
-        fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
-        let original =
-            b"{ \"other\": {\"keep\": 12}, \"mcpServers\": {\"other\": {\"command\": \"keep\"}} }";
-        fs::write(&agent.path, original).unwrap();
-        let result = agent.add(Path::new("C:/A B/sidenote.exe")).unwrap();
-        let backup = fs::read_dir(agent.path.parent().unwrap())
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .find(|p| p.to_string_lossy().contains(".sidenote-backup-"))
-            .unwrap();
-        assert_eq!(fs::read(&backup).unwrap(), original);
-        assert!(result.contains(&backup.display().to_string()));
-        let value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&agent.path).unwrap()).unwrap();
-        assert_eq!(value["other"]["keep"], 12);
-        assert_eq!(value["mcpServers"]["other"]["command"], "keep");
-        let saved = fs::read(&agent.path).unwrap();
-        assert!(agent.add(Path::new("replacement")).is_err());
-        assert_eq!(fs::read(&agent.path).unwrap(), saved);
-        assert_eq!(
-            fs::read_dir(agent.path.parent().unwrap()).unwrap().count(),
-            2
-        );
+        let agent = prepared(&sandbox, client);
+        let error = agent.add(Path::new("sidenote")).unwrap_err();
+        assert!(error.starts_with("Needs a paste"), "{error}");
+        assert!(error.contains(&agent.path.display().to_string()), "{error}");
+        let all = add_all(std::slice::from_ref(&agent), Path::new("sidenote"));
+        assert!(all[0].1.as_ref().unwrap_err().starts_with("Needs a paste"));
+        assert_eq!(fs::read(&agent.path).unwrap(), ORIGINAL);
+        assert_eq!(files_in(&agent), 1, "no backup or temporary file");
     }
 }
 #[test]
-fn invalid_json_comments_and_wrong_shapes_refuse_without_backup() {
+fn unreadable_configs_are_reported_and_never_changed() {
     let sandbox = Sandbox::new();
     let agent = sandbox.agent(Client::OpenCode);
     fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
@@ -189,19 +162,20 @@ fn invalid_json_comments_and_wrong_shapes_refuse_without_backup() {
         "{bad}",
         "[]",
         r#"{"mcp": []}"#,
-        r#"{"mcp":{"sidenote":null}}"#,
     ] {
         fs::write(&agent.path, original).unwrap();
-        assert!(agent.add(Path::new("sidenote")).is_err());
+        assert!(super::json_config::has_entry(Client::OpenCode, &agent.path).is_err());
+        let seen = Agent::inspect(Client::OpenCode, agent.path.clone(), None, |_, _| {
+            panic!("no CLI for JSON")
+        });
+        assert_eq!(seen.status, Status::NotAdded);
+        assert!(seen.detail.is_some());
         assert_eq!(fs::read_to_string(&agent.path).unwrap(), original);
-        assert_eq!(
-            fs::read_dir(agent.path.parent().unwrap()).unwrap().count(),
-            1
-        );
+        assert_eq!(files_in(&agent), 1);
     }
 }
 #[test]
-fn add_all_continues_after_bad_json_and_skips_uninstalled() {
+fn add_all_never_writes_json_agents_and_says_where_to_paste() {
     let sandbox = Sandbox::new();
     let mut agents: Vec<_> = [Client::OpenCode, Client::Cursor, Client::ClaudeDesktop]
         .into_iter()
@@ -212,9 +186,13 @@ fn add_all_continues_after_bad_json_and_skips_uninstalled() {
     agents[2].status = Status::NotInstalled;
     let results = add_all(&agents, Path::new("sidenote"));
     assert_eq!(results.len(), 2);
-    assert!(results[0].1.is_err());
-    assert!(results[1].1.is_ok());
-    assert!(!agents[2].path.exists());
+    for (result, agent) in results.iter().zip(&agents) {
+        let error = result.1.as_ref().unwrap_err();
+        assert!(error.contains("Needs a paste"), "{error}");
+        assert!(error.contains(&agent.path.display().to_string()), "{error}");
+    }
+    assert_eq!(fs::read_to_string(&agents[0].path).unwrap(), "broken");
+    assert!(!agents[1].path.exists() && !agents[2].path.exists());
 }
 #[test]
 fn both_cli_clients_keep_existing_and_refuse_uncertain_checks() {
@@ -332,14 +310,17 @@ exit 1
 }
 
 #[test]
-fn json_strings_with_comment_markers_are_valid_and_preserved() {
+fn json_strings_with_comment_markers_are_valid_and_unchanged() {
     let sandbox = Sandbox::new();
     let agent = sandbox.agent(Client::OpenCode);
     fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
-    fs::write(&agent.path, r#"{"url":"https://example.com/*literal*/"}"#).unwrap();
-    agent.add(Path::new("sidenote")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(&agent.path).unwrap()).unwrap();
-    assert_eq!(value["url"], "https://example.com/*literal*/");
+    let original = r#"{"url":"https://example.com/*literal*/"}"#;
+    fs::write(&agent.path, original).unwrap();
+    assert_eq!(
+        super::json_config::has_entry(Client::OpenCode, &agent.path),
+        Ok(false)
+    );
+    assert_eq!(fs::read_to_string(&agent.path).unwrap(), original);
 }
 #[test]
 fn cli_detection_reads_existing_without_adding() {
@@ -469,9 +450,8 @@ fn linked_config_folder_is_refused_and_the_destination_is_untouched() {
         fs::write(elsewhere.join("config.json"), original).unwrap();
         let agent = sandbox.agent(client);
         link_folder(agent.path.parent().unwrap(), &elsewhere);
-        let error = agent.add(Path::new("sidenote")).unwrap_err();
+        let error = super::json_config::has_entry(client, &agent.path).unwrap_err();
         assert!(error.contains("link"), "{error}");
-        assert!(super::json_config::has_entry(client, &agent.path).is_err());
         assert_eq!(fs::read(elsewhere.join("config.json")).unwrap(), original);
         assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 1);
     }
@@ -487,7 +467,6 @@ fn linked_config_file_is_refused_and_stays_a_link() {
     let real = folder.join("real.json");
     fs::write(&real, br#"{"keep":1}"#).unwrap();
     std::os::unix::fs::symlink(&real, &agent.path).unwrap();
-    assert!(agent.add(Path::new("sidenote")).is_err());
     assert!(super::json_config::has_entry(Client::Cursor, &agent.path).is_err());
     assert_eq!(fs::read(&real).unwrap(), br#"{"keep":1}"#);
     assert!(
@@ -497,72 +476,6 @@ fn linked_config_file_is_refused_and_stays_a_link() {
             .is_symlink()
     );
     assert_eq!(fs::read_dir(folder).unwrap().count(), 2);
-}
-
-const ORIGINAL: &[u8] = br#"{"keep":1,"mcpServers":{}}"#;
-const APP_SAVE: &[u8] = br#"{"keep":1,"added_by_the_app":true,"mcpServers":{}}"#;
-fn prepared(sandbox: &Sandbox, client: Client) -> Agent {
-    let agent = sandbox.agent(client);
-    fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
-    fs::write(&agent.path, ORIGINAL).unwrap();
-    agent
-}
-fn files_in(agent: &Agent) -> usize {
-    fs::read_dir(agent.path.parent().unwrap()).unwrap().count()
-}
-
-#[test]
-fn a_save_by_the_app_just_before_the_replace_is_kept() {
-    let sandbox = Sandbox::new();
-    for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
-        let agent = prepared(&sandbox, client);
-        at_stage("before-swap", |path| fs::write(path, APP_SAVE).unwrap());
-        let error = agent.add(Path::new("sidenote")).unwrap_err();
-        clear_hook();
-        assert!(error.contains("The file changed, try again"), "{error}");
-        assert_eq!(fs::read(&agent.path).unwrap(), APP_SAVE);
-        assert_eq!(files_in(&agent), 1, "no backup or temporary file is left");
-    }
-}
-
-#[test]
-fn a_save_by_the_app_after_the_move_is_kept_beside_the_backup() {
-    let sandbox = Sandbox::new();
-    let agent = prepared(&sandbox, Client::Cursor);
-    at_stage("after-move", |path| fs::write(path, APP_SAVE).unwrap());
-    let error = agent.add(Path::new("sidenote")).unwrap_err();
-    clear_hook();
-    assert!(error.contains("Both versions are kept"), "{error}");
-    assert_eq!(fs::read(&agent.path).unwrap(), APP_SAVE);
-    let backup = fs::read_dir(agent.path.parent().unwrap())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| p.to_string_lossy().contains(".sidenote-backup-"))
-        .unwrap();
-    assert_eq!(fs::read(backup).unwrap(), ORIGINAL);
-    assert_eq!(files_in(&agent), 2);
-}
-
-#[test]
-fn two_adds_at_once_keep_one_entry_and_the_original_backup() {
-    let sandbox = Sandbox::new();
-    let agent = prepared(&sandbox, Client::OpenCode);
-    let second = agent.clone();
-    at_stage("before-swap", move |_| {
-        second.add(Path::new("second")).unwrap();
-    });
-    let error = agent.add(Path::new("first")).unwrap_err();
-    clear_hook();
-    assert!(error.contains("The file changed, try again"), "{error}");
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(&agent.path).unwrap()).unwrap();
-    assert_eq!(value["mcp"]["sidenote"]["command"][0], "second");
-    assert_eq!(files_in(&agent), 2);
-    let backup = fs::read_dir(agent.path.parent().unwrap())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| p.to_string_lossy().contains(".sidenote-backup-"))
-        .unwrap();
-    assert_eq!(fs::read(backup).unwrap(), ORIGINAL);
 }
 
 #[cfg(windows)]
@@ -668,9 +581,9 @@ fn a_cli_that_finishes_in_time_returns_its_output_and_status() {
 fn add_all_keeps_added_agents_untouched_and_reports_every_result() {
     let sandbox = Sandbox::new();
     let mut added = prepared(&sandbox, Client::Cursor);
-    added.add(Path::new("sidenote")).unwrap();
+    let entry = Client::Cursor.config(Path::new("sidenote"));
+    fs::write(&added.path, &entry).unwrap();
     added.status = Status::Added;
-    let before = fs::read(&added.path).unwrap();
     let pending = prepared(&sandbox, Client::OpenCode);
     let mut missing = sandbox.agent(Client::ClaudeDesktop);
     missing.status = Status::NotInstalled;
@@ -681,10 +594,10 @@ fn add_all_keeps_added_agents_untouched_and_reports_every_result() {
     assert_eq!(results.len(), 2);
     assert!(results[0].0 == Client::Cursor);
     assert!(results[0].1.as_ref().unwrap().starts_with("Already added"));
-    assert_eq!(fs::read(&added.path).unwrap(), before);
-    assert_eq!(files_in(&added), 2, "no new backup for an added agent");
-    assert!(results[1].1.is_ok());
-    assert!(super::json_config::has_entry(Client::OpenCode, &pending.path).unwrap());
+    assert_eq!(fs::read_to_string(&added.path).unwrap(), entry);
+    assert_eq!(files_in(&added), 1);
+    assert!(results[1].1.as_ref().unwrap_err().contains("Needs a paste"));
+    assert_eq!(fs::read(&pending.path).unwrap(), ORIGINAL);
     assert!(!missing.path.exists());
 }
 
