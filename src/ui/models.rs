@@ -134,7 +134,7 @@ impl Models {
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                        self.errors.remove(id);
+                        // A failed cancellation preference can still need to be shown.
                     }
                     Err(error) => {
                         self.errors.insert(id, error.to_string());
@@ -197,8 +197,14 @@ impl Models {
     }
 
     fn cancel(&mut self, id: &'static str) {
-        if self.jobs.contains_key(id) && self.remember_choice(id, true) {
-            self.jobs[id].cancel.store(true, Ordering::Relaxed);
+        if let Some(job) = self.jobs.get(id) {
+            job.cancel.store(true, Ordering::Relaxed);
+            if !self.remember_choice(id, true) {
+                self.errors.insert(
+                    id,
+                    "Download stopped. This choice could not be saved for restart.".into(),
+                );
+            }
         }
     }
 
@@ -382,6 +388,69 @@ fn automatic_model_startup_respects_recording_and_saved_choices() {
     );
 }
 
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn provisioning_review_cancel_stops_even_when_saving_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let config = sidenote::core::Config::default();
+    let mut models = Models::load(root.path(), &config);
+    let id = provisioning::PACKS[0];
+    models.start(id, Action::Automatic(true), |_| {});
+    let blocked = root.path().join("not-a-directory");
+    std::fs::write(&blocked, b"fixture").unwrap();
+    models.store = ModelStore::new(blocked);
+
+    models.cancel(id);
+
+    assert!(models.jobs[id].cancel.load(Ordering::Relaxed));
+    assert!(
+        models
+            .preference_error
+            .as_deref()
+            .is_some_and(|e| e.contains("Could not save"))
+    );
+    assert!(models.errors.contains_key(id));
+}
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn provisioning_review_automatic_packs_keep_their_settings_controls() {
+    let mut state = State::new();
+    state.models.languages = vec!["en".into()];
+    state.hex.shell.model_recommended = true;
+    state.models.progress.insert(
+        "anuvani-lid-int8",
+        Progress {
+            downloaded: 10_000,
+            total: 169_000_000,
+            phase: Phase::Downloading,
+        },
+    );
+    state
+        .models
+        .errors
+        .insert("indicconformer-te-ctc", "Connection failed".into());
+    let mut runtime = rune::Runtime::new(
+        state,
+        |s| view(s, super::theme::palette(false), rune::el()),
+        (1000.0, 1000.0),
+        rune::Env::default(),
+    );
+    runtime.frame(0.0);
+    assert!(runtime.find("model-cancel-anuvani-lid-int8").is_some());
+    for id in provisioning::PACKS {
+        assert!(
+            runtime.find(&format!("speech-model-{id}")).is_some(),
+            "{id}"
+        );
+    }
+    assert!(
+        runtime
+            .find("model-download-indicconformer-te-ctc")
+            .is_some()
+    );
+}
+
 pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
     let names = LANGUAGES
         .iter()
@@ -476,6 +545,16 @@ pub fn view(s: &State, p: Palette, routing: El) -> El {
 pub fn advanced(s: &State, p: Palette) -> El {
     catalog_view(s, p, rune::el(), true)
 }
+fn automatic_pack(id: &str) -> bool {
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    return provisioning::PACKS.contains(&id);
+    #[cfg(not(all(windows, feature = "asr-runtime")))]
+    {
+        let _ = id;
+        false
+    }
+}
+
 fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
     let k = super::theme::kit(&p);
     let models = &s.models;
@@ -518,8 +597,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
     if let Some(e) = &models.preference_error {
         body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
-    // English is Hex's Parakeet: nothing to download. Speech models show for the other chosen
-    // languages; language detection shows once a second language is chosen (ADR 0009 (b)).
+    // The automatic packs need controls even with English alone selected.
     let others: Vec<&str> = models
         .languages
         .iter()
@@ -529,12 +607,14 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
     let visible: Vec<_> = model_catalog::catalog()
         .iter()
         .filter(|m| {
+            let automatic = automatic_pack(m.id);
             if advanced {
-                return (m.role == model_catalog::Role::LanguageId
-                    || !cfg!(feature = "asr-runtime"))
+                return !automatic
+                    && (m.role == model_catalog::Role::LanguageId
+                        || !cfg!(feature = "asr-runtime"))
                     && (models.installed.contains(m.id) || models.partial.contains(m.id));
             }
-            if m.role == model_catalog::Role::LanguageId {
+            if m.role == model_catalog::Role::LanguageId && !automatic {
                 return false;
             }
             if !m
@@ -545,6 +625,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 return false;
             }
             if s.hex.shell.model_recommended
+                && !automatic
                 && m.runtime != Runtime::Hex
                 && !model_catalog::PROVISIONAL_DEFAULT_IDS.contains(&m.id)
             {
@@ -554,14 +635,10 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 return false;
             }
             // Downloaded models stay listed so they can be removed after a language is dropped.
-            if models.installed.contains(m.id) || models.progress.contains_key(m.id) {
+            if automatic || models.installed.contains(m.id) || models.progress.contains_key(m.id) {
                 return true;
             }
-            if m.role == model_catalog::Role::LanguageId {
-                models.languages.len() > 1
-            } else {
-                m.languages.iter().any(|l| others.contains(l))
-            }
+            m.languages.iter().any(|l| others.contains(l))
         })
         .collect();
     if visible.is_empty() {
@@ -581,6 +658,10 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
             .child(roles::SMALL.wrap(
                 if m.runtime == Runtime::Hex {
                     "Uses the copy already in Hex. Nothing to download."
+                } else if automatic_pack(id) && m.role == model_catalog::Role::LanguageId {
+                    "Identifies the spoken language."
+                } else if automatic_pack(id) && m.role == model_catalog::Role::VoiceActivity {
+                    "Finds speech before transcription."
                 } else if m.role == model_catalog::Role::LanguageId {
                     "Not available yet."
                 } else {
@@ -593,7 +674,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
         if m.runtime == Runtime::Hex {
             card = card.child(roles::CONTROL.line("In Hex. In use", p.ok));
         } else {
-            if m.role == model_catalog::Role::LanguageId {
+            if m.role == model_catalog::Role::LanguageId && !automatic_pack(id) {
                 card = card.child(roles::SMALL.wrap(
                     "Not available yet. The publisher's patched runtime is not bundled.",
                     p.soft,

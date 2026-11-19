@@ -217,7 +217,7 @@
   "src/ui/memory.rs": "a4091ff72d6b742fda65bcf8d8e5a4c3695f7345522762bed2a8e83f0aa69e12",
   "src/ui/memory/settled.rs": "b9b7344264f3b4270696b0f885922bbefa2a258cee19c72dabc2151bcf38e08a",
   "src/ui/mod.rs": "c9fd9d1f834a2caa8995b003ca2712df197ba1238cb2f231f608ae6e3634e2c2",
-  "src/ui/models.rs": "842fcb45a757bb265442e6670f9cda369052ac2cb22b94fca7e3f499c55cf012",
+  "src/ui/models.rs": "f3484c6e628e91e8fc476bb73fc037fdc2191b2e492d37de292b0811b6551964",
   "src/ui/notes_status.rs": "623156af7b8d0959e43427046dff187624e486da23d661a3696e4113a1e13c16",
   "src/ui/project_merge.rs": "a0c33e2d9ad2754cc95fe3723cee82eea4a651ccd5357dfb9a5318873ed6707c",
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
