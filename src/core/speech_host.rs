@@ -24,6 +24,7 @@ pub fn settings_path() -> Result<PathBuf, String> {
 pub struct Host {
     endpoint: url::Url,
     token: Zeroizing<Vec<u8>>,
+    upload_since: Option<i64>,
 }
 
 fn endpoint(base: &str) -> Result<url::Url, String> {
@@ -48,6 +49,24 @@ impl Host {
     }
 
     pub fn save_and_consent(path: &Path, base: &str, token: &[u8]) -> Result<Self, String> {
+        Self::save(path, base, token, None)
+    }
+
+    pub fn save_with_upload_consent(path: &Path, base: &str, token: &[u8]) -> Result<Self, String> {
+        Self::save(
+            path,
+            base,
+            token,
+            Some(chrono::Utc::now().timestamp_millis()),
+        )
+    }
+
+    fn save(
+        path: &Path,
+        base: &str,
+        token: &[u8],
+        upload_since: Option<i64>,
+    ) -> Result<Self, String> {
         let endpoint = endpoint(base)?;
         if !valid_token(token) {
             return Err("Enter a device token for the speech host.".into());
@@ -56,12 +75,17 @@ impl Host {
         record.extend_from_slice(endpoint[..url::Position::BeforePath].as_bytes());
         record.push(b'\n');
         record.extend_from_slice(token);
+        if let Some(since) = upload_since {
+            record.push(b'\n');
+            record.extend_from_slice(since.to_string().as_bytes());
+        }
         // Seal the recipient and token together so consent cannot carry over to an edited URL.
         let encrypted = protect(&record).map_err(|_| STORE_ERROR)?;
         store_io::atomic_write(path, &encrypted).map_err(|_| STORE_ERROR)?;
         Ok(Self {
             endpoint,
             token: Zeroizing::new(token.to_vec()),
+            upload_since,
         })
     }
 
@@ -74,13 +98,50 @@ impl Host {
         let record = unprotect(&bytes).map_err(|_| STORE_ERROR)?;
         let record = std::str::from_utf8(&record).map_err(|_| STORE_ERROR)?;
         let (base, token) = record.split_once('\n').ok_or(STORE_ERROR)?;
+        let (token, upload_since) = match token.split_once('\n') {
+            Some((token, since)) => (token, Some(since.parse::<i64>().map_err(|_| STORE_ERROR)?)),
+            None => (token, None),
+        };
         if !valid_token(token.as_bytes()) {
             return Err(STORE_ERROR.into());
         }
         Ok(Some(Self {
             endpoint: endpoint(base)?,
             token: Zeroizing::new(token.as_bytes().to_vec()),
+            upload_since,
         }))
+    }
+
+    pub fn upload_enabled(&self) -> bool {
+        self.upload_since.is_some()
+    }
+
+    pub fn stop_audio_uploads(&self, path: &Path) -> Result<Self, String> {
+        Self::save(path, self.recipient(), &self.token, None)
+    }
+
+    fn get(&self, path: &str) -> Option<(u32, Zeroizing<Vec<u8>>)> {
+        self.bytes(
+            Request {
+                method: "GET",
+                path,
+                headers: "",
+                body: &[],
+            },
+            16 * 1024,
+        )
+    }
+
+    fn bytes(&self, call: Request<'_>, limit: usize) -> Option<(u32, Zeroizing<Vec<u8>>)> {
+        let mut body = Zeroizing::new(Vec::new());
+        let status = request(&self.endpoint, &self.token, call, |_, data| {
+            if data.len() > limit - body.len() {
+                return false;
+            }
+            body.extend_from_slice(data);
+            true
+        })?;
+        Some((status, body))
     }
 
     pub fn monitor(self, wake: impl Fn() + Send + 'static) -> Result<Monitor, String> {
@@ -88,7 +149,7 @@ impl Host {
     }
 
     fn probe(&self) -> Option<Status> {
-        let (status, body) = request(&self.endpoint, &self.token)?;
+        let (status, body) = self.get("/v1/host")?;
         match status {
             401 | 403 => return Some(Status::Rejected),
             200 => {}
@@ -198,7 +259,19 @@ pub fn clear(path: &Path, monitor: &mut Option<Monitor>) -> Result<(), String> {
     Ok(())
 }
 
-fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
+struct Request<'a> {
+    method: &'a str,
+    path: &'a str,
+    headers: &'a str,
+    body: &'a [u8],
+}
+
+fn request(
+    url: &url::Url,
+    token: &[u8],
+    call: Request<'_>,
+    mut read_body: impl FnMut(u32, &[u8]) -> bool,
+) -> Option<u32> {
     use std::{ffi::c_void, ptr};
     use windows_sys::{Win32::Networking::WinHttp::*, core::w};
 
@@ -218,7 +291,11 @@ fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
     auth.extend("Authorization: Bearer ".encode_utf16());
     auth.extend(token.iter().map(|&b| u16::from(b)));
     auth.extend([13, 10]);
-    let flags = if cfg!(test) && url.scheme() == "http" {
+    auth.extend(call.headers.encode_utf16());
+    let method: Vec<u16> = call.method.encode_utf16().chain([0]).collect();
+    let path: Vec<u16> = call.path.encode_utf16().chain([0]).collect();
+    let len = u32::try_from(call.body.len()).ok()?;
+    let flags = if cfg!(test) && url.host_str() == Some("127.0.0.1") {
         0
     } else {
         WINHTTP_FLAG_SECURE
@@ -245,8 +322,8 @@ fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
         ))?;
         let request = handle(WinHttpOpenRequest(
             connection.0.as_ptr(),
-            w!("GET"),
-            w!("/v1/host"),
+            method.as_ptr(),
+            path.as_ptr(),
             ptr::null(),
             ptr::null(),
             ptr::null(),
@@ -262,7 +339,19 @@ fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
             ptr::from_ref(&disabled).cast(),
             option_bytes,
         ) == 0
-            || WinHttpSendRequest(raw, auth.as_ptr(), auth.len() as u32, ptr::null(), 0, 0, 0) == 0
+            || WinHttpSendRequest(
+                raw,
+                auth.as_ptr(),
+                auth.len() as u32,
+                if len == 0 {
+                    ptr::null()
+                } else {
+                    call.body.as_ptr().cast()
+                },
+                len,
+                len,
+                0,
+            ) == 0
             || WinHttpReceiveResponse(raw, ptr::null_mut()) == 0
         {
             return None;
@@ -279,29 +368,28 @@ fn request(url: &url::Url, token: &[u8]) -> Option<(u32, Zeroizing<Vec<u8>>)> {
         {
             return None;
         }
-        if status != 200 {
-            return Some((status, Zeroizing::default()));
+        if !matches!(status, 200 | 201) {
+            return Some(status);
         }
-        let mut bytes = Zeroizing::new(vec![0; 16 * 1024]);
-        let mut len = 0;
+        let mut bytes = Zeroizing::new([0u8; 4096]);
         loop {
             let mut read = 0;
             if start.elapsed() >= Duration::from_secs(15)
-                || len == bytes.len()
                 || WinHttpReadData(
                     raw,
-                    bytes[len..].as_mut_ptr().cast(),
-                    (bytes.len() - len) as u32,
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len() as u32,
                     &mut read,
                 ) == 0
             {
                 return None;
             }
             if read == 0 {
-                bytes.truncate(len);
-                return Some((status, bytes));
+                return Some(status);
             }
-            len += read as usize;
+            if !read_body(status, &bytes[..read as usize]) {
+                return None;
+            }
         }
     }
 }

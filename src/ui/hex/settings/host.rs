@@ -7,6 +7,7 @@ use sidenote::core::speech_host::{self, Host, Monitor, Status};
 #[derive(Default)]
 pub(super) struct Form {
     loaded: bool,
+    upload: bool,
     url: TextEdit,
     token: TextEdit,
     recipient: Option<String>,
@@ -20,20 +21,32 @@ impl Form {
         self.monitor = None;
         self.recipient = Some(host.recipient().into());
         self.status = Status::Checking;
+        self.upload = host.upload_enabled();
         self.monitor = Some(host.monitor(move || wake())?);
         Ok(())
     }
 
-    fn save(&mut self, wake: Waker) -> Result<(), String> {
-        let host = self.save_record(&speech_host::settings_path()?)?;
+    fn save(&mut self, wake: Waker, upload: bool) -> Result<(), String> {
+        let host = self.save_record(&speech_host::settings_path()?, upload)?;
         self.activate(host, wake)
     }
 
-    fn save_record(&mut self, path: &std::path::Path) -> Result<Host, String> {
-        let host = Host::save_and_consent(path, &self.url.text, self.token.text.trim().as_bytes())?;
+    fn save_record(&mut self, path: &std::path::Path, upload: bool) -> Result<Host, String> {
+        let token = self.token.text.trim().as_bytes();
+        let host = if upload {
+            Host::save_with_upload_consent(path, &self.url.text, token)?
+        } else {
+            Host::save_and_consent(path, &self.url.text, token)?
+        };
         self.url = TextEdit::new(host.recipient());
         self.token.clear();
         Ok(host)
+    }
+
+    fn stop_uploads(&mut self, wake: Waker) -> Result<(), String> {
+        let path = speech_host::settings_path()?;
+        let host = Host::load(&path)?.ok_or("No speech host is saved.")?;
+        self.activate(host.stop_audio_uploads(&path)?, wake)
     }
 
     fn clear(&mut self) -> Result<(), String> {
@@ -104,14 +117,26 @@ pub(super) fn card(s: &State, k: &Kit, p: Palette) -> El {
             .on_edit(|s: &mut State| &mut s.hex.shell.speech_host.token)
             .build(k).key("speech-host-token"))
         .child(roles::SMALL.wrap(
-            "Allow Sidenote to send the device token to the HTTPS host above for status checks. Meeting audio stays on this device.",
+            if form.upload {
+                "Audio uploads are on for the saved host. Sidenote sends audio windows from new meetings and the device token when the host is ready."
+            } else {
+                "Allow audio uploads to send audio windows from new meetings and the device token to the HTTPS host above when it is ready. Status checks start when Sidenote opens."
+            },
             p.soft,
         ))
         .child(row().gap(8.0).flex_wrap()
             .child(action("Allow status checks", p).key("speech-host-save").on_press(|s: &mut State| {
                 if let Some(wake) = s.waker.clone() {
                     let form = &mut s.hex.shell.speech_host;
-                    form.error = form.save(wake).err();
+                    form.error = form.save(wake, false).err();
+                }
+            }))
+            .child(action(
+                if form.upload { "Stop audio uploads" } else { "Allow audio uploads" }, p
+            ).key("speech-host-upload").on_press(|s: &mut State| {
+                if let Some(wake) = s.waker.clone() {
+                    let form = &mut s.hex.shell.speech_host;
+                    form.error = if form.upload { form.stop_uploads(wake) } else { form.save(wake, true) }.err();
                 }
             }))
             .child(action("Clear host", p).key("speech-host-clear").on_press(|s: &mut State| {
@@ -140,7 +165,8 @@ mod tests {
         };
         form.token.set_secure(true);
         form.token.focused = true;
-        form.save_record(&dir.path().join("host.dpapi")).unwrap();
+        form.save_record(&dir.path().join("host.dpapi"), false)
+            .unwrap();
         assert!(form.token.text.is_empty() && form.token.focused);
     }
 }

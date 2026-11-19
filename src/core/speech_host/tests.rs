@@ -72,6 +72,7 @@ fn fake_response(host: &Host, status: u16, body: &str, extra: &str) -> Option<St
         let loopback = Host {
             endpoint: url::Url::parse(&format!("http://{address}/v1/host")).unwrap(),
             token: host.token.clone(),
+            upload_since: None,
         };
         let result = loopback.probe();
         server.join().unwrap();
