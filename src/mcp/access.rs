@@ -13,6 +13,8 @@ use std::{
 pub struct Grant {
     client: String,
     revision: String,
+    #[serde(default)]
+    speech: bool,
 }
 type Grants = BTreeMap<String, String>;
 fn denied() -> io::Error {
@@ -50,27 +52,46 @@ fn read(root: &Path) -> io::Result<Grants> {
     serde_json::from_slice(&bytes).map_err(|_| denied())
 }
 pub(crate) fn current(root: &Path, client: &str) -> io::Result<Grant> {
+    current_scope(root, client, false)
+}
+fn current_scope(root: &Path, client: &str, speech: bool) -> io::Result<Grant> {
     if !valid(client) {
         return Err(denied());
     }
-    let revision = read(root)?.remove(client).ok_or_else(denied)?;
+    let key = if speech {
+        format!("speech:{client}")
+    } else {
+        client.into()
+    };
+    let revision = read(root)?.remove(&key).ok_or_else(denied)?;
     Ok(Grant {
         client: client.into(),
         revision,
+        speech,
     })
 }
 pub(crate) fn check(root: &Path, grant: &Grant) -> io::Result<()> {
-    if current(root, &grant.client)?.revision != grant.revision {
+    if current_scope(root, &grant.client, grant.speech)?.revision != grant.revision {
         return Err(denied());
     }
     Ok(())
 }
 pub fn authenticate(root: &Path, bearer: &str) -> io::Result<Grant> {
+    authenticate_scope(root, bearer, false)
+}
+pub(crate) fn authenticate_speech(root: &Path, bearer: &str) -> io::Result<Grant> {
+    authenticate_scope(root, bearer, true)
+}
+fn authenticate_scope(root: &Path, bearer: &str, speech: bool) -> io::Result<Grant> {
     let (client, token) = bearer.split_once('.').ok_or_else(denied)?;
     if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(denied());
     }
-    let grant = current(root, client)?;
+    let grant = if speech {
+        current_scope(root, client, true)
+    } else {
+        current(root, client)
+    }?;
     let hash = blake3::hash(bearer.as_bytes()).to_hex().to_string();
     let difference = hash
         .bytes()
@@ -82,7 +103,12 @@ pub fn authenticate(root: &Path, bearer: &str) -> io::Result<Grant> {
     Ok(grant)
 }
 fn update(root: &Path, action: &str, client: &str, output: Option<&Path>) -> io::Result<()> {
-    if !valid(client) || !matches!(action, "grant" | "revoke") {
+    if !valid(client)
+        || !matches!(
+            action,
+            "grant" | "revoke" | "grant-speech" | "revoke-speech"
+        )
+    {
         return Err(denied());
     }
     let _lock = crate::core::store_io::lock(&root.join("local/mcp/access.lock"))?;
@@ -92,8 +118,14 @@ fn update(root: &Path, action: &str, client: &str, output: Option<&Path>) -> io:
         Err(error) if error.kind() == io::ErrorKind::NotFound => Grants::new(),
         Err(error) => return Err(error),
     };
-    if action == "grant" {
-        if grants.len() >= 128 && !grants.contains_key(client) {
+    let client = if action.ends_with("-speech") {
+        format!("speech:{client}")
+    } else {
+        client.into()
+    };
+    let granting = action.starts_with("grant");
+    if granting {
+        if grants.len() >= 128 && !grants.contains_key(&client) {
             return Err(denied());
         }
         let output = output.filter(|p| p.is_absolute()).ok_or_else(denied)?;
@@ -101,7 +133,8 @@ fn update(root: &Path, action: &str, client: &str, output: Option<&Path>) -> io:
             .map_err(|_| denied())?;
         let random = zeroize::Zeroizing::new(sidenote_sync::identity::random32());
         let encoded = zeroize::Zeroizing::new(hex::encode(random.as_slice()));
-        let token = zeroize::Zeroizing::new(format!("{client}.{}", encoded.as_str()));
+        let label = client.strip_prefix("speech:").unwrap_or(&client);
+        let token = zeroize::Zeroizing::new(format!("{label}.{}", encoded.as_str()));
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -116,16 +149,13 @@ fn update(root: &Path, action: &str, client: &str, output: Option<&Path>) -> io:
             let _ = fs::remove_file(output);
             return Err(denied());
         }
-        grants.insert(
-            client.into(),
-            blake3::hash(token.as_bytes()).to_hex().to_string(),
-        );
+        grants.insert(client, blake3::hash(token.as_bytes()).to_hex().to_string());
     } else {
-        grants.remove(client);
+        grants.remove(&client);
     }
     let result = crate::core::store_io::write(&root.join("local/mcp/clients.json"), &grants);
     if result.is_err()
-        && action == "grant"
+        && granting
         && let Some(output) = output
     {
         let _ = fs::remove_file(output);
@@ -147,6 +177,15 @@ pub fn cli(args: &[std::ffi::OsString]) -> i32 {
             Some(Path::new(output)),
         ),
         [Some("revoke"), Some(client)] => update(&crate::core::state_dir(), "revoke", client, None),
+        [Some("grant"), Some(client), Some(output), Some("speech")] => update(
+            &crate::core::state_dir(),
+            "grant-speech",
+            client,
+            Some(Path::new(output)),
+        ),
+        [Some("revoke"), Some(client), Some("speech")] => {
+            update(&crate::core::state_dir(), "revoke-speech", client, None)
+        }
         _ => Err(denied()),
     };
     if result.is_ok() {

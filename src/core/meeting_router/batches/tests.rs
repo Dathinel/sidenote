@@ -37,8 +37,25 @@ impl EnglishBridge for Fakes {
         Ok(serde_json::json!({"text":"English"}))
     }
 }
+fn run_test(root: &Path, plan: &Plan, native: &mut impl NativeLoader, log: &Log) -> Result<()> {
+    #[cfg(windows)]
+    {
+        run(root, plan, native, &mut Fakes(log.clone()))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = log;
+        run_host(
+            root,
+            plan,
+            native,
+            std::time::Duration::from_secs(30),
+            &mut |_, _, _| Ok(()),
+        )
+    }
+}
 pub(super) fn fake(root: &Path, plan: &Plan, log: &Log) -> Result<()> {
-    run(root, plan, &mut Fakes(log.clone()), &mut Fakes(log.clone()))
+    run_test(root, plan, &mut Fakes(log.clone()), log)
 }
 pub(super) fn ranges(wav: &Path) -> Vec<Range> {
     [
@@ -91,7 +108,11 @@ fn identities_integrity_and_sequential_native_batches() {
             1
         );
     }
-    assert_eq!(log.borrow().iter().filter(|e| *e == "English").count(), 1);
+    let english = usize::from(cfg!(windows));
+    assert_eq!(
+        log.borrow().iter().filter(|e| *e == "English").count(),
+        english
+    );
     log.borrow_mut().clear();
     fake(root, &plan, &log).unwrap();
     assert!(log.borrow().is_empty());
@@ -115,7 +136,7 @@ fn identities_integrity_and_sequential_native_batches() {
             .iter()
             .filter(|s| s.starts_with("read") || *s == "English")
             .count(),
-        5
+        4 + english
     );
     let mut pins = ranges(&wav);
     pins[4].model_sha256 = hash(b"new pinned model");
@@ -176,7 +197,7 @@ fn failed_native_shutdown_never_starts_the_next_language() {
     crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
     let plan = spool(dir.path(), ranges(&wav)).unwrap();
     let mut loader = Loader(Vec::new());
-    assert!(run(dir.path(), &plan, &mut loader, &mut Fakes(Log::default())).is_err());
+    assert!(run_test(dir.path(), &plan, &mut loader, &Log::default()).is_err());
     assert_eq!(loader.0, vec!["hi"]);
 }
 
@@ -187,12 +208,22 @@ fn expired_budget_never_loads_or_publishes() {
     crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
     let plan = spool(dir.path(), ranges(&wav)).unwrap();
     let log = Log::default();
+    #[cfg(windows)]
     let error = run_until(
         dir.path(),
         &plan,
         &mut Fakes(log.clone()),
         &mut Fakes(log.clone()),
         std::time::Instant::now(),
+    )
+    .unwrap_err();
+    #[cfg(target_os = "linux")]
+    let error = run_host(
+        dir.path(),
+        &plan,
+        &mut Fakes(log.clone()),
+        std::time::Duration::ZERO,
+        &mut |_, _, _| panic!("expired batch published a result"),
     )
     .unwrap_err();
     assert_eq!(
@@ -202,5 +233,151 @@ fn expired_budget_never_loads_or_publishes() {
     assert!(log.borrow().is_empty());
     for id in plan.batches.values().flat_map(|b| b.keys()) {
         assert!(read_result(dir.path(), &plan, id).unwrap().is_none());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_run_refuses_linux_before_batch_io() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = Plan {
+        revision: "unused".into(),
+        batches: BTreeMap::new(),
+    };
+    let log = Log::default();
+    let error = run(
+        dir.path(),
+        &plan,
+        &mut Fakes(log.clone()),
+        &mut Fakes(log.clone()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<super::super::hex_bridge::HexFailure>(),
+        Some(&super::super::hex_bridge::HexFailure::Unsupported)
+    );
+    assert!(log.borrow().is_empty());
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+}
+
+#[test]
+fn stopped_run_resumes_from_valid_receipts() {
+    struct StopAfterOne(Box<dyn Recognizer>, bool);
+    impl Recognizer for StopAfterOne {
+        fn recognize(&mut self, range: &Range) -> Result<Value> {
+            if self.1 {
+                return Err("stopped between ranges".into());
+            }
+            self.1 = true;
+            self.0.recognize(range)
+        }
+    }
+
+    struct Interrupt(Fakes);
+    impl NativeLoader for Interrupt {
+        fn load(&mut self, lang: NativeLanguage, range: &Range) -> Result<Box<dyn Recognizer>> {
+            Ok(Box::new(StopAfterOne(self.0.load(lang, range)?, false)))
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let wav = root.join("audio.wav");
+    crate::core::asr::write_wav(&wav, &[0.0; 160]).unwrap();
+    let plan = spool(root, ranges(&wav)).unwrap();
+    let log = Log::default();
+    #[cfg(windows)]
+    let error = run_until(
+        root,
+        &plan,
+        &mut Interrupt(Fakes(log.clone())),
+        &mut Fakes(log.clone()),
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+    )
+    .unwrap_err();
+    #[cfg(target_os = "linux")]
+    let mut published = Vec::new();
+    #[cfg(target_os = "linux")]
+    let error = run_host(
+        root,
+        &plan,
+        &mut Interrupt(Fakes(log.clone())),
+        std::time::Duration::from_secs(30),
+        &mut |id, range, reading| {
+            assert_eq!(read_result(root, &plan, id)?, Some(reading.clone()));
+            published.push(range.piece.clone());
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "stopped between ranges");
+
+    let mut hindi = plan.batches["hi"].iter();
+    let (first_id, first) = hindi.next().unwrap();
+    let (second_id, _) = hindi.next().unwrap();
+    assert_eq!(
+        read_result(root, &plan, first_id).unwrap(),
+        Some(serde_json::json!({"text":first.piece}))
+    );
+    assert!(read_result(root, &plan, second_id).unwrap().is_none());
+    assert_eq!(
+        read_result(root, &plan, &id(&plan, "en"))
+            .unwrap()
+            .is_some(),
+        cfg!(windows)
+    );
+    let mut before_stop = Vec::new();
+    #[cfg(windows)]
+    before_stop.push("English".to_owned());
+    before_stop.extend([
+        "load Hindi".to_owned(),
+        format!("read {}", first.piece),
+        "unload".to_owned(),
+    ]);
+    assert_eq!(*log.borrow(), before_stop);
+    #[cfg(target_os = "linux")]
+    assert_eq!(published, [first.piece.as_str()]);
+
+    log.borrow_mut().clear();
+    let reopened = spool(root, ranges(&wav)).unwrap();
+    #[cfg(windows)]
+    fake(root, &reopened, &log).unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        run_host(
+            root,
+            &reopened,
+            &mut Fakes(log.clone()),
+            std::time::Duration::from_secs(30),
+            &mut |id, range, reading| {
+                assert_eq!(read_result(root, &reopened, id)?, Some(reading.clone()));
+                published.push(range.piece.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        let expected: Vec<_> = reopened.batches["hi"]
+            .values()
+            .chain(reopened.batches["te"].values())
+            .map(|range| range.piece.as_str())
+            .collect();
+        assert_eq!(published, expected);
+    }
+    let mut expected = vec!["load Hindi".to_owned()];
+    expected.extend(
+        reopened.batches["hi"]
+            .values()
+            .skip(1)
+            .map(|r| format!("read {}", r.piece)),
+    );
+    expected.extend(["unload", "load Telugu", "read te", "unload"].map(str::to_owned));
+    assert_eq!(*log.borrow(), expected);
+    for (id, range) in reopened.batches.values().flat_map(|batch| batch.iter()) {
+        let expected = if range.piece == "en" {
+            cfg!(windows).then(|| serde_json::json!({"text":"English"}))
+        } else {
+            Some(serde_json::json!({"text":range.piece}))
+        };
+        assert_eq!(read_result(root, &reopened, id).unwrap(), expected);
     }
 }

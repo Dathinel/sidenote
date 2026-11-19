@@ -11,6 +11,7 @@ pub use root::AgentUnavailable;
 enum Profile {
     Offline,
     AgentNotes(fs::File),
+    Speech,
 }
 /// Dormant trusted setup seam; call only in a single-threaded disposable process.
 /// `root` pins a private staged tree containing only runtime/meeting and empty mountpoints.
@@ -31,8 +32,12 @@ fn dead(fd: &OwnedFd) -> bool {
 pub(crate) fn run(args: &[OsString]) -> io::Result<i32> {
     run_profile(args, Profile::Offline)
 }
+pub(crate) fn speech(args: &[OsString]) -> io::Result<i32> {
+    run_profile(args, Profile::Speech)
+}
 fn run_profile(args: &[OsString], profile: Profile) -> io::Result<i32> {
     let agent = matches!(profile, Profile::AgentNotes(_));
+    let speech = matches!(profile, Profile::Speech);
     if args.is_empty() {
         return Err(error());
     }
@@ -85,7 +90,11 @@ fn run_profile(args: &[OsString], profile: Profile) -> io::Result<i32> {
             if agent {
                 command.env_clear().current_dir("/work");
             }
-            crate::containment::configure(&mut command);
+            if speech {
+                crate::containment::configure_speech(&mut command);
+            } else {
+                crate::containment::configure(&mut command);
+            }
             let status = command
                 .status()
                 .map_err(|_| io::Error::other(AgentUnavailable::ExecSetupUnavailable))?;

@@ -1,6 +1,6 @@
 //! Frozen S45 Silero boundaries. Padding/joining belong to the next pipeline stage.
 use super::super::model_catalog;
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(feature = "asr-runtime")]
 use super::super::{asr, store_io};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -111,16 +111,16 @@ impl Checkpoint {
     }
 }
 pub struct Silero {
-    #[cfg(all(windows, feature = "asr-runtime"))]
+    #[cfg(feature = "asr-runtime")]
     session: Option<ort::session::Session>,
 }
 impl Silero {
     /// Only reads an explicitly installed pack; failures leave baseline coverage to the caller.
     pub fn load(store: &model_catalog::ModelStore, dll: &Path) -> Result<Self, Unavailable> {
-        #[cfg(all(windows, feature = "asr-runtime"))]
+        #[cfg(feature = "asr-runtime")]
         {
             use sha2::{Digest, Sha256};
-            #[cfg(test)]
+            #[cfg(all(test, windows))]
             if super::production::proof::active() {
                 return Ok(Self { session: None });
             }
@@ -149,7 +149,7 @@ impl Silero {
             };
             load().map_err(|_| Unavailable)
         }
-        #[cfg(not(all(windows, feature = "asr-runtime")))]
+        #[cfg(not(feature = "asr-runtime"))]
         {
             let _ = (store, dll);
             Err(Unavailable)
@@ -170,7 +170,11 @@ impl Silero {
             return state.push(identity, start, sample_rate, audio, last, |_, _| Ok(1.0));
         }
         state.push(identity, start, sample_rate, audio, last, |state, frame| {
-            #[cfg(all(windows, feature = "asr-runtime"))]
+            #[cfg(target_os = "linux")]
+            if crate::core::speech_jobs::STOP.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(Unavailable);
+            }
+            #[cfg(feature = "asr-runtime")]
             {
                 use ort::value::Tensor;
                 let mut run =
@@ -201,7 +205,7 @@ impl Silero {
                     };
                 run().map_err(|_| Unavailable)
             }
-            #[cfg(not(all(windows, feature = "asr-runtime")))]
+            #[cfg(not(feature = "asr-runtime"))]
             {
                 let _ = (state, frame);
                 Err(Unavailable)
@@ -209,6 +213,8 @@ impl Silero {
         })
     }
 }
+#[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
+mod linux_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

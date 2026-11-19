@@ -3,6 +3,8 @@ pub(crate) mod anuvani;
 mod calibration;
 pub use calibration::{CALIBRATION_VERSION, CalibrationKey, Decision, Unsure, decide_logits};
 mod contract;
+#[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
+mod linux_tests;
 #[cfg(test)]
 mod tests;
 mod worker;

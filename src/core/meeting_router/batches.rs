@@ -76,18 +76,16 @@ pub fn spool(root: &Path, ranges: Vec<Range>) -> Result<Plan> {
     }
     Ok(plan)
 }
-#[cfg(windows)]
 fn path(root: &Path, plan: &Plan, id: &str, kind: &str) -> PathBuf {
     root.join(format!("{}-{id}.{kind}", plan.revision))
 }
-#[cfg(windows)]
 #[derive(Serialize, Deserialize)]
 struct Receipt {
     revision: String,
     range: String,
     sha256: String,
 }
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", any(feature = "asr-runtime", test))))]
 fn cached(root: &Path, plan: &Plan, id: &str) -> bool {
     read_result(root, plan, id).ok().flatten().is_some()
 }
@@ -113,28 +111,20 @@ pub fn read_result(root: &Path, plan: &Plan, id: &str) -> Result<Option<Value>> 
     {
         return Err("Invalid plan/range identity".into());
     }
-    #[cfg(windows)]
-    {
-        let check = || -> Result<Option<Value>> {
-            let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
-            let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
-                &path(root, plan, id, "receipt"),
-                4096,
-            )?)?;
-            let value: Value = serde_json::from_slice(&bytes)?;
-            Ok((receipt.revision == plan.revision
-                && receipt.range == id
-                && receipt.sha256 == hash(&bytes)
-                && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
-            .then_some(value))
-        };
-        Ok(check().unwrap_or(None))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = root;
-        Ok(None)
-    }
+    let check = || -> Result<Option<Value>> {
+        let bytes = Snapshot::read_file(&path(root, plan, id, "result"), 1 << 20)?;
+        let receipt: Receipt = serde_json::from_slice(&Snapshot::read_file(
+            &path(root, plan, id, "receipt"),
+            4096,
+        )?)?;
+        let value: Value = serde_json::from_slice(&bytes)?;
+        Ok((receipt.revision == plan.revision
+            && receipt.range == id
+            && receipt.sha256 == hash(&bytes)
+            && value["text"].as_str().is_some_and(|s| !s.trim().is_empty()))
+        .then_some(value))
+    };
+    Ok(check().unwrap_or(None))
 }
 pub trait EnglishBridge {
     fn transcribe(&mut self, range: &Range) -> Result<Value>;
@@ -161,7 +151,15 @@ pub fn run(
     }
     #[cfg(windows)]
     {
-        run_windows(root, plan, native, bridge, None)
+        run_batches(
+            root,
+            plan,
+            native,
+            bridge,
+            None,
+            &mut |_, _, _| Ok(()),
+            true,
+        )
     }
 }
 #[cfg(windows)]
@@ -172,9 +170,41 @@ pub fn run_until(
     bridge: &mut impl EnglishBridge,
     deadline: std::time::Instant,
 ) -> Result<()> {
-    run_windows(root, plan, native, bridge, Some(deadline))
+    run_batches(
+        root,
+        plan,
+        native,
+        bridge,
+        Some(deadline),
+        &mut |_, _, _| Ok(()),
+        true,
+    )
 }
-#[cfg(windows)]
+#[cfg(all(target_os = "linux", any(feature = "asr-runtime", test)))]
+pub(crate) fn run_host(
+    root: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    timeout: std::time::Duration,
+    publish: &mut impl FnMut(&str, &Range, &Value) -> Result<()>,
+) -> Result<()> {
+    struct Disabled;
+    impl EnglishBridge for Disabled {
+        fn transcribe(&mut self, _: &Range) -> Result<Value> {
+            Err("HOST_ENGLISH_DISABLED".into())
+        }
+    }
+    run_batches(
+        root,
+        plan,
+        native,
+        &mut Disabled,
+        Some(std::time::Instant::now() + timeout),
+        publish,
+        false,
+    )
+}
+#[cfg(any(windows, all(target_os = "linux", any(feature = "asr-runtime", test))))]
 pub(in crate::core) fn remaining(
     deadline: Option<std::time::Instant>,
 ) -> Result<Option<std::time::Duration>> {
@@ -186,13 +216,15 @@ pub(in crate::core) fn remaining(
         })
         .transpose()
 }
-#[cfg(windows)]
-fn run_windows(
+#[cfg(any(windows, all(target_os = "linux", any(feature = "asr-runtime", test))))]
+fn run_batches(
     root: &Path,
     plan: &Plan,
     native: &mut impl NativeLoader,
     bridge: &mut impl EnglishBridge,
     deadline: Option<std::time::Instant>,
+    publish: &mut impl FnMut(&str, &Range, &Value) -> Result<()>,
+    english: bool,
 ) -> Result<()> {
     let _lock = store_io::lock(&root.join("job.lock"))?;
     if revision(&plan.batches)? != plan.revision
@@ -202,6 +234,9 @@ fn run_windows(
         return Err("Stale plan revision".into());
     }
     for (lang, ranges) in &plan.batches {
+        if lang == "en" && !english {
+            continue;
+        }
         let started = std::time::Instant::now();
         let pending: Vec<_> = ranges
             .iter()
@@ -242,6 +277,7 @@ fn run_windows(
                     sha256: hash(&bytes),
                 },
             )?;
+            publish(id, r, &v)?;
         }
         if let Some(s) = &mut session {
             s.finish()?;
@@ -254,7 +290,11 @@ fn run_windows(
     }
     Ok(())
 }
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 mod tests;
 #[cfg(windows)]
+pub mod worker;
+
+#[cfg(target_os = "linux")]
+#[path = "batches/linux_worker.rs"]
 pub mod worker;

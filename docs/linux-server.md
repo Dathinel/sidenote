@@ -135,11 +135,48 @@ The informational loginctl probe runs once in a separate execution context with
 null stdin, rlimits/PDEATHSIG, a two-second deadline, explicit kill/reap and a cached
 unknown result on failure. It never runs inside the supervisor loop.
 
-The pinned Windows ONNX DLL is unchanged. No Linux runtime artifact has been qualified
-against that pin; `asr-runtime` therefore returns `ONNX_RUNTIME_UNAVAILABLE` explicitly.
-Both language-detector and recognition paths report unavailable/degraded output. Arbitrary
-`libonnxruntime.so` files are never loaded. Linux ASR execution remains unavailable in
-this step, which is one of the goal's permitted outcomes.
+The pinned Windows ONNX DLL is unchanged. Linux pins one runtime: `lib/libonnxruntime.so`
+(27,026,609 bytes, SHA-256 `4b3607ae...b566e`) from the sherpa-onnx v2.0.1 linux-x64 shared
+no-TTS release (tarball 25,289,904 bytes, SHA-256 `b3b095f6...67b2`). `asr::initialize`
+reads the file once, checks size and hash, copies those bytes into a sealed `memfd`
+(no write, grow, shrink or further seals), `dlopen`s `/proc/self/fd/N`, and only then
+probes `OrtGetApiBase` and API 22. Any other `libonnxruntime.so` is refused with
+`ONNX Runtime integrity check failed`. The service needs `/proc/self/fd` and `memfd_create`;
+neither has been checked inside the service's private namespace yet. The library is not
+shipped or fetched by the server; the operator supplies an absolute path. The load is
+proved on the test box through `asr::initialize` and one Silero frame (class
+`asr::onnx::linux_tests`). Silero VAD (`Silero::load`, `Silero::push`) and Anuvani language
+ID (read once, hashed, loaded from those same bytes) now run on Linux with this runtime;
+the test process high-water mark was VmHWM 462,984 kB after one load and five seconds of audio.
+Batches and the native Hindi/Telugu entry now compile on Linux. The speech worker uses
+`sidenote-linux-worker --speech`, the existing user-service cgroup check, private
+PID/user/network namespaces and parent-death checks. It refuses a missing launcher,
+non-user-service ownership or an unbounded cgroup.
+The unattended worker retains its ordinary 512 MiB, 32-task and one-CPU budget.
+`sidenote-speech@.service` launches only the speech lifetime in the separate
+`sidenote-speech-worker.service` user service, with 1 GiB, 64 tasks and one CPU.
+Speech admission requires that exact unit and those finite ceilings; ordinary
+helpers retain their existing admission. The speech template copies the unattended
+template's hardening. The outer credential launcher remains at 1 GiB/64 tasks.
+The Server role selects its speech-only lifetime with `--speech-port PORT` (0 chooses an ephemeral port); the packaged speech service defaults to loopback port 6792. `--speech-host box.tail-name.ts.net` adds exactly that HTTPS tailnet authority. Issue and revoke a separate token with `--mcp-access grant NAME /absolute/token speech` and `--mcp-access revoke NAME speech`. Existing grants remain MCP-only. `GET /v1/host` reports the hash-checked runtime probe (`--runtime-library PATH`, or the adjacent library); `ready` describes that runtime only. Languages and models remain empty and speech jobs are disabled. Requests have 8 slots, 32 connections, a 2-second header deadline, a 5-second handler/body deadline, a 10-second connection deadline and a 10,000,000-byte body cap. Uploads and SSE are later lanes.
+The speech child's address-space rlimit is 4 GiB, CPU rlimit 120 seconds, core limit
+zero, with no-new-privileges and nice +10. The existing namespace launcher's
+120-second wall deadline still applies. Cgroup memory bounds resident memory;
+the larger address-space ceiling allows ONNX's mappings and thread stacks.
+A controller cancels and reaps the launcher on cancellation, error, timeout or Drop;
+namespace PID 1 death kills its remaining descendants. Cleanup waits at most 500 ms
+in the caller and keeps ownership in the controller if reaping takes longer.
+The public Hindi qualification is `cargo test --no-default-features --features
+server,asr-runtime --target x86_64-unknown-linux-gnu --test linux_native_worker --
+--ignored --test-threads=1 --nocapture`, under a bounded systemd user service, with
+`SIDENOTE_L4_RUNTIME` naming the pinned absolute L1 library. It downloads and hashes
+the catalogue Hindi graph/tokens and two pinned public Common Voice Hindi MP3s,
+converts those test inputs with contained `/usr/bin/ffmpeg`, and checks both real
+native replies and an inference killed mid-run. Telugu shares the launcher and
+loader but has no real-model qualification in this lane.
+`sidenote --cpu-models verify ID --runtime-library /abs/libonnxruntime.so` prints the
+version the library reports (`runtime=onnxruntime-<version>-linux-x64-api22 loaded`);
+without the flag the status line says `not-loaded` and names the pin.
 
 ## Install a user service with headless credentials
 

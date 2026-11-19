@@ -21,6 +21,8 @@ for binary in sidenote sidenote-linux-worker; do
   mv -f -- "/usr/local/libexec/sidenote/$binary.new" "/usr/local/libexec/sidenote/$binary"
 done
 install -m 0644 "$source_dir/systemd/sidenote-server@.service" /etc/systemd/system/sidenote-server@.service
+install -m 0644 "$source_dir/systemd/sidenote-speech@.service" /etc/systemd/system/sidenote-speech@.service
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/sidenote-server@.service
+systemd-analyze verify /etc/systemd/system/sidenote-speech@.service
 echo "Installed. Provision the encrypted credential, then enable sidenote-server@$account_uid.service."

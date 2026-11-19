@@ -3,20 +3,22 @@ use crate::core::asr::Result;
 
 pub(crate) trait Detector {
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>>;
-    #[cfg(all(windows, feature = "asr-runtime"))]
+    #[cfg(feature = "asr-runtime")]
     fn logits(&mut self, _samples: &[f32]) -> Result<Vec<f32>> {
         Err("Raw language logits unavailable".into())
     }
 }
 
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(feature = "asr-runtime")]
 struct Runtime {
     model: crate::core::asr::Anuvani,
     // Deny replacement from before hashing until the ONNX session is dropped.
+    #[cfg(windows)]
     _verified: std::fs::File,
+    #[cfg(windows)]
     _parents: Vec<std::fs::File>,
 }
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(feature = "asr-runtime")]
 impl Detector for Runtime {
     fn logits(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
         self.model.logits(samples)
@@ -95,7 +97,35 @@ pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
     }))
 }
 
-#[cfg(not(all(windows, feature = "asr-runtime")))]
+/// Linux has no share-mode lock, so the bytes that are hashed are the bytes the session loads.
+#[cfg(all(target_os = "linux", feature = "asr-runtime"))]
+pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    #[cfg(test)]
+    if crate::service::speech::proofs::active() {
+        return Ok(Box::new(crate::service::speech::proofs::Logits::new()));
+    }
+    if !settings.model.is_absolute() {
+        return Err("Language model needs an absolute path".into());
+    }
+    let expected = crate::core::model_catalog::model("anuvani-lid-int8")?.files[0].bytes;
+    let file = std::fs::File::open(std::fs::canonicalize(&settings.model)?)?;
+    if !file.metadata()?.is_file() {
+        return Err("Unsafe language model file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(expected + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != expected || hex::encode(Sha256::digest(&bytes)) != MODEL_SHA256 {
+        return Err("Language model integrity check failed".into());
+    }
+    crate::core::asr::initialize(&settings.runtime_dll)?;
+    Ok(Box::new(Runtime {
+        model: crate::core::asr::Anuvani::load_verified(&bytes)?,
+    }))
+}
+
+#[cfg(not(all(any(windows, target_os = "linux"), feature = "asr-runtime")))]
 pub(crate) fn load(_settings: &Settings) -> Result<Box<dyn Detector>> {
-    Err("Language model unavailable: requires Windows and the asr-runtime build".into())
+    Err("Language model unavailable: requires Windows or Linux and the asr-runtime build".into())
 }

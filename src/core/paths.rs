@@ -102,6 +102,10 @@ pub(super) fn read_only() -> bool {
 pub(super) fn data() -> Option<PathBuf> {
     #[cfg(test)]
     {
+        #[cfg(all(target_os = "linux", feature = "asr-runtime"))]
+        if let Some(root) = std::env::var_os("SIDENOTE_L7_ROOT") {
+            return Some(root.into());
+        }
         Some(crate::test_home().join("state"))
     }
     #[cfg(not(test))]

@@ -66,10 +66,19 @@ Storage must pass the private-directory check; partial files inherit umask 0077.
 
 The exact GCP host is documented by [Hugging Face](https://huggingface.co/docs/hub/models-downloading#downloading-behind-a-proxy-or-firewall); HTTP, arbitrary subdomains, userinfo and alternate ports remain denied.
 
-Files are not inference capability. The Linux ONNX loader still refuses the
-unqualified runtime. Validate the CPU libonnxruntime build/version, dependency
-licenses and model performance separately before enabling inference. Existing
+Files are not inference capability. The Linux ONNX loader accepts only the pinned
+sherpa-onnx v2.0.1 `libonnxruntime.so` (see `linux-server.md`); other builds are refused.
+Dependency licenses and model performance remain separate checks before enabling
+inference. VAD, language ID, batch receipts and the contained native Hindi/Telugu
+worker now run on Linux; the speech host probe is available, jobs and remote uploads remain disabled. Existing
 catalog license labels are metadata, not a new license review.
+
+The packaged unattended worker retains its ordinary 512 MiB, one CPU and 32-task
+budget so existing routing helpers remain admitted. The separate
+`sidenote-speech@.service` packages the speech-only lifetime with a 1 GiB, one CPU,
+64-task inner service. Speech admission requires `sidenote-speech-worker.service`;
+the ordinary server cannot launch speech. Resource-property tests do not qualify
+the installed template's full mount and namespace restrictions.
 
 ## System service, independent of login
 

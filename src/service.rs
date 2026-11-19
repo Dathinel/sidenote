@@ -2,6 +2,8 @@
 #[cfg(target_os = "linux")]
 mod schedule;
 #[cfg(target_os = "linux")]
+pub(crate) mod speech;
+#[cfg(target_os = "linux")]
 pub(crate) mod workers;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -300,6 +302,10 @@ fn supervise() {
 }
 
 pub fn run() -> i32 {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().any(|a| a == "--speech-worker" || a == "--speech-port") {
+        return speech::run();
+    }
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
         eprintln!("SERVICE_ROOT_REFUSED");
