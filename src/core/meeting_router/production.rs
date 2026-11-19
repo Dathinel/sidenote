@@ -13,6 +13,8 @@ mod pipeline;
 #[cfg(feature = "asr-runtime")]
 mod plan;
 pub use pipeline::run;
+#[cfg(all(test, feature = "asr-runtime"))]
+pub(in crate::core) mod proof;
 #[cfg(test)]
 mod public_tests;
 #[cfg(all(test, feature = "asr-runtime"))]
@@ -25,6 +27,10 @@ impl NativeLoader for Native<'_> {
             NativeLanguage::Hindi => "hi",
             NativeLanguage::Telugu => "te",
         };
+        #[cfg(all(test, feature = "asr-runtime"))]
+        if proof::active() {
+            return Ok(Box::new(proof::SyntheticRecognizer));
+        }
         let config = self.0;
         let threads = config.engine_settings.worker_threads;
         if !(1..=256).contains(&threads) {

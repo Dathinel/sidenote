@@ -221,7 +221,7 @@ impl<'a> Upload<'a> {
         mut piece: Piece,
         wav: &Path,
         (host_cutoff, deadline): (Instant, Instant),
-        mut local: impl FnMut(&Journal, (u64, u64), Instant) -> Option<Vec<Value>>,
+        local: Option<impl FnMut(&Journal, (u64, u64), Instant) -> Option<Vec<Value>>>,
     ) -> io::Result<Option<Journal>> {
         if !matches!(piece.track.as_str(), "microphone" | "system") {
             return Err(io::ErrorKind::InvalidData.into());
@@ -281,7 +281,9 @@ impl<'a> Upload<'a> {
         if !journal.done() && expired() {
             journal.record(vec![Change::HostFailed])?;
         }
-        if self.mode != WorkMode::HostOnly {
+        if self.mode != WorkMode::HostOnly
+            && let Some(mut local) = local
+        {
             for span in journal.missing() {
                 if Instant::now() < deadline
                     && !journal.local(span)

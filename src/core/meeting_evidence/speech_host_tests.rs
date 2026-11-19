@@ -145,19 +145,24 @@ impl Fixture {
         mode: Mode,
         mut local: impl FnMut(&Piece, (u64, u64)) -> super::super::asr::Result<Vec<Value>>,
     ) -> io::Result<()> {
-        self.run_using(mode, |_, piece, span, _, _| local(piece, span))
+        self.run_using(
+            mode,
+            Some(|_: &Path, piece: &Piece, span, _: &super::super::Config, _| local(piece, span)),
+        )
     }
 
     fn run_using(
         &mut self,
         mode: Mode,
-        local: impl FnMut(
-            &Path,
-            &Piece,
-            (u64, u64),
-            &super::super::Config,
-            Instant,
-        ) -> super::super::asr::Result<Vec<Value>>,
+        local: Option<
+            impl FnMut(
+                &Path,
+                &Piece,
+                (u64, u64),
+                &super::super::Config,
+                Instant,
+            ) -> super::super::asr::Result<Vec<Value>>,
+        >,
     ) -> io::Result<()> {
         let (active, stopped) = mpsc::channel::<()>();
         let listener = &self.listener;
@@ -641,15 +646,20 @@ fn speech_host_wait_and_local_spans_share_one_deadline() {
     fixture.forward_ms = 21_000;
     let mut deadlines = Vec::new();
     fixture
-        .run_using(Mode::Dead, |_, piece, span, _, deadline| {
-            let left = deadline.saturating_duration_since(Instant::now());
-            assert!(
-                !left.is_zero() && left <= Duration::from_secs(10),
-                "Host wait must reduce the local allowance"
-            );
-            deadlines.push(deadline);
-            Ok(vec![local_reading(piece, span)])
-        })
+        .run_using(
+            Mode::Dead,
+            Some(
+                |_: &Path, piece: &Piece, span, _: &super::super::Config, deadline: Instant| {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    assert!(
+                        !left.is_zero() && left <= Duration::from_secs(10),
+                        "Host wait must reduce the local allowance"
+                    );
+                    deadlines.push(deadline);
+                    Ok(vec![local_reading(piece, span)])
+                },
+            ),
+        )
         .unwrap();
     assert_eq!(
         deadlines.len(),
@@ -730,4 +740,73 @@ fn speech_host_this_device_uses_no_connection() {
     assert_eq!(fixture.server.connections, 0);
     assert_eq!(fixture.revision().evidence.len(), 1);
     assert!(speech_host::progress(&fixture.settings).contains("Finished here 1"));
+}
+
+#[cfg(feature = "asr-runtime")]
+#[test]
+fn speech_host_production_adapter_slices_and_rebases_generated_audio() {
+    use super::super::{asr, meeting_router::production::proof};
+    let mut fixture = Fixture::new(true, 3);
+    let mut samples = vec![0.125; 16000];
+    samples.extend([0.25; 16000]);
+    samples.extend([0.5; 16000]);
+    asr::write_wav(
+        &fixture.source.join(MEETING).join("microphone.wav"),
+        &samples,
+    )
+    .unwrap();
+    fixture.capture(false);
+    fixture.run(Mode::Partial).unwrap();
+    fixture.run(Mode::Lost(0)).unwrap();
+    proof::with_synthetic_models(|| {
+        fixture
+            .run_using(Mode::Failed, local_span_runner())
+            .unwrap()
+    });
+
+    let revision = fixture.revision();
+    assert_eq!(
+        revision.evidence.len(),
+        3,
+        "The real adapter must supply the uncovered reading"
+    );
+    assert!(revision.provenance["missing_ranges"].is_null());
+    let local = &revision.transcript.segments[1];
+    assert_eq!(local.provider, "local");
+    assert_eq!(
+        (local.start, local.end),
+        (2.0, 3.0),
+        "Offset the reading by the cut start and track origin"
+    );
+}
+
+#[cfg(not(feature = "asr-runtime"))]
+#[test]
+fn speech_host_without_runtime_does_not_consume_a_local_attempt() {
+    assert!(
+        local_span_runner().is_none(),
+        "A build without ASR has no local capability"
+    );
+    let mut fixture = Fixture::finished();
+    fixture
+        .run_using(Mode::Failed, local_span_runner())
+        .unwrap();
+    assert_eq!(
+        fixture.revision().provenance["missing_ranges"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut calls = 0;
+    fixture
+        .run_with(Mode::Dead, |piece, span| {
+            calls += 1;
+            Ok(vec![local_reading(piece, span)])
+        })
+        .unwrap();
+    assert_eq!(
+        calls, 1,
+        "An unavailable runtime must leave the local attempt eligible"
+    );
 }

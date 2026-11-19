@@ -328,7 +328,7 @@ impl Collector {
                     host,
                     &super::meetings_dir(),
                     || chrono::Utc::now().timestamp_millis(),
-                    run_local_span,
+                    local_span_runner(),
                 );
             })
             .ok();
@@ -344,13 +344,15 @@ fn upload_windows(
     host: Option<super::speech_host::Host>,
     source: &Path,
     now: impl Fn() -> i64,
-    mut local: impl FnMut(
-        &Path,
-        &super::speech_host::journal::Piece,
-        (u64, u64),
-        &super::Config,
-        Instant,
-    ) -> super::asr::Result<Vec<Value>>,
+    mut local: Option<
+        impl FnMut(
+            &Path,
+            &super::speech_host::journal::Piece,
+            (u64, u64),
+            &super::Config,
+            Instant,
+        ) -> super::asr::Result<Vec<Value>>,
+    >,
 ) -> io::Result<()> {
     use super::{
         meeting_router::ProviderRoute,
@@ -471,10 +473,13 @@ fn upload_windows(
                 piece,
                 &wav,
                 (cutoff(allowance / 2), cutoff(allowance)),
-                |journal, span, deadline| {
-                    progress.save(settings, Some(journal));
-                    local(&wav, journal.piece(), span, &config, deadline).ok()
-                },
+                local.as_mut().map(|run| {
+                    let (wav, config, progress) = (&wav, &config, &progress);
+                    move |journal: &super::speech_host::journal::Journal, span, deadline| {
+                        progress.save(settings, Some(journal));
+                        run(wav, journal.piece(), span, config, deadline).ok()
+                    }
+                }),
             ) {
                 Ok(Some(journal)) => {
                     progress.sent += usize::from(journal.acknowledged());
@@ -524,6 +529,20 @@ fn upload_windows(
         progress.save(settings, None);
     }
     failure.map_or(Ok(()), Err)
+}
+
+#[cfg(windows)]
+type LocalSpan = fn(
+    &Path,
+    &super::speech_host::journal::Piece,
+    (u64, u64),
+    &super::Config,
+    Instant,
+) -> super::asr::Result<Vec<Value>>;
+
+#[cfg(windows)]
+fn local_span_runner() -> Option<LocalSpan> {
+    cfg!(feature = "asr-runtime").then_some(run_local_span)
 }
 
 #[cfg(windows)]
