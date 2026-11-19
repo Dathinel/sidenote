@@ -207,3 +207,37 @@ fn captured_sentence_can_straddle_an_independently_pinned_english_range() {
         "Invalid recorded fallback overlap evidence"
     );
 }
+
+fn notes_at_routed_boundary(capture: &[u8]) -> String {
+    let mut f = Fixture::new(b"public routed words", 0, b"");
+    f.baseline = jobs::read_baseline(capture).unwrap();
+    record_coverage(&f, 0.9, 1.1, false);
+    f.run(&mut super::no_speech_tests::NativeFake::default())
+        .unwrap();
+    let root = f.root.path();
+    store_io::write(
+        &root.join("config.json"),
+        &json!({"version":1,"features":{},"pipeline":{"profile":"experimental"}}),
+    )
+    .unwrap();
+    let data = pipeline::assemble_saved(&f.work, &f.plan, &f.manifest, &f.baseline, 1).unwrap();
+    let dest = root.join("local/transcripts/123-4");
+    revision::begin(&dest, 1).unwrap();
+    let chosen = revision::commit(&dest, &data).unwrap();
+    crate::core::notes::render_routed_fixture(root, &chosen)
+}
+
+#[test]
+fn routed_boundary_preserves_captured_words_in_notes_input() {
+    let rendered = notes_at_routed_boundary(
+        br#"{"source":"system","start_ms":750,"end_ms":1050,"text":"keep the first words"}"#,
+    );
+    assert!(
+        rendered.contains("[00:00:00.750] Them (English): keep the first words\n"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("[00:00:00.900] Them (English): public routed words"),
+        "{rendered}"
+    );
+}

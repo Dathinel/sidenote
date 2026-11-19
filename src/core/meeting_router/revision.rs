@@ -294,6 +294,7 @@ pub fn assemble(
     }
     let mut coverage =
         reconciliation::from_router_records(plan, manifest, &no_speech, &routing, &transport)?;
+    coverage.preserve_baseline = true;
     reconciliation::reconcile(&mut transcript, baseline, &mut coverage);
     transcript.segments.sort_by(|a, b| {
         a.start

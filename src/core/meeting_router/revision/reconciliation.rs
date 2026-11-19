@@ -21,6 +21,8 @@ pub(super) struct RequiredFallback {
 pub(super) struct Coverage {
     pub fallback_required: Vec<RequiredFallback>,
     pub overlaps: Vec<Value>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_baseline: bool,
 }
 
 pub(super) fn from_router_records(
@@ -161,24 +163,31 @@ pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<(
         return Err("Fallback reason was not recorded by the router".into());
     }
     for overlap in &coverage.overlaps {
-        let Some(source) = overlap["english_source"].as_str() else {
+        let source = overlap["english_source"].as_str().or_else(|| {
+            if coverage.preserve_baseline {
+                overlap["native_source"].as_str()
+            } else {
+                None
+            }
+        });
+        let Some(source) = source else {
             continue;
         };
         let (id, _) = source
             .split_once('-')
-            .ok_or("Invalid English source identity")?;
+            .ok_or("Invalid routed source identity")?;
         let range = plan
             .batches
-            .get("en")
-            .and_then(|b| b.get(id))
-            .ok_or("Missing English range")?;
+            .values()
+            .find_map(|b| b.get(id))
+            .ok_or("Missing routed range")?;
         let origin = manifest
             .tracks
             .iter()
             .find(|t| t.track == range.track)
-            .ok_or("Missing English track")?
+            .ok_or("Missing routed track")?
             .origin_sample;
-        let reading = data.evidence.get(id).ok_or("Missing English reading")?;
+        let reading = data.evidence.get(id).ok_or("Missing routed reading")?;
         let pinned = super::segment(id, range, origin, reading)?;
         let mut alternatives = data
             .alternatives
@@ -188,7 +197,7 @@ pub(super) fn validate_records(data: &Revision, coverage: &Coverage) -> Result<(
             != Some(serde_json::to_value(pinned)?)
             || alternatives.next().is_some()
         {
-            return Err("English overlap disagrees with the pinned reading".into());
+            return Err("Overlap disagrees with the pinned reading".into());
         }
     }
     Ok(())
@@ -245,9 +254,11 @@ pub(super) fn receipt(
     if !matches!(
         routed.status.as_str(),
         "segment-level" | "validated-samples"
-    ) || !routed.sources.iter().any(|o| {
-        o.chunk.track == unit.track && (o.chunk.start < unit.start || o.chunk.end > unit.end)
-    }) || !overlaps(fallback, routed)
+    ) || (!coverage.preserve_baseline
+        && !routed.sources.iter().any(|o| {
+            o.chunk.track == unit.track && (o.chunk.start < unit.start || o.chunk.end > unit.end)
+        }))
+        || !overlaps(fallback, routed)
     {
         return None;
     }
@@ -256,7 +267,7 @@ pub(super) fn receipt(
         .iter()
         .filter(|r| fallback_intersection(r, unit).is_some())
         .collect();
-    if required.is_empty()
+    if (required.is_empty() && !coverage.preserve_baseline)
         || (routed.route == "en"
             && required.iter().any(|r| {
                 routed.sources.iter().any(|o| {
@@ -298,16 +309,19 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
             .iter()
             .any(|o| !super::super::baseline::source_covered(&o.chunk, &t.segments))
     }) {
-        t.segments.retain(|s| {
-            let Some(unit) = baseline_of(s, baseline) else {
-                return true;
-            };
-            !overlaps(s, candidate)
-                || coverage
-                    .fallback_required
-                    .iter()
-                    .any(|r| fallback_intersection(r, unit).is_some())
-        });
+        if !coverage.preserve_baseline {
+            // Immutable revisions written before baseline preservation use the original policy.
+            t.segments.retain(|s| {
+                let Some(unit) = baseline_of(s, baseline) else {
+                    return true;
+                };
+                !overlaps(s, candidate)
+                    || coverage
+                        .fallback_required
+                        .iter()
+                        .any(|r| fallback_intersection(r, unit).is_some())
+            });
+        }
         let mut selected = candidate.clone();
         selected.english_reading = baseline
             .iter()
@@ -318,6 +332,27 @@ pub(super) fn reconcile(t: &mut Transcript, baseline: &[Chunk], coverage: &mut C
             .collect::<Vec<_>>()
             .join(" ");
         t.segments.push(selected);
+    }
+    if coverage.preserve_baseline {
+        let routed: Vec<_> = t
+            .segments
+            .iter()
+            .filter(|s| baseline_of(s, baseline).is_none())
+            .cloned()
+            .collect();
+        t.segments.retain_mut(|s| {
+            let Some(unit) = baseline_of(s, baseline) else {
+                return true;
+            };
+            if super::super::baseline::source_covered(unit, &routed) {
+                return false;
+            }
+            if routed.iter().any(|reading| overlaps(s, reading)) {
+                s.status =
+                    "captured Hex retained: routed text covers only part of this entry".into();
+            }
+            true
+        });
     }
     t.segments.sort_by(|a, b| {
         a.start

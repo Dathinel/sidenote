@@ -11,6 +11,14 @@ pub mod queue;
 mod schema;
 mod status_detail;
 mod transcript;
+
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+pub(crate) fn render_routed_fixture(root: &std::path::Path, revision: &str) -> String {
+    transcript::chosen_part(root, "123-4", root, Some(revision), 0, 1)
+        .unwrap()
+        .unwrap()
+        .render()
+}
 mod translation;
 pub use status_detail::{StatusDetail, status_record, status_records};
 
