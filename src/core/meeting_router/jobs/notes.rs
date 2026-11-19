@@ -107,7 +107,7 @@ pub(crate) fn notes_input(
         .filter(|a| a.generation == p.generation && !a.child.success)
         .map(|a| match a.child.error.as_deref() {
             Some(CPU_ASSETS_UNAVAILABLE) => match a.cpu_models_ready {
-                Some(ready @ 0..=3) => Reason::CpuLanguageModelsDownloading { ready },
+                Some(ready @ 0..=3) => Reason::CpuLanguageModelsMissing { ready },
                 _ => Reason::CpuLanguageAssetsUnavailable,
             },
             _ => Reason::RoutingFailed,
@@ -161,18 +161,26 @@ pub(crate) fn notes_input(
 
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 #[test]
-fn provisioning_review_paused_setup_keeps_the_capture_and_shows_the_count() {
-    use crate::core::model_catalog::{ModelStore, provisioning};
+fn dev40_setup_required_keeps_the_capture_and_shows_the_count() {
+    use crate::core::model_catalog::ModelStore;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let store = ModelStore::new(root.to_owned());
     store_io::write(&root.join("config.json"), &Config::load_in(root).unwrap()).unwrap();
     let capture =
         br#"{"source":"system","text":"Synthetic baseline survives.","start_ms":0,"end_ms":3000}"#;
-    let mut lease = Some(provisioning::reserve(&store).unwrap());
-    for (id, wanted) in [
-        ("100-1", Reason::CpuLanguageModelsDownloading { ready: 0 }),
-        ("100-2", Reason::CpuLanguageAssetsUnavailable),
+    let partial = root.join("models/silero-vad/silero-vad.onnx.part");
+    std::fs::create_dir_all(partial.parent().unwrap()).unwrap();
+    std::fs::write(partial, b"partial download").unwrap();
+    let ready = store.incomplete_cpu_language_pack_count();
+    assert_eq!(ready, Some(0));
+    for (id, count, wanted) in [
+        (
+            "100-1",
+            ready,
+            Reason::CpuLanguageModelsMissing { ready: 0 },
+        ),
+        ("100-2", None, Reason::CpuLanguageAssetsUnavailable),
     ] {
         let pending = Pending {
             id: id.into(),
@@ -180,7 +188,7 @@ fn provisioning_review_paused_setup_keeps_the_capture_and_shows_the_count() {
         };
         store_io::write(&queue(root).join(format!("{id}.json")), &pending).unwrap();
         let work = root.join("local/router-work").join(id);
-        let failure = CpuAssetsUnavailable(provisioning::ready_while_provisioning(&store));
+        let failure = CpuAssetsUnavailable(count);
         record_cpu_assets_failure(&work, pending.generation, &failure).unwrap();
         let (_, reading, reasons) = notes_input(
             root,
@@ -197,12 +205,17 @@ fn provisioning_review_paused_setup_keeps_the_capture_and_shows_the_count() {
             "Synthetic baseline survives."
         );
         assert_eq!(reasons, [RoutingFallback::new(wanted)]);
-        assert!(reading.warnings.iter().any(|text| text == wanted.message()));
+        assert!(
+            reading
+                .warnings
+                .iter()
+                .any(|text| text.as_str() == wanted.message().as_ref())
+        );
         if id == "100-1" {
             assert!(reading.warnings.iter().any(|warning| {
-                warning.contains("Language models are still being set up (0 of 4 ready)")
+                warning.contains("Hindi and Telugu models are not installed yet; download them once in Settings, Models (about 567 MB).")
+                    && warning.contains("0 of 4 ready")
             }));
-            drop(lease.take());
         }
     }
 }

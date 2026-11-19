@@ -1,6 +1,7 @@
 //! Operational provenance, separate from recognizer text and helper instructions.
 use super::revision::Revision;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,11 +14,14 @@ pub enum Reason {
     PendingRecordInvalid,
     RoutingFailed,
     CpuLanguageAssetsUnavailable,
-    CpuLanguageModelsDownloading { ready: u8 },
+    #[serde(alias = "cpu_language_models_downloading")]
+    CpuLanguageModelsMissing {
+        ready: u8,
+    },
     DeadlineExpired,
 }
 impl Reason {
-    pub fn message(self) -> &'static str {
+    pub fn message(self) -> Cow<'static, str> {
         match self {
             Self::GuardRejected => {
                 "Language confidence was too low. Notes use the captured Hex transcript for that speech."
@@ -38,16 +42,18 @@ impl Reason {
             Self::CpuLanguageAssetsUnavailable => {
                 "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
             }
-            Self::CpuLanguageModelsDownloading { ready } => [
-                "Language models are still being set up (0 of 4 ready). Notes use the captured Hex transcript.",
-                "Language models are still being set up (1 of 4 ready). Notes use the captured Hex transcript.",
-                "Language models are still being set up (2 of 4 ready). Notes use the captured Hex transcript.",
-                "Language models are still being set up (3 of 4 ready). Notes use the captured Hex transcript.",
-            ].get(usize::from(ready)).copied().unwrap_or(Self::CpuLanguageAssetsUnavailable.message()),
+            Self::CpuLanguageModelsMissing { ready: ready @ 0..=3 } => {
+                return format!(
+                    "Hindi and Telugu models are not installed yet; download them once in Settings, Models (about 567 MB). {ready} of 4 ready. Notes use the captured Hex transcript."
+                ).into();
+            }
+            Self::CpuLanguageModelsMissing { .. } => {
+                return Self::CpuLanguageAssetsUnavailable.message();
+            }
             Self::DeadlineExpired => {
                 "Language routing missed the Stop deadline. Notes use the captured Hex transcript."
             }
-        }
+        }.into()
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -96,7 +102,7 @@ pub(crate) fn attach(data: &mut Revision, reasons: &[RoutingFallback]) -> serde_
     }
     data.provenance["routing_fallbacks"] = serde_json::to_value(reasons)?;
     for r in reasons {
-        let text = r.reason.message().to_owned();
+        let text = r.reason.message().into_owned();
         if !data.transcript.warnings.contains(&text) {
             data.transcript.warnings.push(text.clone());
         }

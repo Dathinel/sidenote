@@ -10,8 +10,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(all(windows, feature = "asr-runtime"))]
-pub mod provisioning;
+pub const CPU_LANGUAGE_PACKS: [&str; 4] = [
+    "silero-vad",
+    "anuvani-lid-int8",
+    "indicconformer-hi-ctc",
+    "indicconformer-te-ctc",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Runtime {
@@ -224,21 +228,22 @@ impl ModelStore {
             result => result,
         }
     }
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    pub(crate) fn incomplete_cpu_language_pack_count(&self) -> Option<u8> {
+        let ready = CPU_LANGUAGE_PACKS
+            .iter()
+            .filter(|id| self.installed_paths(id).is_ok_and(|paths| paths.is_some()))
+            .count();
+        (ready < CPU_LANGUAGE_PACKS.len()).then_some(ready as u8)
+    }
+
     pub fn install(
         &self,
         id: &str,
         cancel: &AtomicBool,
-        progress: impl FnMut(Progress),
-    ) -> io::Result<()> {
-        self.install_files(id, &|| check_cancel(cancel), true, progress)
-    }
-    fn install_files(
-        &self,
-        id: &str,
-        check: &impl Fn() -> io::Result<()>,
-        allow_download: bool,
         mut progress: impl FnMut(Progress),
     ) -> io::Result<()> {
+        let check = &|| check_cancel(cancel);
         let m = model(id)?;
         if m.runtime == Runtime::Hex {
             return Err(store_io::invalid("Hex manages this model"));
@@ -286,12 +291,6 @@ impl ModelStore {
                 offset = 0;
             }
             if offset < f.bytes {
-                if !allow_download {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "File absent from cache",
-                    ));
-                }
                 let mut response = request(&agent, f.url, offset, check)?;
                 check()?;
                 if response.status() == 200 {

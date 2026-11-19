@@ -58,7 +58,7 @@ impl std::error::Error for CpuAssetsUnavailable {}
 
 #[cfg(all(windows, feature = "asr-runtime"))]
 fn require_cpu_assets(config: &RoutingConfig) -> std::result::Result<(), CpuAssetsUnavailable> {
-    use super::super::model_catalog::{ModelStore, provisioning};
+    use super::super::model_catalog::ModelStore;
     if crate::core::asr::verify_runtime(&config.runtime_dll).is_err() {
         return Err(CpuAssetsUnavailable(None));
     }
@@ -80,7 +80,7 @@ fn require_cpu_assets(config: &RoutingConfig) -> std::result::Result<(), CpuAsse
         return Ok(());
     }
     let ready = (forced.is_none() && config.language_mode == "auto")
-        .then(|| provisioning::ready_while_provisioning(&store))
+        .then(|| store.incomplete_cpu_language_pack_count())
         .flatten();
     Err(CpuAssetsUnavailable(ready))
 }
