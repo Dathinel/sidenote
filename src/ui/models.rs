@@ -1,6 +1,8 @@
 use super::{Event, State, hex, roles, theme::Palette, widgets::pressable};
 use rune::{El, col, row};
 use rune_kit::{Kit, TextInput};
+#[cfg(all(windows, feature = "asr-runtime"))]
+use sidenote::core::model_catalog::provisioning;
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
 use std::{
     collections::{HashMap, HashSet},
@@ -16,14 +18,25 @@ pub enum Msg {
     Progress(&'static str, Progress),
     Finished(&'static str, std::io::Result<()>),
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Remove,
+    Install,
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    Automatic(bool),
+}
+
 struct Job {
     cancel: Arc<AtomicBool>,
     worker: JoinHandle<()>,
-    removing: bool,
+    action: Action,
 }
 
 #[derive(Default)]
 pub struct Models {
+    store: ModelStore,
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    provisioning: Option<std::fs::File>,
     languages: Vec<String>,
     installed: HashSet<&'static str>,
     partial: HashSet<&'static str>,
@@ -45,7 +58,7 @@ impl Models {
     pub fn has_local_files(&self, id: &str) -> bool {
         self.installed.contains(id) || self.partial.contains(id)
     }
-    pub fn load(root: &Path) -> Self {
+    pub fn load(root: &Path, config: &sidenote::core::Config) -> Self {
         let (languages, preference_error) = match model_catalog::load_meeting_languages(root) {
             Ok(languages) => (languages, None),
             Err(e) => (
@@ -53,7 +66,14 @@ impl Models {
                 Some(format!("Could not read meeting languages: {e}")),
             ),
         };
-        let store = ModelStore::new(root.to_owned());
+        let model_root = if cfg!(all(windows, feature = "asr-runtime"))
+            && !config.pipeline.model_state_dir.as_os_str().is_empty()
+        {
+            config.pipeline.model_state_dir.clone()
+        } else {
+            root.to_owned()
+        };
+        let store = ModelStore::new(model_root);
         let installed: HashSet<_> = model_catalog::catalog()
             .iter()
             .filter(|m| store.installed_paths(m.id).ok().flatten().is_some())
@@ -65,10 +85,13 @@ impl Models {
             .map(|m| m.id)
             .collect();
         Self {
+            store,
             languages,
             installed,
             partial,
             preference_error,
+            #[cfg(all(windows, feature = "asr-runtime"))]
+            provisioning: None,
             progress: HashMap::new(),
             errors: HashMap::new(),
             jobs: HashMap::new(),
@@ -81,11 +104,14 @@ impl Models {
                 self.progress.insert(id, progress);
             }
             Msg::Finished(id, result) => {
-                if let Some(job) = self.jobs.remove(id) {
+                let installed_by_request = self.jobs.remove(id).is_some_and(|job| {
+                    let requested =
+                        job.action == Action::Install && !job.cancel.load(Ordering::Relaxed);
                     let _ = job.worker.join();
-                }
+                    requested
+                });
                 self.progress.remove(id);
-                let store = ModelStore::default();
+                let store = &self.store;
                 if store.installed_paths(id).ok().flatten().is_some() {
                     self.installed.insert(id);
                 } else {
@@ -99,6 +125,9 @@ impl Models {
                 match result {
                     Ok(()) => {
                         self.errors.remove(id);
+                        if installed_by_request {
+                            self.remember_choice(id, false);
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                         self.errors.remove(id);
@@ -109,6 +138,101 @@ impl Models {
                 }
             }
         }
+    }
+
+    fn start(&mut self, id: &'static str, action: Action, notify: impl Fn(Msg) + Send + 'static) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let store = self.store.clone();
+        self.errors.remove(id);
+        self.progress.insert(
+            id,
+            Progress {
+                downloaded: store.stored_bytes(id).unwrap_or(0),
+                total: model_catalog::model(id).map_or(0, |m| m.bytes()),
+                phase: Phase::Downloading,
+            },
+        );
+        let worker = thread::spawn(move || {
+            let progress = |p| notify(Msg::Progress(id, p));
+            let result = match action {
+                Action::Remove => store.remove(id),
+                Action::Install => store.install(id, &worker_cancel, progress),
+                #[cfg(all(windows, feature = "asr-runtime"))]
+                Action::Automatic(cache_only) => {
+                    provisioning::install(&store, id, &worker_cancel, cache_only, progress)
+                }
+            };
+            notify(Msg::Finished(id, result));
+        });
+        self.jobs.insert(
+            id,
+            Job {
+                cancel,
+                worker,
+                action,
+            },
+        );
+    }
+
+    fn remember_choice(&mut self, id: &'static str, off: bool) -> bool {
+        #[cfg(all(windows, feature = "asr-runtime"))]
+        if let Err(error) = provisioning::opt_out(&self.store, id, off) {
+            self.preference_error = Some(format!("Could not save the model choice: {error}"));
+            return false;
+        }
+        let _ = (id, off);
+        true
+    }
+
+    fn cancel(&mut self, id: &'static str) {
+        if self.jobs.contains_key(id) && self.remember_choice(id, true) {
+            self.jobs[id].cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    fn provision(
+        &mut self,
+        config: &sidenote::core::Config,
+        recording: bool,
+        cache_only: bool,
+        notify: impl Fn(Msg) + Send + 'static,
+    ) -> bool {
+        if self.scene {
+            return false;
+        }
+        if let Some(job) = self
+            .jobs
+            .values()
+            .find(|job| matches!(job.action, Action::Automatic(_)))
+        {
+            if recording || !provisioning::enabled(config) {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+            return false;
+        }
+        let Some(id) =
+            provisioning::next_pack(&self.store, config, |id| self.errors.contains_key(id))
+        else {
+            self.provisioning = None;
+            return false;
+        };
+        if self.provisioning.is_none() {
+            match provisioning::reserve(&self.store) {
+                Ok(lock) => self.provisioning = Some(lock),
+                Err(error) if matches!(error.raw_os_error(), Some(32 | 33)) => return false,
+                Err(error) => {
+                    self.errors.insert(id, error.to_string());
+                    return true;
+                }
+            }
+        }
+        if recording || !self.jobs.is_empty() {
+            return false;
+        }
+        self.start(id, Action::Automatic(cache_only), notify);
+        true
     }
 }
 impl Drop for Models {
@@ -144,48 +268,75 @@ impl State {
         self.hex.shell.saved = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
     }
     fn model_download(&mut self, id: &'static str, remove: bool) {
-        if self.models.scene || self.models.jobs.contains_key(id) {
+        if self.models.scene
+            || self.models.jobs.contains_key(id)
+            || (remove && !self.models.remember_choice(id, true))
+        {
             return;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
-        let sender = self.events_tx.clone();
-        let waker = self.waker.clone();
-        self.models.errors.remove(id);
-        self.models.progress.insert(
-            id,
-            Progress {
-                downloaded: 0,
-                total: model_catalog::model(id).map_or(0, |m| m.bytes()),
-                phase: Phase::Downloading,
-            },
-        );
-        let worker = thread::spawn(move || {
-            let result = if remove {
-                ModelStore::default().remove(id)
-            } else {
-                ModelStore::default().install(id, &worker_cancel, |p| {
-                    let _ = sender.send(Event::Models(Msg::Progress(id, p)));
-                    if let Some(wake) = &waker {
-                        wake();
-                    }
-                })
-            };
-            let _ = sender.send(Event::Models(Msg::Finished(id, result)));
-            if let Some(wake) = &waker {
-                wake();
-            }
-        });
-        self.models.jobs.insert(
-            id,
-            Job {
-                cancel,
-                worker,
-                removing: remove,
-            },
-        );
+        let action = if remove {
+            Action::Remove
+        } else {
+            Action::Install
+        };
+        self.models.start(id, action, model_notify(self));
+    }
+
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    pub(super) fn provision_models(&mut self) -> bool {
+        let recording = self.pause_background_model_install();
+        let notify = model_notify(self);
+        self.models
+            .provision(&self.config, recording, false, notify)
     }
 }
+
+fn model_notify(s: &State) -> impl Fn(Msg) + Send + 'static {
+    let sender = s.events_tx.clone();
+    let waker = s.waker.clone();
+    move |msg| {
+        let _ = sender.send(Event::Models(msg));
+        if let Some(wake) = &waker {
+            wake();
+        }
+    }
+}
+#[cfg(all(test, windows, feature = "asr-runtime"))]
+#[test]
+fn automatic_model_startup_respects_recording_and_saved_choices() {
+    let state = tempfile::tempdir().unwrap();
+    let root = state.path();
+    let mut config = sidenote::core::Config::load_in(root).unwrap();
+    let mut models = Models::load(root, &config);
+    assert!(!models.provision(&config, true, true, |_| {}));
+    assert!(models.jobs.is_empty());
+
+    let silero = provisioning::PACKS[0];
+    assert!(models.provision(&config, false, true, |_| {}));
+    assert_eq!(models.jobs.len(), 1);
+    assert!(models.progress.contains_key(silero));
+    assert!(!models.provision(&config, false, true, |_| {}));
+    models.cancel(silero);
+    drop(models);
+
+    let mut models = Models::load(root, &config);
+    assert!(models.provision(&config, false, true, |_| {}));
+    assert!(models.jobs.contains_key(provisioning::PACKS[1]));
+    drop(models);
+
+    let mut models = Models::load(root, &config);
+    assert!(models.remember_choice(silero, false));
+    config.pipeline.language_mode = "forced:te".into();
+    assert!(!models.provision(&config, false, true, |_| {}));
+    config.pipeline.language_mode = "auto".into();
+    config.labs.after_stop_language_routing = false;
+    assert!(!models.provision(&config, false, true, |_| {}));
+    assert_eq!(
+        provisioning::next_pack(&models.store, &sidenote::core::Config::default(), |_| false),
+        Some(silero)
+    );
+}
+
 pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
     let names = LANGUAGES
         .iter()
@@ -426,7 +577,11 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                 continue;
             }
             if let Some(progress) = models.progress.get(id) {
-                if models.jobs.get(id).is_some_and(|job| job.removing) {
+                if models
+                    .jobs
+                    .get(id)
+                    .is_some_and(|job| job.action == Action::Remove)
+                {
                     card = card.child(
                         roles::CONTROL
                             .wrap("Removing downloaded files...", p.soft)
@@ -460,11 +615,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                         .child(
                             crate::ui::widgets::action("Cancel download", p)
                                 .key(format!("model-cancel-{id}"))
-                                .on_press(move |s: &mut State| {
-                                    if let Some(job) = s.models.jobs.get(id) {
-                                        job.cancel.store(true, Ordering::Relaxed);
-                                    }
-                                }),
+                                .on_press(move |s: &mut State| s.models.cancel(id)),
                         );
                 }
             } else if models.installed.contains(id) {
@@ -570,6 +721,9 @@ pub fn scene(s: &mut State, name: &str) {
     s.hex_open = true;
     s.hex.section = hex::Section::MeetingModels;
     s.models = Models {
+        store: ModelStore::new(s.store.root.clone()),
+        #[cfg(all(windows, feature = "asr-runtime"))]
+        provisioning: None,
         languages: vec!["en".into(), "hi".into()],
         scene: true,
         installed: HashSet::new(),

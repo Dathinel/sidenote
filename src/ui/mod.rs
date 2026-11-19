@@ -468,7 +468,7 @@ impl State {
             people,
             companies,
             updates: updates::Updates::default(),
-            models: models::Models::load(&store.root),
+            models: models::Models::load(&store.root, &config),
             config,
             feature_error,
             selected: None,
@@ -1806,6 +1806,10 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
     }
     let (mut changed, _) = apply_pending(s, headless);
     changed |= s.hex_connection_tick(tx);
+    #[cfg(all(windows, feature = "asr-runtime"))]
+    if !headless && !cfg!(test) {
+        changed |= s.provision_models();
+    }
     if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
         s.show_toast(message, tx);
         s.memory.settle_toast_action = Some((id, redo));

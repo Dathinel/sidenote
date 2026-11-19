@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(all(windows, feature = "asr-runtime"))]
+pub mod provisioning;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Runtime {
     Hex,
@@ -226,6 +229,15 @@ impl ModelStore {
         &self,
         id: &str,
         cancel: &AtomicBool,
+        progress: impl FnMut(Progress),
+    ) -> io::Result<()> {
+        self.install_files(id, cancel, true, progress)
+    }
+    fn install_files(
+        &self,
+        id: &str,
+        cancel: &AtomicBool,
+        allow_download: bool,
         mut progress: impl FnMut(Progress),
     ) -> io::Result<()> {
         let m = model(id)?;
@@ -236,6 +248,7 @@ impl ModelStore {
         let _lock = self.lock(m)?;
         let dir = self.dir(m);
         reject_link(&dir)?;
+        check_cancel(cancel)?;
         fs::create_dir_all(&dir)?;
         let receipt = dir.join("installed.json");
         if receipt.exists() {
@@ -274,7 +287,14 @@ impl ModelStore {
                 offset = 0;
             }
             if offset < f.bytes {
+                if !allow_download {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "File absent from cache",
+                    ));
+                }
                 let mut response = request(&agent, f.url, offset, cancel)?;
+                check_cancel(cancel)?;
                 if response.status() == 200 {
                     offset = 0;
                 } else if response.status() == 206 {
@@ -323,6 +343,7 @@ impl ModelStore {
                 loop {
                     check_cancel(cancel)?;
                     let n = reader.read(&mut buffer)?;
+                    check_cancel(cancel)?;
                     if n == 0 {
                         break;
                     }
