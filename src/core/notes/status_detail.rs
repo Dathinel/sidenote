@@ -155,6 +155,7 @@ impl StatusDetail {
             None | Some("translation_off" | "no_non_english" | "language_passes_not_available") => {
                 ""
             }
+            Some("translated") => "",
             Some("helper_unqualified") => {
                 "Translation provider is not qualified. Notes use the original transcript."
             }

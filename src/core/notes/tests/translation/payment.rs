@@ -25,7 +25,7 @@ fn translation_requires_the_selected_subscription_route() {
         assert_eq!(
             job.translation.unwrap().reason,
             if allowed {
-                "translation_validation_not_available"
+                "translation_reply_invalid"
             } else {
                 "translation_payment_route_unavailable"
             }

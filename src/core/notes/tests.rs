@@ -9,6 +9,7 @@ mod idle;
 mod review;
 #[cfg(windows)]
 mod routing;
+mod translated;
 #[cfg(windows)]
 mod translation;
 use crate::core::{

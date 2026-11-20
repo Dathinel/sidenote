@@ -412,7 +412,7 @@ fn translation_requires_explicit_activation_and_pins_settings() {
 #[test]
 fn translation_uses_shared_text_only_child() {
     for (helper, reason) in [
-        (Helper::OpenCode, "translation_validation_not_available"),
+        (Helper::OpenCode, "translation_reply_invalid"),
         (Helper::OpenCode, "helper_tool_use"),
         (Helper::Codex, "helper_not_text_only"),
     ] {

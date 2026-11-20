@@ -125,10 +125,7 @@ fn after_stop_producer_reaches_translation_and_notes() {
     let notes = fs::read_to_string(root.join("notes-input")).unwrap();
     assert!(notes.contains(&selection.render()));
     assert!(!notes.contains("valid-looking translation output"));
-    assert_eq!(
-        job.translation.unwrap().reason,
-        "translation_validation_not_available"
-    );
+    assert_eq!(job.translation.unwrap().reason, "translation_reply_invalid");
     assert!(folder.join("english-summary.json").is_file());
     assert!(!folder.join("english-transcript.md").exists());
     assert!(
