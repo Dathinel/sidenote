@@ -405,6 +405,7 @@ struct Observation {
 }
 
 impl Preview {
+    #[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
     pub(crate) fn session_status(&self) -> io::Result<String> {
         let connection = self.connection.lock().map_err(|_| failed("mutex"))?;
         let Some(connection) = connection.as_ref() else {
@@ -419,6 +420,7 @@ impl Preview {
             sidenote_sync::status::Status::Failed(reason) => format!("failed:{reason:?}"),
         })
     }
+    #[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
     pub(crate) fn public_fingerprint(&self) -> String {
         hex::encode(sidenote_sync::identity::hash(
             &self.device.identity.public(),

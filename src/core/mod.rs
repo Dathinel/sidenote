@@ -35,6 +35,12 @@ pub mod diary;
 pub mod memory;
 pub mod notes;
 mod paths;
+#[cfg(any(
+    test,
+    target_os = "linux",
+    debug_assertions,
+    feature = "relay-qualification"
+))]
 pub(crate) use paths::ReadOnlyScope;
 pub mod project_merge;
 pub mod prompt_library;
@@ -94,10 +100,12 @@ pub mod task_titles;
 pub fn reconcile_service() -> bool {
     sync_state::reconcile(&state_dir()).is_empty()
 }
+#[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
 pub(crate) fn service_journal_revision(root: &std::path::Path) -> std::io::Result<String> {
     sync_state::ingestion_revision(root)
 }
 
+#[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
 pub(crate) fn scan_ingestion_source(
     path: &std::path::Path,
     pending: bool,
