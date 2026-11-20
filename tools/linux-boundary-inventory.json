@@ -101,7 +101,7 @@
   "src/core/meetings.rs": "4fdaee344e2bd038ec8bebe5ca81e8406cf6862de5be3f5dc633a69804269256",
   "src/core/memory.rs": "9d694740235875a00bab1c53df0f699acd1eaba9c2037ff9a2a799fd6a115a5c",
   "src/core/memory_migration.rs": "4440677e7ebbc84d6ee21343e72f5b1ffd0cc6aeceda692f2e3f4b2e5153e3f5",
-  "src/core/model_catalog.rs": "29eed920d13fe3d57fb909636fe6f1e2f3ff0482961b6f3581811a8f132e64f0",
+  "src/core/model_catalog.rs": "871f26ea5f51c7bfa844ceaa6f3db0a9316e162a2fbd6a6f0c276ba0512a3d09",
   "src/core/notes/draft.rs": "f67846e4f3e44e88175052b6d5906da0271493d83403bff0f0f8a0d5d9d659b2",
   "src/core/notes/joined.rs": "27f33b5b99b9fbeb08ddf3868de47026a98cd5e2b9c74e694ec9f2942ab9b481",
   "src/core/notes/queue.rs": "8fde1f874e5a6d914ca1ed77b15feaed02ea2bae3c484fd9e10a4bd853269521",

@@ -210,6 +210,19 @@ pub static MODELS: &[Model] = &[
         runtime_note: "Requires the publisher's patched sherpa-onnx 1.13.8. Opt-in; no runtime bundled here.",
     },
     Model {
+        id: "parakeet_unified_en",
+        name: "Parakeet English in Hex",
+        languages: &["en"],
+        runtime: Runtime::Hex,
+        role: Role::Asr,
+        files: &[],
+        // Not verified in this lane; Hex installs and licenses the copy it runs.
+        licence: "Not recorded",
+        source: "https://huggingface.co/cswk/sayit-asr-gguf",
+        minimum_ram_mb: None,
+        runtime_note: "Hex's English default. Sidenote does not download or select it.",
+    },
+    Model {
         id: "nemotron_3_5_asr",
         name: "Nemotron 3.5 ASR in Hex",
         languages: &["hi", "en"],
