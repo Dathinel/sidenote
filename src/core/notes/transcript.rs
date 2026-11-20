@@ -23,7 +23,7 @@ pub(super) struct Selection {
     pub revision: String,
     pub transcript: Option<crate::core::meeting_router::Transcript>,
     pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
-    /// How the passes went for this transcript. None when it is not known (joined meetings).
+    /// How the passes went for this transcript. None when it is not known (an older joined reading).
     pub language: Option<super::Language>,
     rendered: String,
 }
@@ -114,11 +114,11 @@ pub(super) fn chosen(
             now_ms,
         )
         .map(|reading| {
-            reading.map(|(revision, rendered, reasons)| Selection {
+            reading.map(|(revision, rendered, reasons, language)| Selection {
                 revision,
                 transcript: None,
                 reasons,
-                language: None,
+                language,
                 rendered,
             })
         });

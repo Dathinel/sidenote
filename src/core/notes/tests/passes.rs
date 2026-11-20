@@ -7,6 +7,7 @@ use crate::core::meeting_router::{
     ranges::AsrRange,
     revision,
 };
+use crate::core::{meeting_parts::Meeting, notes::Language};
 type Done<T> = crate::core::asr::Result<T>;
 
 struct Reading;
@@ -210,4 +211,57 @@ fn range_filled_from_the_baseline_without_a_typed_reason_records_english_only() 
     release(&root.0, &folder, "hi", true);
     write_notes(&root.0, &s, None);
     assert_eq!(made_by(&folder)["language_passes"], "english_only");
+}
+
+/// A two-part meeting. Only the first part (`ID`) can have been routed before this is called.
+fn two_parts(root: &Path, first: &Path) -> (PathBuf, PathBuf) {
+    let hex = root.join("meetings");
+    let second = hex.join("1793947600000-456");
+    fs::create_dir_all(&second).unwrap();
+    for name in ["manifest.json", "transcript.ndjson"] {
+        fs::copy(first.join(name), second.join(name)).unwrap();
+    }
+    let mut meeting = Meeting::begin(root, ID, 1793946600000).unwrap();
+    meeting
+        .resume(root, "1793947600000-456", 1793947600000)
+        .unwrap();
+    let folder = meeting.prepare_notes(root, &hex).unwrap();
+    (hex, folder)
+}
+/// What the notes job would stamp for the joined meeting: read from the pinned stored reading.
+fn joined_word(root: &Path, hex: &Path, folder: &Path) -> Option<Language> {
+    let now = chrono::Utc::now().timestamp_millis() + 1000;
+    let (pin, ..) = super::super::joined::chosen(root, hex, ID, folder, None, 0, now)
+        .unwrap()
+        .unwrap();
+    let pinned = transcript::chosen(root, ID, folder, Some(&pin), 0, now).unwrap();
+    pinned.unwrap().language
+}
+#[test]
+fn joined_meeting_is_routed_when_one_part_has_hindi_or_telugu_text() {
+    let (root, first, _) = setup();
+    release(&root.0, &first, "te", false);
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(joined_word(&root.0, &hex, &folder), Some(Language::Routed));
+}
+#[test]
+fn joined_meeting_is_english_only_when_every_part_fell_back() {
+    let (root, first, _) = setup();
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(
+        joined_word(&root.0, &hex, &folder),
+        Some(Language::EnglishOnly)
+    );
+}
+#[test]
+fn an_older_stored_joined_reading_has_no_word() {
+    let (root, first, _) = setup();
+    let (_, folder) = two_parts(&root.0, &first);
+    let old = br#"{"text":"[00:00:01.000] You (English): old","reasons":[],"parts":[]}"#;
+    let pin = blake3::hash(old).to_hex().to_string();
+    let stored = root.0.join("local/joined-transcripts").join(ID);
+    fs::create_dir_all(&stored).unwrap();
+    fs::write(stored.join(format!("{pin}.json")), old).unwrap();
+    let selection = transcript::chosen(&root.0, ID, &folder, Some(&pin), 0, 0).unwrap();
+    assert_eq!(selection.unwrap().language, None);
 }

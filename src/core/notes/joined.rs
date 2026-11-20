@@ -7,12 +7,15 @@ use crate::core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path};
-pub(super) type Chosen = Option<(String, String, Vec<RoutingFallback>)>;
+pub(super) type Chosen = Option<(String, String, Vec<RoutingFallback>, Option<Language>)>;
 #[derive(Serialize, Deserialize)]
 struct Reading {
     text: String,
     reasons: Vec<RoutingFallback>,
     parts: Vec<(String, String)>,
+    /// Absent in readings stored before the word existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    language: Option<Language>,
 }
 fn waiting() -> io::Error {
     io::Error::new(
@@ -34,7 +37,12 @@ fn publish(root: &Path, id: &str, folder: &Path, reading: Reading) -> io::Result
         &folder.join("english-transcript.md"),
         reading.text.as_bytes(),
     )?;
-    Ok(Some((revision, reading.text, reading.reasons)))
+    Ok(Some((
+        revision,
+        reading.text,
+        reading.reasons,
+        reading.language,
+    )))
 }
 pub(super) fn chosen(
     root: &Path,
@@ -71,7 +79,12 @@ pub(super) fn chosen(
                 &folder.join("english-transcript.md"),
                 reading.text.as_bytes(),
             )?;
-            return Ok(Some((pin.into(), reading.text, reading.reasons)));
+            return Ok(Some((
+                pin.into(),
+                reading.text,
+                reading.reasons,
+                reading.language,
+            )));
         }
         let config = core::Config::load_in(root)?;
         let deadline = requested.saturating_add(
@@ -88,6 +101,7 @@ pub(super) fn chosen(
                 text: transcript::read(folder)?,
                 reasons: vec![RoutingFallback::new(Reason::PinnedRevisionUnavailable)],
                 parts: Vec::new(),
+                language: Some(Language::EnglishOnly),
             },
         );
     }
@@ -99,7 +113,10 @@ pub(super) fn chosen(
         text: String::new(),
         reasons: Vec::new(),
         parts: Vec::new(),
+        language: None,
     };
+    // English only when every part is; Hindi or Telugu text in any part makes the meeting routed.
+    let mut english_only = true;
     let mut offset = 0u64;
     for part in parts {
         if !queue::valid_id(&part.id) {
@@ -115,10 +132,16 @@ pub(super) fn chosen(
             .push_str(&core::notes::shift_transcript(&selection.render(), offset)?);
         reading.parts.push((part.id, selection.revision));
         reading.reasons.extend(selection.reasons);
+        english_only &= selection.language == Some(Language::EnglishOnly);
         offset = offset.saturating_add(part.duration_ms);
         if reading.text.len() as u64 > file_reads::STORE_MAX {
             return Err(store_io::invalid("Meeting transcript is too large"));
         }
     }
+    reading.language = Some(if english_only {
+        Language::EnglishOnly
+    } else {
+        Language::Routed
+    });
     publish(root, id, folder, reading)
 }
