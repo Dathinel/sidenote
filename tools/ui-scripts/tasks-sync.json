@@ -1,6 +1,0 @@
-{"events": [
- {"t": 0.3, "type": "tap", "key": "ttask-1800000000002-1-0"},
- {"t": 0.8, "type": "tap", "key": "ttick-1800000000002-1-0"},
- {"t": 1.2, "type": "tap", "key": "tsrc-meet-1800000000002-1-0"},
- {"t": 2.0, "type": "mark", "name": "end"}
-]}

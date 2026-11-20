@@ -1,8 +1,0 @@
-{"events": [
- {"t": 0.3, "type": "tap", "key": "feature-Tasks"},
- {"t": 0.5, "type": "tap", "key": "feature-Memory"},
- {"t": 0.7, "type": "tap", "key": "feature-Daily check"},
- {"t": 0.9, "type": "tap", "key": "feature-Projects"},
- {"t": 1.1, "type": "tap", "key": "feature-Other devices"},
- {"t": 1.5, "type": "mark", "name": "end"}
-]}

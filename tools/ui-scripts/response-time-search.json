@@ -1,8 +1,0 @@
-{"events":[
-  {"t":0.2,"type":"tap","key":"search"},
-  {"t":0.4,"type":"type","text":"synthetic meeting 0"},
-  {"t":1.0,"type":"key","name":"Enter"},
-  {"t":1.4,"type":"key","name":"k","cmd":true},
-  {"t":1.6,"type":"type","text":"synthetic meeting 1999"},
-  {"t":2.2,"type":"mark","name":"end"}
-]}

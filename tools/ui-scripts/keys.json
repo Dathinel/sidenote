@@ -1,7 +1,0 @@
-{"events": [
- {"t": 0.2, "type": "type", "text": "/"},
- {"t": 0.5, "type": "type", "text": "checkout"},
- {"t": 1.2, "type": "key", "name": "Down"},
- {"t": 1.4, "type": "key", "name": "Enter"},
- {"t": 1.8, "type": "mark", "name": "end"}
-]}

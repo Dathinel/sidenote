@@ -1,5 +1,0 @@
-{"events": [
- {"t": 0.4, "type": "type", "text": "soon"},
- {"t": 0.9, "type": "key", "name": "Enter"},
- {"t": 1.6, "type": "mark", "name": "end"}
-]}

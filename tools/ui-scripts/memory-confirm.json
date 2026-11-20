@@ -1,4 +1,0 @@
-{"events": [
- {"t": 0.3, "type": "tap", "key": "mem-confirm"},
- {"t": 1.0, "type": "mark", "name": "end"}
-]}
