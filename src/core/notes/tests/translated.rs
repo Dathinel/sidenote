@@ -12,6 +12,23 @@ struct Translator {
     notes: Fake,
     damage: Damage,
     calls: Vec<Vec<String>>,
+    budgets: Vec<u32>,
+    pause: Duration,
+    time_out_call: Option<usize>,
+}
+impl Translator {
+    fn new(damage: Damage) -> Self {
+        let notes = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+        let (calls, budgets) = (Vec::new(), Vec::new());
+        Self {
+            notes,
+            damage,
+            calls,
+            budgets,
+            pause: Duration::ZERO,
+            time_out_call: None,
+        }
+    }
 }
 impl Run for Translator {
     fn installed(&self, helper: Helper) -> bool {
@@ -20,7 +37,12 @@ impl Run for Translator {
     fn run(&mut self, h: Helper, m: &str, p: String, t: Duration) -> Result<String, Failure> {
         self.notes.run(h, m, p, t)
     }
-    fn translate(&mut self, _: &Snapshot, prompt: String) -> Result<String, &'static str> {
+    fn translate(&mut self, call: &Snapshot, prompt: String) -> Result<String, &'static str> {
+        self.budgets.push(call.deadline_seconds);
+        std::thread::sleep(self.pause);
+        if self.time_out_call == Some(self.budgets.len() - 1) {
+            return Err("translation_timed_out");
+        }
         let data = prompt.split("Selected transcript data:\n").nth(1).unwrap();
         let items: Lines = serde_json::from_str(data).unwrap();
         let texts = items.iter().map(|i| i["text"].as_str().unwrap().into());
@@ -35,6 +57,15 @@ impl Run for Translator {
         self.damage.iter().for_each(|damage| damage(&mut lines));
         Ok(serde_json::json!({"segments": lines}).to_string())
     }
+}
+/// Six Hindi lines of 6 characters each; a 12 character batch limit makes batches of 2.
+fn tuned(langs: &[&str], batch_chars: u32, deadline: u32) -> (Temp, PathBuf, NotesSettings) {
+    let (root, folder, settings) = meeting_with(langs);
+    let mut config = crate::core::Config::load_in(&root.0).unwrap();
+    config.engine_settings.stages.translation_batch_chars = batch_chars;
+    config.engine_settings.stages.translation_deadline_seconds = deadline;
+    store_io::write(&root.0.join("config.json"), &config).unwrap();
+    (root, folder, settings)
 }
 /// A released revision pinned by the job; the queue reads it as it reads a production one.
 fn meeting_with(langs: &[&str]) -> (Temp, PathBuf, NotesSettings) {
@@ -86,14 +117,12 @@ fn meeting_with(langs: &[&str]) -> (Temp, PathBuf, NotesSettings) {
     store_io::write(&path, &job).unwrap();
     (root, folder, settings)
 }
+fn drain_with(root: &Path, s: &NotesSettings, run: &mut Translator) {
+    queue::drain(root, &root.join("meetings"), run, || Ok(s.clone())).unwrap();
+}
 fn run_notes(root: &Path, s: &NotesSettings, damage: Damage) -> (Translator, String) {
-    let notes = Fake::new(vec![Ok(summary()), Ok(sorted())]);
-    let mut run = Translator {
-        notes,
-        damage,
-        calls: Vec::new(),
-    };
-    queue::drain(root, &root.join("meetings"), &mut run, || Ok(s.clone())).unwrap();
+    let mut run = Translator::new(damage);
+    drain_with(root, s, &mut run);
     let job = queue::read(root, ID).unwrap().unwrap();
     assert!(matches!(job.state, JobState::Done { .. }));
     (run, job.translation.unwrap().reason)
@@ -139,4 +168,53 @@ fn any_reply_problem_keeps_the_original_text() {
         );
         assert!(!run.notes.calls[0].0.contains("English line"));
     }
+}
+
+#[test]
+fn long_meeting_translates_in_batches() {
+    let (root, _, settings) = tuned(&["hi"; 6], 12, 240);
+    let (run, reason) = run_notes(&root.0, &settings, None);
+    assert_eq!(reason, "translated");
+    assert_eq!(
+        run.calls.iter().map(Vec::len).collect::<Vec<_>>(),
+        [2, 2, 2]
+    );
+    for i in 0..6 {
+        let line = format!("(Hindi, translated): English line {i}");
+        assert!(run.notes.calls[0].0.contains(&line));
+    }
+}
+
+#[test]
+fn stalled_batch_falls_back_whole_inside_one_budget() {
+    let (root, folder, settings) = tuned(&["hi"; 6], 12, 2);
+    let mut run = Translator::new(None);
+    (run.pause, run.time_out_call) = (Duration::from_millis(1100), Some(1));
+    drain_with(&root.0, &settings, &mut run);
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    assert_eq!(job.translation.unwrap().reason, "translation_timed_out");
+    // The second call got what was left of the 2 seconds, not a fresh 2 seconds.
+    assert_eq!(run.budgets, [2, 1]);
+    let original = transcript::chosen(
+        &root.0,
+        ID,
+        &folder,
+        job.transcript_revision.as_deref(),
+        0,
+        1,
+    );
+    assert!(
+        run.notes.calls[0]
+            .0
+            .contains(&original.unwrap().unwrap().render())
+    );
+    assert!(!run.notes.calls[0].0.contains("English line"));
+}
+
+#[test]
+fn more_than_sixteen_batches_are_refused_before_any_call() {
+    let (root, _, settings) = tuned(&["hi"; 17], 6, 240);
+    let (run, reason) = run_notes(&root.0, &settings, None);
+    assert_eq!(reason, "translation_input_limit");
+    assert!(run.calls.is_empty());
 }

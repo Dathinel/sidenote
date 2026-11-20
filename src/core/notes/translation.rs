@@ -2,12 +2,13 @@ use super::{
     Helper,
     transcript::{Selection, Source},
 };
-use crate::core::{Config, engine_settings::Prompt};
+use crate::core::{Config, engine_settings::Prompt, meeting_router::Segment};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     io,
     path::Path,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -163,33 +164,77 @@ pub(super) fn invoke(
     state.reason = result.as_ref().map_or_else(|r| *r, |_| "translated").into();
     result.ok()
 }
+const BATCH_LINES: usize = 256;
+const BATCH_BYTES: usize = 64 * 1024;
+const MAX_BATCHES: usize = 16;
+
+type Selected<'a> = Vec<(usize, &'a Segment)>;
+/// Splits the selection in order. A segment is never split, so one that cannot fit fails.
+fn batches<'a>(
+    selected: Selected<'a>,
+    batch_chars: u32,
+) -> Result<Vec<Selected<'a>>, &'static str> {
+    let limit = batch_chars.min(18_000) as usize;
+    let mut out: Vec<Selected<'a>> = Vec::new();
+    let (mut chars, mut bytes) = (0, 0);
+    for (i, s) in selected {
+        let (c, b) = (s.text_original.chars().count(), s.text_original.len());
+        if c > limit || b > BATCH_BYTES {
+            return Err("translation_input_limit");
+        }
+        let full = out.last().is_none_or(|cur| cur.len() == BATCH_LINES);
+        if full || chars + c > limit || bytes + b > BATCH_BYTES {
+            out.push(Vec::new());
+            (chars, bytes) = (0, 0);
+        }
+        out.last_mut().unwrap().push((i, s));
+        (chars, bytes) = (chars + c, bytes + b);
+    }
+    (out.len() <= MAX_BATCHES)
+        .then_some(out)
+        .ok_or("translation_input_limit")
+}
 fn translate(
     selection: &Selection,
     snapshot: &Snapshot,
     run: &mut impl super::helper::Run,
 ) -> Result<BTreeMap<usize, String>, &'static str> {
-    let segments = selection.transcript.iter().flat_map(|t| &t.segments);
-    let selected: Vec<_> = segments.enumerate().filter(|(_, s)| s.translate).collect();
-    let chars: usize = selected
-        .iter()
-        .map(|(_, s)| s.text_original.chars().count())
-        .sum();
-    let bytes: usize = selected.iter().map(|(_, s)| s.text_original.len()).sum();
-    // Context and batches arrive in later layers; one call carries the whole selection.
+    // Context arrives in a later layer.
     if snapshot.include_context
-        || selected.len() > 256
-        || chars > snapshot.batch_chars.min(18_000) as usize
-        || bytes > 64 * 1024
         || snapshot.prompt.chars().count() > 16_000
         || snapshot.prompt.len() > 64 * 1024
     {
         return Err("translation_input_limit");
     }
-    let ids: Vec<_> = selected
+    let segments = selection.transcript.iter().flat_map(|t| &t.segments);
+    let selected = segments.enumerate().filter(|(_, s)| s.translate);
+    let (started, mut english) = (Instant::now(), BTreeMap::new());
+    let budget = Duration::from_secs(u64::from(snapshot.deadline_seconds));
+    for batch in batches(selected.collect(), snapshot.batch_chars)? {
+        // One time limit for the whole meeting: each call may use only what is left of it.
+        let left = budget.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            return Err("translation_timed_out");
+        }
+        let call = Snapshot {
+            deadline_seconds: left.as_secs_f64().ceil() as u32,
+            ..snapshot.clone()
+        };
+        english.extend(translate_batch(selection, &call, &batch, run)?);
+    }
+    Ok(english)
+}
+fn translate_batch(
+    selection: &Selection,
+    snapshot: &Snapshot,
+    batch: &[(usize, &Segment)],
+    run: &mut impl super::helper::Run,
+) -> Result<Vec<(usize, String)>, &'static str> {
+    let ids: Vec<_> = batch
         .iter()
         .map(|(i, _)| selection.segment_key(*i))
         .collect();
-    let data: Vec<_> = (selected.iter().zip(&ids))
+    let data: Vec<_> = (batch.iter().zip(&ids))
         .map(|((_, s), id)| serde_json::json!({"id": id, "lang": s.lang, "text": s.text_original}))
         .collect();
     let prompt = format!(
@@ -202,5 +247,5 @@ fn translate(
     }
     let reply = run.translate(snapshot, prompt)?;
     let english = accept(&reply, &ids).ok_or("translation_reply_invalid")?;
-    Ok(selected.iter().map(|(i, _)| *i).zip(english).collect())
+    Ok(batch.iter().map(|(i, _)| *i).zip(english).collect())
 }

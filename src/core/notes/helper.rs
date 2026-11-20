@@ -7,7 +7,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(super) const NOTES_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -175,6 +175,8 @@ impl Run for Cli {
         let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
         let authorize =
             || crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c));
+        // One limit covers the capability check and the call itself.
+        let end = Instant::now() + Duration::from_secs(u64::from(snapshot.deadline_seconds));
         let invoke = |capability, input| {
             runner_process::run_classified(
                 runner_process::Invocation::Translation {
@@ -186,7 +188,7 @@ impl Run for Cli {
                 },
                 input,
                 &scratch.0,
-                Duration::from_secs(u64::from(snapshot.deadline_seconds)),
+                end.saturating_duration_since(Instant::now()),
                 false,
                 |_| {},
             )
