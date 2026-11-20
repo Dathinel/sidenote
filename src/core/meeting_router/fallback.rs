@@ -45,7 +45,7 @@ impl Reason {
                 "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
             }
             Self::SpeechPackRefused => {
-                "A language pack failed its checks, so its language was not transcribed. Notes use the captured Hex transcript."
+                "A language pack failed its checks, so no language pass ran. Notes use the captured Hex transcript."
             }
             Self::CpuLanguageModelsMissing { ready: ready @ 0..=3 } => {
                 return format!(

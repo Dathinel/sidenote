@@ -163,6 +163,10 @@ pub struct ResolvedRoute {
 }
 /// Per-language pins. A refusal stays with its language and blocks only routes that use it.
 pub type RouteSnapshot = BTreeMap<String, Result<ResolvedRoute, PackRefusal>>;
+/// The one refusal rule: the first pin, in language order, whose route or pack failed.
+pub fn first_refusal(routes: &RouteSnapshot) -> Option<&PackRefusal> {
+    routes.values().find_map(|pin| pin.as_ref().err())
+}
 
 /// A bad pack is held with its refusal; the other packs stay usable.
 pub struct Registry {

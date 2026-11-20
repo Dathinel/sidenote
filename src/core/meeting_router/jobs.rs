@@ -861,13 +861,19 @@ pub(crate) fn run_pending_with(
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
             cleanup_work(&work);
-            // Only the after-stop planner reads the routes; it never opens a refused one.
+            // The planner refuses for every caller; labs jobs refuse here too, before any launch,
+            // so the notes can say why.
             if labs {
-                if let Some(refusal) = job.routes.values().find_map(|pin| pin.as_ref().err()) {
+                if let Some(refusal) = speech_packs::first_refusal(&job.routes) {
                     record_refusal(&work, pending.generation, refusal)?;
                     continue;
                 }
-                bind_readings(&work.join("batches"), &job.routes)?;
+                // A locked cache file holds back only this meeting, not the whole queue.
+                if bind_readings(&work.join("batches"), &job.routes).is_err() {
+                    let failed = serde_json::json!({"generation":pending.generation,"setup_failed":true,"pending_retained":true,"child":{"success":false,"exit_code":null,"timed_out":false,"error":"setup_failed"}});
+                    store_io::write(&work.join("attempt.json"), &failed)?;
+                    continue;
+                }
             }
             let request = work.join("request.json");
             job.generation = pending.generation;

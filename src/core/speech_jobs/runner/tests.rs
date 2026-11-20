@@ -101,6 +101,42 @@ fn speech_job_fixture() {
         })
         .unwrap();
 }
+#[cfg(feature = "asr-runtime")]
+#[test]
+fn a_refused_speech_pack_stops_the_span_runner_before_speech_detection() {
+    use crate::core::model_catalog::speech_packs::*;
+    let hindi = catalog_with_hash("indicconformer-hi-ctc", 0, "");
+    use_test_registry(Registry::parse(&shipped_with(|_| {}), hindi).unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let store = Store(root.path().join("speech"));
+    let (id, _) = store.create("owner", request()).unwrap();
+    let audio = root.path().join("synthetic.wav");
+    asr::write_wav(&audio, &[0.0; 24000]).unwrap();
+    let bytes = fs::read(&audio).unwrap();
+    let metadata = PieceRequest {
+        track: "system".into(),
+        index: 0,
+        origin_sample: 0,
+        start_sample: 0,
+        end_sample: 24000,
+        context_start_sample: 0,
+        sha256: digest(&bytes),
+    };
+    let piece = metadata.id(&request());
+    store.put("owner", &id, &piece, metadata, &bytes).unwrap();
+    let mut failure = String::new();
+    let config = crate::core::Config::default();
+    let tick = store.tick(|id, piece, session| {
+        let result = process(&store, id, piece, session, &config);
+        if let Err(error) = &result {
+            failure = error.to_string();
+        }
+        result
+    });
+    tick.unwrap();
+    // The VAD and models are not installed here, so any later stage would fail differently.
+    assert_eq!(failure, "speech_pack_invalid_hash: hi");
+}
 #[test]
 fn speech_job_restart_keeps_range_keys_and_snapshot() {
     let root = tempfile::tempdir().unwrap();
