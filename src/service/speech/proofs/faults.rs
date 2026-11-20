@@ -24,7 +24,7 @@ impl Detector for Logits {
         self.calls += 1;
         let mut scores = vec![0.0; lid::LANGUAGES.len()];
         if self.partial && self.calls > 1 {
-            scores[if self.calls % 3 == 0 { 4 } else { 6 }] = 20.0;
+            scores[if self.calls.is_multiple_of(3) { 4 } else { 6 }] = 20.0;
         }
         Ok(scores)
     }
