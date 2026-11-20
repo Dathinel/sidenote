@@ -21,6 +21,7 @@ impl Run for BusyNotes {
         &mut self,
         snapshot: &super::super::super::translation::Snapshot,
         _: String,
+        _: std::time::Instant,
     ) -> Result<String, &'static str> {
         self.translations
             .push(serde_json::to_value(snapshot).unwrap());

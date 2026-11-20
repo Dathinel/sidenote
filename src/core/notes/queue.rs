@@ -541,12 +541,14 @@ fn process(
         )?);
     }
     store_io::write(&job_path(root, id), job)?;
+    let mut english = None;
     if !sort_only && let Some(state) = job.translation.as_mut() {
-        translation::invoke(routed.as_ref(), state, run);
+        english = translation::invoke(routed.as_ref(), state, run);
         store_io::write(&job_path(root, id), job)?;
     }
     let mut transcript = if let Some(selection) = routed {
-        selection.render()
+        // Translation is all or nothing: a failure leaves the original text in place.
+        english.map_or_else(|| selection.render(), |e| selection.render_english(&e))
     } else if job.request == Some(Request::RedoTasks) {
         let existing = text(&folder.join("english-transcript.md"), file_reads::STORE_MAX)?;
         if existing.trim().is_empty() {

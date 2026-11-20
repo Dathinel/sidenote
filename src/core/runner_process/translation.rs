@@ -2,14 +2,63 @@ use super::*;
 use serde_json::json;
 pub(super) mod qualification;
 
-pub(super) fn runner(model: &str) -> Result<Runner, RunnerFailure> {
-    if model.is_empty()
-        || model.starts_with('-')
-        || model.len() > 200
-        || !model
+fn valid_model(model: &str) -> bool {
+    !model.is_empty()
+        && !model.starts_with('-')
+        && model.len() <= 200
+        && model
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_/.:".contains(&b))
+}
+/// Only the tool-free Claude runner, on a plain model name, may carry meeting text here.
+pub(super) fn claude_guard(runner: &Runner) -> Result<(), RunnerFailure> {
+    runners::validate(runner)?;
+    if runners::kind(runner)? != "claude"
+        || runner.tools
+        || !valid_model(runner.model.as_deref().unwrap_or_default())
     {
+        return Err("Invalid translation model".into());
+    }
+    Ok(())
+}
+pub(super) fn consent_changed() -> RunnerFailure {
+    RunnerFailure {
+        category: "HELPER_CONSENT",
+        exit: None,
+        message: "Translation permission changed.".into(),
+    }
+}
+pub(super) fn claude_result(line: &str) -> Result<String, RunnerFailure> {
+    fn tool(event: &serde_json::Value) -> bool {
+        match event {
+            serde_json::Value::Object(fields) => {
+                matches!(
+                    event["type"].as_str(),
+                    Some("tool_use" | "tool_result" | "server_tool_use" | "mcp_tool_use")
+                ) || fields.values().any(tool)
+            }
+            serde_json::Value::Array(items) => items.iter().any(tool),
+            _ => false,
+        }
+    }
+    let invalid = "Claude did not return a successful final result.";
+    let event: serde_json::Value = serde_json::from_str(line).map_err(|_| invalid)?;
+    if tool(&event) || event["stop_reason"] == "tool_use" {
+        return Err("Translation helper used a tool.".into());
+    }
+    if event["type"] == "result"
+        && event["subtype"] == "success"
+        && event["is_error"] == false
+        && event["stop_reason"] != "refusal"
+        && let Some(text) = event["result"].as_str()
+        && !text.trim().is_empty()
+    {
+        return Ok(text.into());
+    }
+    Err(invalid.into())
+}
+pub(super) fn runner(model: &str) -> Result<Runner, RunnerFailure> {
+    if !valid_model(model) {
         return Err("Invalid translation model".into());
     }
     Ok(Runner {

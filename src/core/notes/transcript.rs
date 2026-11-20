@@ -1,6 +1,6 @@
 use crate::core::{file_reads, meeting_router::inputs::Snapshot, store_io};
 use serde::Deserialize;
-use std::{io, path::Path};
+use std::{collections::BTreeMap, io, path::Path};
 
 #[derive(Deserialize)]
 struct Row {
@@ -24,6 +24,8 @@ pub(super) struct Selection {
     pub transcript: Option<crate::core::meeting_router::Transcript>,
     pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
     rendered: String,
+    /// The start of each rendered line, up to the language, so English can replace the text.
+    heads: Vec<String>,
 }
 impl Selection {
     pub fn segment_key(&self, ordinal: usize) -> String {
@@ -39,6 +41,18 @@ impl Selection {
     pub fn render(&self) -> String {
         self.rendered.clone()
     }
+    /// One line per segment; translated segments carry the English text instead of the original.
+    pub fn render_english(&self, english: &BTreeMap<usize, String>) -> String {
+        let lines = self.rendered.lines().zip(&self.heads);
+        let line = |(i, (line, head)): (usize, (&str, &String))| match english.get(&i) {
+            Some(text) => format!("{head}, translated): {}\n", words(text)),
+            None => format!("{line}\n"),
+        };
+        lines.enumerate().map(line).collect()
+    }
+}
+fn words(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 pub(super) fn render(raw: &str) -> String {
     let mut rows: Vec<Row> = raw
@@ -117,6 +131,7 @@ pub(super) fn chosen(
                 transcript: None,
                 reasons,
                 rendered,
+                heads: Vec::new(),
             })
         });
     }
@@ -174,7 +189,7 @@ pub(super) fn chosen_part(
     };
     router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
         .map(|(id, t, reasons)| {
-            let mut text = String::new();
+            let (mut text, mut heads) = (String::new(), Vec::new());
             for s in &t.segments {
                 let lang = match s.lang.as_str() {
                     "en" => "English",
@@ -192,24 +207,23 @@ pub(super) fn chosen_part(
                         "Them"
                     });
                 let ms = (s.start * 1000.0).round() as u64;
-                text.push_str(&format!(
-                    "[{:02}:{:02}:{:02}.{:03}] {} ({lang}): {}\n",
+                let head = format!(
+                    "[{:02}:{:02}:{:02}.{:03}] {} ({lang}",
                     ms / 3_600_000,
                     ms / 60_000 % 60,
                     ms / 1000 % 60,
                     ms % 1000,
                     speaker.split_whitespace().collect::<Vec<_>>().join("_"),
-                    s.text_original
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ));
+                );
+                text.push_str(&format!("{head}): {}\n", words(&s.text_original)));
+                heads.push(head);
             }
             Ok(Selection {
                 revision: id,
                 transcript: Some(t),
                 reasons,
                 rendered: text,
+                heads,
             })
         })
         .transpose()
