@@ -22,8 +22,17 @@ fn worker_child() {
         super::lifetime_tests::drive(&mode, &output);
         return;
     }
+    if mode == "orphan" {
+        // Never reads stdin, so the owner's death cannot make it clean up; only the job can.
+        let mut grandchild = command("grandchild").spawn().unwrap();
+        store_io::write(&output.join("pid"), &grandchild.id()).unwrap();
+        Signal::notify("fixture-ready");
+        std::thread::sleep(Duration::from_secs(60));
+        grandchild.wait().unwrap();
+        return;
+    }
     if mode == "owner" {
-        let inner = start("hang");
+        let inner = start("orphan");
         let pid = inner.output.path().join("pid");
         let grandchild: u32 = std::fs::read_to_string(pid).unwrap().parse().unwrap();
         store_io::write(&output.join("tree"), &[inner.child.id(), grandchild]).unwrap();
@@ -241,9 +250,9 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
             c.env(key, v);
         }
     }
-    // Every descendant starts after this instant, and the grandchild only exits by itself 60 s
-    // after its own start. So any exit seen before `cap` is the job reaping it, however slowly the
-    // loaded machine tears the owner down.
+    // Every descendant starts after this instant, and the orphan worker and its grandchild only
+    // exit by themselves 60 s after their own start. So any exit seen before `cap` is the job
+    // reaping them, however slowly the loaded machine tears the owner down.
     let cap = std::time::Instant::now() + Duration::from_secs(45);
     let left = || cap.saturating_duration_since(std::time::Instant::now()).as_millis() as u32;
     let owner_job = crate::platform::ProcessJob::new().unwrap();
