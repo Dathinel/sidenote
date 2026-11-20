@@ -241,6 +241,11 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
             c.env(key, v);
         }
     }
+    // Every descendant starts after this instant, and the grandchild only exits by itself 60 s
+    // after its own start. So any exit seen before `cap` is the job reaping it, however slowly the
+    // loaded machine tears the owner down.
+    let cap = std::time::Instant::now() + Duration::from_secs(45);
+    let left = || cap.saturating_duration_since(std::time::Instant::now()).as_millis() as u32;
     let owner_job = crate::platform::ProcessJob::new().unwrap();
     let owner = owner_job.spawn(&c).unwrap();
     ready.wait(&owner.handle);
@@ -256,10 +261,10 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
         })
         .collect();
     owner.kill().unwrap();
-    assert!(owner.wait_for(1000).unwrap().is_some());
+    assert!(owner.wait_for(left()).unwrap().is_some());
     for handle in handles {
         assert_eq!(
-            unsafe { WaitForSingleObject(handle.as_raw_handle(), 5000) },
+            unsafe { WaitForSingleObject(handle.as_raw_handle(), left()) },
             0
         );
     }
