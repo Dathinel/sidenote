@@ -26,6 +26,9 @@ pub struct StageSettings {
     pub comparison_request_deadline_seconds: u32,
     pub prepare_deadline_seconds: u32,
     pub routing_deadline_seconds: u32,
+    pub notes_wait_seconds: u32,
+    pub notes_wait_max_minutes: u32,
+    pub background_routing_seconds: u32,
     pub notes_deadline_seconds: u32,
     pub render_deadline_seconds: u32,
     pub publish_deadline_seconds: u32,
@@ -69,6 +72,9 @@ impl Default for StageSettings {
             comparison_request_deadline_seconds: 600,
             prepare_deadline_seconds: 1800,
             routing_deadline_seconds: 360,
+            notes_wait_seconds: 40,
+            notes_wait_max_minutes: 5,
+            background_routing_seconds: 1_200,
             notes_deadline_seconds: 600,
             render_deadline_seconds: 120,
             publish_deadline_seconds: 120,
@@ -112,6 +118,9 @@ impl StageSettings {
         "stages.comparison_request_deadline_seconds",
         "stages.prepare_deadline_seconds",
         "stages.routing_deadline_seconds",
+        "stages.notes_wait_seconds",
+        "stages.notes_wait_max_minutes",
+        "stages.background_routing_seconds",
         "stages.notes_deadline_seconds",
         "stages.render_deadline_seconds",
         "stages.publish_deadline_seconds",
@@ -159,6 +168,11 @@ impl StageSettings {
                             !(1..=18_000).contains(&self.translation_batch_chars)
                         }
                         "comparison_delay_seconds" => self.comparison_delay_seconds > 86400,
+                        "notes_wait_seconds" => self.notes_wait_seconds > 360,
+                        "notes_wait_max_minutes" => self.notes_wait_max_minutes > 240,
+                        "background_routing_seconds" => {
+                            !(60..=3600).contains(&self.background_routing_seconds)
+                        }
                         "asr_seconds_per_audio_second_per_pass" => {
                             !(0.01..=10.0).contains(&self.asr_seconds_per_audio_second_per_pass)
                         }

@@ -11,7 +11,7 @@ pub(super) fn enabled(root: &Path) -> io::Result<Option<Config>> {
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
     Ok((config.labs.after_stop_language_routing && config.pipeline.enabled()).then_some(config))
 }
-/// Resolve a durable dependency to immutable text. This function performs no audio work.
+#[cfg(test)]
 pub(crate) fn notes_input(
     root: &Path,
     id: &str,
@@ -19,6 +19,18 @@ pub(crate) fn notes_input(
     baseline: impl FnOnce() -> io::Result<Vec<Chunk>>,
     ended_ms: i64,
     now_ms: i64,
+) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
+    notes_input_sized(root, id, chosen, baseline, ended_ms, now_ms, None)
+}
+/// Resolve a durable dependency to immutable text. This function performs no audio work.
+pub(crate) fn notes_input_sized(
+    root: &Path,
+    id: &str,
+    chosen: Option<&str>,
+    baseline: impl FnOnce() -> io::Result<Vec<Chunk>>,
+    ended_ms: i64,
+    now_ms: i64,
+    duration_ms: Option<u64>,
 ) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
@@ -33,10 +45,18 @@ pub(crate) fn notes_input(
     {
         return Ok(Some((id, r.transcript, reasons)));
     }
-    let seconds = config.engine_settings.stages.routing_deadline_seconds;
-    if !(1..=3600).contains(&seconds) {
+    // An unknown length keeps the old wait; a known one waits only while short (0 minutes: never).
+    let stages = &config.engine_settings.stages;
+    let max_ms = u64::from(stages.notes_wait_max_minutes) * 60_000;
+    let seconds = match duration_ms {
+        None => stages.routing_deadline_seconds,
+        Some(ms) if ms <= max_ms && max_ms > 0 => stages.notes_wait_seconds,
+        Some(_) => 0,
+    };
+    if seconds > 3600 || (seconds == 0 && duration_ms.is_none()) {
         return Err(store_io::invalid("Invalid routing deadline"));
     }
+    let english_first = seconds == 0;
     let deadline = ended_ms.saturating_add(i64::from(seconds) * 1000);
     let _lock = pending_lock(root, id)?;
     let dependency =
@@ -75,7 +95,7 @@ pub(crate) fn notes_input(
         && latest.is_some()
         && let Some(released) = released
         && released.completed_ms >= 0
-        && released.completed_ms <= deadline
+        && (english_first || released.completed_ms <= deadline)
         && released.completed_ms <= now_ms
         && pending
             .as_ref()
@@ -138,9 +158,12 @@ pub(crate) fn notes_input(
         reasons.push(RoutingFallback::new(Reason::SelectedRevisionUnavailable));
     }
     if reasons.is_empty() {
-        reasons.push(RoutingFallback::new(
-            attempt_failure.unwrap_or(Reason::DeadlineExpired),
-        ));
+        let reason = attempt_failure.unwrap_or(if english_first && pending.is_some() {
+            Reason::EnglishFirst
+        } else {
+            Reason::DeadlineExpired
+        });
+        reasons.push(RoutingFallback::new(reason));
     }
     let mut data = revision::Revision {
         generation: generation.to_string(),

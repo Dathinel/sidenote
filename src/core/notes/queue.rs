@@ -513,13 +513,16 @@ fn process(
     pinned.model = job.model.clone();
     let settings = &pinned;
     stage(root, id, job, JobStage::Prepare)?;
-    let routed = transcript::chosen(
+    let routed = transcript::chosen_sized(
         root,
         id,
         &folder,
         job.transcript_revision.as_deref(),
         end.unwrap_or(job.updated_at),
         now(),
+        duration
+            .or_else(|| end.zip(started).map(|(e, s)| e.saturating_sub(s) as f64))
+            .map(|d| d as u64),
     )?;
     if let Some(selection) = &routed {
         job.transcript_revision = Some(selection.revision.clone());
