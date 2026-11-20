@@ -11,6 +11,8 @@ const BILLING_NAMES: [&str; 5] = [
     "oThEr_Service_TOKEN",
 ];
 
+const RELEASE_PIPES: &str = "release-pipes";
+
 fn child(mode: &str, marker: &Path) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -39,7 +41,11 @@ fn fixture_child() {
     assert_eq!(args.next().as_deref().unwrap(), "--skip");
     let marker = PathBuf::from(args.next().unwrap());
     if mode == "hold-pipes" {
-        std::thread::sleep(Duration::from_millis(1500));
+        let root = marker.parent().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while root.is_dir() && !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         return;
     }
     fs::write(&marker, "").unwrap();
@@ -82,7 +88,7 @@ fn fixture_child() {
         "refusal" => reply["stop_reason"] = "refusal".into(),
         "late" => std::thread::sleep(Duration::from_millis(1200)),
         "pipes" => {
-            let mut holder = child("hold-pipes", &marker);
+            let mut holder = child("hold-pipes", &marker.with_file_name(RELEASE_PIPES));
             holder.stdin(std::process::Stdio::null());
             hold_pipes(holder);
         }
@@ -180,6 +186,9 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
     assert!(matches!(job.state, JobState::Done { .. }));
     if timed {
         assert!(start.elapsed() < Duration::from_secs(2), "{mode}");
+    }
+    if mode == "pipes" {
+        fs::write(root.0.join(RELEASE_PIPES), "").unwrap();
     }
     if mode != "ok" {
         let notes = &run.notes.calls[0].0;
