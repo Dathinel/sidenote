@@ -1,5 +1,6 @@
 //! A lazy, native listener overlay. No Rune application or GPU device is initialized here.
 mod native;
+mod nub;
 use crate::core::meeting_job::Cause;
 use crate::core::{self, file_reads, store_io};
 use serde::{Deserialize, Serialize};
@@ -280,6 +281,34 @@ pub(crate) fn start(isolated: bool) {
     }
 }
 
+fn frame_for(
+    current: &Snapshot,
+    id: &str,
+    pending: &Pending,
+    speech_until: Instant,
+    transcript_revision: u64,
+) -> native::Frame {
+    let recording = current.recording && current.id.as_deref() == Some(id);
+    let raw = summary(id);
+    native::Frame {
+        id: id.to_owned(),
+        recording,
+        pill: recording && (current.speaking || Instant::now() < speech_until),
+        elapsed: pending.elapsed,
+        notice: (!recording && raw.is_none()).then(|| {
+            let state = notice(id);
+            if state == Notice::Writing && pending.notice_at_ms.is_some() {
+                Notice::Later
+            } else {
+                state
+            }
+        }),
+        raw,
+        transcript_revision,
+        skipped: pending.skipped_at_ms.is_some(),
+    }
+}
+
 fn run(isolated: bool, replay: bool) {
     let engine = crate::hex_engine::HexEngine::new();
     let mut pending: BTreeMap<String, Pending> =
@@ -463,28 +492,16 @@ fn run(isolated: bool, replay: bool) {
                         .map_err(|_| crate::listener::log("floating icon window unavailable"))
                         .ok();
                 }
-                if let Some(window) = &host {
-                    let recording = current.recording && current.id.as_ref() == Some(id);
-                    let raw = summary(id);
-                    if !window.update(native::Frame {
-                        id: id.clone(),
-                        recording,
-                        pill: recording && (current.speaking || Instant::now() < speech_until),
-                        elapsed: pending[id].elapsed,
-                        notice: (!recording && raw.is_none()).then(|| {
-                            let state = notice(id);
-                            if state == Notice::Writing && pending[id].notice_at_ms.is_some() {
-                                Notice::Later
-                            } else {
-                                state
-                            }
-                        }),
-                        raw,
+                if let Some(window) = &host
+                    && !window.update(frame_for(
+                        &current,
+                        id,
+                        &pending[id],
+                        speech_until,
                         transcript_revision,
-                        skipped: pending[id].skipped_at_ms.is_some(),
-                    }) {
-                        host = None;
-                    }
+                    ))
+                {
+                    host = None;
                 }
             } else {
                 host = None;
@@ -498,6 +515,50 @@ fn run(isolated: bool, replay: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nub_frame_does_not_read_meeting_parts_after_stop() {
+        use std::io::Write;
+
+        let dir = core::state_dir().join("local/meeting-parts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _records = ["9088645-1", "9088645-2"].map(|id| {
+            let mut record = tempfile::Builder::new()
+                .prefix(id)
+                .suffix(".json")
+                .rand_bytes(0)
+                .tempfile_in(&dir)
+                .unwrap();
+            write!(record, r#"{{"id":"{id}","phase":"Paused"}}"#).unwrap();
+            record
+        });
+        let id = "9088645-3";
+        let recording = Snapshot {
+            id: Some(id.to_owned()),
+            recording: true,
+            elapsed: 125,
+            ..Snapshot::default()
+        };
+        let mut pending = Pending {
+            elapsed: recording.elapsed,
+            ..Pending::default()
+        };
+        let stopped = Snapshot::default();
+        let mut counts = Vec::new();
+        for snapshot in [&recording, &stopped, &stopped, &stopped] {
+            pending.stopped_at_ms = (!snapshot.recording).then_some(1000);
+            let scope = file_reads::Scope::begin();
+            let frame = frame_for(snapshot, id, &pending, Instant::now(), 1);
+            assert_eq!(frame.id, id);
+            assert_eq!(frame.recording, snapshot.recording);
+            assert_eq!(frame.notice.is_none(), snapshot.recording);
+            assert_eq!(frame.elapsed, 125);
+            let stats = scope.stats();
+            counts.push((stats.reads, stats.entries));
+        }
+        assert_eq!(counts, [(0, 0); 4], "reads and directory entries per frame");
+    }
+
     #[test]
     fn terminal_notice_is_bounded_and_click_dismisses() {
         assert!(notice_fresh(1000, 30_999, None));
