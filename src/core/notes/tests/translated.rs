@@ -226,5 +226,5 @@ fn more_than_sixteen_batches_are_refused_before_any_call() {
     assert!(run.calls.is_empty());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(windows, target_os = "linux"))]
 mod claude;

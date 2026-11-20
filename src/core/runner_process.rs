@@ -610,6 +610,13 @@ pub(super) fn run_classified(
         .stderr
         .take()
         .ok_or("Could not capture the CLI status")?;
+    // The native Claude test child uses stderr for protocol lines and stdout for libtest.
+    #[cfg(test)]
+    let (stdout, stderr): (Box<dyn Read + Send>, Box<dyn Read + Send>) = if claude && fixture {
+        (Box::new(stderr), Box::new(stdout))
+    } else {
+        (Box::new(stdout), Box::new(stderr))
+    };
     let writer = child
         .stdin
         .take()
