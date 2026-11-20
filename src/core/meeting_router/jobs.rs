@@ -5,7 +5,7 @@ mod notes;
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(crate) mod r1_tests;
 pub use handoff::{BatchOutput, commit_batches};
-#[cfg(all(test, windows))]
+#[cfg(test)]
 pub(crate) use notes::notes_input;
 pub(crate) use notes::notes_input_sized;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {

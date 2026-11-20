@@ -1,4 +1,4 @@
-use super::routing::{dir, selected, setup};
+use super::routing::{dir, selected};
 use super::*;
 use crate::core::meeting_router::{jobs, revision};
 
@@ -21,7 +21,7 @@ fn expire(root: &Path, folder: &Path) -> i64 {
 #[test]
 fn labs_on_busy_pin_corruption_waits_then_uses_hex_without_adopting_a_later_route() {
     for kind in ["truncated", "missing", "checksum"] {
-        let (root, folder, settings) = setup();
+        let (root, folder, settings) = routing_setup();
         let (pin, data) = selected(&root.0, &folder);
         enqueue(&root.0, &settings, None);
         drain(&root.0, &settings, &mut Fake::new(vec![Err(Failure::Busy)]));
@@ -149,7 +149,7 @@ fn labs_on_malformed_pending_waits_then_uses_hex_and_retains_the_record() {
         serde_json::json!({"id":ID,"generation":"invalid"}).to_string(),
         serde_json::json!({"id":ID,"generation":0}).to_string(),
     ] {
-        let (root, folder, settings) = setup();
+        let (root, folder, settings) = routing_setup();
         enqueue(&root.0, &settings, None);
         let pending = root.0.join("local/router-queue").join(format!("{ID}.json"));
         fs::create_dir_all(pending.parent().unwrap()).unwrap();

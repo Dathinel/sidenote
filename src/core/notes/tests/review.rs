@@ -1,4 +1,4 @@
-use super::routing::{dir, selected, setup};
+use super::routing::{dir, selected};
 use super::*;
 use crate::core::meeting_router::{jobs, revision};
 fn disable(root: &Path) {
@@ -10,7 +10,7 @@ fn disable(root: &Path) {
 #[test]
 fn persisted_busy_pin_and_corrupt_pin_are_ignored_after_disable_without_enqueue() {
     for corrupt in [false, true] {
-        let (root, folder, s) = setup();
+        let (root, folder, s) = routing_setup();
         let (id, _) = selected(&root.0, &folder);
         enqueue(&root.0, &s, None);
         let mut busy = Fake::new(vec![Err(Failure::Busy)]);
@@ -48,7 +48,7 @@ fn persisted_busy_pin_and_corrupt_pin_are_ignored_after_disable_without_enqueue(
 #[test]
 fn corrupt_latest_waits_then_uses_hex_and_preserves_bad_bytes_and_edited_notes() {
     for malformed in [true, false] {
-        let (root, folder, s) = setup();
+        let (root, folder, s) = routing_setup();
         let (old, data) = selected(&root.0, &folder);
         let latest = dir(&root.0).join("transcript.segments.v1.json");
         let bad = if malformed {
@@ -136,7 +136,7 @@ fn edit_and_new_batch_revision_during_helper_never_replace_the_owners_notes() {
             Ok(summary())
         }
     }
-    let (root, folder, s) = setup();
+    let (root, folder, s) = routing_setup();
     let (_, data) = selected(&root.0, &folder);
     enqueue(&root.0, &s, None);
     let mut helper = Edit {

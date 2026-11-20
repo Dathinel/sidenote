@@ -11,7 +11,7 @@ pub(super) fn enabled(root: &Path) -> io::Result<Option<Config>> {
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
     Ok((config.labs.after_stop_language_routing && config.pipeline.enabled()).then_some(config))
 }
-#[cfg(all(test, windows))]
+#[cfg(test)]
 pub(crate) fn notes_input(
     root: &Path,
     id: &str,
