@@ -1,5 +1,6 @@
 //! A lazy, native listener overlay. No Rune application or GPU device is initialized here.
 mod native;
+mod nub;
 use crate::core::meeting_job::Cause;
 use crate::core::{self, file_reads, store_io};
 use serde::{Deserialize, Serialize};
@@ -470,6 +471,15 @@ fn run(isolated: bool, replay: bool) {
                         id: id.clone(),
                         recording,
                         pill: recording && (current.speaking || Instant::now() < speech_until),
+                        paused_elapsed: (!recording)
+                            .then(|| {
+                                core::meeting_parts::owner(&core::state_dir(), id)
+                                    .ok()
+                                    .flatten()
+                            })
+                            .flatten()
+                            .filter(|m| m.phase == core::meeting_parts::Phase::Paused)
+                            .map(|m| m.elapsed_ms() / 1000),
                         elapsed: pending[id].elapsed,
                         notice: (!recording && raw.is_none()).then(|| {
                             let state = notice(id);

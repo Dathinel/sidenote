@@ -2,7 +2,7 @@ use super::{Control, Frame, RETIRE, callback_boundary};
 use crate::core::notes::SummarySkip;
 use crate::{
     core::{self, store_io},
-    meeting_icon::{Notice, card_text, dismiss_notice, draft_seen},
+    meeting_icon::{Notice, card_text, dismiss_notice, draft_seen, nub},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -10,7 +10,7 @@ use std::{
     mem::size_of,
     ptr,
     rc::Rc,
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, Once, OnceLock, atomic::Ordering},
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -32,6 +32,39 @@ use windows_sys::Win32::{
 
 const WIDTH: f32 = 104.0;
 const HEIGHT: f32 = 44.0;
+fn nub_step() -> usize {
+    static START: OnceLock<Instant> = OnceLock::new();
+    (START.get_or_init(Instant::now).elapsed().as_millis() / 100) as usize
+}
+
+fn nub_font(height: i32) -> io::Result<Rc<Font>> {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| unsafe {
+        let face = include_bytes!("../../../assets/fonts/Figtree-Variable.ttf");
+        let mut fonts = 0;
+        AddFontMemResourceEx(
+            face.as_ptr().cast(),
+            face.len() as u32,
+            ptr::null(),
+            &raw mut fonts,
+        );
+    });
+    unsafe {
+        let mut spec: LOGFONTW = std::mem::zeroed();
+        spec.lfHeight = -height;
+        spec.lfWeight = 500;
+        spec.lfCharSet = DEFAULT_CHARSET;
+        spec.lfQuality = ANTIALIASED_QUALITY;
+        let face = wide("Figtree Light");
+        spec.lfFaceName[..face.len()].copy_from_slice(&face);
+        let font = CreateFontIndirectW(&raw const spec);
+        if font.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Rc::new(Font(font)))
+    }
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -195,6 +228,7 @@ struct View {
     font: RefCell<Option<Rc<Font>>>,
     layout: Cell<Layout>,
     frame: RefCell<Frame>,
+    painted_step: Cell<usize>,
     content: RefCell<Card>,
     scroll: Cell<i32>,
     max_scroll: Cell<i32>,
@@ -238,6 +272,7 @@ impl NativeWindow {
                         },
                     }),
                     frame: RefCell::new(Frame::default()),
+                    painted_step: Cell::new(0),
                     content: RefCell::new(Card::default()),
                     scroll: Cell::new(0),
                     max_scroll: Cell::new(0),
@@ -307,9 +342,10 @@ impl NativeWindow {
         let changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.pill != frame.pill
+            || prior.paused_elapsed != frame.paused_elapsed
             || prior.notice != frame.notice
             || prior.skipped != frame.skipped
-            || (frame.pill && prior.elapsed != frame.elapsed);
+            || (frame.recording && prior.elapsed != frame.elapsed);
         let card_changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.raw != frame.raw
@@ -334,6 +370,12 @@ impl NativeWindow {
         }
     }
     pub(super) fn pump(&self) -> bool {
+        if self.view.frame.borrow().recording
+            && self.view.painted_step.get() != nub_step()
+            && !self.view.control.stop.load(Ordering::Acquire)
+        {
+            let _ = unsafe { self.view.paint_icon() };
+        }
         unsafe {
             let mut message = std::mem::zeroed();
             // Return to the stop/channel checks even when native messages keep arriving.
@@ -373,8 +415,17 @@ enum Scroll {
     End,
 }
 impl View {
+    fn live_nub(&self) -> bool {
+        let frame = self.frame.borrow();
+        frame.recording || frame.paused_elapsed.is_some()
+    }
+    fn height(&self) -> f32 {
+        if self.live_nub() { nub::HEIGHT } else { HEIGHT }
+    }
     fn width(&self) -> f32 {
-        if self.frame.borrow().notice.is_some() {
+        if self.live_nub() {
+            nub::WIDTH
+        } else if self.frame.borrow().notice.is_some() {
             300.0
         } else {
             WIDTH
@@ -385,7 +436,7 @@ impl View {
     }
     fn travel(&self) -> i32 {
         let g = self.layout.get();
-        (g.work.bottom - g.work.top - self.px(HEIGHT + 16.0)).max(0)
+        (g.work.bottom - g.work.top - self.px(self.height() + 16.0)).max(0)
     }
     fn point(&self) -> POINT {
         let g = self.layout.get();
@@ -453,7 +504,7 @@ impl View {
                 p.x,
                 p.y,
                 self.px(self.width()),
-                self.px(HEIGHT),
+                self.px(self.height()),
                 SWP_NOACTIVATE,
             );
             self.position_card();
@@ -705,13 +756,17 @@ impl View {
             }
         }
     }
-    unsafe fn paint_icon(&self) -> io::Result<()> {
+    fn draw_icon(&self, step: usize) -> io::Result<(Surface, i32)> {
         unsafe {
             let frame = self.frame.borrow().clone();
-            let pill = frame.pill || frame.skipped || frame.notice.is_some();
-            let (width, height) = (self.px(self.width()), self.px(HEIGHT));
+            let live = self.live_nub();
+            let pill = live || frame.skipped || frame.notice.is_some();
+            let (width, height) = (self.px(self.width()), self.px(self.height()));
             let left = if pill { 0 } else { width - height };
-            let label = wide(&if let Some(notice) = frame.notice {
+            let label = wide(&if live {
+                let elapsed = frame.paused_elapsed.unwrap_or(frame.elapsed);
+                format!("{}:{:02}", elapsed / 60, elapsed % 60)
+            } else if let Some(notice) = frame.notice {
                 notice.text()
             } else if frame.skipped {
                 "Skipped".into()
@@ -719,26 +774,31 @@ impl View {
                 format!("{}:{:02}", frame.elapsed / 60, frame.elapsed % 60)
             });
             let mut surface = Surface::new(width, height)?;
-            surface.pixels().fill(0x001f2630);
-            let font = self
-                .font
-                .borrow()
-                .clone()
-                .ok_or_else(|| io::Error::other("Icon font unavailable"))?;
+            let font = if live {
+                let scale = self.layout.get().scale;
+                for (i, pixel) in surface.pixels().iter_mut().enumerate() {
+                    let x = ((i % width as usize) as f32 + 0.5) / scale;
+                    let y = ((i / width as usize) as f32 + 0.5) / scale;
+                    *pixel = nub::pixel(x, y, frame.paused_elapsed.is_some(), frame.pill, step);
+                }
+                nub_font(self.px(11.0))?
+            } else {
+                surface.pixels().fill(0x001f2630);
+                self.font
+                    .borrow()
+                    .clone()
+                    .ok_or_else(|| io::Error::other("Icon font unavailable"))?
+            };
             {
                 let _font = SelectedFont::new(surface.dc, font);
                 SetBkMode(surface.dc, TRANSPARENT as i32);
                 SetTextColor(surface.dc, 0x00faf3ea);
                 if pill {
                     let mut r = RECT {
-                        left: self.px(if frame.skipped || frame.notice.is_some() {
-                            8.0
-                        } else {
-                            37.0
-                        }),
-                        top: 0,
-                        right: width - self.px(8.0),
-                        bottom: height,
+                        left: self.px(if live { 3.0 } else { 8.0 }),
+                        top: if live { self.px(79.0) } else { 0 },
+                        right: width - self.px(if live { 3.0 } else { 8.0 }),
+                        bottom: if live { self.px(103.0) } else { height },
                     };
                     DrawTextW(
                         surface.dc,
@@ -748,22 +808,8 @@ impl View {
                         DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
                     );
                 }
-                let brush = CreateSolidBrush(if frame.recording {
-                    0x00a6d5a0
-                } else {
-                    0x00b5c9ed
-                });
-                if pill && !frame.skipped && frame.notice.is_none() {
-                    for (offset, h) in [(15.0, 10.0), (21.0, 20.0), (27.0, 14.0)] {
-                        let r = RECT {
-                            left: self.px(offset),
-                            right: self.px(offset + 3.0),
-                            top: self.px((HEIGHT - h) / 2.0),
-                            bottom: self.px((HEIGHT + h) / 2.0),
-                        };
-                        FillRect(surface.dc, &r, brush);
-                    }
-                } else if !pill {
+                if !pill {
+                    let brush = CreateSolidBrush(0x00b5c9ed);
                     let prior = SelectObject(surface.dc, brush);
                     let pen = SelectObject(surface.dc, GetStockObject(NULL_PEN));
                     let c = left + height / 2;
@@ -771,15 +817,15 @@ impl View {
                     Ellipse(surface.dc, c - r, height / 2 - r, c + r, height / 2 + r);
                     SelectObject(surface.dc, pen);
                     SelectObject(surface.dc, prior);
+                    DeleteObject(brush);
                 }
-                DeleteObject(brush);
             }
-            let radius = height as f32 / 2.0;
+            let radius = width.min(height) as f32 / 2.0;
             for y in 0..height {
                 for x in 0..width {
                     let cx = (x as f32 + 0.5).clamp(left as f32 + radius, width as f32 - radius);
-                    let distance =
-                        ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - radius).powi(2)).sqrt();
+                    let cy = (y as f32 + 0.5).clamp(radius, height as f32 - radius);
+                    let distance = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy);
                     let a = ((radius - distance + 0.5).clamp(0.0, 1.0) * 255.0).round() as u32;
                     let p = &mut surface.pixels()[(y * width + x) as usize];
                     *p = (a << 24)
@@ -788,7 +834,17 @@ impl View {
                         | ((*p & 255) * a / 255);
                 }
             }
+            Ok((surface, left))
+        }
+    }
+    unsafe fn paint_icon(&self) -> io::Result<()> {
+        unsafe {
+            let step = nub_step();
+            self.painted_step.set(step);
+            let (mut surface, left) = self.draw_icon(step)?;
+            let (width, height) = (surface.width, surface.height);
             if self.replay {
+                let frame = self.frame.borrow().clone();
                 let name = if let Some(notice) = frame.notice {
                     match notice {
                         Notice::Writing => "floating-icon-writing.png",
@@ -801,7 +857,7 @@ impl View {
                     }
                 } else if frame.skipped {
                     "floating-icon-skipped.png"
-                } else if pill {
+                } else if frame.pill {
                     "floating-icon-pill.png"
                 } else {
                     "floating-icon-bead.png"
@@ -836,7 +892,7 @@ impl View {
             {
                 return Err(io::Error::last_os_error());
             }
-            let region = CreateRoundRectRgn(left, 0, width + 1, height + 1, height, height);
+            let region = icon_region(left, width, height);
             if region.is_null() {
                 return Err(io::Error::last_os_error());
             }
@@ -847,6 +903,11 @@ impl View {
             Ok(())
         }
     }
+}
+
+fn icon_region(left: i32, width: i32, height: i32) -> HRGN {
+    let diameter = width.min(height);
+    unsafe { CreateRoundRectRgn(left, 0, width + 1, height + 1, diameter, diameter) }
 }
 
 unsafe fn view<'a>(hwnd: HWND, msg: u32, l: LPARAM) -> Option<&'a View> {
@@ -1128,10 +1189,10 @@ unsafe fn card_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     }
 }
 
-pub(super) fn render_synthetic() -> io::Result<()> {
+fn synthetic_view(scale: f32) -> io::Result<View> {
     unsafe {
         let font = CreateFontW(
-            -13,
+            -(13.0 * scale).round() as i32,
             0,
             0,
             0,
@@ -1149,12 +1210,12 @@ pub(super) fn render_synthetic() -> io::Result<()> {
         if font.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let view = View {
+        Ok(View {
             icon: Cell::new(ptr::null_mut()),
             card: Cell::new(ptr::null_mut()),
             font: RefCell::new(Some(Rc::new(Font(font)))),
             layout: Cell::new(Layout {
-                scale: 1.0,
+                scale,
                 work: RECT {
                     left: 0,
                     top: 0,
@@ -1164,6 +1225,7 @@ pub(super) fn render_synthetic() -> io::Result<()> {
                 fraction: 0.6,
             }),
             frame: RefCell::new(Frame::default()),
+            painted_step: Cell::new(0),
             content: RefCell::new(Card::default()),
             scroll: Cell::new(0),
             max_scroll: Cell::new(0),
@@ -1173,7 +1235,13 @@ pub(super) fn render_synthetic() -> io::Result<()> {
             reopen: Cell::new(false),
             replay: true,
             control: Arc::new(Control::new()),
-        };
+        })
+    }
+}
+
+pub(super) fn render_synthetic() -> io::Result<()> {
+    unsafe {
+        let view = synthetic_view(1.0)?;
         for notice in [
             Notice::Writing,
             Notice::Later,
@@ -1201,5 +1269,89 @@ pub(super) fn render_synthetic() -> io::Result<()> {
             view.paint_icon()?;
         }
         Ok(())
+    }
+}
+
+#[test]
+fn nub_painter_renders_recording_quiet_and_paused_at_both_scales() {
+    for scale in [1.0, 1.5] {
+        let view = synthetic_view(scale).unwrap();
+        for (recording, speaking, paused_elapsed, ink, bar_height) in [
+            (true, true, None, 0xff8a6b, 16.0),
+            (true, false, None, 0xff8a6b, 12.0),
+            (false, false, Some(7559), 0x595753, 16.0),
+        ] {
+            view.frame.replace(Frame {
+                recording,
+                pill: speaking,
+                paused_elapsed,
+                elapsed: 7559,
+                ..Frame::default()
+            });
+            let (mut surface, left) = view.draw_icon(8).unwrap();
+            let (width, height) = (surface.width, surface.height);
+            assert_eq!((left, width, height), (0, view.px(46.0), view.px(109.0)));
+            let pixels = surface.pixels();
+            let pixel = |x: f32, y: f32| {
+                pixels[(y * scale) as usize * width as usize + (x * scale) as usize]
+            };
+            assert_eq!(pixel(0.0, 64.0), 0xff3a3a37);
+            assert_eq!(pixel(12.0, 64.0), 0xff1d1d1b);
+            let mark = if recording { 0xffff8a6b } else { 0xff9a978f };
+            assert_eq!(pixel(17.5, 21.7), mark);
+            assert_eq!(pixel(23.0, 64.0), 0xff000000 | ink);
+            let tip = 64.0 - bar_height / 2.0 + 0.5;
+            assert_eq!(pixel(23.0, tip), 0xff000000 | ink);
+            assert_eq!(pixel(23.0, tip - 1.0), 0xff1d1d1b);
+            assert_eq!(pixel(24.25, tip), 0xff1d1d1b);
+            let timer = &pixels[(view.px(79.0) * width) as usize..];
+            assert!(timer.iter().any(|p| p & 0xff > 0x70));
+            unsafe {
+                let _font = SelectedFont::new(surface.dc, nub_font(view.px(11.0)).unwrap());
+                let mut face = [0u16; 32];
+                assert!(GetTextFaceW(surface.dc, face.len() as i32, face.as_mut_ptr()) > 0);
+                assert!(face.starts_with(&wide("Figtree")[..7]));
+                let text = wide("125:59");
+                let mut extent: SIZE = std::mem::zeroed();
+                assert_ne!(
+                    GetTextExtentPoint32W(surface.dc, text.as_ptr(), 6, &raw mut extent),
+                    0
+                );
+                assert!((view.px(20.0)..=width - 2 * view.px(3.0)).contains(&extent.cx));
+            }
+        }
+    }
+}
+
+#[test]
+fn nub_whole_pill_admits_legacy_clicks() {
+    for scale in [1.0, 1.5] {
+        let view = synthetic_view(scale).unwrap();
+        view.frame.borrow_mut().recording = true;
+        let (mut surface, left) = view.draw_icon(0).unwrap();
+        let (width, height) = (surface.width, surface.height);
+        let pixels = surface.pixels();
+        unsafe {
+            let region = icon_region(left, width, height);
+            assert!(!region.is_null());
+            for y in 0..height {
+                for x in 0..width {
+                    let radius = width as f32 / 2.0;
+                    let y_center = (y as f32 + 0.5).clamp(radius, height as f32 - radius);
+                    let distance = (x as f32 + 0.5 - radius).hypot(y as f32 + 0.5 - y_center);
+                    let alpha = pixels[(y * width + x) as usize] >> 24;
+                    let hit = alpha != 0 && PtInRegion(region, x, y) != 0;
+                    // GDI and the alpha mask can round the outermost pixels differently.
+                    if distance <= radius - 1.0 || distance >= radius + 0.5 {
+                        assert_eq!(
+                            hit,
+                            distance < radius,
+                            "legacy click at ({x}, {y}), {scale}x"
+                        );
+                    }
+                }
+            }
+            DeleteObject(region);
+        }
     }
 }

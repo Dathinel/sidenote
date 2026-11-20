@@ -33,6 +33,7 @@ pub(super) struct Frame {
     pub id: String,
     pub recording: bool,
     pub pill: bool,
+    pub paused_elapsed: Option<u64>,
     pub skipped: bool,
     pub notice: Option<super::Notice>,
     pub elapsed: u64,
