@@ -21,8 +21,7 @@ pub(super) enum Invocation<'a> {
         payment: &'a str,
         authorize: &'a dyn Fn() -> bool,
     },
-    /// Tool-free Claude on the user's subscription: no qualification, no capability self-report.
-    ClaudeTranslation(&'a Runner, &'a dyn Fn() -> bool),
+    ClaudeTranslation(&'a Runner, &'a Path, &'a dyn Fn() -> bool, Instant),
 }
 #[cfg(test)]
 type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
@@ -176,6 +175,7 @@ fn category(text: &str) -> &'static str {
 enum Stream {
     Line(String),
     TooLarge,
+    Invalid,
     Done,
 }
 const STDOUT_CAP: usize = 4 * 1024 * 1024;
@@ -187,7 +187,8 @@ fn forward_stdout(stdout: impl Read, sender: mpsc::SyncSender<Stream>) {
     loop {
         bytes.clear();
         let Ok(n) = reader.read_until(b'\n', &mut bytes) else {
-            break;
+            let _ = sender.send(Stream::Invalid);
+            return;
         };
         if n == 0 {
             break;
@@ -198,7 +199,8 @@ fn forward_stdout(stdout: impl Read, sender: mpsc::SyncSender<Stream>) {
             return;
         }
         let Ok(line) = String::from_utf8(bytes.clone()) else {
-            break;
+            let _ = sender.send(Stream::Invalid);
+            return;
         };
         if sender
             .send(Stream::Line(line.trim_end_matches(['\r', '\n']).into()))
@@ -436,6 +438,12 @@ pub(super) fn run_classified(
     read_only_background: bool,
     progress: impl Fn(AskProgress),
 ) -> Result<String, RunnerFailure> {
+    let deadline = match invocation {
+        Invocation::ClaudeTranslation(.., end) => Some(end),
+        _ => None,
+    };
+    let claude = deadline.is_some();
+    let expired = || deadline.is_some_and(|end| Instant::now() >= end);
     let mut prepared;
     let (runner, text_only) = match invocation {
         Invocation::General(r) => {
@@ -451,16 +459,19 @@ pub(super) fn run_classified(
             }
             (&prepared, true)
         }
-        Invocation::ClaudeTranslation(runner, _) => {
+        Invocation::ClaudeTranslation(runner, ..) => {
             translation::claude_guard(runner)?;
             (runner, false)
         }
     };
     #[cfg(all(test, target_os = "linux"))]
-    let fixture = matches!(invocation, Invocation::ClaudeTranslation(..))
-        && TEST_CHILD.with(|c| c.borrow().is_some());
+    let fixture = claude && TEST_CHILD.with(|c| c.borrow().is_some());
     #[cfg(not(all(test, target_os = "linux")))]
     let fixture = false;
+    // No shipped launcher confines a verified Claude binary and its subscription context.
+    if claude && !fixture {
+        return Err(translation::qualification::refusal());
+    }
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") && !fixture {
         return Err(RunnerFailure {
@@ -546,24 +557,26 @@ pub(super) fn run_classified(
             runner.model.as_deref().unwrap_or(""),
         )?;
     }
-    if matches!(invocation, Invocation::ClaudeTranslation(..)) {
-        for name in translation::METERED_BILLING {
-            command.env_remove(name);
-        }
-    }
     #[cfg(test)]
     let mut command = TEST_CHILD
         .with(|c| c.borrow().as_ref().map(|f| f(&command)))
         .unwrap_or(command);
-    if let Invocation::Translation { authorize, .. } | Invocation::ClaudeTranslation(_, authorize) =
-        invocation
+    if claude {
+        command.env_clear();
+    }
+    let launch_guard = if let Invocation::ClaudeTranslation(_, root, ..) = invocation {
+        Some(super::config::lock(root).map_err(|_| translation::consent_changed())?)
+    } else {
+        None
+    };
+    if let Invocation::Translation { authorize, .. }
+    | Invocation::ClaudeTranslation(_, _, authorize, _) = invocation
         && !authorize()
     {
-        return Err(RunnerFailure {
-            category: "HELPER_CONSENT",
-            exit: None,
-            message: "Translation permission changed.".into(),
-        });
+        return Err(translation::consent_changed());
+    }
+    if expired() {
+        return Err("The runner exceeded its time limit.".into());
     }
     let spawn = crate::platform::UserRunner::spawn;
     #[cfg(all(test, target_os = "linux"))]
@@ -579,6 +592,10 @@ pub(super) fn run_classified(
             e.raw_os_error().unwrap_or(0)
         )
     })?;
+    if expired() {
+        child.stop_in_background();
+        return Err("The runner exceeded its time limit.".into());
+    }
     let stdout = child
         .stdout
         .take()
@@ -591,6 +608,7 @@ pub(super) fn run_classified(
         .stdin
         .take()
         .map(|mut stdin| std::thread::spawn(move || stdin.write_all(prompt.as_bytes())));
+    drop(launch_guard);
     let errors = std::thread::spawn(move || {
         let mut stderr = stderr;
         let mut bytes = Vec::new();
@@ -621,7 +639,7 @@ pub(super) fn run_classified(
     let mut status = None;
     let mut too_large = false;
     let mut tool_rejected = false;
-    loop {
+    let result = loop {
         let stop = if tool_rejected {
             Some("Translation helper used a tool.")
         } else if too_large {
@@ -630,22 +648,28 @@ pub(super) fn run_classified(
             Some("Stopped because the window was closed.")
         } else if crate::service::stopping() || super::ask::cancel_requested() {
             Some(super::ask::STOPPED)
-        } else if started.elapsed() >= timeout {
+        } else if expired() || (!claude && started.elapsed() >= timeout) {
             Some("The runner exceeded its time limit.")
         } else {
             None
         };
         if let Some(message) = stop {
-            drop(receiver);
-            let _ = child.stop();
-            let _ = reader.join();
-            let _ = errors.join();
-            if let Some(writer) = writer {
-                let _ = writer.join();
-            }
-            return Err(message.into());
+            break Err(message.into());
         }
-        match receiver.recv_timeout(Duration::from_millis(100)) {
+        let poll = Duration::from_millis(100);
+        let wait = deadline.map_or(poll, |end| {
+            end.saturating_duration_since(Instant::now()).min(poll)
+        });
+        match receiver.recv_timeout(wait) {
+            Ok(Stream::Line(line)) if claude => {
+                if !line.trim().is_empty() {
+                    match translation::claude_result(&line) {
+                        Ok(text) if output.final_text.is_empty() => output.final_text = text,
+                        Err(error) => break Err(error),
+                        _ => break Err("Duplicate Claude result.".into()),
+                    }
+                }
+            }
             Ok(Stream::Line(line)) => {
                 tool_rejected = text_only
                     && serde_json::from_str::<serde_json::Value>(&line)
@@ -661,17 +685,52 @@ pub(super) fn run_classified(
                 }
             }
             Ok(Stream::TooLarge) => too_large = true,
+            Ok(Stream::Invalid) if claude => break Err("Invalid Claude output.".into()),
+            Ok(Stream::Invalid) => done = true,
             Ok(Stream::Done) | Err(mpsc::RecvTimeoutError::Disconnected) => done = true,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if status.is_none() {
-            status = child
-                .try_wait()
-                .map_err(|_| "Could not read the CLI status")?;
+            match child.try_wait() {
+                Ok(exit) => status = exit,
+                Err(_) => break Err("Could not read the CLI status".into()),
+            }
         }
-        if status.is_some() && done {
-            break;
+        if status.is_some() && done && (!claude || writer.as_ref().is_some_and(|w| w.is_finished()))
+        {
+            break if expired() {
+                Err("The runner exceeded its time limit.".into())
+            } else {
+                Ok(())
+            };
         }
+        if claude && done {
+            std::thread::sleep(wait.min(Duration::from_millis(5)));
+        }
+    };
+    if claude {
+        child.stop_in_background();
+        result?;
+        if !status.is_some_and(|s| s.success())
+            || !writer.is_some_and(|w| w.join().is_ok_and(|r| r.is_ok()))
+            || output.final_text.is_empty()
+        {
+            return Err("Claude did not return a successful final result.".into());
+        }
+        if expired() {
+            return Err("The runner exceeded its time limit.".into());
+        }
+        return Ok(output.final_text);
+    }
+    if let Err(error) = result {
+        drop(receiver);
+        let _ = child.stop();
+        let _ = reader.join();
+        let _ = errors.join();
+        if let Some(writer) = writer {
+            let _ = writer.join();
+        }
+        return Err(error);
     }
     child.stop().map_err(|_| "Could not stop the CLI process")?;
     let _ = reader.join();
@@ -864,7 +923,7 @@ mod tests {
             match event {
                 Stream::Line(line) => total += line.len(),
                 Stream::TooLarge => limited = true,
-                Stream::Done => {}
+                Stream::Done | Stream::Invalid => {}
             }
         }
         reader.join().unwrap();

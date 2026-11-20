@@ -87,6 +87,14 @@ impl UserRunner {
     pub fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
         self.child.try_wait()
     }
+    pub(crate) fn stop_in_background(mut self) {
+        #[cfg(windows)]
+        drop(self.job.take());
+        let _ = self.child.kill();
+        std::thread::spawn(move || {
+            let _ = self.child.wait();
+        });
+    }
     pub fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
         drop(self.stdin.take());
         self.child.wait()

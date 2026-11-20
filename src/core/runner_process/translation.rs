@@ -21,13 +21,42 @@ pub(super) fn claude_guard(runner: &Runner) -> Result<(), RunnerFailure> {
     }
     Ok(())
 }
-/// Names that move Claude from the subscription to metered billing or a cloud account.
-pub(super) const METERED_BILLING: [&str; 4] = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_USE_BEDROCK",
-    "CLAUDE_CODE_USE_VERTEX",
-];
+pub(super) fn consent_changed() -> RunnerFailure {
+    RunnerFailure {
+        category: "HELPER_CONSENT",
+        exit: None,
+        message: "Translation permission changed.".into(),
+    }
+}
+pub(super) fn claude_result(line: &str) -> Result<String, RunnerFailure> {
+    fn tool(event: &serde_json::Value) -> bool {
+        match event {
+            serde_json::Value::Object(fields) => {
+                matches!(
+                    event["type"].as_str(),
+                    Some("tool_use" | "tool_result" | "server_tool_use" | "mcp_tool_use")
+                ) || fields.values().any(tool)
+            }
+            serde_json::Value::Array(items) => items.iter().any(tool),
+            _ => false,
+        }
+    }
+    let invalid = "Claude did not return a successful final result.";
+    let event: serde_json::Value = serde_json::from_str(line).map_err(|_| invalid)?;
+    if tool(&event) || event["stop_reason"] == "tool_use" {
+        return Err("Translation helper used a tool.".into());
+    }
+    if event["type"] == "result"
+        && event["subtype"] == "success"
+        && event["is_error"] == false
+        && event["stop_reason"] != "refusal"
+        && let Some(text) = event["result"].as_str()
+        && !text.trim().is_empty()
+    {
+        return Ok(text.into());
+    }
+    Err(invalid.into())
+}
 pub(super) fn runner(model: &str) -> Result<Runner, RunnerFailure> {
     if !valid_model(model) {
         return Err("Invalid translation model".into());

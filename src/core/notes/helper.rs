@@ -183,7 +183,7 @@ impl Run for Cli {
             runner_process::run_classified(
                 match &claude {
                     Some(runner) => {
-                        runner_process::Invocation::ClaudeTranslation(runner, &authorize)
+                        runner_process::Invocation::ClaudeTranslation(runner, root, &authorize, end)
                     }
                     None => runner_process::Invocation::Translation {
                         model: &snapshot.model,
