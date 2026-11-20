@@ -4,6 +4,7 @@ use super::{
 };
 #[cfg(windows)]
 mod corruption;
+mod english_first;
 mod idle;
 mod passes;
 #[cfg(windows)]

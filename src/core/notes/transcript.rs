@@ -109,6 +109,7 @@ fn captured(folder: &Path) -> io::Result<Vec<u8>> {
     };
     Ok(bytes)
 }
+#[cfg(test)]
 pub(super) fn chosen(
     root: &Path,
     id: &str,
@@ -116,6 +117,18 @@ pub(super) fn chosen(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
+) -> io::Result<Option<Selection>> {
+    chosen_sized(root, id, folder, chosen, ended_ms, &|| now_ms, None)
+}
+/// `duration_ms` is the meeting's length, so a long one starts from English at once.
+pub(super) fn chosen_sized(
+    root: &Path,
+    id: &str,
+    folder: &Path,
+    chosen: Option<&str>,
+    ended_ms: i64,
+    now: &dyn Fn() -> i64,
+    duration_ms: Option<f64>,
 ) -> io::Result<Option<Selection>> {
     if crate::core::meeting_parts::read(root, id)?.is_some() {
         return super::joined::chosen(
@@ -125,7 +138,7 @@ pub(super) fn chosen(
             folder,
             chosen,
             ended_ms,
-            now_ms,
+            now(),
         )
         .map(|reading| {
             reading.map(|(revision, rendered, reasons, language)| Selection {
@@ -138,7 +151,7 @@ pub(super) fn chosen(
             })
         });
     }
-    chosen_part(root, id, folder, chosen, ended_ms, now_ms)
+    chosen_part_sized(root, id, folder, chosen, ended_ms, now, duration_ms)
 }
 pub(super) fn chosen_part(
     root: &Path,
@@ -147,6 +160,17 @@ pub(super) fn chosen_part(
     chosen: Option<&str>,
     ended_ms: i64,
     now_ms: i64,
+) -> io::Result<Option<Selection>> {
+    chosen_part_sized(root, id, folder, chosen, ended_ms, &|| now_ms, None)
+}
+fn chosen_part_sized(
+    root: &Path,
+    id: &str,
+    folder: &Path,
+    chosen: Option<&str>,
+    ended_ms: i64,
+    now: &dyn Fn() -> i64,
+    duration_ms: Option<f64>,
 ) -> io::Result<Option<Selection>> {
     use crate::core::meeting_router::{self as router, Chunk};
     // With Labs off, retain the compatibility reader and its existing-file behavior.
@@ -190,7 +214,7 @@ pub(super) fn chosen_part(
             })
             .collect())
     };
-    router::jobs::notes_input(root, id, chosen, baseline, ended_ms, now_ms)?
+    router::jobs::notes_input_sized(root, id, chosen, baseline, ended_ms, now, duration_ms)?
         .map(|(id, t, reasons)| {
             let (mut text, mut heads) = (String::new(), Vec::new());
             for s in &t.segments {

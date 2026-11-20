@@ -19,6 +19,7 @@ pub enum Reason {
         ready: u8,
     },
     DeadlineExpired,
+    EnglishFirst,
 }
 impl Reason {
     pub fn message(self) -> Cow<'static, str> {
@@ -52,6 +53,9 @@ impl Reason {
             }
             Self::DeadlineExpired => {
                 "Language routing missed the Stop deadline. Notes use the captured Hex transcript."
+            }
+            Self::EnglishFirst => {
+                "Notes use the English Hex captured, not Hindi and Telugu passes."
             }
         }.into()
     }
