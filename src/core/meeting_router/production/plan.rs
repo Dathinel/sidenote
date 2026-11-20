@@ -86,6 +86,12 @@ fn produce_plan(
     PlanScope { owned, deadline }: PlanScope,
 ) -> Result<(Plan, pieces::PieceManifest, Option<fs::File>)> {
     remaining(deadline)?;
+    // Every caller (router child, speech host span runners) refuses here, before VAD or any model.
+    let packs = model_catalog::speech_packs::registry()?;
+    let routes = config.pipeline.route_snapshot(packs);
+    if let Some(refusal) = model_catalog::speech_packs::first_refusal(&routes) {
+        return Err(refusal.clone().into());
+    }
     let started = Instant::now();
     let mut manifest = pieces::plan(folder, origins, &config.pipeline)?;
     // Staging/normalization changes file identities. Cache against the parent's pinned input.

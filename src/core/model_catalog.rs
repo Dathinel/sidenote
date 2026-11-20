@@ -1,5 +1,6 @@
 //! Meeting-only model files. This module never invokes Hex or loads model code.
 use super::{model_catalog_data::MODELS, state_dir, store_io};
+pub mod speech_packs;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::{

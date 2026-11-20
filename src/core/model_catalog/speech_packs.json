@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "packs": [
+    { "language": "en", "script": "Latn", "model": "parakeet_unified_en", "decoder": "hex-service", "readiness": "qualified" },
+    { "language": "hi", "script": "Deva", "model": "indicconformer-hi-ctc", "decoder": "ctc-tokens", "readiness": "qualified" },
+    { "language": "te", "script": "Telu", "model": "indicconformer-te-ctc", "decoder": "ctc-tokens", "readiness": "qualified" }
+  ]
+}

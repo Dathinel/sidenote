@@ -1,4 +1,11 @@
-use super::super::{asr::Result, lid::LANGUAGES, model_catalog as models};
+use super::super::{
+    asr::Result,
+    lid::LANGUAGES,
+    model_catalog::{
+        self as models,
+        speech_packs::{PackRefusal, Registry, RouteSnapshot, code},
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -81,7 +88,8 @@ fn unique_routes<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_map(Routes)
 }
 impl LanguageRoutes {
-    #[cfg(windows)]
+    /// The calibrated default set. It stays fixed until calibration is keyed by language set.
+    #[cfg(any(windows, test))]
     pub(super) fn cpu_after_stop() -> Self {
         Self {
             primary: "en".into(),
@@ -129,42 +137,16 @@ impl LanguageRoutes {
         }
         Ok(())
     }
+    /// Declarations only. Providers and models are checked against the speech packs when a
+    /// request pins the routes it uses (`RoutingConfig::route_snapshot`).
     pub fn validate(&self) -> Result<()> {
         self.validate_declarations()?;
-        let declared: Vec<_> = std::iter::once(&self.primary)
-            .chain(&self.supporting)
-            .collect();
-        for language in &declared {
-            let route = self
-                .routes
-                .get(*language)
-                .ok_or_else(|| format!("Missing provider route: {language}"))?;
-            let supported = if route.provider == "hex" && route.model == "parakeet_unified_en" {
-                language.as_str() == "en"
-            } else {
-                models::catalog().iter().any(|model| {
-                    model.id == route.model
-                        && model.role == models::Role::Asr
-                        && model.languages.contains(&language.as_str())
-                        && matches!(
-                            (route.provider.as_str(), model.runtime),
-                            ("hex", models::Runtime::Hex) | ("local", models::Runtime::SherpaOnnx)
-                        )
-                })
-            };
-            if !supported {
-                return Err(format!(
-                    "Unsupported provider/model route for {language}: {}/{}",
-                    route.provider, route.model
-                )
-                .into());
+        for language in std::iter::once(&self.primary).chain(&self.supporting) {
+            if !self.routes.contains_key(language) {
+                return Err(format!("Missing provider route: {language}").into());
             }
         }
-        if self
-            .routes
-            .keys()
-            .any(|language| !declared.contains(&language))
-        {
+        if self.routes.len() != 1 + self.supporting.len() {
             return Err("Provider route for undeclared language".into());
         }
         Ok(())
@@ -200,6 +182,38 @@ impl RoutingConfig {
         }
         Ok(())
     }
+    /// Pins every language the after-stop planner can route in this mode: the forced
+    /// language, the primary when only one is declared or detection is off, else all.
+    pub fn route_snapshot(&self, registry: &Registry) -> RouteSnapshot {
+        let Some(routes) = &self.after_stop_languages else {
+            return RouteSnapshot::new();
+        };
+        let declared = std::iter::once(&routes.primary).chain(&routes.supporting);
+        let languages: Vec<&str> = match self.language_mode.strip_prefix("forced:") {
+            Some(forced) if forced != "mixed" => vec![forced],
+            _ if routes.supporting.is_empty() || self.language_mode == "off" => {
+                vec![routes.primary.as_str()]
+            }
+            _ => declared.map(String::as_str).collect(),
+        };
+        let pin = |language: &str| match routes.routes.get(language) {
+            Some(route) => registry.resolve(language, &route.provider, &route.model),
+            None => Err(PackRefusal::new(code::ROUTE, language)),
+        };
+        languages
+            .into_iter()
+            .map(|l| (l.to_owned(), pin(l)))
+            .collect()
+    }
+    /// A pinned request runs only while every pin still matches the shipped packs.
+    pub fn verify_routes(&self, pinned: &RouteSnapshot, registry: &Registry) -> Result<()> {
+        let current = self.route_snapshot(registry);
+        let mut languages = current.keys().chain(pinned.keys());
+        match languages.find(|l| current.get(*l) != pinned.get(*l)) {
+            Some(language) => Err(PackRefusal::new(code::REVISION, language.as_str()).into()),
+            None => Ok(()),
+        }
+    }
     pub fn non_english_route(&self) -> &'static str {
         if self.meeting_languages.iter().any(|s| s == "mixed") {
             "mixed"
@@ -212,6 +226,7 @@ impl RoutingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model_catalog::speech_packs;
     use crate::core::{config::Config, meeting_watch::Labs};
     use serde_json::json;
     fn failure(config: &LanguageRoutes) -> String {
@@ -286,22 +301,56 @@ mod tests {
         assert_eq!(loaded.profile, "compat");
     }
     #[test]
-    fn invalid_duplicate_and_unsupported_routes_explain_the_failure() {
-        for (provider, model) in [
-            ("cloud", "parakeet_unified_en"),
-            ("local", "absent"),
-            ("local", "anuvani-lid-int8"),
-            ("local", "indicconformer-hi-ctc"),
+    fn route_pins_follow_the_mode_and_keep_the_existing_backend_and_model() {
+        use speech_packs::{Backend::*, Decoder::*};
+        let registry = speech_packs::registry().unwrap();
+        let mut config = RoutingConfig::default();
+        config.after_stop_languages = Some(LanguageRoutes::cpu_after_stop());
+        let mut pins = config.route_snapshot(registry);
+        for (language, expected) in [
+            ("en", (Hex, "parakeet_unified_en", HexService)),
+            ("hi", (Local, "indicconformer-hi-ctc", CtcTokens)),
+            ("te", (Local, "indicconformer-te-ctc", CtcTokens)),
         ] {
-            let mut config = routes();
-            config.routes.insert(
-                "en".into(),
-                ProviderRoute {
-                    provider: provider.into(),
-                    model: model.into(),
-                },
-            );
-            assert!(failure(&config).contains("Unsupported provider/model route for en"));
+            let pin = pins[language].as_ref().unwrap();
+            assert_eq!((pin.backend, &*pin.model, pin.decoder), expected);
+            assert_eq!(pin.revision, registry.pack(language).unwrap().revision);
+        }
+        // Only the languages the mode routes are pinned; a changed pin is refused, not remapped.
+        for (mode, languages) in [
+            ("forced:te", "te"),
+            ("off", "en"),
+            ("forced:mixed", "en,hi,te"),
+        ] {
+            config.language_mode = mode.into();
+            let pinned = config.route_snapshot(registry);
+            let keys: Vec<_> = pinned.keys().cloned().collect();
+            assert_eq!(keys.join(","), languages);
+            config.verify_routes(&pinned, registry).unwrap();
+        }
+        pins.get_mut("te").unwrap().as_mut().unwrap().revision = "0".repeat(64);
+        let refusal = config.verify_routes(&pins, registry).unwrap_err();
+        assert_eq!(refusal.to_string(), "speech_pack_revision_changed: te");
+    }
+    #[test]
+    fn invalid_duplicate_and_unsupported_routes_explain_the_failure() {
+        let registry = speech_packs::registry().unwrap();
+        for (language, provider, model) in [
+            ("en", "cloud", "parakeet_unified_en"),
+            ("en", "local", "absent"),
+            ("en", "local", "anuvani-lid-int8"),
+            ("en", "local", "indicconformer-hi-ctc"),
+            ("hi", "local", "whisper-hindi2hinglish-swift"),
+            ("hi", "hex", "nemotron_3_5_asr"),
+        ] {
+            let (mut routes, mut config) = (routes(), RoutingConfig::default());
+            let route = serde_json::from_value(json!({"provider":provider, "model":model}));
+            routes.routes.insert(language.into(), route.unwrap());
+            routes.validate().unwrap();
+            config.after_stop_languages = Some(routes);
+            let pins = config.route_snapshot(registry);
+            assert_eq!(pins[language], Err(PackRefusal::new(code::ROUTE, language)));
+            assert!(pins["te"].is_ok());
         }
         let mut config = routes();
         config.routes.remove("hi");
