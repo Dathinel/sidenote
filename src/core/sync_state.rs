@@ -1290,6 +1290,7 @@ pub(super) fn stores(root: &Path) -> io::Result<Vec<String>> {
     }
     Ok(stores.into_iter().collect())
 }
+#[cfg(any(target_os = "linux", debug_assertions, feature = "relay-qualification"))]
 pub(super) fn ingestion_revision(root: &Path) -> io::Result<String> {
     let mut journals = BTreeSet::new();
     for owner in entries(&root.join("state"))? {

@@ -11,7 +11,19 @@ struct Paths {
 static PATHS: OnceLock<Paths> = OnceLock::new();
 thread_local! {static READ_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
 
+#[cfg(any(
+    test,
+    target_os = "linux",
+    debug_assertions,
+    feature = "relay-qualification"
+))]
 pub(crate) struct ReadOnlyScope(bool, std::marker::PhantomData<std::rc::Rc<()>>);
+#[cfg(any(
+    test,
+    target_os = "linux",
+    debug_assertions,
+    feature = "relay-qualification"
+))]
 impl ReadOnlyScope {
     pub(crate) fn begin(enabled: bool) -> Self {
         Self(
@@ -20,6 +32,12 @@ impl ReadOnlyScope {
         )
     }
 }
+#[cfg(any(
+    test,
+    target_os = "linux",
+    debug_assertions,
+    feature = "relay-qualification"
+))]
 impl Drop for ReadOnlyScope {
     fn drop(&mut self) {
         READ_ONLY.with(|mode| mode.set(self.0));
