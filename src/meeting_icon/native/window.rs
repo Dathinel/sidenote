@@ -226,6 +226,7 @@ struct View {
     icon: Cell<HWND>,
     card: Cell<HWND>,
     font: RefCell<Option<Rc<Font>>>,
+    timer_font: RefCell<Option<(i32, Rc<Font>)>>,
     layout: Cell<Layout>,
     frame: RefCell<Frame>,
     painted_step: Cell<usize>,
@@ -262,6 +263,7 @@ impl NativeWindow {
                     icon: Cell::new(ptr::null_mut()),
                     card: Cell::new(ptr::null_mut()),
                     font: RefCell::new(None),
+                    timer_font: RefCell::new(None),
                     layout: Cell::new(Layout {
                         scale: 1.0,
                         work: std::mem::zeroed(),
@@ -339,13 +341,7 @@ impl NativeWindow {
     }
     pub(super) fn update(&self, frame: Frame) {
         let prior = self.view.frame.replace(frame.clone());
-        let changed = prior.id != frame.id
-            || prior.recording != frame.recording
-            || prior.pill != frame.pill
-            || prior.paused_elapsed != frame.paused_elapsed
-            || prior.notice != frame.notice
-            || prior.skipped != frame.skipped
-            || (frame.recording && prior.elapsed != frame.elapsed);
+        let changed = icon_changed(&prior, &frame);
         let card_changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.raw != frame.raw
@@ -370,10 +366,7 @@ impl NativeWindow {
         }
     }
     pub(super) fn pump(&self) -> bool {
-        if self.view.frame.borrow().recording
-            && self.view.painted_step.get() != nub_step()
-            && !self.view.control.stop.load(Ordering::Acquire)
-        {
+        if self.view.animation_due(nub_step()) {
             let _ = unsafe { self.view.paint_icon() };
         }
         unsafe {
@@ -414,18 +407,46 @@ enum Scroll {
     Home,
     End,
 }
+fn icon_changed(prior: &Frame, frame: &Frame) -> bool {
+    prior.id != frame.id
+        || prior.recording != frame.recording
+        || prior.pill != frame.pill
+        || prior.notice != frame.notice
+        || prior.skipped != frame.skipped
+        || (frame.recording && prior.elapsed != frame.elapsed)
+}
+
 impl View {
-    fn live_nub(&self) -> bool {
+    fn animation_due(&self, step: usize) -> bool {
         let frame = self.frame.borrow();
-        frame.recording || frame.paused_elapsed.is_some()
+        frame.recording
+            && frame.pill
+            && self.painted_step.get() != step
+            && !self.control.stop.load(Ordering::Acquire)
+    }
+    fn figtree(&self) -> io::Result<Rc<Font>> {
+        let height = self.px(11.0);
+        if let Some((cached_height, font)) = self.timer_font.borrow().as_ref()
+            && *cached_height == height
+        {
+            return Ok(Rc::clone(font));
+        }
+        let font = nub_font(height)?;
+        self.timer_font.replace(Some((height, Rc::clone(&font))));
+        Ok(font)
     }
     fn height(&self) -> f32 {
-        if self.live_nub() { nub::HEIGHT } else { HEIGHT }
+        if self.frame.borrow().recording {
+            nub::HEIGHT
+        } else {
+            HEIGHT
+        }
     }
     fn width(&self) -> f32 {
-        if self.live_nub() {
+        let frame = self.frame.borrow();
+        if frame.recording {
             nub::WIDTH
-        } else if self.frame.borrow().notice.is_some() {
+        } else if frame.notice.is_some() {
             300.0
         } else {
             WIDTH
@@ -759,14 +780,11 @@ impl View {
     fn draw_icon(&self, step: usize) -> io::Result<(Surface, i32)> {
         unsafe {
             let frame = self.frame.borrow().clone();
-            let live = self.live_nub();
+            let live = frame.recording;
             let pill = live || frame.skipped || frame.notice.is_some();
             let (width, height) = (self.px(self.width()), self.px(self.height()));
             let left = if pill { 0 } else { width - height };
-            let label = wide(&if live {
-                let elapsed = frame.paused_elapsed.unwrap_or(frame.elapsed);
-                format!("{}:{:02}", elapsed / 60, elapsed % 60)
-            } else if let Some(notice) = frame.notice {
+            let label = wide(&if let Some(notice) = frame.notice {
                 notice.text()
             } else if frame.skipped {
                 "Skipped".into()
@@ -776,12 +794,13 @@ impl View {
             let mut surface = Surface::new(width, height)?;
             let font = if live {
                 let scale = self.layout.get().scale;
+                let step = if frame.pill { step } else { 0 };
                 for (i, pixel) in surface.pixels().iter_mut().enumerate() {
                     let x = ((i % width as usize) as f32 + 0.5) / scale;
                     let y = ((i / width as usize) as f32 + 0.5) / scale;
-                    *pixel = nub::pixel(x, y, frame.paused_elapsed.is_some(), frame.pill, step);
+                    *pixel = nub::pixel(x, y, frame.pill, step);
                 }
-                nub_font(self.px(11.0))?
+                self.figtree()?
             } else {
                 surface.pixels().fill(0x001f2630);
                 self.font
@@ -825,7 +844,8 @@ impl View {
                 for x in 0..width {
                     let cx = (x as f32 + 0.5).clamp(left as f32 + radius, width as f32 - radius);
                     let cy = (y as f32 + 0.5).clamp(radius, height as f32 - radius);
-                    let distance = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy);
+                    let distance =
+                        ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
                     let a = ((radius - distance + 0.5).clamp(0.0, 1.0) * 255.0).round() as u32;
                     let p = &mut surface.pixels()[(y * width + x) as usize];
                     *p = (a << 24)
@@ -1214,6 +1234,7 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
             icon: Cell::new(ptr::null_mut()),
             card: Cell::new(ptr::null_mut()),
             font: RefCell::new(Some(Rc::new(Font(font)))),
+            timer_font: RefCell::new(None),
             layout: Cell::new(Layout {
                 scale,
                 work: RECT {
@@ -1273,18 +1294,13 @@ pub(super) fn render_synthetic() -> io::Result<()> {
 }
 
 #[test]
-fn nub_painter_renders_recording_quiet_and_paused_at_both_scales() {
+fn nub_painter_renders_recording_and_quiet_at_both_scales() {
     for scale in [1.0, 1.5] {
         let view = synthetic_view(scale).unwrap();
-        for (recording, speaking, paused_elapsed, ink, bar_height) in [
-            (true, true, None, 0xff8a6b, 16.0),
-            (true, false, None, 0xff8a6b, 12.0),
-            (false, false, Some(7559), 0x595753, 16.0),
-        ] {
+        for (speaking, bar_height) in [(true, 16.0), (false, 9.6)] {
             view.frame.replace(Frame {
-                recording,
+                recording: true,
                 pill: speaking,
-                paused_elapsed,
                 elapsed: 7559,
                 ..Frame::default()
             });
@@ -1297,20 +1313,16 @@ fn nub_painter_renders_recording_quiet_and_paused_at_both_scales() {
             };
             assert_eq!(pixel(0.0, 64.0), 0xff3a3a37);
             assert_eq!(pixel(12.0, 64.0), 0xff1d1d1b);
-            let mark = if recording { 0xffff8a6b } else { 0xff9a978f };
-            assert_eq!(pixel(17.5, 21.7), mark);
-            assert_eq!(pixel(23.0, 64.0), 0xff000000 | ink);
+            assert_eq!(pixel(17.5, 21.7), 0xffff8a6b);
+            assert_eq!(pixel(23.0, 64.0), 0xffff8a6b);
             let tip = 64.0 - bar_height / 2.0 + 0.5;
-            assert_eq!(pixel(23.0, tip), 0xff000000 | ink);
+            assert_eq!(pixel(23.0, tip), 0xffff8a6b);
             assert_eq!(pixel(23.0, tip - 1.0), 0xff1d1d1b);
             assert_eq!(pixel(24.25, tip), 0xff1d1d1b);
             let timer = &pixels[(view.px(79.0) * width) as usize..];
             assert!(timer.iter().any(|p| p & 0xff > 0x70));
             unsafe {
-                let _font = SelectedFont::new(surface.dc, nub_font(view.px(11.0)).unwrap());
-                let mut face = [0u16; 32];
-                assert!(GetTextFaceW(surface.dc, face.len() as i32, face.as_mut_ptr()) > 0);
-                assert!(face.starts_with(&wide("Figtree")[..7]));
+                let _font = SelectedFont::new(surface.dc, view.figtree().unwrap());
                 let text = wide("125:59");
                 let mut extent: SIZE = std::mem::zeroed();
                 assert_ne!(
@@ -1320,6 +1332,56 @@ fn nub_painter_renders_recording_quiet_and_paused_at_both_scales() {
                 assert!((view.px(20.0)..=width - 2 * view.px(3.0)).contains(&extent.cx));
             }
         }
+    }
+}
+
+#[test]
+fn nub_pump_repaints_steps_only_during_speech() {
+    let view = synthetic_view(1.0).unwrap();
+    let mut frame = Frame {
+        recording: true,
+        elapsed: 9,
+        ..Frame::default()
+    };
+    view.frame.replace(frame.clone());
+    frame.elapsed += 1;
+    let prior = view.frame.replace(frame);
+    assert!(icon_changed(&prior, &view.frame.borrow()));
+    assert_eq!([view.animation_due(1), view.animation_due(2)], [false; 2]);
+    let (mut first, _) = view.draw_icon(1).unwrap();
+    let (mut second, _) = view.draw_icon(2).unwrap();
+    assert_eq!(first.pixels(), second.pixels());
+    view.frame.borrow_mut().pill = true;
+    view.painted_step.set(2);
+    assert!(view.animation_due(3));
+}
+
+#[test]
+fn nub_painter_reuses_figtree_until_pixel_height_changes() {
+    let view = synthetic_view(1.0).unwrap();
+    view.frame.borrow_mut().recording = true;
+    let cached = || view.timer_font.borrow().clone().unwrap();
+    view.draw_icon(0).unwrap();
+    let (height, first) = cached();
+    view.draw_icon(1).unwrap();
+    assert!(
+        Rc::ptr_eq(&first, &cached().1),
+        "same height must reuse font"
+    );
+
+    view.layout.set(Layout {
+        scale: 1.5,
+        ..view.layout.get()
+    });
+    let (surface, _) = view.draw_icon(2).unwrap();
+    let (next_height, next) = cached();
+    assert_eq!((height, next_height), (11, 17));
+    assert_ne!(first.0, next.0);
+    unsafe {
+        let _font = SelectedFont::new(surface.dc, next);
+        let mut face = [0u16; 32];
+        assert!(GetTextFaceW(surface.dc, face.len() as i32, face.as_mut_ptr()) > 0);
+        assert!(face.starts_with(&wide("Figtree")[..7]));
     }
 }
 
