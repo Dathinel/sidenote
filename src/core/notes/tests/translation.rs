@@ -94,12 +94,12 @@ fn fixture_child() {
                 && binding["automatic_fallback"] == false
         );
         if root.join("emit-tool").exists() {
-            println!(
+            eprintln!(
                 "{}",
                 serde_json::json!({"type":"tool_use","part":{"tool":"read","callID":"forbidden"}})
             );
         }
-        println!(
+        eprintln!(
             "{}",
             serde_json::json!({"type":"text","part":{"text":"valid-looking translation output"}})
         );

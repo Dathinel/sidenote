@@ -97,7 +97,7 @@ pub(super) fn capability_child(root: &Path, input: &str) -> ! {
         "wrong_auth" => cap["route"]["auth_mode"] = "api_key".into(),
         _ => {}
     }
-    println!(
+    eprintln!(
         "{}",
         serde_json::json!({"type":"text","part":{"text":cap.to_string()}})
     );
