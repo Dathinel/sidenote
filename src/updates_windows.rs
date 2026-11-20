@@ -1861,6 +1861,18 @@ function Set-ScheduledTask {
     $script:migrated = $env:SIDENOTE_TEST_MISMATCH -ne 'unsaved'
 }
 function Start-ScheduledTask { $script:started = $true }
+function New-ListenerTestStopwatch {
+    $script:elapsedMs = 0
+    $clock = [PSCustomObject]@{}
+    Add-Member -InputObject $clock -MemberType ScriptProperty -Name Elapsed -Value {
+        [TimeSpan]::FromMilliseconds($script:elapsedMs)
+    }
+    $clock
+}
+function Start-Sleep {
+    param([int]$Milliseconds)
+    $script:elapsedMs += $Milliseconds
+}
 function Get-CimInstance {
     $script:samples++
     if ($env:SIDENOTE_TEST_MISMATCH -eq 'no-process' -or
@@ -1877,6 +1889,9 @@ try {
 } catch { if ($script:started) { exit 2 }; exit 1 }
 if ($script:started) { exit 0 }; exit 3
 "#;
+        let real_clock = "[Diagnostics.Stopwatch]::StartNew()";
+        assert_eq!(LISTENER_TASK_SCRIPT.matches(real_clock).count(), 1);
+        let script = LISTENER_TASK_SCRIPT.replace(real_clock, "(New-ListenerTestStopwatch)");
         for mismatch in [
             "none",
             "exe",
@@ -1895,7 +1910,7 @@ if ($script:started) { exit 0 }; exit 3
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    &format!("{prelude}\n{LISTENER_TASK_SCRIPT}\n{suffix}"),
+                    &format!("{prelude}\n{script}\n{suffix}"),
                 ])
                 .env("SIDENOTE_TASK_NAME", "Sidenote mock listener")
                 .env("SIDENOTE_TASK_EXE", "sidenote-test.exe")

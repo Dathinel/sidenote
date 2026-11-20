@@ -201,8 +201,7 @@ fn start_removal_cases(failed_start: bool) {
                 state.live.is_some(),
                 "idle before START_WAIT must keep the page"
             );
-            // Exercise the real elapsed-time condition without altering a production clock.
-            thread::sleep(Duration::from_secs(26));
+            state.live.as_mut().unwrap().age_past_start_timeout();
         }
         state.live_notes = rune::TextEdit::new(text);
         state.live_tick();

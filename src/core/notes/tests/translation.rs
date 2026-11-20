@@ -46,6 +46,7 @@ fn fixture_child() {
     if let Some(work) = mode.strip_prefix("router-produced|") {
         producer::router_child(Path::new(work));
     }
+    #[cfg(feature = "asr-runtime")]
     if mode == "recognizer" {
         let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
         let mut lines = std::io::BufRead::lines(std::io::stdin().lock());
@@ -117,25 +118,24 @@ fn fixture_child() {
     std::process::exit(0);
 }
 struct Recognizers;
+impl Recognizer for Recognizers {
+    fn recognize(&mut self, range: &Range) -> crate::core::asr::Result<serde_json::Value> {
+        let language = range.range.language.as_deref().unwrap();
+        Ok(serde_json::json!({"text":format!("selected {language} words")}))
+    }
+}
 impl NativeLoader for Recognizers {
     fn load(
         &mut self,
         _: NativeLanguage,
         _: &Range,
     ) -> crate::core::asr::Result<Box<dyn Recognizer>> {
-        Ok(Box::new(batches::worker::Worker::spawn(
-            child("recognizer"),
-            Arc::new(AtomicBool::new(false)),
-            Duration::from_secs(10),
-        )?))
+        Ok(Box::new(Self))
     }
 }
 impl EnglishBridge for Recognizers {
-    fn transcribe(&mut self, r: &Range) -> crate::core::asr::Result<serde_json::Value> {
-        let mut worker = self.load(NativeLanguage::Hindi, r)?;
-        let reading = worker.recognize(r)?;
-        worker.finish()?;
-        Ok(reading)
+    fn transcribe(&mut self, range: &Range) -> crate::core::asr::Result<serde_json::Value> {
+        self.recognize(range)
     }
 }
 fn fixture() -> (Temp, PathBuf, NotesSettings) {
