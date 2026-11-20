@@ -195,6 +195,16 @@ fn fact(icon: &'static rune::Icon, words: String, p: Palette) -> El {
         .child(roles::META.line(words, p.soft))
 }
 
+const ENGLISH_ONLY: &str = "English-only transcript. Hindi or Telugu parts may be missing.";
+
+/// Whether to say the transcript was English-only. It follows the word stamped in the summary on
+/// screen, so a summary with no word shows it: nothing recorded that its language passes ran.
+fn english_only(s: &State, m: &Meeting) -> bool {
+    s.meeting_tab == Tab::Summary
+        && m.has_summary()
+        && m.summary_language != Some(core::notes::Language::Routed)
+}
+
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
     let facts = facts_line(m.started.map(|d| d.format("%-d %b").to_string()), m.minutes);
     let people = m.summary.people.len();
@@ -251,6 +261,11 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
+        .children(english_only(s, m).then(|| {
+            roles::META
+                .wrap(ENGLISH_ONLY, p.faint)
+                .key("meeting-english-only")
+        }))
         .children(crate::ui::live::parts_status(s, p))
         .children(project::form(s, k, &m.id, p))
 }

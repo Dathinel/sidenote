@@ -278,6 +278,8 @@ pub struct Meeting {
     pub transcript_raw: String,
     pub routed: Option<super::meeting_router::Transcript>,
     pub routed_revision: String,
+    /// The language word stamped in the summary on screen (`made_by.language_passes`), if any.
+    pub summary_language: Option<super::notes::Language>,
     /// The user's own notes from `notes.md`, typed during the meeting (or imported). Empty when none.
     pub notes: String,
     pub lines: Vec<Line>,
@@ -479,6 +481,7 @@ impl Meeting {
             .transpose()?
             .unwrap_or_default();
         let summary_raw = summary_raw.unwrap_or_default();
+        let summary_language = super::notes::Language::recorded(&summary_raw);
         let draft_raw = if folder.parent().is_some_and(|p| p == meetings_dir()) {
             super::notes::draft::read(&state_dir(), folder, &id)?
         } else {
@@ -589,6 +592,7 @@ impl Meeting {
             transcript_raw,
             routed,
             routed_revision,
+            summary_language,
             notes,
             lines,
             started,

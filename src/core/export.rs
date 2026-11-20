@@ -226,6 +226,7 @@ mod tests {
             transcript_raw: String::new(),
             routed: None,
             routed_revision: String::new(),
+            summary_language: None,
             notes: "Ask about the survey".into(),
             lines: Vec::new(),
             started: None,

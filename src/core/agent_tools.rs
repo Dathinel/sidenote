@@ -677,6 +677,7 @@ mod tests {
             transcript_raw: String::new(),
             routed: None,
             routed_revision: String::new(),
+            summary_language: None,
             notes: "Typed-only caf\u{e9} notes".into(),
             lines: vec![],
             started: None,

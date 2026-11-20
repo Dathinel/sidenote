@@ -10,6 +10,25 @@ pub enum Language {
     EnglishOnly,
 }
 
+impl Language {
+    /// The word in a summary's `made_by` record. None when there is no record or it is not a word
+    /// this build knows. Reads that one field and nothing else.
+    pub fn recorded(summary: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Stamp {
+            made_by: Option<By>,
+        }
+        #[derive(Deserialize)]
+        struct By {
+            language_passes: Option<Language>,
+        }
+        serde_json::from_str::<Stamp>(summary)
+            .ok()?
+            .made_by?
+            .language_passes
+    }
+}
+
 /// Routed: Hindi or Telugu text was read, or language ID heard only English. English only: the
 /// passes did not run, or Hindi or Telugu may be hiding in captured English. `langs` are segment
 /// `lang` codes and `degraded` comes from segment `status`.

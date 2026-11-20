@@ -25,6 +25,7 @@ pub fn scene(s: &mut State) {
                 transcript_raw: String::new(),
                 routed: None,
                 routed_revision: String::new(),
+                summary_language: None,
                 notes: String::new(),
                 lines: Vec::new(),
                 started: None,
