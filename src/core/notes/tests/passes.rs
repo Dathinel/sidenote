@@ -67,8 +67,8 @@ fn pending(root: &Path) {
 }
 /// Builds a released revision through the real hand-off. `corrupt` damages the range receipt, so
 /// assembly fills the range from the captured baseline and records no typed reason.
-fn release(root: &Path, folder: &Path, language: &str, corrupt: bool) -> String {
-    let first = transcript::chosen(root, ID, folder, None, 0, 10_000)
+pub(super) fn release(root: &Path, folder: &Path, language: &str, corrupt: bool) -> String {
+    let first = transcript::chosen(root, ID, folder, None, 0, 1 << 60)
         .unwrap()
         .unwrap();
     let (_, data) = revision::load(&dir(root), Some(&first.revision))
@@ -157,7 +157,7 @@ fn write_notes(root: &Path, settings: &NotesSettings, request: Option<Request>) 
     drain(root, settings, &mut fake);
     fake
 }
-fn made_by(folder: &Path) -> serde_json::Value {
+pub(super) fn made_by(folder: &Path) -> serde_json::Value {
     let raw = fs::read(folder.join("english-summary.json")).unwrap();
     serde_json::from_slice::<serde_json::Value>(&raw).unwrap()["made_by"].clone()
 }

@@ -20,7 +20,7 @@ pub(crate) fn notes_input(
     ended_ms: i64,
     now_ms: i64,
 ) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
-    notes_input_sized(root, id, chosen, baseline, ended_ms, now_ms, None)
+    notes_input_sized(root, id, chosen, baseline, ended_ms, &|| now_ms, None)
 }
 /// Resolve a durable dependency to immutable text. This function performs no audio work.
 pub(crate) fn notes_input_sized(
@@ -29,8 +29,8 @@ pub(crate) fn notes_input_sized(
     chosen: Option<&str>,
     baseline: impl FnOnce() -> io::Result<Vec<Chunk>>,
     ended_ms: i64,
-    now_ms: i64,
-    duration_ms: Option<u64>,
+    now: &dyn Fn() -> i64,
+    duration_ms: Option<f64>,
 ) -> io::Result<Option<(String, Transcript, Vec<RoutingFallback>)>> {
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
@@ -47,18 +47,29 @@ pub(crate) fn notes_input_sized(
     }
     // An unknown length keeps the old wait; a known one waits only while short (0 minutes: never).
     let stages = &config.engine_settings.stages;
-    let max_ms = u64::from(stages.notes_wait_max_minutes) * 60_000;
+    let max_ms = f64::from(stages.notes_wait_max_minutes) * 60_000.0;
     let seconds = match duration_ms {
         None => stages.routing_deadline_seconds,
-        Some(ms) if ms <= max_ms && max_ms > 0 => stages.notes_wait_seconds,
+        Some(ms) if ms <= max_ms && max_ms > 0.0 => stages.notes_wait_seconds,
         Some(_) => 0,
     };
-    if seconds > 3600 || (seconds == 0 && duration_ms.is_none()) {
+    let bad_wait = stages
+        .errors()
+        .iter()
+        .any(|f| f.starts_with("stages.notes_wait"));
+    if bad_wait || seconds > 3600 || (seconds == 0 && duration_ms.is_none()) {
         return Err(store_io::invalid("Invalid routing deadline"));
     }
+    // A zero wait never defers, whatever the clock says; the release check below stays separate.
     let english_first = seconds == 0;
-    let deadline = ended_ms.saturating_add(i64::from(seconds) * 1000);
+    let deadline = if english_first {
+        i64::MIN
+    } else {
+        ended_ms.saturating_add(i64::from(seconds) * 1000)
+    };
     let _lock = pending_lock(root, id)?;
+    // Sampled under the lock, so a release published while we waited for it is not "from the future".
+    let now_ms = now();
     let dependency =
         super::super::inputs::Snapshot::read_file(&queue(root).join(format!("{id}.json")), 4096)
             .and_then(|bytes| serde_json::from_slice::<Pending>(&bytes).map_err(io::Error::from));
@@ -158,7 +169,7 @@ pub(crate) fn notes_input_sized(
         reasons.push(RoutingFallback::new(Reason::SelectedRevisionUnavailable));
     }
     if reasons.is_empty() {
-        let reason = attempt_failure.unwrap_or(if english_first && pending.is_some() {
+        let reason = attempt_failure.unwrap_or(if english_first {
             Reason::EnglishFirst
         } else {
             Reason::DeadlineExpired

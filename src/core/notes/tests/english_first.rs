@@ -1,33 +1,15 @@
 //! Notes start from English past the wait limit, through enqueue and drain. Not Windows-only.
+use super::passes::{made_by, release};
 use super::*;
 use crate::core::meeting_router::{
-    batches::{self, EnglishBridge, NativeLanguage, NativeLoader, Range, Recognizer},
     fallback::{Reason, RoutingFallback},
-    jobs::handoff::{self, BatchOutput},
-    pieces::{Piece, PieceManifest, TrackManifest},
-    ranges::AsrRange,
     revision,
 };
-type Done<T> = crate::core::asr::Result<T>;
 
-struct Reading;
-impl Recognizer for Reading {
-    fn recognize(&mut self, r: &Range) -> Done<serde_json::Value> {
-        Ok(serde_json::json!({"text":r.piece}))
-    }
-}
-impl NativeLoader for Reading {
-    fn load(&mut self, _: NativeLanguage, _: &Range) -> Done<Box<dyn Recognizer>> {
-        Ok(Box::new(Reading))
-    }
-}
-impl EnglishBridge for Reading {
-    fn transcribe(&mut self, r: &Range) -> Done<serde_json::Value> {
-        self.recognize(r)
-    }
-}
+const MIN: f64 = 60_000.0;
 
-fn setup(minutes: u64, ago_ms: i64) -> (Temp, PathBuf, NotesSettings) {
+/// A meeting of `duration_ms` that ended `ago_ms` ago, with Labs routing on.
+fn setup(duration_ms: f64, ago_ms: i64) -> (Temp, PathBuf, NotesSettings) {
     let root = Temp::new();
     let folder = meeting(&root.0, PRIVATE);
     let settings = settings_fixture();
@@ -42,13 +24,10 @@ fn setup(minutes: u64, ago_ms: i64) -> (Temp, PathBuf, NotesSettings) {
     .unwrap();
     let path = folder.join("manifest.json");
     let mut m: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    m["duration_ms"] = (minutes * 60_000).into();
+    m["duration_ms"] = duration_ms.into();
     m["ended_at_ms"] = (chrono::Utc::now().timestamp_millis() - ago_ms).into();
     fs::write(path, m.to_string()).unwrap();
     (root, folder, settings)
-}
-fn dir(root: &Path) -> PathBuf {
-    root.join("local/transcripts").join(ID)
 }
 fn pending(root: &Path) {
     let queue = root.join("local/router-queue");
@@ -58,82 +37,7 @@ fn pending(root: &Path) {
         format!(r#"{{"id":"{ID}","generation":7}}"#),
     )
     .unwrap();
-    revision::begin(&dir(root), 7).unwrap();
-}
-fn release(root: &Path, folder: &Path, language: &str) -> String {
-    let first = transcript::chosen(root, ID, folder, None, 0, 10_000)
-        .unwrap()
-        .unwrap();
-    let (_, data) = revision::load(&dir(root), Some(&first.revision))
-        .unwrap()
-        .unwrap();
-    let baseline = data.transcript.baseline;
-    pending(root);
-    let work = root.join("local/router-work").join(ID).join("batches");
-    fs::create_dir_all(&work).unwrap();
-    let b = &baseline[0];
-    let (start, end) = (
-        (b.start * 16000.0).round() as u64,
-        (b.end * 16000.0).round() as u64,
-    );
-    let wav = work.join("clip.wav");
-    crate::core::asr::write_wav(&wav, &vec![0.0; (end - start) as usize]).unwrap();
-    let text = if language == "te" {
-        "తెలుగు selected revision"
-    } else {
-        "हिंदी selected revision"
-    };
-    let plan = batches::spool(
-        &work,
-        vec![Range {
-            track: b.track.clone(),
-            piece: text.into(),
-            wav,
-            range: AsrRange {
-                context: (start, end),
-                members: vec![(0, (start, end))],
-                language: Some(language.into()),
-            },
-            model_id: format!("fake-{language}"),
-            model_sha256: "a".repeat(64),
-        }],
-    )
-    .unwrap();
-    let manifest = PieceManifest {
-        source_revision: "capture".into(),
-        config_checksum: "config".into(),
-        tracks: vec![TrackManifest {
-            track: b.track.clone(),
-            origin_sample: 0,
-            sample_count: end,
-            pieces: vec![Piece {
-                id: text.into(),
-                start_sample: 0,
-                end_sample: end,
-            }],
-        }],
-    };
-    let output = BatchOutput {
-        generation: "7".into(),
-        source_revision: "fixture-input".into(),
-        plan,
-        manifest,
-        fallbacks: vec![],
-        english_transport: serde_json::Value::Null,
-    };
-    store_io::write(&work.join("output.json"), &output).unwrap();
-    #[cfg(windows)]
-    batches::run(&work, &output.plan, &mut Reading, &mut Reading).unwrap();
-    #[cfg(not(windows))]
-    batches::run_host(
-        &work,
-        &output.plan,
-        &mut Reading,
-        Duration::from_secs(60),
-        &mut |_, _, _| Ok(()),
-    )
-    .unwrap();
-    handoff::commit_batches(root, ID, 7, "fixture-input", &baseline).unwrap()
+    revision::begin(&root.join("local/transcripts").join(ID), 7).unwrap();
 }
 fn notes(root: &Path, s: &NotesSettings) -> (Fake, Vec<RoutingFallback>) {
     enqueue(root, s, None);
@@ -148,26 +52,29 @@ fn reasons(reason: Reason) -> Vec<RoutingFallback> {
 
 #[test]
 fn long_meeting_starts_from_english_one_second_after_the_end() {
-    let (root, folder, s) = setup(30, 1_000);
+    let (root, folder, s) = setup(30.0 * MIN, 1_000);
     pending(&root.0);
     let (fake, got) = notes(&root.0, &s);
-    assert!(folder.join("english-summary.json").exists());
     assert!(fake.calls[0].0.contains(PRIVATE) && fake.calls[0].0.contains("(English)"));
     assert_eq!(got, reasons(Reason::EnglishFirst));
+    let by = made_by(&folder);
+    assert_eq!(by["language_passes"], "english_only");
+    assert!(by["transcript_revision"].is_string());
 }
 #[test]
 fn short_meeting_uses_a_release_that_lands_inside_the_wait() {
-    let (root, folder, s) = setup(4, 20_000);
-    let pin = release(&root.0, &folder, "te");
+    let (root, folder, s) = setup(4.0 * MIN, 20_000);
+    let pin = release(&root.0, &folder, "te", false);
     let (fake, got) = notes(&root.0, &s);
     assert!(fake.calls[0].0.contains("తెలుగు selected revision"));
     assert!(got.is_empty());
-    let job = queue::read(&root.0, ID).unwrap().unwrap();
-    assert_eq!(job.transcript_revision, Some(pin));
+    let by = made_by(&folder);
+    assert_eq!(by["language_passes"], "routed");
+    assert_eq!(by["transcript_revision"], pin.as_str());
 }
 #[test]
 fn short_meeting_without_a_release_falls_back_after_the_wait() {
-    let (root, folder, s) = setup(4, 41_000);
+    let (root, folder, s) = setup(4.0 * MIN, 41_000);
     pending(&root.0);
     let (fake, got) = notes(&root.0, &s);
     assert!(folder.join("english-summary.json").exists());
@@ -176,7 +83,7 @@ fn short_meeting_without_a_release_falls_back_after_the_wait() {
 }
 #[test]
 fn zero_minutes_means_never_wait() {
-    let (root, folder, s) = setup(4, 1_000);
+    let (root, folder, s) = setup(4.0 * MIN, 1_000);
     let path = root.0.join("config.json");
     let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     c["engine_settings"]["stages"]["notes_wait_max_minutes"] = 0.into();
@@ -189,9 +96,74 @@ fn zero_minutes_means_never_wait() {
 }
 #[test]
 fn long_meeting_still_uses_a_release_that_is_already_there() {
-    let (root, folder, s) = setup(30, 400_000);
-    release(&root.0, &folder, "hi");
+    let (root, folder, s) = setup(30.0 * MIN, 400_000);
+    release(&root.0, &folder, "hi", false);
     let (fake, got) = notes(&root.0, &s);
     assert!(fake.calls[0].0.contains("हिंदी selected revision"));
     assert!(got.is_empty());
+}
+#[test]
+fn a_release_published_while_notes_wait_for_the_lock_is_used() {
+    let (root, folder, _) = setup(30.0 * MIN, 400_000);
+    let pin = release(&root.0, &folder, "hi", false);
+    let released = fs::read(
+        root.0
+            .join("local/router-work")
+            .join(ID)
+            .join("released.json"),
+    );
+    let done =
+        serde_json::from_slice::<serde_json::Value>(&released.unwrap()).unwrap()["completed_ms"]
+            .as_i64()
+            .unwrap();
+    // The clock reads older than the release until the notes job holds the router's lock.
+    let lock = root.0.join("local/router-queue").join(format!("{ID}.lock"));
+    let clock = || {
+        if store_io::lock(&lock).is_err() {
+            done
+        } else {
+            done - 1
+        }
+    };
+    let got = transcript::chosen_sized(&root.0, ID, &folder, None, 0, &clock, Some(30.0 * MIN));
+    assert_eq!(got.unwrap().unwrap().revision, pin);
+}
+#[test]
+fn zero_wait_ignores_an_end_time_ahead_of_the_clock() {
+    let (root, _, s) = setup(30.0 * MIN, -60_000);
+    pending(&root.0);
+    let (fake, got) = notes(&root.0, &s);
+    assert!(fake.calls[0].0.contains(PRIVATE));
+    assert_eq!(got, reasons(Reason::EnglishFirst));
+}
+#[test]
+fn long_meeting_without_a_router_record_is_still_english_first() {
+    let (root, _, s) = setup(30.0 * MIN, 1_000);
+    let (_, got) = notes(&root.0, &s);
+    assert_eq!(got, reasons(Reason::EnglishFirst));
+}
+#[test]
+fn the_five_minute_limit_is_compared_at_full_precision() {
+    let (root, folder, s) = setup(5.0 * MIN, 1_000);
+    pending(&root.0);
+    assert!(notes(&root.0, &s).0.calls.is_empty());
+    release(&root.0, &folder, "te", false);
+    // The waiting job is retried after one second.
+    std::thread::sleep(Duration::from_millis(1100));
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(&root.0, &s, &mut fake);
+    assert!(fake.calls[0].0.contains("తెలుగు selected revision"));
+    let (root, _, s) = setup(5.0 * MIN + 0.5, 1_000);
+    pending(&root.0);
+    assert_eq!(notes(&root.0, &s).1, reasons(Reason::EnglishFirst));
+}
+#[test]
+fn wait_settings_outside_their_range_are_refused() {
+    let (root, folder, _) = setup(4.0 * MIN, 1_000);
+    let path = root.0.join("config.json");
+    let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    c["engine_settings"]["stages"]["notes_wait_seconds"] = 600.into();
+    fs::write(path, c.to_string()).unwrap();
+    let got = transcript::chosen_sized(&root.0, ID, &folder, None, 0, &|| 1, Some(4.0 * MIN));
+    assert!(got.is_err());
 }

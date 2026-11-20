@@ -519,10 +519,8 @@ fn process(
         &folder,
         job.transcript_revision.as_deref(),
         end.unwrap_or(job.updated_at),
-        now(),
-        duration
-            .or_else(|| end.zip(started).map(|(e, s)| e.saturating_sub(s) as f64))
-            .map(|d| d as u64),
+        &now,
+        duration.or_else(|| end.zip(started).map(|(e, s)| e.saturating_sub(s) as f64)),
     )?;
     if let Some(selection) = &routed {
         job.transcript_revision = Some(selection.revision.clone());

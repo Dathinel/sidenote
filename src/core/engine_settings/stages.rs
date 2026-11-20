@@ -140,7 +140,7 @@ impl StageSettings {
         "stages.all_models",
         "stages.routing_mode",
     ];
-    pub(super) fn errors(&self) -> Vec<&'static str> {
+    pub(crate) fn errors(&self) -> Vec<&'static str> {
         let value = serde_json::to_value(self).expect("serializable stage settings");
         Self::FIELDS
             .iter()

@@ -55,7 +55,7 @@ impl Reason {
                 "Language routing missed the Stop deadline. Notes use the captured Hex transcript."
             }
             Self::EnglishFirst => {
-                "Notes use the English Hex captured. Hindi and Telugu passes are still running."
+                "Notes use the English Hex captured, not Hindi and Telugu passes."
             }
         }.into()
     }
