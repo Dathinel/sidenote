@@ -1,9 +1,11 @@
 use super::*;
 mod authorization;
+#[cfg(windows)]
 mod busy;
+#[cfg(windows)]
 mod failed;
 mod payment;
-#[cfg(feature = "asr-runtime")]
+#[cfg(all(windows, feature = "asr-runtime"))]
 mod producer;
 mod qualification;
 use crate::core::meeting_router::{
@@ -11,11 +13,7 @@ use crate::core::meeting_router::{
     batches::{self, *},
     jobs, pieces,
 };
-use std::{
-    io::Read,
-    process::Command,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{io::Read, process::Command};
 
 fn child(mode: &str) -> Command {
     let mut c = Command::new(std::env::current_exe().unwrap());
@@ -33,20 +31,22 @@ fn fixture_child() {
     let Some(mode) = std::env::args().skip_while(|a| a != "--skip").nth(1) else {
         return;
     };
+    #[cfg(windows)]
     if mode == "recognizer-failed" {
         let mut start = String::new();
         std::io::stdin().read_line(&mut start).unwrap();
         assert_eq!(start, "start\n");
         std::process::exit(23);
     }
+    #[cfg(windows)]
     if let Some(work) = mode.strip_prefix("router-failed|") {
         failed::router_child(Path::new(work));
     }
-    #[cfg(feature = "asr-runtime")]
+    #[cfg(all(windows, feature = "asr-runtime"))]
     if let Some(work) = mode.strip_prefix("router-produced|") {
         producer::router_child(Path::new(work));
     }
-    #[cfg(feature = "asr-runtime")]
+    #[cfg(all(windows, feature = "asr-runtime"))]
     if mode == "recognizer" {
         let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
         let mut lines = std::io::BufRead::lines(std::io::stdin().lock());
@@ -62,7 +62,7 @@ fn fixture_child() {
     }
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
-    let (purpose, path) = mode.split_once('|').unwrap_or(("notes", &mode));
+    let (purpose, path) = mode.split_once('|').unwrap();
     let root = PathBuf::from(path);
     if purpose == "capability" {
         qualification::capability_child(&root, &input);
@@ -105,17 +105,7 @@ fn fixture_child() {
         );
         std::process::exit(0);
     }
-    let tasks = input.contains("## Known projects");
-    fs::write(
-        root.join(if tasks { "tasks-input" } else { "notes-input" }),
-        input,
-    )
-    .unwrap();
-    println!(
-        "{}",
-        serde_json::json!({"type":"result","is_error":false,"result":if tasks { sorted() } else { summary() }})
-    );
-    std::process::exit(0);
+    panic!("unexpected fixture mode {purpose}");
 }
 struct Recognizers;
 impl Recognizer for Recognizers {
@@ -139,7 +129,7 @@ impl EnglishBridge for Recognizers {
     }
 }
 fn fixture() -> (Temp, PathBuf, NotesSettings) {
-    let (root, folder, settings) = routing::setup();
+    let (root, folder, settings) = routing_setup();
     let raw = (0..3).map(|i| serde_json::json!({"start_ms":i*1000,"end_ms":(i+1)*1000,"source":"system","text":vec![format!("baseline{i}");25].join(" ")}).to_string()).collect::<Vec<_>>().join("\n");
     fs::write(folder.join("transcript.ndjson"), raw).unwrap();
     crate::core::asr::write_wav(&folder.join("system.wav"), &vec![0.0; 48000]).unwrap();
@@ -169,17 +159,22 @@ fn fixture() -> (Temp, PathBuf, NotesSettings) {
         serde_json::from_value(serde_json::json!({"track":"system","piece":manifest.tracks[0].pieces[0].id,"wav":wav,"range":{"context":[a,b],"members":[[0,[a,b]]],"language":lang},"model_id":format!("fixture-{lang}"),"model_sha256":"a".repeat(64)})).unwrap()
     }).collect();
     let plan = batches::spool(&work, ranges).unwrap();
+    #[cfg(windows)]
     batches::run(&work, &plan, &mut Recognizers, &mut Recognizers).unwrap();
+    #[cfg(target_os = "linux")]
+    batches::run_fixture(&work, &plan, &mut Recognizers, &mut Recognizers).unwrap();
     let output = work.join("output.json");
-    jobs::BatchOutput {
-        generation: generation.to_string(),
-        source_revision: source.clone(),
-        plan,
-        manifest,
-        fallbacks: Vec::new(),
-        english_transport: serde_json::Value::Null,
-    }
-    .publish(&output)
+    store_io::write(
+        &output,
+        &jobs::BatchOutput {
+            generation: generation.to_string(),
+            source_revision: source.clone(),
+            plan,
+            manifest,
+            fallbacks: Vec::new(),
+            english_transport: serde_json::Value::Null,
+        },
+    )
     .unwrap();
     jobs::commit_batches(&root.0, ID, generation, &source, &baseline).unwrap();
     (root, folder, settings)
@@ -249,10 +244,9 @@ fn boundary(root: &Path) -> Boundary {
             "{}|{}",
             if capability {
                 "capability"
-            } else if translating {
-                "translation"
             } else {
-                "notes"
+                assert!(translating, "unexpected subprocess: {args:?}");
+                "translation"
             },
             root.display()
         );
@@ -268,15 +262,60 @@ fn boundary(root: &Path) -> Boundary {
     let _ = crate::core::runner_process::TEST_CHILD.with(|c| c.replace(Some(Box::new(factory))));
     Boundary
 }
+// Keep the real translation subprocess and run the notes helper directly.
+struct FixtureNotes {
+    root: PathBuf,
+    cli: helper::Cli,
+}
+
+impl Run for FixtureNotes {
+    fn translate(
+        &mut self,
+        snapshot: &super::super::translation::Snapshot,
+        prompt: String,
+        end: std::time::Instant,
+    ) -> Result<String, &'static str> {
+        self.cli.translate(snapshot, prompt, end)
+    }
+
+    fn installed(&self, _: Helper) -> bool {
+        true
+    }
+
+    fn run(
+        &mut self,
+        helper: Helper,
+        _: &str,
+        prompt: String,
+        _: Duration,
+    ) -> Result<String, Failure> {
+        if !helper::authorized(&self.root, helper)? {
+            return Err(Failure::Consent);
+        }
+        let tasks = prompt.contains("## Known projects");
+        fs::write(
+            self.root
+                .join(if tasks { "tasks-input" } else { "notes-input" }),
+            prompt,
+        )
+        .unwrap();
+        Ok(if tasks { sorted() } else { summary() })
+    }
+}
+
 fn process(root: &Path, settings: &NotesSettings) {
+    process_in(root, &root.join("meetings"), settings);
+}
+
+fn process_in(root: &Path, meetings: &Path, settings: &NotesSettings) {
     let _boundary = boundary(root);
-    let mut cli = helper::Cli {
-        root: Some(root.to_owned()),
+    let mut run = FixtureNotes {
+        root: root.to_owned(),
+        cli: helper::Cli {
+            root: Some(root.to_owned()),
+        },
     };
-    queue::drain(root, &root.join("meetings"), &mut cli, || {
-        Ok(settings.clone())
-    })
-    .unwrap();
+    queue::drain(root, meetings, &mut run, || Ok(settings.clone())).unwrap();
 }
 #[test]
 fn translation_input_uses_released_selection() {

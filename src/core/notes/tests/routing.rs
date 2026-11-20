@@ -1,25 +1,5 @@
 use super::*;
 use crate::core::meeting_router::revision::{self, Revision};
-pub(super) fn setup() -> (Temp, PathBuf, NotesSettings) {
-    let root = Temp::new();
-    let folder = meeting(&root.0, PRIVATE);
-    let settings = settings_fixture();
-    let mut config = crate::core::Config::default();
-    config.notes = Some(settings.clone());
-    config.pipeline.profile = "experimental".into();
-    config.labs.after_stop_language_routing = true;
-    config.engine_settings.stages.routing_deadline_seconds = 360;
-    let manifest = folder.join("manifest.json");
-    let mut m: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
-    m["ended_at_ms"] = chrono::Utc::now().timestamp_millis().into();
-    fs::write(manifest, m.to_string()).unwrap();
-    fs::write(
-        root.0.join("config.json"),
-        serde_json::to_vec(&config).unwrap(),
-    )
-    .unwrap();
-    (root, folder, settings)
-}
 pub(super) fn dir(root: &Path) -> PathBuf {
     root.join("local/transcripts").join(ID)
 }
@@ -42,7 +22,7 @@ pub(super) fn selected(root: &Path, folder: &Path) -> (String, Revision) {
 }
 #[test]
 fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
-    let (root, folder, s) = setup();
+    let (root, folder, s) = routing_setup();
     let (first, data) = selected(&root.0, &folder);
     fs::write(folder.join("english-transcript.md"), "stale English file").unwrap();
     enqueue(&root.0, &s, None);
@@ -118,7 +98,7 @@ fn chosen_revision_reaches_helper_and_busy_retry_and_notes_rerun_do_no_asr() {
 #[test]
 fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
     for failed in [false, true] {
-        let (root, folder, s) = setup();
+        let (root, folder, s) = routing_setup();
         let path = root.0.join("config.json");
         let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         c["engine_settings"]["stages"]["routing_deadline_seconds"] = 1.into();
@@ -178,7 +158,7 @@ fn slow_or_failed_routing_resolves_baseline_and_late_retry_preserves_edits() {
 }
 #[test]
 fn flag_off_retains_compatibility_even_when_a_routed_revision_exists() {
-    let (root, folder, s) = setup();
+    let (root, folder, s) = routing_setup();
     let (chosen, _) = selected(&root.0, &folder);
     enqueue(&root.0, &s, None);
     let mut initial = Fake::new(vec![Ok(summary()), Ok(sorted())]);
@@ -212,7 +192,7 @@ fn flag_off_retains_compatibility_even_when_a_routed_revision_exists() {
 }
 #[test]
 fn routing_dependency_does_not_starve_another_meetings_notes() {
-    let (root, folder, s) = setup();
+    let (root, folder, s) = routing_setup();
     let other = "1793946600001-123";
     let second = root.0.join("meetings").join(other);
     fs::create_dir_all(&second).unwrap();
@@ -247,7 +227,7 @@ fn routing_dependency_does_not_starve_another_meetings_notes() {
 
 #[test]
 fn joined_parts_keep_their_language_readings_and_pin_the_combined_text() {
-    let (root, first, _) = setup();
+    let (root, first, _) = routing_setup();
     let (_, data) = selected(&root.0, &first);
     let hex = root.0.join("meetings");
     let second_id = "1793947600000-456";
