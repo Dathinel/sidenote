@@ -59,7 +59,9 @@ fn long_meeting_starts_from_english_one_second_after_the_end() {
     assert_eq!(got, reasons(Reason::EnglishFirst));
     let by = made_by(&folder);
     assert_eq!(by["language_passes"], "english_only");
-    assert!(by["transcript_revision"].is_string());
+    let job = queue::read(&root.0, ID).unwrap().unwrap();
+    let pin = job.transcript_revision.unwrap();
+    assert_eq!(by["transcript_revision"], pin.as_str());
 }
 #[test]
 fn short_meeting_uses_a_release_that_lands_inside_the_wait() {
@@ -158,12 +160,20 @@ fn the_five_minute_limit_is_compared_at_full_precision() {
     assert_eq!(notes(&root.0, &s).1, reasons(Reason::EnglishFirst));
 }
 #[test]
-fn wait_settings_outside_their_range_are_refused() {
-    let (root, folder, _) = setup(4.0 * MIN, 1_000);
-    let path = root.0.join("config.json");
-    let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    c["engine_settings"]["stages"]["notes_wait_seconds"] = 600.into();
-    fs::write(path, c.to_string()).unwrap();
-    let got = transcript::chosen_sized(&root.0, ID, &folder, None, 0, &|| 1, Some(4.0 * MIN));
-    assert!(got.is_err());
+fn wait_settings_outside_their_range_fall_back_to_the_defaults() {
+    // A short meeting at 41 s, and a long one at 1 s.
+    for (field, value, long) in [
+        ("notes_wait_seconds", 600, false),
+        ("notes_wait_max_minutes", 241, true),
+    ] {
+        let (minutes, ago) = [(4.0, 41_000), (30.0, 1_000)][long as usize];
+        let reason = [Reason::DeadlineExpired, Reason::EnglishFirst][long as usize];
+        let (root, _, s) = setup(minutes * MIN, ago);
+        let path = root.0.join("config.json");
+        let mut c: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        c["engine_settings"]["stages"][field] = value.into();
+        fs::write(path, c.to_string()).unwrap();
+        pending(&root.0);
+        assert_eq!(notes(&root.0, &s).1, reasons(reason));
+    }
 }

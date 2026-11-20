@@ -46,18 +46,22 @@ pub(crate) fn notes_input_sized(
         return Ok(Some((id, r.transcript, reasons)));
     }
     // An unknown length keeps the old wait; a known one waits only while short (0 minutes: never).
-    let stages = &config.engine_settings.stages;
+    let mut stages = config.engine_settings.stages.clone();
+    // A saved wait outside its range falls back to its default; notes must still publish.
+    let (bad, def) = (stages.errors(), Config::default().engine_settings.stages);
+    if bad.contains(&"stages.notes_wait_seconds") {
+        stages.notes_wait_seconds = def.notes_wait_seconds;
+    }
+    if bad.contains(&"stages.notes_wait_max_minutes") {
+        stages.notes_wait_max_minutes = def.notes_wait_max_minutes;
+    }
     let max_ms = f64::from(stages.notes_wait_max_minutes) * 60_000.0;
     let seconds = match duration_ms {
         None => stages.routing_deadline_seconds,
         Some(ms) if ms <= max_ms && max_ms > 0.0 => stages.notes_wait_seconds,
         Some(_) => 0,
     };
-    let bad_wait = stages
-        .errors()
-        .iter()
-        .any(|f| f.starts_with("stages.notes_wait"));
-    if bad_wait || seconds > 3600 || (seconds == 0 && duration_ms.is_none()) {
+    if seconds > 3600 || (seconds == 0 && duration_ms.is_none()) {
         return Err(store_io::invalid("Invalid routing deadline"));
     }
     // A zero wait never defers, whatever the clock says; the release check below stays separate.
