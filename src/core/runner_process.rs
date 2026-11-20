@@ -21,6 +21,8 @@ pub(super) enum Invocation<'a> {
         payment: &'a str,
         authorize: &'a dyn Fn() -> bool,
     },
+    /// Tool-free Claude on the user's subscription: no qualification, no capability self-report.
+    ClaudeTranslation(&'a Runner, &'a dyn Fn() -> bool),
 }
 #[cfg(test)]
 type ChildFactory = Box<dyn Fn(&std::process::Command) -> std::process::Command>;
@@ -449,9 +451,18 @@ pub(super) fn run_classified(
             }
             (&prepared, true)
         }
+        Invocation::ClaudeTranslation(runner, _) => {
+            translation::claude_guard(runner)?;
+            (runner, false)
+        }
     };
+    #[cfg(all(test, target_os = "linux"))]
+    let fixture = matches!(invocation, Invocation::ClaudeTranslation(..))
+        && TEST_CHILD.with(|c| c.borrow().is_some());
+    #[cfg(not(all(test, target_os = "linux")))]
+    let fixture = false;
     #[cfg(target_os = "linux")]
-    if cfg!(target_os = "linux") {
+    if cfg!(target_os = "linux") && !fixture {
         return Err(RunnerFailure {
             category: "HELPER_UNAVAILABLE_LINUX",
             exit: None,
@@ -461,7 +472,11 @@ pub(super) fn run_classified(
     let _update_activity = crate::updates::activity()
         .map_err(|_| "An update is being installed. Try again after restart.")?;
     let harness = runners::kind(runner)?;
-    let program = runners::executable(runner)?;
+    let program = if fixture {
+        std::env::current_exe().map_err(|_| "Fixture executable unavailable")?
+    } else {
+        runners::executable(runner)?
+    };
     let qualification = if text_only {
         Some(translation::qualification::admit(&program, runner)?)
     } else {
@@ -531,11 +546,17 @@ pub(super) fn run_classified(
             runner.model.as_deref().unwrap_or(""),
         )?;
     }
+    if matches!(invocation, Invocation::ClaudeTranslation(..)) {
+        for name in translation::METERED_BILLING {
+            command.env_remove(name);
+        }
+    }
     #[cfg(test)]
     let mut command = TEST_CHILD
         .with(|c| c.borrow().as_ref().map(|f| f(&command)))
         .unwrap_or(command);
-    if let Invocation::Translation { authorize, .. } = invocation
+    if let Invocation::Translation { authorize, .. } | Invocation::ClaudeTranslation(_, authorize) =
+        invocation
         && !authorize()
     {
         return Err(RunnerFailure {
@@ -544,14 +565,20 @@ pub(super) fn run_classified(
             message: "Translation permission changed.".into(),
         });
     }
-    let mut child =
-        crate::platform::UserRunner::spawn(&mut command, runner.stdin).map_err(|e| {
-            format!(
-                "Could not start {} (OS error {})",
-                runner.name,
-                e.raw_os_error().unwrap_or(0)
-            )
-        })?;
+    let spawn = crate::platform::UserRunner::spawn;
+    #[cfg(all(test, target_os = "linux"))]
+    let spawn = if fixture {
+        crate::platform::UserRunner::spawn_fixture
+    } else {
+        spawn
+    };
+    let mut child = spawn(&mut command, runner.stdin).map_err(|e| {
+        format!(
+            "Could not start {} (OS error {})",
+            runner.name,
+            e.raw_os_error().unwrap_or(0)
+        )
+    })?;
     let stdout = child
         .stdout
         .take()

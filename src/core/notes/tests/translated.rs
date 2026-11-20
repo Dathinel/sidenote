@@ -12,7 +12,7 @@ struct Translator {
     notes: Fake,
     damage: Damage,
     calls: Vec<Vec<String>>,
-    budgets: Vec<u32>,
+    budgets: Vec<Duration>,
     pause: Duration,
     time_out_call: Option<usize>,
 }
@@ -37,8 +37,14 @@ impl Run for Translator {
     fn run(&mut self, h: Helper, m: &str, p: String, t: Duration) -> Result<String, Failure> {
         self.notes.run(h, m, p, t)
     }
-    fn translate(&mut self, call: &Snapshot, prompt: String) -> Result<String, &'static str> {
-        self.budgets.push(call.deadline_seconds);
+    fn translate(
+        &mut self,
+        _: &Snapshot,
+        prompt: String,
+        end: std::time::Instant,
+    ) -> Result<String, &'static str> {
+        self.budgets
+            .push(end.saturating_duration_since(std::time::Instant::now()));
         std::thread::sleep(self.pause);
         if self.time_out_call == Some(self.budgets.len() - 1) {
             return Err("translation_timed_out");
@@ -193,8 +199,9 @@ fn stalled_batch_falls_back_whole_inside_one_budget() {
     drain_with(&root.0, &settings, &mut run);
     let job = queue::read(&root.0, ID).unwrap().unwrap();
     assert_eq!(job.translation.unwrap().reason, "translation_timed_out");
-    // The second call got what was left of the 2 seconds, not a fresh 2 seconds.
-    assert_eq!(run.budgets, [2, 1]);
+    assert_eq!(run.budgets.len(), 2);
+    assert!(run.budgets[0] <= Duration::from_secs(2));
+    assert!(run.budgets[1] > Duration::ZERO && run.budgets[1] <= Duration::from_millis(900));
     let original = transcript::chosen(
         &root.0,
         ID,
@@ -218,3 +225,6 @@ fn more_than_sixteen_batches_are_refused_before_any_call() {
     assert_eq!(reason, "translation_input_limit");
     assert!(run.calls.is_empty());
 }
+
+#[cfg(target_os = "linux")]
+mod claude;

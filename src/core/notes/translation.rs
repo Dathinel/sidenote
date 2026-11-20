@@ -113,7 +113,7 @@ pub(super) fn prepare(
         "translation_consent_changed"
     } else if snapshot.location != "hosted" || snapshot.payment != "subscription" {
         "provider_policy_unavailable"
-    } else if snapshot.helper == Helper::OpenCode {
+    } else if matches!(snapshot.helper, Helper::OpenCode | Helper::Claude) {
         "translation_pending"
     } else {
         "helper_not_text_only"
@@ -208,19 +208,13 @@ fn translate(
     }
     let segments = selection.transcript.iter().flat_map(|t| &t.segments);
     let selected = segments.enumerate().filter(|(_, s)| s.translate);
-    let (started, mut english) = (Instant::now(), BTreeMap::new());
-    let budget = Duration::from_secs(u64::from(snapshot.deadline_seconds));
+    let end = Instant::now() + Duration::from_secs(u64::from(snapshot.deadline_seconds));
+    let mut english = BTreeMap::new();
     for batch in batches(selected.collect(), snapshot.batch_chars)? {
-        // One time limit for the whole meeting: each call may use only what is left of it.
-        let left = budget.saturating_sub(started.elapsed());
-        if left.is_zero() {
+        if Instant::now() >= end {
             return Err("translation_timed_out");
         }
-        let call = Snapshot {
-            deadline_seconds: left.as_secs_f64().ceil() as u32,
-            ..snapshot.clone()
-        };
-        english.extend(translate_batch(selection, &call, &batch, run)?);
+        english.extend(translate_batch(selection, snapshot, &batch, end, run)?);
     }
     Ok(english)
 }
@@ -228,6 +222,7 @@ fn translate_batch(
     selection: &Selection,
     snapshot: &Snapshot,
     batch: &[(usize, &Segment)],
+    end: Instant,
     run: &mut impl super::helper::Run,
 ) -> Result<Vec<(usize, String)>, &'static str> {
     let ids: Vec<_> = batch
@@ -245,7 +240,7 @@ fn translate_batch(
     if prompt.len() > 96 * 1024 {
         return Err("translation_input_limit");
     }
-    let reply = run.translate(snapshot, prompt)?;
+    let reply = run.translate(snapshot, prompt, end)?;
     let english = accept(&reply, &ids).ok_or("translation_reply_invalid")?;
     Ok(batch.iter().map(|(i, _)| *i).zip(english).collect())
 }

@@ -103,6 +103,7 @@ pub(super) trait Run {
         &mut self,
         _snapshot: &super::translation::Snapshot,
         _prompt: String,
+        _end: Instant,
     ) -> Result<String, &'static str> {
         Err("helper_not_text_only")
     }
@@ -164,31 +165,39 @@ impl Run for Cli {
         &mut self,
         snapshot: &super::translation::Snapshot,
         prompt: String,
+        end: Instant,
     ) -> Result<String, &'static str> {
         let root = self.root.as_ref().ok_or("translation_consent_changed")?;
         if !crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c)) {
             return Err("translation_consent_changed");
         }
-        if snapshot.helper != Helper::OpenCode {
+        if !matches!(snapshot.helper, Helper::OpenCode | Helper::Claude) {
             return Err("helper_not_text_only");
         }
         let scratch = Scratch::new().map_err(|_| "translation_storage_failed")?;
         let authorize =
             || crate::core::Config::load_existing(root).is_ok_and(|c| snapshot.authorized_by(&c));
-        // One limit covers the capability check and the call itself.
-        let end = Instant::now() + Duration::from_secs(u64::from(snapshot.deadline_seconds));
+        let claude =
+            (snapshot.helper == Helper::Claude).then(|| runner(Helper::Claude, &snapshot.model));
         let invoke = |capability, input| {
             runner_process::run_classified(
-                runner_process::Invocation::Translation {
-                    model: &snapshot.model,
-                    capability,
-                    location: &snapshot.location,
-                    payment: &snapshot.payment,
-                    authorize: &authorize,
+                match &claude {
+                    Some(runner) => {
+                        runner_process::Invocation::ClaudeTranslation(runner, &authorize)
+                    }
+                    None => runner_process::Invocation::Translation {
+                        model: &snapshot.model,
+                        capability,
+                        location: &snapshot.location,
+                        payment: &snapshot.payment,
+                        authorize: &authorize,
+                    },
                 },
                 input,
                 &scratch.0,
-                end.saturating_duration_since(Instant::now()),
+                end.checked_duration_since(Instant::now())
+                    .filter(|left| !left.is_zero())
+                    .ok_or("translation_timed_out")?,
                 false,
                 |_| {},
             )
@@ -204,6 +213,9 @@ impl Run for Cli {
                 _ => "helper_unsupported",
             })
         };
+        if claude.is_some() {
+            return invoke(None, prompt);
+        }
         let capability = invoke(
             None,
             serde_json::json!({"model":snapshot.model}).to_string(),

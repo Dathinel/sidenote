@@ -2,14 +2,34 @@ use super::*;
 use serde_json::json;
 pub(super) mod qualification;
 
-pub(super) fn runner(model: &str) -> Result<Runner, RunnerFailure> {
-    if model.is_empty()
-        || model.starts_with('-')
-        || model.len() > 200
-        || !model
+fn valid_model(model: &str) -> bool {
+    !model.is_empty()
+        && !model.starts_with('-')
+        && model.len() <= 200
+        && model
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_/.:".contains(&b))
+}
+/// Only the tool-free Claude runner, on a plain model name, may carry meeting text here.
+pub(super) fn claude_guard(runner: &Runner) -> Result<(), RunnerFailure> {
+    runners::validate(runner)?;
+    if runners::kind(runner)? != "claude"
+        || runner.tools
+        || !valid_model(runner.model.as_deref().unwrap_or_default())
     {
+        return Err("Invalid translation model".into());
+    }
+    Ok(())
+}
+/// Names that move Claude from the subscription to metered billing or a cloud account.
+pub(super) const METERED_BILLING: [&str; 4] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+];
+pub(super) fn runner(model: &str) -> Result<Runner, RunnerFailure> {
+    if !valid_model(model) {
         return Err("Invalid translation model".into());
     }
     Ok(Runner {

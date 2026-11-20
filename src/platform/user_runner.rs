@@ -43,6 +43,17 @@ impl UserRunner {
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         return Err(super::unavailable());
+        #[cfg(target_os = "linux")]
+        let command = &mut command;
+        Self::spawn_piped(command, piped_stdin)
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn spawn_fixture(command: &mut Command, piped_stdin: bool) -> io::Result<Self> {
+        Self::spawn_piped(command, piped_stdin)
+    }
+
+    fn spawn_piped(command: &mut Command, piped_stdin: bool) -> io::Result<Self> {
         let mut child = command
             .stdin(if piped_stdin {
                 Stdio::piped()
