@@ -127,8 +127,11 @@ fn recording_at_click_refuses_download_and_resume_and_leaves_the_partial() {
         f.runtime.state.models.store.stored_bytes(HINDI).unwrap(),
         1000
     );
+    // A search that matches nothing must not hide the card that says why.
+    assert_card_listed_under_unmatched_search(&mut f, HINDI);
 
     // Nothing retries by itself and nothing stays blocked: the next click starts it.
+    f.runtime.state.hex.shell.model_query.text.clear();
     set(&f.live, Ok(engine("idle", false)));
     click_download(&mut f);
     assert_eq!(f.installs.recv_timeout(WAIT).unwrap(), HINDI);
@@ -154,14 +157,42 @@ fn unreadable_hex_state_refuses_with_its_own_line() {
     }
 }
 
+fn assert_card_listed_under_unmatched_search(f: &mut Fixture, id: &str) {
+    f.runtime.state.hex.shell.model_query.text = "unmatched search".into();
+    f.runtime.invalidate();
+    f.runtime.frame(0.01);
+    assert!(
+        f.runtime.find(&format!("speech-model-{id}")).is_some(),
+        "{id}"
+    );
+}
+
 #[test]
-fn idle_hex_starts_the_download() {
+fn busy_hex_states_refuse_with_the_recording_line() {
+    for state in ["paused", "stopping", "finishing"] {
+        let mut f = fixture(Ok(engine(state, false)), |_| {});
+        click_download(&mut f);
+        let line = finish(&mut f.runtime.state, HINDI).unwrap_err().to_string();
+        assert_eq!(line, RECORDING_LINE, "{state}");
+        assert!(f.installs.try_recv().is_err(), "{state} started");
+    }
+}
+
+#[test]
+fn every_finished_hex_state_starts_the_download() {
     let mut f = fixture(recording(), |_| {});
     f.runtime.state.models.status_fixture = Some(always_idle());
     click_download(&mut f);
     assert_eq!(f.installs.recv_timeout(WAIT).unwrap(), HINDI);
     finish(&mut f.runtime.state, HINDI).unwrap();
     assert!(f.runtime.state.models.errors.is_empty());
+    for state in ["idle", "stopped", "complete", "finished", "transcribing"] {
+        let mut f = fixture(Ok(engine(state, false)), |_| {});
+        click_download(&mut f);
+        assert_eq!(f.installs.recv_timeout(WAIT).unwrap(), HINDI, "{state}");
+        finish(&mut f.runtime.state, HINDI).unwrap();
+        assert!(f.runtime.state.models.errors.is_empty(), "{state}");
+    }
 }
 
 /// Writes what a finished install leaves: every file at its size, then the receipt last.

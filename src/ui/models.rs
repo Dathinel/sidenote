@@ -732,7 +732,8 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                         || !cfg!(feature = "asr-runtime"))
                     && (models.installed.contains(m.id) || models.partial.contains(m.id));
             }
-            if cpu_language && !models.pack_queue.is_empty() {
+            // A queued pack, or any card that has to show an error, stays listed whatever the search says.
+            if (cpu_language && !models.pack_queue.is_empty()) || models.errors.contains_key(m.id) {
                 return true;
             }
             if m.role == model_catalog::Role::LanguageId && !cpu_language {
