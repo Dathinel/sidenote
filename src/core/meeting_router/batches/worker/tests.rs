@@ -254,7 +254,10 @@ fn killing_owner_reaps_eager_worker_and_grandchild() {
     // exit by themselves 60 s after their own start. So any exit seen before `cap` is the job
     // reaping them, however slowly the loaded machine tears the owner down.
     let cap = std::time::Instant::now() + Duration::from_secs(45);
-    let left = || cap.saturating_duration_since(std::time::Instant::now()).as_millis() as u32;
+    let left = || {
+        cap.saturating_duration_since(std::time::Instant::now())
+            .as_millis() as u32
+    };
     let owner_job = crate::platform::ProcessJob::new().unwrap();
     let owner = owner_job.spawn(&c).unwrap();
     ready.wait(&owner.handle);
