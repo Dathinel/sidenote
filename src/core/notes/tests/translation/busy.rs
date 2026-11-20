@@ -40,7 +40,7 @@ fn busy_retry_preserves_translation_snapshot_and_notice() {
         "off",
         "sorting",
     ] {
-        let (root, folder, settings) = routing::setup();
+        let (root, folder, settings) = routing_setup();
         routing::selected(&root.0, &folder);
         let mut config = crate::core::Config::load_in(&root.0).unwrap();
         config.engine_settings.steps.translation = true;
@@ -127,7 +127,7 @@ fn busy_retry_preserves_translation_snapshot_and_notice() {
 
 #[test]
 fn manual_retry_uses_translation_snapshot_for_new_capture() {
-    let (root, folder, settings) = routing::setup();
+    let (root, folder, settings) = routing_setup();
     let (first, _) = routing::selected(&root.0, &folder);
     let mut config = crate::core::Config::load_in(&root.0).unwrap();
     config.engine_settings.steps.translation = true;

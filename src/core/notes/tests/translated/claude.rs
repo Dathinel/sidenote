@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::runner_process::TEST_CHILD;
-use std::{process::Command, time::Instant};
+use serde_json::json;
+use std::{io::Read, process::Command, time::Instant};
 
 const BILLING_NAMES: [&str; 5] = [
     "ANTHROPIC_API_KEY",
@@ -10,36 +11,98 @@ const BILLING_NAMES: [&str; 5] = [
     "oThEr_Service_TOKEN",
 ];
 
-const REPLY: &str = r#"
-import json, os, subprocess, sys, time
-from pathlib import Path
-Path(sys.argv[1]).touch()
-mode = sys.argv[2]
-assert not (set(sys.argv[3:]) | {"HOME", "PATH"}) & os.environ.keys()
-_, data = sys.stdin.read().split("Selected transcript data:\n", 1)
-segments = [{"id": line["id"], "text_en": "English fixture"} for line in json.loads(data)]
-text = json.dumps({"segments": segments})
-reply = {"type": "result", "subtype": "success", "is_error": False, "result": text}
-assistant = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
-if mode == "partial":
-    reply = assistant
-if mode == "tools":
-    assistant["message"]["content"].append({"type": "tool_use", "name": "Read"})
-    print(json.dumps(assistant))
-if mode == "error":
-    print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True}))
-if mode == "missing":
-    del reply["is_error"]
-if mode == "malformed":
-    reply["is_error"] = "false"
-if mode == "refusal":
-    reply["stop_reason"] = "refusal"
-if mode == "late":
-    time.sleep(1.2)
-if mode == "pipes":
-    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(3)"])
-print(json.dumps(reply))
-"#;
+const RELEASE_PIPES: &str = "release-pipes";
+
+fn child(mode: &str, marker: &Path) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "core::notes::tests::translated::claude::fixture_child",
+            "--nocapture",
+            "--skip",
+            &format!("claude-fixture:{mode}"),
+        ])
+        .arg("--skip")
+        .arg(marker);
+    command
+}
+
+#[test]
+fn fixture_child() {
+    let mut args = std::env::args_os();
+    let Some(mode) = args.find_map(|arg| {
+        arg.to_str()?
+            .strip_prefix("claude-fixture:")
+            .map(str::to_owned)
+    }) else {
+        return;
+    };
+    assert_eq!(args.next().as_deref().unwrap(), "--skip");
+    let marker = PathBuf::from(args.next().unwrap());
+    if mode == "hold-pipes" {
+        let root = marker.parent().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while root.is_dir() && !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        return;
+    }
+    fs::write(&marker, "").unwrap();
+    for name in BILLING_NAMES.into_iter().chain(["HOME", "PATH"]) {
+        assert!(std::env::var_os(name).is_none(), "{name} leaked");
+    }
+    let mut prompt = String::new();
+    std::io::stdin().read_to_string(&mut prompt).unwrap();
+    let (_, data) = prompt.split_once("Selected transcript data:\n").unwrap();
+    let items: Lines = serde_json::from_str(data).unwrap();
+    let segments: Lines = items
+        .iter()
+        .map(|line| json!({"id": line["id"], "text_en": "English fixture"}))
+        .collect();
+    let text = json!({"segments": segments}).to_string();
+    let mut reply =
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": text});
+    let mut content = vec![json!({"type": "text", "text": text})];
+    match mode.as_str() {
+        "partial" => {
+            reply = json!({"type": "assistant", "message": {"content": content}});
+        }
+        "tools" => {
+            content.push(json!({"type": "tool_use", "name": "Read"}));
+            eprintln!(
+                "{}",
+                json!({"type": "assistant", "message": {"content": content}})
+            );
+        }
+        "error" => {
+            eprintln!(
+                "{}",
+                json!({"type": "result", "subtype": "error_during_execution", "is_error": true})
+            );
+        }
+        "missing" => {
+            reply.as_object_mut().unwrap().remove("is_error");
+        }
+        "malformed" => reply["is_error"] = "false".into(),
+        "refusal" => reply["stop_reason"] = "refusal".into(),
+        "late" => std::thread::sleep(Duration::from_millis(1200)),
+        "pipes" => {
+            let mut holder = child("hold-pipes", &marker.with_file_name(RELEASE_PIPES));
+            holder.stdin(std::process::Stdio::null());
+            hold_pipes(holder);
+        }
+        "ok" => {}
+        _ => panic!("unexpected Claude fixture mode {mode}"),
+    }
+    eprintln!("{reply}");
+    std::process::exit(0);
+}
+
+fn hold_pipes(mut command: Command) {
+    let mut holder = command.spawn().unwrap();
+    std::thread::spawn(move || holder.wait());
+}
 
 struct Fixture {
     cli: helper::Cli,
@@ -98,12 +161,7 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
         if mode == "delayed" {
             std::thread::sleep(Duration::from_millis(1200));
         }
-        let mut child = Command::new("/usr/bin/python3");
-        child
-            .args(["-c", REPLY])
-            .arg(path.join("claude-started"))
-            .arg(mode)
-            .args(BILLING_NAMES);
+        let mut child = child(mode, &path.join("claude-started"));
         for name in BILLING_NAMES {
             child.env(name, "fixture");
         }
@@ -128,6 +186,9 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
     assert!(matches!(job.state, JobState::Done { .. }));
     if timed {
         assert!(start.elapsed() < Duration::from_secs(2), "{mode}");
+    }
+    if mode == "pipes" {
+        fs::write(root.0.join(RELEASE_PIPES), "").unwrap();
     }
     if mode != "ok" {
         let notes = &run.notes.calls[0].0;

@@ -464,9 +464,9 @@ pub(super) fn run_classified(
             (runner, false)
         }
     };
-    #[cfg(all(test, target_os = "linux"))]
-    let fixture = claude && TEST_CHILD.with(|c| c.borrow().is_some());
-    #[cfg(not(all(test, target_os = "linux")))]
+    #[cfg(test)]
+    let fixture = TEST_CHILD.with(|c| c.borrow().is_some());
+    #[cfg(not(test))]
     let fixture = false;
     // No shipped launcher confines a verified Claude binary and its subscription context.
     if claude && !fixture {
@@ -487,6 +487,12 @@ pub(super) fn run_classified(
         std::env::current_exe().map_err(|_| "Fixture executable unavailable")?
     } else {
         runners::executable(runner)?
+    };
+    #[cfg(test)]
+    let program = if text_only && fixture {
+        translation::qualification::fixture_program(working_dir)?
+    } else {
+        program
     };
     let qualification = if text_only {
         Some(translation::qualification::admit(&program, runner)?)
@@ -604,6 +610,13 @@ pub(super) fn run_classified(
         .stderr
         .take()
         .ok_or("Could not capture the CLI status")?;
+    // The native Claude test child uses stderr for protocol lines and stdout for libtest.
+    #[cfg(test)]
+    let (stdout, stderr): (Box<dyn Read + Send>, Box<dyn Read + Send>) = if claude && fixture {
+        (Box::new(stderr), Box::new(stdout))
+    } else {
+        (Box::new(stdout), Box::new(stderr))
+    };
     let writer = child
         .stdin
         .take()

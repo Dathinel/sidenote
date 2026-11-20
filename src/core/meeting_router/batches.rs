@@ -188,6 +188,23 @@ pub fn run(
         )
     }
 }
+#[cfg(all(test, target_os = "linux"))]
+pub(in crate::core) fn run_fixture(
+    root: &Path,
+    plan: &Plan,
+    native: &mut impl NativeLoader,
+    bridge: &mut impl EnglishBridge,
+) -> Result<()> {
+    run_batches(
+        root,
+        plan,
+        native,
+        bridge,
+        None,
+        &mut |_, _, _| Ok(()),
+        true,
+    )
+}
 #[cfg(windows)]
 pub fn run_until(
     root: &Path,

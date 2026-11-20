@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::{Arc, atomic::AtomicBool};
 
 pub(super) fn router_child(work: &Path) -> ! {
     let request: serde_json::Value = store_io::read(&work.join("request.json")).unwrap();
@@ -71,16 +72,7 @@ fn recognizer_failure_uses_complete_hex_baseline() {
     .unwrap()
     .unwrap();
     queue::enqueue_in(&root, &meetings, ID, None, &settings).unwrap();
-    let _boundary = boundary(&root);
-    queue::drain(
-        &root,
-        &meetings,
-        &mut helper::Cli {
-            root: Some(root.clone()),
-        },
-        || Ok(settings.clone()),
-    )
-    .unwrap();
+    process_in(&root, &meetings, &settings);
     let job = queue::read(&root, ID).unwrap().unwrap();
     assert!(matches!(job.state, JobState::Done { .. }));
     let disposition = job.translation.unwrap();

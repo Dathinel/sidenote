@@ -85,16 +85,7 @@ fn after_stop_producer_reaches_translation_and_notes() {
         "parent must accept the producer receipt"
     );
     queue::enqueue_in(&root, &meetings, ID, None, &settings).unwrap();
-    let _boundary = boundary(&root);
-    queue::drain(
-        &root,
-        &meetings,
-        &mut helper::Cli {
-            root: Some(root.clone()),
-        },
-        || Ok(settings.clone()),
-    )
-    .unwrap();
+    process_in(&root, &meetings, &settings);
     let job = queue::read(&root, ID).unwrap().unwrap();
     assert!(matches!(job.state, JobState::Done { .. }));
     let selection = transcript::chosen(

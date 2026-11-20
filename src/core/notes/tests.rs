@@ -12,7 +12,7 @@ mod review;
 #[cfg(windows)]
 mod routing;
 mod translated;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod translation;
 use crate::core::{
     agent_instructions::{self, Agent},
@@ -111,6 +111,27 @@ impl Run for Fake {
 }
 const ID: &str = "1793946600000-123";
 const PRIVATE: &str = "The confidential fixture sentence must never appear in logs.";
+#[cfg(any(windows, target_os = "linux"))]
+fn routing_setup() -> (Temp, PathBuf, NotesSettings) {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(settings.clone());
+    config.pipeline.profile = "experimental".into();
+    config.labs.after_stop_language_routing = true;
+    config.engine_settings.stages.routing_deadline_seconds = 360;
+    let manifest = folder.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    m["ended_at_ms"] = chrono::Utc::now().timestamp_millis().into();
+    fs::write(manifest, m.to_string()).unwrap();
+    fs::write(
+        root.0.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    (root, folder, settings)
+}
 fn settings_fixture() -> NotesSettings {
     NotesSettings {
         helper: Some(Helper::Claude),

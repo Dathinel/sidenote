@@ -51,7 +51,7 @@ pub(in crate::core::runner_process) fn admit(
 ) -> Result<Qualified, RunnerFailure> {
     let records: Vec<Receipt> =
         serde_json::from_str(include_str!("qualified.json")).map_err(|_| refusal())?;
-    // Test trust anchor is only the native fixture binary, never an installed provider.
+    // Test receipts pin the synthetic fixture identity, never an installed provider.
     #[cfg(test)]
     let records = records
         .into_iter()
@@ -87,12 +87,24 @@ pub(in crate::core::runner_process) fn admit(
     })
 }
 #[cfg(test)]
+const FIXTURE_EXECUTABLE: &[u8] = b"synthetic OpenCode executable identity";
+
+#[cfg(test)]
+pub(in crate::core::runner_process) fn fixture_program(
+    work: &Path,
+) -> Result<PathBuf, RunnerFailure> {
+    // The test command factory supplies the actual child. Admission still hashes and pins this file.
+    let program = work.join("opencode-fixture");
+    fs::write(&program, FIXTURE_EXECUTABLE).map_err(|_| "Fixture executable unavailable")?;
+    Ok(program)
+}
+
+#[cfg(test)]
 fn fixture_receipts() -> Vec<Receipt> {
     static RECORDS: std::sync::OnceLock<Vec<Receipt>> = std::sync::OnceLock::new();
     RECORDS
         .get_or_init(|| {
-            let fixture =
-                hash(&mut fs::File::open(std::env::current_exe().unwrap()).unwrap()).unwrap();
+            let fixture = hex::encode(Sha256::digest(FIXTURE_EXECUTABLE));
             [
                 "translation-fixture",
                 "translation-original",
