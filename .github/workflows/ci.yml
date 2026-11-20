@@ -55,6 +55,4 @@ jobs:
       - name: Verify reproducible dependency notices
         run: powershell.exe -NoProfile -NonInteractive -File tools/dependency_notices_proof.ps1
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
-      - name: Build Sidenote and domain crate
-        run: cargo build --workspace --locked --bins --examples
       - run: cargo test --workspace --locked
