@@ -50,6 +50,9 @@ pub mod code {
     pub const MODEL: &str = "speech_pack_model_mismatch";
     pub const HASH: &str = "speech_pack_invalid_hash";
     pub const UNKNOWN: &str = "speech_pack_unknown_language";
+    pub const UNQUALIFIED: &str = "speech_pack_unqualified";
+    pub const ROUTE: &str = "speech_pack_route_mismatch";
+    pub const REVISION: &str = "speech_pack_revision_changed";
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +153,17 @@ fn variant<T: serde::de::DeserializeOwned>(id: &str) -> Option<T> {
     T::deserialize(id).ok()
 }
 
+/// One route pinned to a pack revision. A request keeps it; it is never remapped.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedRoute {
+    pub backend: Backend,
+    pub model: String,
+    pub decoder: Decoder,
+    pub revision: String,
+}
+/// Per-language pins. A refusal stays with its language and blocks only routes that use it.
+pub type RouteSnapshot = BTreeMap<String, Result<ResolvedRoute, PackRefusal>>;
+
 /// A bad pack is held with its refusal; the other packs stay usable.
 pub struct Registry {
     packs: BTreeMap<String, Result<Pack, PackRefusal>>,
@@ -182,6 +196,27 @@ impl Registry {
         match self.packs.get(language) {
             Some(pack) => pack.as_ref().map_err(Clone::clone),
             None => Err(PackRefusal::new(code::UNKNOWN, language)),
+        }
+    }
+    pub fn resolve(
+        &self,
+        language: &str,
+        backend: &str,
+        model: &str,
+    ) -> Result<ResolvedRoute, PackRefusal> {
+        let pack = self.pack(language)?;
+        if pack.readiness != Readiness::Qualified {
+            return Err(PackRefusal::new(code::UNQUALIFIED, language));
+        }
+        let (_, _, backends) = pack.decoder.contract();
+        match variant::<Backend>(backend).filter(|b| backends.contains(b)) {
+            Some(backend) if model == pack.model.id => Ok(ResolvedRoute {
+                backend,
+                model: model.into(),
+                decoder: pack.decoder,
+                revision: pack.revision.clone(),
+            }),
+            _ => Err(PackRefusal::new(code::ROUTE, language)),
         }
     }
 }
@@ -272,5 +307,32 @@ mod tests {
         let schema = invalid(br#"{"schema":2,"packs":[],"calibration":{}}"#);
         assert_eq!((&*schema.code, &*schema.subject), (REGISTRY, "schema 2"));
         assert_eq!(invalid(b"{").code, REGISTRY);
+    }
+    #[test]
+    fn a_pack_for_a_catalogued_model_is_added_with_data_alone() {
+        let marathi = json!({"language":"mr", "script":"Deva",
+            "model":"indicconformer-mr-ctc", "decoder":"ctc-tokens", "readiness":"qualified"});
+        let registry = parse(|d| d["packs"].as_array_mut().unwrap().push(marathi));
+        let route = registry.resolve("mr", "local", "indicconformer-mr-ctc");
+        let route = route.unwrap();
+        let pinned = (route.backend, route.decoder, &*route.revision);
+        let pack = registry.pack("mr").unwrap();
+        assert_eq!(
+            pinned,
+            (Backend::Local, Decoder::CtcTokens, &*pack.revision)
+        );
+        assert_ne!(route.revision, registry.pack("hi").unwrap().revision);
+        for (language, backend, model, expected) in [
+            ("mr", "hex", "indicconformer-mr-ctc", ROUTE),
+            ("mr", "local", "indicconformer-hi-ctc", ROUTE),
+            ("mr", "cloud", "indicconformer-mr-ctc", ROUTE),
+            ("ta", "local", "indicconformer-ta-ctc", UNKNOWN),
+        ] {
+            let refused = registry.resolve(language, backend, model).unwrap_err();
+            assert_eq!(refused, PackRefusal::new(expected, language));
+        }
+        let registry = parse(|d| d["packs"][1]["readiness"] = json!("experimental"));
+        let refused = registry.resolve("hi", "local", "indicconformer-hi-ctc");
+        assert_eq!(refused.unwrap_err().code, UNQUALIFIED);
     }
 }

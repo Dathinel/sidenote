@@ -1,4 +1,11 @@
-use super::super::{asr::Result, lid::LANGUAGES, model_catalog as models};
+use super::super::{
+    asr::Result,
+    lid::LANGUAGES,
+    model_catalog::{
+        self as models,
+        speech_packs::{PackRefusal, Registry, RouteSnapshot, code},
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -81,7 +88,8 @@ fn unique_routes<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_map(Routes)
 }
 impl LanguageRoutes {
-    #[cfg(windows)]
+    /// The calibrated default set. It stays fixed until calibration is keyed by language set.
+    #[cfg(any(windows, test))]
     pub(super) fn cpu_after_stop() -> Self {
         Self {
             primary: "en".into(),
@@ -200,6 +208,38 @@ impl RoutingConfig {
         }
         Ok(())
     }
+    /// Pins every language the after-stop planner can route in this mode: the forced
+    /// language, the primary when only one is declared or detection is off, else all.
+    pub fn route_snapshot(&self, registry: &Registry) -> RouteSnapshot {
+        let Some(routes) = &self.after_stop_languages else {
+            return RouteSnapshot::new();
+        };
+        let declared = std::iter::once(&routes.primary).chain(&routes.supporting);
+        let languages: Vec<&str> = match self.language_mode.strip_prefix("forced:") {
+            Some(forced) if forced != "mixed" => vec![forced],
+            _ if routes.supporting.is_empty() || self.language_mode == "off" => {
+                vec![routes.primary.as_str()]
+            }
+            _ => declared.map(String::as_str).collect(),
+        };
+        let pin = |language: &str| match routes.routes.get(language) {
+            Some(route) => registry.resolve(language, &route.provider, &route.model),
+            None => Err(PackRefusal::new(code::ROUTE, language)),
+        };
+        languages
+            .into_iter()
+            .map(|l| (l.to_owned(), pin(l)))
+            .collect()
+    }
+    /// A pinned request runs only while every pin still matches the shipped packs.
+    pub fn verify_routes(&self, pinned: &RouteSnapshot, registry: &Registry) -> Result<()> {
+        let current = self.route_snapshot(registry);
+        let mut languages = current.keys().chain(pinned.keys());
+        match languages.find(|l| current.get(*l) != pinned.get(*l)) {
+            Some(language) => Err(PackRefusal::new(code::REVISION, language.as_str()).into()),
+            None => Ok(()),
+        }
+    }
     pub fn non_english_route(&self) -> &'static str {
         if self.meeting_languages.iter().any(|s| s == "mixed") {
             "mixed"
@@ -212,6 +252,7 @@ impl RoutingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model_catalog::speech_packs;
     use crate::core::{config::Config, meeting_watch::Labs};
     use serde_json::json;
     fn failure(config: &LanguageRoutes) -> String {
@@ -284,6 +325,38 @@ mod tests {
         loaded.validate().unwrap();
         loaded.after_stop_languages.unwrap().validate().unwrap();
         assert_eq!(loaded.profile, "compat");
+    }
+    #[test]
+    fn route_pins_follow_the_mode_and_keep_the_existing_backend_and_model() {
+        use speech_packs::{Backend::*, Decoder::*};
+        let registry = speech_packs::registry().unwrap();
+        let mut config = RoutingConfig::default();
+        config.after_stop_languages = Some(LanguageRoutes::cpu_after_stop());
+        let mut pins = config.route_snapshot(registry);
+        for (language, expected) in [
+            ("en", (Hex, "parakeet_unified_en", HexService)),
+            ("hi", (Local, "indicconformer-hi-ctc", CtcTokens)),
+            ("te", (Local, "indicconformer-te-ctc", CtcTokens)),
+        ] {
+            let pin = pins[language].as_ref().unwrap();
+            assert_eq!((pin.backend, &*pin.model, pin.decoder), expected);
+            assert_eq!(pin.revision, registry.pack(language).unwrap().revision);
+        }
+        // Only the languages the mode routes are pinned; a changed pin is refused, not remapped.
+        for (mode, languages) in [
+            ("forced:te", "te"),
+            ("off", "en"),
+            ("forced:mixed", "en,hi,te"),
+        ] {
+            config.language_mode = mode.into();
+            let pinned = config.route_snapshot(registry);
+            let keys: Vec<_> = pinned.keys().cloned().collect();
+            assert_eq!(keys.join(","), languages);
+            config.verify_routes(&pinned, registry).unwrap();
+        }
+        pins.get_mut("te").unwrap().as_mut().unwrap().revision = "0".repeat(64);
+        let refusal = config.verify_routes(&pins, registry).unwrap_err();
+        assert_eq!(refusal.to_string(), "speech_pack_revision_changed: te");
     }
     #[test]
     fn invalid_duplicate_and_unsupported_routes_explain_the_failure() {
