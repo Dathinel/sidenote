@@ -227,6 +227,8 @@ struct View {
     card: Cell<HWND>,
     font: RefCell<Option<Rc<Font>>>,
     timer_font: RefCell<Option<(i32, Rc<Font>)>>,
+    surface: RefCell<Option<Surface>>,
+    region_geometry: Cell<Option<(i32, i32, i32, f32)>>,
     layout: Cell<Layout>,
     frame: RefCell<Frame>,
     painted_step: Cell<usize>,
@@ -264,6 +266,8 @@ impl NativeWindow {
                     card: Cell::new(ptr::null_mut()),
                     font: RefCell::new(None),
                     timer_font: RefCell::new(None),
+                    surface: RefCell::default(),
+                    region_geometry: Cell::default(),
                     layout: Cell::new(Layout {
                         scale: 1.0,
                         work: std::mem::zeroed(),
@@ -791,7 +795,10 @@ impl View {
             } else {
                 format!("{}:{:02}", frame.elapsed / 60, frame.elapsed % 60)
             });
-            let mut surface = Surface::new(width, height)?;
+            let mut surface = match self.surface.take() {
+                Some(surface) if (surface.width, surface.height) == (width, height) => surface,
+                _ => Surface::new(width, height)?,
+            };
             let font = if live {
                 let scale = self.layout.get().scale;
                 let step = if frame.pill { step } else { 0 };
@@ -887,8 +894,10 @@ impl View {
                 }
             }
             if self.icon.get().is_null() {
+                self.surface.replace(Some(surface));
                 return Ok(());
             }
+            let key = (left, width, height, self.layout.get().scale);
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
@@ -910,16 +919,33 @@ impl View {
                 ULW_ALPHA,
             ) == 0
             {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                self.surface.replace(Some(surface));
+                return Err(error);
             }
+            self.surface.replace(Some(surface));
+            self.set_region(key, |region| SetWindowRgn(self.icon.get(), region, 1))
+        }
+    }
+    fn set_region(
+        &self,
+        key: (i32, i32, i32, f32),
+        install: impl FnOnce(HRGN) -> i32,
+    ) -> io::Result<()> {
+        unsafe {
+            if self.region_geometry.get() == Some(key) {
+                return Ok(());
+            }
+            let (left, width, height, _) = key;
             let region = icon_region(left, width, height);
             if region.is_null() {
                 return Err(io::Error::last_os_error());
             }
-            if SetWindowRgn(self.icon.get(), region, 1) == 0 {
+            if install(region) == 0 {
                 DeleteObject(region);
                 return Err(io::Error::last_os_error());
             }
+            self.region_geometry.set(Some(key));
             Ok(())
         }
     }
@@ -1235,6 +1261,8 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
             card: Cell::new(ptr::null_mut()),
             font: RefCell::new(Some(Rc::new(Font(font)))),
             timer_font: RefCell::new(None),
+            surface: RefCell::default(),
+            region_geometry: Cell::default(),
             layout: Cell::new(Layout {
                 scale,
                 work: RECT {
@@ -1358,12 +1386,26 @@ fn nub_pump_repaints_steps_only_during_speech() {
 
 #[test]
 fn nub_painter_reuses_figtree_until_pixel_height_changes() {
-    let view = synthetic_view(1.0).unwrap();
+    let mut view = synthetic_view(1.0).unwrap();
+    view.replay = false;
     view.frame.borrow_mut().recording = true;
     let cached = || view.timer_font.borrow().clone().unwrap();
-    view.draw_icon(0).unwrap();
+    let installs = Cell::new(0);
+    let paint = || unsafe {
+        view.paint_icon().unwrap();
+        let surface = view.surface.borrow();
+        let surface = surface.as_ref().unwrap();
+        let key = (0, surface.width, surface.height, view.layout.get().scale);
+        view.set_region(key, |region| {
+            installs.set(installs.get() + 1);
+            DeleteObject(region)
+        })
+        .unwrap();
+        surface.bitmap
+    };
+    let bitmap = paint();
     let (height, first) = cached();
-    view.draw_icon(1).unwrap();
+    assert_eq!((paint(), installs.get()), (bitmap, 1));
     assert!(
         Rc::ptr_eq(&first, &cached().1),
         "same height must reuse font"
@@ -1373,7 +1415,10 @@ fn nub_painter_reuses_figtree_until_pixel_height_changes() {
         scale: 1.5,
         ..view.layout.get()
     });
-    let (surface, _) = view.draw_icon(2).unwrap();
+    assert_ne!(paint(), bitmap);
+    assert_eq!(installs.get(), 2);
+    let surface = view.surface.borrow();
+    let surface = surface.as_ref().unwrap();
     let (next_height, next) = cached();
     assert_eq!((height, next_height), (11, 17));
     assert_ne!(first.0, next.0);
