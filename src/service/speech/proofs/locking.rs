@@ -59,8 +59,7 @@ fn job_creation_keeps_intake_ownership_until_processing_is_locked() {
     );
     let lock = store_io::lock(&root.join("local/speech/intake.lock"));
     assert_eq!(
-        lock.err()
-            .expect("job creation released intake before locking processing")
+        lock.expect_err("job creation released intake before locking processing")
             .kind(),
         std::io::ErrorKind::WouldBlock
     );

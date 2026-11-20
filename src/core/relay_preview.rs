@@ -1265,6 +1265,7 @@ mod presence_tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     fn observation(statuses: Vec<PeerStatus>, members: &[[u8; 32]]) -> Observation {
         Observation {
             statuses,
@@ -1272,6 +1273,7 @@ mod presence_tests {
             members: members.to_vec(),
         }
     }
+    #[cfg(windows)]
     fn peer(key: u8, online: bool, last_seen: Option<u64>) -> PeerStatus {
         PeerStatus {
             device: [key; 32],
