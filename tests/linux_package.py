@@ -203,6 +203,49 @@ class Packaging(unittest.TestCase):
             paths.extend(matches)
         self.assertNotEqual(*paths)
 
+    def test_notice_dedupe(self):
+        p = fixture('notice-dedupe')
+        shared = b'Shared license\r\nSecond line'
+        different = b'Different license\n'
+        packages = {
+            'first': {'LICENSE': shared, 'NOTICE': shared},
+            'second': {'COPYING': shared},
+            'third': {'LICENSE': different},
+        }
+        root = p / 'Cargo.toml'
+        excluded = json.dumps([f'deps/{name}' for name in packages])
+        manifest = root.read_text().replace('[workspace]\n', f'[workspace]\nexclude={excluded}\n')
+        remove(root)
+        put(root, manifest + '\n[dependencies]\n' + ''.join(f'{name}={{path="deps/{name}"}}\n' for name in packages))
+        lock = p / 'Cargo.lock'
+        remove(lock)
+        put(lock, 'version=4\n' + ''.join(f'\n[[package]]\nname="{name}"\nversion="0.1.0"\n' for name in packages)
+                  + f'\n[[package]]\nname="sidenote"\nversion="0.0.1"\ndependencies={json.dumps(list(packages))}\n')
+        for name, notices in packages.items():
+            dependency = p / 'deps' / name
+            put(dependency / 'Cargo.toml', f'[package]\nname="{name}"\nversion="0.1.0"\nedition="2024"\n')
+            put(dependency / 'src/lib.rs', 'pub fn fixture() {}\n')
+            for filename, data in notices.items():
+                put(dependency / filename, data)
+
+        commit(p)
+        r, out = cli(p)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        stage = binary(out).parents[1]
+        coverage = json.loads((stage / 'DEPENDENCY_NOTICE_COVERAGE.json').read_text())
+        self.assertCountEqual([row['name'] for row in coverage], list(packages))
+        referenced = set()
+        for row in coverage:
+            paths = row['notice_paths']
+            expected = packages[row['name']].values()
+            self.assertEqual(row['kind'], 'upstream')
+            self.assertEqual(row['notice_files'], len(expected))
+            self.assertCountEqual([(stage / path).read_bytes() for path in paths], expected)
+            referenced.update(stage / path for path in paths)
+        stored = {path for path in (stage / 'dependency-notices').rglob('*') if path.is_file()}
+        self.assertEqual(stored, referenced)
+        self.assertCountEqual([path.read_bytes() for path in stored], [shared, different])
+
     def test_llvm_exception(self):
         p = fixture('llvm-exception')
         term = 'Apache-2.0 WITH LLVM-exception'

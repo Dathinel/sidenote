@@ -50,6 +50,7 @@ def notices(source, stage, cache, metadata, archive, git_archives):
     choices = json.loads((source / 'tools/license_choices.json').read_text())
     resolved = {p['id'] for p in metadata['resolve']['nodes']}
     coverage, standards = [], set()
+    upstream_paths = {}
     notice_root = stage / 'dependency-notices'
     standards_dir = notice_root / 'standard-licenses'
     for p in sorted(metadata['packages'], key=lambda p: (p['name'], p['version'], p['source'] or '')):
@@ -71,14 +72,25 @@ def notices(source, stage, cache, metadata, archive, git_archives):
         if p['source'] in git_archives and p['license_file']:
             archive_root = Path(git(manifest_dir, 'rev-parse', '--show-toplevel').decode().strip())
         declared = (manifest_dir / p['license_file']).resolve().relative_to(archive_root.resolve()).as_posix() if p['license_file'] else None
-        files = []
+        files = {}
+        file_paths, parent_paths = set(), set()
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for item in tar:
                 name = item.name.removeprefix(prefix)
                 if item.isfile() and item.name.startswith(prefix) and (name == declared or re.search(r'(?i)(^|/)(licen[cs]es?|copying|copyright|notices?)([^/]*$|/)', name)):
-                    if Path(name).is_absolute() or '..' in Path(name).parts: raise ValueError('invalid notice path')
-                    put(destination / name, tar.extractfile(item).read())
-                    files.append(name)
+                    path = Path(name)
+                    if path.is_absolute() or '..' in path.parts: raise ValueError('invalid notice path')
+                    if path in file_paths or path in parent_paths or not file_paths.isdisjoint(path.parents):
+                        raise FileExistsError(f'conflicting notice path: {name}')
+                    file_paths.add(path)
+                    parent_paths.update(path.parents)
+                    contents = tar.extractfile(item).read()
+                    # Coverage rows share the first stored path for identical upstream bytes.
+                    if contents not in upstream_paths:
+                        target = destination / path
+                        put(target, contents)
+                        upstream_paths[contents] = target.relative_to(stage).as_posix()
+                    files[name] = upstream_paths[contents]
         if declared and declared not in files: raise ValueError('declared notice absent from immutable source')
         kind = 'upstream' if files else 'metadata'
         standard_paths = []
@@ -99,8 +111,9 @@ def notices(source, stage, cache, metadata, archive, git_archives):
             holder = '; '.join(p['authors']) or p['repository']
             if not holder: raise ValueError('missing attribution')
             relative_standards = os.path.relpath(standards_dir, destination)
-            put(destination / 'NOTICE.txt', f"{p['name']} {p['version']}\nCopyright holder (Cargo metadata): {holder}\nDeclared: {expression}\nIncluded: {effective}\nStandard texts: {relative_standards}/\n")
-            files.append('NOTICE.txt')
+            notice = destination / 'NOTICE.txt'
+            put(notice, f"{p['name']} {p['version']}\nCopyright holder (Cargo metadata): {holder}\nDeclared: {expression}\nIncluded: {effective}\nStandard texts: {relative_standards}/\n")
+            files['NOTICE.txt'] = notice.relative_to(stage).as_posix()
             for identifier in sorted(ids):
                 target = standards_dir / f'{identifier}.txt'
                 if identifier not in standards:
@@ -109,7 +122,7 @@ def notices(source, stage, cache, metadata, archive, git_archives):
                 standard_paths.append(target.relative_to(stage).as_posix())
         coverage.append(dict(
             name=p['name'], version=p['version'], source=p['source'], license=p['license'], kind=kind,
-            notice_files=len(files), notice_paths=[(destination / name).relative_to(stage).as_posix() for name in files],
+            notice_files=len(files), notice_paths=list(files.values()),
             standard_license_paths=standard_paths,
         ))
     put((stage / 'DEPENDENCY_NOTICE_COVERAGE.json'), json.dumps(coverage, indent=2) + '\n')
