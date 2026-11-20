@@ -42,6 +42,12 @@ fn page() -> Runtime<State> {
 }
 
 fn page_at(size: (f32, f32)) -> Runtime<State> {
+    page_with(size, || {})
+}
+
+/// `page_at`, with `stored` run after the meeting folder is written and before the app reads its
+/// meetings, so a test can leave other records beside it.
+fn page_with(size: (f32, f32), stored: impl FnOnce()) -> Runtime<State> {
     crate::test_paths::isolate();
     let folder = core::meetings_dir().join(MEETING);
     std::fs::create_dir_all(&folder).unwrap();
@@ -51,6 +57,7 @@ fn page_at(size: (f32, f32)) -> Runtime<State> {
         "topics": [{"title": "Launch", "points": [{"type": "decided", "text": POINT}]}],
     });
     std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+    stored();
     let mut rt = Runtime::with_text(
         State::new(),
         view,
@@ -619,4 +626,91 @@ fn the_ask_bar_starts_at_the_notes_column_at_the_default_width() {
         "the_ask_bar_starts_at_the_notes_column_at_the_default_width",
         DEFAULT_SIZE,
     );
+}
+
+/// Writes a summary with this `made_by` record into `folder`.
+fn stamped_summary(folder: &std::path::Path, made_by: Option<serde_json::Value>) {
+    let path = folder.join("english-summary.json");
+    let mut summary: serde_json::Value = match std::fs::read(&path) {
+        Ok(raw) => serde_json::from_slice(&raw).unwrap(),
+        Err(_) => serde_json::json!({"title": "Beta launch plan", "context": [CONTEXT]}),
+    };
+    if let Some(by) = made_by {
+        summary["made_by"] = by;
+    }
+    std::fs::create_dir_all(folder).unwrap();
+    std::fs::write(path, summary.to_string()).unwrap();
+}
+
+/// Whether the saved meeting's Notes view says the transcript was English-only.
+fn shows_english_only_note(made_by: Option<serde_json::Value>, stored: impl FnOnce()) -> bool {
+    let rt = page_with(DEFAULT_SIZE, || {
+        stamped_summary(&core::meetings_dir().join(MEETING), made_by);
+        stored();
+    });
+    rt.find("meeting-english-only").is_some()
+}
+
+#[test]
+fn a_summary_stamped_english_only_shows_the_note() {
+    if in_parent("a_summary_stamped_english_only_shows_the_note") {
+        return;
+    }
+    let by = serde_json::json!({"helper": "claude", "language_passes": "english_only"});
+    assert!(shows_english_only_note(Some(by), || {}));
+}
+
+#[test]
+fn a_summary_stamped_routed_shows_nothing() {
+    if in_parent("a_summary_stamped_routed_shows_nothing") {
+        return;
+    }
+    let by = serde_json::json!({"helper": "claude", "language_passes": "routed"});
+    assert!(!shows_english_only_note(Some(by), || {}));
+}
+
+#[test]
+fn a_summary_with_no_language_record_shows_the_note() {
+    if in_parent("a_summary_with_no_language_record_shows_the_note") {
+        return;
+    }
+    // An older summary: it has a `made_by` record, but no word.
+    let by = serde_json::json!({"helper": "claude", "model": "claude-sonnet-5-5"});
+    assert!(shows_english_only_note(Some(by), || {}));
+}
+
+#[test]
+fn the_notes_job_record_cannot_hide_the_note() {
+    if in_parent("the_notes_job_record_cannot_hide_the_note") {
+        return;
+    }
+    // The job says it pinned a routed revision with no fallback; the summary says English only.
+    let by = serde_json::json!({"language_passes": "english_only"});
+    assert!(shows_english_only_note(Some(by), || {
+        let dir = core::state_dir().join("local/notes-jobs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let job = serde_json::json!({
+            "state": "done", "fallback": false, "tasks_failed": false, "attempts": 1,
+            "transcript_revision": "a".repeat(64), "routing_fallbacks": [],
+        });
+        std::fs::write(dir.join(format!("{MEETING}.json")), job.to_string()).unwrap();
+    }));
+}
+
+#[test]
+fn a_joined_meeting_shows_its_own_summarys_word() {
+    if in_parent("a_joined_meeting_shows_its_own_summarys_word") {
+        return;
+    }
+    // The first recording's own folder says routed; the joined meeting's notes say English only.
+    let routed = serde_json::json!({"language_passes": "routed"});
+    let english = serde_json::json!({"language_passes": "english_only"});
+    assert!(shows_english_only_note(Some(routed), || {
+        core::meeting_parts::Meeting::begin(&core::state_dir(), MEETING, 1_800_000_000_000)
+            .unwrap();
+        let joined = core::meeting_parts::inputs(&core::state_dir()).join(MEETING);
+        std::fs::create_dir_all(&joined).unwrap();
+        std::fs::write(joined.join("manifest.json"), r#"{"status":"complete"}"#).unwrap();
+        stamped_summary(&joined, Some(english));
+    }));
 }

@@ -6,6 +6,7 @@ mod helper;
 #[cfg(feature = "idle-cpu-proof")]
 pub mod idle_fixture;
 mod joined;
+mod language;
 mod prompt;
 pub mod queue;
 mod schema;
@@ -20,6 +21,7 @@ pub(crate) fn render_routed_fixture(root: &std::path::Path, revision: &str) -> S
         .render()
 }
 mod translation;
+pub use language::Language;
 pub use status_detail::{StatusDetail, status_record, status_records};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

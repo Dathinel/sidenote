@@ -1,0 +1,295 @@
+//! The language-passes word in `english-summary.json`, through enqueue and drain. Not Windows-only.
+use super::*;
+use crate::core::meeting_router::{
+    batches::{self, EnglishBridge, NativeLanguage, NativeLoader, Range, Recognizer},
+    jobs::handoff::{self, BatchOutput},
+    pieces::{Piece, PieceManifest, TrackManifest},
+    ranges::AsrRange,
+    revision,
+};
+use crate::core::{meeting_parts::Meeting, notes::Language};
+type Done<T> = crate::core::asr::Result<T>;
+
+struct Reading;
+impl Recognizer for Reading {
+    fn recognize(&mut self, r: &Range) -> Done<serde_json::Value> {
+        Ok(serde_json::json!({"text":r.piece}))
+    }
+}
+impl NativeLoader for Reading {
+    fn load(&mut self, _: NativeLanguage, _: &Range) -> Done<Box<dyn Recognizer>> {
+        Ok(Box::new(Reading))
+    }
+}
+impl EnglishBridge for Reading {
+    fn transcribe(&mut self, r: &Range) -> Done<serde_json::Value> {
+        self.recognize(r)
+    }
+}
+
+fn setup() -> (Temp, PathBuf, NotesSettings) {
+    let root = Temp::new();
+    let folder = meeting(&root.0, PRIVATE);
+    let settings = settings_fixture();
+    let mut config = crate::core::Config::default();
+    config.notes = Some(settings.clone());
+    config.pipeline.profile = "experimental".into();
+    config.labs.after_stop_language_routing = true;
+    config.engine_settings.stages.routing_deadline_seconds = 360;
+    let json = serde_json::to_vec(&config).unwrap();
+    fs::write(root.0.join("config.json"), json).unwrap();
+    set_ended(&folder, chrono::Utc::now().timestamp_millis());
+    (root, folder, settings)
+}
+fn set_ended(folder: &Path, ms: i64) {
+    let path = folder.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    m["ended_at_ms"] = ms.into();
+    fs::write(path, m.to_string()).unwrap();
+}
+fn labs_off(root: &Path) {
+    let path = root.join("config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    config["labs"]["after_stop_language_routing"] = false.into();
+    fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+}
+fn dir(root: &Path) -> PathBuf {
+    root.join("local/transcripts").join(ID)
+}
+/// The pending-language record the router leaves behind, so the notes job can see the generation.
+fn pending(root: &Path) {
+    let queue = root.join("local/router-queue");
+    fs::create_dir_all(&queue).unwrap();
+    fs::write(
+        queue.join(format!("{ID}.json")),
+        format!(r#"{{"id":"{ID}","generation":7}}"#),
+    )
+    .unwrap();
+}
+/// Builds a released revision through the real hand-off. `corrupt` damages the range receipt, so
+/// assembly fills the range from the captured baseline and records no typed reason.
+fn release(root: &Path, folder: &Path, language: &str, corrupt: bool) -> String {
+    let first = transcript::chosen(root, ID, folder, None, 0, 10_000)
+        .unwrap()
+        .unwrap();
+    let (_, data) = revision::load(&dir(root), Some(&first.revision))
+        .unwrap()
+        .unwrap();
+    let baseline = data.transcript.baseline;
+    pending(root);
+    revision::begin(&dir(root), 7).unwrap();
+    let work = root.join("local/router-work").join(ID).join("batches");
+    fs::create_dir_all(&work).unwrap();
+    let b = &baseline[0];
+    let (start, end) = (
+        (b.start * 16000.0).round() as u64,
+        (b.end * 16000.0).round() as u64,
+    );
+    let wav = work.join("clip.wav");
+    crate::core::asr::write_wav(&wav, &vec![0.0; (end - start) as usize]).unwrap();
+    let text = if language == "te" {
+        "తెలుగు selected revision"
+    } else {
+        "हिंदी selected revision"
+    };
+    let plan = batches::spool(
+        &work,
+        vec![Range {
+            track: b.track.clone(),
+            piece: text.into(),
+            wav,
+            range: AsrRange {
+                context: (start, end),
+                members: vec![(0, (start, end))],
+                language: Some(language.into()),
+            },
+            model_id: format!("fake-{language}"),
+            model_sha256: "a".repeat(64),
+        }],
+    )
+    .unwrap();
+    let manifest = PieceManifest {
+        source_revision: "capture".into(),
+        config_checksum: "config".into(),
+        tracks: vec![TrackManifest {
+            track: b.track.clone(),
+            origin_sample: 0,
+            sample_count: end,
+            pieces: vec![Piece {
+                id: text.into(),
+                start_sample: 0,
+                end_sample: end,
+            }],
+        }],
+    };
+    let output = BatchOutput {
+        generation: "7".into(),
+        source_revision: "fixture-input".into(),
+        plan,
+        manifest,
+        fallbacks: vec![],
+        english_transport: serde_json::Value::Null,
+    };
+    store_io::write(&work.join("output.json"), &output).unwrap();
+    #[cfg(windows)]
+    batches::run(&work, &output.plan, &mut Reading, &mut Reading).unwrap();
+    #[cfg(not(windows))]
+    batches::run_host(
+        &work,
+        &output.plan,
+        &mut Reading,
+        Duration::from_secs(60),
+        &mut |_, _, _| Ok(()),
+    )
+    .unwrap();
+    if corrupt {
+        for entry in fs::read_dir(&work).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "receipt") {
+                fs::write(path, b"corrupt receipt").unwrap();
+            }
+        }
+    }
+    handoff::commit_batches(root, ID, 7, "fixture-input", &baseline).unwrap()
+}
+fn write_notes(root: &Path, settings: &NotesSettings, request: Option<Request>) -> Fake {
+    enqueue(root, settings, request);
+    let mut fake = Fake::new(vec![Ok(summary()), Ok(sorted())]);
+    drain(root, settings, &mut fake);
+    fake
+}
+fn made_by(folder: &Path) -> serde_json::Value {
+    let raw = fs::read(folder.join("english-summary.json")).unwrap();
+    serde_json::from_slice::<serde_json::Value>(&raw).unwrap()["made_by"].clone()
+}
+
+#[test]
+fn routed_summary_records_routed_and_the_revision_it_was_built_from() {
+    for language in ["te", "hi"] {
+        let (root, folder, s) = setup();
+        let revision = release(&root.0, &folder, language, false);
+        write_notes(&root.0, &s, None);
+        let by = made_by(&folder);
+        assert_eq!(by["language_passes"], "routed");
+        assert_eq!(by["transcript_revision"], revision.as_str());
+    }
+}
+#[test]
+fn missed_deadline_records_english_only() {
+    let (root, folder, s) = setup();
+    set_ended(&folder, 1000);
+    pending(&root.0);
+    revision::begin(&dir(&root.0), 7).unwrap();
+    write_notes(&root.0, &s, None);
+    let by = made_by(&folder);
+    assert_eq!(by["language_passes"], "english_only");
+    assert!(by["transcript_revision"].is_string());
+}
+#[test]
+fn labs_off_records_english_only_without_a_revision() {
+    let (root, folder, s) = setup();
+    labs_off(&root.0);
+    write_notes(&root.0, &s, None);
+    let by = made_by(&folder);
+    assert_eq!(by["language_passes"], "english_only");
+    assert!(by.get("transcript_revision").is_none());
+}
+#[test]
+fn task_retry_with_labs_off_leaves_the_routed_word_alone() {
+    let (root, folder, s) = setup();
+    release(&root.0, &folder, "te", false);
+    write_notes(&root.0, &s, None);
+    assert_eq!(made_by(&folder)["language_passes"], "routed");
+    labs_off(&root.0);
+    let redo = write_notes(&root.0, &s, Some(Request::RedoTasks));
+    assert_eq!(redo.calls.len(), 2, "the task retry did run");
+    assert_eq!(made_by(&folder)["language_passes"], "routed");
+}
+#[test]
+fn range_filled_from_the_baseline_without_a_typed_reason_records_english_only() {
+    let (root, folder, s) = setup();
+    release(&root.0, &folder, "hi", true);
+    write_notes(&root.0, &s, None);
+    assert_eq!(made_by(&folder)["language_passes"], "english_only");
+}
+
+/// A two-part meeting. Only the first part (`ID`) can have been routed before this is called.
+fn two_parts(root: &Path, first: &Path) -> (PathBuf, PathBuf) {
+    let hex = root.join("meetings");
+    let second = hex.join("1793947600000-456");
+    fs::create_dir_all(&second).unwrap();
+    for name in ["manifest.json", "transcript.ndjson"] {
+        fs::copy(first.join(name), second.join(name)).unwrap();
+    }
+    let mut meeting = Meeting::begin(root, ID, 1793946600000).unwrap();
+    meeting
+        .resume(root, "1793947600000-456", 1793947600000)
+        .unwrap();
+    let folder = meeting.prepare_notes(root, &hex).unwrap();
+    (hex, folder)
+}
+/// What the notes job would stamp for the joined meeting: read from the pinned stored reading.
+fn joined_word(root: &Path, hex: &Path, folder: &Path) -> Option<Language> {
+    let now = chrono::Utc::now().timestamp_millis() + 1000;
+    let (pin, ..) = super::super::joined::chosen(root, hex, ID, folder, None, 0, now)
+        .unwrap()
+        .unwrap();
+    let pinned = transcript::chosen(root, ID, folder, Some(&pin), 0, now).unwrap();
+    pinned.unwrap().language
+}
+#[test]
+fn joined_meeting_is_routed_when_one_part_has_hindi_or_telugu_text() {
+    let (root, first, _) = setup();
+    release(&root.0, &first, "te", false);
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(joined_word(&root.0, &hex, &folder), Some(Language::Routed));
+}
+/// Replaces the released Telugu reading with a clean all-English one: language ID was sure.
+fn clean_english(root: &Path, folder: &Path) {
+    let id = release(root, folder, "te", false);
+    let (_, mut data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
+    let segment = &mut data.transcript.segments[0];
+    (segment.lang, segment.route, segment.status) =
+        ("en".into(), "en".into(), "segment-level".into());
+    segment.text_original = PRIVATE.into();
+    data.provenance = serde_json::Value::Null;
+    let id = revision::commit(&dir(root), &data).unwrap();
+    let released = serde_json::json!({"generation": "7", "revision": id,
+        "source_revision": "fixture-input", "completed_ms": chrono::Utc::now().timestamp_millis()});
+    let work = root.join("local/router-work").join(ID);
+    fs::write(work.join("released.json"), released.to_string()).unwrap();
+}
+#[test]
+fn a_sure_english_part_cannot_hide_a_part_that_fell_back() {
+    let (root, first, _) = setup();
+    clean_english(&root.0, &first);
+    let now = chrono::Utc::now().timestamp_millis();
+    let part = transcript::chosen(&root.0, ID, &first, None, now, now + 1000);
+    assert_eq!(part.unwrap().unwrap().language, Some(Language::Routed));
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(
+        joined_word(&root.0, &hex, &folder),
+        Some(Language::EnglishOnly)
+    );
+}
+#[test]
+fn joined_meeting_is_english_only_when_every_part_fell_back() {
+    let (root, first, _) = setup();
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(
+        joined_word(&root.0, &hex, &folder),
+        Some(Language::EnglishOnly)
+    );
+}
+#[test]
+fn an_older_stored_joined_reading_has_no_word() {
+    let (root, first, _) = setup();
+    let (_, folder) = two_parts(&root.0, &first);
+    let old = br#"{"text":"[00:00:01.000] You (English): old","reasons":[],"parts":[]}"#;
+    let pin = blake3::hash(old).to_hex().to_string();
+    let stored = root.0.join("local/joined-transcripts").join(ID);
+    fs::create_dir_all(&stored).unwrap();
+    fs::write(stored.join(format!("{pin}.json")), old).unwrap();
+    let selection = transcript::chosen(&root.0, ID, &folder, Some(&pin), 0, 0).unwrap();
+    assert_eq!(selection.unwrap().language, None);
+}

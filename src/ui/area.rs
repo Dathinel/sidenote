@@ -116,6 +116,7 @@ impl State {
                     transcript_raw: String::new(),
                     routed: None,
                     routed_revision: String::new(),
+                    summary_language: None,
                     notes: String::new(),
                     lines: Vec::new(),
                     minutes: m.minutes,

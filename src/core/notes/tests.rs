@@ -5,6 +5,7 @@ use super::{
 #[cfg(windows)]
 mod corruption;
 mod idle;
+mod passes;
 #[cfg(windows)]
 mod review;
 #[cfg(windows)]

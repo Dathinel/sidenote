@@ -23,6 +23,8 @@ pub(super) struct Selection {
     pub revision: String,
     pub transcript: Option<crate::core::meeting_router::Transcript>,
     pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    /// How the passes went for this transcript. None when it is not known (an older joined reading).
+    pub language: Option<super::Language>,
     rendered: String,
     /// The start of each rendered line, up to the language, so English can replace the text.
     heads: Vec<String>,
@@ -126,10 +128,11 @@ pub(super) fn chosen(
             now_ms,
         )
         .map(|reading| {
-            reading.map(|(revision, rendered, reasons)| Selection {
+            reading.map(|(revision, rendered, reasons, language)| Selection {
                 revision,
                 transcript: None,
                 reasons,
+                language,
                 rendered,
                 heads: Vec::new(),
             })
@@ -218,10 +221,17 @@ pub(super) fn chosen_part(
                 text.push_str(&format!("{head}): {}\n", words(&s.text_original)));
                 heads.push(head);
             }
+            let language = super::language::of(
+                t.input_checksum == "compatibility",
+                t.degraded(),
+                &reasons,
+                t.segments.iter().map(|s| s.lang.as_str()),
+            );
             Ok(Selection {
                 revision: id,
                 transcript: Some(t),
                 reasons,
+                language: Some(language),
                 rendered: text,
                 heads,
             })

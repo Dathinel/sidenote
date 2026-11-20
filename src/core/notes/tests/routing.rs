@@ -271,7 +271,7 @@ fn joined_parts_keep_their_language_readings_and_pin_the_combined_text() {
     meeting.resume(&root.0, second_id, 1793947600000).unwrap();
     let folder = meeting.prepare_notes(&root.0, &hex).unwrap();
     let now = chrono::Utc::now().timestamp_millis() + 1000;
-    let (pin, text, _) = super::super::joined::chosen(&root.0, &hex, ID, &folder, None, 0, now)
+    let (pin, text, ..) = super::super::joined::chosen(&root.0, &hex, ID, &folder, None, 0, now)
         .unwrap()
         .unwrap();
     assert!(text.contains("(Telugu)"));
