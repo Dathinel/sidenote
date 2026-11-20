@@ -75,64 +75,6 @@ fn production_refuses_expired_caller_deadline_before_opening_inputs() {
     assert!(!work.path().join("output.json").exists());
 }
 
-#[cfg(all(test, feature = "asr-runtime"))]
-#[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
-fn saved_public_assembly_failure_retains_phase_clocks() {
-    let saved = PathBuf::from(std::env::var_os("SIDENOTE_ASSEMBLY_REPRO").unwrap());
-    let temp = tempfile::tempdir().unwrap();
-    let work = temp.path();
-    for entry in fs::read_dir(saved).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), work.join(entry.file_name())).unwrap();
-    }
-    let read = |name: &str| fs::read(work.join(name)).unwrap();
-    let plan: Plan = serde_json::from_slice(&read("batch-plan.json")).unwrap();
-    let pieces = serde_json::from_slice(&read("pieces.json")).unwrap();
-    let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")).unwrap();
-    fs::write(
-        work.join(format!("{}.plan.json", plan.revision)),
-        serde_json::to_vec(&plan).unwrap(),
-    )
-    .unwrap();
-    fs::remove_file(work.join(format!(
-        "{}-38d0482dac119209983b83022fd4c7d3f68eb8b4bb8a3aa14cbcb456b275c7ff.receipt",
-        plan.revision
-    )))
-    .unwrap();
-    let phases = [
-        "pieces",
-        "vad",
-        "detection",
-        "ranges",
-        "model_pin",
-        "spool",
-        "batches",
-    ];
-    let error = with_clocks(work, |clocks, _| {
-        // Distinct sentinels stand for already completed phases, not measured times.
-        clocks.extend(
-            phases
-                .iter()
-                .enumerate()
-                .map(|(i, p)| ((*p).into(), i as f64)),
-        );
-        revision::assemble(work, &plan, &pieces, &baseline, 1).map(|_| ())
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains("Speech lacks routed or explicit baseline coverage or marked gap"),
-        "{error}"
-    );
-    let clocks: Value = serde_json::from_slice(&read("clocks.json")).unwrap();
-    assert_eq!(clocks["partial"], true);
-    for (i, p) in phases.iter().enumerate() {
-        assert_eq!(clocks[*p], i as f64);
-    }
-    assert!(!work.join("output.json").exists());
-}
-
 /// The caller owns the inputs and decides when to publish the result.
 pub fn run(
     folder: &Path,

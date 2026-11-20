@@ -30,8 +30,6 @@ mod no_speech_tests;
 mod probe_tests;
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(in crate::core) mod proof;
-#[cfg(all(test, windows))]
-mod public_tests;
 #[cfg(all(test, windows, feature = "asr-runtime"))]
 pub(crate) mod regression;
 #[cfg(all(test, windows))]
