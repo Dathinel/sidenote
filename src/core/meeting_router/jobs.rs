@@ -11,7 +11,10 @@ pub(crate) use notes::notes_input_sized;
 pub(crate) fn notes_enabled(root: &Path) -> io::Result<bool> {
     Ok(notes::enabled(root).ok().flatten().is_some())
 }
-use crate::platform::CommandExt;
+use crate::{
+    core::model_catalog::speech_packs::{self, PackRefusal, RouteSnapshot},
+    platform::CommandExt,
+};
 use std::{
     collections::HashSet,
     io,
@@ -33,6 +36,8 @@ pub(crate) struct Job {
     config: RoutingConfig,
     languages: Vec<String>,
     input_revision: String,
+    /// Pinned when the drain opens the request; the child refuses a pin that has changed.
+    routes: RouteSnapshot,
     #[serde(default)]
     generation: u128,
     windows: serde_json::Value,
@@ -48,6 +53,7 @@ struct Outcome {
 }
 
 const CPU_ASSETS_UNAVAILABLE: &str = "cpu_language_assets_unavailable";
+const SPEECH_PACK_REFUSED: &str = "speech_pack_refused";
 
 #[derive(Debug)]
 struct CpuAssetsUnavailable(Option<u8>);
@@ -101,6 +107,30 @@ fn record_cpu_assets_failure(
         attempt["cpu_models_ready"] = ready.into();
     }
     store_io::write(&work.join("attempt.json"), &attempt)
+}
+
+/// Refused before any child, model load or audio work. The pending entry stays for retry.
+fn record_refusal(work: &Path, generation: u128, refusal: &PackRefusal) -> io::Result<()> {
+    let child = Outcome {
+        error: Some(SPEECH_PACK_REFUSED.into()),
+        ..Outcome::default()
+    };
+    let retry = chrono::Utc::now().timestamp_millis() + 30_000;
+    let attempt = serde_json::json!({"generation":generation, "child":child,
+        "refusal":refusal, "retry_after_ms":retry});
+    store_io::write(&work.join("attempt.json"), &attempt)
+}
+/// Cached range readings are reused only under the route pins that produced them.
+fn bind_readings(batches: &Path, routes: &RouteSnapshot) -> Result<()> {
+    let pins = serde_json::to_vec(routes)?;
+    if fs::read(batches.join("routes.json")).ok().as_ref() != Some(&pins) {
+        match fs::remove_dir_all(batches) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+            _ => fs::create_dir_all(batches)?,
+        }
+        store_io::atomic_write(&batches.join("routes.json"), &pins)?;
+    }
+    Ok(())
 }
 
 fn valid_id(id: &str) -> bool {
@@ -355,6 +385,7 @@ fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
         folder,
         baseline,
         languages: config.meeting_languages.clone(),
+        routes: config.route_snapshot(speech_packs::registry()?),
         config,
         input_revision: revision,
         generation: 0,
@@ -568,6 +599,8 @@ pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
     let mut job: Job =
         serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
     job.config.meeting_languages = job.languages;
+    job.config
+        .verify_routes(&job.routes, speech_packs::registry()?)?;
     let work = request.parent().ok_or("Missing work directory")?;
     let labs = notes_enabled(root)?;
     if labs
@@ -828,6 +861,14 @@ pub(crate) fn run_pending_with(
             let work = root.join("local/router-work").join(&job.id);
             fs::create_dir_all(&work)?;
             cleanup_work(&work);
+            // Only the after-stop planner reads the routes; it never opens a refused one.
+            if labs {
+                if let Some(refusal) = job.routes.values().find_map(|pin| pin.as_ref().err()) {
+                    record_refusal(&work, pending.generation, refusal)?;
+                    continue;
+                }
+                bind_readings(&work.join("batches"), &job.routes)?;
+            }
             let request = work.join("request.json");
             job.generation = pending.generation;
             let mut command = match worker(&job, &request) {
@@ -1363,5 +1404,127 @@ mod publication_tests {
         assert!(!publish_attempt(&dest, &fallback, false, true).unwrap());
         assert!(publish_attempt(&dest, &good, true, true).is_ok());
         assert_eq!(fs::read(&dest).unwrap(), original);
+    }
+}
+
+/// Production path for speech pack refusals and route pins: a real drain opens the request.
+#[cfg(test)]
+mod route_pin_tests {
+    use super::*;
+    use crate::core::model_catalog::{catalog, speech_packs::*};
+    use crate::core::{Config, meeting_router::fallback::Reason, meetings_dir, state_dir};
+    use serde_json::json;
+    /// A finished 30 s meeting with 25 synthetic words, so it queues, under the given routing.
+    fn meeting(id: &str, labs: bool, languages: &[&str], hi: &str, mode: &str) -> PathBuf {
+        let (root, folder) = (state_dir(), meetings_dir().join(id));
+        fs::create_dir_all(&folder).unwrap();
+        let manifest = json!({"status":"complete", "created_at_ms":1793946600000_i64,
+            "ended_at_ms":0, "duration_ms":30000});
+        store_io::write(&folder.join("manifest.json"), &manifest).unwrap();
+        let text = vec!["synthetic"; 25].join(" ");
+        let line = json!({"start_ms":1000, "end_ms":2000, "source":"system", "text":text});
+        fs::write(folder.join("transcript.ndjson"), line.to_string()).unwrap();
+        let mut config = Config::default();
+        config.pipeline.profile = "experimental".into();
+        config.pipeline.language_mode = mode.into();
+        config.labs.after_stop_language_routing = labs;
+        let mut routes = LanguageRoutes::cpu_after_stop();
+        routes.routes.get_mut("hi").unwrap().model = hi.into();
+        config.pipeline.after_stop_languages = Some(routes);
+        store_io::write(&root.join("config.json"), &config).unwrap();
+        let languages: Vec<String> = languages.iter().map(|l| l.to_string()).collect();
+        crate::core::model_catalog::save_meeting_languages(&root, &languages).unwrap();
+        enqueue_in(&root, &meetings_dir(), id).unwrap();
+        root
+    }
+    #[test]
+    fn route_request_refuses_invalid_pack_hash_or_decoder_before_launch() {
+        if isolated_test() {
+            return;
+        }
+        let (id, all) = ("1793946600000-424242", ["en", "hi", "te"]);
+        let (hi, swift) = ("indicconformer-hi-ctc", "whisper-hindi2hinglish-swift");
+        let decoder = shipped_with(|d| d["packs"][1]["decoder"] = json!("whisper-seq2seq"));
+        let te_hash = catalog_with_hash("indicconformer-te-ctc", 0, "");
+        let (shipped, models) = (shipped_with(|_| {}), catalog());
+        for (bytes, catalog, hi, mode, expected) in [
+            (&decoder, models, hi, "auto", Some((code::DECODER, "hi"))),
+            (&shipped, te_hash, hi, "auto", Some((code::HASH, "te"))),
+            (&shipped, models, swift, "auto", Some((code::ROUTE, "hi"))),
+            (&shipped, models, swift, "forced:en", None),
+            (&shipped, models, hi, "auto", None),
+        ] {
+            use_test_registry(Registry::parse(bytes, catalog).unwrap());
+            let root = meeting(id, true, &all, hi, mode);
+            let mut launched = false;
+            let drained = run_pending_with(|_, _| {
+                launched = true;
+                Err("launched".into())
+            });
+            let Some((refused, language)) = expected else {
+                assert_eq!(drained.unwrap_err().to_string(), "launched");
+                continue;
+            };
+            assert!(drained.is_ok() && !launched, "{refused}");
+            let attempt = fs::read(root.join("local/router-work").join(id).join("attempt.json"));
+            let attempt: serde_json::Value = serde_json::from_slice(&attempt.unwrap()).unwrap();
+            let expected = json!({"code":refused, "subject":language});
+            assert_eq!(attempt["refusal"], expected);
+            let transcript = meetings_dir().join(id).join("transcript.ndjson");
+            let baseline = || Ok(read_baseline(&fs::read(transcript)?).unwrap());
+            let notes = notes_input(&root, id, None, baseline, 0, 0).unwrap();
+            assert_eq!(notes.unwrap().2[0].reason, Reason::SpeechPackRefused);
+        }
+        // Without labs the worker never reads the after-stop routes, so a refused one never blocks it.
+        meeting(id, false, &all, swift, "auto");
+        let drained = run_pending_with(|_, _| Err("launched".into()));
+        assert_eq!(drained.unwrap_err().to_string(), "launched");
+        // An English-only meeting never opens the refused Hindi route, so it completes.
+        let root = meeting(id, false, &["en"], swift, "auto");
+        run_pending_with(|_, _| Err("launched".into())).unwrap();
+        assert!(!queue(&root).join(format!("{id}.json")).exists());
+        assert!(automatic_revision(&root, id).unwrap().is_some());
+    }
+    #[test]
+    fn a_new_pack_revision_changes_the_job_and_refuses_the_old_pin() {
+        if isolated_test() {
+            return;
+        }
+        let (id, hi, all) = (
+            "1793946600000-424243",
+            "indicconformer-hi-ctc",
+            ["en", "hi", "te"],
+        );
+        let root = meeting(id, true, &all, hi, "auto");
+        let old = snapshot(&root, id).unwrap().unwrap();
+        let request = root.join("pinned-request.json");
+        store_io::write(&request, &old).unwrap();
+        // The same model id with new Telugu tokens, as an app update could ship.
+        let catalog = catalog_with_hash("indicconformer-te-ctc", 1, "a".repeat(64).leak());
+        use_test_registry(Registry::parse(&shipped_with(|_| {}), catalog).unwrap());
+        let new = snapshot(&root, id).unwrap().unwrap();
+        assert_ne!(old.input_revision, new.input_revision);
+        assert_eq!(old.routes["hi"], new.routes["hi"]);
+        assert_ne!(old.routes["te"], new.routes["te"]);
+        let refusal = run_one_in(&request, &root).unwrap_err().to_string();
+        assert_eq!(refusal, "speech_pack_revision_changed: te");
+        // Readings cached under the old pins are dropped before the worker starts.
+        let batches = root.join("local/router-work").join(id).join("batches");
+        fs::create_dir_all(&batches).unwrap();
+        let new_pins = serde_json::to_vec(&new.routes).unwrap();
+        fs::write(
+            batches.join("routes.json"),
+            serde_json::to_vec(&old.routes).unwrap(),
+        )
+        .unwrap();
+        fs::write(batches.join("old.result.json"), "reading from the old pack").unwrap();
+        let drained = run_pending_with(|job, _| {
+            assert_eq!(job.routes, new.routes);
+            assert!(!batches.join("old.result.json").exists());
+            let pins = fs::read(batches.join("routes.json")).unwrap();
+            assert_eq!(pins, new_pins);
+            Err("launched".into())
+        });
+        assert_eq!(drained.unwrap_err().to_string(), "launched");
     }
 }

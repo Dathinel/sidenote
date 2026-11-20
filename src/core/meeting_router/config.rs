@@ -137,42 +137,16 @@ impl LanguageRoutes {
         }
         Ok(())
     }
+    /// Declarations only. Providers and models are checked against the speech packs when a
+    /// request pins the routes it uses (`RoutingConfig::route_snapshot`).
     pub fn validate(&self) -> Result<()> {
         self.validate_declarations()?;
-        let declared: Vec<_> = std::iter::once(&self.primary)
-            .chain(&self.supporting)
-            .collect();
-        for language in &declared {
-            let route = self
-                .routes
-                .get(*language)
-                .ok_or_else(|| format!("Missing provider route: {language}"))?;
-            let supported = if route.provider == "hex" && route.model == "parakeet_unified_en" {
-                language.as_str() == "en"
-            } else {
-                models::catalog().iter().any(|model| {
-                    model.id == route.model
-                        && model.role == models::Role::Asr
-                        && model.languages.contains(&language.as_str())
-                        && matches!(
-                            (route.provider.as_str(), model.runtime),
-                            ("hex", models::Runtime::Hex) | ("local", models::Runtime::SherpaOnnx)
-                        )
-                })
-            };
-            if !supported {
-                return Err(format!(
-                    "Unsupported provider/model route for {language}: {}/{}",
-                    route.provider, route.model
-                )
-                .into());
+        for language in std::iter::once(&self.primary).chain(&self.supporting) {
+            if !self.routes.contains_key(language) {
+                return Err(format!("Missing provider route: {language}").into());
             }
         }
-        if self
-            .routes
-            .keys()
-            .any(|language| !declared.contains(&language))
-        {
+        if self.routes.len() != 1 + self.supporting.len() {
             return Err("Provider route for undeclared language".into());
         }
         Ok(())
@@ -360,21 +334,23 @@ mod tests {
     }
     #[test]
     fn invalid_duplicate_and_unsupported_routes_explain_the_failure() {
-        for (provider, model) in [
-            ("cloud", "parakeet_unified_en"),
-            ("local", "absent"),
-            ("local", "anuvani-lid-int8"),
-            ("local", "indicconformer-hi-ctc"),
+        let registry = speech_packs::registry().unwrap();
+        for (language, provider, model) in [
+            ("en", "cloud", "parakeet_unified_en"),
+            ("en", "local", "absent"),
+            ("en", "local", "anuvani-lid-int8"),
+            ("en", "local", "indicconformer-hi-ctc"),
+            ("hi", "local", "whisper-hindi2hinglish-swift"),
+            ("hi", "hex", "nemotron_3_5_asr"),
         ] {
-            let mut config = routes();
-            config.routes.insert(
-                "en".into(),
-                ProviderRoute {
-                    provider: provider.into(),
-                    model: model.into(),
-                },
-            );
-            assert!(failure(&config).contains("Unsupported provider/model route for en"));
+            let (mut routes, mut config) = (routes(), RoutingConfig::default());
+            let route = serde_json::from_value(json!({"provider":provider, "model":model}));
+            routes.routes.insert(language.into(), route.unwrap());
+            routes.validate().unwrap();
+            config.after_stop_languages = Some(routes);
+            let pins = config.route_snapshot(registry);
+            assert_eq!(pins[language], Err(PackRefusal::new(code::ROUTE, language)));
+            assert!(pins["te"].is_ok());
         }
         let mut config = routes();
         config.routes.remove("hi");

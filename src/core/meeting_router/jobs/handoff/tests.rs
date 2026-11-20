@@ -114,6 +114,7 @@ fn handoff_requires_receipts_and_source_generation_and_preserves_provenance() {
             config: Default::default(),
             languages: vec!["en".into(), "te".into()],
             input_revision: "fixture-input".into(),
+            routes: Default::default(),
             generation: 7,
             windows: serde_json::Value::Null,
             input: None,

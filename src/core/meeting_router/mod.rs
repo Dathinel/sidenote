@@ -629,10 +629,12 @@ pub fn configuration_key(config: &RoutingConfig) -> Result<String> {
             cache::model_checksum(&config.runtime_dll).unwrap_or_else(|_| "unavailable".into()),
         ));
     }
+    // Pack revisions key every job and piece, so a pack change never reuses older readings.
+    let routes = config.route_snapshot(super::model_catalog::speech_packs::registry()?);
     Ok(cache::key(
         &[],
         &serde_json::to_string(&config)?,
-        &serde_json::to_string(&resources)?,
+        &serde_json::to_string(&(resources, routes))?,
         &format!("routing-v2:{}", config.meeting_languages.join(",")),
     ))
 }

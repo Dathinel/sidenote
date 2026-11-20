@@ -223,9 +223,22 @@ impl Registry {
 
 /// The shipped registry. It is compiled in, so it cannot change within one process.
 pub fn registry() -> Result<&'static Registry, PackRefusal> {
+    #[cfg(test)]
+    if let Some(registry) = TEST_REGISTRY.with(std::cell::Cell::get) {
+        return Ok(registry);
+    }
     static SHIPPED: OnceLock<Result<Registry, PackRefusal>> = OnceLock::new();
     let shipped = SHIPPED.get_or_init(|| Registry::parse(BUILTIN, catalog()));
     shipped.as_ref().map_err(Clone::clone)
+}
+#[cfg(test)]
+thread_local! {
+    static TEST_REGISTRY: std::cell::Cell<Option<&'static Registry>> = const { std::cell::Cell::new(None) };
+}
+/// Production-path tests swap the registry for their own thread.
+#[cfg(test)]
+pub(crate) fn use_test_registry(registry: Registry) {
+    TEST_REGISTRY.with(|cell| cell.set(Some(Box::leak(Box::new(registry)))));
 }
 #[cfg(test)]
 pub(crate) fn shipped_with(edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {

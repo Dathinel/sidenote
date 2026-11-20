@@ -14,6 +14,7 @@ pub enum Reason {
     PendingRecordInvalid,
     RoutingFailed,
     CpuLanguageAssetsUnavailable,
+    SpeechPackRefused,
     #[serde(alias = "cpu_language_models_downloading")]
     CpuLanguageModelsMissing {
         ready: u8,
@@ -42,6 +43,9 @@ impl Reason {
             Self::RoutingFailed => "A language pass failed. Notes use the captured Hex transcript.",
             Self::CpuLanguageAssetsUnavailable => {
                 "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
+            }
+            Self::SpeechPackRefused => {
+                "A language pack failed its checks, so its language was not transcribed. Notes use the captured Hex transcript."
             }
             Self::CpuLanguageModelsMissing { ready: ready @ 0..=3 } => {
                 return format!(
