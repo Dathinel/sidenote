@@ -115,8 +115,8 @@ pub(super) fn chosen(
         parts: Vec::new(),
         language: None,
     };
-    // English only when every part is; Hindi or Telugu text in any part makes the meeting routed.
-    let mut english_only = true;
+    // As for one recording: routed if any part has Hindi or Telugu text, or every part was sure.
+    let (mut any_text, mut any_unsure) = (false, false);
     let mut offset = 0u64;
     for part in parts {
         if !queue::valid_id(&part.id) {
@@ -132,16 +132,20 @@ pub(super) fn chosen(
             .push_str(&core::notes::shift_transcript(&selection.render(), offset)?);
         reading.parts.push((part.id, selection.revision));
         reading.reasons.extend(selection.reasons);
-        english_only &= selection.language == Some(Language::EnglishOnly);
+        any_text |= selection
+            .transcript
+            .as_ref()
+            .is_some_and(|t| t.segments.iter().any(|s| s.lang != "en"));
+        any_unsure |= selection.language != Some(Language::Routed);
         offset = offset.saturating_add(part.duration_ms);
         if reading.text.len() as u64 > file_reads::STORE_MAX {
             return Err(store_io::invalid("Meeting transcript is too large"));
         }
     }
-    reading.language = Some(if english_only {
-        Language::EnglishOnly
-    } else {
+    reading.language = Some(if any_text || !any_unsure {
         Language::Routed
+    } else {
+        Language::EnglishOnly
     });
     publish(root, id, folder, reading)
 }

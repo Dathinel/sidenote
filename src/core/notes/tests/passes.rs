@@ -244,6 +244,34 @@ fn joined_meeting_is_routed_when_one_part_has_hindi_or_telugu_text() {
     let (hex, folder) = two_parts(&root.0, &first);
     assert_eq!(joined_word(&root.0, &hex, &folder), Some(Language::Routed));
 }
+/// Replaces the released Telugu reading with a clean all-English one: language ID was sure.
+fn clean_english(root: &Path, folder: &Path) {
+    let id = release(root, folder, "te", false);
+    let (_, mut data) = revision::load(&dir(root), Some(&id)).unwrap().unwrap();
+    let segment = &mut data.transcript.segments[0];
+    (segment.lang, segment.route, segment.status) =
+        ("en".into(), "en".into(), "segment-level".into());
+    segment.text_original = PRIVATE.into();
+    data.provenance = serde_json::Value::Null;
+    let id = revision::commit(&dir(root), &data).unwrap();
+    let released = serde_json::json!({"generation": "7", "revision": id,
+        "source_revision": "fixture-input", "completed_ms": chrono::Utc::now().timestamp_millis()});
+    let work = root.join("local/router-work").join(ID);
+    fs::write(work.join("released.json"), released.to_string()).unwrap();
+}
+#[test]
+fn a_sure_english_part_cannot_hide_a_part_that_fell_back() {
+    let (root, first, _) = setup();
+    clean_english(&root.0, &first);
+    let now = chrono::Utc::now().timestamp_millis();
+    let part = transcript::chosen(&root.0, ID, &first, None, now, now + 1000);
+    assert_eq!(part.unwrap().unwrap().language, Some(Language::Routed));
+    let (hex, folder) = two_parts(&root.0, &first);
+    assert_eq!(
+        joined_word(&root.0, &hex, &folder),
+        Some(Language::EnglishOnly)
+    );
+}
 #[test]
 fn joined_meeting_is_english_only_when_every_part_fell_back() {
     let (root, first, _) = setup();
