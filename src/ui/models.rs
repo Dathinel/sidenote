@@ -2,6 +2,9 @@ use super::{Event, State, hex, roles, theme::Palette, widgets::pressable};
 use rune::{El, col, row};
 use rune_kit::{Kit, TextInput};
 use sidenote::core::model_catalog::{self, ModelStore, Phase, Progress, Runtime, SizeTier};
+#[cfg(not(test))]
+use sidenote::hex_engine::HexEngine;
+use sidenote::hex_engine::{EngineState, HexError};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::Path,
@@ -17,6 +20,23 @@ pub(crate) mod proof;
 
 const CPU_DOWNLOAD_KEY: &str = "download-cpu-language-packs";
 const CPU_DOWNLOAD_LABEL: &str = "Download Hindi and Telugu (567 MB)";
+const RECORDING_LINE: &str = "A meeting is recording. Start the download after it ends.";
+const UNKNOWN_LINE: &str = "Could not check for a recording. Try again.";
+
+/// Runs at the start of every install worker: each click, and each pack of the 4-pack queue.
+/// A pack already transferring is not interrupted. Only a start is refused, and nothing retries.
+fn recording_check(status: Result<EngineState, HexError>) -> std::io::Result<()> {
+    let line = match status {
+        Ok(s) if s.recording.is_some() => RECORDING_LINE,
+        Ok(s) => match s.meeting_state.as_str() {
+            "idle" | "stopped" | "complete" | "finished" | "transcribing" => return Ok(()),
+            "paused" | "stopping" | "finishing" => RECORDING_LINE,
+            _ => UNKNOWN_LINE,
+        },
+        Err(_) => UNKNOWN_LINE,
+    };
+    Err(std::io::Error::other(line))
+}
 
 pub enum Msg {
     Progress(&'static str, Progress),
@@ -46,6 +66,9 @@ pub struct Models {
     pack_queue: VecDeque<&'static str>,
     #[cfg(test)]
     install_fixture: Option<std::sync::mpsc::Sender<&'static str>>,
+    /// The Hex status the recording check reads. Tests never reach the real Hex.
+    #[cfg(test)]
+    status_fixture: Option<Arc<dyn Fn() -> Result<EngineState, HexError> + Send + Sync>>,
     preference_error: Option<String>,
     scene: bool,
 }
@@ -99,6 +122,8 @@ impl Models {
             pack_queue: VecDeque::new(),
             #[cfg(test)]
             install_fixture: None,
+            #[cfg(test)]
+            status_fixture: None,
             scene: false,
         }
     }
@@ -154,6 +179,8 @@ impl Models {
         let store = self.store.clone();
         #[cfg(test)]
         let install_fixture = self.install_fixture.clone();
+        #[cfg(test)]
+        let status_fixture = self.status_fixture.clone();
         self.errors.remove(id);
         self.progress.insert(
             id,
@@ -168,6 +195,14 @@ impl Models {
             let result = match action {
                 Action::Remove => store.remove(id),
                 Action::Install => {
+                    #[cfg(test)]
+                    let status = status_fixture.map_or(Err(HexError::HexNotRunning), |read| read());
+                    #[cfg(not(test))]
+                    let status = HexEngine::new().status_for_command();
+                    if let Err(error) = recording_check(status) {
+                        notify(Msg::Finished(id, Err(error)));
+                        return;
+                    }
                     #[cfg(test)]
                     if let Some(fixture) = install_fixture {
                         notify(Msg::Finished(
@@ -213,8 +248,7 @@ impl Models {
     }
 
     fn can_download_cpu_packs(&self, config: &sidenote::core::Config) -> bool {
-        cfg!(all(windows, feature = "asr-runtime"))
-            && config.labs.after_stop_language_routing
+        config.labs.after_stop_language_routing
             && config.pipeline.enabled()
             && config.pipeline.language_mode == "auto"
             && self.pack_queue.is_empty()
@@ -461,6 +495,7 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     state.models = Models::load(root.path(), &state.config);
     let (installed_tx, installed_rx) = std::sync::mpsc::channel();
     state.models.install_fixture = Some(installed_tx);
+    state.models.status_fixture = Some(recording_tests::always_idle());
     state.hex.shell.model_query.text = "unmatched search".into();
     let mut runtime = settings_models_runtime(state);
     assert!(click_model_control(&mut runtime, CPU_DOWNLOAD_KEY));
@@ -500,7 +535,10 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     assert!(installed_rx.try_recv().is_err());
 }
 
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(all(test, feature = "asr-runtime"))]
+mod recording_tests;
+
+#[cfg(all(feature = "asr-runtime", any(windows, test)))]
 fn settings_models_runtime(state: State) -> rune::Runtime<State> {
     let mut runtime = rune::Runtime::new(
         state,
@@ -512,7 +550,7 @@ fn settings_models_runtime(state: State) -> rune::Runtime<State> {
     runtime
 }
 
-#[cfg(all(windows, feature = "asr-runtime"))]
+#[cfg(all(feature = "asr-runtime", any(windows, test)))]
 fn click_model_control(runtime: &mut rune::Runtime<State>, key: &str) -> bool {
     let Some((x, y)) = runtime.find(key) else {
         return false;
@@ -666,7 +704,7 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                     ),
             )
             .child(routing);
-        if models.can_download_cpu_packs(&s.config) {
+        if cfg!(all(windows, feature = "asr-runtime")) && models.can_download_cpu_packs(&s.config) {
             body = body.child(
                 super::widgets::action(CPU_DOWNLOAD_LABEL, p)
                     .key(CPU_DOWNLOAD_KEY)
@@ -694,7 +732,8 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
                         || !cfg!(feature = "asr-runtime"))
                     && (models.installed.contains(m.id) || models.partial.contains(m.id));
             }
-            if cpu_language && !models.pack_queue.is_empty() {
+            // A queued pack, or any card that has to show an error, stays listed whatever the search says.
+            if (cpu_language && !models.pack_queue.is_empty()) || models.errors.contains_key(m.id) {
                 return true;
             }
             if m.role == model_catalog::Role::LanguageId && !cpu_language {
@@ -952,6 +991,8 @@ pub fn scene(s: &mut State, name: &str) {
         pack_queue: VecDeque::new(),
         #[cfg(test)]
         install_fixture: None,
+        #[cfg(test)]
+        status_fixture: None,
         preference_error: None,
     };
     let id = "indicconformer-hi-ctc";
