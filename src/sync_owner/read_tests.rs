@@ -3,12 +3,14 @@ use serde_json::json;
 
 #[test]
 fn large_inventory_stays_readable_and_cursors_detect_changes() -> io::Result<()> {
+    // Keep the inventory above the frame cap with fewer pages to hash.
+    let revision = "a".repeat(14 * 1024);
     let mut state = Snapshot {
-        meetings: (0..12_000)
+        meetings: (0..80)
             .map(|n| Ingested {
                 device: Some("d".repeat(32)),
                 id: format!("{n}-1"),
-                revision: "a".repeat(64),
+                revision: revision.clone(),
                 ..Default::default()
             })
             .collect(),
@@ -33,8 +35,8 @@ fn large_inventory_stays_readable_and_cursors_detect_changes() -> io::Result<()>
             Some(serde_json::from_value(page["next"].clone())?),
         )?;
     }
-    assert_eq!(seen.len(), 12_000);
-    state.meetings[0].revision = "b".repeat(64);
+    assert_eq!(seen.len(), state.meetings.len());
+    state.meetings[0].revision.replace_range(..1, "b");
     assert!(
         pages::page(&state.meetings, Some(serde_json::from_value(stale)?))
             .unwrap_err()
@@ -56,9 +58,9 @@ fn many_conflict_choices_have_a_small_selector_and_bounded_pages() -> io::Result
         task_id: "synthetic".into(),
         title: String::new(),
         field: "owner".into(),
-        choices: (0..10_000)
+        choices: (0..80)
             .map(|n| relay::Choice {
-                value: json!(format!("{n}:{}", "x".repeat(100))),
+                value: json!(format!("{n}:{}", "x".repeat(14 * 1024))),
                 device: "fixture".into(),
                 at: String::new(),
                 source: n.to_string(),

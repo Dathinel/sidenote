@@ -291,6 +291,11 @@ impl Drop for Live {
 }
 
 impl Live {
+    #[cfg(all(test, windows))]
+    pub(super) fn age_past_start_timeout(&mut self) {
+        self.began = Instant::now() - START_WAIT - Duration::from_secs(1);
+    }
+
     pub(super) fn take_notes_timing(&mut self, recording: u64) -> u64 {
         if self.recording_id == recording {
             std::mem::take(&mut self.notes_response_time)

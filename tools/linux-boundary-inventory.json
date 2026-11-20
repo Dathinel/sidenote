@@ -111,7 +111,7 @@
   "src/core/notes/tests/idle.rs": "1042fecce32cbd639cafb25395077c718558d80aa4bc0e64812c3e0b9fe00dd6",
   "src/core/notes/tests/review.rs": "a3a5e306f63cbcbd7449ba25a40690a1b1370ed09721799212859e49197d0f92",
   "src/core/notes/tests/routing.rs": "516c036af7c0d977673b11baa58c2eb12350398c1babaa4be3e8ade116fb4f02",
-  "src/core/notes/tests/translation.rs": "41af10c733c26a9fe75db9b8d7605eeba5593fa5e0d50f0e8c2ad463ed516574",
+  "src/core/notes/tests/translation.rs": "1f6d893eaa89918705645778aea5270a627c2e76c2fec2db63c9648bd1b63a0d",
   "src/core/notes/tests/translation/authorization.rs": "767ba6dd4e52d237eeb53579ad57ecc06e11e7594c39da8f266ef8fedacf0cbb",
   "src/core/notes/tests/translation/busy.rs": "e081f100d184ea89bb0173ab92c01b009bc777bfd9e494cf2c4d0e6db4c82c29",
   "src/core/notes/tests/translation/failed.rs": "4a53753fe8c9e66fb0a1330a18156a3a25c8858a2490801e688d8aa05f31e9e8",
@@ -203,14 +203,14 @@
   "src/ui/edit_worker.rs": "f3d8212397e72b9255aeda147e710d300be5d5b4555ab37ae8c479f82d8387e3",
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
   "src/ui/hex.rs": "2a712cd37829a5a9aaf36b3f401ba17f428a520acf28d3d0bc50e995bf5009d9",
-  "src/ui/hex/connection/stop_tests.rs": "20f341d5095147e5d1e41d96bb12ea68fe097eb88a736633c79ee4a8d583722b",
+  "src/ui/hex/connection/stop_tests.rs": "bc54d10d6e81eea949dbb6dbb7f24cef01cb819b4af0241cebcbe44ac6cf1591",
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
   "src/ui/hex/connection/stop_tests/readiness.rs": "364d6e812b5131efe65314381fde0a9d4a1a77eb9d9cbab88b8ab9b83477a169",
   "src/ui/hex/settings.rs": "2477f86b966d3f6e8f8387ad2b8d4d55dd34fc6854b5ec21c1420c00de14cf58",
   "src/ui/hex/setup.rs": "bba9c880a9c9b598e651c455b7ae387db766a7c9fffa7a99474ea76019c49e37",
   "src/ui/idle_cpu.rs": "ab45c9a037baff122cbbd3a35ef2de88d452a16666265c0e89166aa8624ff239",
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
-  "src/ui/live.rs": "e83834601970ea30b6076d0bf90805ee35522a4987ed0e503c83a5b10e18fe02",
+  "src/ui/live.rs": "8a6e82f1806b678d0b8d63735b239beac992be2747e1a43e2c862e2ffb8a0e81",
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
   "src/ui/memory.rs": "a4091ff72d6b742fda65bcf8d8e5a4c3695f7345522762bed2a8e83f0aa69e12",
   "src/ui/memory/settled.rs": "b9b7344264f3b4270696b0f885922bbefa2a258cee19c72dabc2151bcf38e08a",
@@ -223,5 +223,5 @@
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
   "src/ui/theme.rs": "1b9b8b2a44d178355ac4bc365661a2919a3fefb571e52964b307b7e00697a730",
   "src/ui/updates.rs": "c0fb7519901a28d537f0b1424eac92b0ba4eaed74f825a8aa8a5bc0e343ac6ec",
-  "src/updates_windows.rs": "364656827f4b8c0922922487f0c937715f1b5b8a322a0877a692a211fa65dd50"
+  "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }
