@@ -6,6 +6,7 @@ use super::{
 mod corruption;
 mod english_first;
 mod idle;
+mod passes;
 #[cfg(windows)]
 mod review;
 #[cfg(windows)]

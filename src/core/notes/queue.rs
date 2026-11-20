@@ -1,7 +1,7 @@
 use super::{
-    Engine, Helper, JobState, NotesSettings, Request,
+    Engine, Helper, JobState, Language, NotesSettings, Request,
     helper::{self, Failure, Run},
-    prompt, schema, transcript, translation,
+    language, prompt, schema, transcript, translation,
 };
 use crate::core::failure::{AtStage, Stage};
 use crate::core::meeting_job::{self, Stage as JobStage};
@@ -548,6 +548,11 @@ fn process(
         translation::invoke(routed.as_ref(), state, run);
         store_io::write(&job_path(root, id), job)?;
     }
+    // Status only: how the passes went for the transcript this summary is written from.
+    let passes = routed
+        .as_ref()
+        .map_or(Some(Language::EnglishOnly), |selection| selection.language);
+    let passes_revision = routed.as_ref().map(|selection| selection.revision.clone());
     let mut transcript = if let Some(selection) = routed {
         selection.render()
     } else if job.request == Some(Request::RedoTasks) {
@@ -737,12 +742,11 @@ fn process(
         }
         .into();
         let mut summary = answer.value;
-        summary.made_by = Some(prompt::provenance(
-            helper,
-            model,
-            answer.custom,
-            answer.fallback,
-        ));
+        let mut made_by = prompt::provenance(helper, model, answer.custom, answer.fallback);
+        if let Some(passes) = passes {
+            language::stamp(&mut made_by, passes, passes_revision.as_deref());
+        }
+        summary.made_by = Some(made_by);
         let bytes = serde_json::to_vec_pretty(&summary)?;
         // Publication also preserves a summary written before this engine acquired the lock.
         let settle = core::settle::Store::new(

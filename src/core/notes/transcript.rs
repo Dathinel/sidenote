@@ -23,6 +23,8 @@ pub(super) struct Selection {
     pub revision: String,
     pub transcript: Option<crate::core::meeting_router::Transcript>,
     pub reasons: Vec<crate::core::meeting_router::fallback::RoutingFallback>,
+    /// How the passes went for this transcript. None when it is not known (joined meetings).
+    pub language: Option<super::Language>,
     rendered: String,
 }
 impl Selection {
@@ -129,6 +131,7 @@ pub(super) fn chosen_sized(
                 revision,
                 transcript: None,
                 reasons,
+                language: None,
                 rendered,
             })
         });
@@ -229,10 +232,17 @@ fn chosen_part_sized(
                         .join(" ")
                 ));
             }
+            let language = super::language::of(
+                t.input_checksum == "compatibility",
+                t.degraded(),
+                &reasons,
+                t.segments.iter().map(|s| s.lang.as_str()),
+            );
             Ok(Selection {
                 revision: id,
                 transcript: Some(t),
                 reasons,
+                language: Some(language),
                 rendered: text,
             })
         })
