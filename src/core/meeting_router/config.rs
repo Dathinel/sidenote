@@ -304,8 +304,10 @@ mod tests {
     fn route_pins_follow_the_mode_and_keep_the_existing_backend_and_model() {
         use speech_packs::{Backend::*, Decoder::*};
         let registry = speech_packs::registry().unwrap();
-        let mut config = RoutingConfig::default();
-        config.after_stop_languages = Some(LanguageRoutes::cpu_after_stop());
+        let mut config = RoutingConfig {
+            after_stop_languages: Some(LanguageRoutes::cpu_after_stop()),
+            ..RoutingConfig::default()
+        };
         let mut pins = config.route_snapshot(registry);
         for (language, expected) in [
             ("en", (Hex, "parakeet_unified_en", HexService)),
