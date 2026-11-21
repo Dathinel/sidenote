@@ -371,6 +371,26 @@ pub fn banner(title: &str, body: impl Into<String>, kind: BannerKind, p: Palette
         .child(roles::SMALL.wrap(body, p.ink))
 }
 
+pub fn notice_action(name: &str, p: Palette) -> El {
+    pressable(
+        roles::CONTROL
+            .bold()
+            .wrap(name, p.ink)
+            .spans([Span::new(0, name.len()).underline(p.ink)]),
+    )
+    .focus_ring(2.0, 2.0, p.accent)
+}
+
+pub fn inline_notice(message: &str, action: El, p: Palette) -> El {
+    row()
+        .gap(6.0)
+        .items_center()
+        .flex_wrap()
+        .child(icons::draw(&icons::WARNING, 14.0, p.warn))
+        .child(roles::CONTROL.wrap(message, p.soft).role("status"))
+        .child(action)
+}
+
 pub fn scroll(content: El, key: &str) -> El {
     col()
         .key(key.to_string())

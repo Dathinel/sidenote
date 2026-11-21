@@ -4,9 +4,9 @@ use super::{
     area::button,
     roles,
     theme::Palette,
-    widgets::{self, BannerKind},
+    widgets::{self, BannerKind, ButtonDisabled},
 };
-use rune::{El, row};
+use rune::{El, col, row};
 use sidenote::core::{
     self, Meeting,
     notes::{Helper, JobState, Request},
@@ -106,44 +106,33 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
     }
 }
 
-fn has_notice(job: &Job) -> bool {
-    !job.routing_message().is_empty() || !job.translation_message().is_empty()
-}
-fn label_for(job: &Job) -> &'static str {
-    let tasks_ok = matches!(
-        job.state,
-        JobState::Done {
-            tasks_failed: false,
-            ..
-        }
-    );
-    if !job.routing_message().is_empty() && tasks_ok {
-        "Summary used Hex coverage"
-    } else if !job.translation_message().is_empty() && tasks_ok {
-        "Summary used original text"
-    } else {
-        label(&job.state)
-    }
-}
-
 pub fn visible_copy(
     job: &Job,
     selected: Option<Helper>,
     dismissed: bool,
 ) -> Option<(&'static str, String)> {
-    if matches!(job.state, JobState::Done { .. })
-        && (dismissed
-            || (matches!(
-                job.state,
-                JobState::Done {
-                    fallback: false,
-                    ..
-                }
-            ) && !has_notice(job)))
+    if let JobState::Done {
+        fallback,
+        tasks_failed,
+    } = job.state
     {
-        return None;
+        if dismissed {
+            return None;
+        }
+        if tasks_failed {
+            return Some((label(&job.state), TASKS_RETRY.into()));
+        }
+        if !fallback {
+            let routing = job.routing_message();
+            if !routing.is_empty() {
+                return Some(("Summary used Hex coverage", routing));
+            }
+            let translation = job.translation_message();
+            return (!translation.is_empty())
+                .then(|| ("Summary used original text", translation.into()));
+        }
     }
-    Some((label_for(job), message(job, selected)))
+    Some((label(&job.state), summary_message(job, selected)))
 }
 
 pub fn label(state: &JobState) -> &'static str {
@@ -166,10 +155,10 @@ pub fn label(state: &JobState) -> &'static str {
         JobState::TooLong { .. } => "Meeting too long for a summary",
         JobState::ContextTooLong { .. } => "Shorten the summary input",
         JobState::Empty => "No speech heard",
-        JobState::Done { fallback: true, .. } => "Summary used default instructions",
         JobState::Done {
             tasks_failed: true, ..
         } => "Tasks not added to a project",
+        JobState::Done { fallback: true, .. } => "Summary used default instructions",
         JobState::Done { .. } => "Summary ready",
     }
 }
@@ -221,20 +210,11 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
         })
 }
 pub fn list_label(s: &State, m: &Meeting) -> Option<&'static str> {
-    job(s, m).and_then(|j| {
-        if matches!(
-            j.state,
-            JobState::Done {
-                fallback: false,
-                tasks_failed: false
-            }
-        ) && !has_notice(&j)
-        {
-            None
-        } else {
-            Some(label_for(&j))
-        }
-    })
+    let job = job(s, m)?;
+    match job.state {
+        JobState::Done { .. } => visible_copy(&job, None, false).map(|(title, _)| title),
+        _ => Some(label(&job.state)),
+    }
 }
 fn request_button(title: &str, id: &str, mode: Request, key: &str, s: &State, p: Palette) -> El {
     let id = id.to_string();
@@ -321,8 +301,34 @@ fn banner_with(s: &State, id: &str, job: &Job, p: Palette, show_engine: bool) ->
         {
             return None;
         }
-        (label(&job.state), summary_message(job, selected))
+        let title = if matches!(job.state, JobState::Done { fallback: true, .. }) {
+            "Summary used default instructions"
+        } else {
+            label(&job.state)
+        };
+        (title, summary_message(job, selected))
     };
+    if show_engine
+        && matches!(
+            job.state,
+            JobState::Done {
+                tasks_failed: true,
+                ..
+            }
+        )
+    {
+        let engine = engine_message(job);
+        let mut notice = tasks_retry_notice(s, id, &copy, p);
+        if !engine.is_empty() {
+            notice = notice.child(roles::SMALL.wrap(engine, p.faint).role("status"));
+        }
+        if matches!(job.state, JobState::Done { fallback: true, .. }) {
+            notice = notice
+                .child(roles::SMALL.wrap(summary_message(job, selected), p.soft))
+                .child(edit_button(p).self_start());
+        }
+        return Some(notice);
+    }
     let kind = if is_failure(&job.state) {
         BannerKind::Problem
     } else if matches!(job.state, JobState::Running | JobState::Queued) {
@@ -341,6 +347,12 @@ fn banner_with(s: &State, id: &str, job: &Job, p: Palette, show_engine: bool) ->
         ));
     }
     let mut c = widgets::banner(title, copy, kind, p).key("notes-state-banner");
+    if show_engine && matches!(job.state, JobState::Done { fallback: true, .. }) {
+        let engine = engine_message(job);
+        if !engine.is_empty() {
+            c = c.child(roles::SMALL.wrap(engine, p.faint).role("status"));
+        }
+    }
     let mut buttons = row().w_full().flex_wrap().gaps(8.0, 8.0);
     match job.state {
         JobState::NoHelper => {
@@ -467,6 +479,9 @@ fn edit_button(p: Palette) -> El {
         super::scene_scroll(s, "agent-instructions");
     })
 }
+const TASKS_RETRY: &str = "Not added to projects yet.";
+const TRANSCRIPT_SAVED: &str = "Your transcript is saved.";
+
 pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let j = job(s, m)?;
     matches!(
@@ -476,38 +491,31 @@ pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
             ..
         }
     )
-    .then(|| {
-        widgets::banner(
-            "Tasks need another try",
-            "Tasks could not be added to projects. Press Try again. Your transcript is saved.",
-            BannerKind::Problem,
-            p,
-        )
-        .mt(12.0)
-        .mb(16.0)
+    .then(|| tasks_retry_notice(s, &m.id, TASKS_RETRY, p))
+}
+
+fn tasks_retry_notice(s: &State, id: &str, message: &str, p: Palette) -> El {
+    let id = id.to_string();
+    let retry = widgets::notice_action("Try again", p)
+        .key("notes-sort-again")
+        .help(TRANSCRIPT_SAVED)
+        .on_press(move |s: &mut State| s.request_notes(id.clone(), Request::SortAgain))
+        .button_disabled(s.ai_notes.pending.is_some());
+    col()
+        .key("notes-tasks-notice")
+        .gap(4.0)
+        .child(widgets::inline_notice(message, retry, p))
         .children(
             s.ai_notes
                 .error
                 .as_ref()
-                .map(|error| roles::SMALL.wrap(error, p.warn).role("alert")),
+                .map(|error| roles::SMALL.wrap(error, p.ink).role("alert")),
         )
         .children(
             s.ai_notes
                 .pending
-                .map(|text| roles::META.wrap(text, p.soft).role("status")),
+                .map(|text| roles::META.wrap(text, p.faint).role("status")),
         )
-        .child(
-            request_button(
-                "Try again",
-                &m.id,
-                Request::SortAgain,
-                "notes-sort-again",
-                s,
-                p,
-            )
-            .self_start(),
-        )
-    })
 }
 pub fn provenance(m: &Meeting, p: Palette) -> Option<El> {
     let raw: serde_json::Value = serde_json::from_str(&m.summary_raw).ok()?;
@@ -600,6 +608,38 @@ mod tests {
             assert_eq!(label, "Summary used Hex coverage");
             assert!(text.contains(reason), "{case}: {text}");
             assert!(!text.contains("default instructions"));
+        }
+    }
+
+    #[test]
+    fn task_retry_and_missing_models_each_use_their_own_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "1793955600000-1";
+        let jobs = root.path().join("local/notes-jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        for (failed, title, detail) in [
+            (
+                true,
+                "Tasks not added to a project",
+                "Not added to projects yet.",
+            ),
+            (
+                false,
+                "Summary used Hex coverage",
+                "Hindi and Telugu models are not installed yet",
+            ),
+        ] {
+            let record = serde_json::json!({
+                "state": "done", "fallback": false, "tasks_failed": failed,
+                "transcript_revision": "a".repeat(64),
+                "routing_fallbacks": [{"reason": {"cpu_language_models_missing": {"ready": 2}}}]
+            });
+            std::fs::write(jobs.join(format!("{id}.json")), record.to_string()).unwrap();
+            let job = core::notes::status_record(root.path(), id).unwrap();
+            let (shown_title, copy) = visible_copy(&job, None, false).unwrap();
+            assert_eq!(shown_title, title);
+            assert!(copy.contains(detail), "{copy}");
+            assert_eq!(copy.contains("models are not installed"), !failed);
         }
     }
 
