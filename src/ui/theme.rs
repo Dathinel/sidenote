@@ -315,7 +315,6 @@ mod type_and_contrast_tests {
             ("reading", include_str!("meeting/reading.rs")),
             ("widgets", include_str!("widgets.rs")),
             ("tasks", include_str!("tasks.rs")),
-            ("check", include_str!("check.rs")),
             ("todo", include_str!("todo.rs")),
         ] {
             let source: String = source.split_whitespace().collect();

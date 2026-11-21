@@ -110,6 +110,44 @@ fn page_with_cited_point() -> Runtime<State> {
 }
 
 #[test]
+fn kb_copy_rows_keep_mono_for_paths_and_commands() {
+    if in_parent("kb_copy_rows_keep_mono_for_paths_and_commands") {
+        return;
+    }
+    const VALUES: [&str; 2] = ["docs/v1/api_keys.md", "git show HEAD:docs/v1/api_keys.md"];
+    fn fixture(s: &State, _: &mut rune::Cx<State>) -> rune::El {
+        let p = theme::palette(false);
+        col().children(VALUES.into_iter().enumerate().flat_map(|(i, value)| {
+            [
+                check::source_row(s, value, format!("copy-{i}"), p),
+                rune::text(value)
+                    .font(roles::META.style().mono())
+                    .self_start(),
+            ]
+        }))
+    }
+    crate::test_paths::isolate();
+    let mut rt = Runtime::with_text(
+        State::new(),
+        fixture,
+        (640.0, 240.0),
+        Env::default(),
+        TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+    );
+    rt.frame(0.0);
+    let elements = rt.elements();
+    for value in VALUES {
+        let widths = elements
+            .iter()
+            .filter(|element| element.text.as_deref() == Some(value))
+            .map(|element| element.rect[2])
+            .collect::<Vec<_>>();
+        assert_eq!(widths.len(), 2, "{value}");
+        assert!((widths[0] - widths[1]).abs() < 0.5, "{value}: {widths:?}");
+    }
+}
+
+#[test]
 fn meeting_source_time_reveals_on_hover_and_focus() {
     if in_parent("meeting_source_time_reveals_on_hover_and_focus") {
         return;

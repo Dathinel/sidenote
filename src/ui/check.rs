@@ -2069,7 +2069,7 @@ pub fn copy_row(s: &State, value: &str, key: String, p: Palette) -> El {
         .items_center()
         .child(
             rune::text(value.to_string())
-                .font(roles::TIME.style())
+                .font(roles::META.style().mono())
                 .color(p.soft)
                 .wrap()
                 .selectable(true)
