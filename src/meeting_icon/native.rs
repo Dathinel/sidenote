@@ -243,12 +243,12 @@ fn panic_hook() {
 }
 
 pub(super) struct Host {
-    send: Option<mpsc::SyncSender<(Frame, bool)>>,
+    send: Option<mpsc::SyncSender<Frame>>,
     control: Arc<Control>,
     worker: Option<JoinHandle<()>>,
 }
 impl Host {
-    pub(super) fn new(replay: bool, capture_visible: bool) -> io::Result<Self> {
+    pub(super) fn new(replay: bool, root: &Path) -> io::Result<Self> {
         if disabled() {
             return Err(io::Error::other("Icon disabled"));
         }
@@ -260,29 +260,27 @@ impl Host {
         let (ready, started) = mpsc::sync_channel(1);
         let control = Arc::new(Control::new());
         let worker_control = control.clone();
+        let root = root.to_owned();
         let worker = std::thread::Builder::new()
             .name("meeting-icon-window".into())
             .spawn(move || {
                 worker_control.startup.enter("thread_entry");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let window = match window::NativeWindow::new(
-                        replay,
-                        capture_visible,
-                        worker_control.clone(),
-                    ) {
-                        Ok(window) => window,
-                        Err(error) => {
-                            let _ = ready.send(Err(error));
-                            return;
-                        }
-                    };
+                    let window =
+                        match window::NativeWindow::new(replay, root, worker_control.clone()) {
+                            Ok(window) => window,
+                            Err(error) => {
+                                let _ = ready.send(Err(error));
+                                return;
+                            }
+                        };
                     if ready.send(Ok(())).is_err() {
                         return;
                     }
                     worker_control.startup.enter("ready_sent");
                     while !worker_control.stop.load(Ordering::Acquire) {
                         match receive.try_recv() {
-                            Ok((frame, capture_visible)) => window.update(frame, capture_visible),
+                            Ok(frame) => window.update(frame),
                             Err(mpsc::TryRecvError::Empty) => (),
                             Err(mpsc::TryRecvError::Disconnected) => break,
                         }
@@ -305,14 +303,11 @@ impl Host {
         Ok(host)
     }
 
-    pub(super) fn update(&self, frame: Frame, capture_visible: bool) -> bool {
+    pub(super) fn update(&self, frame: Frame) -> bool {
         reap();
         !self.control.stop.load(Ordering::Acquire)
             && self.send.as_ref().is_some_and(|s| {
-                !matches!(
-                    s.try_send((frame, capture_visible)),
-                    Err(mpsc::TrySendError::Disconnected(_))
-                )
+                !matches!(s.try_send(frame), Err(mpsc::TrySendError::Disconnected(_)))
             })
     }
 }

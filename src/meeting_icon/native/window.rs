@@ -1,4 +1,4 @@
-use super::{Control, Frame, RETIRE, callback_boundary};
+use super::{Control, Frame, RETIRE, callback_boundary, capture_visible};
 use crate::core::notes::SummarySkip;
 use crate::{
     core::{self, store_io},
@@ -8,10 +8,11 @@ use std::{
     cell::{Cell, RefCell},
     io,
     mem::size_of,
+    path::{Path, PathBuf},
     ptr,
     rc::Rc,
     sync::{Arc, Once, OnceLock, atomic::Ordering},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
@@ -32,6 +33,13 @@ use windows_sys::Win32::{
 
 const WIDTH: f32 = 104.0;
 const HEIGHT: f32 = 44.0;
+const CAPTURE_TIMER: usize = 1;
+const CAPTURE_POLL_MS: u32 = 100;
+
+fn capture_stamp(root: &Path) -> Option<(SystemTime, u64)> {
+    let metadata = std::fs::metadata(root.join("config.json")).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
 
 fn capture_affinity(visible: bool) -> u32 {
     if visible {
@@ -248,6 +256,8 @@ impl Drop for Paint {
 struct View {
     icon: Cell<HWND>,
     card: Cell<HWND>,
+    config_root: PathBuf,
+    capture_stamp: Cell<Option<(SystemTime, u64)>>,
     capture_visible: Cell<bool>,
     font: RefCell<Option<Rc<Font>>>,
     timer_font: RefCell<Option<(i32, Rc<Font>)>>,
@@ -272,27 +282,24 @@ pub(super) struct NativeWindow {
     card_class: Vec<u16>,
 }
 impl NativeWindow {
-    pub(super) fn new(
-        replay: bool,
-        capture_visible: bool,
-        control: Arc<Control>,
-    ) -> io::Result<Self> {
+    pub(super) fn new(replay: bool, root: PathBuf, control: Arc<Control>) -> io::Result<Self> {
         unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(ptr::null());
             let icon_class = wide(&control.icon_class);
             let card_class = wide(&control.card_class);
             control.startup.enter("position_read");
-            let fraction = store_io::read::<Option<f32>>(
-                &core::state_dir().join("local/floating-icon-position.json"),
-            )
-            .unwrap_or_default()
-            .unwrap_or(0.6);
+            let fraction =
+                store_io::read::<Option<f32>>(&root.join("local/floating-icon-position.json"))
+                    .unwrap_or_default()
+                    .unwrap_or(0.6);
             let window = Self {
                 view: Box::new(View {
                     icon: Cell::new(ptr::null_mut()),
                     card: Cell::new(ptr::null_mut()),
-                    capture_visible: Cell::new(capture_visible),
+                    config_root: root,
+                    capture_stamp: Cell::new(None),
+                    capture_visible: Cell::new(false),
                     font: RefCell::new(None),
                     timer_font: RefCell::new(None),
                     surface: RefCell::default(),
@@ -364,26 +371,21 @@ impl NativeWindow {
             window.view.icon.set(hwnd);
             window.view.control.publish(hwnd, false);
             window.view.control.startup.enter("capture_exclusion");
-            apply_capture_affinity(hwnd, capture_visible)?;
+            let root = &window.view.config_root;
+            window.view.capture_stamp.set(capture_stamp(root));
+            let visible = capture_visible(root);
+            apply_capture_affinity(hwnd, visible)?;
+            window.view.capture_visible.set(visible);
+            // A window timer also runs inside the card's native move/resize loop.
+            if SetTimer(hwnd, CAPTURE_TIMER, CAPTURE_POLL_MS, None) == 0 {
+                return Err(io::Error::last_os_error());
+            }
             window.view.control.startup.enter("geometry");
             window.view.geometry();
             Ok(window)
         }
     }
-    pub(super) fn update(&self, frame: Frame, capture_visible: bool) {
-        let view = &self.view;
-        if view.capture_visible.replace(capture_visible) != capture_visible {
-            let card = view.card.get();
-            unsafe {
-                if !card.is_null() && apply_capture_affinity(card, capture_visible).is_err() {
-                    view.destroy(card);
-                }
-                if apply_capture_affinity(view.icon.get(), capture_visible).is_err() {
-                    view.close_windows();
-                    return;
-                }
-            }
-        }
+    pub(super) fn update(&self, frame: Frame) {
         let prior = self.view.frame.replace(frame.clone());
         let changed = icon_changed(&prior, &frame);
         let card_changed = prior.id != frame.id
@@ -410,6 +412,23 @@ impl NativeWindow {
         }
     }
     pub(super) fn pump(&self) -> bool {
+        unsafe {
+            let mut timer = std::mem::zeroed();
+            // Service capture even if the rest of the queue is busy.
+            if PeekMessageW(
+                &mut timer,
+                self.view.icon.get(),
+                WM_TIMER,
+                WM_TIMER,
+                PM_REMOVE,
+            ) != 0
+            {
+                if timer.message == WM_QUIT {
+                    return false;
+                }
+                DispatchMessageW(&timer);
+            }
+        }
         if self.view.animation_due(nub_step()) {
             let _ = unsafe { self.view.paint_icon() };
         }
@@ -461,6 +480,27 @@ fn icon_changed(prior: &Frame, frame: &Frame) -> bool {
 }
 
 impl View {
+    fn refresh_capture(&self, force: bool) {
+        let stamp = capture_stamp(&self.config_root);
+        let prior = self.capture_stamp.replace(stamp);
+        let visible = match stamp {
+            None => false,
+            Some(_) if force || stamp != prior => capture_visible(&self.config_root),
+            Some(_) => return,
+        };
+        if self.capture_visible.replace(visible) == visible {
+            return;
+        }
+        unsafe {
+            let card = self.card.get();
+            if !card.is_null() && apply_capture_affinity(card, visible).is_err() {
+                self.destroy(card);
+            }
+            if apply_capture_affinity(self.icon.get(), visible).is_err() {
+                self.close_windows();
+            }
+        }
+    }
     fn animation_due(&self, step: usize) -> bool {
         let frame = self.frame.borrow();
         frame.recording
@@ -639,36 +679,49 @@ impl View {
             }
         }
     }
-    unsafe fn open_card(&self) {
+    unsafe fn prepare_card(&self) -> HWND {
         unsafe {
             if self.control.stop.load(Ordering::Acquire) {
-                return;
+                return ptr::null_mut();
             }
-            let mut hwnd = self.card.get();
+            if !self.card.get().is_null() {
+                self.refresh_capture(true);
+                return self.card.get();
+            }
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST,
+                wide(&self.control.card_class).as_ptr(),
+                wide("Sidenote meeting").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                360,
+                300,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                GetModuleHandleW(ptr::null()),
+                (self as *const View).cast(),
+            );
             if hwnd.is_null() {
-                hwnd = CreateWindowExW(
-                    WS_EX_TOPMOST,
-                    wide(&self.control.card_class).as_ptr(),
-                    wide("Sidenote meeting").as_ptr(),
-                    WS_OVERLAPPEDWINDOW,
-                    0,
-                    0,
-                    360,
-                    300,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    GetModuleHandleW(ptr::null()),
-                    (self as *const View).cast(),
-                );
-                if hwnd.is_null() {
-                    return;
-                }
-                self.card.set(hwnd);
-                self.control.publish(hwnd, true);
-                if apply_capture_affinity(hwnd, self.capture_visible.get()).is_err() {
-                    self.destroy(hwnd);
-                    return;
-                }
+                return hwnd;
+            }
+            self.refresh_capture(true);
+            if self.control.stop.load(Ordering::Acquire)
+                || apply_capture_affinity(hwnd, self.capture_visible.get()).is_err()
+            {
+                self.destroy(hwnd);
+                return ptr::null_mut();
+            }
+            self.card.set(hwnd);
+            self.control.publish(hwnd, true);
+            hwnd
+        }
+    }
+    unsafe fn open_card(&self) {
+        unsafe {
+            let hwnd = self.prepare_card();
+            if hwnd.is_null() {
+                return;
             }
             self.scroll.set(0);
             self.max_scroll.set(0);
@@ -1041,6 +1094,10 @@ unsafe fn icon_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         }
         if let Some(v) = view(hwnd, msg, l) {
             match msg {
+                WM_TIMER if w == CAPTURE_TIMER => {
+                    v.refresh_capture(false);
+                    return 0;
+                }
                 m if m == WM_APP + 40 && v.replay => {
                     v.open_card();
                     return 0;
@@ -1299,6 +1356,8 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
         Ok(View {
             icon: Cell::new(ptr::null_mut()),
             card: Cell::new(ptr::null_mut()),
+            config_root: PathBuf::new(),
+            capture_stamp: Cell::new(None),
             capture_visible: Cell::new(false),
             font: RefCell::new(Some(Rc::new(Font(font)))),
             timer_font: RefCell::new(None),
@@ -1352,6 +1411,75 @@ fn meeting_icon_capture_affinity_round_trips_through_config() {
     config.meeting_icon_in_captures = false;
     config.save(root).unwrap();
     assert_eq!(affinity(), WDA_EXCLUDEFROMCAPTURE);
+}
+
+#[test]
+fn meeting_icon_capture_affinity_updates_live_windows() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let mut defaults = core::Config::default();
+    defaults.notes = Some(core::notes::NotesSettings::default());
+    let config_path = root.join("config.json");
+    store_io::write(&config_path, &defaults).unwrap();
+    let mut config = core::Config::load_in(root).unwrap();
+    let mut save = |visible| {
+        config.meeting_icon_in_captures = visible;
+        config.save(root).unwrap();
+    };
+    let window = NativeWindow::new(false, root.to_owned(), Arc::new(Control::new())).unwrap();
+    let view = &window.view;
+    let icon = view.icon.get();
+    let card = unsafe { view.prepare_card() };
+    let affinity = |hwnd| unsafe {
+        assert_eq!(IsWindowVisible(hwnd), 0);
+        let mut value = u32::MAX;
+        assert_ne!(
+            GetWindowDisplayAffinity(hwnd, &mut value),
+            0,
+            "{}",
+            io::Error::last_os_error()
+        );
+        value
+    };
+    let wait_for = |card, expected| {
+        let start = Instant::now();
+        let deadline = start + Duration::from_millis(250);
+        loop {
+            let actual = (affinity(icon), affinity(card));
+            if actual == (expected, expected) || Instant::now() >= deadline {
+                assert_eq!(actual, (expected, expected), "after {:?}", start.elapsed());
+                assert!(start.elapsed() <= Duration::from_millis(250));
+                break;
+            }
+            assert!(window.pump());
+        }
+    };
+
+    assert_eq!(affinity(icon), WDA_EXCLUDEFROMCAPTURE);
+    assert_eq!(affinity(card), WDA_EXCLUDEFROMCAPTURE);
+    save(true);
+    wait_for(card, WDA_NONE);
+    save(false);
+    wait_for(card, WDA_EXCLUDEFROMCAPTURE);
+
+    // Create each card before pumping any timer messages for the new value.
+    unsafe { view.destroy(card) };
+    save(true);
+    let card = unsafe { view.prepare_card() };
+    assert_eq!(affinity(card), WDA_NONE);
+    unsafe { view.destroy(card) };
+    save(false);
+    let card = unsafe { view.prepare_card() };
+    assert_eq!(affinity(card), WDA_EXCLUDEFROMCAPTURE);
+
+    save(true);
+    wait_for(card, WDA_NONE);
+    std::fs::write(&config_path, b"{").unwrap();
+    wait_for(card, WDA_EXCLUDEFROMCAPTURE);
+    store_io::write(&config_path, &config).unwrap();
+    wait_for(card, WDA_NONE);
+    std::fs::remove_file(config_path).unwrap();
+    wait_for(card, WDA_EXCLUDEFROMCAPTURE);
 }
 
 pub(super) fn render_synthetic() -> io::Result<()> {
