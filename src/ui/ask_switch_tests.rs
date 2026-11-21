@@ -1173,7 +1173,7 @@ fn meeting_language_status_has_no_task_sorting_title() {
     let elements = rt.elements();
     let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
     assert!(!texts.contains(&"Tasks not added to a project"));
-    assert!(texts.contains(&"Tasks need another try"));
+    assert!(texts.contains(&"Not added to projects yet."));
 }
 
 #[test]
