@@ -2972,7 +2972,7 @@ fn source_section(s: &State, t: &TaskItem, p: Palette) -> El {
                     )
                     .child(
                         text(core::short(&l.at).to_string())
-                            .font(roles::META.medium().style().mono())
+                            .font(roles::TIME.style())
                             .color(p.faint),
                     ),
             )

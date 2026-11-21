@@ -400,7 +400,7 @@ fn bullet(kind: &str, number: Option<usize>, p: Palette) -> El {
             .radius(3.0)
             .border(1.3, p.faint)
             .mt(11.0),
-        _ => el().size(5.0, 5.0).radius(2.5).fill(p.faint).mt(11.0),
+        _ => el().size(5.0, 5.0).radius(2.5).fill(p.mark).mt(11.0),
     };
     col().w(22.0).items_center().child(mark)
 }
@@ -419,19 +419,15 @@ pub fn stamp(at: &[String], origin: &str, p: Palette) -> Option<El> {
     let origin = origin.to_string();
     let shown = format!("\u{b7} {} in recording", recording_time(&first));
     Some(
-        pressable(
-            text(shown.clone())
-                .font(roles::META.medium().style().mono())
-                .color(p.faint),
-        )
-        .key(format!("stamp-{origin}"))
-        .label(format!("Open the transcript at {}", recording_time(&first)))
-        .help("Time in the recording. Open the transcript.")
-        .px(5.0)
-        .py(1.0)
-        .radius(4.0)
-        .hover(p.chip)
-        .on_press_tx(move |s: &mut State, tx| s.jump(&first, origin.clone(), tx)),
+        pressable(text(shown.clone()).font(roles::TIME.style()).color(p.faint))
+            .key(format!("stamp-{origin}"))
+            .label(format!("Open the transcript at {}", recording_time(&first)))
+            .help("Time in the recording. Open the transcript.")
+            .px(5.0)
+            .py(1.0)
+            .radius(4.0)
+            .hover(p.chip)
+            .on_press_tx(move |s: &mut State, tx| s.jump(&first, origin.clone(), tx)),
     )
 }
 
@@ -462,16 +458,18 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
         );
     }
     let mut stamp_link = None;
+    let mut body_style = TextStyle::new(BODY, weight).lh(BODY_LH);
     if let Some(at) = pt.at.first() {
+        // Rune applies features to the whole text element, including this inline link.
+        body_style = body_style.features(roles::TIME.style().features);
         content.push('\u{a0}');
         let start = content.len();
         content.push_str(&format!("at\u{a0}{}", recording_time(at)));
         let range = start..content.len();
         spans.push(
             Span::new(range.start, range.end)
-                .mono()
-                .weight(400.0)
-                .size(roles::META.size)
+                .weight(roles::TIME.weight)
+                .size(roles::TIME.size)
                 .color(p.faint),
         );
         stamp_link = Some(
@@ -482,7 +480,7 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
         );
     }
     let mut body = text(content)
-        .font(TextStyle::new(BODY, weight).lh(BODY_LH))
+        .font(body_style)
         .color(ink)
         .wrap()
         .spans(spans)

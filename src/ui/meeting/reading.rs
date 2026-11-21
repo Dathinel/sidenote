@@ -200,7 +200,7 @@ fn fact(icon: &'static rune::Icon, words: String, p: Palette) -> El {
         .radius(8.0)
         .border(1.0, p.line)
         .child(icons::draw(icon, 13.0, p.faint))
-        .child(roles::META.line(words, p.soft))
+        .child(roles::FACT.line(words, p.soft))
 }
 
 const ENGLISH_ONLY: &str = "English-only transcript. Hindi or Telugu parts may be missing.";
@@ -367,7 +367,7 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
         let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
         line = line.child(
-            pressable(roles::META.line(&shown, p.ink))
+            pressable(roles::TIME.line(&shown, p.ink))
                 .key(source_key)
                 .label(format!("Open source at {shown}"))
                 .help("Open this line in the transcript")

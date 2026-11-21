@@ -499,7 +499,7 @@ fn transcript_lines(s: &State, m: &Meeting, p: Palette) -> (El, usize) {
         if show_time {
             meta = meta.child(
                 text(super::widgets::recording_time(&line.at))
-                    .font(roles::META.style().mono())
+                    .font(roles::TIME.style())
                     .color(p.faint),
             );
         }

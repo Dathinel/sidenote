@@ -23,6 +23,7 @@ pub struct Palette {
     /// and in dark mode never below #a9a69f on a raised surface.
     pub faint: Color,
     pub line: Color,
+    pub mark: Color,
     /// Coral: the one main action on a screen (the primary button) and the focus ring.
     pub accent: Color,
     pub ok: Color,
@@ -112,6 +113,7 @@ pub fn palette(dark: bool) -> Palette {
         soft: c[4],
         faint: c[5],
         line: c[6],
+        mark: hex(if dark { "#77746d" } else { "#95928a" }),
         accent: c[7],
         ok: c[8],
         okbg: c[9],
@@ -297,6 +299,33 @@ mod type_and_contrast_tests {
     }
 
     #[test]
+    fn time_role_gives_recording_times_equal_width() {
+        let mut ts = system();
+        let style = crate::ui::roles::TIME.style();
+        let narrow = ts.layout_rich("11:11", &[], style, 1.0, None).width();
+        let wide = ts.layout_rich("22:22", &[], style, 1.0, None).width();
+        assert!((narrow - wide).abs() < 0.01, "{narrow} vs {wide}");
+    }
+
+    #[test]
+    fn meeting_renderers_use_no_mono_family() {
+        for (name, source) in [
+            ("roles", include_str!("roles.rs")),
+            ("meeting", include_str!("meeting.rs")),
+            ("reading", include_str!("meeting/reading.rs")),
+            ("widgets", include_str!("widgets.rs")),
+            ("tasks", include_str!("tasks.rs")),
+            ("check", include_str!("check.rs")),
+            ("todo", include_str!("todo.rs")),
+        ] {
+            let source: String = source.split_whitespace().collect();
+            for mono in [".mono(", "Family::Mono", "Family::SystemMono", "mono:true"] {
+                assert!(!source.contains(mono), "{name} requests {mono}");
+            }
+        }
+    }
+
+    #[test]
     fn titles_draw_in_fraunces_and_text_in_figtree_not_in_inter() {
         let mut ts = system();
         let word = "Hamburgefonstiv 1234";
@@ -434,12 +463,14 @@ mod type_and_contrast_tests {
         assert!(failures.is_empty(), "below 4.5:1: {failures:#?}");
     }
 
-    /// Marks people click, such as section marks, need 3:1.
     #[test]
-    fn the_dimmest_text_grey_clears_three_to_one_for_clickable_marks() {
+    fn marks_keep_three_to_one_on_the_page() {
         for dark in [false, true] {
             let p = palette(dark);
-            assert!(ratio(p.faint, p.bg) >= 3.0);
+            for (name, colour) in [("faint", p.faint), ("mark", p.mark)] {
+                let contrast = ratio(colour, p.bg);
+                assert!(contrast >= 3.0, "{name}, dark={dark}: {contrast:.2}:1");
+            }
         }
     }
 

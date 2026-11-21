@@ -5,15 +5,35 @@
 use super::theme::{BODY, BODY_LH, Palette};
 use rune::{Color, El, TextStyle, row, text};
 
-/// A size, weight and line height. The colour comes from the caller's palette.
+/// A size, weight, line height and letter spacing. The colour comes from the caller's palette.
 #[derive(Clone, Copy)]
 pub struct Role {
     pub size: f32,
     pub weight: f32,
     pub lh: f32,
+    pub tracking: f32,
+    pub features: &'static str,
 }
 
 impl Role {
+    const fn new(size: f32, weight: f32, lh: f32) -> Self {
+        Self {
+            size,
+            weight,
+            lh,
+            tracking: 0.0,
+            features: "",
+        }
+    }
+
+    const fn tabular(self, tracking: f32) -> Self {
+        Self {
+            tracking,
+            features: "'tnum' 1",
+            ..self
+        }
+    }
+
     /// The same size in the title weight, for a name inside a dense row or a lead word.
     pub const fn bold(self) -> Role {
         Role {
@@ -39,7 +59,10 @@ impl Role {
     }
 
     pub fn style(self) -> TextStyle {
-        TextStyle::new(self.size, self.weight).lh(self.lh)
+        TextStyle::new(self.size, self.weight)
+            .lh(self.lh)
+            .tracking(self.tracking)
+            .features(self.features)
     }
 
     /// Wrapping text in this role.
@@ -59,66 +82,32 @@ impl Role {
 }
 
 /// Page sections: Decisions, To do, Needs attention, a settings group.
-pub const SECTION: Role = Role {
-    size: 14.0,
-    weight: 600.0,
-    lh: 20.0,
-};
+pub const SECTION: Role = Role::new(14.0, 600.0, 20.0);
 /// Date headings and summaries in narrow reading views.
-pub const COMPACT_SECTION: Role = Role {
-    size: 14.0,
-    weight: 600.0,
-    lh: 20.0,
-};
-pub const COMPACT_READ: Role = Role {
-    size: 13.0,
-    weight: 400.0,
-    lh: 21.0,
-};
+pub const COMPACT_SECTION: Role = Role::new(14.0, 600.0, 20.0);
+pub const COMPACT_READ: Role = Role::new(13.0, 400.0, 21.0);
 /// Item titles: a meeting in a list, a topic, a model card, a panel's subject.
-pub const TITLE: Role = Role {
-    size: 14.5,
-    weight: 600.0,
-    lh: 22.0,
-};
+pub const TITLE: Role = Role::new(14.5, 600.0, 22.0);
 /// Reading text: summary points, to-dos, answers and live notes.
-pub const READ: Role = Role {
-    size: BODY,
-    weight: 400.0,
-    lh: BODY_LH,
-};
+pub const READ: Role = Role::new(BODY, 400.0, BODY_LH);
 /// Dense rows and descriptions: tasks, findings, transcript lines, form text.
-pub const SMALL: Role = Role {
-    size: 12.5,
-    weight: 400.0,
-    lh: 19.0,
-};
+pub const SMALL: Role = Role::new(12.5, 400.0, 19.0);
 /// The name in a dense row: a setting, a finding, a memory claim, a sidebar place.
 pub const NAME: Role = SMALL.bold();
 /// Tabs, buttons, links and menu items.
-pub const CONTROL: Role = Role {
-    size: 13.0,
-    weight: 500.0,
-    lh: 19.0,
-};
-/// Facts about an item: times, people, dates, sizes, licences, sources and help text.
-pub const META: Role = Role {
-    size: 12.0,
-    weight: 400.0,
-    lh: 18.0,
-};
+pub const CONTROL: Role = Role::new(13.0, 500.0, 19.0);
+/// Dates, durations and other facts shown alongside a control.
+pub const FACT: Role = Role::new(12.5, 400.0, 18.0).tabular(0.05);
+/// Fine print, sources and help text.
+pub const META: Role = Role::new(12.0, 400.0, 17.0).tabular(0.1);
+/// Recording positions.
+pub const TIME: Role = META;
+/// Counts accompanying a label.
+pub const COUNT: Role = FACT;
 /// Group labels inside a section (Today, This week, Medium) and field labels.
-pub const GROUP: Role = Role {
-    size: 13.0,
-    weight: 600.0,
-    lh: 20.0,
-};
+pub const GROUP: Role = Role::new(13.0, 600.0, 20.0);
 /// Panel captions in capitals, and the number in a count pill.
-pub const CAPTION: Role = Role {
-    size: 12.0,
-    weight: 600.0,
-    lh: 16.0,
-};
+pub const CAPTION: Role = Role::new(12.0, 600.0, 16.0);
 
 /// Space above a section heading. Sections are grouped by space first, lines second.
 pub const SECTION_TOP: f32 = 28.0;
@@ -164,11 +153,11 @@ pub fn section(s: impl Into<String>, count_: Option<usize>, p: Palette) -> El {
     r
 }
 
-/// A number after a heading or tab, in a small pill. `soft` keeps 4.5:1 on the `chip` fill.
+/// A number after a heading or tab, in a small pill.
 pub fn count(n: usize, p: Palette) -> El {
     text(n.to_string())
-        .font(META.medium().style())
-        .color(p.soft)
+        .font(COUNT.style())
+        .color(p.faint)
         .px(7.0)
         .radius(999.0)
         .fill(p.chip)
