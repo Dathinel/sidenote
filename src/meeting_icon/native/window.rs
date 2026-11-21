@@ -32,6 +32,29 @@ use windows_sys::Win32::{
 
 const WIDTH: f32 = 104.0;
 const HEIGHT: f32 = 44.0;
+
+fn capture_affinity(visible: bool) -> u32 {
+    if visible {
+        WDA_NONE
+    } else {
+        WDA_EXCLUDEFROMCAPTURE
+    }
+}
+
+fn apply_capture_affinity(hwnd: HWND, visible: bool) -> io::Result<()> {
+    unsafe {
+        if SetWindowDisplayAffinity(hwnd, capture_affinity(visible)) != 0 {
+            return Ok(());
+        }
+        if visible {
+            crate::listener::log("FI_CAPTURE_ENABLE_FAILED");
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        ShowWindow(hwnd, SW_HIDE);
+        Err(error)
+    }
+}
 fn nub_step() -> usize {
     static START: OnceLock<Instant> = OnceLock::new();
     (START.get_or_init(Instant::now).elapsed().as_millis() / 100) as usize
@@ -225,6 +248,7 @@ impl Drop for Paint {
 struct View {
     icon: Cell<HWND>,
     card: Cell<HWND>,
+    capture_visible: Cell<bool>,
     font: RefCell<Option<Rc<Font>>>,
     timer_font: RefCell<Option<(i32, Rc<Font>)>>,
     surface: RefCell<Option<Surface>>,
@@ -248,7 +272,11 @@ pub(super) struct NativeWindow {
     card_class: Vec<u16>,
 }
 impl NativeWindow {
-    pub(super) fn new(replay: bool, control: Arc<Control>) -> io::Result<Self> {
+    pub(super) fn new(
+        replay: bool,
+        capture_visible: bool,
+        control: Arc<Control>,
+    ) -> io::Result<Self> {
         unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(ptr::null());
@@ -264,6 +292,7 @@ impl NativeWindow {
                 view: Box::new(View {
                     icon: Cell::new(ptr::null_mut()),
                     card: Cell::new(ptr::null_mut()),
+                    capture_visible: Cell::new(capture_visible),
                     font: RefCell::new(None),
                     timer_font: RefCell::new(None),
                     surface: RefCell::default(),
@@ -335,15 +364,26 @@ impl NativeWindow {
             window.view.icon.set(hwnd);
             window.view.control.publish(hwnd, false);
             window.view.control.startup.enter("capture_exclusion");
-            if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0 {
-                return Err(io::Error::last_os_error());
-            }
+            apply_capture_affinity(hwnd, capture_visible)?;
             window.view.control.startup.enter("geometry");
             window.view.geometry();
             Ok(window)
         }
     }
-    pub(super) fn update(&self, frame: Frame) {
+    pub(super) fn update(&self, frame: Frame, capture_visible: bool) {
+        let view = &self.view;
+        if view.capture_visible.replace(capture_visible) != capture_visible {
+            let card = view.card.get();
+            unsafe {
+                if !card.is_null() && apply_capture_affinity(card, capture_visible).is_err() {
+                    view.destroy(card);
+                }
+                if apply_capture_affinity(view.icon.get(), capture_visible).is_err() {
+                    view.close_windows();
+                    return;
+                }
+            }
+        }
         let prior = self.view.frame.replace(frame.clone());
         let changed = icon_changed(&prior, &frame);
         let card_changed = prior.id != frame.id
@@ -625,7 +665,7 @@ impl View {
                 }
                 self.card.set(hwnd);
                 self.control.publish(hwnd, true);
-                if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0 {
+                if apply_capture_affinity(hwnd, self.capture_visible.get()).is_err() {
                     self.destroy(hwnd);
                     return;
                 }
@@ -1259,6 +1299,7 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
         Ok(View {
             icon: Cell::new(ptr::null_mut()),
             card: Cell::new(ptr::null_mut()),
+            capture_visible: Cell::new(false),
             font: RefCell::new(Some(Rc::new(Font(font)))),
             timer_font: RefCell::new(None),
             surface: RefCell::default(),
@@ -1286,6 +1327,31 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
             control: Arc::new(Control::new()),
         })
     }
+}
+
+#[test]
+fn meeting_icon_capture_affinity_round_trips_through_config() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let mut defaults = core::Config::default();
+    assert!(!defaults.meeting_icon_in_captures);
+    defaults.notes = Some(core::notes::NotesSettings::default());
+    let mut config = serde_json::to_value(defaults).unwrap();
+    config
+        .as_object_mut()
+        .unwrap()
+        .remove("meeting_icon_in_captures");
+    store_io::write(&root.join("config.json"), &config).unwrap();
+
+    let affinity = || capture_affinity(super::capture_visible(root));
+    assert_eq!(affinity(), WDA_EXCLUDEFROMCAPTURE);
+    let mut config = core::Config::load_in(root).unwrap();
+    config.meeting_icon_in_captures = true;
+    config.save(root).unwrap();
+    assert_eq!(affinity(), WDA_NONE);
+    config.meeting_icon_in_captures = false;
+    config.save(root).unwrap();
+    assert_eq!(affinity(), WDA_EXCLUDEFROMCAPTURE);
 }
 
 pub(super) fn render_synthetic() -> io::Result<()> {

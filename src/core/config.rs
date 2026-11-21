@@ -246,6 +246,8 @@ pub struct Config {
     #[serde(default)]
     pub labs: super::meeting_watch::Labs,
     #[serde(default)]
+    pub meeting_icon_in_captures: bool,
+    #[serde(default)]
     pub knowledge_base: KnowledgeBase,
     #[serde(default)]
     pub pipeline: super::meeting_router::RoutingConfig,
@@ -264,6 +266,7 @@ impl Default for Config {
             engine_settings: super::engine_settings::EngineSettings::default(),
             features: Features::default(),
             labs: super::meeting_watch::Labs::default(),
+            meeting_icon_in_captures: false,
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
             notes: None,
@@ -326,7 +329,7 @@ impl Config {
         Ok(config)
     }
 
-    pub(super) fn read_config(root: &Path) -> io::Result<Option<Self>> {
+    pub(crate) fn read_config(root: &Path) -> io::Result<Option<Self>> {
         match read(root) {
             Ok(bytes) => {
                 let config: Self = operation(

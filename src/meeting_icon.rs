@@ -311,6 +311,7 @@ fn frame_for(
 
 fn run(isolated: bool, replay: bool) {
     let engine = crate::hex_engine::HexEngine::new();
+    let root = core::state_dir();
     let mut pending: BTreeMap<String, Pending> =
         store_io::read(&pending_path()).unwrap_or_default();
     pending.retain(|id, _| valid_id(id));
@@ -487,19 +488,23 @@ fn run(isolated: bool, replay: bool) {
                 .filter(|id| current.recording && pending.contains_key(*id))
                 .or_else(|| pending.last_key_value().map(|(id, _)| id));
             if let Some(id) = item {
+                let capture_visible = native::capture_visible(&root);
                 if host.is_none() && !native::disabled() {
-                    host = native::Host::new(replay)
+                    host = native::Host::new(replay, capture_visible)
                         .map_err(|_| crate::listener::log("floating icon window unavailable"))
                         .ok();
                 }
                 if let Some(window) = &host
-                    && !window.update(frame_for(
-                        &current,
-                        id,
-                        &pending[id],
-                        speech_until,
-                        transcript_revision,
-                    ))
+                    && !window.update(
+                        frame_for(
+                            &current,
+                            id,
+                            &pending[id],
+                            speech_until,
+                            transcript_revision,
+                        ),
+                        capture_visible,
+                    )
                 {
                     host = None;
                 }

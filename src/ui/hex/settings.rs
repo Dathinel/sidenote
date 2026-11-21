@@ -1121,8 +1121,21 @@ fn app_index() -> Vec<Destination> {
         ),
     ]
 }
+const MEETING_ICON_CAPTURE: &str = "meeting-icon-capture";
+const MEETING_ICON_CAPTURE_LABEL: &str = "Show the meeting icon in screenshots and recordings";
+
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
+    if cfg!(windows) {
+        entries.push(entry(
+            MEETING_ICON_CAPTURE,
+            MEETING_ICON_CAPTURE_LABEL,
+            "screen recording screen sharing floating indicator capture",
+            Page::Meetings,
+            0,
+            false,
+        ));
+    }
     entries.push(entry(
         "relay-preview",
         "Relay sync (preview)",
@@ -2324,6 +2337,42 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
     card("Knowledge base", body, p).key("knowledge-base")
 }
 
+fn meeting_icon_capture(s: &State, k: &Kit, p: Palette) -> El {
+    setting_row(
+        s,
+        MEETING_ICON_CAPTURE,
+        MEETING_ICON_CAPTURE_LABEL,
+        "When on, the icon and its open card can appear in screen recordings and be seen by people you share your screen with.",
+        Switch::new(s.config.meeting_icon_in_captures)
+            .label(MEETING_ICON_CAPTURE_LABEL)
+            .hide_label()
+            .on_toggle(|s: &mut State| {
+                let visible = !s.config.meeting_icon_in_captures;
+                let result =
+                    sidenote::core::Config::load_in(&s.store.root).and_then(|mut config| {
+                        config.meeting_icon_in_captures = visible;
+                        config.save(&s.store.root)?;
+                        Ok(config)
+                    });
+                match result {
+                    Ok(config) => {
+                        s.config = config;
+                        s.feature_error = None;
+                        s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
+                    }
+                    Err(_) => {
+                        s.feature_error =
+                            Some("Could not save the meeting icon setting. Try again.".into())
+                    }
+                }
+            })
+            .build(k)
+            .key("meeting-icon-capture-toggle"),
+        true,
+        p,
+    )
+}
+
 fn privacy(s: &State, k: &Kit, p: Palette) -> El {
     ai_notes::section(s, k, p, ai_notes::Part::Privacy)
 }
@@ -2375,6 +2424,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     ),
                 )
             }))
+            .children(cfg!(windows).then(|| card("Meeting icon", meeting_icon_capture(s, k, p), p)))
             .child(hex_group(
                 2,
                 card(
