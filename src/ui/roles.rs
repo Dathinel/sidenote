@@ -1,5 +1,5 @@
 //! Text roles: the few sizes, weights and greys the app reads in. See docs/design/typography.md.
-//! The scale follows the v3 approval: section heading 14 semibold, note text 14.5 on 1.6,
+//! The scale follows the v3 approval: section heading 15 semibold, note text 14.5 on 1.6,
 //! tasks and chips 12.5, 28 between sections; page titles are capped in `theme::display`.
 //! Pages use these instead of raw sizes, so every page keeps the same hierarchy.
 use super::theme::{BODY, BODY_LH, Palette};
@@ -82,7 +82,7 @@ impl Role {
 }
 
 /// Page sections: Decisions, To do, Needs attention, a settings group.
-pub const SECTION: Role = Role::new(14.0, 600.0, 20.0);
+pub const SECTION: Role = Role::new(15.0, 600.0, 22.0);
 /// Date headings and summaries in narrow reading views.
 pub const COMPACT_SECTION: Role = Role::new(14.0, 600.0, 20.0);
 pub const COMPACT_READ: Role = Role::new(13.0, 400.0, 21.0);
