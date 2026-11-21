@@ -8,6 +8,7 @@ pub struct Updates {
     pub status: Status,
     listener: updates::ListenerStatus,
     listener_busy: bool,
+    listener_open: bool,
     listener_probe_busy: bool,
     listener_probed: Option<std::time::Instant>,
     recorder_gap: Option<heartbeat::Gap>,
@@ -24,6 +25,7 @@ impl Default for Updates {
             status: updates::load(),
             listener: updates::listener_status(),
             listener_busy: false,
+            listener_open: false,
             listener_probe_busy: false,
             listener_probed: None,
             recorder_gap: None,
@@ -46,6 +48,9 @@ impl Updates {
             && !self.applying
             && let Some(status) = status
         {
+            if status.error.is_none() {
+                self.listener_open = false;
+            }
             self.listener = status;
         }
     }
@@ -168,6 +173,9 @@ impl State {
     }
     pub fn listener_finished(&mut self, result: Result<(), String>) {
         self.updates.listener_busy = false;
+        if result.is_ok() {
+            self.updates.listener_open = false;
+        }
         self.updates.listener = updates::ListenerStatus {
             ready: result.is_ok(),
             preparing: false,
@@ -573,59 +581,74 @@ pub fn settings_scene(s: &mut State) {
     s.open_updates();
 }
 
-pub fn listener_notice(s: &State, p: Palette) -> Option<El> {
-    let Some(error) = s.updates.listener.error.as_ref() else {
-        let gap = s.updates.recorder_gap.as_ref()?;
-        return Some(
-            row()
-                .w_full()
-                .gap(8.0)
-                .items_center()
-                .mb(16.0)
-                .key("recorder-gap")
-                .child(roles::META.wrap(gap.notice(), p.soft).grow(1.0).min_w(0.0))
-                .child(
-                    super::widgets::action("Dismiss", p)
-                        .key("recorder-gap-dismiss")
-                        .on_press(|s: &mut State| {
-                            if let Some(gap) = s.updates.recorder_gap.clone()
-                                && heartbeat::dismiss(&gap).is_ok()
-                            {
-                                s.updates.dismissed_gap = Some(gap);
-                                s.updates.recorder_gap = None;
-                            }
-                        }),
-                ),
-        );
-    };
-    let mut retry = super::area::button(
+pub fn recorder_gap_notice(s: &State, p: Palette) -> Option<El> {
+    if listener_problem(s).is_some() {
+        return None;
+    }
+    let gap = s.updates.recorder_gap.as_ref()?;
+    let dismiss = super::widgets::action("Dismiss", p)
+        .key("recorder-gap-dismiss")
+        .on_press(|s: &mut State| {
+            if let Some(gap) = s.updates.recorder_gap.clone()
+                && heartbeat::dismiss(&gap).is_ok()
+            {
+                s.updates.dismissed_gap = Some(gap);
+                s.updates.recorder_gap = None;
+            }
+        });
+    Some(super::widgets::alert_strip(gap.notice(), dismiss, p).key("recorder-gap"))
+}
+
+pub fn listener_problem(s: &State) -> Option<&str> {
+    if cfg!(windows) {
+        s.updates.listener.error.as_deref()
+    } else {
+        None
+    }
+}
+
+pub fn listener_popover(
+    s: &State,
+    trigger: El,
+    error: &str,
+    p: Palette,
+    layer: &mut Vec<El>,
+) -> El {
+    use super::widgets::{self, ButtonDisabled};
+    let trigger = trigger
+        .child(widgets::dot(6.0, p.warn).key("listener-error-dot"))
+        .label("New meeting. Recording is unavailable")
+        .on_press(|s: &mut State| s.updates.listener_open = !s.updates.listener_open);
+    let retry = widgets::notice_action(
         if s.updates.listener_busy {
             "Trying again\u{2026}"
         } else {
             "Try again"
         },
-        "listener-retry",
         p,
     )
-    .key("listener-retry");
-    if s.updates.listener_busy {
-        retry = retry.dim(0.5);
-    } else {
-        retry = retry.on_press(|s: &mut State| {
-            let _ = s.retry_listener();
-        });
-    }
-    Some(
-        super::widgets::banner(
-            "Recording is unavailable",
-            error.clone(),
-            super::widgets::BannerKind::Problem,
-            p,
+    .key("listener-retry")
+    .help("You can also reopen Sidenote to retry.")
+    .self_start()
+    .on_press(|s: &mut State| {
+        let _ = s.retry_listener();
+    })
+    .button_disabled(s.updates.listener_busy || s.updates.applying);
+    rune_kit::Popover::new("listener-error-popover")
+        .trigger(trigger)
+        .label("Recording is unavailable")
+        .open(s.updates.listener_open)
+        .placement(rune_kit::Placement::BottomEnd)
+        .on_close(|s: &mut State| s.updates.listener_open = false)
+        .child(
+            col()
+                .w(270.0)
+                .gap(8.0)
+                .child(roles::NAME.wrap("Recording is unavailable", p.ink))
+                .child(roles::SMALL.wrap(error, p.soft))
+                .child(retry),
         )
-        .key("listener-error")
-        .mb(16.0)
-        .child(retry.self_start()),
-    )
+        .build(&super::theme::kit(&p), layer)
 }
 pub fn listener_error_scene(s: &mut State) {
     hex::scene(s, false);
@@ -653,7 +676,7 @@ pub fn listener_start_blocked(s: &State) -> Option<&'static str> {
     if status.preparing {
         Some("Checking the meeting listener")
     } else if !status.ready {
-        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+        Some("Recording is unavailable. Restart Sidenote to retry.")
     } else {
         None
     }
@@ -671,7 +694,7 @@ pub fn listener_ready(s: &State) -> bool {
 mod listener_tests {
     use super::*;
     #[test]
-    fn background_recovery_clears_the_banner_and_later_death_restores_it() {
+    fn background_recovery_clears_the_error_and_later_death_restores_it() {
         let mut updates = Updates {
             listener: updates::ListenerStatus {
                 ready: false,

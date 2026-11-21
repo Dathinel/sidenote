@@ -2033,7 +2033,7 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     }
 }
 
-fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
+fn top_bar(s: &State, p: theme::Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let mut left = row().gap(4.0).items_center().min_w(0.0);
     if !s.sidebar_is_open() {
         left = left.child(
@@ -2086,7 +2086,7 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool) -> El {
         .justify_between()
         .fill(p.bg)
         .child(left.grow(1.0))
-        .child(nav::actions(s, p, narrow))
+        .child(nav::actions(s, p, narrow, layer))
 }
 
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
@@ -2206,27 +2206,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .h_full()
         .min_h(0.0)
         .fill(p.bg)
-        .children((!on_hex).then(|| top_bar(s, p, narrow)));
-    let on_list = home
-        && !s.companies.open
-        && !s.annotations.open
-        && !on_check
-        && !on_memory
-        && !on_hex
-        && !on_live
-        && !(s.config.features.projects
-            && matches!(s.filter, nav::Filter::Area(_) | nav::Filter::Areas));
-    if !on_list && let Some(notice) = updates::listener_notice(s, p) {
-        main = main.child(
-            col().w_full().items_center().child(
-                col()
-                    .w_full()
-                    .max_w(860.0)
-                    .px(if narrow { 16.0 } else { 40.0 })
-                    .child(notice),
-            ),
-        );
-    }
+        .children((!on_hex).then(|| top_bar(s, p, narrow, &mut layer)))
+        .children(updates::recorder_gap_notice(s, p));
     if let Some(bar) = hex::error_bar(s, p) {
         main = main.child(bar);
     }

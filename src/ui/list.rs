@@ -282,7 +282,6 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 .mb(10.0)
                 .on_press(|s: &mut State| s.set_filter(Filter::Short)),
         )
-        .children(super::updates::listener_notice(s, p))
         .children((s.filter != Filter::All).then(|| {
             link("Show all meetings", p)
                 .key("filter-clear")

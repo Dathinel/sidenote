@@ -118,7 +118,7 @@ pub(super) fn run() {
     runtime.update(|state, _| state.apply_event(Event::ListenerFinished(failed)));
     assert_eq!(
         crate::ui::hex::start_blocked(&runtime.state),
-        Some("Recording is unavailable. Use Try again in the warning, or restart Sidenote.")
+        Some("Recording is unavailable. Restart Sidenote to retry.")
     );
     runtime.update(|state, _| state.new_meeting());
     assert_eq!(api.data.lock().unwrap().starts, 0);

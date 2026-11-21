@@ -529,7 +529,7 @@ pub fn scene_all(s: &mut State) {
 // ---- the top right ----------------------------------------------------------------------------
 
 /// "New meeting", or while Hex records, "Recording 12:34 | Stop".
-pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
+pub fn actions(s: &State, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     if s.annotations.open {
         return super::annotations::new_button(s, p);
     }
@@ -540,22 +540,25 @@ pub fn actions(s: &State, p: Palette, narrow: bool) -> El {
                 .gap(8.0)
                 .items_center()
                 .child(recording)
-                .child(new_meeting_button(s, p, narrow))
+                .child(new_meeting_button(s, p, narrow, layer))
         } else {
             recording
         };
     }
-    new_meeting_button(s, p, narrow)
+    new_meeting_button(s, p, narrow, layer)
 }
 
-pub(super) fn new_meeting_button(s: &State, p: Palette, narrow: bool) -> El {
-    let blocked = hex::start_blocked(s);
+pub(super) fn new_meeting_button(s: &State, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let b = super::widgets::button(
         if narrow { "+ New" } else { "+ New meeting" },
         "new-meeting",
         super::widgets::ButtonRole::Primary,
         p,
     );
+    if let Some(error) = super::updates::listener_problem(s) {
+        return super::updates::listener_popover(s, b, error, p, layer);
+    }
+    let blocked = hex::start_blocked(s);
     let action = match blocked {
         None => b
             .label("New meeting")
@@ -567,6 +570,9 @@ pub(super) fn new_meeting_button(s: &State, p: Palette, narrow: bool) -> El {
             .opacity(0.5)
             .disabled(true),
     };
+    if cfg!(target_os = "linux") {
+        return action;
+    }
     col()
         .items_end()
         .gap(2.0)

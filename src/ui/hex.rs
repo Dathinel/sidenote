@@ -1288,7 +1288,7 @@ pub fn start_blocked(s: &State) -> Option<&'static str> {
 
 fn start_block_reason(s: &State) -> Option<&'static str> {
     if cfg!(target_os = "linux") {
-        Some("Recording control is unavailable in this Linux desktop launch layer.")
+        Some("Recording is not available on Linux yet.")
     } else {
         super::updates::listener_start_blocked(s).or_else(|| recorder_start_block_reason(s))
     }

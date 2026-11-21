@@ -391,6 +391,26 @@ pub fn inline_notice(message: &str, action: El, p: Palette) -> El {
         .child(action)
 }
 
+pub fn alert_strip(message: impl Into<String>, action: El, p: Palette) -> El {
+    row()
+        .w_full()
+        .min_h(40.0)
+        .px(16.0)
+        .py(4.0)
+        .gap(8.0)
+        .items_center()
+        .fill(p.warnbg)
+        .child(icons::draw(&icons::WARNING, 16.0, p.warn))
+        .child(
+            roles::CONTROL
+                .wrap(message, p.ink)
+                .min_w(0.0)
+                .grow(1.0)
+                .role("alert"),
+        )
+        .child(action)
+}
+
 pub fn scroll(content: El, key: &str) -> El {
     col()
         .key(key.to_string())
