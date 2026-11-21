@@ -507,14 +507,27 @@ fn choice_label(s: &State, name: Option<&str>, model: Option<&str>) -> String {
 /// first (it follows Settings and shows what it resolves to), then each installed helper's
 /// models in a group, then a Thinking switch. It is on the meeting page, the live screen and
 /// before the first question of a new chat.
-fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+fn runner_choice(
+    s: &State,
+    k: &Kit,
+    p: Palette,
+    narrow: bool,
+    notes_column: bool,
+    layer: &mut Vec<El>,
+) -> El {
     let shown = picker_label(s);
+    let (caption, width, padding) = match (narrow, notes_column) {
+        (true, true) => (shown.replacen("Claude Code · ", "Claude · ", 1), 144.0, 5.0),
+        (true, false) => (shown.clone(), 150.0, 12.0),
+        _ => (shown.clone(), 240.0, 12.0),
+    };
     let chevron = if s.runner_open {
         k.glyph.chevron_up
     } else {
         k.glyph.chevron_down
     };
     let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
+        .px(padding)
         .gap(0.0)
         .child(
             row()
@@ -523,7 +536,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
                 .min_w(0.0)
                 .shrink()
                 .child(
-                    text(shown.clone())
+                    text(caption)
                         .font(roles::META.medium().style())
                         .color(p.soft)
                         .truncate()
@@ -536,7 +549,7 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
         .help(format!("Model for the next answer: {shown}"))
         .preserve_focus_on_press(true)
         .min_w(0.0)
-        .max_w(if narrow { 150.0 } else { 240.0 })
+        .max_w(width)
         .on_press(|s: &mut State| {
             s.runner_open = !s.runner_open;
             s.ask_settings.thinking_open = false;
@@ -959,7 +972,7 @@ pub fn overlay_with(
                     .wrap(format!("Runners are not set up. {e}"), p.warn)
                     .px(8.0)
                     .max_w(260.0),
-                None => runner_choice(s, k, p, narrow, layer),
+                None => runner_choice(s, k, p, narrow, notes_column, layer),
             }
         }
     });
