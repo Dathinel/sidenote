@@ -1,7 +1,7 @@
 """Render Settings in the isolated offscreen application, never on the desktop."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import argparse,json,os,subprocess,sys,shutil
+import argparse,json,os,subprocess,sys,shutil,tempfile
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'artifacts/settings-build'
 STATE=ROOT/'target/settings-build-render'
@@ -28,8 +28,16 @@ def render(job):
   meetings=state/'screen-meetings'
   shutil.copytree(ROOT/'tools/ui-fixtures/screens/meetings',meetings,dirs_exist_ok=True)
   summary=meetings/'1793955600000-1/english-summary.json'
-  value=json.loads(summary.read_text(encoding='utf-8'));value['title']='Planning the next Northwind workshop, partner review, delivery timeline and follow-up decisions for the whole team'
-  summary.write_text(json.dumps(value),encoding='utf-8')
+  if name.startswith('meeting-lift-'):
+   jobs=state/'local/notes-jobs'
+   jobs.mkdir(parents=True)
+   (jobs/'1793955600000-1.json').write_text(json.dumps({
+    'state':'done','fallback':False,'tasks_failed':True,'transcript_revision':'a'*64,
+    'routing_fallbacks':[{'reason':{'cpu_language_models_missing':{'ready':2}}}],
+   }),encoding='utf-8')
+  else:
+   value=json.loads(summary.read_text(encoding='utf-8'));value['title']='Planning the next Northwind workshop, partner review, delivery timeline and follow-up decisions for the whole team'
+   summary.write_text(json.dumps(value),encoding='utf-8')
  env=os.environ|{'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
  args=[str(EXE),'--meetings-dir',str(meetings),'--data-dir',str(state),'--peers-dir',str(state/'peers'),'--scene',scene,'--theme',theme,'--size',f'{width}x{height}','--scale','1','--snap',str(base)+'.png','--tree',str(base)+'.json']
  if events:
@@ -41,6 +49,16 @@ def render(job):
  assert base.with_suffix('.png').is_file(),base
  tree=json.loads(base.with_suffix('.json').read_text(encoding='utf-8-sig'))
  assert not tree['warnings'],(base.name,tree['warnings'])
+ if name.startswith('meeting-lift-after'):
+  elements={e['key']:e for e in tree['elements'] if e.get('key')}
+  for key in ('meeting-view','meeting-facts','meeting-people','meeting-status','suggest-0','ask-pill'):
+   x,y,w,h=elements[key]['rect']
+   assert w>0 and h>0 and x>=0 and x+w<=width and y>=0 and y+h<=height,(base.name,key)
+  suggestion=elements['suggest-0']['rect']
+  assert suggestion[1]+suggestion[3]<=elements['ask-pill']['rect'][1],base.name
+  assert elements['meeting-source-pt-0-1']['opacity']==int(name.endswith('-time')),base.name
+  assert elements['help-hint-model-tip']['opacity']==int(name.endswith('-hint')),base.name
+  assert ('meeting-engine-status' in elements)==name.endswith('-status'),base.name
  if scene.startswith('settings-engine'):
   keys={n.get('key') for n in tree['elements']}
   need={'engine-unused','engine-worker-threads-input','engine-transcription-save','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-step-tasks-switch','engine-step-comparison-switch','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-reset'}
@@ -62,8 +80,34 @@ def render(job):
  return os.path.relpath(base.with_suffix('.png'), ROOT)
 
 def tap(key,t=.3):return dict(type='tap',key=key,t=t)
+
+def meeting_lift(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT=output.resolve()
+ OUT.mkdir(parents=True,exist_ok=True)
+ if exe:
+  EXE=exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-meeting-render-') as state:
+  STATE=Path(state)
+  for width in (1334,390):
+   for theme in ('light','dark'):
+    render((f'meeting-lift-{phase}','screens-summary',width,theme,900,None))
+  if phase=='after':
+   for suffix,event in (
+    ('status',tap('meeting-status')),
+    ('time',dict(type='move',key='meeting-point-text-pt-0-1',t=.3)),
+    ('hint',dict(type='move',key='help-hint-model',t=.3)),
+   ):
+    render((f'meeting-lift-{phase}-{suffix}','screens-summary',1334,'dark',900,[event]))
+
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
+ parser.add_argument('--meeting-lift',choices=['before','after'])
+ parser.add_argument('--output',type=Path,default=OUT)
+ parser.add_argument('--exe',type=Path)
+ args=parser.parse_args()
+ if args.meeting_lift:
+  return meeting_lift(args.meeting_lift,args.output,args.exe)
  OUT.mkdir(parents=True,exist_ok=True)
  jobs=[]
  setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed'),('hex-meetings-off','settings-hex-meetings-off'),('hex-meetings-enable','settings-hex-meetings-enable')]

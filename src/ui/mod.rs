@@ -2659,6 +2659,9 @@ const SCREENS_MEETING: &str = "1793955600000-1";
 fn scene_screens(s: &mut State) {
     hex::scene(s, false);
     scene_agents(s, ALL_AGENTS);
+    if isolated() {
+        s.ai_notes.jobs = notes_status::read(&core::state_dir(), &s.meetings);
+    }
     if s.meetings.iter().any(|m| m.id == SCREENS_MEETING) {
         s.selected = Some(SCREENS_MEETING.into());
         s.load_saved();
