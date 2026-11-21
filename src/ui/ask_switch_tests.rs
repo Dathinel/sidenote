@@ -148,6 +148,84 @@ fn kb_copy_rows_keep_mono_for_paths_and_commands() {
 }
 
 #[test]
+fn point_timestamp_uses_its_own_figures_and_stays_clickable() {
+    if in_parent("point_timestamp_uses_its_own_figures_and_stays_clickable") {
+        return;
+    }
+    const PROSE: &str = "Review on 1 December";
+    fn fixture(_: &State, _: &mut rune::Cx<State>) -> rune::El {
+        let p = theme::palette(false);
+        col().children(
+            [
+                ("plain", None),
+                ("early", Some("11:11")),
+                ("late", Some("22:22")),
+                ("narrow", Some("11:11")),
+            ]
+            .into_iter()
+            .map(|(key, at)| {
+                let point = core::Point {
+                    text: PROSE.into(),
+                    at: at.into_iter().map(str::to_string).collect(),
+                    ..Default::default()
+                };
+                let row = widgets::point_row(&point, key.into(), None, false, p);
+                if key == "narrow" { row.w(150.0) } else { row }
+            }),
+        )
+    }
+    let state = page_with(DEFAULT_SIZE, || {
+        std::fs::write(
+            core::meetings_dir()
+                .join(MEETING)
+                .join("english-transcript.md"),
+            "[00:11:11.000] Maya (English): Review the date.\n",
+        )
+        .unwrap();
+    })
+    .state;
+    let mut rt = Runtime::with_text(
+        state,
+        fixture,
+        (480.0, 240.0),
+        Env::default(),
+        TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+    );
+    rt.frame(0.0);
+    let elements = rt.elements();
+    let prose = elements
+        .iter()
+        .filter(|element| element.text.as_deref() == Some(PROSE))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prose.len(),
+        4,
+        "each point renders prose in its own element"
+    );
+    for element in &prose[..3] {
+        assert!((element.rect[2] - prose[0].rect[2]).abs() < 0.5);
+    }
+    let time = |key| {
+        elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap()
+            .rect
+    };
+    let early = time("early-time");
+    let late = time("late-time");
+    assert!((early[2] - late[2]).abs() < 0.5);
+    assert!(early[0] >= prose[1].rect[0] + prose[1].rect[2]);
+    assert!(early[1] < prose[1].rect[1] + prose[1].rect[3]);
+    let narrow = time("narrow-time");
+    assert!(narrow[1] >= prose[3].rect[1] + prose[3].rect[3]);
+    assert!(narrow[0] + narrow[2] <= 150.0);
+    tap(&mut rt, "early-time");
+    assert_eq!(rt.state.highlight, Some(0));
+    assert_eq!(rt.state.back.as_deref(), Some("early"));
+}
+
+#[test]
 fn meeting_source_time_reveals_on_hover_and_focus() {
     if in_parent("meeting_source_time_reveals_on_hover_and_focus") {
         return;

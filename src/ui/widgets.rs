@@ -457,41 +457,39 @@ pub fn point_row(pt: &Point, key: String, number: Option<usize>, from: bool, p: 
                 .color(p.faint),
         );
     }
-    let mut stamp_link = None;
-    let mut body_style = TextStyle::new(BODY, weight).lh(BODY_LH);
-    if let Some(at) = pt.at.first() {
-        // Rune applies features to the whole text element, including this inline link.
-        body_style = body_style.features(roles::TIME.style().features);
-        content.push('\u{a0}');
-        let start = content.len();
-        content.push_str(&format!("at\u{a0}{}", recording_time(at)));
-        let range = start..content.len();
-        spans.push(
-            Span::new(range.start, range.end)
-                .weight(roles::TIME.weight)
-                .size(roles::TIME.size)
-                .color(p.faint),
-        );
-        stamp_link = Some(
-            Link::new(range, format!("{key}\u{1f}{at}"))
-                .label(format!("Open the transcript at {}", recording_time(at)))
-                .help("Read this in the transcript")
-                .hover(LinkPaint::new().color(p.ink).bg(p.chip)),
-        );
-    }
-    let mut body = text(content)
-        .font(body_style)
-        .color(ink)
-        .wrap()
-        .spans(spans)
+    let mut body = row()
+        .flex_wrap()
+        .items_center()
+        .gaps(4.0, 0.0)
         .grow(1.0)
-        .min_w(0.0);
-    if let Some(l) = stamp_link {
-        body = body.link(l).on_link(|s: &mut State, id, tx| {
-            if let Some((origin, stamp)) = id.split_once('\u{1f}') {
-                s.jump(stamp, origin.to_string(), tx);
-            }
-        });
+        .min_w(0.0)
+        .child(
+            text(content)
+                .font(TextStyle::new(BODY, weight).lh(BODY_LH))
+                .color(ink)
+                .wrap()
+                .spans(spans)
+                .min_w(0.0)
+                .shrink(),
+        );
+    if let Some(at) = pt.at.first() {
+        let at = at.clone();
+        let origin = key.clone();
+        let time = recording_time(&at);
+        let caption = format!("at\u{a0}{time}");
+        let link = Link::new(0..caption.len(), "source")
+            .label(format!("Open the transcript at {time}"))
+            .help("Read this in the transcript")
+            .hover(LinkPaint::new().color(p.ink).bg(p.chip));
+        body = body.child(
+            roles::TIME
+                .wrap(caption, p.faint)
+                .key(format!("{key}-time"))
+                .min_w(0.0)
+                .shrink()
+                .link(link)
+                .on_link(move |s: &mut State, _, tx| s.jump(&at, origin.clone(), tx)),
+        );
     }
     let mut r = row()
         .key(key)
