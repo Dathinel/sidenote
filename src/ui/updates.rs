@@ -614,26 +614,28 @@ pub fn listener_popover(
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
-    use super::widgets::{self, ButtonDisabled};
+    use super::widgets;
     let trigger = trigger
         .child(widgets::dot(6.0, p.warn).key("listener-error-dot"))
         .label("New meeting. Recording is unavailable")
         .on_press(|s: &mut State| s.updates.listener_open = !s.updates.listener_open);
-    let retry = widgets::notice_action(
-        if s.updates.listener_busy {
-            "Trying again\u{2026}"
-        } else {
-            "Try again"
+    let retry = widgets::retry_action(
+        widgets::notice_action(
+            if s.updates.listener_busy {
+                "Trying again\u{2026}"
+            } else {
+                "Try again"
+            },
+            p,
+        )
+        .key("listener-retry")
+        .help("You can also reopen Sidenote to retry.")
+        .self_start(),
+        s.updates.listener_busy || s.updates.applying,
+        |s: &mut State| {
+            let _ = s.retry_listener();
         },
-        p,
-    )
-    .key("listener-retry")
-    .help("You can also reopen Sidenote to retry.")
-    .self_start()
-    .on_press(|s: &mut State| {
-        let _ = s.retry_listener();
-    })
-    .button_disabled(s.updates.listener_busy || s.updates.applying);
+    );
     rune_kit::Popover::new("listener-error-popover")
         .trigger(trigger)
         .label("Recording is unavailable")

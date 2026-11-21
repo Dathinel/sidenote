@@ -381,6 +381,16 @@ pub fn notice_action(name: &str, p: Palette) -> El {
     .focus_ring(2.0, 2.0, p.accent)
 }
 
+/// A retry that is running stays focusable and dimmed, but takes no second press, so keyboard
+/// focus is not lost when it starts.
+pub fn retry_action(action: El, running: bool, on_press: impl Fn(&mut State) + 'static) -> El {
+    if running {
+        action.dim(0.5)
+    } else {
+        action.on_press(on_press)
+    }
+}
+
 pub fn inline_notice(message: &str, action: El, p: Palette) -> El {
     row()
         .gap(6.0)

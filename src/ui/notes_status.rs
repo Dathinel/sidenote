@@ -4,7 +4,7 @@ use super::{
     area::button,
     roles,
     theme::Palette,
-    widgets::{self, BannerKind, ButtonDisabled},
+    widgets::{self, BannerKind},
 };
 use rune::{El, col, row};
 use sidenote::core::{
@@ -500,11 +500,13 @@ pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
 
 fn tasks_retry_notice(s: &State, id: &str, message: &str, p: Palette) -> El {
     let id = id.to_string();
-    let retry = widgets::notice_action("Try again", p)
-        .key("notes-sort-again")
-        .help(TRANSCRIPT_SAVED)
-        .on_press(move |s: &mut State| s.request_notes(id.clone(), Request::SortAgain))
-        .button_disabled(s.ai_notes.pending.is_some());
+    let retry = widgets::retry_action(
+        widgets::notice_action("Try again", p)
+            .key("notes-sort-again")
+            .help(TRANSCRIPT_SAVED),
+        s.ai_notes.pending.is_some(),
+        move |s: &mut State| s.request_notes(id.clone(), Request::SortAgain),
+    );
     col()
         .key("notes-tasks-notice")
         .gap(4.0)
@@ -690,6 +692,39 @@ mod tests {
             .find(|e| e.key.as_deref() == Some("notes-state-edit"))
             .unwrap();
         assert!(!inside(edit));
+    }
+
+    #[test]
+    fn running_task_retry_keeps_keyboard_focus_and_ignores_a_second_press() {
+        fn view(s: &State, _: &mut rune::Cx<State>) -> El {
+            let p = crate::ui::theme::palette(false);
+            tasks_retry_notice(s, "1793955600000-3", TASKS_RETRY, p)
+        }
+        fn retry(runtime: &rune::Runtime<State>) -> rune::ElementInfo {
+            runtime
+                .elements()
+                .into_iter()
+                .find(|e| e.key.as_deref() == Some("notes-sort-again"))
+                .unwrap()
+        }
+        let mut runtime =
+            rune::Runtime::new(State::new(), view, (500.0, 120.0), rune::Env::default());
+        runtime.frame(0.0);
+        runtime.update(|_, tx| tx.focus("notes-sort-again", true));
+        runtime.frame(1.0 / 60.0);
+        assert!(retry(&runtime).focused);
+        runtime.update(|s, _| s.ai_notes.pending = Some("Adding the meeting summary..."));
+        runtime.frame(1.0 / 60.0);
+        let running = retry(&runtime);
+        assert!(running.focusable && running.focused);
+        let [left, top, width, height] = running.rect;
+        let (x, y) = (left + width / 2.0, top + height / 2.0);
+        runtime.pointer_move(x, y);
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(1.0 / 60.0);
+        assert!(runtime.state.ai_notes.error.is_none());
+        assert!(retry(&runtime).focused);
     }
 
     #[test]
