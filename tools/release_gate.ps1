@@ -5,7 +5,7 @@ Run from the root of a release worktree:
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\release_gate.ps1 [-GnuBin <dir>]
 
 It refuses to run from anywhere else, always builds into this worktree's own
-target folder, installs relay dependencies first, then runs the fixed check
+target folder, checks the Linux boundary inventory, then runs the fixed check
 list once. It writes artifacts\release-gate-<commit>.md with a pass table,
 links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fails.
 #>
@@ -27,10 +27,24 @@ if (-not (Test-Path (Join-Path $root 'Cargo.toml')) -or -not (Test-Path (Join-Pa
     Write-Output 'release_gate: Cargo.toml or relay\ is missing; this is not a Sidenote worktree.'
     exit 2
 }
-if (git status --porcelain) {
+$pinnedHead = git rev-parse --verify HEAD
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'release_gate: could not resolve the release commit.'
+    exit 2
+}
+$status = git status --porcelain --untracked-files=all
+if ($LASTEXITCODE -ne 0 -or $status) {
     Write-Output 'release_gate: the worktree has uncommitted changes; commit them first.'
     exit 2
 }
+. (Join-Path $PSScriptRoot 'linux_boundary_preflight.ps1')
+try { $boundaryPreflight = Invoke-LinuxBoundaryPreflight $root }
+catch {
+    Write-Output "release_gate: $($_.Exception.Message)"
+    exit 1
+}
+Write-Output $boundaryPreflight
+
 $branch = (git symbolic-ref --short -q HEAD)
 if ($branch) {
     & (Join-Path $PSScriptRoot 'prune_merged_targets.ps1') -Release $branch -Keep @($root) -WhatIf:$PreflightOnly
@@ -56,6 +70,11 @@ catch {
     Write-Output "release_gate: $($_.Exception.Message)"
     exit 2
 }
+if ((git rev-parse HEAD) -cne $pinnedHead) {
+    Write-Output 'release_gate: HEAD changed after the boundary preflight. Run the gate again on the intended commit.'
+    exit 2
+}
+$commit = (git rev-parse --short $pinnedHead)
 if ($PreflightOnly) {
     Write-Output ('release_gate: preflight passed ({0:N1} GB free, {1} GB needed, lock held, no other local build running); stopping because -PreflightOnly was given.' -f $freeGb, $MinFreeGb)
     exit 0
@@ -63,7 +82,6 @@ if ($PreflightOnly) {
 if (Test-Path $GnuBin) { $env:PATH = "$GnuBin;" + $env:PATH }
 # Always this worktree's own build folder. A shared folder can hold another worktree's exe.
 $env:CARGO_TARGET_DIR = Join-Path $root 'target'
-$commit = (git rev-parse --short HEAD)
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $started = Get-Date
 $artifacts = Join-Path $root 'artifacts'
@@ -166,6 +184,8 @@ $lines = @(
     "# Release gate: Sidenote $version ($commit)",
     '',
     "Started $($started.ToString('yyyy-MM-dd HH:mm:ss zzz')), finished $((Get-Date).ToString('HH:mm:ss')) local time.",
+    '',
+    $boundaryPreflight,
     '',
     '| Check | Exit | Seconds | Detail | Log |',
     '|---|---|---|---|---|'

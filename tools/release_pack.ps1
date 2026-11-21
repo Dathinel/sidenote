@@ -21,6 +21,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or $branch -cne $ExpectedBranch) { throw 'The branch does not match ExpectedBranch.' }
     $head = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0 -or $ExpectedCommit -notmatch '^[0-9a-fA-F]{7,40}$' -or -not $head.StartsWith($ExpectedCommit, [StringComparison]::OrdinalIgnoreCase)) { throw 'The commit does not match ExpectedCommit.' }
+    . (Join-Path $PSScriptRoot 'linux_boundary_preflight.ps1')
+    Write-Output (Invoke-LinuxBoundaryPreflight $root)
     $manifest = [IO.File]::ReadAllText((Join-Path $root 'Cargo.toml'))
     if ([regex]::Match($manifest, '(?m)^version\s*=\s*"([^\"]+)"').Groups[1].Value -cne $Version) { throw 'The manifest version does not match Version.' }
     if (-not [IO.Path]::IsPathRooted($Feed) -or $Feed -match '^[a-z]+://') { throw 'Feed must be an absolute local path or file share.' }

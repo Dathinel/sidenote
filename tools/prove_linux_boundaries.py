@@ -36,7 +36,7 @@ def verify(root, overrides=None):
     inputs = source("src/core/meeting_router/inputs.rs")
     assert len(re.findall(r"m\.nlink\(\)\s*!=\s*1", inputs)) >= 2, "input fd must have exactly one link"
     assert "Directory::open(path.parent()" in inputs and "libc::O_NOFOLLOW" in inputs, "all path components must be pinned"
-    expected = json.loads((Path(__file__).with_name("linux-boundary-inventory.json")).read_text())
+    expected = json.loads((root / "tools" / "linux-boundary-inventory.json").read_text())
     actual = {}
     for directory in ("src", "crates"):
         for path in (root / directory).rglob("*.rs"):
@@ -44,7 +44,9 @@ def verify(root, overrides=None):
             text = source(name)
             if SPAWN.search(text) or READ.search(text):
                 actual[name] = hashlib.sha256(text.encode()).hexdigest()
-    assert actual == expected, "helper/reader source changed: enumerate and review every affected call site"
+    if actual != expected:
+        stale = sorted(name for name in actual.keys() | expected.keys() if actual.get(name) != expected.get(name))
+        raise AssertionError("stale boundary inventory: " + ", ".join(stale))
     print("PASS Linux decoder disabled; meeting reads pinned; reviewed helper/reader inventory matches")
 
 
@@ -68,4 +70,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AssertionError as error:
+        print(error)
+        sys.exit(1)
