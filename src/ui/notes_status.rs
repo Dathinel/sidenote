@@ -120,7 +120,7 @@ pub fn visible_copy(
             return None;
         }
         if tasks_failed {
-            return Some((label(&job.state), TASKS_RETRY.into()));
+            return Some((label(&job.state), TASKS_RETRY_SUBJECT.into()));
         }
         if !fallback {
             let routing = job.routing_message();
@@ -318,16 +318,19 @@ fn banner_with(s: &State, id: &str, job: &Job, p: Palette, show_engine: bool) ->
         )
     {
         let engine = engine_message(job);
-        let mut notice = tasks_retry_notice(s, id, &copy, p);
+        let mut items = col()
+            .key("notes-state-banner")
+            .gap(8.0)
+            .child(tasks_retry_notice(s, id, &copy, p));
         if !engine.is_empty() {
-            notice = notice.child(roles::SMALL.wrap(engine, p.faint).role("status"));
+            items = items.child(roles::SMALL.wrap(engine, p.faint).role("status"));
         }
         if matches!(job.state, JobState::Done { fallback: true, .. }) {
-            notice = notice
+            items = items
                 .child(roles::SMALL.wrap(summary_message(job, selected), p.soft))
                 .child(edit_button(p).self_start());
         }
-        return Some(notice);
+        return Some(items);
     }
     let kind = if is_failure(&job.state) {
         BannerKind::Problem
@@ -480,6 +483,7 @@ fn edit_button(p: Palette) -> El {
     })
 }
 const TASKS_RETRY: &str = "Not added to projects yet.";
+const TASKS_RETRY_SUBJECT: &str = "Tasks not added to projects yet.";
 const TRANSCRIPT_SAVED: &str = "Your transcript is saved.";
 
 pub fn tasks_notice(s: &State, m: &Meeting, p: Palette) -> Option<El> {
@@ -621,7 +625,7 @@ mod tests {
             (
                 true,
                 "Tasks not added to a project",
-                "Not added to projects yet.",
+                "Tasks not added to projects yet.",
             ),
             (
                 false,
@@ -641,6 +645,51 @@ mod tests {
             assert!(copy.contains(detail), "{copy}");
             assert_eq!(copy.contains("models are not installed"), !failed);
         }
+    }
+
+    #[test]
+    fn live_page_task_notice_names_tasks_and_keeps_other_causes_apart() {
+        const ID: &str = "1793955600000-2";
+        fn view(s: &State, _: &mut rune::Cx<State>) -> El {
+            let p = crate::ui::theme::palette(false);
+            banner_for(s, ID, &s.ai_notes.jobs[ID], p).unwrap()
+        }
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("local/notes-jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        let record = serde_json::json!({
+            "state": "done", "fallback": true, "tasks_failed": true,
+            "transcript_revision": "a".repeat(64),
+            "routing_fallbacks": [{"reason": {"cpu_language_models_missing": {"ready": 2}}}]
+        });
+        std::fs::write(jobs.join(format!("{ID}.json")), record.to_string()).unwrap();
+        let job = core::notes::status_record(root.path(), ID).unwrap();
+        let (engine, defaults) = (engine_message(&job), summary_message(&job, None));
+        assert!(engine.contains("models are not installed"), "{engine}");
+        let mut state = State::new();
+        state.ai_notes.jobs.insert(ID.into(), job);
+        let mut runtime = rune::Runtime::new(state, view, (500.0, 400.0), rune::Env::default());
+        runtime.frame(0.0);
+        let elements = runtime.elements();
+        let notice = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("notes-tasks-notice"))
+            .unwrap();
+        let inside = |e: &rune::ElementInfo| e.path.starts_with(&format!("{}/", notice.path));
+        let text = |wanted: &str| {
+            elements
+                .iter()
+                .find(|e| e.text.as_deref() == Some(wanted))
+                .unwrap_or_else(|| panic!("no element shows {wanted:?}"))
+        };
+        assert!(inside(text("Tasks not added to projects yet.")));
+        assert!(!inside(text(&engine)));
+        assert!(!inside(text(&defaults)));
+        let edit = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("notes-state-edit"))
+            .unwrap();
+        assert!(!inside(edit));
     }
 
     #[test]
