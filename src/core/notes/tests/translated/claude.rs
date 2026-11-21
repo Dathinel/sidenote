@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::runner_process::{
     TEST_CHILD,
-    deadline::fixture::{FrozenClock, Phase},
+    deadline::fixture::{self as deadline_fixture, FrozenClock, Phase},
 };
 use serde_json::json;
 use std::{io::Read, process::Command, time::Instant};
@@ -178,6 +178,10 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
             "-p|--model|translation-fixture|--strict-mcp-config|--tools||--no-session-persistence|--output-format|json"
         );
         fs::create_dir(path.join("claude-prepared")).unwrap();
+        if mode == "delayed" {
+            // A fresh deadline at launch would give back the time spent preparing.
+            deadline_fixture::advance(Duration::from_millis(500));
+        }
         if mode == "revoked" {
             let mut config = crate::core::Config::load_in(&path).unwrap();
             config.engine_settings.steps.translation = false;

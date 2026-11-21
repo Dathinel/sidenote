@@ -55,6 +55,13 @@ pub(crate) mod fixture {
         CLOCK.with(|slot| slot.borrow().as_ref().map(|clock| clock.now))
     }
 
+    pub(crate) fn advance(elapsed: Duration) {
+        CLOCK.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            slot.as_mut().expect("fixture clock installed").now += elapsed;
+        });
+    }
+
     pub(crate) fn reach(phase: Phase) {
         CLOCK.with(|slot| {
             if let Some(clock) = slot.borrow_mut().as_mut()
