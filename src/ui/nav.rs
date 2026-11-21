@@ -238,10 +238,10 @@ fn fills(active: bool, p: Palette) -> (Color, Color) {
     }
 }
 
-/// A place's name: 600 in `ink` when active, 500 in `soft` otherwise.
+/// A place's name: 600 in `ink` when active, 400 in `soft` otherwise.
 fn place_name(name: &str, active: bool, p: Palette) -> El {
     if active {
-        roles::NAME.line(name, p.ink)
+        roles::CONTROL.bold().line(name, p.ink)
     } else {
         roles::CONTROL.line(name, p.soft)
     }

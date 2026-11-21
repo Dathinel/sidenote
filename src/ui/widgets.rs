@@ -219,7 +219,7 @@ fn button_state(
             .center()
             .radius(8.0)
             .fill(fill)
-            .child(super::icons::styled(name, roles::CONTROL.style(), ink).max_lines(1)),
+            .child(super::icons::styled(name, roles::CONTROL.bold().style(), ink).max_lines(1)),
     )
     .label(accessible_name)
     .hover(hover)

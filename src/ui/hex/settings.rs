@@ -1380,7 +1380,8 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                         .py(7.0)
                         .child(icons::draw(page.icon(), 18.0, p.soft))
                         .child(if active == page {
-                            roles::NAME
+                            roles::CONTROL
+                                .bold()
                                 .line(page.name(), p.ink)
                                 .grow(1.0)
                                 .help(page.name())
@@ -1460,7 +1461,7 @@ fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
                     .gap(12.0)
                     .pt(14.0)
                     .child(if tab == active {
-                        roles::NAME.wrap(*name, p.ink)
+                        roles::CONTROL.bold().wrap(*name, p.ink)
                     } else {
                         roles::CONTROL.wrap(*name, p.soft)
                     })

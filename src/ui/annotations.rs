@@ -679,8 +679,13 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
         (true, "Transcript", "annotation-transcript-tab"),
     ] {
         let active = s.annotations.transcript == transcript;
+        let (role, ink) = if active {
+            (roles::CONTROL.bold(), p.ink)
+        } else {
+            (roles::CONTROL, p.soft)
+        };
         tabs = tabs.child(
-            pressable(roles::CONTROL.wrap(label, if active { p.ink } else { p.soft }))
+            pressable(role.wrap(label, ink))
                 .key(key)
                 .role("tab")
                 .label(label)

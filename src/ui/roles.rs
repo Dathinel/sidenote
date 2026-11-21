@@ -95,7 +95,7 @@ pub const SMALL: Role = Role::new(12.5, 400.0, 19.0);
 /// The name in a dense row: a setting, a finding, a memory claim, a sidebar place.
 pub const NAME: Role = SMALL.bold();
 /// Tabs, buttons, links and menu items.
-pub const CONTROL: Role = Role::new(13.0, 500.0, 19.0);
+pub const CONTROL: Role = Role::new(12.5, 400.0, 18.0).tabular(0.05);
 /// Dates, durations and other facts shown alongside a control.
 pub const FACT: Role = Role::new(12.5, 400.0, 18.0).tabular(0.05);
 /// Fine print, sources and help text.
