@@ -2,9 +2,10 @@
 use super::*;
 use crate::ui::{
     cards, icons, notes_status, tasks,
-    widgets::{self, ButtonRole, HelpHint},
+    widgets::{self, HelpHint},
 };
-use rune_kit::{Menu, MenuItem, Placement, Popover, SegmentedControl};
+use rune::{Color, KeyEvent};
+use rune_kit::{Menu, MenuItem, Placement, Popover};
 use sidenote::core::{self, people::Side};
 
 pub fn return_key(origin: &str) -> String {
@@ -181,26 +182,100 @@ fn picked_template(s: &State, m: &Meeting) -> &'static str {
     }
 }
 
-/// "15 Nov · 2 min". A part that is not known is left out, so nobody sees "Length not recorded".
-fn facts_line(date: Option<String>, minutes: Option<u64>) -> String {
-    [date, minutes.map(|n| format!("{n} min"))]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" \u{b7} ")
+fn fact(icon: &'static rune::Icon, p: Palette) -> El {
+    row()
+        .h(28.0)
+        .gap(6.0)
+        .items_center()
+        .px(6.0)
+        .radius(8.0)
+        .child(icons::draw(icon, 14.0, p.faint).a11y_hidden())
 }
 
-/// A small icon and its words on the meta row.
-fn fact(icon: &'static rune::Icon, words: String, p: Palette) -> El {
+fn meeting_facts(m: &Meeting, p: Palette) -> Option<El> {
+    let date = m.started.map(|d| d.format("%-d %b").to_string());
+    let duration = m.minutes.map(|n| format!("{n} min"));
+    let name = match (&date, &duration) {
+        (Some(date), Some(duration)) => format!("Date: {date}. Duration: {duration}"),
+        (Some(date), None) => format!("Date: {date}"),
+        (None, Some(duration)) => format!("Duration: {duration}"),
+        (None, None) => return None,
+    };
+    let separator = date.is_some() && duration.is_some();
+    Some(
+        fact(&icons::DIARY, p)
+            .key("meeting-facts")
+            .role("text")
+            .label(name)
+            .focusable(true)
+            .focus_ring(2.0, 1.0, p.accent)
+            .children(date.map(|date| roles::FACT.line(date, p.soft).a11y_hidden()))
+            .children(separator.then(|| {
+                widgets::dot(3.0, p.mark)
+                    .key("meeting-fact-separator")
+                    .a11y_hidden()
+            }))
+            .children(duration.map(|duration| roles::FACT.line(duration, p.soft).a11y_hidden())),
+    )
+}
+
+fn view_switch(s: &State, k: &Kit, p: Palette) -> El {
+    let selected = usize::from(s.meeting_tab == Tab::Notes);
     row()
-        .gap(4.0)
-        .items_center()
-        .px(8.0)
-        .py(3.0)
+        .key("meeting-view")
+        .role("radiogroup")
+        .label("Meeting view")
+        .focus_group()
+        .h(28.0)
+        .padding(2.0)
         .radius(8.0)
-        .border(1.0, p.line)
-        .child(icons::draw(icon, 13.0, p.faint))
-        .child(roles::FACT.line(words, p.soft))
+        .fill(p.chip)
+        .equal_columns(2)
+        .child(
+            el().key("indicator")
+                .h(24.0)
+                .radius(6.0)
+                .fill(p.bg)
+                .shadow(0.0, 1.0, p.shadow)
+                .token_motion(k.motion.control)
+                .a11y_hidden()
+                .grid_cell(selected),
+        )
+        .children(
+            [(Tab::Summary, "Notes"), (Tab::Notes, "Your notes")]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (tab, name))| {
+                    let on = index == selected;
+                    row()
+                        .key(format!("segment{index}"))
+                        .role("radio")
+                        .label(name)
+                        .position_in_set(index + 1, 2)
+                        .focusable(true)
+                        .focus_selected(on)
+                        .focus_ring(2.0, 1.0, p.accent)
+                        .h(24.0)
+                        .px(10.0)
+                        .center()
+                        .radius(6.0)
+                        .hover(p.button_hover)
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.set_meeting_tab(tab);
+                            tx.blur();
+                        })
+                        .child(
+                            rune::text(name)
+                                .font(rune::TextStyle {
+                                    weight: if on { 600.0 } else { k.ty.ui.weight },
+                                    ..k.ty.ui
+                                })
+                                .color(if on { p.ink } else { p.soft })
+                                .a11y_hidden(),
+                        )
+                        .grid_cell(index)
+                }),
+        )
 }
 
 const ENGLISH_ONLY: &str = "English-only transcript. Hindi or Telugu parts may be missing.";
@@ -228,20 +303,45 @@ pub(super) fn status_chip(
     if !english && engine.is_none() {
         return None;
     }
-    let toggle = widgets::button(
-        "Transcript status",
-        "meeting-status",
-        ButtonRole::Secondary,
-        p,
+    let close_on_escape = |s: &mut State, e: &KeyEvent, tx: &mut Tx| {
+        if e.key != Key::Escape || !s.meeting_ui.status_open {
+            return false;
+        }
+        s.meeting_ui.status_open = false;
+        tx.focus("meeting-status", true);
+        true
+    };
+    let (status, name) = if english {
+        ("English only", "Transcript status: English only")
+    } else {
+        ("Transcript status", "Transcript status")
+    };
+    let toggle = pressable(
+        fact(&icons::INFO, p)
+            .px(8.0)
+            .child(roles::FACT.line(status, p.faint))
+            .fill(if s.meeting_ui.status_open {
+                p.chip
+            } else {
+                Color::TRANSPARENT
+            }),
     )
-    .px(8.0)
-    .py(2.0)
-    .min_h(24.0)
-    .h(24.0)
-    .on_press(|s: &mut State| s.meeting_ui.status_open = !s.meeting_ui.status_open);
+    .key("meeting-status")
+    .label(name)
+    .hover(p.chip)
+    .focus_ring(2.0, 1.0, p.accent)
+    .on_key(close_on_escape)
+    .on_press_tx(|s: &mut State, tx| {
+        s.meeting_ui.status_open = !s.meeting_ui.status_open;
+        if s.meeting_ui.status_open && tx.by_keys() {
+            tx.focus_when_shown("meeting-status-settings", true);
+        }
+    });
     let body = col()
-        .w(270.0)
+        .w(274.0)
+        .px(2.0)
         .gap(8.0)
+        .on_key(close_on_escape)
         .children(english.then(|| {
             roles::SMALL
                 .wrap(ENGLISH_ONLY, p.ink)
@@ -259,6 +359,7 @@ pub(super) fn status_chip(
         );
     let mut kit = k.clone();
     kit.c.surface_raised = p.raised;
+    kit.radius.md = 10.0;
     Some(
         Popover::new("meeting-status-popover")
             .label("Transcript status")
@@ -272,7 +373,6 @@ pub(super) fn status_chip(
 }
 
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
-    let facts = facts_line(m.started.map(|d| d.format("%-d %b").to_string()), m.minutes);
     let people = m.summary.people.len();
     let mut controls = row()
         .key("meeting-controls")
@@ -280,32 +380,21 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
         .flex_wrap()
         .gaps(6.0, 6.0)
         .items_center()
-        .child(
-            SegmentedControl::new(
-                &["Notes", "Your notes"],
-                Some(usize::from(s.meeting_tab == Tab::Notes)),
-            )
-            .label("Meeting view")
-            .fit()
-            .on_pick::<State>(|s, i, tx| {
-                s.set_meeting_tab(if i == 0 { Tab::Summary } else { Tab::Notes });
-                tx.blur();
-            })
-            .build(k)
-            .key("meeting-view"),
-        );
-    if !facts.is_empty() {
-        controls = controls.child(fact(&icons::DIARY, facts, p).key("meeting-facts"));
-    }
+        .child(view_switch(s, k, p))
+        .children(meeting_facts(m, p));
     if people > 0 {
         controls = controls.child(
-            fact(&icons::PEOPLE, people.to_string(), p)
+            fact(&icons::PEOPLE, p)
                 .key("meeting-people")
+                .role("text")
                 .label(match people {
                     1 => "1 person".to_string(),
                     n => format!("{n} people"),
                 })
-                .help(m.summary.people.join(", ")),
+                .help(m.summary.people.join(", "))
+                .focusable(true)
+                .focus_ring(2.0, 1.0, p.accent)
+                .child(roles::FACT.line(people.to_string(), p.soft).a11y_hidden()),
         );
     }
     if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
@@ -315,10 +404,10 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
     col()
         .key("meeting-header")
         .w_full()
-        .gap(10.0)
+        .gap(12.0)
         .px(24.0)
         .pt(18.0)
-        .pb(16.0)
+        .pb(22.0)
         .child(
             text_title(&m.title, 32.0, p)
                 .max_lines(2)
@@ -775,19 +864,5 @@ pub fn scene_publication(s: &mut State, home: bool) {
     }));
     if home {
         s.go_home();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::facts_line;
-
-    #[test]
-    fn the_facts_line_leaves_out_what_is_not_known() {
-        let date = || Some("17 Nov".to_string());
-        assert_eq!(facts_line(date(), Some(2)), "17 Nov \u{b7} 2 min");
-        assert_eq!(facts_line(date(), None), "17 Nov");
-        assert_eq!(facts_line(None, Some(22)), "22 min");
-        assert_eq!(facts_line(None, None), "");
     }
 }

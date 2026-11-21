@@ -244,9 +244,15 @@ fn chip_with(
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(name))
         });
+    let guessed = mp.name.is_some() && !mp.confirmed;
+    let label = match if quiet { &display_name } else { &mp.name } {
+        Some(n) if guessed => format!("Suggested project: {n}. Change it"),
+        Some(n) => format!("Project: {n}. Change it"),
+        None => "Add this meeting to a project".into(),
+    };
     let name_ink = if mp.confirmed { p.soft } else { p.ink };
-    let mut trigger_row = row().gap(4.0).items_center();
-    if mp.name.is_some() && !mp.confirmed && !quiet {
+    let mut trigger_row = row().gap(if quiet { 6.0 } else { 4.0 }).items_center();
+    if guessed && !quiet {
         trigger_row = trigger_row.child(roles::META.wrap(
             if new_project {
                 "New project:"
@@ -256,23 +262,24 @@ fn chip_with(
             p.faint,
         ));
     }
+    let name_style = if quiet {
+        roles::FACT.bold()
+    } else {
+        roles::META.medium()
+    };
     trigger_row = trigger_row
         .child(
-            rune::text(display_name.unwrap_or_else(|| "Add to project".into()))
-                .font(roles::META.medium().style())
-                .color(if mp.name.is_some() { name_ink } else { p.faint })
-                .truncate()
-                .min_w(0.0)
+            name_style
+                .line(
+                    display_name.unwrap_or_else(|| "Add to project".into()),
+                    if mp.name.is_some() { name_ink } else { p.faint },
+                )
                 .max_w(190.0),
         )
         .children((s.selected.is_some() || s.on_live()).then_some(chevron));
     let menu_id = id.to_string();
     let trigger = pressable(trigger_row)
-        .label(match &mp.name {
-            Some(n) if mp.confirmed => format!("Project: {n}. Change it"),
-            Some(n) => format!("Suggested project: {n}. Change it"),
-            None => "Add this meeting to a project".into(),
-        })
+        .label(label)
         .min_w(0.0)
         .pl(10.0)
         .pr(6.0)
@@ -283,6 +290,17 @@ fn chip_with(
             let same = s.project_menu.as_deref() == Some(menu_id.as_str());
             s.project_menu = (!same).then(|| menu_id.clone());
         });
+    let trigger = if quiet {
+        trigger
+            .key(format!("meeting-project-{id}"))
+            .h(28.0)
+            .px(8.0)
+            .py(0.0)
+            .radius(8.0)
+            .focus_ring(2.0, 1.0, p.accent)
+    } else {
+        trigger
+    };
     let mut menu = Menu::new(format!("proj-{id}"))
         .trigger(trigger)
         .open(open)
@@ -334,20 +352,21 @@ fn chip_with(
         }
     }
     let menu = menu.build(k, layer).min_w(0.0);
-    // A suggestion has a dashed outline and its own accept button; an accepted project is a
-    // plain outlined chip.
     let mut wrap = row()
         .key(format!("project-{id}"))
         .items_center()
         .min_w(0.0)
         .max_w(420.0)
-        .radius(999.0)
-        .border(1.0, p.line)
+        .radius(if quiet { 8.0 } else { 999.0 })
         .child(menu.shrink());
-    if mp.name.is_some() && !mp.confirmed {
-        wrap = wrap.border_dash(4.0, 3.0);
+    if guessed {
+        wrap = wrap
+            .border(1.0, if quiet { p.mark } else { p.line })
+            .border_dash(4.0, 3.0);
+    } else if !quiet {
+        wrap = wrap.border(1.0, p.line);
     }
-    if mp.name.is_some() && !mp.confirmed && !quiet {
+    if guessed && !quiet {
         let dismiss_id = id.to_string();
         let id = id.to_string();
         let name = mp.name.clone().unwrap_or_default();

@@ -223,7 +223,7 @@
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
-  "src/ui/theme.rs": "6b99ef7685e90cc2dcbad4f73dfaf0db9afe9679c6b48e59ca60020c8ec79831",
+  "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
   "src/ui/updates.rs": "c0fb7519901a28d537f0b1424eac92b0ba4eaed74f825a8aa8a5bc0e343ac6ec",
   "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }

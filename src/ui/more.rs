@@ -143,13 +143,18 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
     let trigger = if scope == "row" {
         super::widgets::quiet_button("More", &format!("{key}-button"), p)
     } else {
-        super::widgets::icon_button(
+        let button = super::widgets::icon_button(
             &super::icons::MORE,
             "More actions",
             &format!("{key}-button"),
             super::widgets::ButtonRole::Ghost,
             p,
-        )
+        );
+        if scope == "meeting" {
+            button.size(28.0, 28.0).px(6.0)
+        } else {
+            button
+        }
     }
     .on_press(move |s: &mut State| {
         let same = s.more_menu.as_deref() == Some(toggle.as_str());
