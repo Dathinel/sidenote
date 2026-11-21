@@ -1,9 +1,10 @@
 //! Small shared pieces: text, chips, links, headings, bullets and the drawn icons.
 use super::{
-    State, roles,
+    State, icons, roles,
     theme::{BODY, BODY_LH, Palette},
 };
 use rune::{Color, Cursor, El, Link, LinkPaint, ScrollSpec, Span, TextStyle, col, el, row, text};
+use rune_kit::Kit;
 use sidenote::core::{self, Point};
 
 /// A glyph or icon character (a tick, a chevron, a close cross) at its own size. Words use the
@@ -37,6 +38,65 @@ pub fn chip(s: impl Into<String>, p: Palette) -> El {
 
 pub fn pressable(e: El) -> El {
     e.role("button").focusable(true).cursor(Cursor::Pointer)
+}
+
+#[derive(Clone, Copy)]
+pub enum HelpHint {
+    Questions,
+    Tasks,
+    Model,
+}
+
+impl HelpHint {
+    pub fn build(self, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+        let (key, topic, explanation) = match self {
+            Self::Questions => (
+                "help-hint-questions",
+                "open questions",
+                "Questions still waiting for an answer.",
+            ),
+            Self::Tasks => (
+                "help-hint-tasks",
+                "tasks",
+                "Follow-up work from this meeting.",
+            ),
+            Self::Model => (
+                "help-hint-model",
+                "the Ask model",
+                "Choose the model for your next question.",
+            ),
+        };
+        let surface = roles::META
+            .line(explanation, p.faint)
+            .key(format!("{key}-tip"))
+            .px(8.0)
+            .py(4.0)
+            .radius(8.0)
+            .fill(p.raised)
+            .border(1.0, p.line)
+            .inert()
+            .group_opacity(0.0, 1.0);
+        layer.push(rune_kit::popover::anchored(
+            k,
+            row().hover_group_shared(key).child(surface),
+            key,
+            rune_kit::Placement::Top,
+            4.0,
+        ));
+        pressable(row().items_center().justify_center().child(icons::draw(
+            &icons::INFO,
+            13.0,
+            p.faint,
+        )))
+        .key(key)
+        .label(format!("About {topic}"))
+        .description(explanation)
+        .size(24.0, 24.0)
+        .min_w(24.0)
+        .radius(8.0)
+        .hover_group_shared(key)
+        .on_press_tx(move |_: &mut State, tx| tx.focus(key, true))
+    }
 }
 
 /// Disabled push controls retain their role but never take pointer or keyboard input.

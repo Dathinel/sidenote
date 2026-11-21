@@ -151,6 +151,27 @@ fn assert_source_revealed(rt: &Runtime<State>, source: &str, row: &str) {
 }
 
 #[test]
+fn meeting_model_hint_reveals_on_hover_and_keyboard_focus() {
+    if in_parent("meeting_model_hint_reveals_on_hover_and_keyboard_focus") {
+        return;
+    }
+    let mut rt = page();
+    let hint = "help-hint-model";
+    let tip = "help-hint-model-tip";
+    assert_eq!(rt.presented(tip).unwrap().1, 0.0);
+    let (x, y) = rt.find(hint).unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(0.2);
+    assert_eq!(rt.presented(tip).unwrap().1, 1.0);
+    rt.pointer_leave();
+    rt.frame(0.2);
+    assert_eq!(rt.presented(tip).unwrap().1, 0.0);
+    rt.update(|_, tx| tx.focus(hint, true));
+    rt.frame(0.2);
+    assert_eq!(rt.presented(tip).unwrap().1, 1.0);
+}
+
+#[test]
 fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() {
     if in_parent("an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load") {
         return;

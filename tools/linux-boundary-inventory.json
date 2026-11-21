@@ -198,7 +198,7 @@
   "src/ui/area.rs": "8d8707a6b818d7e08880b92747098277e3c0d46c1badfa0dd27493047d16aad4",
   "src/ui/area_scene.rs": "ed9d0a3291369f5ab6a8a3e2c0da8a04bb05ba7155a065cd2604c9da7b1bf160",
   "src/ui/ask_settings.rs": "9f224b3d477bf938277064c440f99f4191e43b037b5c51282cb29713525f1b84",
-  "src/ui/ask_switch_tests.rs": "d80c9e02baad13357c5e4465357ab853ea009afad71c883852f60f484727563f",
+  "src/ui/ask_switch_tests.rs": "1010d2830be20ce3e948e1fa8c6d689d3fd8b527f69a642a2523e90a9e0ce1eb",
   "src/ui/benchmark.rs": "3eea004745d87db3e40f407a7d320827a47772f1185355a0c6397be3df15e9ff",
   "src/ui/check.rs": "99a63145026da06e0119fce3e965ab04f12c164319f82884724cd387ee061557",
   "src/ui/cloud_ask.rs": "19f3464bf233e66ba570830d018e9fde4fb7c5d9a0ea1a7e24fd9fe7525f5117",
@@ -223,7 +223,7 @@
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
-  "src/ui/theme.rs": "1b9b8b2a44d178355ac4bc365661a2919a3fefb571e52964b307b7e00697a730",
+  "src/ui/theme.rs": "b6dee24524c52342c5d3af0d1068f5aa5564877489d9d7f6416f27bb7833986f",
   "src/ui/updates.rs": "c0fb7519901a28d537f0b1424eac92b0ba4eaed74f825a8aa8a5bc0e343ac6ec",
   "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }

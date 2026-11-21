@@ -1,6 +1,6 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
-use crate::ui::{cards, icons, notes_status, tasks};
+use crate::ui::{cards, icons, notes_status, tasks, widgets::HelpHint};
 use rune_kit::{Menu, MenuItem, Placement, Popover, SegmentedControl};
 use sidenote::core::{self, people::Side};
 
@@ -34,6 +34,7 @@ impl State {
         match prefs.save(&self.store.root) {
             Ok(()) => {
                 self.meeting_ui.tabs = tabs;
+                self.meeting_ui.status_open = false;
                 self.more_menu = None;
             }
             Err(_) => self.notice = Some("Could not save the meeting layout. Try again.".into()),
@@ -244,6 +245,8 @@ pub(super) fn status_chip(
                     s.hex.section = crate::ui::hex::Section::MeetingModels;
                 }),
         );
+    let mut kit = k.clone();
+    kit.c.surface_raised = p.raised;
     Some(
         Popover::new("meeting-status-popover")
             .label("Transcript status")
@@ -252,7 +255,7 @@ pub(super) fn status_chip(
             .placement(Placement::BottomStart)
             .on_close(|s: &mut State| s.meeting_ui.status_open = false)
             .child(body)
-            .build(k, layer),
+            .build(&kit, layer),
     )
 }
 
@@ -296,10 +299,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
     if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
         controls = controls.child(project);
     }
-    controls = controls
-        .children(status_chip(s, k, m, p, layer))
-        .child(el().grow(1.0));
-    controls = controls.child(more::menu(s, k, m, "meeting", p, layer));
+    controls = controls.children(status_chip(s, k, m, p, layer));
     col()
         .key("meeting-header")
         .w_full()
@@ -313,7 +313,14 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .key("meeting-title")
                 .help(&m.title),
         )
-        .child(controls)
+        .child(
+            row()
+                .w_full()
+                .gap(6.0)
+                .items_start()
+                .child(controls.grow(1.0).min_w(0.0))
+                .child(more::menu(s, k, m, "meeting", p, layer)),
+        )
         .children(crate::ui::live::parts_status(s, p))
         .children(project::form(s, k, &m.id, p))
 }
@@ -321,12 +328,13 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
 fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     let key = format!("meeting-point-{origin}");
     let source_key = format!("meeting-source-{origin}");
+    let decided = pt.kind == "decided";
     let mut body = roles::READ
-        .wrap(&pt.text, p.ink)
+        .wrap(&pt.text, if decided { p.ink } else { p.body })
         .key(format!("meeting-point-text-{origin}"))
         .selectable(true)
         .w_full();
-    if pt.kind == "decided" {
+    if decided {
         body = body.font(roles::READ.bold().style());
     }
     let mut line = row()
@@ -364,7 +372,7 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
         );
     }
     if s.back.as_deref() == Some(&origin) {
-        line = line.fill(p.hit);
+        line = line.fill(p.sel);
     }
     line
 }
@@ -402,7 +410,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         for (i, line) in summary.context.iter().enumerate() {
             body = body.child(
                 roles::READ
-                    .wrap(line, p.ink)
+                    .wrap(line, p.body)
                     .key(format!("ctx-{i}"))
                     .selectable(true),
             );
@@ -447,7 +455,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
     .children(crate::ui::notes_status::provenance(m, p))
 }
 
-fn rail(s: &State, m: &Meeting, p: Palette) -> El {
+fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
     let items: Vec<_> = s
         .tasks
         .all
@@ -455,6 +463,7 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
         .filter(|t| t.meeting_id == m.id && !t.manual)
         .collect();
     let mut rail = col().key("meeting-actions").w_full().gap(12.0);
+    let mut task_hint = Some(HelpHint::Tasks);
     for (external, name) in [(false, "Ours"), (true, "They will")] {
         let group: Vec<_> = items
             .iter()
@@ -472,13 +481,19 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
             continue;
         }
         rail = rail.child(
-            roles::GROUP
-                .wrap(format!("Tasks \u{b7} {name} {}", group.len()), p.soft)
-                .key(if external {
-                    "meeting-external-task-count"
-                } else {
-                    "meeting-task-count"
-                }),
+            row()
+                .items_center()
+                .gap(2.0)
+                .child(
+                    roles::GROUP
+                        .wrap(format!("Tasks \u{b7} {name} {}", group.len()), p.soft)
+                        .key(if external {
+                            "meeting-external-task-count"
+                        } else {
+                            "meeting-task-count"
+                        }),
+                )
+                .children(task_hint.take().map(|hint| hint.build(k, p, layer))),
         );
         let mut card = cards::panel(p).key(if external {
             "meeting-external-tasks"
@@ -563,11 +578,14 @@ fn rail(s: &State, m: &Meeting, p: Palette) -> El {
     }
     if !m.summary.to_settle.is_empty() {
         rail = rail.child(
-            roles::GROUP
-                .wrap(
+            row()
+                .items_center()
+                .gap(2.0)
+                .child(roles::GROUP.wrap(
                     format!("Open questions · {}", m.summary.to_settle.len()),
                     p.soft,
-                )
+                ))
+                .child(HelpHint::Questions.build(k, p, layer))
                 .mt(8.0),
         );
         let mut card = cards::panel(p).key("meeting-questions");
@@ -613,7 +631,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let wide = s.app_w.get() - crate::ui::nav::width(s) >= 980.0;
     let mut doc = narrative(s, m, p);
     if !wide {
-        doc = doc.child(rail(s, m, p).mt(24.0));
+        doc = doc.child(rail(s, k, m, p, layer).mt(24.0));
     }
     let mut main = col()
         .key("meeting-main")
@@ -695,11 +713,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0).child(main);
     if wide {
         columns = columns.child(
-            scroll(rail(s, m, p).px(12.0).pb(24.0), "meeting-rail-scroll")
-                .w(324.0)
-                .min_w(324.0)
-                .max_w(324.0)
-                .grow(0.0),
+            scroll(
+                rail(s, k, m, p, layer).px(12.0).pb(24.0),
+                "meeting-rail-scroll",
+            )
+            .w(324.0)
+            .min_w(324.0)
+            .max_w(324.0)
+            .grow(0.0),
         );
     }
     let mut pane = col()

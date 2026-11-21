@@ -409,7 +409,12 @@ fn meeting_chips(p: Palette) -> El {
         .items_center()
         .gap(8.0)
         .pb(8.0)
-        .child(recipe(0, "Draft a follow-up", p))
+        .child(
+            recipe(0, "Draft a follow-up", p)
+                .min_h(26.0)
+                .h(26.0)
+                .py(2.0),
+        )
 }
 
 /// A few ideas to ask, floating above the pill while its box has focus and is empty.
@@ -952,7 +957,18 @@ pub fn overlay_with(
                     .wrap(format!("Runners are not set up. {e}"), p.warn)
                     .px(8.0)
                     .max_w(260.0),
-                None => runner_choice(s, k, p, narrow, layer),
+                None => {
+                    let picker = runner_choice(s, k, p, narrow, layer);
+                    if notes_column {
+                        row()
+                            .items_center()
+                            .min_w(0.0)
+                            .child(picker)
+                            .child(super::widgets::HelpHint::Model.build(k, p, layer))
+                    } else {
+                        picker
+                    }
+                }
             }
         }
     });

@@ -1,6 +1,6 @@
 //! Colours, fonts and the type scale. Light and dark follow the system setting. Greys carry
-//! structure and hierarchy (`bg`, `card`, `side`, `line`, then the text greys `ink`, `soft`,
-//! `faint`); the coral accent marks the one main action and the focus ring, and nothing
+//! structure and hierarchy (`bg`, `card`, `raised`, `side`, `line`, then the text greys
+//! `ink`, `body`, `soft`, `faint`); the coral accent marks the one main action and the focus ring, and nothing
 //! else (not links, progress, selection or decoration); green, amber and red mean status only. Every text token keeps 4.5:1 on the fills it sits on, in both modes
 //! (`text_tokens_keep_four_and_a_half_to_one`). docs/design/typography.md lists the ratios.
 use rune::{Color, Family, TextStyle};
@@ -10,11 +10,14 @@ use rune_kit::{Kit, PaletteSeed};
 pub struct Palette {
     /// The reading page.
     pub bg: Color,
-    /// Raised surfaces: the Ask pill, its thread, inputs and menus.
+    /// Surfaces: the Ask pill, its thread and inputs.
     pub card: Color,
+    /// Floating details and help hints on the meeting page.
+    pub raised: Color,
     /// The sidebar.
     pub side: Color,
     pub ink: Color,
+    pub body: Color,
     pub soft: Color,
     /// The dimmest text grey: facts, placeholders and small notes. Still 4.5:1 on every fill,
     /// and in dark mode never below #a9a69f on a raised surface.
@@ -102,8 +105,10 @@ pub fn palette(dark: bool) -> Palette {
     Palette {
         bg: c[0],
         card: c[1],
+        raised: hex(if dark { "#2a2a28" } else { "#ffffff" }),
         side: c[2],
         ink: c[3],
+        body: hex(if dark { "#d6d3cc" } else { "#3e3d39" }),
         soft: c[4],
         faint: c[5],
         line: c[6],
@@ -385,9 +390,10 @@ mod type_and_contrast_tests {
         for dark in [false, true] {
             let p = palette(dark);
             let k = kit(&p);
-            let plain = [p.bg, p.card, p.side, p.chip, p.sel, p.hit];
+            let plain = [p.bg, p.card, p.raised, p.side, p.chip, p.sel, p.hit];
             let rows: Vec<(&str, Color, Vec<Color>)> = vec![
                 ("ink", p.ink, plain.to_vec()),
+                ("body", p.body, plain.to_vec()),
                 ("soft", p.soft, plain.to_vec()),
                 ("faint", p.faint, plain.to_vec()),
                 ("accent", p.accent, vec![p.bg, p.card, p.side]),
@@ -495,7 +501,7 @@ mod type_and_contrast_tests {
         let p = palette(true);
         let floor = rune::color::hex("#a9a69f").unwrap().luminance();
         let old = rune::color::hex("#77746d").unwrap().luminance();
-        for ink in [p.ink, p.soft, p.faint] {
+        for ink in [p.ink, p.body, p.soft, p.faint] {
             assert!(ink.luminance() >= floor);
             assert_ne!(ink.luminance(), old);
         }
