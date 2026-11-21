@@ -277,6 +277,133 @@ fn assert_source_revealed(rt: &Runtime<State>, source: &str, row: &str) {
     assert_eq!(row.hover, 1.0);
 }
 
+/// A summary with every point kind, in an order that is not the display order.
+fn page_with_every_kind() -> Runtime<State> {
+    page_with(DEFAULT_SIZE, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let summary = serde_json::json!({
+            "title": "Beta launch plan",
+            "context": [CONTEXT, "Two questions stayed open."],
+            "topics": [
+                {"title": "Launch", "points": [
+                    {"type": "fact", "text": "Copy is with Priya.", "at": ["00:27"]},
+                    {"type": "open", "text": "Whether to ask for the work email later."},
+                    {"type": "decided", "text": POINT},
+                    {"type": "response", "text": "Priya will send it Thursday."},
+                    {"type": "decided", "text": "Hold the review on Monday."},
+                ]},
+                {"title": "Survey", "points": [{"type": "fact", "text": "Four in ten skip it."}]},
+            ],
+            "verify": ["The sample is 48 people."],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+    })
+}
+
+fn rect_of(rt: &Runtime<State>, key: &str) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("missing {key}"))
+        .rect
+}
+
+#[test]
+fn meeting_notes_body_follows_the_spacing_and_bullet_rules() {
+    if in_parent("meeting_notes_body_follows_the_spacing_and_bullet_rules") {
+        return;
+    }
+    let rt = page_with_every_kind();
+    let row = |i: usize| rect_of(&rt, &format!("meeting-point-pt-0-{i}"));
+    // Bullets sit 27 px apart: a 23 px line plus 2 px of padding above and below.
+    let mut ys: Vec<f32> = (0..5).map(|i| row(i)[1]).collect();
+    ys.sort_by(f32::total_cmp);
+    for i in 1..5 {
+        assert_eq!(ys[i] - ys[i - 1], 27.0, "row {i}");
+        assert_eq!(row(i)[3], 27.0, "row {i}");
+    }
+    // Every heading is one role: the same height, 8 px above its first row, 28 px below the
+    // last row of the section before.
+    let context = rect_of(&rt, "sec-context");
+    let launch = rect_of(&rt, "topic-1");
+    let survey = rect_of(&rt, "topic-2");
+    let verify = rect_of(&rt, "sec-verify");
+    assert!(
+        [launch[3], survey[3], verify[3]]
+            .iter()
+            .all(|h| *h == context[3])
+    );
+    assert_eq!(ys[0] - (launch[1] + launch[3]), 8.0);
+    assert_eq!(
+        launch[1] - (rect_of(&rt, "ctx-0")[1] + rect_of(&rt, "ctx-0")[3]),
+        28.0
+    );
+    assert_eq!(survey[1] - (ys[4] + 27.0), 28.0);
+    // Context is one paragraph: both lines are in ctx-0, and no second block exists.
+    assert!(rt.find("ctx-1").is_none());
+    let context = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("ctx-0"))
+        .and_then(|e| e.text);
+    assert_eq!(
+        context.as_deref(),
+        Some(&*format!("{CONTEXT} Two questions stayed open."))
+    );
+    // Bullets are 5 px, 11 px in from the row edge; the text starts 26 px in (46 for a reply).
+    // A decision has an ink dot, an open point a ring (no fill), the rest a grey dot.
+    let elements = rt.elements();
+    let by_key = |key: &str| {
+        elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("missing {key}"))
+    };
+    for (i, text_x) in [(0, 26.0), (1, 26.0), (2, 26.0), (3, 46.0), (4, 26.0)] {
+        let (row, dot) = (row(i), by_key(&format!("meeting-bullet-pt-0-{i}")));
+        let text = rect_of(&rt, &format!("meeting-point-text-pt-0-{i}"));
+        assert_eq!((dot.rect[2], dot.rect[3]), (5.0, 5.0), "dot {i}");
+        let dx = if i == 3 { 20.0 } else { 0.0 };
+        assert_eq!(dot.rect[0] - row[0], 11.0 + dx, "dot x {i}");
+        assert_eq!(text[0] - row[0], text_x, "text x {i}");
+        assert_eq!(
+            dot.fill.a == 0.0,
+            i == 1,
+            "only the open point is a ring: {i}"
+        );
+        // First line is 23 px tall, so its centre is 2 + 11.5 below the row top.
+        assert_eq!(dot.rect[1] + 2.5 - row[1], 13.5, "dot y {i}");
+    }
+    let fill = |i: usize| by_key(&format!("meeting-bullet-pt-0-{i}")).fill;
+    assert_eq!(fill(2), fill(4), "decision dots share one colour");
+    assert_eq!(fill(0), fill(3), "fact and reply dots share one colour");
+    assert_ne!(fill(0), fill(2), "a decision dot differs from a fact dot");
+}
+
+#[test]
+fn meeting_source_time_works_by_keyboard_in_the_new_rows() {
+    if in_parent("meeting_source_time_works_by_keyboard_in_the_new_rows") {
+        return;
+    }
+    let mut rt = page_with_cited_point();
+    // The pill is hidden, 21 px high, 6 px in from the row's right edge, and reachable by Tab.
+    let (row, pill) = (
+        rect_of(&rt, "meeting-point-pt-0-0"),
+        rect_of(&rt, "meeting-source-pt-0-0"),
+    );
+    assert_eq!(pill[3], 21.0);
+    assert_eq!(row[0] + row[2] - (pill[0] + pill[2]), 6.0);
+    rt.update(|_, tx| tx.focus("meeting-source-pt-0-0", true));
+    rt.frame(0.2);
+    rt.key(KeyEvent {
+        key: Key::Text(" ".into()),
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.2);
+    assert!(rt.state.transcript_open);
+    assert_eq!(rt.state.highlight, Some(1));
+}
+
 #[test]
 fn meeting_model_hint_reveals_on_hover_and_keyboard_focus() {
     if in_parent("meeting_model_hint_reveals_on_hover_and_keyboard_focus") {

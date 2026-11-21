@@ -426,12 +426,34 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
         .children(project::form(s, k, &m.id, p))
 }
 
+/// The bullet before a note: an ink dot for a decision, a ring for an open point, a grey dot
+/// for everything else. All three are 5 px, so the text starts at the same x in every row.
+fn bullet(kind: &str, origin: &str, p: Palette) -> El {
+    let mark = match kind {
+        "decided" => widgets::dot(5.0, p.ink),
+        "open" => el().size(5.0, 5.0).radius(2.5).border(1.0, p.mark),
+        _ => widgets::dot(5.0, p.mark),
+    };
+    // 5 px in from the 6 px row padding puts the dot 11 px from the row edge; 9 px down centres
+    // it on the first 23 px line below the 2 px row padding.
+    col()
+        .w(20.0)
+        .pt(9.0)
+        .pl(5.0)
+        .child(mark.key(format!("meeting-bullet-{origin}")))
+}
+
 fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     let key = format!("meeting-point-{origin}");
     let source_key = format!("meeting-source-{origin}");
     let decided = pt.kind == "decided";
+    let ink = match pt.kind.as_str() {
+        "decided" => p.ink,
+        "open" => p.soft,
+        _ => p.body,
+    };
     let mut body = roles::READ
-        .wrap(&pt.text, if decided { p.ink } else { p.body })
+        .wrap(&pt.text, ink)
         .key(format!("meeting-point-text-{origin}"))
         .selectable(true)
         .w_full();
@@ -441,15 +463,16 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     let mut line = row()
         .key(key)
         .w_full()
-        .gap(8.0)
-        .py(4.0)
-        .px(6.0)
+        .gap(0.0)
+        .py(2.0)
+        .pl(if pt.kind == "response" { 26.0 } else { 6.0 })
+        .pr(6.0)
         .radius(6.0)
         .items_start()
         // Pointing at the line, or keyboard focus on its time, tints the row and shows the time.
         .hover(p.chip)
         .hover_group()
-        .child(roles::READ.wrap("•", p.soft).w(12.0))
+        .child(bullet(&pt.kind, &origin, p))
         .child(body.grow(1.0).min_w(0.0));
     if timed && let Some(at) = pt.at.iter().find(|at| core::seconds(at).is_some()) {
         let time = at.clone();
@@ -462,6 +485,7 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
                 .help("Open this line in the transcript")
                 .px(6.0)
                 .py(2.0)
+                .mt(1.0)
                 .radius(5.0)
                 .fill(p.sel)
                 .hover(p.chip)
@@ -478,8 +502,19 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     line
 }
 
+/// One section heading. Every heading on the page uses this role; the first sits right under the
+/// header, which already ends 28 px above the notes, and each later one gets 28 px of its own.
+fn heading(label: &str, key: String, first: bool, p: Palette) -> El {
+    roles::SECTION
+        .wrap(label, p.ink)
+        .key(key)
+        .selectable(true)
+        .mt(if first { 0.0 } else { roles::SECTION_TOP })
+        .mb(8.0)
+}
+
 fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
-    let mut body = col().key("summary-top").w_full().gap(4.0);
+    let mut body = col().key("summary-top").w_full().gap(0.0);
     if s.meeting_tab == Tab::Notes {
         return body.child(if m.notes.is_empty() {
             roles::READ.wrap("No personal notes for this meeting.", p.soft)
@@ -500,49 +535,39 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
     if !m.has_summary() && draft.is_none() {
         return body.children(notes_status::meeting_banner(s, m, p));
     }
+    let mut first = true;
     if !summary.context.is_empty() {
-        body = body.child(
-            roles::SECTION
-                .wrap("Context", p.ink)
-                .key("sec-context")
-                .selectable(true)
-                .mb(6.0),
-        );
-        for (i, line) in summary.context.iter().enumerate() {
-            body = body.child(
+        body = body
+            .child(heading("Context", "sec-context".into(), first, p))
+            .child(
                 roles::READ
-                    .wrap(line, p.body)
-                    .key(format!("ctx-{i}"))
+                    .wrap(summary.context.join(" "), p.body)
+                    .key("ctx-0")
                     .selectable(true),
             );
-        }
+        first = false;
     }
     let timed = m.timed();
     for (ti, topic) in summary.topics.iter().enumerate() {
-        body = body.child(
-            roles::TITLE
-                .wrap(&topic.title, p.ink)
-                .key(format!("topic-{}", ti + 1))
-                .selectable(true)
-                .mt(22.0)
-                .mb(4.0),
-        );
+        body = body.child(heading(&topic.title, format!("topic-{}", ti + 1), first, p));
+        first = false;
         for (pi, pt) in topic.points.iter().enumerate() {
             body = body.child(point(s, pt, format!("pt-{ti}-{pi}"), timed, p));
         }
     }
     if !summary.verify.is_empty() {
-        body = body.child(
-            roles::TITLE
-                .wrap("Check before acting", p.ink)
-                .selectable(true)
-                .mt(20.0),
-        );
+        body = body.child(heading(
+            "Check before acting",
+            "sec-verify".into(),
+            first,
+            p,
+        ));
         for (i, line) in summary.verify.iter().enumerate() {
             body = body.child(
                 roles::READ
                     .wrap(line, p.soft)
                     .key(format!("verify-{i}"))
+                    .py(2.0)
                     .selectable(true),
             );
         }

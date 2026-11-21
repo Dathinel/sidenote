@@ -147,6 +147,20 @@ def refine_p3(phase, output, exe):
     render((f'meeting-refine-p3-{project}-{phase}', 'screens-summary', 1334, 'dark', 900, None))
 
 
+def refine_p4(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-notes-render-') as state:
+  STATE = Path(state)
+  for width, theme in ((1334, 'dark'), (1334, 'light'), (390, 'dark')):
+   render((f'meeting-refine-p4-notes-{phase}', 'screens-summary', width, theme, 900, None))
+  hover = [dict(type='move', key='meeting-point-text-pt-0-1', t=.3)]
+  render((f'meeting-refine-p4-hover-{phase}', 'screens-summary', 1334, 'dark', 900, hover))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -154,6 +168,7 @@ def main():
  modes.add_argument('--meeting-lift',choices=['before','after'])
  modes.add_argument('--refine-p1',choices=['before','after'])
  modes.add_argument('--refine-p3',choices=['before','after'])
+ modes.add_argument('--refine-p4',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -163,6 +178,8 @@ def main():
   return refine_p1(args.refine_p1,args.output,args.exe)
  if args.refine_p3:
   return refine_p3(args.refine_p3,args.output,args.exe)
+ if args.refine_p4:
+  return refine_p4(args.refine_p4,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()
