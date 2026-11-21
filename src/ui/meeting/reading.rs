@@ -1,7 +1,7 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
-use crate::ui::{cards, icons, tasks};
-use rune_kit::{Menu, MenuItem, SegmentedControl};
+use crate::ui::{cards, icons, notes_status, tasks};
+use rune_kit::{Menu, MenuItem, Placement, Popover, SegmentedControl};
 use sidenote::core::{self, people::Side};
 
 pub fn return_key(origin: &str) -> String {
@@ -189,9 +189,13 @@ fn facts_line(date: Option<String>, minutes: Option<u64>) -> String {
 /// A small icon and its words on the meta row.
 fn fact(icon: &'static rune::Icon, words: String, p: Palette) -> El {
     row()
-        .gap(5.0)
+        .gap(4.0)
         .items_center()
-        .child(icons::draw(icon, 14.0, p.faint))
+        .px(8.0)
+        .py(3.0)
+        .radius(8.0)
+        .border(1.0, p.line)
+        .child(icons::draw(icon, 13.0, p.faint))
         .child(roles::META.line(words, p.soft))
 }
 
@@ -205,6 +209,53 @@ fn english_only(s: &State, m: &Meeting) -> bool {
         && m.summary_language != Some(core::notes::Language::Routed)
 }
 
+pub(super) fn status_chip(
+    s: &State,
+    k: &Kit,
+    m: &Meeting,
+    p: Palette,
+    layer: &mut Vec<El>,
+) -> Option<El> {
+    if s.meeting_tab != Tab::Summary {
+        return None;
+    }
+    let english = english_only(s, m);
+    let engine = notes_status::meeting_engine_message(s, m);
+    if !english && engine.is_none() {
+        return None;
+    }
+    let toggle = quiet_button("Transcript status", "meeting-status", p)
+        .on_press(|s: &mut State| s.meeting_ui.status_open = !s.meeting_ui.status_open);
+    let body = col()
+        .w(270.0)
+        .gap(8.0)
+        .children(english.then(|| {
+            roles::SMALL
+                .wrap(ENGLISH_ONLY, p.ink)
+                .key("meeting-english-only")
+        }))
+        .children(engine.map(|copy| roles::SMALL.wrap(copy, p.ink).key("meeting-engine-status")))
+        .child(
+            quiet_button("Open language settings", "meeting-status-settings", p)
+                .self_start()
+                .on_press(|s: &mut State| {
+                    s.meeting_ui.status_open = false;
+                    s.open_hex();
+                    s.hex.section = crate::ui::hex::Section::MeetingModels;
+                }),
+        );
+    Some(
+        Popover::new("meeting-status-popover")
+            .label("Transcript status")
+            .trigger(toggle)
+            .open(s.meeting_ui.status_open)
+            .placement(Placement::BottomStart)
+            .on_close(|s: &mut State| s.meeting_ui.status_open = false)
+            .child(body)
+            .build(k, layer),
+    )
+}
+
 fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
     let facts = facts_line(m.started.map(|d| d.format("%-d %b").to_string()), m.minutes);
     let people = m.summary.people.len();
@@ -212,7 +263,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
         .key("meeting-controls")
         .w_full()
         .flex_wrap()
-        .gap(12.0)
+        .gaps(6.0, 6.0)
         .items_center()
         .child(
             SegmentedControl::new(
@@ -245,7 +296,9 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
     if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
         controls = controls.child(project);
     }
-    controls = controls.child(el().grow(1.0));
+    controls = controls
+        .children(status_chip(s, k, m, p, layer))
+        .child(el().grow(1.0));
     controls = controls.child(more::menu(s, k, m, "meeting", p, layer));
     col()
         .key("meeting-header")
@@ -261,16 +314,11 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
                 .help(&m.title),
         )
         .child(controls)
-        .children(english_only(s, m).then(|| {
-            roles::META
-                .wrap(ENGLISH_ONLY, p.faint)
-                .key("meeting-english-only")
-        }))
         .children(crate::ui::live::parts_status(s, p))
         .children(project::form(s, k, &m.id, p))
 }
 
-fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
+fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     let key = format!("meeting-point-{origin}");
     let source_key = format!("meeting-source-{origin}");
     let mut body = roles::READ
@@ -294,7 +342,7 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
         .hover_group()
         .child(roles::READ.wrap("•", p.soft).w(12.0))
         .child(body.grow(1.0).min_w(0.0));
-    if let Some(at) = pt.at.first() {
+    if timed && let Some(at) = pt.at.iter().find(|at| core::seconds(at).is_some()) {
         let time = at.clone();
         let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
@@ -307,7 +355,8 @@ fn point(s: &State, pt: &Point, origin: String, p: Palette) -> El {
                 .py(2.0)
                 .radius(5.0)
                 .fill(p.sel)
-                .hover(p.hit)
+                .hover(p.chip)
+                .focus_ring(2.0, 1.0, p.accent)
                 .group_opacity(0.0, 1.0)
                 .on_press_tx(move |s: &mut State, tx| {
                     s.jump(&time, back.clone(), tx);
@@ -340,7 +389,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         );
     }
     if !m.has_summary() && draft.is_none() {
-        return body.children(crate::ui::notes_status::banner(s, m, p));
+        return body.children(notes_status::meeting_banner(s, m, p));
     }
     if !summary.context.is_empty() {
         body = body.child(
@@ -359,6 +408,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             );
         }
     }
+    let timed = m.timed();
     for (ti, topic) in summary.topics.iter().enumerate() {
         body = body.child(
             roles::TITLE
@@ -369,7 +419,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
                 .mb(4.0),
         );
         for (pi, pt) in topic.points.iter().enumerate() {
-            body = body.child(point(s, pt, format!("pt-{ti}-{pi}"), p));
+            body = body.child(point(s, pt, format!("pt-{ti}-{pi}"), timed, p));
         }
     }
     if !summary.verify.is_empty() {
@@ -393,7 +443,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             .as_ref()
             .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
     )
-    .children(crate::ui::notes_status::banner(s, m, p))
+    .children(notes_status::meeting_banner(s, m, p))
     .children(crate::ui::notes_status::provenance(m, p))
 }
 

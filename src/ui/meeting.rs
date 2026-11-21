@@ -24,6 +24,7 @@ pub struct ReadingUi {
     pub templates: std::collections::BTreeMap<String, String>,
     pub time_open: bool,
     pub recording_hover: bool,
+    pub status_open: bool,
     pub window_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
@@ -40,6 +41,7 @@ impl ReadingUi {
             templates: prefs.meeting_summary_templates.clone(),
             time_open: false,
             recording_hover: false,
+            status_open: false,
             window_h: std::cell::Cell::new(800.0),
         }
     }
@@ -370,9 +372,11 @@ fn tab_row(s: &State, k: &Kit, m: &Meeting, narrow: bool, p: Palette, layer: &mu
         .child(
             row()
                 .w_full()
+                .flex_wrap()
                 .items_end()
                 .gap(12.0)
                 .child(tabs)
+                .children(reading::status_chip(s, k, m, p, layer))
                 .child(el().grow(1.0))
                 .child(more::menu(s, k, m, "meeting", p, layer).pb(2.0)),
         )
@@ -959,7 +963,7 @@ fn document(
     if let Some(form) = project::form(s, k, &m.id, p) {
         body = body.child(form);
     }
-    body = body.children(super::notes_status::banner(s, m, p).map(|b| b.mt(20.0)));
+    body = body.children(super::notes_status::meeting_banner(s, m, p).map(|b| b.mt(20.0)));
     body = body.child(tab_row(s, k, m, narrow, p, layer).mt(20.0));
     match main_tab(s, m) {
         Tab::Summary => {

@@ -753,6 +753,7 @@ impl State {
         self.hex_open = false;
         self.live_open = false;
         self.more_menu = None;
+        self.meeting_ui.status_open = false;
         if self.selected.take().is_some() {
             self.transcript_open = false;
             self.meeting_tab = meeting::Tab::Summary;
@@ -783,6 +784,7 @@ impl State {
             return;
         }
         self.selected = Some(id.to_string());
+        self.meeting_ui.status_open = false;
         self.transcript_open = false;
         self.transcript_filter = TextEdit::new("");
         self.transcript_jump = TextEdit::new("");

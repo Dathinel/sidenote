@@ -49,10 +49,10 @@ fn running_message_at(started_at: i64, now: i64) -> String {
         "Still writing the summary. Your transcript is saved.".into()
     }
 }
-pub fn message(job: &Job, selected: Option<Helper>) -> String {
+fn summary_message(job: &Job, selected: Option<Helper>) -> String {
     let helper = job.helper.or(selected);
     let name = helper.map(Helper::name).unwrap_or("The agent");
-    let standard: String = match &job.state {
+    match &job.state {
         JobState::NoHelper => "Choose Claude Code in Settings, then press Write summary. Your transcript is saved.".into(),
         JobState::NeedsClick => "Sidenote only writes summaries automatically for meetings that end after you turn on Meeting summary. You can write this one now.".into(),
         JobState::Queued => "Waiting for another summary to finish.".into(),
@@ -83,12 +83,20 @@ pub fn message(job: &Job, selected: Option<Helper>) -> String {
             format!("{input} over the 16,000 character limit. Shorten the input, then press Try again. Your transcript is saved.")
         }
         JobState::Empty => "Sidenote heard no speech in this meeting, so there is nothing to summarise.".into(),
-    };
-    let routing = [job.routing_message(), job.translation_message().into()]
+    }
+}
+
+fn engine_message(job: &Job) -> String {
+    [job.routing_message(), job.translation_message().into()]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+}
+
+pub fn message(job: &Job, selected: Option<Helper>) -> String {
+    let standard = summary_message(job, selected);
+    let routing = engine_message(job);
     if routing.is_empty() {
         standard
     } else if standard.is_empty() {
@@ -102,25 +110,9 @@ fn has_notice(job: &Job) -> bool {
     !job.routing_message().is_empty() || !job.translation_message().is_empty()
 }
 fn label_for(job: &Job) -> &'static str {
-    if !job.routing_message().is_empty()
-        && matches!(
-            job.state,
-            JobState::Done {
-                tasks_failed: false,
-                ..
-            }
-        )
-    {
+    if !job.routing_message().is_empty() && matches!(job.state, JobState::Done { .. }) {
         "Summary used Hex coverage"
-    } else if !job.translation_message().is_empty()
-        && matches!(
-            job.state,
-            JobState::Done {
-                tasks_failed: false,
-                ..
-            }
-        )
-    {
+    } else if !job.translation_message().is_empty() && matches!(job.state, JobState::Done { .. }) {
         "Summary used original text"
     } else {
         label(&job.state)
@@ -250,6 +242,20 @@ pub fn banner(s: &State, m: &Meeting, p: Palette) -> Option<El> {
     let job = job(s, m)?;
     banner_for(s, &m.id, &job, p)
 }
+
+pub fn meeting_banner(s: &State, m: &Meeting, p: Palette) -> Option<El> {
+    let job = job(s, m)?;
+    banner_with(s, &m.id, &job, p, false)
+}
+
+pub fn meeting_engine_message(s: &State, m: &Meeting) -> Option<String> {
+    let job = job(s, m)?;
+    if matches!(job.state, JobState::Done { .. }) && s.ai_notes.dismissed.contains(&m.id) {
+        return None;
+    }
+    let message = engine_message(&job);
+    (!message.is_empty()).then_some(message)
+}
 pub(super) fn can_use_codex(job: &Job, found: &[(Helper, bool)]) -> bool {
     matches!(job.state, JobState::HelperLimit { .. })
         && job.helper == Some(Helper::Claude)
@@ -283,12 +289,33 @@ pub(super) fn progress(title: &str, p: Palette) -> El {
 }
 
 pub fn banner_for(s: &State, id: &str, job: &Job, p: Palette) -> Option<El> {
+    banner_with(s, id, job, p, true)
+}
+
+fn banner_with(s: &State, id: &str, job: &Job, p: Palette, show_engine: bool) -> Option<El> {
     let selected = s
         .ai_notes
         .settings
         .as_ref()
         .and_then(|n| n.effective_helper());
-    let (title, copy) = visible_copy(job, selected, s.ai_notes.dismissed.contains(id))?;
+    let dismissed = s.ai_notes.dismissed.contains(id);
+    let (title, copy) = if show_engine {
+        visible_copy(job, selected, dismissed)?
+    } else {
+        if matches!(job.state, JobState::Done { .. })
+            && (dismissed
+                || matches!(
+                    job.state,
+                    JobState::Done {
+                        fallback: false,
+                        ..
+                    }
+                ))
+        {
+            return None;
+        }
+        (label(&job.state), summary_message(job, selected))
+    };
     let kind = if is_failure(&job.state) {
         BannerKind::Problem
     } else if matches!(job.state, JobState::Running | JobState::Queued) {

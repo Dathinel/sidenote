@@ -58,8 +58,10 @@ fn page_with(size: (f32, f32), stored: impl FnOnce()) -> Runtime<State> {
     });
     std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
     stored();
+    let mut state = State::new();
+    state.ai_notes.jobs = notes_status::read(&core::state_dir(), &state.meetings);
     let mut rt = Runtime::with_text(
-        State::new(),
+        state,
         view,
         size,
         Env::default(),
@@ -87,6 +89,65 @@ fn a_context_line_and_a_point_can_be_selected_and_copied() {
         rt.frame(0.0);
         assert_eq!(rt.selected_text().as_deref(), Some(want), "{key}");
     }
+}
+
+#[test]
+fn meeting_source_time_reveals_on_hover_and_focus_and_opens_its_line() {
+    if in_parent("meeting_source_time_reveals_on_hover_and_focus_and_opens_its_line") {
+        return;
+    }
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let summary = serde_json::json!({
+            "title": "Beta launch plan",
+            "topics": [{"title": "Launch", "points": [{
+                "type": "decided", "text": POINT, "at": ["unknown", "00:27"]
+            }]}],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+        std::fs::write(
+            folder.join("english-transcript.md"),
+            "[00:00:06.000] Maya (English): Ready?\n[00:00:27.000] Tom (English): Ship the beta on Friday.\n",
+        )
+        .unwrap();
+    });
+    let source = "meeting-source-pt-0-0";
+    let row = "meeting-point-pt-0-0";
+    assert_eq!(rt.presented(source).unwrap().1, 0.0);
+    let (x, y) = rt.find("meeting-point-text-pt-0-0").unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(0.2);
+    assert_source_revealed(&rt, source, row);
+    rt.pointer_leave();
+    rt.frame(0.2);
+    assert_eq!(rt.presented(source).unwrap().1, 0.0);
+
+    rt.update(|_, tx| tx.focus(source, true));
+    rt.frame(0.2);
+    assert_source_revealed(&rt, source, row);
+    let (x, y) = rt.find(source).unwrap();
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.2);
+    assert!(rt.state.transcript_open);
+    assert_eq!(rt.state.highlight, Some(1));
+    assert!(rt.find("line-1").is_some());
+}
+
+fn assert_source_revealed(rt: &Runtime<State>, source: &str, row: &str) {
+    let elements = rt.elements();
+    let time = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some(source))
+        .unwrap();
+    assert_eq!(time.opacity, 1.0);
+    assert_eq!(time.label.as_deref(), Some("Open source at 0:27"));
+    let row = elements
+        .iter()
+        .find(|e| e.key.as_deref() == Some(row))
+        .unwrap();
+    assert_eq!(row.hover, 1.0);
 }
 
 #[test]
@@ -644,11 +705,56 @@ fn stamped_summary(folder: &std::path::Path, made_by: Option<serde_json::Value>)
 
 /// Whether the saved meeting's Notes view says the transcript was English-only.
 fn shows_english_only_note(made_by: Option<serde_json::Value>, stored: impl FnOnce()) -> bool {
-    let rt = page_with(DEFAULT_SIZE, || {
+    let mut rt = page_with(DEFAULT_SIZE, || {
         stamped_summary(&core::meetings_dir().join(MEETING), made_by);
         stored();
     });
+    if rt.find("meeting-status").is_some() {
+        tap(&mut rt, "meeting-status");
+    }
     rt.find("meeting-english-only").is_some()
+}
+
+fn tap(rt: &mut Runtime<State>, key: &str) {
+    let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.2);
+}
+
+#[test]
+fn meeting_status_keeps_language_facts_and_the_settings_link_inside_the_popover() {
+    if in_parent("meeting_status_keeps_language_facts_and_the_settings_link_inside_the_popover") {
+        return;
+    }
+    let mut rt = page_with((390.0, 800.0), || {
+        let dir = core::state_dir().join("local/notes-jobs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let job = serde_json::json!({
+            "state": "done", "fallback": false, "tasks_failed": true,
+            "transcript_revision": "a".repeat(64),
+            "routing_fallbacks": [{"reason": {"cpu_language_models_missing": {"ready": 2}}}],
+        });
+        std::fs::write(dir.join(format!("{MEETING}.json")), job.to_string()).unwrap();
+    });
+    let check = |rt: &Runtime<State>, open| {
+        let elements = rt.elements();
+        let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
+        assert!(!texts.contains(&"Tasks not added to a project"));
+        assert!(!texts.contains(&"Summary used Hex coverage"));
+        assert_eq!(
+            texts.contains(&"English-only transcript. Hindi or Telugu parts may be missing."),
+            open
+        );
+        assert_eq!(texts.contains(&"Hindi and Telugu models are not installed yet; download them once in Settings, Models (about 567 MB). 2 of 4 ready. Notes use the captured Hex transcript."), open);
+    };
+    check(&rt, false);
+    tap(&mut rt, "meeting-status");
+    check(&rt, true);
+    tap(&mut rt, "meeting-status-settings");
+    assert!(rt.state.hex_open);
+    assert!(matches!(rt.state.hex.section, hex::Section::MeetingModels));
 }
 
 #[test]
