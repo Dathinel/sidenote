@@ -565,6 +565,7 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         .collect();
     let mut rail = col().key("meeting-actions").w_full().gap(12.0);
     let mut task_hint = Some(HelpHint::Tasks);
+    let mut task_notice = notes_status::tasks_notice(s, m, p);
     for (external, name) in [(false, "Ours"), (true, "They will")] {
         let group: Vec<_> = items
             .iter()
@@ -596,6 +597,7 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
                 )
                 .children(task_hint.take().map(|hint| hint.build(k, p, layer))),
         );
+        rail = rail.children(task_notice.take());
         let mut card = cards::panel(p).key(if external {
             "meeting-external-tasks"
         } else {
@@ -674,7 +676,9 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         }
         rail = rail.child(card);
     }
-    rail = rail.children(notes_status::tasks_notice(s, m, p));
+    if let Some(notice) = task_notice {
+        rail = rail.child(roles::GROUP.wrap("Tasks", p.soft)).child(notice);
+    }
     if !m.summary.to_settle.is_empty() {
         rail = rail.child(
             row()

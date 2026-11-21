@@ -474,14 +474,20 @@ fn new_meeting_refuses_on_linux_without_rechecking_or_replacing_pending_notes() 
     let page = pending_notes(&mut state, &api, notes);
     api.data.lock().unwrap().commands.clear();
 
-    let refusal = "Recording control is unavailable in this Linux desktop launch layer.";
+    let refusal = "Recording is not available on Linux yet.";
     assert_eq!(start_blocked(&state), Some(refusal));
     let mut runtime =
         rune::Runtime::new(state, meeting_control, (500.0, 160.0), rune::Env::default());
     runtime.frame(0.0);
+    let elements = runtime.elements();
+    let control = elements
+        .iter()
+        .find(|el| el.key.as_deref() == Some("new-meeting"))
+        .unwrap();
+    assert_eq!(control.help.as_deref(), Some(refusal));
+    assert!(!control.focusable);
     assert!(
-        runtime
-            .elements()
+        !elements
             .iter()
             .any(|el| el.text.as_deref() == Some(refusal))
     );
@@ -861,7 +867,14 @@ fn recorder_ready_new_meeting_logs_one_correlated_action_through_recheck() {
 
 #[cfg(any(windows, target_os = "linux"))]
 fn meeting_control(state: &State, _: &mut rune::Cx<State>) -> rune::El {
-    crate::ui::nav::new_meeting_button(state, crate::ui::theme::palette(false), false)
+    let mut layer = Vec::new();
+    let button = crate::ui::nav::new_meeting_button(
+        state,
+        crate::ui::theme::palette(false),
+        false,
+        &mut layer,
+    );
+    rune_kit::root(button, layer)
 }
 
 #[cfg(all(windows, feature = "recorder-ready-proof"))]

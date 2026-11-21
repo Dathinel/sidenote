@@ -371,6 +371,56 @@ pub fn banner(title: &str, body: impl Into<String>, kind: BannerKind, p: Palette
         .child(roles::SMALL.wrap(body, p.ink))
 }
 
+pub fn notice_action(name: &str, p: Palette) -> El {
+    pressable(
+        roles::CONTROL
+            .bold()
+            .wrap(name, p.ink)
+            .spans([Span::new(0, name.len()).underline(p.ink)]),
+    )
+    .focus_ring(2.0, 2.0, p.accent)
+}
+
+/// A retry that is running stays focusable and dimmed, but takes no second press, so keyboard
+/// focus is not lost when it starts.
+pub fn retry_action(action: El, running: bool, on_press: impl Fn(&mut State) + 'static) -> El {
+    if running {
+        action.dim(0.5)
+    } else {
+        action.on_press(on_press)
+    }
+}
+
+pub fn inline_notice(message: &str, action: El, p: Palette) -> El {
+    row()
+        .gap(6.0)
+        .items_center()
+        .flex_wrap()
+        .child(icons::draw(&icons::WARNING, 14.0, p.warn))
+        .child(roles::CONTROL.wrap(message, p.soft).role("status"))
+        .child(action)
+}
+
+pub fn alert_strip(message: impl Into<String>, action: El, p: Palette) -> El {
+    row()
+        .w_full()
+        .min_h(40.0)
+        .px(16.0)
+        .py(4.0)
+        .gap(8.0)
+        .items_center()
+        .fill(p.warnbg)
+        .child(icons::draw(&icons::WARNING, 16.0, p.warn))
+        .child(
+            roles::CONTROL
+                .wrap(message, p.ink)
+                .min_w(0.0)
+                .grow(1.0)
+                .role("alert"),
+        )
+        .child(action)
+}
+
 pub fn scroll(content: El, key: &str) -> El {
     col()
         .key(key.to_string())
