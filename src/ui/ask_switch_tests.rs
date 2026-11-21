@@ -745,6 +745,54 @@ fn meeting_task_rows_work_by_keyboard_and_checking_one_saves() {
 }
 
 #[test]
+fn meeting_tasks_label_names_the_sides_only_when_they_will_has_tasks() {
+    if in_parent("meeting_tasks_label_names_the_sides_only_when_they_will_has_tasks") {
+        return;
+    }
+    let mut rt = page_with_tasks(DEFAULT_SIZE);
+    let inside = |rt: &Runtime<State>, key: &str| -> Vec<String> {
+        let root = element(rt, key).path;
+        rt.elements()
+            .into_iter()
+            .filter(|e| e.path.starts_with(&format!("{root}/")))
+            .filter_map(|e| e.text)
+            .collect()
+    };
+    // Everyone is on our side: one label, "Tasks 3", and no side labels.
+    assert_eq!(inside(&rt, "meeting-task-count")[..2], ["Tasks", "3"]);
+    assert!(rt.find("meeting-ours-task-count").is_none());
+    assert!(rt.find("meeting-external-task-count").is_none());
+    // Priya owns one task and is on the other side: "Tasks 3" over "Ours 2" and "They will 1".
+    rt.update(|s, _| {
+        s.people
+            .prefs
+            .people_sides
+            .insert(core::people::key("Priya"), core::people::Side::External);
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    assert_eq!(inside(&rt, "meeting-task-count")[..2], ["Tasks", "3"]);
+    assert_eq!(inside(&rt, "meeting-ours-task-count"), ["Ours", "2"]);
+    assert_eq!(
+        inside(&rt, "meeting-external-task-count"),
+        ["They will", "1"]
+    );
+    // The first side label sits 4 under the Tasks label's row; 28 between the two lists.
+    let (tasks, ours, theirs) = (
+        element(&rt, "meeting-task-count").rect,
+        element(&rt, "meeting-ours-task-count").rect,
+        element(&rt, "meeting-external-task-count").rect,
+    );
+    let list = element(&rt, "meeting-tasks").rect;
+    assert_eq!(ours[1] - (tasks[1] + tasks[3]), 4.0);
+    assert_eq!(
+        theirs[1] - (list[1] + list[3]),
+        28.0,
+        "theirs {theirs:?}, list {list:?}"
+    );
+}
+
+#[test]
 fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() {
     if in_parent("an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load") {
         return;

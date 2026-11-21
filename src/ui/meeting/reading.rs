@@ -608,6 +608,18 @@ fn rail_label(name: String, count: Option<usize>, hint: Option<El>, p: Palette) 
         .children(hint)
 }
 
+/// The small label over one side of the tasks ("Ours 4", "They will 2").
+fn rail_side(name: &str, count: usize, p: Palette) -> El {
+    row()
+        .items_center()
+        .gap(6.0)
+        .h(22.0)
+        .px(8.0)
+        .mb(4.0)
+        .child(roles::META.bold().wrap(name, p.soft))
+        .child(roles::META.wrap(count.to_string(), p.faint))
+}
+
 /// A task or question row: 8 all round, the 16 px mark at the left, the text beside it.
 fn rail_row(mark: El, body: El) -> El {
     row()
@@ -634,39 +646,46 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         .collect();
     let mut rail = col().key("meeting-actions");
     let mut top = 0.0;
-    let mut task_hint = Some(HelpHint::Tasks);
     let mut task_notice = notes_status::tasks_notice(s, m, p).map(|n| n.px(8.0).mb(4.0));
-    for (external, name) in [(false, "Ours"), (true, "They will")] {
-        let group: Vec<_> = items
-            .iter()
-            .filter(|t| {
-                let side = t.owner.as_ref().and_then(|owner| {
-                    s.people
-                        .prefs
-                        .people_sides
-                        .get(&core::people::key(&s.tasks.teams.owner_name(owner)))
-                });
-                (side == Some(&Side::External)) == external
-            })
-            .collect();
-        if group.is_empty() {
-            continue;
-        }
-        rail = rail.child(
-            rail_label(
-                format!("Tasks \u{b7} {name}"),
-                Some(group.len()),
-                task_hint.take().map(|hint| hint.build(k, p, layer)),
-                p,
-            )
-            .mt(top)
-            .key(if external {
+    let groups: Vec<_> = [(false, "Ours"), (true, "They will")]
+        .into_iter()
+        .map(|(external, name)| {
+            let group: Vec<_> = items
+                .iter()
+                .filter(|t| {
+                    let side = t.owner.as_ref().and_then(|owner| {
+                        s.people
+                            .prefs
+                            .people_sides
+                            .get(&core::people::key(&s.tasks.teams.owner_name(owner)))
+                    });
+                    (side == Some(&Side::External)) == external
+                })
+                .collect();
+            (external, name, group)
+        })
+        .filter(|(.., group)| !group.is_empty())
+        .collect();
+    // "Tasks 4". "Ours" only means something next to "They will", so the two sides get their
+    // own small labels only when a They-will group exists.
+    let sides = groups.iter().any(|(external, ..)| *external);
+    if !groups.is_empty() {
+        let total: usize = groups.iter().map(|(.., group)| group.len()).sum();
+        let hint = HelpHint::Tasks.build(k, p, layer);
+        rail = rail
+            .child(rail_label("Tasks".into(), Some(total), Some(hint), p).key("meeting-task-count"))
+            .children(task_notice.take());
+    }
+    let mut gap = 0.0;
+    for (external, name, group) in groups {
+        if sides {
+            rail = rail.child(rail_side(name, group.len(), p).mt(gap).key(if external {
                 "meeting-external-task-count"
             } else {
-                "meeting-task-count"
-            }),
-        );
-        rail = rail.children(task_notice.take());
+                "meeting-ours-task-count"
+            }));
+        }
+        gap = roles::SECTION_TOP;
         let mut list = col().w_full().key(if external {
             "meeting-external-tasks"
         } else {
