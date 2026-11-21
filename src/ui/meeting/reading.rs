@@ -502,6 +502,20 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     line
 }
 
+/// A topic's points as (summary index, point): decisions, then facts and replies, then open
+/// points, each group in the summary's order. The index stays the summary's, so row keys and
+/// the way back from the transcript do not move.
+fn decisions_first(points: &[Point]) -> Vec<(usize, &Point)> {
+    let group = |pt: &Point| match pt.kind.as_str() {
+        "decided" => 0,
+        "open" => 2,
+        _ => 1,
+    };
+    let mut out: Vec<_> = points.iter().enumerate().collect();
+    out.sort_by_key(|(_, pt)| group(pt));
+    out
+}
+
 /// One section heading. Every heading on the page uses this role; the first sits right under the
 /// header, which already ends 28 px above the notes, and each later one gets 28 px of its own.
 fn heading(label: &str, key: String, first: bool, p: Palette) -> El {
@@ -551,7 +565,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
     for (ti, topic) in summary.topics.iter().enumerate() {
         body = body.child(heading(&topic.title, format!("topic-{}", ti + 1), first, p));
         first = false;
-        for (pi, pt) in topic.points.iter().enumerate() {
+        for (pi, pt) in decisions_first(&topic.points) {
             body = body.child(point(s, pt, format!("pt-{ti}-{pi}"), timed, p));
         }
     }

@@ -381,6 +381,42 @@ fn meeting_notes_body_follows_the_spacing_and_bullet_rules() {
 }
 
 #[test]
+fn meeting_notes_lead_each_topic_with_its_decisions() {
+    if in_parent("meeting_notes_lead_each_topic_with_its_decisions") {
+        return;
+    }
+    let rt = page_with_every_kind();
+    // Summary order is fact, open, decided, response, decided: shown as the two decisions
+    // (summary rows 2 and 4), then the fact and the reply (0, 3), then the open point (1).
+    let mut shown: Vec<(f32, usize)> = (0..5)
+        .map(|i| (rect_of(&rt, &format!("meeting-point-pt-0-{i}"))[1], i))
+        .collect();
+    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let shown: Vec<usize> = shown.into_iter().map(|(_, i)| i).collect();
+    assert_eq!(shown, [2, 4, 0, 3, 1]);
+    // The bold lead block is the decisions only.
+    let elements = rt.elements();
+    let ink = |i: usize| {
+        let key = format!("meeting-point-text-pt-0-{i}");
+        elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some(&key))
+            .unwrap()
+            .text_color
+    };
+    assert_eq!(ink(2), ink(4));
+    for plain in [0, 1, 3] {
+        assert_ne!(
+            ink(plain),
+            ink(2),
+            "only decisions use the ink colour: {plain}"
+        );
+    }
+    // A topic with no decisions keeps the summary's order.
+    assert!(rect_of(&rt, "meeting-point-pt-1-0")[1] > rect_of(&rt, "topic-2")[1]);
+}
+
+#[test]
 fn meeting_source_time_works_by_keyboard_in_the_new_rows() {
     if in_parent("meeting_source_time_works_by_keyboard_in_the_new_rows") {
         return;
