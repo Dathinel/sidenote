@@ -35,6 +35,14 @@ def render(job):
     'state':'done','fallback':False,'tasks_failed':True,'transcript_revision':'a'*64,
     'routing_fallbacks':[{'reason':{'cpu_language_models_missing':{'ready':2}}}],
    }),encoding='utf-8')
+   if name.startswith('meeting-refine-p3-'):
+    if '-confirmed-' in name:
+     projects=state/'projects.json'
+     data=json.loads(projects.read_text(encoding='utf-8'))
+     data['meeting_projects']={summary.parent.name:'Northwind Atlas'}
+     projects.write_text(json.dumps(data),encoding='utf-8')
+    elif '-unassigned-' not in name:
+     (summary.parent/'tasks.json').write_text('{"meeting_project":"Northwind Atlas"}',encoding='utf-8')
   else:
    value=json.loads(summary.read_text(encoding='utf-8'));value['title']='Planning the next Northwind workshop, partner review, delivery timeline and follow-up decisions for the whole team'
    summary.write_text(json.dumps(value),encoding='utf-8')
@@ -123,12 +131,29 @@ def refine_p1(phase, output, exe):
     render((f'refine-{phase}-{name}', scene, width, 'dark', 900, None))
 
 
+def refine_p3(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-meta-render-') as state:
+  STATE = Path(state)
+  for width, theme in ((1334, 'dark'), (1334, 'light'), (390, 'dark')):
+   render((f'meeting-refine-p3-meta-{phase}', 'screens-summary', width, theme, 900, None))
+   render((f'meeting-refine-p3-popover-{phase}', 'screens-summary', width, theme, 900, [tap('meeting-status')]))
+  if phase == 'after':
+   for project in ('confirmed', 'unassigned'):
+    render((f'meeting-refine-p3-{project}-{phase}', 'screens-summary', 1334, 'dark', 900, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
  modes=parser.add_mutually_exclusive_group()
  modes.add_argument('--meeting-lift',choices=['before','after'])
  modes.add_argument('--refine-p1',choices=['before','after'])
+ modes.add_argument('--refine-p3',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -136,6 +161,8 @@ def main():
   return meeting_lift(args.meeting_lift,args.output,args.exe)
  if args.refine_p1:
   return refine_p1(args.refine_p1,args.output,args.exe)
+ if args.refine_p3:
+  return refine_p3(args.refine_p3,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()

@@ -299,6 +299,100 @@ fn meeting_model_hint_reveals_on_hover_and_keyboard_focus() {
 }
 
 #[test]
+fn meeting_meta_facts_and_popover_work_by_keyboard() {
+    if in_parent("meeting_meta_facts_and_popover_work_by_keyboard") {
+        return;
+    }
+    assert!(page().find("meeting-facts").is_none());
+    let start = 1_793_955_600_000_i64;
+    let mut rt = page_with((390.0, 900.0), || {
+        let folder = core::meetings_dir().join(MEETING);
+        let state = core::state_dir();
+        std::fs::create_dir_all(&state).unwrap();
+        for (path, value) in [
+            (
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":1320000}),
+            ),
+            (
+                folder.join("english-summary.json"),
+                serde_json::json!({"title":"Beta launch plan","context":[CONTEXT],"people":["Maya","Tom"]}),
+            ),
+            (
+                folder.join("tasks.json"),
+                serde_json::json!({"meeting_project":"Atlas 2"}),
+            ),
+            (
+                state.join("config.json"),
+                serde_json::json!({"version":1,"features":{"projects":true}}),
+            ),
+            (
+                state.join("projects.json"),
+                serde_json::json!({"projects":["Atlas 2"]}),
+            ),
+        ] {
+            std::fs::write(path, value.to_string()).unwrap();
+        }
+    });
+    let project = format!("meeting-project-{MEETING}");
+    let date = chrono::DateTime::from_timestamp_millis(start)
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let facts = format!("Date: {}. Duration: 22 min", date.format("%-d %b"));
+    rt.update(|s, tx| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.areas.refresh_pending {
+            let event = s
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("area worker finished");
+            s.apply_event(event);
+        }
+        tx.focus("segment0", true);
+    });
+    rt.frame(0.0);
+    let press = |rt: &mut Runtime<State>, key| {
+        rt.key(KeyEvent {
+            key,
+            mods: rune::Mods::default(),
+        });
+        rt.frame(0.2);
+    };
+    for (key, name) in [
+        ("meeting-facts", facts.as_str()),
+        ("meeting-people", "2 people"),
+        (&project, "Suggested project: Atlas 2. Change it"),
+        ("meeting-status", "Transcript status: English only"),
+    ] {
+        press(&mut rt, Key::Tab);
+        let item = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("missing {key}"));
+        assert!(item.focusable && item.focused, "{key}");
+        assert!(item.focus_visible, "{key}");
+        assert_eq!(item.label.as_deref(), Some(name), "{key}");
+        assert_eq!(item.rect[3], 28.0, "{key}");
+        assert!(
+            item.rect[0] >= 0.0 && item.rect[0] + item.rect[2] <= 390.0,
+            "{key}"
+        );
+    }
+    let focused = |rt: &Runtime<State>, key| {
+        rt.elements()
+            .iter()
+            .any(|e| e.focused && e.key.as_deref() == Some(key))
+    };
+    press(&mut rt, Key::Text(" ".into()));
+    assert!(rt.find("meeting-english-only").is_some());
+    assert!(focused(&rt, "meeting-status-settings"));
+    press(&mut rt, Key::Escape);
+    assert!(rt.find("meeting-english-only").is_none());
+    assert!(focused(&rt, "meeting-status"));
+}
+
+#[test]
 fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() {
     if in_parent("an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load") {
         return;
