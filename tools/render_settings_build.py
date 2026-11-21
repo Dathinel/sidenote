@@ -28,7 +28,7 @@ def render(job):
   meetings=state/'screen-meetings'
   shutil.copytree(ROOT/'tools/ui-fixtures/screens/meetings',meetings,dirs_exist_ok=True)
   summary=meetings/'1793955600000-1/english-summary.json'
-  if name.startswith('meeting-lift-'):
+  if name.startswith(('meeting-lift-', 'meeting-refine-')):
    jobs=state/'local/notes-jobs'
    jobs.mkdir(parents=True)
    (jobs/'1793955600000-1.json').write_text(json.dumps({
@@ -38,13 +38,15 @@ def render(job):
   else:
    value=json.loads(summary.read_text(encoding='utf-8'));value['title']='Planning the next Northwind workshop, partner review, delivery timeline and follow-up decisions for the whole team'
    summary.write_text(json.dumps(value),encoding='utf-8')
- env=os.environ|{'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
+ env={key: value for key, value in os.environ.items() if not key.startswith('HEX_MEETING_')}
+ env.update({'SIDENOTE_DATA_DIR':str(state),'XDG_CONFIG_HOME':str(state/'config'),'XDG_DATA_HOME':str(state/'data'),'XDG_STATE_HOME':str(state/'xdg-state'),'XDG_CACHE_HOME':str(state/'cache')})
+ env|={'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
  args=[str(EXE),'--meetings-dir',str(meetings),'--data-dir',str(state),'--peers-dir',str(state/'peers'),'--scene',scene,'--theme',theme,'--size',f'{width}x{height}','--scale','1','--snap',str(base)+'.png','--tree',str(base)+'.json']
  if events:
   script=state/'events.json';script.write_text(json.dumps(dict(events=events+[dict(t=max(e['t'] for e in events)+1,type='mark',name='end')])),encoding='utf-8')
   args+=['--script',str(script),'--at','mark:end']
  with (state/'render.log').open('w') as log:
-  result=subprocess.run(args,cwd=ROOT,env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW,timeout=180)
+  result=subprocess.run(args,cwd=ROOT,env=env,stdout=log,stderr=log,creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),timeout=180)
  assert result.returncode==0,(base.name,(state/'render.log').read_text()[-2000:])
  assert base.with_suffix('.png').is_file(),base
  tree=json.loads(base.with_suffix('.json').read_text(encoding='utf-8-sig'))
@@ -102,14 +104,41 @@ def meeting_lift(phase, output, exe):
    ):
     render((f'meeting-lift-{phase}-{suffix}','screens-summary',1334,'dark',900,[event]))
 
+
+def refine_p1(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-refine-render-') as state:
+  STATE = Path(state)
+  for width, theme in ((1334, 'dark'), (1334, 'light'), (390, 'dark')):
+   events = None
+   if width == 1334 and theme == 'dark':
+    events = [dict(type='move', key='meeting-point-text-pt-0-1', t=.3)]
+   render((f'meeting-refine-{phase}', 'screens-summary', width, theme, 900, events))
+  for name, scene in (('tasks', 'tasks'), ('memory', 'memory'), ('diary', 'diary'), ('general', 'settings-general')):
+   for width in (1280, 390):
+    render((f'refine-{phase}-{name}', scene, width, 'dark', 900, None))
+
+
 def main():
+ global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
- parser.add_argument('--meeting-lift',choices=['before','after'])
+ modes=parser.add_mutually_exclusive_group()
+ modes.add_argument('--meeting-lift',choices=['before','after'])
+ modes.add_argument('--refine-p1',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
  if args.meeting_lift:
   return meeting_lift(args.meeting_lift,args.output,args.exe)
+ if args.refine_p1:
+  return refine_p1(args.refine_p1,args.output,args.exe)
+ OUT=args.output.resolve()
+ if args.exe:
+  EXE=args.exe.resolve()
  OUT.mkdir(parents=True,exist_ok=True)
  jobs=[]
  setup_scenes=[('hex-setup','settings-hex-setup'),('hex-installing','settings-hex-installing'),('hex-install-failed','settings-hex-install-failed'),('hex-installed','settings-hex-installed'),('hex-meetings-off','settings-hex-meetings-off'),('hex-meetings-enable','settings-hex-meetings-enable')]
