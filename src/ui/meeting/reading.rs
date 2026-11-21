@@ -573,9 +573,7 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         }
         rail = rail.child(card);
     }
-    if !items.is_empty() {
-        rail = rail.children(crate::ui::notes_status::tasks_notice(s, m, p));
-    }
+    rail = rail.children(notes_status::tasks_notice(s, m, p));
     if !m.summary.to_settle.is_empty() {
         rail = rail.child(
             row()

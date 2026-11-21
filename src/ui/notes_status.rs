@@ -110,9 +110,16 @@ fn has_notice(job: &Job) -> bool {
     !job.routing_message().is_empty() || !job.translation_message().is_empty()
 }
 fn label_for(job: &Job) -> &'static str {
-    if !job.routing_message().is_empty() && matches!(job.state, JobState::Done { .. }) {
+    let tasks_ok = matches!(
+        job.state,
+        JobState::Done {
+            tasks_failed: false,
+            ..
+        }
+    );
+    if !job.routing_message().is_empty() && tasks_ok {
         "Summary used Hex coverage"
-    } else if !job.translation_message().is_empty() && matches!(job.state, JobState::Done { .. }) {
+    } else if !job.translation_message().is_empty() && tasks_ok {
         "Summary used original text"
     } else {
         label(&job.state)

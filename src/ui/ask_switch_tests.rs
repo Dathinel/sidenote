@@ -764,6 +764,7 @@ fn meeting_status_keeps_language_facts_and_the_settings_link_inside_the_popover(
         let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
         assert!(!texts.contains(&"Tasks not added to a project"));
         assert!(!texts.contains(&"Summary used Hex coverage"));
+        assert!(texts.contains(&"Tasks need another try"));
         assert_eq!(
             texts.contains(&"English-only transcript. Hindi or Telugu parts may be missing."),
             open

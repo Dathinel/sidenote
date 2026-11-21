@@ -878,6 +878,8 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
             .child(heading("Tasks", Some(summary.todo.len()), "sec-todo", p))
             .children(super::notes_status::tasks_notice(s, m, p))
             .child(todo::section(s, m, p));
+    } else if !is_draft {
+        body = body.children(super::notes_status::tasks_notice(s, m, p));
     }
 
     if !summary.to_settle.is_empty() {
