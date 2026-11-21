@@ -555,6 +555,195 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
     assert!(focused(&rt, "meeting-status"));
 }
 
+/// Three tasks and two open questions: one task with a detail, one with a guessed date and one
+/// with neither owner nor date; one question waits on someone.
+fn page_with_tasks(size: (f32, f32)) -> Runtime<State> {
+    let mut rt = page_with(size, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let summary = serde_json::json!({
+            "title": "Beta launch plan",
+            "todo": [
+                {"task": "Send the survey results to the team", "title": "Send the survey results",
+                 "description": "Send the survey results to the team",
+                 "owner": "Maya", "due": "2026-11-27"},
+                {"task": "Share the pricing page copy", "title": "Share the pricing page copy",
+                 "owner": "Priya", "due": "2026-12-01", "due_default": true},
+                {"task": "Book five customer tests", "title": "Book five customer tests"},
+            ],
+            "to_settle": [
+                {"question": "Should the work email move to the end of sign-up?", "waits_on": "Priya"},
+                {"question": "Who owns the survey follow-up?"},
+            ],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+        let state = core::state_dir();
+        std::fs::create_dir_all(&state).unwrap();
+        let config = serde_json::json!({"version":1,"features":{"tasks":true}});
+        std::fs::write(state.join("config.json"), config.to_string()).unwrap();
+    });
+    // The tasks come from the area worker's snapshot.
+    rt.update(|s, _| {
+        s.refresh_areas();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.areas.refresh_pending {
+            let event = s
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("area worker finished");
+            s.apply_event(event);
+        }
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    rt
+}
+
+fn element(rt: &Runtime<State>, key: &str) -> rune::ElementInfo {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("missing {key}"))
+}
+
+#[test]
+fn meeting_tasks_column_is_plain_rows_that_keep_every_fact() {
+    if in_parent("meeting_tasks_column_is_plain_rows_that_keep_every_fact") {
+        return;
+    }
+    let rt = page_with_tasks(DEFAULT_SIZE);
+    // No card: the lists have neither a rounded box nor a fill.
+    for key in ["meeting-tasks", "meeting-questions"] {
+        let list = element(&rt, key);
+        assert_eq!((list.radius, list.fill.a), (0.0, 0.0), "{key}");
+    }
+    // Each row: 8 all round, a 16 px check circle at x 8 (1 below the padding), the title at 34.
+    let row = |i: usize| element(&rt, &format!("meeting-task-{i}")).rect;
+    for i in 0..3 {
+        let tick = element(&rt, &format!("meeting-tick-{i}")).rect;
+        let title = element(&rt, &format!("meeting-task-open-{i}")).rect;
+        assert_eq!((tick[2], tick[3]), (16.0, 16.0), "check circle {i}");
+        assert_eq!(
+            (tick[0] - row(i)[0], tick[1] - row(i)[1]),
+            (8.0, 9.0),
+            "tick {i}"
+        );
+        assert_eq!(
+            (title[0] - row(i)[0], title[1] - row(i)[1]),
+            (34.0, 8.0),
+            "title {i}"
+        );
+        // The text column is 300 wide: the row is 316 with 8 of padding each side.
+        assert_eq!(row(i)[2], 316.0, "row width {i}");
+    }
+    // 4 px from the label to the first row, 28 between the lists.
+    let label = element(&rt, "meeting-task-count").rect;
+    assert_eq!(label[3], 22.0);
+    assert_eq!(row(0)[1] - (label[1] + label[3]), 4.0);
+    let questions = element(&rt, "meeting-questions").rect;
+    let tasks = element(&rt, "meeting-tasks").rect;
+    assert_eq!(questions[1] - 4.0 - 22.0 - (tasks[1] + tasks[3]), 28.0);
+    assert_eq!(element(&rt, "meeting-question-0").rect[0], row(0)[0]);
+    // Every fact is still on the page.
+    let elements = rt.elements();
+    let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
+    for want in [
+        "Send the survey results",
+        "Send the survey results to the team",
+        "Maya \u{b7} 27 Nov",
+        "Share the pricing page copy",
+        "Priya \u{b7} 1 Dec \u{b7} guessed",
+        "Book five customer tests",
+        "No owner \u{b7} No date",
+        "Should the work email move to the end of sign-up?",
+        "Waiting on Priya",
+        "Who owns the survey follow-up?",
+    ] {
+        assert!(texts.contains(&want), "missing {want}");
+    }
+}
+
+#[test]
+fn meeting_tasks_column_fits_a_narrow_window() {
+    if in_parent("meeting_tasks_column_fits_a_narrow_window") {
+        return;
+    }
+    let rt = page_with_tasks((390.0, 900.0));
+    for i in 0..3 {
+        let row = element(&rt, &format!("meeting-task-{i}")).rect;
+        assert!(
+            row[0] >= 0.0 && row[0] + row[2] <= 390.0,
+            "row {i}: {row:?}"
+        );
+        // The check circle sits where the notes text starts.
+        let tick = element(&rt, &format!("meeting-tick-{i}")).rect;
+        assert_eq!(tick[0], element(&rt, "meeting-view").rect[0], "tick {i}");
+    }
+}
+
+fn wait_for_tick(rt: &mut Runtime<State>, index: usize, done: bool) {
+    rt.update(|s, _| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !s
+            .tasks
+            .all
+            .iter()
+            .any(|t| t.index == index && t.done == done)
+        {
+            let event = s
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("tick saved");
+            s.apply_event(event);
+        }
+    });
+    rt.frame(0.2);
+}
+
+#[test]
+fn meeting_task_rows_work_by_keyboard_and_checking_one_saves() {
+    if in_parent("meeting_task_rows_work_by_keyboard_and_checking_one_saves") {
+        return;
+    }
+    let mut rt = page_with_tasks(DEFAULT_SIZE);
+    rt.update(|_, tx| tx.focus("meeting-tick-0", true));
+    rt.frame(0.0);
+    let tick = element(&rt, "meeting-tick-0");
+    assert!(tick.focusable && tick.focused && tick.focus_visible);
+    assert_eq!(tick.role, "checkbox");
+    assert_eq!(
+        tick.label.as_deref(),
+        Some("Mark Send the survey results done")
+    );
+    rt.key(KeyEvent {
+        key: Key::Tab,
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.2);
+    let open = element(&rt, "meeting-task-open-0");
+    assert!(open.focusable && open.focused && open.focus_visible);
+    assert_eq!(open.role, "button");
+    assert_eq!(open.text.as_deref(), Some("Send the survey results"));
+    // Space on the check circle saves the tick; a click takes it off again.
+    rt.update(|_, tx| tx.focus("meeting-tick-0", true));
+    rt.frame(0.0);
+    rt.key(KeyEvent {
+        key: Key::Text(" ".into()),
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.2);
+    wait_for_tick(&mut rt, 0, true);
+    assert_eq!(
+        element(&rt, "meeting-tick-0").label.as_deref(),
+        Some("Mark Send the survey results open")
+    );
+    tap(&mut rt, "meeting-tick-0");
+    wait_for_tick(&mut rt, 0, false);
+    assert_eq!(
+        element(&rt, "meeting-tick-0").label.as_deref(),
+        Some("Mark Send the survey results done")
+    );
+}
+
 #[test]
 fn an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load() {
     if in_parent("an_answer_names_the_helper_and_model_that_wrote_it_and_old_ones_still_load") {

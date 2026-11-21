@@ -35,6 +35,8 @@ def render(job):
     'state':'done','fallback':False,'tasks_failed':True,'transcript_revision':'a'*64,
     'routing_fallbacks':[{'reason':{'cpu_language_models_missing':{'ready':2}}}],
    }),encoding='utf-8')
+   if '-clean-' in name:
+    (jobs/'1793955600000-1.json').unlink()
    if name.startswith('meeting-refine-p3-'):
     if '-confirmed-' in name:
      projects=state/'projects.json'
@@ -161,6 +163,21 @@ def refine_p4(phase, output, exe):
   render((f'meeting-refine-p4-hover-{phase}', 'screens-summary', 1334, 'dark', 900, hover))
 
 
+def refine_p5(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-tasks-render-') as state:
+  STATE = Path(state)
+  for width, theme in ((1334, 'dark'), (1334, 'light'), (390, 'dark')):
+   # Normal, then with the failed-sort notice under the Tasks label.
+   for scene in ('clean', 'retry'):
+    # At 390 the tasks sit below the notes, so the picture is taller.
+    render((f'meeting-refine-p5-{scene}-{phase}', 'screens-summary', width, theme, 2400 if width == 390 else 900, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -169,6 +186,7 @@ def main():
  modes.add_argument('--refine-p1',choices=['before','after'])
  modes.add_argument('--refine-p3',choices=['before','after'])
  modes.add_argument('--refine-p4',choices=['before','after'])
+ modes.add_argument('--refine-p5',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -180,6 +198,8 @@ def main():
   return refine_p3(args.refine_p3,args.output,args.exe)
  if args.refine_p4:
   return refine_p4(args.refine_p4,args.output,args.exe)
+ if args.refine_p5:
+  return refine_p5(args.refine_p5,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()
