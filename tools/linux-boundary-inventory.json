@@ -218,12 +218,12 @@
   "src/ui/memory/settled.rs": "b9b7344264f3b4270696b0f885922bbefa2a258cee19c72dabc2151bcf38e08a",
   "src/ui/mod.rs": "a64a1f84a6ad74ea7c355ba443e78f6846e6aeb2b798b9a69ebbe4f4fe87e33d",
   "src/ui/models.rs": "652e50da1b1d7c3e3f45b8da81879830e08b543a8bfb8f9832335cd2dd6ba169",
-  "src/ui/notes_status.rs": "1d90fe8c60e1b64e230f2fcb64b3aab4b0945a41674b2fcbfd6cfa901bd89283",
+  "src/ui/notes_status.rs": "d9e98514b67333b5cb5dc5578a51081ba8327539bb1d341aa5a6f9a5e3c39c2d",
   "src/ui/project_merge.rs": "a0c33e2d9ad2754cc95fe3723cee82eea4a651ccd5357dfb9a5318873ed6707c",
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
   "src/ui/theme.rs": "6b99ef7685e90cc2dcbad4f73dfaf0db9afe9679c6b48e59ca60020c8ec79831",
-  "src/ui/updates.rs": "0ffc11ea8feb1cc50962a8e0e8c7cc1549f18c719dc766e3da3ab63654cc7ad9",
+  "src/ui/updates.rs": "f0bb32c4b5ac00b7240725f3386fb15374ac7599a9cba6c66a0b780a8e0a53b7",
   "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }
