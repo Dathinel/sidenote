@@ -1,6 +1,9 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
-use crate::ui::{cards, icons, notes_status, tasks, widgets::HelpHint};
+use crate::ui::{
+    cards, icons, notes_status, tasks,
+    widgets::{self, ButtonRole, HelpHint},
+};
 use rune_kit::{Menu, MenuItem, Placement, Popover, SegmentedControl};
 use sidenote::core::{self, people::Side};
 
@@ -225,8 +228,17 @@ pub(super) fn status_chip(
     if !english && engine.is_none() {
         return None;
     }
-    let toggle = quiet_button("Transcript status", "meeting-status", p)
-        .on_press(|s: &mut State| s.meeting_ui.status_open = !s.meeting_ui.status_open);
+    let toggle = widgets::button(
+        "Transcript status",
+        "meeting-status",
+        ButtonRole::Secondary,
+        p,
+    )
+    .px(8.0)
+    .py(2.0)
+    .min_h(24.0)
+    .h(24.0)
+    .on_press(|s: &mut State| s.meeting_ui.status_open = !s.meeting_ui.status_open);
     let body = col()
         .w(270.0)
         .gap(8.0)

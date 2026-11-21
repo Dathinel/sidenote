@@ -56,6 +56,8 @@ def render(job):
    assert w>0 and h>0 and x>=0 and x+w<=width and y>=0 and y+h<=height,(base.name,key)
   suggestion=elements['suggest-0']['rect']
   assert suggestion[1]+suggestion[3]<=elements['ask-pill']['rect'][1],base.name
+  if width==390:
+   assert elements['ask-input']['rect'][2]>=86.0,base.name
   assert elements['meeting-source-pt-0-1']['opacity']==int(name.endswith('-time')),base.name
   assert elements['help-hint-model-tip']['opacity']==int(name.endswith('-hint')),base.name
   assert ('meeting-engine-status' in elements)==name.endswith('-status'),base.name

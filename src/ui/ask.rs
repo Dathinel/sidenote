@@ -520,6 +520,8 @@ fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<E
             row()
                 .gap(2.0)
                 .items_center()
+                .min_w(0.0)
+                .shrink()
                 .child(
                     text(shown.clone())
                         .font(roles::META.medium().style())
@@ -957,21 +959,17 @@ pub fn overlay_with(
                     .wrap(format!("Runners are not set up. {e}"), p.warn)
                     .px(8.0)
                     .max_w(260.0),
-                None => {
-                    let picker = runner_choice(s, k, p, narrow, layer);
-                    if notes_column {
-                        row()
-                            .items_center()
-                            .min_w(0.0)
-                            .child(picker)
-                            .child(super::widgets::HelpHint::Model.build(k, p, layer))
-                    } else {
-                        picker
-                    }
-                }
+                None => runner_choice(s, k, p, narrow, layer),
             }
         }
     });
+    // Use the empty send slot for help so it does not squeeze the field or picker at 390 px.
+    let help = (notes_column
+        && empty
+        && !pending
+        && s.runner_error.is_none()
+        && !s.ask_settings.connection.settings.enabled)
+        .then(|| super::widgets::HelpHint::Model.build(k, p, layer));
     // The level control sits inside the bar, at its left; the bar is 40 points tall.
     let lead_in = lead.is_some();
     let mut pill = row()
@@ -1002,7 +1000,12 @@ pub fn overlay_with(
         .children(lead)
         .child(input)
         .children(model)
-        .child(action(s, p, ready, pending));
+        .child(
+            action(s, p, ready, pending)
+                .items_center()
+                .justify_center()
+                .children(help),
+        );
     // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
     pill = if s.companies.open || notes_column {
         pill.w_full()
