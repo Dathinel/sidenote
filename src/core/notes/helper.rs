@@ -195,7 +195,7 @@ impl Run for Cli {
                 },
                 input,
                 &scratch.0,
-                end.checked_duration_since(Instant::now())
+                end.checked_duration_since(runner_process::deadline::now())
                     .filter(|left| !left.is_zero())
                     .ok_or("translation_timed_out")?,
                 false,

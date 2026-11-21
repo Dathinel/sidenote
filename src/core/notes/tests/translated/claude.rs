@@ -1,5 +1,8 @@
 use super::*;
-use crate::core::runner_process::TEST_CHILD;
+use crate::core::runner_process::{
+    TEST_CHILD,
+    deadline::fixture::{FrozenClock, Phase},
+};
 use serde_json::json;
 use std::{io::Read, process::Command, time::Instant};
 
@@ -11,7 +14,24 @@ const BILLING_NAMES: [&str; 5] = [
     "oThEr_Service_TOKEN",
 ];
 
-const RELEASE_PIPES: &str = "release-pipes";
+const WAITING_FOR_REPLY: &str = "claude-waiting-for-reply";
+const HOLDING_PIPES: &str = "claude-holding-pipes";
+const RELEASE: &str = "release-claude";
+const WATCHDOG: &str = "claude-watchdog";
+const DEADLINE_SECONDS: u32 = 1;
+
+fn wait_for_release(marker: &Path) {
+    let root = marker.parent().unwrap();
+    fs::write(marker, "").unwrap();
+    let start = Instant::now();
+    while root.is_dir() && !root.join(RELEASE).exists() {
+        if start.elapsed() >= Duration::from_secs(30) {
+            let _ = fs::write(root.join(WATCHDOG), format!("{:?}", start.elapsed()));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn child(mode: &str, marker: &Path) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -41,11 +61,7 @@ fn fixture_child() {
     assert_eq!(args.next().as_deref().unwrap(), "--skip");
     let marker = PathBuf::from(args.next().unwrap());
     if mode == "hold-pipes" {
-        let root = marker.parent().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while root.is_dir() && !marker.exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_release(&marker);
         return;
     }
     fs::write(&marker, "").unwrap();
@@ -86,9 +102,12 @@ fn fixture_child() {
         }
         "malformed" => reply["is_error"] = "false".into(),
         "refusal" => reply["stop_reason"] = "refusal".into(),
-        "late" => std::thread::sleep(Duration::from_millis(1200)),
+        "late" => {
+            wait_for_release(&marker.with_file_name(WAITING_FOR_REPLY));
+            return;
+        }
         "pipes" => {
-            let mut holder = child("hold-pipes", &marker.with_file_name(RELEASE_PIPES));
+            let mut holder = child("hold-pipes", &marker.with_file_name(HOLDING_PIPES));
             holder.stdin(std::process::Stdio::null());
             hold_pipes(holder);
         }
@@ -135,9 +154,15 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
     let (root, _, settings) = meeting_with(&["en", "hi", "te"]);
     let mut config = crate::core::Config::load_in(&root.0).unwrap();
     config.engine_settings.stages.translation_helper = Helper::Claude;
-    let timed = matches!(mode, "delayed" | "late" | "pipes");
+    let phase = match mode {
+        "delayed" => Some((Phase::Launch, "claude-prepared")),
+        "late" => Some((Phase::Reply, WAITING_FOR_REPLY)),
+        "pipes" => Some((Phase::Pipes, HOLDING_PIPES)),
+        _ => None,
+    };
+    let timed = phase.is_some();
     if timed {
-        config.engine_settings.stages.translation_deadline_seconds = 1;
+        config.engine_settings.stages.translation_deadline_seconds = DEADLINE_SECONDS;
     }
     config.save(&root.0).unwrap();
     let _held = (mode == "locked").then(|| crate::core::config::lock(&root.0).unwrap());
@@ -158,9 +183,6 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
             config.engine_settings.steps.translation = false;
             config.save(&path).unwrap();
         }
-        if mode == "delayed" {
-            std::thread::sleep(Duration::from_millis(1200));
-        }
         let mut child = child(mode, &path.join("claude-started"));
         for name in BILLING_NAMES {
             child.env(name, "fixture");
@@ -177,7 +199,20 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
         },
         notes: Fake::new(vec![Ok(summary()), Ok(sorted())]),
     };
-    let start = Instant::now();
+    // Keep the same deadline from batch dispatch through cleanup and expire it at the observed phase.
+    let _clock = phase.map(|(target, marker)| {
+        let ready = root.0.join(marker);
+        FrozenClock::until(
+            Duration::from_secs(u64::from(DEADLINE_SECONDS)),
+            move |phase| {
+                assert!(
+                    (target, phase) != (Phase::Launch, Phase::Spawn),
+                    "delayed: runner attempted to spawn after launch deadline"
+                );
+                phase == target && ready.exists()
+            },
+        )
+    });
     queue::drain(&root.0, &root.0.join("meetings"), &mut run, || {
         Ok(settings.clone())
     })
@@ -185,10 +220,13 @@ fn run_claude(mode: &'static str) -> (Temp, String, Fake) {
     let job = queue::read(&root.0, ID).unwrap().unwrap();
     assert!(matches!(job.state, JobState::Done { .. }));
     if timed {
-        assert!(start.elapsed() < Duration::from_secs(2), "{mode}");
-    }
-    if mode == "pipes" {
-        fs::write(root.0.join(RELEASE_PIPES), "").unwrap();
+        fs::write(root.0.join(RELEASE), "").unwrap();
+        let watchdog = root.0.join(WATCHDOG);
+        assert!(
+            !watchdog.exists(),
+            "{mode}: fixture watchdog fired after {}",
+            fs::read_to_string(&watchdog).unwrap_or_default()
+        );
     }
     if mode != "ok" {
         let notes = &run.notes.calls[0].0;
@@ -231,7 +269,11 @@ fn deadline_covers_launch_reply_and_cleanup() {
     for mode in ["delayed", "late", "pipes"] {
         let (root, reason, _) = run_claude(mode);
         assert_eq!(reason, "translation_timed_out", "{mode}");
-        assert_eq!(root.0.join("claude-started").exists(), mode != "delayed");
+        assert_eq!(
+            root.0.join("claude-started").exists(),
+            mode != "delayed",
+            "{mode}: child start marker"
+        );
     }
 }
 

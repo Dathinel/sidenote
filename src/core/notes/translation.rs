@@ -2,7 +2,9 @@ use super::{
     Helper,
     transcript::{Selection, Source},
 };
-use crate::core::{Config, engine_settings::Prompt, meeting_router::Segment};
+use crate::core::{
+    Config, engine_settings::Prompt, meeting_router::Segment, runner_process::deadline,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -208,10 +210,10 @@ fn translate(
     }
     let segments = selection.transcript.iter().flat_map(|t| &t.segments);
     let selected = segments.enumerate().filter(|(_, s)| s.translate);
-    let end = Instant::now() + Duration::from_secs(u64::from(snapshot.deadline_seconds));
+    let end = deadline::now() + Duration::from_secs(u64::from(snapshot.deadline_seconds));
     let mut english = BTreeMap::new();
     for batch in batches(selected.collect(), snapshot.batch_chars)? {
-        if Instant::now() >= end {
+        if deadline::now() >= end {
             return Err("translation_timed_out");
         }
         english.extend(translate_batch(selection, snapshot, &batch, end, run)?);

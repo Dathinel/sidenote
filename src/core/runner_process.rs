@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
+pub(crate) mod deadline;
 mod translation;
 #[derive(Clone, Copy)]
 pub(super) enum Invocation<'a> {
@@ -443,7 +444,7 @@ pub(super) fn run_classified(
         _ => None,
     };
     let claude = deadline.is_some();
-    let expired = || deadline.is_some_and(|end| Instant::now() >= end);
+    let expired = || deadline.is_some_and(|end| deadline::now() >= end);
     let mut prepared;
     let (runner, text_only) = match invocation {
         Invocation::General(r) => {
@@ -581,6 +582,10 @@ pub(super) fn run_classified(
     {
         return Err(translation::consent_changed());
     }
+    #[cfg(test)]
+    if claude {
+        deadline::fixture::reach(deadline::fixture::Phase::Launch);
+    }
     if expired() {
         return Err("The runner exceeded its time limit.".into());
     }
@@ -591,6 +596,10 @@ pub(super) fn run_classified(
     } else {
         spawn
     };
+    #[cfg(test)]
+    if claude {
+        deadline::fixture::reach(deadline::fixture::Phase::Spawn);
+    }
     let mut child = spawn(&mut command, runner.stdin).map_err(|e| {
         format!(
             "Could not start {} (OS error {})",
@@ -672,7 +681,7 @@ pub(super) fn run_classified(
         }
         let poll = Duration::from_millis(100);
         let wait = deadline.map_or(poll, |end| {
-            end.saturating_duration_since(Instant::now()).min(poll)
+            end.saturating_duration_since(deadline::now()).min(poll)
         });
         match receiver.recv_timeout(wait) {
             Ok(Stream::Line(line)) if claude => {
@@ -708,6 +717,15 @@ pub(super) fn run_classified(
             match child.try_wait() {
                 Ok(exit) => status = exit,
                 Err(_) => break Err("Could not read the CLI status".into()),
+            }
+        }
+        #[cfg(test)]
+        if claude && !done {
+            use deadline::fixture::{Phase, reach};
+            if status.is_none() && output.final_text.is_empty() {
+                reach(Phase::Reply);
+            } else if status.is_some_and(|exit| exit.success()) && !output.final_text.is_empty() {
+                reach(Phase::Pipes);
             }
         }
         if status.is_some() && done && (!claude || writer.as_ref().is_some_and(|w| w.is_finished()))
