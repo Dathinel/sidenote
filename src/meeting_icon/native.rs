@@ -29,13 +29,6 @@ const MAX_RETIRING: usize = 2;
 static DISABLED: AtomicBool = AtomicBool::new(false);
 thread_local! { static CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
-pub(super) fn capture_visible(root: &Path) -> bool {
-    crate::core::Config::read_config(root)
-        .ok()
-        .flatten()
-        .is_some_and(|config| config.meeting_icon_in_captures)
-}
-
 #[derive(Clone, Default)]
 pub(super) struct Frame {
     pub id: String,

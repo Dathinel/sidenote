@@ -333,8 +333,7 @@ impl Config {
         match read(root) {
             Ok(bytes) => {
                 let config: Self = operation(
-                    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
-                        .map_err(io::Error::from),
+                    Self::decode(&bytes).map_err(io::Error::from),
                     "decode",
                     "config.json",
                 )?;
@@ -346,6 +345,19 @@ impl Config {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    fn decode(bytes: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
+    }
+
+    #[cfg(all(windows, feature = "desktop"))]
+    pub(crate) fn meeting_icon_capture_allowed(root: &Path) -> bool {
+        // The native window timer must fail closed on sharing errors without retrying.
+        std::fs::read(root.join("config.json"))
+            .ok()
+            .and_then(|bytes| Self::decode(&bytes).ok())
+            .is_some_and(|config| config.version == 1 && config.meeting_icon_in_captures)
     }
 
     pub fn save(&mut self, root: &Path) -> io::Result<()> {
