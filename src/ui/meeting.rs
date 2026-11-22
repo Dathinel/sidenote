@@ -68,8 +68,8 @@ pub const EDGE: f32 = 16.0;
 /// The widest the other reading pages get; lines stay near 80 characters.
 pub const PAGE_COLUMN: f32 = 760.0;
 
-/// The page width below which the meeting page is the phone layout: a 16 gutter, a 24 title and
-/// the meta row on two lines.
+/// The page width below which the meeting page uses a 16 gutter, a 24 title and a control row
+/// above the wrapping facts.
 pub const PHONE: f32 = 600.0;
 /// The phone layout's page gutter.
 pub const PHONE_SIDE: f32 = 16.0;
@@ -93,17 +93,6 @@ pub fn strip(s: &State) -> bool {
 
 pub fn phone(s: &State) -> bool {
     page_w(s) < PHONE
-}
-
-/// Below this the switch, the date and the menu do not fit on one line, so the date goes to the
-/// second line. Measured from the 390 render: switch 164.81 + date 120.88 + menu 28 + three 6
-/// gaps = 331.69, plus the two 16 gutters and the sidebar's 1 point divider (which a narrow
-/// window's page width still counts) = 364.69. The page cannot measure text while it builds, so
-/// this is that figure rounded up, for a date like "6 Nov" and a duration like "22 min".
-pub const TIGHT: f32 = 365.0;
-
-pub fn tight(s: &State) -> bool {
-    page_w(s) < TIGHT
 }
 
 /// The page gutter beside the notes: none where the column is fixed (the grid's own strip is the

@@ -376,20 +376,18 @@ pub(super) fn status_chip(
 fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Vec<El>) -> El {
     let people = m.summary.people.len();
     let phone = super::phone(s);
-    // On a phone the switch and the date share the first line with the menu; the people, the
-    // project and the transcript status take the second.
+    // Keep the phone controls together regardless of how wide the facts are.
     let mut first = row()
         .key("meeting-controls")
         .w_full()
-        .flex_wrap()
         .gaps(6.0, 6.0)
         .items_center()
         .child(view_switch(s, k, p));
     let mut rest = Vec::new();
-    if phone && super::tight(s) {
+    if phone {
         rest.extend(meeting_facts(m, p));
     } else {
-        first = first.children(meeting_facts(m, p));
+        first = first.flex_wrap().children(meeting_facts(m, p));
     }
     if people > 0 {
         rest.push(

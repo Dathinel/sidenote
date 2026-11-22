@@ -556,10 +556,10 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
         });
         rt.frame(0.2);
     };
-    // At 390 the menu sits on the first line, so Tab reaches it before the second line.
+    // Tab reaches both controls before the facts below them.
     for (key, name) in [
-        ("meeting-facts", facts.as_str()),
         (more.as_str(), "More actions"),
+        ("meeting-facts", facts.as_str()),
         ("meeting-people", "2 people"),
         (&project, "Suggested project: Atlas 2. Change it"),
         ("meeting-status", "Transcript status: English only"),
@@ -1639,8 +1639,8 @@ fn the_meta_facts_show_a_date_alone_a_duration_alone_or_both_with_a_dot_between(
 }
 
 #[test]
-fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
-    if in_parent("a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters") {
+fn a_phone_page_has_a_24_title_16_gutters_and_facts_below_the_controls() {
+    if in_parent("a_phone_page_has_a_24_title_16_gutters_and_facts_below_the_controls") {
         return;
     }
     let rt = page_with_every_meta_item((390.0, 900.0));
@@ -1652,39 +1652,38 @@ fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
     // The title is 24 on a 30 line.
     let title = r("meeting-title");
     assert_eq!((title[0], title[3]), (left, 30.0), "title {title:?}");
-    // Line one: the switch, the date and the menu, the menu at the right gutter.
+    // Line one: the switch and the menu at opposite gutters.
     let (view, facts, menu) = (r("meeting-view"), r("meeting-facts"), r(&more));
-    assert_eq!((facts[1], menu[1]), (view[1], view[1]), "line one");
+    assert_eq!(menu[1], view[1], "line one");
     assert_eq!(
         menu[0] + menu[2],
         390.0 - 16.0,
         "the menu is at the right gutter"
     );
     assert_eq!(view[0], left, "the switch is at the left gutter");
-    // Line two, 6 below it: the people, the project and the status, then the empty slot the
-    // section rail's chip takes.
+    // The facts start 6 below the controls and wrap in reading order, ending with the section
+    // rail's slot.
     let (people, chip, status, slot) = (
         r("meeting-people"),
         r(&project),
         r("meeting-status"),
         r("meeting-sections-slot"),
     );
-    assert_eq!(people[1], view[1] + view[3] + 6.0, "line two");
-    assert_eq!((chip[1], status[1]), (people[1], people[1]), "line two");
-    assert!(people[0] + people[2] <= chip[0] && chip[0] + chip[2] <= status[0]);
-    assert!(slot[0] >= status[0] + status[2], "the slot ends line two");
-    // The notes keep the same 16 gutter, and nothing runs past the window.
-    assert_eq!(r("sec-context")[0], left, "notes gutter");
-    for e in rt.elements() {
-        let key = e.key.as_deref().unwrap_or_default();
-        if key.starts_with("meeting-") || key.starts_with("more-meeting-") {
-            assert!(
-                e.rect[0] >= 0.0 && e.rect[0] + e.rect[2] <= 390.0,
-                "{key} {:?}",
-                e.rect
-            );
-        }
+    assert_eq!((facts[0], facts[1]), (left, view[1] + view[3] + 6.0));
+    for (before, after) in [
+        (facts, people),
+        (people, chip),
+        (chip, status),
+        (status, slot),
+    ] {
+        assert!(
+            after[1] >= before[1] + before[3]
+                || (after[1] >= before[1] && after[0] >= before[0] + before[2]),
+            "{after:?} follows {before:?}"
+        );
     }
+    assert_eq!(r("sec-context")[0], left, "notes gutter");
+    assert_inside(&rt, 390.0);
     // Every fact stays reachable: each is on the page with its name.
     for key in [
         "meeting-facts",
@@ -1787,34 +1786,6 @@ fn hex_engine_recording() -> sidenote::hex_engine::EngineState {
 }
 
 #[test]
-fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_333() {
-    if in_parent("the_date_moves_to_the_second_line_when_the_recording_rail_leaves_333") {
-        return;
-    }
-    let mut rt = page_with_every_meta_item((390.0, 900.0));
-    let line = |rt: &Runtime<State>, key: &str| rect_of(rt, key)[1];
-    let more = format!("more-meeting-{MEETING}-button");
-    // Without the rail the date shares the first line with the switch and the menu.
-    assert_eq!(line(&rt, "meeting-facts"), line(&rt, "meeting-view"));
-    rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
-    rt.frame(0.2);
-    rt.settle_all();
-    // With it the page is 333 wide: the menu stays on line one and the date leads line two (the
-    // status may wrap to a third line); nothing runs past the window.
-    let (view, menu, facts, people) = (
-        rect_of(&rt, "meeting-view"),
-        rect_of(&rt, &more),
-        rect_of(&rt, "meeting-facts"),
-        rect_of(&rt, "meeting-people"),
-    );
-    assert_eq!(menu[1], view[1], "the menu stays on line one");
-    assert_eq!(facts[1], view[1] + view[3] + 6.0, "the date leads line two");
-    assert_eq!(people[1], facts[1], "line two");
-    assert!(facts[0] < people[0]);
-    assert_inside(&rt, 390.0);
-}
-
-#[test]
 fn the_phone_menu_shares_the_switch_row_with_short_and_long_facts() {
     if in_parent("the_phone_menu_shares_the_switch_row_with_short_and_long_facts") {
         return;
@@ -1832,8 +1803,9 @@ fn the_phone_menu_shares_the_switch_row_with_short_and_long_facts() {
         .unwrap()
         .timestamp_millis();
     for long in [false, true] {
-        // A 407 window with the recording rail (57) is a page of 350.
+        // The recording rail uses 57 points, leaving pages of 333 and 350.
         for (window, rail) in [
+            (390.0, true),
             (340.0, false),
             (407.0, true),
             (360.0, false),
@@ -1872,6 +1844,7 @@ fn the_phone_menu_shares_the_switch_row_with_short_and_long_facts() {
                 let pane = rect_of(&rt, "meeting-pane");
                 for fact in [&facts, &people, &project_chip] {
                     let [x, y, w, h] = fact.rect;
+                    assert!(y >= view[1] + view[3], "page {page}: {:?}", fact.label);
                     assert!(
                         w > 0.0
                             && h > 0.0
