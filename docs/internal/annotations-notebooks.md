@@ -35,9 +35,9 @@ None of the measured alternatives beat the earlier Sonnet result. These are indi
 
 Reproduce with the built executable: `--notebook-benchmark codex-low --annotation-proof-output <isolated-output-folder>`, replacing the variant with `codex-medium` or `haiku`. The entry point always constructs synthetic inputs from the repository fixture. The production notebook path still requests Medium effort.
 
-- codex-low: [timing](../../artifacts/notebooks-round1/live-codex-low/timing.json), [stream proof](../../artifacts/notebooks-round1/live-codex-low/stream-proof.json), [note](../../artifacts/notebooks-round1/live-codex-low/notebook-note.json).
-- codex-medium: [timing](../../artifacts/notebooks-round1/live-codex-medium/timing.json), [stream proof](../../artifacts/notebooks-round1/live-codex-medium/stream-proof.json), [note](../../artifacts/notebooks-round1/live-codex-medium/notebook-note.json).
-- haiku: [timing](../../artifacts/notebooks-round1/live-haiku/timing.json), [stream proof](../../artifacts/notebooks-round1/live-haiku/stream-proof.json), [note](../../artifacts/notebooks-round1/live-haiku/notebook-note.json).
+- codex-low: `../../artifacts/notebooks-round1/live-codex-low/timing.json`, `../../artifacts/notebooks-round1/live-codex-low/stream-proof.json`, `../../artifacts/notebooks-round1/live-codex-low/notebook-note.json`.
+- codex-medium: `../../artifacts/notebooks-round1/live-codex-medium/timing.json`, `../../artifacts/notebooks-round1/live-codex-medium/stream-proof.json`, `../../artifacts/notebooks-round1/live-codex-medium/notebook-note.json`.
+- haiku: `../../artifacts/notebooks-round1/live-haiku/timing.json`, `../../artifacts/notebooks-round1/live-haiku/stream-proof.json`, `../../artifacts/notebooks-round1/live-haiku/notebook-note.json`.
 
 ## Gates
 
@@ -51,7 +51,7 @@ Reproduce with the built executable: `--notebook-benchmark codex-low --annotatio
 | `cargo build --locked` | PASS, exit 0, 18.19 s |
 | `python tools/mcp-smoke.py target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0, 1.18 s |
 
-Both test modes pass 237 top-level tests: 1 domain unit, 14 domain integration, 178 app library and 44 app binary tests. No tests were ignored. Gate logs and exit codes are in [gate results](../../artifacts/notebooks-round1/gates/results.json).
+Both test modes pass 237 top-level tests: 1 domain unit, 14 domain integration, 178 app library and 44 app binary tests. No tests were ignored. Gate logs and exit codes are in `../../artifacts/notebooks-round1/gates/results.json`.
 
 ## Render and interaction proof
 
