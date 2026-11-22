@@ -2013,4 +2013,4 @@ pub(super) use parts_scene::scene_over as parts_scene_over;
 #[path = "live/recording_control.rs"]
 mod recording_control;
 pub(super) use parts_scene::scene as parts_scene;
-pub(super) use recording_control::{parts_control, status as parts_status};
+pub(super) use recording_control::{parts_control, recording_note, status as parts_status};

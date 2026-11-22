@@ -544,6 +544,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             crate::ui::live::your_notes(&m.notes, p).key("sec-your-notes")
         });
     }
+    body = body.children(crate::ui::live::recording_note(s, p));
     let draft = draft_summary(m);
     let summary = draft.as_ref().unwrap_or(&m.summary);
     if draft.is_some() {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::widgets::ButtonDisabled;
+use crate::ui::widgets::{ButtonDisabled, dot};
 use sidenote::core::{
     self,
     meeting_parts::{self, Phase as SavedPhase},
@@ -16,10 +16,26 @@ fn session(s: &State) -> Option<meeting_parts::Meeting> {
                 .and_then(|id| meeting_parts::read(&core::state_dir(), id).ok().flatten())
         })
 }
+fn is_recording(s: &State, m: &Option<meeting_parts::Meeting>) -> bool {
+    m.as_ref().is_some_and(|m| m.phase == SavedPhase::Recording)
+        || (s.selected.is_none() && s.live.as_ref().is_some_and(|l| l.phase == Phase::Recording))
+}
+/// Level E: the line over the notes of the meeting that is recording. The notes are written when
+/// it pauses, so until then they are the last ones.
+pub(in crate::ui) fn recording_note(s: &State, p: Palette) -> Option<El> {
+    is_recording(s, &session(s)).then(|| {
+        row()
+            .key("meeting-recording-note")
+            .gap(8.0)
+            .items_center()
+            .mb(16.0)
+            .child(dot(8.0, p.danger))
+            .child(roles::SMALL.wrap("Recording. These notes update when you pause.", p.faint))
+    })
+}
 pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let m = session(s);
-    let recording = m.as_ref().is_some_and(|m| m.phase == SavedPhase::Recording)
-        || (s.selected.is_none() && s.live.as_ref().is_some_and(|l| l.phase == Phase::Recording));
+    let recording = is_recording(s, &m);
     let open = if s.on_live() {
         s.live.as_ref().is_some_and(|l| l.panel_open)
     } else {

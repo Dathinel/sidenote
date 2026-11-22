@@ -135,6 +135,73 @@ fn hex_records(rt: &mut Runtime<State>) {
     rt.frame(0.2);
 }
 
+const NOTE: &str = "Recording. These notes update when you pause.";
+
+/// The texts inside the line over the notes; empty when the page has no such line.
+fn note_texts(rt: &Runtime<State>) -> Vec<String> {
+    let Some(root) = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("meeting-recording-note"))
+        .map(|e| e.path)
+    else {
+        return Vec::new();
+    };
+    rt.elements()
+        .into_iter()
+        .filter(|e| e.path.starts_with(&format!("{root}/")))
+        .filter_map(|e| e.text)
+        .collect()
+}
+
+#[test]
+fn the_notes_say_they_update_on_pause_only_while_recording() {
+    if in_parent("the_notes_say_they_update_on_pause_only_while_recording") {
+        return;
+    }
+    let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
+    // The line is the first thing in the notes: 16 above the Context heading, in its column.
+    assert_eq!(note_texts(&rt), [NOTE]);
+    let (note, context) = (
+        element(&rt, "meeting-recording-note").rect,
+        element(&rt, "sec-context").rect,
+    );
+    assert_eq!(context[1] - (note[1] + note[3]), 16.0);
+    assert_eq!(note[0], context[0]);
+    let dot = rt
+        .elements()
+        .into_iter()
+        .find(|e| {
+            e.path
+                .starts_with(&element(&rt, "meeting-recording-note").path)
+                && e.radius == 4.0
+        })
+        .expect("the live dot");
+    assert_eq!(dot.fill, theme::palette(true).danger);
+    // Pause finishes: the same page, a moment later, has no line.
+    rt.update(|s, _| s.parts_paused());
+    rt.frame(0.2);
+    assert!(
+        rt.find("meeting-recording-note").is_none(),
+        "still shown after Pause"
+    );
+    assert!(rt.find("sec-context").is_some());
+    // A meeting that has ended never shows it either.
+    rt.update(|s, _| {
+        let live = s.live.as_mut().unwrap();
+        live.session.as_mut().unwrap().phase = SavedPhase::Ended;
+    });
+    rt.frame(0.2);
+    assert!(
+        rt.find("meeting-recording-note").is_none(),
+        "shown for an ended meeting"
+    );
+    // At 390 wide the line stays inside the page.
+    let rt = page(SavedPhase::Recording, (390.0, 900.0));
+    let note = element(&rt, "meeting-recording-note").rect;
+    assert!(note[0] >= 0.0 && note[0] + note[2] <= 390.0, "{note:?}");
+}
+
 #[test]
 fn the_live_dot_in_the_top_right_is_danger_red_not_amber() {
     if in_parent("the_live_dot_in_the_top_right_is_danger_red_not_amber") {
