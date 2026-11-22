@@ -679,7 +679,10 @@ impl State {
             && r.as_ref()
                 .is_ok_and(|state| state.labs.state("meetings") == Some(false));
         self.hex.meetings_setup_checked |= r.is_ok();
-        if !self.hex.install.busy() && !super::isolated() {
+        let check_installation = !self.hex.install.busy() && !super::isolated();
+        #[cfg(test)]
+        let check_installation = check_installation && !SKIP_INSTALL_DETECT.get();
+        if check_installation {
             self.hex.installation = sidenote::hex_install::detect();
         }
         let running = r.is_ok();

@@ -163,6 +163,13 @@ fn stale_bound_expires_availability_but_keeps_stop() {
 #[test]
 #[cfg(windows)]
 fn unknown_status_does_not_offer_to_open_an_installed_hex() {
+    struct RestoreInstallDetect(bool);
+    impl Drop for RestoreInstallDetect {
+        fn drop(&mut self) {
+            hex::SKIP_INSTALL_DETECT.set(self.0);
+        }
+    }
+    let _restore = RestoreInstallDetect(hex::SKIP_INSTALL_DETECT.replace(true));
     let (mut state, mut client) = setup([], false);
     state.hex.installation = sidenote::hex_install::Installation::Installed {
         version: "0.0.0-dev-1085".into(),
