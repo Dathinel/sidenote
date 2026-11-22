@@ -125,6 +125,12 @@ jobs:
                 --skip=packaged_speech_service_admits_only_speech
                 --skip=service::speech::proofs::service_shutdown_replans_and_replays_over_http
                 --skip=service::speech::proofs::speech_service_fixture
+                --skip=service::speech::proofs::faults::http_stream_disconnect_releases_slots_and_revocation_ends_replay
+                --skip=service::speech::proofs::faults::nested_publication_interruptions_recover_without_losing_receipts
+                --skip=service::speech::proofs::faults::one_unavailable_status_log_does_not_stop_other_sessions
+                --skip=service::speech::proofs::faults::rejected_speech_survives_production_planning_and_http_completion
+                --skip=service::speech::proofs::faults::retained_status_is_bounded_and_cannot_kill_the_listener
+                --skip=service::speech::proofs::locking::job_creation_keeps_intake_ownership_until_processing_is_locked
                 --skip=tests::server_role_exposes_only_scoped_host_probe)
           if [[ -n "$TEST_MODULE" ]]; then
             cargo test --locked -p sidenote --lib "$TEST_MODULE"
