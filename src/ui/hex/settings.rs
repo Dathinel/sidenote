@@ -1380,13 +1380,13 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                         .py(7.0)
                         .child(icons::draw(page.icon(), 18.0, p.soft))
                         .child(if active == page {
-                            roles::CONTROL
+                            roles::NAV
                                 .bold()
                                 .line(page.name(), p.ink)
                                 .grow(1.0)
                                 .help(page.name())
                         } else {
-                            roles::CONTROL
+                            roles::NAV
                                 .line(page.name(), p.soft)
                                 .grow(1.0)
                                 .help(page.name())

@@ -208,7 +208,7 @@
   "src/ui/hex/connection/stop_tests.rs": "f995543c145b94290941b2f0084b0d33e66009bf7c2c6914ba761b7088fb41b7",
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
-  "src/ui/hex/settings.rs": "58ef5c18277f7f5002101f6420c1e5ce94c831fae0af7a787ef4602eb0540267",
+  "src/ui/hex/settings.rs": "224b438754267494c3c445d2a013ab8f145e03d0f5a9428c860ab9e06c7dd8c6",
   "src/ui/hex/setup.rs": "bba9c880a9c9b598e651c455b7ae387db766a7c9fffa7a99474ea76019c49e37",
   "src/ui/idle_cpu.rs": "ab45c9a037baff122cbbd3a35ef2de88d452a16666265c0e89166aa8624ff239",
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
@@ -224,7 +224,7 @@
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
-  "src/ui/theme.rs": "ebdcd967bee0bced321bbedb4f8389ded2eadd4a5904a8af21d9c68c8eb4f5e3",
+  "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
   "src/ui/updates.rs": "f0bb32c4b5ac00b7240725f3386fb15374ac7599a9cba6c66a0b780a8e0a53b7",
   "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }
