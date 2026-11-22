@@ -95,6 +95,14 @@ pub fn phone(s: &State) -> bool {
     page_w(s) < PHONE
 }
 
+/// Below this the switch, the date and the menu do not fit on one line (a 390 window with the
+/// recording rail beside it leaves 333), so the date goes to the second line.
+pub const TIGHT: f32 = 340.0;
+
+pub fn tight(s: &State) -> bool {
+    page_w(s) < TIGHT
+}
+
 /// The page gutter beside the notes: none where the column is fixed (the grid's own strip is the
 /// margin), 16 on a phone and 24 between.
 pub fn gutter(s: &State) -> f32 {

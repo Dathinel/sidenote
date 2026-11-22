@@ -384,9 +384,13 @@ fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Ve
         .flex_wrap()
         .gaps(6.0, 6.0)
         .items_center()
-        .child(view_switch(s, k, p))
-        .children(meeting_facts(m, p));
+        .child(view_switch(s, k, p));
     let mut rest = Vec::new();
+    if phone && super::tight(s) {
+        rest.extend(meeting_facts(m, p));
+    } else {
+        first = first.children(meeting_facts(m, p));
+    }
     if people > 0 {
         rest.push(
             fact(&icons::PEOPLE, p)

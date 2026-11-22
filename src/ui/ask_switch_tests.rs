@@ -1726,6 +1726,61 @@ fn the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone() {
     assert!(text < free, "wide: {text} of {free}");
 }
 
+/// What Hex reports while it records the invented meeting.
+fn hex_engine_recording() -> sidenote::hex_engine::EngineState {
+    sidenote::hex_engine::EngineState {
+        running: true,
+        version: "test".into(),
+        protocol: 4,
+        recording: Some(sidenote::hex_engine::Recording {
+            id: Some(MEETING.into()),
+            title: None,
+            since: None,
+            elapsed_seconds: Some(724),
+        }),
+        meeting_state: "recording".into(),
+        dictating: Some(false),
+        capture_state: "idle".into(),
+        model: sidenote::hex_engine::ModelState {
+            id: None,
+            name: None,
+            language: None,
+            installed: None,
+            preparing: None,
+            downloaded_bytes: None,
+        },
+        labs: Default::default(),
+    }
+}
+
+#[test]
+fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_under_340() {
+    if in_parent("the_date_moves_to_the_second_line_when_the_recording_rail_leaves_under_340") {
+        return;
+    }
+    let mut rt = page_with_every_meta_item((390.0, 900.0));
+    let line = |rt: &Runtime<State>, key: &str| rect_of(rt, key)[1];
+    let more = format!("more-meeting-{MEETING}-button");
+    // Without the rail the date shares the first line with the switch and the menu.
+    assert_eq!(line(&rt, "meeting-facts"), line(&rt, "meeting-view"));
+    rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
+    rt.frame(0.2);
+    rt.settle_all();
+    // With it the page is 333 wide: the menu stays on line one and the date leads line two (the
+    // status may wrap to a third line); nothing runs past the window.
+    let (view, menu, facts, people) = (
+        rect_of(&rt, "meeting-view"),
+        rect_of(&rt, &more),
+        rect_of(&rt, "meeting-facts"),
+        rect_of(&rt, "meeting-people"),
+    );
+    assert_eq!(menu[1], view[1], "the menu stays on line one");
+    assert_eq!(facts[1], view[1] + view[3] + 6.0, "the date leads line two");
+    assert_eq!(people[1], facts[1], "line two");
+    assert!(facts[0] < people[0]);
+    assert_inside(&rt, 390.0);
+}
+
 #[test]
 fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
     if in_parent("the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone") {
@@ -1737,29 +1792,7 @@ fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
         "no rail until it records"
     );
     rt.update(|s, _| {
-        s.hex.status = Some(Ok(sidenote::hex_engine::EngineState {
-            running: true,
-            version: "test".into(),
-            protocol: 4,
-            recording: Some(sidenote::hex_engine::Recording {
-                id: Some(MEETING.into()),
-                title: None,
-                since: None,
-                elapsed_seconds: Some(724),
-            }),
-            meeting_state: "recording".into(),
-            dictating: Some(false),
-            capture_state: "idle".into(),
-            model: sidenote::hex_engine::ModelState {
-                id: None,
-                name: None,
-                language: None,
-                installed: None,
-                preparing: None,
-                downloaded_bytes: None,
-            },
-            labs: Default::default(),
-        }));
+        s.hex.status = Some(Ok(hex_engine_recording()));
     });
     rt.frame(0.2);
     let rail = element(&rt, "rail-recording");
