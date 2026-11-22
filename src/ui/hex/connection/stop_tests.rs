@@ -275,10 +275,11 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
     assert_eq!(live.phase, crate::ui::live::Phase::Starting);
     live.age_past_start_timeout();
     let page = live.recording_id;
+    let id = live.session.as_ref().unwrap().id.clone();
 
     let root = sidenote::core::state_dir();
     let notes = sidenote::core::meeting_parts::inputs(&root)
-        .join(&live.session.as_ref().unwrap().id)
+        .join(&id)
         .join(sidenote::core::live::NOTES_FILE);
     let recovery = root.join("unsaved-notes");
     std::fs::create_dir(&notes).unwrap();
@@ -324,6 +325,46 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
         assert_eq!(preserved, text);
     } else {
         saved_removal_notes(text);
+    }
+    if restore_primary {
+        let mut restarted = State::new();
+        let listed = restarted
+            .meetings
+            .iter()
+            .find(|meeting| meeting.id == id)
+            .expect("saved draft must be discoverable in the meeting list");
+        assert_eq!(listed.notes, text);
+        restarted.select(&id, &mut rune::Tx::default());
+        assert!(matches!(
+            restarted.meeting_tab,
+            crate::ui::meeting::Tab::Notes
+        ));
+        let mut view = rune::Runtime::new(
+            restarted,
+            crate::ui::view,
+            (960.0, 720.0),
+            rune::Env::default(),
+        );
+        view.frame(0.0);
+        let elements = view.elements();
+        assert!(
+            elements
+                .iter()
+                .any(|element| element.text.as_deref() == Some(text))
+        );
+        assert!(
+            !elements
+                .iter()
+                .any(|element| element.key.as_deref() == Some("meeting-generate"))
+        );
+        let mut restarted = view.state;
+        let idle = state.hex.engine.status_for_command().unwrap();
+        restarted.hex_apply(Msg::Status(Ok(idle)));
+        let restored = restarted.live.as_ref().unwrap().session.as_ref().unwrap();
+        assert_eq!(restored.id, id);
+        assert!(restored.parts.is_empty());
+        assert!(restarted.on_live());
+        assert_eq!(restarted.live_notes.text, text);
     }
 }
 

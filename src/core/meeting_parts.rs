@@ -79,35 +79,36 @@ pub fn owner(root: &Path, part: &str) -> io::Result<Option<Meeting>> {
         .into_iter()
         .find(|m| m.parts.iter().any(|p| p.id == part)))
 }
-/// A first Start that failed never produced a recording, so its pending record and view go away.
-/// A meeting that already has a part is kept.
-pub fn discard_pending(root: &Path, id: &str) -> io::Result<()> {
-    let Some(m) = read(root, id)? else {
-        return Ok(());
+/// Returns whether an unstarted meeting was discarded. Recorded parts and typed notes keep it.
+pub fn discard_pending(root: &Path, id: &str) -> io::Result<bool> {
+    // A save to this folder must either finish before the notes check or retry via recovery.
+    let _write = super::live::NOTES_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(mut m) = read(root, id)? else {
+        return Ok(false);
     };
     if !m.parts.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
-    std::fs::remove_file(path(root, id)?)?;
     let folder = inputs(root).join(id);
-    if !file_reads::directory(&folder) || folder.join(super::live::NOTES_FILE).try_exists()? {
-        return Ok(());
+    match std::fs::metadata(folder.join(super::live::NOTES_FILE)) {
+        Ok(meta) if meta.is_file() => {
+            if m.pending_start_ms.take().is_some() {
+                m.save(root)?;
+            }
+            return Ok(false);
+        }
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
     }
-    if let Err(error) = std::fs::remove_file(folder.join("manifest.json"))
+    if let Err(error) = std::fs::remove_dir_all(folder)
         && error.kind() != io::ErrorKind::NotFound
     {
         return Err(error);
     }
-    // A notes writer can publish while the pending record is being discarded.
-    if let Err(error) = std::fs::remove_dir(folder)
-        && !matches!(
-            error.kind(),
-            io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
-        )
-    {
-        return Err(error);
-    }
-    Ok(())
+    std::fs::remove_file(path(root, id)?)?;
+    Ok(true)
 }
 pub fn inputs(root: &Path) -> PathBuf {
     root.join("local/meeting-inputs")
@@ -248,6 +249,15 @@ impl Meeting {
     }
     /// Recovery never sends a recorder command or starts notes.
     pub fn restore(mut self, root: &Path, hex: &Path) -> io::Result<Self> {
+        if self.parts.is_empty()
+            && self.pending_start_ms.is_none()
+            && inputs(root)
+                .join(&self.id)
+                .join(super::live::NOTES_FILE)
+                .is_file()
+        {
+            return Ok(self);
+        }
         if let Some(since) = self.pending_start_ms {
             let mut found = Vec::new();
             for entry in file_reads::dir_iter(hex)?.take(file_reads::ENTRIES_MAX) {

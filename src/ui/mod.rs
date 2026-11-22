@@ -802,7 +802,16 @@ impl State {
         self.transcript_open = false;
         self.transcript_filter = TextEdit::new("");
         self.transcript_jump = TextEdit::new("");
-        self.meeting_tab = meeting::Tab::Summary;
+        self.meeting_tab = if self
+            .current()
+            .is_some_and(|m| !m.notes.is_empty() && !m.has_summary())
+            && core::meeting_parts::read(&core::state_dir(), id).is_ok_and(|m| {
+                m.is_some_and(|m| m.parts.is_empty() && m.pending_start_ms.is_none())
+            }) {
+            meeting::Tab::Notes
+        } else {
+            meeting::Tab::Summary
+        };
         self.more_menu = None;
         self.highlight = None;
         self.back = None;

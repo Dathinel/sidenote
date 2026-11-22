@@ -129,6 +129,7 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
     }
     if let Some(m) = m
         && m.phase != SavedPhase::Ended
+        && !m.parts.is_empty()
         && !recording
     {
         control = control.child(
