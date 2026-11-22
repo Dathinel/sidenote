@@ -100,6 +100,8 @@ if ($PreflightOnly) {
     exit 0
 }
 $env:PATH = "$GnuBin;" + $env:PATH
+# Child tools read this variable first, so the folder chosen here must win.
+$env:SIDENOTE_GNU_BIN = $GnuBin
 # Always this worktree's own build folder. A shared folder can hold another worktree's exe.
 $env:CARGO_TARGET_DIR = Join-Path $root 'target'
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
