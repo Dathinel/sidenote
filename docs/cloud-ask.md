@@ -69,6 +69,7 @@ asserts the actual HTTP request, fragmented SSE response and usage, and prints
 per-attempt first-visible-text/total milliseconds with first-text p50/p95. These
 numbers describe the loopback mock, not any cloud model's performance.
 
+Set `SIDENOTE_GNU_BIN` to your GNU toolchain's bin folder or put `gcc` on PATH.
 `python tools/render_settings_build.py --cloud-ask` writes dark synthetic Settings
 and Ask-label PNGs and element trees into `artifacts/settings-build`, without
 desktop interaction. The normal full render gate and settings-reachability gate

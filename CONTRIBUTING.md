@@ -90,17 +90,27 @@ SIDENOTE_DATA_DIR="$root/state" SIDENOTE_STATE_DIR="$root/state" SIDENOTE_HEX_DI
 
 ## Checks before a pull request
 
-Run these from the repo root. On Ubuntu, keep the two `export` lines from the first build.
+From the repo root, run `python3 -I tools/check.py` on Ubuntu or
+`python -I tools/check.py` on Windows. The script needs Python 3.8 or newer.
+Use `--list` to see the commands for your platform or `--fast` to run only
+the Python checks. Add `--test core::notes::` to run tests for the module you
+changed after the standard checks.
+
+The script runs the commands below in order. On Ubuntu, it sets the toolchain
+and build target from the first build section for Cargo. If you run the Cargo
+commands by hand on Ubuntu, keep the two `export` lines from that section.
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --locked --all-targets -- -D warnings
 cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
-cargo test --locked -p sidenote --lib core::notes::    # the module you changed
-python3 -I tools/prove_linux_boundaries.py . --self-test
-python3 -I tools/check_links.py
 cargo check --workspace --locked --tests                           # Windows only
 cargo check --workspace --locked --tests --features asr-runtime    # Windows only
+python3 -I tools/prove_linux_boundaries.py . --self-test
+python3 -I tools/check_links.py --self-test
+python3 -I tools/check_links.py
+python3 -I .github/ci_changes.py --self-test
+cargo test --locked -p sidenote --lib core::notes::                # with --test core::notes::
 ```
 
 In PowerShell, quote Cargo's separator (`'--'`) and use `python` for `python3`.

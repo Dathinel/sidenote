@@ -98,7 +98,8 @@ it is not echoed. Service stderr uses fixed categories and status values.
 
 Run `tools/prove_linux_step4.py <linux-binary> hub` and `server` only on the isolated
 Linux box with the step-2 credential provider. It generates synthetic meetings and
-disposable tokens under private temporary directories. It verifies transport,
+disposable tokens under private temporary directories. Set `SIDENOTE_PROOF_TMP`
+to use a proof workspace in place of the system temporary folder. It verifies transport,
 denial/revocation, queues, logs, restart and resource assertions. It does not
 execute models, use a real phone, touch installed Windows data or prove real
 Syncthing behavior. Run the server build with no desktop features.

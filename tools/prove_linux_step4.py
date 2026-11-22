@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Maintainer tool: used for releases and proofs, not needed to contribute.
 """Run only on an isolated Linux box. Synthetic data and disposable tokens only."""
 from http.client import HTTPConnection
 import json
@@ -61,7 +62,7 @@ def stop(process):
 
 
 def qualify(binary, role):
-    with tempfile.TemporaryDirectory(prefix="sidenote-step4-", dir="/home/boxes") as temp:
+    with tempfile.TemporaryDirectory(prefix="sidenote-step4-", dir=os.environ.get("SIDENOTE_PROOF_TMP") or None) as temp:
         base = Path(temp)
         root = base / "state"
         seed(root, "synthetic", role)
