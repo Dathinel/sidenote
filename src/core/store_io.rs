@@ -2,7 +2,10 @@
 use serde::{Serialize, de::DeserializeOwned};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
-use std::{fs, io, io::Write, path::Path};
+use std::{fs, io, io::Write, path::Path, time::Duration};
+
+const LOCK_RETRIES: usize = 4;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(crate) struct RelayFailure(pub &'static str, pub Option<i32>, pub Option<&'static str>);
@@ -105,7 +108,7 @@ fn checked_parent(path: &Path) -> io::Result<Parent> {
 #[cfg(windows)]
 pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     let _parent = checked_parent(path)?;
-    for attempt in 0..5 {
+    for attempt in 0..=LOCK_RETRIES {
         match fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -115,8 +118,8 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
             .custom_flags(0x00200000)
             .open(path)
         {
-            Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) && attempt < 4 => {
-                std::thread::sleep(std::time::Duration::from_millis(50))
+            Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) && attempt < LOCK_RETRIES => {
+                std::thread::sleep(LOCK_RETRY_DELAY)
             }
             Ok(file) => {
                 if !super::file_reads::regular(&file.metadata()?) {
@@ -333,10 +336,17 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     if !file.metadata()?.is_file() {
         return Err(invalid("Unsafe lock file"));
     }
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(io::Error::last_os_error());
+    for attempt in 0..=LOCK_RETRIES {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::WouldBlock || attempt == LOCK_RETRIES {
+            return Err(error);
+        }
+        std::thread::sleep(LOCK_RETRY_DELAY);
     }
-    Ok(file)
+    unreachable!()
 }
 #[cfg(unix)]
 fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
