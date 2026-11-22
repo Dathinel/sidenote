@@ -86,6 +86,26 @@ def render(job):
    assert 'meeting-grid' not in rects,base.name
   for key,(x,y,w,h) in rects.items():
    if key.startswith('meeting-'):assert x>=0 and x+w<=width,(base.name,key,x,w)
+ if name.startswith('meeting-refine-p8-') and name.endswith('-after'):
+  rects={e['key']:e['rect'] for e in tree['elements'] if e.get('key')}
+  # Nothing of the meeting page runs past the window, on either side.
+  for key,(x,y,w,h) in rects.items():
+   if key.startswith(('meeting-','more-meeting-')):assert x>=0 and x+w<=width,(base.name,key,x,w)
+  facts=('meeting-view','meeting-facts','meeting-people','meeting-title')
+  assert all(key in rects for key in facts),(base.name,[key for key in facts if key not in rects])
+  assert any(key.startswith('more-meeting-') and key.endswith('-button') for key in rects),base.name
+  numbers=dict(title=rects['meeting-title'][:4],header=rects['meeting-header'][:4],view=rects['meeting-view'][:4])
+  if width==390:
+   # Phone: two meta lines, the second under the first, and the Sections slot after the project.
+   assert rects['meeting-people'][1]>rects['meeting-view'][1]+rects['meeting-view'][3]-1,(base.name,numbers)
+   assert 'meeting-sections-slot' in rects,base.name
+   print(base.name,numbers,flush=True)
+  if width==1024:
+   main,strip=rects['meeting-main'],rects['meeting-grid-strip']
+   numbers=dict(strip=strip[2],column=main[2],header=(rects['meeting-header'][0]-main[0],rects['meeting-header'][2]))
+   print(base.name,numbers,flush=True)
+   assert numbers==dict(strip=44,column=640,header=(0,640)),(base.name,numbers)
+   assert 'meeting-tasks-column' not in rects,base.name
  if scene.startswith('settings-engine'):
   keys={n.get('key') for n in tree['elements']}
   need={'engine-unused','engine-worker-threads-input','engine-transcription-save','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-step-tasks-switch','engine-step-comparison-switch','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-reset'}
@@ -220,6 +240,21 @@ def refine_p7(phase, output, exe):
     render((f'meeting-refine-p7-{scene}-{phase}', f'screens-{scene}', width, theme, 900, None))
 
 
+def refine_p8(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-narrow-render-') as state:
+  STATE = Path(state)
+  # The narrow layouts: the phone, then 1024 where the tasks sit under the notes. "clean" has no
+  # failed job, "retry" has the tasks notice, "recording-clean" is the meeting while it records.
+  for scene, kind in (('clean', 'screens-summary'), ('retry', 'screens-summary'), ('recording-clean', 'screens-recording')):
+   for width, theme, height in ((390, 'dark', 2400), (390, 'light', 2400), (1024, 'dark', 1600)):
+    render((f'meeting-refine-p8-{scene}-{phase}', kind, width, theme, height, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -231,6 +266,7 @@ def main():
  modes.add_argument('--refine-p5',choices=['before','after'])
  modes.add_argument('--refine-p6',choices=['before','after'])
  modes.add_argument('--refine-p7',choices=['before','after'])
+ modes.add_argument('--refine-p8',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -248,6 +284,8 @@ def main():
   return refine_p6(args.refine_p6,args.output,args.exe)
  if args.refine_p7:
   return refine_p7(args.refine_p7,args.output,args.exe)
+ if args.refine_p8:
+  return refine_p8(args.refine_p8,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()
