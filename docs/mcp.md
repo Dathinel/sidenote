@@ -134,7 +134,7 @@ Exports follow the selected state root. Background logs use `<state-root>\sideno
 unless the old `%LOCALAPPDATA%\hex-meeting-watch.log` exists and the new log does
 not. Explicit data overrides also isolate logs under that root. Existing client registration names
 such as `meetings` still work when their command points at an available executable.
-See [rename-migration.md](rename-migration.md) before updating a live install.
+See [rename-migration.md](internal/rename-migration.md) before updating a live install.
 
 With an explicit data folder and no peer override, peers default to `<data-dir>\peers` to keep an isolated
 instance from reading the owner's normal peer data. The meetings folder is independent;

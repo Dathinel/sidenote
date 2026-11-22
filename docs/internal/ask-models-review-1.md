@@ -69,7 +69,7 @@ All commits carry the requested co-author trailer. No push or version bump was p
 
 Offscreen coverage: 100 Settings captures, 28 Ask/model-menu captures at both 1280x800 and 640x800 in light and dark, five thinking-preference captures and five offered/custom-model captures. Every PNG has a matching element tree. The artifact verifier checks all 138 sizes, absence of layout warnings and visible helper wording, and writes SHA-256 receipts. Legacy settings reachability checks all 44 keys. The existing Settings layout and slash-shortcut assertions pass.
 
-Requested PNGs are under `E:\Personal-Projects\hex-meetings\.worktrees\ask-models\artifacts\ask-models-round1`:
+Requested PNGs are under `<repo>/artifacts/ask-models-round1`:
 
 - `models-and-agents-1280-light.png`
 - `ask-in-meeting-1280-dark.png`
@@ -86,6 +86,6 @@ Final gates, using the GNU toolchain and this worktree's target directory:
 | `cargo test --workspace --locked` | PASS, 201 tests, zero ignored | 22.18 |
 | `cargo test --workspace --locked --features asr-runtime` | PASS, 201 tests, zero ignored | 36.51 |
 | `cargo build --locked` | PASS, exit 0 | 22.45 |
-| `python tools/mcp-smoke.py E:\Personal-Projects\hex-meetings\.worktrees\ask-models\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 1.24 |
+| `python tools/mcp-smoke.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 | 1.24 |
 
 The MCP smoke test reports JSON-RPC-only stdout, empty stderr and unchanged synthetic fixture files. No hook or gate was skipped. All renders use the final gate-built executable and isolated synthetic state; no owner window or input was used.

@@ -1,6 +1,6 @@
 # Sidenote relay
 
-Decisions needed: none for slice 1. Copied from synccore-r1 (461afde). The app integration contract and release gates are in [sync-relay-integration.md](../docs/sync-relay-integration.md). No deployment or account login is performed by this slice.
+Decisions needed: none for slice 1. Copied from synccore-r1 (461afde). The app integration contract and release gates are in [sync-relay-integration.md](../docs/internal/sync-relay-integration.md). No deployment or account login is performed by this slice.
 
 ## Self-hosting
 

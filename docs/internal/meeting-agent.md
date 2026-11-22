@@ -58,7 +58,7 @@ Six provider turns in total, all synthetic. Measurements use the production live
 
 Final warming took 14.415 seconds from initialization through the synthetic Ready result. The final question clock starts after readiness. A question submitted earlier waits for any remaining warm-up. This avoids paying that provider start on the first question once warming has finished. No meeting text is used for priming.
 
-Call ledger: cold Codex question; reused Codex question; first question after protocol-only prewarm; Claude fallback question after a missing Codex executable; one synthetic Codex Ready turn; first question after Ready. Exactly six model requests, with no additional help or model-answer calls. Missing-executable resolution makes no provider request. The first four results are in meeting-agent-timings.json; the final two-turn proof is in meeting-agent-primed-timing.json. Both probes stopped their process trees cleanly.
+Call ledger: cold Codex question; reused Codex question; first question after protocol-only prewarm; Claude fallback question after a missing Codex executable; one synthetic Codex Ready turn; first question after Ready. Exactly six model requests, with no additional help or model-answer calls. Missing-executable resolution makes no provider request. The first four results are in ../meeting-agent-timings.json; the final two-turn proof is in ../meeting-agent-primed-timing.json. Both probes stopped their process trees cleanly.
 
 ## Final gates
 
@@ -72,8 +72,8 @@ All use this worktree's target directory with w64devkit first on PATH. Automated
 | `cargo test --workspace --locked` | PASS, exit 0 | 142.62 |
 | `cargo test --workspace --locked --features asr-runtime` | PASS, exit 0 | 120.38 |
 | `cargo build --locked` | PASS, exit 0 | 49.64 |
-| `python tools/mcp-smoke.py E:\Personal-Projects\hex-meetings\.worktrees\meeting-agent\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 1.81 |
-| `python tools/verify-meeting-agent.py E:\Personal-Projects\hex-meetings\.worktrees\meeting-agent\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 94.19 |
+| `python tools/mcp-smoke.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 | 1.81 |
+| `python tools/verify-meeting-agent.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 | 94.19 |
 
 Each Rust test configuration passed 261 tests: 1 domain unit test, 14 domain integration tests, 196 app library tests and 50 UI tests. Isolated child tests are not counted twice. Both Clippy configurations denied warnings. MCP smoke verified nine tool schemas, JSON-RPC-only stdout, empty stderr and unchanged synthetic fixture files.
 
@@ -98,7 +98,7 @@ Requested PNGs, relative to this worktree:
 
 The signed-out failure policy, cancellation, meeting ending during an answer, selection changes, idle boundaries and retention of a newer draft are covered by automated tests. No account was signed out, no real recording was used, and no two-minute real-time idle recording was performed. No owner-screen input or visible app window was used.
 
-The synthetic probe also exposed invalid live citation ids and missing citations. This remains outside the latency change and is recorded in https://github.com/harshanandak/hex-meetings/issues/3, re-fetched and verified open.
+The synthetic probe also exposed invalid live citation ids and missing citations. This remains outside the latency change and is recorded in `https://github.com/<account>/hex-meetings/issues/3`, re-fetched and verified open.
 
 ## Delivery
 
@@ -132,7 +132,7 @@ Queued Codex warm-up work emits a starting progress event without changing the s
 | `cargo test --workspace --locked` | PASS, exit 0 | 451.08 |
 | `cargo test --workspace --locked --features asr-runtime` | PASS, exit 0 | 727.97 |
 | `cargo build --locked` | PASS, exit 0 | 192.03 |
-| `python tools/mcp-smoke.py E:\Personal-Projects\hex-meetings\.worktrees\meeting-agent\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 2.12 |
+| `python tools/mcp-smoke.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 | 2.12 |
 | `python artifacts/meeting-agent/round1-fixes/gates/verify-focused.py` | PASS, exit 0 | 81.66 |
 
 Both test configurations passed 263 tests: 1 domain unit test, 14 domain integration tests, 198 app library tests and 50 UI tests. All 49 legacy expectations are unchanged. There were no Rust test, formatting, Clippy, build or MCP smoke failures this round. Automated checks are rung 4 evidence.

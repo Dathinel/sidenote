@@ -1,6 +1,6 @@
 # Relay integration
 
-Security follow-up contract: `docs/sync-relay-security-fixes.md` (review at 030a513).
+Security follow-up contract: `docs/internal/sync-relay-security-fixes.md` (review at 030a513).
 
 ## Slice 5 local qualification: threat model and contract
 
@@ -41,7 +41,7 @@ windows. Stop at a clean commit around 60 minutes and report unfinished work.
 
 
 Decisions needed: none. Slice 1 contract and evidence are retained below.
-Slice 2 is authorized on dev.13 at d85f637; see docs/sync-relay-2.md for its contract.
+Slice 2 is authorized on dev.13 at d85f637; see docs/internal/sync-relay-2.md for its contract.
 Base: settings at 74150f0, version 0.0.1-dev.10. Core source: synccore-r1
 at 461afde. The owner requires folder sync, independent offline field edits,
 two-instance and two-device qualification, self-hosting and independent review.
@@ -209,7 +209,7 @@ Round 1 UI acceptance (28fc734). Slices 3 and 4 are accepted; slice 5 local qual
 
 Slices 1 and 2 passed the recorded local gates. The initial provisioned pairing
 fixture was replaced in slice 2 with the real confirmed pairing flow. See
-`docs/sync-relay-2.md` for the accepted receipts. Local automated evidence is
+`docs/internal/sync-relay-2.md` for the accepted receipts. Local automated evidence is
 rung 4 and does not replace physical-device or independent security qualification.
 
 ## Accepted slice 3
@@ -245,5 +245,5 @@ physical devices and independent security review remain owner release gates.
 
 The UI fixes, optimized two-capability release proof, crash recovery,
 adversarial protocol cases and three-peer rotation are recorded in
-`docs/sync-relay-release-gates.md`. Evidence is local, rung 4. See that receipt
+`docs/internal/sync-relay-release-gates.md`. Evidence is local, rung 4. See that receipt
 for the gate results, artifact paths and the three owner release gates.

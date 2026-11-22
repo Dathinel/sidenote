@@ -53,7 +53,7 @@ real app data, pipeline scripts, scheduled tasks, listener or MCP registrations.
   and command using the client's MCP listing. First point that registration at the
   new executable with `--mcp`; its client-side name can remain `meetings`. If the
   owner wants the name `sidenote`, remove the old registration in that same scope
-  and add `sidenote` using the command in [mcp.md](mcp.md). Verify tools load once.
+  and add `sidenote` using the command in [mcp.md](../mcp.md). Verify tools load once.
 - [ ] Codex currently uses `meetings`. Record the existing `[mcp_servers.meetings]`
   command and arguments without exposing secrets. Update its executable path and
   keep `--mcp`. To adopt the new name, change the table to `[mcp_servers.sidenote]`
