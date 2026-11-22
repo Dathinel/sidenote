@@ -1556,6 +1556,38 @@ fn meeting_language_status_has_no_task_sorting_title() {
     assert!(texts.contains(&"Not added to projects yet."));
 }
 
+/// A finished-notes job record for the invented meeting: "done", with these two flags.
+fn write_done_job(fallback: bool, tasks_failed: bool) {
+    let dir = core::state_dir().join("local/notes-jobs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let job = serde_json::json!({
+        "state": "done", "fallback": fallback, "tasks_failed": tasks_failed,
+        "transcript_revision": "a".repeat(64), "routing_fallbacks": [],
+    });
+    std::fs::write(dir.join(format!("{MEETING}.json")), job.to_string()).unwrap();
+}
+
+#[test]
+fn a_tabbed_meeting_names_the_tasks_notice_with_a_heading() {
+    if in_parent("a_tabbed_meeting_names_the_tasks_notice_with_a_heading") {
+        return;
+    }
+    let mut rt = page_with(DEFAULT_SIZE, || write_done_job(false, true));
+    rt.update(|s, _| s.meeting_ui.tabs = true);
+    rt.settle_all();
+    rt.frame(0.0);
+    // The heading's text is in a child of the keyed element.
+    let root = format!("{}/", element(&rt, "sec-todo").path);
+    let elements = rt.elements();
+    assert!(
+        elements
+            .iter()
+            .any(|e| e.path.starts_with(&root) && e.text.as_deref() == Some("Tasks"))
+    );
+    let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
+    assert!(texts.contains(&"Not added to projects yet."));
+}
+
 #[test]
 fn a_summary_stamped_english_only_shows_the_note() {
     if in_parent("a_summary_stamped_english_only_shows_the_note") {

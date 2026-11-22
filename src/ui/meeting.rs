@@ -894,8 +894,11 @@ fn summary_sections(s: &State, m: &Meeting, p: Palette, mut body: El) -> El {
             .child(heading("Tasks", Some(summary.todo.len()), "sec-todo", p))
             .children(super::notes_status::tasks_notice(s, m, p))
             .child(todo::section(s, m, p));
-    } else if !is_draft {
-        body = body.children(super::notes_status::tasks_notice(s, m, p));
+    } else if !is_draft && let Some(notice) = super::notes_status::tasks_notice(s, m, p) {
+        // The notice needs its subject: a bare "Not added to projects yet." has no heading above.
+        body = body
+            .child(heading("Tasks", None, "sec-todo", p))
+            .child(notice);
     }
 
     if !summary.to_settle.is_empty() {
