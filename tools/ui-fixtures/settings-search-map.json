@@ -699,7 +699,7 @@
   {
     "key": "meeting-icon-capture",
     "owner": "Sidenote",
-    "home": "Meetings / Recording",
+    "home": "General / Meeting icon",
     "preserve_controls": [
       "meeting-icon-capture-toggle"
     ],

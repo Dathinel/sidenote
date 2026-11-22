@@ -1129,7 +1129,7 @@ fn meeting_icon_capture_destination() -> Destination {
         MEETING_ICON_CAPTURE,
         MEETING_ICON_CAPTURE_LABEL,
         "floating indicator capture",
-        Page::Meetings,
+        Page::General,
         0,
         false,
     )
@@ -2381,6 +2381,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::General, _) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
+            .children(cfg!(windows).then(|| card("Meeting icon", meeting_icon_capture(s, k, p), p)))
             .child(card(
                 "Sidebar features",
                 col()
@@ -2424,7 +2425,6 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     ),
                 )
             }))
-            .children(cfg!(windows).then(|| card("Meeting icon", meeting_icon_capture(s, k, p), p)))
             .child(hex_group(
                 2,
                 card(
@@ -3329,7 +3329,7 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    fn meeting_icon_capture_aliases_jump_to_recording_switch() {
+    fn meeting_icon_capture_aliases_jump_to_general_settings() {
         let mut s = State::new();
         for query in [
             "screenshot",
@@ -3344,17 +3344,19 @@ mod tests {
             "hide icon",
             "show icon",
         ] {
+            navigate(&mut s, Page::Meetings, 0);
             s.hex.filter = TextEdit::new(query);
             let destination = results(&s)
                 .into_iter()
                 .find(|entry| entry.key == MEETING_ICON_CAPTURE)
                 .unwrap_or_else(|| panic!("Missing meeting icon result for {query}"));
             jump(&mut s, destination);
-            assert_eq!(active(&s), (Page::Meetings, 0), "{query}");
+            assert_eq!(active(&s), (Page::General, 0), "{query}");
             assert_eq!(
                 s.hex.shell.highlighted.as_ref().unwrap().0,
                 MEETING_ICON_CAPTURE
             );
+            assert_eq!(s.pending_scroll.as_ref().unwrap().key, MEETING_ICON_CAPTURE);
         }
     }
 
