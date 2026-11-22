@@ -98,6 +98,7 @@ cargo clippy --workspace --locked --all-targets -- -D warnings
 cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
 cargo test --locked -p sidenote --lib core::notes::    # the module you changed
 python3 -I tools/prove_linux_boundaries.py . --self-test
+python3 -I tools/check_links.py
 cargo check --workspace --locked --tests                           # Windows only
 cargo check --workspace --locked --tests --features asr-runtime    # Windows only
 ```

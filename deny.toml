@@ -1,0 +1,10 @@
+[advisories]
+unmaintained = "all"
+ignore = [
+    { id = "RUSTSEC-2026-0548", reason = "Velopack selects and reads entries by index without the streaming extractor. Evidence: source review at da5a76d6, no runtime test." },
+    { id = "RUSTSEC-2026-0429", reason = "Velopack copies indexed entries itself without ZipArchive::extract, which contains the symlink allocation. Evidence: source review at da5a76d6, no runtime test." },
+    { id = "RUSTSEC-2026-0545", reason = "Velopack disables zip default features and enables deflate only, so AES support is not compiled. Evidence: source review at da5a76d6, no runtime test." },
+    { id = "RUSTSEC-2026-0367", reason = "Zip is a Windows-only dependency through Velopack, and its privileged Unix permission preservation is not used. Evidence: source review at da5a76d6, no runtime test." },
+    { id = "RUSTSEC-2026-0368", reason = "Velopack copies indexed entries itself and never calls the zip bulk extractor that creates these symlinks. Evidence: source review at da5a76d6, no runtime test." },
+    { id = "RUSTSEC-2026-0369", reason = "Zip is a Windows-only dependency through Velopack, which uses neither extractor that applies Unix permissions through symlinks. Evidence: source review at da5a76d6, no runtime test." },
+]
