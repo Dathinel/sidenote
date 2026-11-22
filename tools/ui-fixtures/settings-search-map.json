@@ -695,5 +695,28 @@
       "ask-chat-thinking-trigger"
     ],
     "target": "ask-chat-thinking-row"
+  },
+  {
+    "key": "meeting-icon-capture",
+    "owner": "Sidenote",
+    "home": "Meetings / Recording",
+    "preserve_controls": [
+      "meeting-icon-capture-toggle"
+    ],
+    "search_aliases": [
+      "meeting-icon-capture",
+      "screenshot",
+      "screenshots",
+      "screen recording",
+      "recording",
+      "screen share",
+      "sharing",
+      "nub",
+      "meeting icon",
+      "floating icon",
+      "hide icon",
+      "show icon"
+    ],
+    "target": "meeting-icon-capture"
   }
 ]

@@ -1124,17 +1124,21 @@ fn app_index() -> Vec<Destination> {
 const MEETING_ICON_CAPTURE: &str = "meeting-icon-capture";
 const MEETING_ICON_CAPTURE_LABEL: &str = "Show the meeting icon in screenshots and recordings";
 
+fn meeting_icon_capture_destination() -> Destination {
+    entry(
+        MEETING_ICON_CAPTURE,
+        MEETING_ICON_CAPTURE_LABEL,
+        "floating indicator capture",
+        Page::Meetings,
+        0,
+        false,
+    )
+}
+
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
     if cfg!(windows) {
-        entries.push(entry(
-            MEETING_ICON_CAPTURE,
-            MEETING_ICON_CAPTURE_LABEL,
-            "screen recording screen sharing floating indicator capture",
-            Page::Meetings,
-            0,
-            false,
-        ));
+        entries.push(meeting_icon_capture_destination());
     }
     entries.push(entry(
         "relay-preview",
@@ -2343,32 +2347,27 @@ fn meeting_icon_capture(s: &State, k: &Kit, p: Palette) -> El {
         s,
         MEETING_ICON_CAPTURE,
         MEETING_ICON_CAPTURE_LABEL,
-        "When on, the icon and its open card can appear in screen recordings and be seen by people you share your screen with.",
-        Switch::new(s.config.meeting_icon_in_captures)
-            .label(MEETING_ICON_CAPTURE_LABEL)
-            .hide_label()
-            .on_toggle(|s: &mut State| {
-                let visible = !s.config.meeting_icon_in_captures;
-                let result =
-                    sidenote::core::Config::load_in(&s.store.root).and_then(|mut config| {
-                        config.meeting_icon_in_captures = visible;
-                        config.save(&s.store.root)?;
-                        Ok(config)
-                    });
-                match result {
-                    Ok(config) => {
-                        s.config = config;
-                        s.feature_error = None;
-                        s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
-                    }
-                    Err(_) => {
-                        s.feature_error =
-                            Some("Could not save the meeting icon setting. Try again.".into())
-                    }
+        "The meeting icon and its card are hidden from screenshots by default to keep meetings private.",
+        Switch::new(sidenote::core::Config::meeting_icon_capture_allowed(
+            &s.store.root,
+        ))
+        .label(MEETING_ICON_CAPTURE_LABEL)
+        .hide_label()
+        .on_toggle(|s: &mut State| {
+            match sidenote::core::Config::toggle_meeting_icon_capture(&s.store.root) {
+                Ok(config) => {
+                    s.config = config;
+                    s.feature_error = None;
+                    s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                 }
-            })
-            .build(k)
-            .key("meeting-icon-capture-toggle"),
+                Err(_) => {
+                    s.feature_error =
+                        Some("Could not save the meeting icon setting. Try again.".into())
+                }
+            }
+        })
+        .build(k)
+        .key("meeting-icon-capture-toggle"),
         true,
         p,
     )
@@ -3278,16 +3277,17 @@ mod tests {
         }
     }
     #[test]
-    fn approved_legacy_search_map_keeps_all_49_destinations() {
+    fn approved_search_map_keeps_all_destinations() {
         let map: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tools/ui-fixtures/settings-search-map.json"
         ))
         .unwrap();
         let rows = map.as_array().unwrap();
-        assert_eq!(rows.len(), 49);
+        assert_eq!(rows.len(), 50);
         let fixture: Fixture =
             serde_json::from_str(include_str!("../../../tools/ui-fixtures/hex.json")).unwrap();
         let mut entries = app_index();
+        entries.push(meeting_icon_capture_destination());
         for st in fixture.settings {
             let (page, tab, advanced) = location(&st);
             let key = if matches!(
@@ -3327,6 +3327,37 @@ mod tests {
             );
         }
     }
+    #[cfg(windows)]
+    #[test]
+    fn meeting_icon_capture_aliases_jump_to_recording_switch() {
+        let mut s = State::new();
+        for query in [
+            "screenshot",
+            "screenshots",
+            "screen recording",
+            "recording",
+            "screen share",
+            "sharing",
+            "nub",
+            "meeting icon",
+            "floating icon",
+            "hide icon",
+            "show icon",
+        ] {
+            s.hex.filter = TextEdit::new(query);
+            let destination = results(&s)
+                .into_iter()
+                .find(|entry| entry.key == MEETING_ICON_CAPTURE)
+                .unwrap_or_else(|| panic!("Missing meeting icon result for {query}"));
+            jump(&mut s, destination);
+            assert_eq!(active(&s), (Page::Meetings, 0), "{query}");
+            assert_eq!(
+                s.hex.shell.highlighted.as_ref().unwrap().0,
+                MEETING_ICON_CAPTURE
+            );
+        }
+    }
+
     #[test]
     fn ask_rows_have_distinct_requested_lucide_icons_at_the_shared_stroke() {
         let rows = [

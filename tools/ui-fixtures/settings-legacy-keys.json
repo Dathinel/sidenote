@@ -157,6 +157,9 @@
     ],
     "ask_chat_thinking": [
       "ask-chat-thinking-trigger"
+    ],
+    "meeting-icon-capture": [
+      "meeting-icon-capture-toggle"
     ]
   }
 }
