@@ -3337,12 +3337,12 @@ mod tests {
         ];
         let mut seen = HashSet::new();
         seen.insert(Page::Helpers.icon().name);
-        assert_eq!(icons::STROKE_WIDTH, 2.25);
+        assert_eq!(icons::STROKE_WIDTH, 2.0);
         for (key, name) in rows {
             let icon = row_icon(key);
             assert_eq!(icon.name, name);
             assert!(seen.insert(icon.name));
-            assert!(icon.body.contains("stroke-width=\"2.25\""));
+            assert!(icon.body.contains("stroke-width=\"2\""));
         }
     }
     #[test]
@@ -3405,7 +3405,7 @@ mod tests {
             assert_ne!(icon.name, icons::MEETINGS.name);
         }
         assert_eq!(row_icon("meetings.auto_start").name, "lucide-phone-call");
-        assert_eq!(row_icon("notes-identity").name, "lucide-user");
+        assert_eq!(row_icon("notes-identity").name, "lucide-user-round");
         assert_eq!(row_icon("summary-template").name, "lucide-file-text");
     }
     #[test]
