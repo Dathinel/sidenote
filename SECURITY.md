@@ -1,9 +1,8 @@
 # Security
 
 Report vulnerabilities privately through this repository's GitHub **Security >
-Advisories > Report a vulnerability** form. The repository maintainer must enable
-private vulnerability reporting before publication. If the form is unavailable,
-wait for a private channel rather than opening a public issue with sensitive details.
+Advisories > Report a vulnerability** form. Do not open a public issue with
+sensitive details.
 
 Include a minimal reproduction using synthetic meeting data, the affected version,
 and expected versus actual behavior. Never include credentials or real transcripts.
