@@ -73,6 +73,17 @@ def render(job):
   assert elements['meeting-source-pt-0-1']['opacity']==int(name.endswith('-time')),base.name
   assert elements['help-hint-model-tip']['opacity']==int(name.endswith('-hint')),base.name
   assert ('meeting-engine-status' in elements)==name.endswith('-status'),base.name
+ if name.startswith('meeting-refine-p6-') and name.endswith('-after'):
+  rects={e['key']:e['rect'] for e in tree['elements'] if e.get('key')}
+  if width>=1334:
+   strip,main,tasks=rects['meeting-grid-strip'],rects['meeting-main'],rects['meeting-tasks-column']
+   numbers=dict(strip=strip[2],column=main[2],gap=tasks[0]-(main[0]+main[2]),tasks=tasks[2],header=rects['meeting-header'][2],ask=rects['ask-pill'][2],fade=rects['meeting-scroll-fade'][3])
+   print(base.name,numbers,flush=True)
+   assert numbers==dict(strip=44,column=640,gap=40,tasks=300,header=640,ask=640,fade=150),(base.name,numbers)
+  else:
+   assert 'meeting-grid' not in rects,base.name
+  for key,(x,y,w,h) in rects.items():
+   if key.startswith('meeting-'):assert x>=0 and x+w<=width,(base.name,key,x,w)
  if scene.startswith('settings-engine'):
   keys={n.get('key') for n in tree['elements']}
   need={'engine-unused','engine-worker-threads-input','engine-transcription-save','engine-model-te-input','engine-model-hi-value','engine-notes-writer-status','engine-notes-writer-change','engine-notes-model-status','engine-step-models-save','engine-step-tasks-switch','engine-step-comparison-switch','engine-import-button','engine-prompt-notes-input','engine-prompt-notes-reset','engine-prompt-translation-reset'}
@@ -178,6 +189,21 @@ def refine_p5(phase, output, exe):
     render((f'meeting-refine-p5-{scene}-{phase}', 'screens-summary', width, theme, 2400 if width == 390 else 900, None))
 
 
+def refine_p6(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-grid-render-') as state:
+  STATE = Path(state)
+  # The grid at three desktop and phone sizes, and 1024 where the tasks sit under the notes.
+  # "banner" is a bordered notes banner under the last row. Tall renders show the stacked tasks.
+  for scene in ('clean',):
+   for width, theme, height in ((1334, 'dark', 900), (1334, 'light', 900), (390, 'dark', 2400), (1024, 'dark', 1600)):
+    render((f'meeting-refine-p6-{scene}-{phase}', 'screens-summary', width, theme, height, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -187,6 +213,7 @@ def main():
  modes.add_argument('--refine-p3',choices=['before','after'])
  modes.add_argument('--refine-p4',choices=['before','after'])
  modes.add_argument('--refine-p5',choices=['before','after'])
+ modes.add_argument('--refine-p6',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -200,6 +227,8 @@ def main():
   return refine_p4(args.refine_p4,args.output,args.exe)
  if args.refine_p5:
   return refine_p5(args.refine_p5,args.output,args.exe)
+ if args.refine_p6:
+  return refine_p6(args.refine_p6,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()

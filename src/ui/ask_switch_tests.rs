@@ -1380,6 +1380,71 @@ fn the_ask_bar_starts_at_the_notes_column_at_the_default_width() {
     );
 }
 
+#[test]
+fn meeting_grid_is_a_44_strip_640_notes_40_gap_and_300_tasks() {
+    if in_parent("meeting_grid_is_a_44_strip_640_notes_40_gap_and_300_tasks") {
+        return;
+    }
+    let mut rt = page_with_tasks((1334.0, 900.0));
+    rt.settle_all();
+    rt.frame(0.0);
+    let rect =
+        |rt: &Runtime<State>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key}")).0;
+    let (grid, strip, main, tasks) = (
+        rect(&rt, "meeting-grid"),
+        rect(&rt, "meeting-grid-strip"),
+        rect(&rt, "meeting-main"),
+        rect(&rt, "meeting-tasks-column"),
+    );
+    assert_eq!(strip[2], 44.0, "strip");
+    assert_eq!(main[2], 640.0, "notes column");
+    assert_eq!(tasks[2], 300.0, "tasks column");
+    assert_eq!(
+        strip[0] + strip[2],
+        main[0],
+        "the strip sits left of the notes"
+    );
+    assert_eq!(tasks[0] - (main[0] + main[2]), 40.0, "gap");
+    // Centred with 16 kept at the right, and nothing past the window.
+    let left = grid[0] - nav::width(&rt.state);
+    let right = 1334.0 - (grid[0] + grid[2]);
+    assert_eq!((grid[2], right - left), (1024.0, 16.0), "grid {grid:?}");
+    // The header's title and controls are in the notes column.
+    let head = rect(&rt, "meeting-header");
+    assert_eq!((head[0], head[2]), (main[0], 640.0), "header");
+    // The Ask bar is the notes column wide and starts where it does; the fade is 150 tall.
+    let pill = rect(&rt, "ask-pill");
+    assert_eq!((pill[0], pill[2]), (main[0], 640.0), "Ask bar");
+    assert_eq!(rect(&rt, "meeting-scroll-fade")[3], 150.0, "fade");
+    // The transcript sheet rises inside the notes column.
+    rt.update(|s, _| s.transcript_open = true);
+    rt.frame(0.2);
+    rt.settle_all();
+    let sheet = rect(&rt, "meeting-transcript-surface");
+    assert_eq!((sheet[0], sheet[2]), (main[0], 640.0), "transcript sheet");
+}
+
+#[test]
+fn meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows() {
+    if in_parent("meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows") {
+        return;
+    }
+    // 1024 wide leaves 775 beside the sidebar: less than the 1024 grid plus its 16.
+    let rt = page_with_tasks((1024.0, 800.0));
+    assert!(rt.find("meeting-grid").is_none());
+    let header = rect_of(&rt, "meeting-header");
+    assert!(rect_of(&rt, "meeting-task-0")[1] >= header[1] + header[3]);
+    for e in rt.elements() {
+        let key = e.key.as_deref().unwrap_or_default();
+        if key.starts_with("meeting-") {
+            assert!(
+                e.rect[0] + e.rect[2] <= 1024.0,
+                "{key} runs past the window"
+            );
+        }
+    }
+}
+
 /// Writes a summary with this `made_by` record into `folder`.
 fn stamped_summary(folder: &std::path::Path, made_by: Option<serde_json::Value>) {
     let path = folder.join("english-summary.json");

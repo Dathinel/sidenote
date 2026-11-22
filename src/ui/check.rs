@@ -9,7 +9,7 @@ use super::{
     ask::{cite_time, link_citations},
     diary,
     list::text_title,
-    meeting::COLUMN,
+    meeting::PAGE_COLUMN,
     roles,
     tasks::{button, cap, chevron, pill, prop_row, value_button},
     theme::Palette,
@@ -2046,7 +2046,7 @@ pub fn source_row(s: &State, e: &str, key: String, p: Palette) -> El {
             .label(format!("Open the meeting: {shown}"))
             .help("Open the meeting at that line")
             .w_full()
-            .max_w(COLUMN)
+            .max_w(PAGE_COLUMN)
             .min_w(0.0)
             .px(4.0)
             .py(1.0)

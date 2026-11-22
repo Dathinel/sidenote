@@ -372,7 +372,8 @@ pub(super) fn status_chip(
     )
 }
 
-fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
+/// `side` is the page gutter; the wide page puts the header in the notes column and passes 0.
+fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Vec<El>) -> El {
     let people = m.summary.people.len();
     let mut controls = row()
         .key("meeting-controls")
@@ -405,7 +406,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> E
         .key("meeting-header")
         .w_full()
         .gap(12.0)
-        .px(24.0)
+        .px(side)
         .pt(18.0)
         .pb(22.0)
         .child(
@@ -813,7 +814,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let Some(m) = s.current() else {
         return col();
     };
-    let wide = s.app_w.get() - crate::ui::nav::width(s) >= 980.0;
+    let wide = super::wide(s);
+    // The wide grid already sets the notes 44 points in from its edge, so its column has no
+    // gutter of its own; below the grid's width the notes keep the page gutter.
+    let side = if wide { 0.0 } else { SIDE };
     let mut doc = narrative(s, m, p);
     if !wide {
         doc = doc.child(rail(s, k, m, p, layer).mx(-8.0).mt(24.0));
@@ -828,38 +832,41 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 false
             }
         })
-        .grow(1.0)
-        .min_w(0.0)
-        .min_h(0.0)
-        .child(
-            col()
-                .key("meeting-scroll-frame")
-                .w_full()
-                .grow(1.0)
-                .min_w(0.0)
-                .min_h(0.0)
-                .child(
-                    scroll(
-                        doc.max_w(COLUMN)
-                            .px(24.0)
-                            .pt(6.0)
-                            .pb(s.overlay_h.get() + 32.0),
-                        "meeting-scroll",
-                    )
-                    .grow(1.0),
+        .min_h(0.0);
+    main = if wide {
+        main.w(COLUMN).min_w(COLUMN).max_w(COLUMN)
+    } else {
+        main.grow(1.0).min_w(0.0)
+    };
+    main = main.child(
+        col()
+            .key("meeting-scroll-frame")
+            .w_full()
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0)
+            .child(
+                scroll(
+                    doc.max_w(COLUMN + 2.0 * side)
+                        .px(side)
+                        .pt(6.0)
+                        .pb(s.overlay_h.get() + 32.0),
+                    "meeting-scroll",
                 )
-                // The page fades into the Ask bar, so a chip at the cut edge never shows as a
-                // sliver of a bar.
-                .child(
-                    el().key("meeting-scroll-fade")
-                        .pin(Some(0.0), None, Some(0.0), Some(0.0))
-                        .h(28.0)
-                        .linear_gradient(
-                            std::f32::consts::PI,
-                            [(0.0, p.bg.alpha(0.0)), (1.0, p.bg)],
-                        ),
-                ),
-        );
+                .grow(1.0),
+            )
+            // The page fades into the Ask bar: 150 tall, clear at the top and solid from halfway,
+            // so a chip at the cut edge never shows as a sliver of a bar.
+            .child(
+                el().key("meeting-scroll-fade")
+                    .pin(Some(0.0), None, Some(0.0), Some(0.0))
+                    .h(150.0)
+                    .linear_gradient(
+                        std::f32::consts::PI,
+                        [(0.0, p.bg.alpha(0.0)), (0.5, p.bg), (1.0, p.bg)],
+                    ),
+            ),
+    );
     let control = recording_control(s, k, p, layer);
     let panel = s.transcript_open.then(|| {
         col()
@@ -875,9 +882,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         col()
             .key("meeting-transcript-dock")
             .w_full()
-            .items_center()
+            .items_start()
             .shrink()
-            .px(16.0)
+            .px(if wide { 0.0 } else { 16.0 })
             .pb(36.0)
             .child(
                 col()
@@ -895,18 +902,38 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     } else {
         ask::overlay_with(s, k, p, narrow, layer, Some(control), None)
     });
-    let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0).child(main);
+    let mut columns = row().w_full().grow(1.0).min_h(0.0).min_w(0.0);
     if wide {
-        columns = columns.child(
-            scroll(
-                rail(s, k, m, p, layer).px(4.0).pb(24.0),
-                "meeting-rail-scroll",
-            )
-            .w(324.0)
-            .min_w(324.0)
-            .max_w(324.0)
-            .grow(0.0),
-        );
+        columns = columns.pr(EDGE);
+        // The tasks' rows hang 8 either side of their column, like the mock, so the text gap to the
+        // notes is the 40 and the rows' hairlines and check circles are not cut by the scroll area.
+        let tasks = scroll(
+            col().px(8.0).pb(24.0).child(
+                col()
+                    .key("meeting-tasks-column")
+                    .w(TASKS)
+                    .child(rail(s, k, m, p, layer).mx(-8.0)),
+            ),
+            "meeting-rail-scroll",
+        )
+        .w(TASKS + 16.0)
+        .min_w(TASKS + 16.0)
+        .max_w(TASKS + 16.0)
+        .grow(0.0)
+        .ml(GAP - 8.0)
+        .mr(-8.0);
+        columns = columns
+            .justify_center()
+            .child(grid("meeting-grid", main).child(tasks));
+    } else {
+        columns = columns.child(main);
+    }
+    let mut head = header(s, k, m, side, p, layer);
+    if wide {
+        head = row().w_full().pr(EDGE).justify_center().child(grid(
+            "meeting-header-grid",
+            head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
+        ));
     }
     let mut pane = col()
         .key("meeting-pane")
@@ -918,7 +945,24 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(note) = &s.notice {
         pane = pane.child(notice_bar(note, p));
     }
-    pane.child(header(s, k, m, p, layer)).child(columns)
+    pane.child(head).child(columns)
+}
+
+/// The wide page's grid row: the 44 point strip kept for the section rail, then `notes`. The
+/// header and the page body both sit in one, so the title lines up with the notes.
+fn grid(key: &str, notes: El) -> El {
+    row()
+        .key(key)
+        .w(GRID)
+        .min_w(GRID)
+        .max_w(GRID)
+        .child(
+            el().key(format!("{key}-strip"))
+                .w(STRIP)
+                .min_w(STRIP)
+                .max_w(STRIP),
+        )
+        .child(notes)
 }
 
 /// Publication-arrival scene, confined to the renderer's invented meeting directory.

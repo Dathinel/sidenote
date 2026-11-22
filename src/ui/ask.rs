@@ -8,7 +8,7 @@
 //! the system asks for reduced motion.
 use super::{
     AskRun, State,
-    meeting::COLUMN,
+    meeting::{COLUMN, PAGE_COLUMN},
     roles,
     theme::Palette,
     widgets::{ButtonDisabled, hairline, pressable, quiet_button, spaced_caps},
@@ -785,12 +785,18 @@ pub fn overlay_with(
     };
     let mut stack = col().w_full().gap(if meeting_bar { 0.0 } else { 10.0 });
     if notes_column {
-        stack = stack
-            .max_w(COLUMN)
-            .px(if narrow { 16.0 } else { NOTES_GUTTER });
+        // The wide page's notes column is the bar's width exactly, with no gutter of its own.
+        let gutter = if narrow {
+            16.0
+        } else if super::meeting::wide(s) {
+            0.0
+        } else {
+            NOTES_GUTTER
+        };
+        stack = stack.max_w(COLUMN + 2.0 * gutter).px(gutter);
     } else if !s.companies.open {
         stack = stack
-            .max_w(COLUMN)
+            .max_w(PAGE_COLUMN)
             .px(if narrow { 16.0 } else { 28.0 })
             .items_center();
     }
@@ -1023,7 +1029,7 @@ pub fn overlay_with(
     pill = if s.companies.open || notes_column {
         pill.w_full()
     } else {
-        pill.w_full().max_w(if wide { COLUMN } else { IDLE_W })
+        pill.w_full().max_w(if wide { PAGE_COLUMN } else { IDLE_W })
     };
     if s.live_scope_available() {
         stack = stack.child(

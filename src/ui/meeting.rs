@@ -54,8 +54,24 @@ pub enum Tab {
     Notes,
 }
 
-/// The widest the reading column gets; lines stay near 80 characters.
-pub const COLUMN: f32 = 760.0;
+/// The saved meeting page's notes column, text width. Wide pages lay out left to right as a strip
+/// kept for the section rail, the notes, a gap and the tasks, centred as one 1024 point grid.
+pub const COLUMN: f32 = 640.0;
+pub const STRIP: f32 = 44.0;
+pub const GAP: f32 = 40.0;
+pub const TASKS: f32 = 300.0;
+pub const GRID: f32 = STRIP + COLUMN + GAP + TASKS;
+/// Page gutter below the wide grid.
+pub const SIDE: f32 = 24.0;
+/// Space kept right of the wide grid (the mock's page padding); the grid is centred in the rest.
+pub const EDGE: f32 = 16.0;
+/// The widest the other reading pages get; lines stay near 80 characters.
+pub const PAGE_COLUMN: f32 = 760.0;
+
+/// Room for the whole grid and its right edge. Below it the tasks sit under the notes.
+pub fn wide(s: &State) -> bool {
+    s.app_w.get() - super::nav::width(s) >= GRID + EDGE
+}
 
 fn chips(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
     let mut r = row().flex_wrap().items_center().gaps(6.0, 6.0);
@@ -951,7 +967,7 @@ fn document(
     let mut body = col()
         .key("summary-top")
         .w_full()
-        .max_w(COLUMN)
+        .max_w(PAGE_COLUMN)
         .px(if narrow { 20.0 } else { 40.0 })
         .pt(if narrow { 8.0 } else { 18.0 })
         // Room under the last line for the floating Ask bar.
