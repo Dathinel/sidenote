@@ -34,7 +34,7 @@ def main():
     assert any(node.get("key") == "hs-meetings.silence_threshold" and node.get("rect", [0,-1,0,0])[1] >= 108 and node.get("rect", [0,0,0,0])[1] + node.get("rect", [0,0,0,0])[3] <= 800 and node.get("fill") == "#fff3c4ff" for node in search_nodes), "Search did not reveal the Advanced row"
     assert any(node.get("key") == "settings-advanced" and node.get("expanded") for node in search_nodes), "Search did not open Advanced"
     mapping=json.loads((Path(__file__).parent / "ui-fixtures/settings-search-map.json").read_text(encoding="utf-8"))
-    assert len(mapping)==len(manifest["keys"])==49
+    assert len(mapping)==len(manifest["keys"])==50
     for item in mapping:
         assert item["key"] in manifest["keys"],item["key"]
         assert item["preserve_controls"]==manifest["keys"][item["key"]],item["key"]

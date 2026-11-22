@@ -351,8 +351,8 @@ impl Config {
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
     }
 
-    #[cfg(all(windows, feature = "desktop"))]
-    pub(crate) fn meeting_icon_capture_allowed(root: &Path) -> bool {
+    #[cfg(feature = "desktop")]
+    pub fn meeting_icon_capture_allowed(root: &Path) -> bool {
         // The native window timer must fail closed on sharing errors without retrying.
         std::fs::read(root.join("config.json"))
             .ok()
@@ -360,8 +360,21 @@ impl Config {
             .is_some_and(|config| config.version == 1 && config.meeting_icon_in_captures)
     }
 
+    #[cfg(feature = "desktop")]
+    pub fn toggle_meeting_icon_capture(root: &Path) -> io::Result<Self> {
+        let _lock = lock(root)?;
+        let mut config = Self::load_existing(root)?;
+        config.meeting_icon_in_captures = !config.meeting_icon_in_captures;
+        config.save_locked(root)?;
+        Ok(config)
+    }
+
     pub fn save(&mut self, root: &Path) -> io::Result<()> {
         let _lock = lock(root)?;
+        self.save_locked(root)
+    }
+
+    fn save_locked(&mut self, root: &Path) -> io::Result<()> {
         let path = root.join("config.json");
         let bytes = read(root)?;
         let mut latest: serde_json::Value =

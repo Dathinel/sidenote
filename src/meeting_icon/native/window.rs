@@ -12,6 +12,7 @@ use std::{
     ptr,
     rc::Rc,
     sync::{Arc, Once, OnceLock, atomic::Ordering},
+    thread::{Builder, JoinHandle},
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -35,6 +36,8 @@ const WIDTH: f32 = 104.0;
 const HEIGHT: f32 = 44.0;
 const CAPTURE_TIMER: usize = 1;
 const CAPTURE_POLL_MS: u32 = 100;
+const TOGGLE_CAPTURE: usize = 1;
+const CAPTURE_SAVE_FAILED: &str = "FI_CAPTURE_SAVE_FAILED";
 
 fn capture_affinity(visible: bool) -> u32 {
     if visible {
@@ -253,6 +256,7 @@ struct View {
     card: Cell<HWND>,
     config_root: PathBuf,
     capture_visible: Cell<bool>,
+    capture_save: RefCell<Option<JoinHandle<()>>>,
     font: RefCell<Option<Rc<Font>>>,
     timer_font: RefCell<Option<(i32, Rc<Font>)>>,
     surface: RefCell<Option<Surface>>,
@@ -293,6 +297,7 @@ impl NativeWindow {
                     card: Cell::new(ptr::null_mut()),
                     config_root: root,
                     capture_visible: Cell::new(false),
+                    capture_save: RefCell::default(),
                     font: RefCell::new(None),
                     timer_font: RefCell::new(None),
                     surface: RefCell::default(),
@@ -471,6 +476,78 @@ fn icon_changed(prior: &Frame, frame: &Frame) -> bool {
 }
 
 impl View {
+    fn toggle_capture(&self) {
+        let root = self.config_root.clone();
+        let worker = Builder::new()
+            .name("nub-capture-save".into())
+            .spawn(move || {
+                if core::Config::toggle_meeting_icon_capture(&root).is_err() {
+                    crate::listener::log(CAPTURE_SAVE_FAILED);
+                }
+            });
+        match worker {
+            Ok(worker) => {
+                self.capture_save.replace(Some(worker));
+            }
+            Err(_) => crate::listener::log("FI_CAPTURE_WORKER_FAILED"),
+        }
+    }
+
+    unsafe fn capture_menu(&self, hwnd: HWND, position: LPARAM) {
+        if self
+            .capture_save
+            .borrow()
+            .as_ref()
+            .is_some_and(|w| !w.is_finished())
+        {
+            return;
+        }
+        unsafe {
+            let (x, y) = if position == -1 {
+                let mut rect = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut rect) == 0 {
+                    return;
+                }
+                (rect.left, rect.bottom)
+            } else {
+                (position as i16 as i32, (position >> 16) as i16 as i32)
+            };
+            let menu = CreatePopupMenu();
+            if menu.is_null() {
+                return;
+            }
+            let checked = if self.capture_visible.get() {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            let added = AppendMenuW(
+                menu,
+                MF_STRING | checked,
+                TOGGLE_CAPTURE,
+                wide("Show in screenshots and recordings").as_ptr(),
+            );
+            let command = if added != 0 {
+                // Keep the meeting app in the foreground.
+                TrackPopupMenu(
+                    menu,
+                    TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                    x,
+                    y,
+                    0,
+                    hwnd,
+                    ptr::null(),
+                )
+            } else {
+                0
+            };
+            DestroyMenu(menu);
+            if command as usize == TOGGLE_CAPTURE && !self.control.stop.load(Ordering::Acquire) {
+                self.toggle_capture();
+            }
+        }
+    }
+
     fn refresh_capture(&self) {
         let visible = core::Config::meeting_icon_capture_allowed(&self.config_root);
         if self.capture_visible.replace(visible) == visible {
@@ -1056,8 +1133,13 @@ unsafe fn common(hwnd: HWND, msg: u32, l: LPARAM) -> Option<LRESULT> {
         let v = view(hwnd, msg, l)?;
         if msg == RETIRE {
             v.control.stop.store(true, Ordering::Release);
+            EndMenu();
             v.close_windows();
             PostQuitMessage(0);
+            return Some(0);
+        }
+        if matches!(msg, WM_CONTEXTMENU | WM_NCRBUTTONUP) {
+            v.capture_menu(hwnd, l);
             return Some(0);
         }
         if msg == WM_NCDESTROY {
@@ -1343,6 +1425,7 @@ fn synthetic_view(scale: f32) -> io::Result<View> {
             card: Cell::new(ptr::null_mut()),
             config_root: PathBuf::new(),
             capture_visible: Cell::new(false),
+            capture_save: RefCell::default(),
             font: RefCell::new(Some(Rc::new(Font(font)))),
             timer_font: RefCell::new(None),
             surface: RefCell::default(),
@@ -1446,6 +1529,36 @@ fn meeting_icon_capture_affinity_updates_live_windows() {
     save(true);
     wait_for(card, WDA_NONE);
     save(false);
+    wait_for(card, WDA_EXCLUDEFROMCAPTURE);
+
+    let select_capture_menu_item = || {
+        view.toggle_capture();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !view.capture_save.borrow().as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < deadline, "capture worker did not finish");
+            assert!(window.pump());
+        }
+    };
+    select_capture_menu_item();
+    assert!(core::Config::meeting_icon_capture_allowed(root));
+    wait_for(card, WDA_NONE);
+
+    // An occupied writer lock must leave the saved value and the checkmark alone.
+    let lock = store_io::lock(&root.join("local/config.lock")).unwrap();
+    select_capture_menu_item();
+    assert!(core::Config::meeting_icon_capture_allowed(root));
+    assert!(view.capture_visible.get());
+    assert_eq!(affinity(icon), WDA_NONE);
+    assert_eq!(affinity(card), WDA_NONE);
+    assert!(
+        std::fs::read_to_string(core::log_path())
+            .unwrap()
+            .contains(CAPTURE_SAVE_FAILED)
+    );
+    drop(lock);
+
+    select_capture_menu_item();
+    assert!(!core::Config::meeting_icon_capture_allowed(root));
     wait_for(card, WDA_EXCLUDEFROMCAPTURE);
 
     // Create each card before pumping any timer messages for the new value.
