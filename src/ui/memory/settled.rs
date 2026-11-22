@@ -329,15 +329,15 @@ mod tests {
     #[test]
     fn change_kinds_use_the_requested_lucide_icons() {
         for (kind, name) in [
-            (change::Icon::Owner, "lucide-user"),
+            (change::Icon::Owner, "lucide-user-round"),
             (change::Icon::Date, "lucide-calendar"),
             (change::Icon::Project, "lucide-folder"),
-            (change::Icon::Team, "lucide-users"),
+            (change::Icon::Team, "lucide-users-round"),
             (change::Icon::Waiting, "lucide-hourglass"),
             (change::Icon::Ours, "lucide-circle-check"),
         ] {
             assert_eq!(change_icon(kind).name, name);
         }
-        assert_eq!(icons::STROKE_WIDTH, 2.25);
+        assert_eq!(icons::STROKE_WIDTH, 2.0);
     }
 }

@@ -244,9 +244,9 @@ fn fills(active: bool, p: Palette) -> (Color, Color) {
 /// A place's name: 600 in `ink` when active, 400 in `soft` otherwise.
 fn place_name(name: &str, active: bool, p: Palette) -> El {
     if active {
-        roles::CONTROL.bold().line(name, p.ink)
+        roles::NAV.bold().line(name, p.ink)
     } else {
-        roles::CONTROL.line(name, p.soft)
+        roles::NAV.line(name, p.soft)
     }
 }
 
@@ -949,7 +949,7 @@ fn profile_item(
             .gap(10.0)
             .items_center()
             .child(super::icons::draw(icon, 18.0, p.soft))
-            .child(roles::CONTROL.line(name, p.soft).grow(1.0)),
+            .child(roles::NAV.line(name, p.soft).grow(1.0)),
     )
     .key(key.to_string())
     .role("menuitem")

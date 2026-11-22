@@ -67,6 +67,10 @@ def render(job):
  assert base.with_suffix('.png').is_file(),base
  tree=json.loads(base.with_suffix('.json').read_text(encoding='utf-8-sig'))
  assert not tree['warnings'],(base.name,tree['warnings'])
+ if scene == 'settings-general':
+  name_field = next(element for element in tree['elements'] if element.get('key') == 'notes-name')
+  name_height = name_field['rect'][3]
+  assert name_height == 28, f"{base.name}: Your name height {name_height:g}, expected 28"
  if name.startswith('meeting-lift-after'):
   elements={e['key']:e for e in tree['elements'] if e.get('key')}
   for key in ('meeting-view','meeting-facts','meeting-people','meeting-status','suggest-0','ask-pill'):

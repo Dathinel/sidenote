@@ -209,6 +209,9 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
         if scope == "meeting" {
             menu = super::meeting::reading::menu_items(s, m, menu);
         }
+        let mut menu_kit = k.clone();
+        menu_kit.ty.ui_compact = super::roles::NAV.style();
+        return menu.build(&menu_kit, layer);
     }
     menu.build(k, layer)
 }

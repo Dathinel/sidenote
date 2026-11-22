@@ -6,15 +6,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 VERSION = "1.61.0"
-ICONS = {'MEETINGS': 'notebook-pen',
- 'ANNOTATIONS': 'pen-tool',
+ICONS = {'MEETINGS': 'notepad-text',
+ 'ANNOTATIONS': 'pen-line',
  'GRIP_VERTICAL': 'grip-vertical',
  'TASKS': 'list-checks',
- 'MEMORY': 'library',
+ 'MEMORY': 'book-open',
  'DIARY': 'calendar',
  'SETTINGS': 'settings',
  'REFRESH_CW': 'refresh-cw',
- 'DEVICE': 'laptop',
+ 'DEVICE': 'monitor-smartphone',
  'PLUS': 'plus',
  'STOP': 'square',
  'CHECK': 'check',
@@ -31,9 +31,9 @@ ICONS = {'MEETINGS': 'notebook-pen',
  'HELP': 'circle-question-mark',
  'INFO': 'info',
  'SEARCH': 'search',
- 'PANEL_CLOSE': 'panel-left-close',
- 'PANEL_OPEN': 'panel-left-open',
- 'PROMPTS': 'braces',
+ 'PANEL_CLOSE': 'panel-left',
+ 'PANEL_OPEN': 'panel-left',
+ 'PROMPTS': 'scroll-text',
  'MIC': 'mic',
  'CIRCLE': 'circle',
  'WAITING': 'circle-pause',
@@ -51,7 +51,7 @@ ICONS = {'MEETINGS': 'notebook-pen',
  'SUMMARY': 'sparkles',
  'UPDATES': 'download',
  'CONNECTED': 'plug',
- 'PEOPLE': 'users',
+ 'PEOPLE': 'users-round',
  'FLAG': 'flag',
  'SPELLING': 'spell-check',
  'PHONE_CALL': 'phone-call',
@@ -61,7 +61,7 @@ ICONS = {'MEETINGS': 'notebook-pen',
  'TRASH': 'trash-2',
  'VOLUME_X': 'volume-x',
  'FOLDER': 'folder',
- 'USER': 'user',
+ 'USER': 'user-round',
  'FILE_TEXT': 'file-text',
  'KEYBOARD': 'keyboard',
  'ERASER': 'eraser',
@@ -108,6 +108,7 @@ def main():
     for entry, name in ICONS.items():
         root = ET.fromstring(archive.extractfile(f"package/icons/{name}.svg").read())
         body = ""
+        fill = "currentColor" if entry == "STOP" else "none"
         for element in root:
             tag = element.tag.split("}")[-1]
             attributes = dict(element.attrib)
@@ -117,10 +118,16 @@ def main():
                 tag = "path"
             if tag not in {"path", "rect", "circle", "ellipse", "line"} or "transform" in attributes:
                 raise ValueError(f"Rune cannot draw {name}: {tag}")
-            attributes.update({"fill": "none", "stroke": "currentColor", "stroke-width": "STROKE_WIDTH", "stroke-linecap": "round", "stroke-linejoin": "round"})
+            attributes.update({"fill": fill, "stroke": "currentColor", "stroke-width": "STROKE_WIDTH", "stroke-linecap": "round", "stroke-linejoin": "round"})
             body += "<" + tag + " " + " ".join(key + '=\"' + value + '\"' for key, value in attributes.items()) + "/>"
-        entries.append(f'lucide!({entry}, "lucide-{name}", r#"{body}"#);')
-    path.write_text(header + "// Embedded entries\n" + "\n".join(entries) + "\n\n" + tail, encoding="utf-8")
+        entries.append(f'lucide!(\n    {entry},\n    "lucide-{name}",\n    r#"{body}"#\n);')
+    registry = (
+        "#[cfg(test)]\n"
+        "const GENERATED_LUCIDE_ICONS: &[&LazyLock<Icon>] = &[\n"
+        + "".join(f"    &{entry},\n" for entry in ICONS)
+        + "];\n\n"
+    )
+    path.write_text(header + "// Embedded entries\n" + "\n".join(entries) + "\n\n" + registry + tail, encoding="utf-8")
     (ROOT / "assets/licenses/lucide-LICENSE.txt").write_bytes(archive.extractfile("package/LICENSE").read())
 
 if __name__ == "__main__":

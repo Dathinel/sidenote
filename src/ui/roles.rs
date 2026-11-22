@@ -94,6 +94,8 @@ pub const READ: Role = Role::new(BODY, 400.0, BODY_LH);
 pub const SMALL: Role = Role::new(12.5, 400.0, 19.0);
 /// The name in a dense row: a setting, a finding, a memory claim, a sidebar place.
 pub const NAME: Role = SMALL.bold();
+/// Places in the sidebar and Settings list, and menu labels.
+pub const NAV: Role = Role::new(13.5, 400.0, 20.0);
 /// Tabs, buttons, links and menu items.
 pub const CONTROL: Role = Role::new(12.5, 400.0, 18.0).tabular(0.05);
 /// Dates, durations and other facts shown alongside a control.
