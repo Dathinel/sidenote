@@ -3,7 +3,7 @@
 //! Every change here is the owner's own action; the daily check only proposes.
 use super::{
     State,
-    check::{copy_row, prose, source_row},
+    check::{copy_row, prose, source_rows},
     list::text_title,
     roles,
     tasks::{button, prop_row},
@@ -1562,11 +1562,18 @@ fn source_block(s: &State, sources: &[MemorySource], key: &str, p: Palette) -> E
     if sources.is_empty() {
         c = c.child(roles::META.wrap("No source recorded.", p.faint));
     }
+    c = c.children(source_rows(
+        s,
+        sources.iter().filter_map(|src| match src {
+            MemorySource::Meeting { reference } => Some(reference.as_str()),
+            MemorySource::Kb { .. } => None,
+        }),
+        &format!("{key}-src"),
+        p,
+    ));
     for (n, src) in sources.iter().enumerate() {
         match src {
-            MemorySource::Meeting { reference } => {
-                c = c.child(source_row(s, reference, format!("{key}-src-{n}"), p));
-            }
+            MemorySource::Meeting { .. } => {}
             MemorySource::Kb { path, revision } => {
                 c = c.child(
                     col()
@@ -1947,19 +1954,21 @@ fn proposal_comment(s: &State, pp: &PendingProposal, p: Palette) -> Option<El> {
             .child(roles::SMALL.wrap(text, p.ink).selectable(true))
             .child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft))
             .child(
-                button(
-                    if open {
-                        "Hide earlier wording"
-                    } else {
-                        "Show earlier wording"
-                    },
-                    format!("memory-earlier-{id}"),
-                    false,
-                    p,
-                )
-                .on_press(move |s: &mut State| {
-                    s.memory.earlier_wording = (!open).then(|| id.clone());
-                }),
+                row().child(
+                    button(
+                        if open {
+                            "Hide earlier wording"
+                        } else {
+                            "Show earlier wording"
+                        },
+                        format!("memory-earlier-{id}"),
+                        false,
+                        p,
+                    )
+                    .on_press(move |s: &mut State| {
+                        s.memory.earlier_wording = (!open).then(|| id.clone());
+                    }),
+                ),
             )
             .children(open.then(|| roles::SMALL.wrap(&pp.proposal.text, p.soft)));
     } else if pp.can_rewrite() {

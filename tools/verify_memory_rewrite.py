@@ -67,6 +67,18 @@ def fixture(root, case):
             at=p["decided_at"], proposal_id=p["id"],
         ))
         records.write_text(json.dumps(data), encoding="utf-8")
+    elif case == "citation-second-jump":
+        p["sources"].append(dict(type="meeting", reference="[[1800000000001-1@15:00]]"))
+        p["id"] = proposal_id(p)
+        records.write_text(json.dumps(data), encoding="utf-8")
+        transcript = meetings / "1800000000001-1/english-transcript.md"
+        transcript.write_text(
+            "\n".join(
+                f"[00:{i // 6:02}:{i % 6 * 10:02}.000] Speaker{i % 2} (English): Synthetic transcript line {i}."
+                for i in range(110)
+            ),
+            encoding="utf-8",
+        )
     return meetings, p["id"]
 
 
@@ -119,6 +131,8 @@ def run(exe, output, case, theme="dark"):
             events = []
             if case == "confirm-legacy":
                 events.append(tap(0.4, f"memory-legacy-confirm-memory-{proposal}"))
+        if case == "citation-second-jump":
+            events = [tap(0.4, f"need-{proposal}-suggested-source-0-time-1")]
         end = {"cancel-close": 2, "helper-timeout": 92.5, "rewrite-wait": 1.9}.get(case, 3.5)
         events.append(mark(end, "end"))
         script = root / "script.json"
@@ -156,7 +170,7 @@ def run(exe, output, case, theme="dark"):
                 if app.poll() is None:
                     app.kill()
                     app.wait(timeout=5)
-        if case in {"retire-note", "needs-you", "confirm-legacy"}:
+        if case in {"retire-note", "needs-you", "confirm-legacy", "citation-second-jump"}:
             assert not marker.exists(), "a read-only decision view or note started the helper"
         else:
             pid, scratch = started(marker)
@@ -185,6 +199,13 @@ def run(exe, output, case, theme="dark"):
             assert ("The demo is on Friday afternoon." in saved) == (case == "accept-rewrite"), "acceptance saved different wording"
             if case == "cancel-accept-original":
                 assert "The demo is on Friday." in saved, "the original wording was not saved"
+        if case == "citation-second-jump":
+            tree = json.loads(artifact.with_suffix(".json").read_text(encoding="utf-8-sig"))
+            lines = {e.get("key"): e for e in tree["elements"]}
+            second = lines.get("line-90")
+            first = lines.get("line-0")
+            assert second and 0 < second["rect"][1] < 860, "the second citation did not bring its line into view"
+            assert not first or first["rect"][1] + first["rect"][3] < 0, "the jump stayed at the first citation"
         print(f"PASS {case}", flush=True)
 
 
@@ -196,6 +217,7 @@ def main():
         "cancel-reject", "cancel-reject-export-fails", "cancel-close", "cancel-accept-original",
         "comment-card", "rewrite-wait", "accept-rewrite", "retire-note", "helper-timeout",
         "needs-you", "confirm-legacy",
+        "citation-second-jump",
     ])
     parser.add_argument("--theme", choices=["light", "dark"], default="dark")
     args = parser.parse_args()

@@ -1811,10 +1811,12 @@ fn claim_column(
     if claim.sources.is_empty() {
         c = c.child(roles::META.wrap("No source cited.", p.faint));
     }
-    for (n, src) in claim.sources.iter().enumerate() {
-        c = c.child(source_row(s, src, format!("{key}-src-{n}"), p));
-    }
-    c
+    c.children(source_rows(
+        s,
+        claim.sources.iter().map(String::as_str),
+        &format!("{key}-src"),
+        p,
+    ))
 }
 
 fn story_section(s: &State, k: &Kit, r: &DailyCheck, narrow: bool, p: Palette) -> El {
@@ -2002,6 +2004,137 @@ fn history_section(s: &State, narrow: bool, p: Palette) -> El {
 }
 
 // ---- sources ---------------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Eq)]
+enum SourceGroup<'a> {
+    Meeting {
+        id: &'a str,
+        stamps: Vec<&'a str>,
+        untimed: bool,
+    },
+    Other(&'a str),
+}
+
+fn group_sources<'a>(sources: impl IntoIterator<Item = &'a str>) -> Vec<SourceGroup<'a>> {
+    let mut groups = Vec::new();
+    for source in sources {
+        let Some(citation) = source.strip_prefix("[[").and_then(|s| s.strip_suffix("]]")) else {
+            groups.push(SourceGroup::Other(source));
+            continue;
+        };
+        let (id, stamp) = citation
+            .split_once('@')
+            .map_or((citation, None), |(id, stamp)| (id, Some(stamp)));
+        if let Some(SourceGroup::Meeting {
+            stamps, untimed, ..
+        }) = groups
+            .iter_mut()
+            .find(|g| matches!(g, SourceGroup::Meeting { id: seen, .. } if *seen == id))
+        {
+            *untimed |= stamp.is_none();
+            if let Some(stamp) = stamp
+                && !stamps.contains(&stamp)
+            {
+                stamps.push(stamp);
+            }
+        } else {
+            groups.push(SourceGroup::Meeting {
+                id,
+                stamps: stamp.into_iter().collect(),
+                untimed: stamp.is_none(),
+            });
+        }
+    }
+    groups
+}
+
+#[cfg(test)]
+#[test]
+fn meeting_sources_group_in_order_and_keep_distinct_times() {
+    assert_eq!(
+        group_sources([
+            "[[1800000000001-1@00:05]]",
+            "docs/demo.md",
+            "[[1800000000001-1@00:15]]",
+            "[[1800000000001-1@00:05]]",
+            "[[1800000000002-1]]",
+        ]),
+        [
+            SourceGroup::Meeting {
+                id: "1800000000001-1",
+                stamps: vec!["00:05", "00:15"],
+                untimed: false
+            },
+            SourceGroup::Other("docs/demo.md"),
+            SourceGroup::Meeting {
+                id: "1800000000002-1",
+                stamps: vec![],
+                untimed: true
+            },
+        ],
+    );
+}
+
+pub fn source_rows<'a>(
+    s: &State,
+    sources: impl IntoIterator<Item = &'a str>,
+    key: &str,
+    p: Palette,
+) -> Vec<El> {
+    group_sources(sources)
+        .into_iter()
+        .enumerate()
+        .map(|(i, group)| {
+            let key = format!("{key}-{i}");
+            match group {
+                SourceGroup::Other(value) => copy_row(s, value, key, p),
+                SourceGroup::Meeting {
+                    id,
+                    stamps,
+                    untimed,
+                } if stamps.is_empty() || (stamps.len() == 1 && !untimed) => {
+                    let target = stamps
+                        .first()
+                        .map_or_else(|| id.to_owned(), |time| format!("{id}@{time}"));
+                    source_row(s, &format!("[[{target}]]"), key, p)
+                }
+                SourceGroup::Meeting { id, stamps, .. } => {
+                    let mut group = row()
+                        .w_full()
+                        .gap(4.0)
+                        .min_w(0.0)
+                        .items_center()
+                        .flex_wrap()
+                        .key(&key)
+                        .child(source_row(
+                            s,
+                            &format!("[[{id}]]"),
+                            format!("{key}-meeting"),
+                            p,
+                        ));
+                    if let Some(meeting) = s.meetings.iter().find(|m| m.id == id) {
+                        for (n, stamp) in stamps.into_iter().enumerate() {
+                            let target = format!("{id}@{stamp}");
+                            let time_key = format!("{key}-time-{n}");
+                            group = group.child(
+                                quiet_button(cite_time(stamp), &time_key, p)
+                                    .label(format!(
+                                        "Open {} at {}",
+                                        meeting.title,
+                                        cite_time(stamp)
+                                    ))
+                                    .on_press_tx(move |s: &mut State, tx| {
+                                        s.open_check_citation(&target, time_key.clone(), tx)
+                                    }),
+                            );
+                        }
+                    }
+                    group
+                }
+            }
+        })
+        .collect()
+}
 
 /// A meeting citation as a link that opens the meeting at that line, or a KB path with a copy
 /// button.
@@ -2303,9 +2436,12 @@ fn finding_panel(
     if f.evidence.is_empty() {
         ev = ev.child(roles::META.wrap("No citation.", p.faint));
     }
-    for (n, e) in f.evidence.iter().enumerate() {
-        ev = ev.child(source_row(s, e, format!("ev-{i}-{n}"), p));
-    }
+    ev = ev.children(source_rows(
+        s,
+        f.evidence.iter().map(String::as_str),
+        &format!("ev-{i}"),
+        p,
+    ));
     ev = ev.child(
         roles::META
             .wrap(

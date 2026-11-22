@@ -310,15 +310,12 @@ pub(super) fn toolbar(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
 }
 
 fn sources(s: &State, values: &[MemorySource], prefix: &str, p: Palette) -> El {
-    let mut out = col().w_full().gap(2.0);
-    for (i, source) in values.iter().enumerate() {
-        out = out.child(match source {
-            MemorySource::Meeting { reference } => {
-                source_row(s, reference, format!("{prefix}-source-{i}"), p)
-            }
-            MemorySource::Kb { path, .. } => copy_row(s, path, format!("{prefix}-source-{i}"), p),
-        });
-    }
+    let mut out = col().w_full().gap(2.0).children(source_rows(
+        s,
+        values.iter().map(MemorySource::reference),
+        &format!("{prefix}-source"),
+        p,
+    ));
     if values.is_empty() {
         out = out.child(roles::META.wrap("No source recorded", p.faint));
     }
@@ -348,15 +345,11 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
         .min_w(0.0)
         .gap(6.0)
         .child(roles::NAME.wrap(title, p.ink))
-        .children(pp.revision_text().is_none().then(|| {
-            roles::SMALL
-                .wrap(
-                    format!("Best guess: {} {}", plain(&pr.text), pr.rationale),
-                    p.ink,
-                )
-                .spans(vec![rune::Span::new(0, "Best guess:".len()).weight(600.0)])
-                .key(format!("memory-best-guess-{id}"))
-        }));
+        .children(
+            pp.revision_text()
+                .is_none()
+                .then(|| roles::SMALL.wrap(&pr.rationale, p.soft)),
+        );
     if let Some(target) = target {
         body = body
             .child(roles::SMALL.wrap(
@@ -377,7 +370,7 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
         .children(
             pp.revision_text()
                 .is_none()
-                .then(|| roles::SMALL.wrap(format!("Suggested: {}", plain(&pr.text)), p.ink)),
+                .then(|| roles::SMALL.wrap(format!("Suggested: {}", pr.text), p.ink)),
         )
         .child(sources(s, &pr.sources, &format!("need-{id}-suggested"), p))
         .children(proposal_comment(s, pp, p));
@@ -504,11 +497,8 @@ fn recent(s: &State, p: Palette) -> El {
         if i > 0 {
             card = card.child(hairline(p));
         }
-        let title = e
-            .decision
-            .as_ref()
-            .and_then(|d| d.text.clone())
-            .unwrap_or_else(|| event_name(&e.operation));
+        let title = e.decision.as_ref().and_then(|d| d.text.as_deref());
+        let operation = event_name(&e.operation);
         let time = DateTime::parse_from_rfc3339(&e.at)
             .map(|d| d.with_timezone(&Local).format("%-d %b, %H:%M").to_string())
             .unwrap_or_else(|_| e.at.clone());
@@ -516,8 +506,11 @@ fn recent(s: &State, p: Palette) -> El {
             .grow(1.0)
             .min_w(0.0)
             .gap(4.0)
-            .child(roles::NAME.wrap(title, p.ink))
-            .child(roles::META.wrap(format!("{} · {time}", event_name(&e.operation)), p.soft));
+            .child(roles::NAME.wrap(title.unwrap_or(&operation), p.ink))
+            .child(roles::META.wrap(
+                title.map_or_else(|| time.clone(), |_| format!("{operation} · {time}")),
+                p.soft,
+            ));
         if let Some(label) = e.comment_label {
             copy = copy.child(roles::META.wrap(label, p.soft));
         }
