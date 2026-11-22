@@ -778,8 +778,10 @@ pub fn overlay_with(
     let meeting_bar = s.selected.is_some();
     // On the saved meeting page the bar is the notes column's width and shares its left edge.
     let notes_column = meeting_bar && !s.on_live() && !s.companies.open && !s.meeting_ui.tabs;
+    // The thread keeps a 16 gutter in a narrow window; the bar steps in to where the notes start,
+    // which is the same 16 on a phone and 24 beyond it.
     let bar_inset = if notes_column && narrow {
-        NOTES_GUTTER - 16.0
+        (super::meeting::gutter(s) - 16.0).max(0.0)
     } else {
         0.0
     };

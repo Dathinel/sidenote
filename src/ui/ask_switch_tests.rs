@@ -92,7 +92,11 @@ fn a_context_line_and_a_point_can_be_selected_and_copied() {
 }
 
 fn page_with_cited_point() -> Runtime<State> {
-    page_with(DEFAULT_SIZE, || {
+    page_with_cited_point_at(DEFAULT_SIZE)
+}
+
+fn page_with_cited_point_at(size: (f32, f32)) -> Runtime<State> {
+    page_with(size, || {
         let folder = core::meetings_dir().join(MEETING);
         let summary = serde_json::json!({
             "title": "Beta launch plan",
@@ -528,6 +532,7 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
         }
     });
     let project = format!("meeting-project-{MEETING}");
+    let more = format!("more-meeting-{MEETING}-button");
     let date = chrono::DateTime::from_timestamp_millis(start)
         .unwrap()
         .with_timezone(&chrono::Local);
@@ -551,8 +556,10 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
         });
         rt.frame(0.2);
     };
+    // At 390 the menu sits on the first line, so Tab reaches it before the second line.
     for (key, name) in [
         ("meeting-facts", facts.as_str()),
+        (more.as_str(), "More actions"),
         ("meeting-people", "2 people"),
         (&project, "Suggested project: Atlas 2. Change it"),
         ("meeting-status", "Transcript status: English only"),
@@ -588,9 +595,14 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
 /// Three tasks and two open questions: one task with a detail, one with a guessed date and one
 /// with neither owner nor date; one question waits on someone.
 fn page_with_tasks(size: (f32, f32)) -> Runtime<State> {
+    tasks_page(size, false)
+}
+
+/// `page_with_tasks`, optionally with a context line and a topic above the tasks.
+fn tasks_page(size: (f32, f32), notes: bool) -> Runtime<State> {
     let mut rt = page_with(size, || {
         let folder = core::meetings_dir().join(MEETING);
-        let summary = serde_json::json!({
+        let mut summary = serde_json::json!({
             "title": "Beta launch plan",
             "todo": [
                 {"task": "Send the survey results to the team", "title": "Send the survey results",
@@ -605,6 +617,12 @@ fn page_with_tasks(size: (f32, f32)) -> Runtime<State> {
                 {"question": "Who owns the survey follow-up?"},
             ],
         });
+        if notes {
+            summary["context"] = serde_json::json!([CONTEXT]);
+            summary["topics"] = serde_json::json!([{"title": "Launch", "points": [
+                {"type": "decided", "text": POINT},
+                {"type": "fact", "text": "Copy is with Priya."}]}]);
+        }
         std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
         let state = core::state_dir();
         std::fs::create_dir_all(&state).unwrap();
@@ -1518,6 +1536,151 @@ fn the_fade_leaves_the_last_notes_row_clear_and_is_gone_under_an_open_thread() {
     let (overlay, fade) = (rect(&rt, "ask-overlay"), rect(&rt, "meeting-scroll-fade"));
     assert!(overlay[3] >= 150.0, "the thread stack is {overlay:?}");
     assert_eq!(fade[3], 0.0, "fade with a thread open");
+}
+
+/// The saved meeting at `size` with a date and duration, two people, a project and the English-only
+/// status: every item the meta row can show.
+fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
+    let start = 1_793_955_600_000_i64;
+    let mut rt = page_with(size, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let state = core::state_dir();
+        std::fs::create_dir_all(&state).unwrap();
+        for (path, value) in [
+            (
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":1320000}),
+            ),
+            (
+                folder.join("english-summary.json"),
+                serde_json::json!({"title":"Beta launch plan","context":[CONTEXT],"people":["Maya","Tom"]}),
+            ),
+            (
+                folder.join("tasks.json"),
+                serde_json::json!({"meeting_project":"Atlas 2"}),
+            ),
+            (
+                state.join("config.json"),
+                serde_json::json!({"version":1,"features":{"projects":true}}),
+            ),
+            (
+                state.join("projects.json"),
+                serde_json::json!({"projects":["Atlas 2"]}),
+            ),
+        ] {
+            std::fs::write(path, value.to_string()).unwrap();
+        }
+    });
+    rt.update(|s, _| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.areas.refresh_pending {
+            let event = s
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("area worker finished");
+            s.apply_event(event);
+        }
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
+    if in_parent("a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters") {
+        return;
+    }
+    let rt = page_with_every_meta_item((390.0, 900.0));
+    let project = format!("meeting-project-{MEETING}");
+    let more = format!("more-meeting-{MEETING}-button");
+    let r = |key: &str| rect_of(&rt, key);
+    // The title is 24 on a 30 line and 16 in from the window edge.
+    let title = r("meeting-title");
+    assert_eq!((title[0], title[3]), (16.0, 30.0), "title {title:?}");
+    // Line one: the switch, the date and the menu, the menu at the right gutter.
+    let (view, facts, menu) = (r("meeting-view"), r("meeting-facts"), r(&more));
+    assert_eq!((facts[1], menu[1]), (view[1], view[1]), "line one");
+    assert_eq!(
+        menu[0] + menu[2],
+        390.0 - 16.0,
+        "the menu is at the right gutter"
+    );
+    assert_eq!(view[0], 16.0, "the switch is at the left gutter");
+    // Line two, 6 below it: the people, the project and the status, then the empty slot the
+    // section rail's chip takes.
+    let (people, chip, status, slot) = (
+        r("meeting-people"),
+        r(&project),
+        r("meeting-status"),
+        r("meeting-sections-slot"),
+    );
+    assert_eq!(people[1], view[1] + view[3] + 6.0, "line two");
+    assert_eq!((chip[1], status[1]), (people[1], people[1]), "line two");
+    assert!(people[0] + people[2] <= chip[0] && chip[0] + chip[2] <= status[0]);
+    assert!(slot[0] >= status[0] + status[2], "the slot ends line two");
+    // The notes keep the same 16 gutter, and nothing runs past the window.
+    assert_eq!(r("sec-context")[0], 16.0, "notes gutter");
+    for e in rt.elements() {
+        let key = e.key.as_deref().unwrap_or_default();
+        if key.starts_with("meeting-") || key.starts_with("more-meeting-") {
+            assert!(
+                e.rect[0] >= 0.0 && e.rect[0] + e.rect[2] <= 390.0,
+                "{key} {:?}",
+                e.rect
+            );
+        }
+    }
+    // Every fact stays reachable: each is on the page with its name.
+    for key in [
+        "meeting-facts",
+        "meeting-people",
+        "meeting-status",
+        &project,
+        &more,
+    ] {
+        assert!(element(&rt, key).label.is_some(), "{key}");
+    }
+}
+
+#[test]
+fn the_tasks_sit_28_below_the_notes_on_a_phone() {
+    if in_parent("the_tasks_sit_28_below_the_notes_on_a_phone") {
+        return;
+    }
+    let rt = tasks_page((390.0, 900.0), true);
+    let last = rect_of(&rt, "meeting-point-pt-0-1");
+    let tasks = rect_of(&rt, "meeting-actions");
+    assert_eq!(tasks[1] - (last[1] + last[3]), 28.0, "tasks {tasks:?}");
+    assert!(rt.find("meeting-grid").is_none());
+}
+
+#[test]
+fn the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone() {
+    if in_parent("the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone") {
+        return;
+    }
+    // Bullet column 20, row padding 6 each side.
+    let space = |rt: &Runtime<State>| {
+        let row = rect_of(rt, "meeting-point-pt-0-0");
+        (
+            row,
+            rect_of(rt, "meeting-point-text-pt-0-0")[2],
+            row[2] - 32.0,
+        )
+    };
+    let rt = page_with_cited_point_at((390.0, 900.0));
+    let (row, text, free) = space(&rt);
+    assert_eq!(text, free, "the text has the row's whole width");
+    // The pill is still 6 from the row's right edge, and the pointer still reaches it.
+    let pill = rect_of(&rt, "meeting-source-pt-0-0");
+    assert_eq!(
+        (pill[3], row[0] + row[2] - (pill[0] + pill[2])),
+        (21.0, 6.0)
+    );
+    // On the wide page the pill is in the row, so the text has less.
+    let (_, text, free) = space(&page_with_cited_point());
+    assert!(text < free, "wide: {text} of {free}");
 }
 
 #[test]
