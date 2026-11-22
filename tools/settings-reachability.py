@@ -27,8 +27,9 @@ def main():
                for key, controls in manifest["keys"].items()}
     missing = {key: controls for key, controls in missing.items() if controls}
     assert not missing, f"Unreachable legacy settings: {missing}"
-    for name in ("General", "Meetings", "Prompt library", "People", "Hex and dictation", "Models and agents", "Connected apps", "Appearance and startup", "Sync", "Privacy and data", "Updates", "Diagnostics"):
+    for name in ("General", "Meetings", "Prompt library", "Hex and dictation", "Models and agents", "Connected apps", "Appearance and startup", "Sync", "Privacy and data", "Updates", "Diagnostics"):
         assert f"settings-page-{name}" in keys, name
+    assert "settings-page-People" not in keys, "People belongs to the home sidebar, not Settings"
     search = json.loads((folder / "settings-search-1280-light.json").read_text(encoding="utf-8-sig"))
     search_nodes = list(nodes(search))
     assert any(node.get("key") == "hs-meetings.silence_threshold" and node.get("rect", [0,-1,0,0])[1] >= 108 and node.get("rect", [0,0,0,0])[1] + node.get("rect", [0,0,0,0])[3] <= 800 and node.get("fill") == "#fff3c4ff" for node in search_nodes), "Search did not reveal the Advanced row"
@@ -83,7 +84,7 @@ def main():
     for query in ("MCP", "connect", "Claude", "Codex", "Cursor", "OpenCode"):
         tree = json.loads((folder / f"settings-mcp-search-{query}-1280-light.json").read_text(encoding="utf-8-sig"))
         assert any(n.get("key") == "find-setting-mcp-connect" for n in nodes(tree)), query
-    print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; twelve pages and search reveal verified in {len(trees)} render trees.")
+    print(f"PASS: all {len(manifest['keys'])} legacy setting keys reachable; eleven Settings pages, People outside Settings and search reveal verified in {len(trees)} render trees.")
     print("PASS: all 16 Hex setup renders show the expected copy, controls, busy state and visible actions.")
     print("PASS: all 8 Meetings-off renders show instructions, re-check and only supported enable actions.")
 
