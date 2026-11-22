@@ -1684,6 +1684,55 @@ fn the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone() {
 }
 
 #[test]
+fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
+    if in_parent("the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone") {
+        return;
+    }
+    let mut rt = page_at((390.0, 900.0));
+    assert!(rt.find("rail-recording").is_none(), "no rail until it records");
+    rt.update(|s, _| {
+        s.hex.status = Some(Ok(sidenote::hex_engine::EngineState {
+            running: true,
+            version: "test".into(),
+            protocol: 4,
+            recording: Some(sidenote::hex_engine::Recording {
+                id: Some(MEETING.into()),
+                title: None,
+                since: None,
+                elapsed_seconds: Some(724),
+            }),
+            meeting_state: "recording".into(),
+            dictating: Some(false),
+            capture_state: "idle".into(),
+            model: sidenote::hex_engine::ModelState {
+                id: None,
+                name: None,
+                language: None,
+                installed: None,
+                preparing: None,
+                downloaded_bytes: None,
+            },
+            labs: Default::default(),
+        }));
+    });
+    rt.frame(0.2);
+    let rail = element(&rt, "rail-recording");
+    // Amber is a warning; a live status is danger. The test environment draws the dark theme.
+    let p = theme::palette(true);
+    let colours: Vec<_> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", rail.path)))
+        .filter_map(|e| e.text_color)
+        .collect();
+    assert!(
+        colours.contains(&p.danger),
+        "the mic is not danger red: {colours:?}"
+    );
+    assert!(!colours.contains(&p.warn), "the mic is amber");
+}
+
+#[test]
 fn meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows() {
     if in_parent("meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows") {
         return;
