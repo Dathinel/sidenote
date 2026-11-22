@@ -328,12 +328,20 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
     }
     if restore_primary {
         let mut restarted = State::new();
+        let idle = state.hex.engine.status_for_command().unwrap();
+        restarted.hex_apply(Msg::Status(Ok(idle)));
+        assert!(
+            restarted.live.is_none(),
+            "a finished draft must not reopen on restart"
+        );
         let listed = restarted
             .meetings
             .iter()
             .find(|meeting| meeting.id == id)
             .expect("saved draft must be discoverable in the meeting list");
         assert_eq!(listed.notes, text);
+        assert!(crate::ui::notes_status::job(&restarted, listed).is_none());
+        assert!(crate::ui::notes_status::read(&root, std::slice::from_ref(listed)).is_empty());
         restarted.select(&id, &mut rune::Tx::default());
         assert!(matches!(
             restarted.meeting_tab,
@@ -352,19 +360,10 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
                 .iter()
                 .any(|element| element.text.as_deref() == Some(text))
         );
-        assert!(
-            !elements
-                .iter()
-                .any(|element| element.key.as_deref() == Some("meeting-generate"))
-        );
-        let mut restarted = view.state;
-        let idle = state.hex.engine.status_for_command().unwrap();
-        restarted.hex_apply(Msg::Status(Ok(idle)));
-        let restored = restarted.live.as_ref().unwrap().session.as_ref().unwrap();
-        assert_eq!(restored.id, id);
-        assert!(restored.parts.is_empty());
-        assert!(restarted.on_live());
-        assert_eq!(restarted.live_notes.text, text);
+        assert!(!elements.iter().any(|element| matches!(
+            element.key.as_deref(),
+            Some("meeting-resume" | "meeting-generate")
+        )));
     }
 }
 

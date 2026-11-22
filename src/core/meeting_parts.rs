@@ -94,7 +94,8 @@ pub fn discard_pending(root: &Path, id: &str) -> io::Result<bool> {
     let folder = inputs(root).join(id);
     match std::fs::metadata(folder.join(super::live::NOTES_FILE)) {
         Ok(meta) if meta.is_file() => {
-            if m.pending_start_ms.take().is_some() {
+            if m.pending_start_ms.take().is_some() || m.phase != Phase::Ended {
+                m.phase = Phase::Ended;
                 m.save(root)?;
             }
             return Ok(false);
