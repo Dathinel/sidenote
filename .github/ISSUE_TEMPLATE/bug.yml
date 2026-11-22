@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in Sidenote does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before you send this, remove any real meeting text,
+        names, company details, keys or tokens from everything below, including logs
+        and screenshots. Use made-up text if you need an example.
+        For a security problem, do not use this form; see SECURITY.md.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (say the distribution below)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version or Linux distribution
+      placeholder: e.g. Windows 11 24H2, Ubuntu 24.04 on Wayland
+  - type: input
+    id: sidenote-version
+    attributes:
+      label: Sidenote version
+      description: From Settings, or the commit you built from.
+      placeholder: e.g. 0.0.1-dev.40 or a commit hash
+    validations:
+      required: true
+  - type: input
+    id: hex-version
+    attributes:
+      label: Hex version
+      description: Write "not installed" if you do not use Hex.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Include error text or a log excerpt with private content removed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This report contains no real meeting text, names, keys or tokens.
+          required: true

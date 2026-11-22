@@ -440,7 +440,7 @@ impl State {
             return false;
         };
         let results = std::mem::take(&mut *live.saves.lock().unwrap_or_else(|e| e.into_inner()));
-        let changed = !results.is_empty();
+        let mut changed = !results.is_empty();
         for (text, result) in results {
             if live.queued.as_ref() == Some(&text) {
                 live.queued = None;
@@ -468,6 +468,10 @@ impl State {
                 }
             }
         }
+        if live.close_failed && live.can_close(&self.live_notes.text) {
+            live.close_failed = false;
+            changed = true;
+        }
         changed
     }
 
@@ -477,14 +481,12 @@ impl State {
             writer.finish();
         }
         self.live_saved();
-        let safe = self
-            .live
-            .as_ref()
-            .is_none_or(|live| live.can_close(&self.live_notes.text));
+        let safe = self.live.as_mut().is_none_or(|live| {
+            let safe = live.can_close(&self.live_notes.text);
+            live.close_failed = !safe;
+            safe
+        });
         if !safe {
-            if let Some(live) = &mut self.live {
-                live.close_failed = true;
-            }
             self.go_home();
             self.live_open = true;
         }

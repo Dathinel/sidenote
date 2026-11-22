@@ -1,105 +1,88 @@
-# Sidenote: local-first meeting notes on top of Hex
+# Sidenote
 
-Sidenote is a local Windows desktop companion to [Hex](https://github.com/anomalyco/hex).
-Browse meeting summaries and transcripts, ask questions with your own agent CLI,
-and review optional tasks, projects, memory and daily alignment reports.
+Sidenote is a desktop app for the meetings you record with [Hex](https://github.com/anomalyco/hex).
+It lists your meetings and shows their transcripts, summaries and tasks, and it lets you
+ask questions about them through an agent CLI or a model endpoint you choose.
+Your meetings stay as files on your computer. There is no account.
 
-You need Windows, Hex, and an installed agent CLI such as Claude Code
-or Codex for Ask. Configure a provider and model you can use. Provider calls may
-send meeting text to that provider. Reading saved meetings does not require an agent.
+Status: early development (version 0.0.1-dev.40). Expect rough edges and breaking changes.
 
-## Install and updates
+## What works today
 
-Download `sidenote-win-Setup.exe` from the latest stable
-[GitHub Release](https://github.com/harshanandak/hex-meetings/releases/latest).
-Run Setup to install Sidenote for your Windows user. The 0.0.1 installer is
-**unsigned**: Windows may show "Windows protected your PC". After checking that
-the file came from that release, choose **More info**, then **Run anyway**.
-If your organisation blocks unsigned applications, ask its administrator to
-approve the installer; that policy may prevent the override.
+| Area | Windows | Linux |
+| --- | --- | --- |
+| Desktop window: meetings, transcripts, notes, tasks | Yes | Builds from source and opens; no package yet |
+| Start and stop Hex recordings from the app | Yes | No |
+| Install Hex from the app | Yes | No; install Hex yourself |
+| Tray and floating meeting indicator | Yes | No |
+| Automatic update checks | Packaged installs only; disabled in a source build | No |
+| Ask through an agent CLI | Yes | Not yet; blocked in code |
+| Notes and daily checks written by an agent | Yes, see "What you need" | Not yet; blocked in code |
+| Headless server role (no window): MCP and folder sync | Not the main use | Yes, see [docs/linux-server.md](docs/linux-server.md) |
 
-Installed copies check GitHub Releases when opened, every six hours, and when
-the window gets focus if the last attempt was over 30 minutes ago. Updates
-download in the background. Use **Settings > Updates > Install and restart**,
-or keep working and install the pending update on the next launch. Installation
-waits for recording and background jobs to finish. A manually copied executable
-does not update. `SIDENOTE_UPDATE_FEED` overrides GitHub with a local development
-folder; clear it for public updates. See [release and update details](docs/updates.md).
+Linux limits in detail: [docs/linux-desktop.md](docs/linux-desktop.md) and
+[docs/linux-processing.md](docs/linux-processing.md). On Linux a second launch exits
+instead of focusing the open window, and save dialogs are not available yet.
 
-Existing notes-pipeline installations receive versioned scripts through Sidenote
-app updates, with previous copies backed up. Fresh setup still requires the local
-Hex/model/CLI dependencies and device-local configuration. On a PC without the
-external watcher, recording works but notes remain unavailable. See the
-[pipeline setup and update contract](docs/meeting-pipeline.md).
+## What you need
 
-If you used the private 0.0.6 build, back up `%APPDATA%/hex-meetings`, uninstall
-0.0.6, then install 0.0.1. Clear `SIDENOTE_UPDATE_FEED` or point it at a fresh,
-empty folder; the old development feed can otherwise offer 0.0.6 again.
+- **Hex** records and transcribes meetings. Sidenote reads the meeting folders Hex writes
+  and talks to the running Hex app. Hex is a separate program; Sidenote does not change it.
+- **An agent CLI for Ask**, such as Claude Code, Codex or OpenCode, signed in to a provider
+  you can use. Ask can also use an OpenAI-compatible endpoint, including local servers
+  such as Ollama or LM Studio. See [docs/cloud-ask.md](docs/cloud-ask.md).
+- **Notes on Windows** use the in-app engine with Claude Code or Codex, or the PowerShell pipeline in `scripts/meeting-pipeline`. Configure the engine and helper in Settings. See [docs/meeting-pipeline.md](docs/meeting-pipeline.md) for the scripts engine.
 
-## Build
+What you do not need: an account, a Sidenote server, or any cloud service to read
+meetings you already have. Reading saved meetings does not need an agent. Building
+Sidenote and running its tests does not need Hex.
 
-Install Rust (stable), the `x86_64-pc-windows-gnu` target and a full MinGW GNU
-toolchain including `as.exe` and `dlltool.exe`. Put its bin folder on PATH or set
-`RUST_GNU_BIN`, then run from this checkout:
+## Install
 
-```powershell
-./tools/local_build.ps1 build --locked
-./tools/local_build.ps1 build --release --locked
+Releases: not published yet. There is no installer to download today.
+To try Sidenote now, build it from source.
+
+## Build from source
+
+```sh
+git clone https://github.com/harshanandak/sidenote.git
+cd sidenote
+./build.ps1    # Windows, PowerShell, with a MinGW GNU toolchain on PATH
+RUSTUP_TOOLCHAIN=stable cargo build --no-default-features --features desktop --target x86_64-unknown-linux-gnu --bin sidenote    # Linux
 ```
 
-The executable is `sidenote.exe`, under `target/x86_64-pc-windows-gnu/debug/` or `release/`.
-The checked-in Cargo configuration selects Windows GNU, rust-lld and static CRT.
+Prerequisites, how to run it against empty test folders, and the checks to run before
+a pull request are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Use and configuration
+## Where your data lives
 
-The default meeting folder is `%APPDATA%/hex/meetings`; local state and
-`config.json` live in `%APPDATA%/hex-meetings` by default, including on new installs.
-If `%APPDATA%/sidenote` already exists, Sidenote uses that folder instead. Exports
-stay under that selected root. New logs use `<state-root>/sidenote.log`; an existing
-`%LOCALAPPDATA%/hex-meeting-watch.log` stays in place. Nothing is moved or copied. See the
-[owner migration checklist](docs/rename-migration.md) and [MCP setup](docs/mcp.md)
-for stdio integration, tools, trust boundaries and directory overrides.
-See [private configuration](docs/configuration.md) for optional KB context.
-Features are opt-in in Settings. Existing feature choices migrate on first use.
-Runner definitions live in device-local `runners.json`; bundled definitions are examples.
+Hex writes meetings to its own folder (`%APPDATA%\hex\meetings` on Windows).
+On Windows, Sidenote uses `%APPDATA%\sidenote` if that folder already exists; otherwise it uses `%APPDATA%\hex-meetings`. Set `SIDENOTE_DATA_DIR`, `SIDENOTE_HEX_DIR` and `SIDENOTE_PEERS_DIR` to use other state, meeting and peer folders.
+See [docs/configuration.md](docs/configuration.md) and [docs/mcp.md](docs/mcp.md).
 
-Notes-pipeline sources live in `scripts/meeting-pipeline`; app updates manage an
-existing installation. Private context and credentials stay outside the repository.
-See the [pipeline contract](docs/meeting-pipeline.md) and
-[architecture](docs/architecture/README.md) for the remaining integration work.
+## Privacy
 
-## Privacy and security
+- Sidenote stores meeting files and app state locally and has no Sidenote account. Enabling a provider, sync tool or remote host can send data to that service or device.
+- Ask and enabled agent features send prompts and supplied context to the CLI or endpoint you select. MCP clients can read the corpus you expose; the client controls its further use.
+- Other network features include model and Hex downloads, installed Windows update checks, provider model-list requests, configured knowledge-base fetches, and opt-in folder or relay sync. On Windows, speech-host consent enables status checks, and allowing audio uploads sends windows from new meetings to your configured HTTPS host. See [SECURITY.md](SECURITY.md) and [docs/sync.md](docs/sync.md).
 
-Meeting text, memory, exports and sync journals can contain private information.
-Keep them outside Git. Agent and MCP clients can read the corpus you configure.
-Synced device folders currently require fully trusted peers; checksums do not
-authenticate their authors. Tombstones do not erase historical backups or replicas.
-See [SECURITY.md](SECURITY.md), [sync](docs/sync.md) and
-[audio retention](docs/audio-retention.md).
+## Documentation
 
-## Render fixtures
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): where the code for each part lives.
+- [docs/architecture/](docs/architecture/README.md): dated design decision records.
+- [docs/sync.md](docs/sync.md), [docs/self-host-relay.md](docs/self-host-relay.md): sync between devices.
+- [docs/audio-retention.md](docs/audio-retention.md): what happens to meeting audio.
 
-`tools/render_ui.ps1` uses synthetic Northwind meetings and isolated temporary
-state. `tools/prepare_check_fixture.py` generates check and memory examples without
-reading AppData or calling a model. Render output stays under ignored `artifacts/`.
+## Contributing
+
+Bug reports, fixes and documentation help are welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) and issues labelled
+[good first issue](https://github.com/harshanandak/sidenote/labels/good%20first%20issue).
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems
+privately as described in [SECURITY.md](SECURITY.md).
 
 ## Licence
 
-Sidenote is licensed under [AGPL-3.0-or-later](LICENSE).
-[Third-party notices and dependency licences](THIRD_PARTY.md) cover Hex, Rune,
-bundled fonts and the locked Cargo dependency inventory.
-
-### Local cargo and release work
-
-Run every local cargo command through `tools/local_build.ps1`; it limits concurrent
-builds and waits for recent meeting activity. For example:
-
-```powershell
-./tools/local_build.ps1 build --locked
-```
-
-Quote Cargo's separator in PowerShell: `./tools/local_build.ps1 clippy '--' -D warnings`.
-PowerShell consumes a bare `--` before the wrapper receives its arguments.
-
-Use `./tools/local_build.ps1 -Pack` with the parameters in `tools/release_pack.ps1`
-for release packing. The meeting activity check is a log-based heuristic.
+Sidenote is licensed under [AGPL-3.0-or-later](LICENSE). The `crates/meetings-domain`
+crate is available under MIT or Apache-2.0. [THIRD_PARTY.md](THIRD_PARTY.md) lists the
+notices for Hex, Rune, bundled fonts and the Cargo dependencies.

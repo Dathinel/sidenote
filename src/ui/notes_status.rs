@@ -173,7 +173,9 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
     if sidenote::core::meeting_parts::read(&sidenote::core::state_dir(), &m.id)
         .ok()
         .flatten()
-        .is_some_and(|session| session.phase != sidenote::core::meeting_parts::Phase::Ended)
+        .is_some_and(|session| {
+            session.phase != sidenote::core::meeting_parts::Phase::Ended || session.parts.is_empty()
+        })
     {
         return None;
     }

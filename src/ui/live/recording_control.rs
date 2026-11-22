@@ -120,7 +120,10 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
             .button_disabled(s.hex_record_busy())
             .on_press(|s: &mut State| s.meeting_pause()),
         );
-    } else if m.is_some() {
+    } else if m
+        .as_ref()
+        .is_some_and(|m| m.phase != SavedPhase::Ended || !m.parts.is_empty())
+    {
         control = control.child(
             quiet_button("Resume", "meeting-resume", p)
                 .button_disabled(s.hex_record_busy())
@@ -129,6 +132,7 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
     }
     if let Some(m) = m
         && m.phase != SavedPhase::Ended
+        && !m.parts.is_empty()
         && !recording
     {
         control = control.child(
