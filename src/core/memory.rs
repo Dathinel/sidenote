@@ -142,6 +142,78 @@ pub struct PendingProposal {
     pub decided_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<ProposalRevision>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProposalRevision {
+    basis: String,
+    text: String,
+}
+#[derive(Clone, Debug)]
+pub struct RevisionRequest {
+    id: String,
+    basis: String,
+    text: String,
+    sources: Vec<MemorySource>,
+    comment: String,
+}
+impl RevisionRequest {
+    pub fn input(&self) -> (&str, &[MemorySource], &str) {
+        (&self.text, &self.sources, &self.comment)
+    }
+}
+#[derive(Clone, Copy)]
+pub enum AcceptChoice {
+    Shown,
+    Original,
+}
+enum ProposalDecision<'a> {
+    Reject,
+    AcceptId,
+    AcceptShown(&'a PendingProposal, AcceptChoice),
+}
+impl PendingProposal {
+    pub fn can_rewrite(&self) -> bool {
+        matches!(self.proposal.op, ProposalOp::Add | ProposalOp::Supersede)
+    }
+
+    fn basis(&self) -> String {
+        let p = &self.proposal;
+        let bytes = serde_json::to_vec(&(
+            p.op,
+            &p.target_id,
+            &p.target_updated_at,
+            &p.text,
+            &p.sources,
+            &self.comment,
+        ))
+        .expect("proposal basis is serializable");
+        blake3::hash(&bytes).to_hex().to_string()
+    }
+
+    pub fn revision_text(&self) -> Option<&str> {
+        self.revision
+            .as_ref()
+            .filter(|r| self.can_rewrite() && self.comment.is_some() && r.basis == self.basis())
+            .map(|r| r.text.as_str())
+    }
+
+    pub fn revision_request(&self) -> Option<RevisionRequest> {
+        if self.status != ProposalStatus::Pending
+            || !self.can_rewrite()
+            || self.revision_text().is_some()
+        {
+            return None;
+        }
+        Some(RevisionRequest {
+            id: self.proposal.id.clone(),
+            basis: self.basis(),
+            text: self.proposal.text.clone(),
+            sources: self.proposal.sources.clone(),
+            comment: self.comment.clone()?,
+        })
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryUndo {
@@ -323,17 +395,17 @@ impl MemoryStore {
         self.snapshot().map(|(_, text)| text)
     }
     pub fn visible_file(&self, mut file: MemoryFile) -> MemoryFile {
-        let meetings = super::meetings_dir();
-        let visible = |sources: &[MemorySource]| {
-            super::recording_guard::sources_visible(
-                &self.root,
-                &meetings,
-                sources.iter().map(MemorySource::reference),
-            )
-        };
-        file.records.retain(|r| visible(&r.sources));
-        file.proposals.retain(|p| visible(&p.proposal.sources));
+        file.records.retain(|r| self.sources_visible(&r.sources));
+        file.proposals
+            .retain(|p| self.sources_visible(&p.proposal.sources));
         file
+    }
+    fn sources_visible(&self, sources: &[MemorySource]) -> bool {
+        super::recording_guard::sources_visible(
+            &self.root,
+            &super::meetings_dir(),
+            sources.iter().map(MemorySource::reference),
+        )
     }
     /// One consistent prompt snapshot, protected against simultaneous owner edits.
     pub fn snapshot(&self) -> io::Result<(MemoryFile, String)> {
@@ -496,12 +568,19 @@ impl MemoryStore {
         }
     }
     pub fn reject_proposal(&self, id: &str) -> io::Result<()> {
-        self.decide_proposal(id, false)
+        self.decide_proposal(id, ProposalDecision::Reject)
     }
     pub fn accept_proposal(&self, id: &str) -> io::Result<()> {
-        self.decide_proposal(id, true)
+        self.decide_proposal(id, ProposalDecision::AcceptId)
     }
-    fn decide_proposal(&self, id: &str, accept: bool) -> io::Result<()> {
+    pub fn accept_shown(&self, shown: &PendingProposal, choice: AcceptChoice) -> io::Result<()> {
+        self.decide_proposal(
+            &shown.proposal.id,
+            ProposalDecision::AcceptShown(shown, choice),
+        )
+    }
+    fn decide_proposal(&self, id: &str, decision: ProposalDecision<'_>) -> io::Result<()> {
+        let accept = !matches!(decision, ProposalDecision::Reject);
         let _lock = store_io::lock(&self.path("records.lock"))?;
         let mut file = self.load_locked()?;
         let before = file.clone();
@@ -513,10 +592,37 @@ impl MemoryStore {
             .iter()
             .position(|p| p.proposal.id == id)
             .ok_or_else(|| invalid("Unknown proposal"))?;
-        if file.proposals[index].status != ProposalStatus::Pending {
+        let pending = &file.proposals[index];
+        if pending.status != ProposalStatus::Pending {
             return Err(invalid("Proposal was already decided"));
         }
-        let proposal = file.proposals[index].proposal.clone();
+        let revised = match decision {
+            ProposalDecision::AcceptId if pending.comment.is_some() => {
+                return Err(invalid("Review the comment before accepting"));
+            }
+            ProposalDecision::AcceptShown(shown, choice) => {
+                if shown.basis() != pending.basis() {
+                    return Err(invalid("The proposal changed. Review it again"));
+                }
+                match choice {
+                    AcceptChoice::Original => None,
+                    AcceptChoice::Shown if pending.can_rewrite() && pending.comment.is_some() => {
+                        let text = pending
+                            .revision_text()
+                            .filter(|text| Some(*text) == shown.revision_text());
+                        Some(text.ok_or_else(|| {
+                            invalid("Wait for new wording or accept the original wording")
+                        })?)
+                    }
+                    AcceptChoice::Shown => None,
+                }
+            }
+            _ => None,
+        };
+        let mut proposal = pending.proposal.clone();
+        if let Some(text) = revised {
+            proposal.text = text.into();
+        }
         let projects = super::TaskStore::new(self.root.clone()).load_projects()?;
         let catalog = projects.area_catalog()?;
         let assignment = catalog.resolve_target(
@@ -531,6 +637,9 @@ impl MemoryStore {
             validate_reviewable_proposal(&proposal)?;
             if blocked(&file, &proposal.sources) {
                 return Err(invalid("This source set was forgotten"));
+            }
+            if !self.sources_visible(&proposal.sources) {
+                return Err(invalid("A proposal source is no longer visible"));
             }
             if let Some(target) = &proposal.target_id {
                 let record = active_record(&mut file, target)?;
@@ -618,7 +727,7 @@ impl MemoryStore {
         capture_undo(&before, &mut file);
         self.save(&before, &file)
     }
-    pub fn comment_proposal(&self, id: &str, comment: &str) -> io::Result<()> {
+    pub fn comment_proposal(&self, id: &str, comment: &str) -> io::Result<Option<RevisionRequest>> {
         if comment.trim().is_empty() || comment.chars().count() > 4000 {
             return Err(invalid("Write a comment of up to 4000 characters"));
         }
@@ -630,8 +739,42 @@ impl MemoryStore {
             .iter_mut()
             .find(|p| p.proposal.id == id && p.status == ProposalStatus::Pending)
             .ok_or_else(|| invalid("This proposal is no longer waiting"))?;
+        if !self.sources_visible(&proposal.proposal.sources) {
+            return Err(invalid("A proposal source is no longer visible"));
+        }
         proposal.comment = Some(comment.trim().into());
-        self.save(&before, &file)
+        let request = proposal.revision_request();
+        self.save(&before, &file)?;
+        Ok(request)
+    }
+    pub fn save_revision(&self, request: &RevisionRequest, text: &str) -> io::Result<bool> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 4000 {
+            return Err(invalid("The rewrite needs up to 4000 characters"));
+        }
+        let _lock = store_io::lock(&self.path("records.lock"))?;
+        let mut file = self.load_locked()?;
+        let before = file.clone();
+        let Some(proposal) = file
+            .proposals
+            .iter_mut()
+            .find(|p| p.proposal.id == request.id)
+        else {
+            return Ok(false);
+        };
+        if proposal.status != ProposalStatus::Pending
+            || proposal.basis() != request.basis
+            || proposal.revision_text().is_some()
+            || !self.sources_visible(&request.sources)
+        {
+            return Ok(false);
+        }
+        proposal.revision = Some(ProposalRevision {
+            basis: request.basis.clone(),
+            text: text.into(),
+        });
+        self.save(&before, &file)?;
+        Ok(true)
     }
     pub fn undo_event(&self, record_id: &str, at: &str) -> io::Result<()> {
         let _lock = store_io::lock(&self.path("records.lock"))?;
@@ -837,6 +980,7 @@ fn merge_proposals(
                 created_at: created_at.into(),
                 decided_at: None,
                 comment: None,
+                revision: None,
             });
         }
     }

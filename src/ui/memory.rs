@@ -757,10 +757,12 @@ impl State {
         }
     }
     pub fn memory_comment_save(&mut self, id: &str) {
-        let result = MemoryStore::default().comment_proposal(id, &self.memory.comment.text);
+        let result = MemoryStore::default()
+            .comment_proposal(id, &self.memory.comment.text)
+            .map(|_| ());
         if self.memory_done(id, result) {
             self.memory.comment_for = None;
-            self.memory.result = Some("Comment saved for Sidenote's next check.".into());
+            self.memory.result = Some("Comment saved.".into());
         }
     }
 

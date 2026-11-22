@@ -7,6 +7,7 @@ fn fixture() -> MemoryStore {
 fn fixture_at(stamp: String) -> MemoryStore {
     let root = fixture_root(Local::now().timestamp_nanos_opt().unwrap());
     let store = MemoryStore::new(root);
+    super::super::recording_guard::keep_in(&store.root, "1800000000000-1").unwrap();
     let source = MemorySource::Meeting {
         reference: "[[1800000000000-1@00:05]]".into(),
     };
@@ -73,6 +74,103 @@ fn fixture_roots_are_distinct_within_the_same_clock_tick() {
 }
 
 #[test]
+fn plain_accept_refuses_a_commented_proposal() {
+    let store = fixture();
+    let id = store.load().unwrap().proposals[0].proposal.id.clone();
+    store.comment_proposal(&id, "Friday afternoon.").unwrap();
+    assert!(store.accept_proposal(&id).is_err());
+    assert_eq!(
+        store.load().unwrap().proposals[0].status,
+        ProposalStatus::Pending
+    );
+}
+
+#[test]
+fn plain_accept_refuses_a_source_hidden_since_the_card_loaded() {
+    let store = fixture();
+    let shown = store.list_pending_proposals().unwrap().remove(0);
+    let receipt = store
+        .root
+        .join("local/recording-guard/1800000000000-1.json");
+    fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+    fs::write(receipt, "unreadable synthetic receipt").unwrap();
+    let before = serde_json::to_vec(&store.load().unwrap()).unwrap();
+    assert!(store.accept_proposal(&shown.proposal.id).is_err());
+    assert_eq!(serde_json::to_vec(&store.load().unwrap()).unwrap(), before);
+}
+
+#[test]
+fn revision_preserves_the_first_reply_for_the_current_pending_comment() {
+    let store = fixture();
+    let id = store.load().unwrap().proposals[0].proposal.id.clone();
+    let first = store
+        .comment_proposal(&id, "Friday morning.")
+        .unwrap()
+        .unwrap();
+    let current = store
+        .comment_proposal(&id, "Friday afternoon.")
+        .unwrap()
+        .unwrap();
+    assert!(
+        !store
+            .save_revision(&first, "The demo is Friday morning.")
+            .unwrap()
+    );
+    assert!(
+        store
+            .save_revision(&current, "The demo is Friday afternoon.")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .save_revision(&current, "The demo is at 3 pm.")
+            .unwrap()
+    );
+    assert_eq!(
+        store.load().unwrap().proposals[0].revision_text(),
+        Some("The demo is Friday afternoon.")
+    );
+    store.reject_proposal(&id).unwrap();
+    assert!(
+        !store
+            .save_revision(&current, "The demo is at 4 pm.")
+            .unwrap()
+    );
+}
+
+#[test]
+fn accept_binds_the_choice_to_the_wording_on_the_card() {
+    for choice in [AcceptChoice::Shown, AcceptChoice::Original] {
+        let store = fixture();
+        let id = store.load().unwrap().proposals[0].proposal.id.clone();
+        let request = store
+            .comment_proposal(&id, "Friday afternoon.")
+            .unwrap()
+            .unwrap();
+        let original = store.list_pending_proposals().unwrap().remove(0);
+        assert!(store.accept_shown(&original, AcceptChoice::Shown).is_err());
+        store
+            .save_revision(&request, "The demo is Friday afternoon.")
+            .unwrap();
+        assert!(store.accept_shown(&original, AcceptChoice::Shown).is_err());
+        let revised = store.list_pending_proposals().unwrap().remove(0);
+        let (shown, wording) = match choice {
+            AcceptChoice::Shown => (&revised, "The demo is Friday afternoon."),
+            AcceptChoice::Original => (&original, "The demo is Friday."),
+        };
+        store.accept_shown(shown, choice).unwrap();
+        assert!(
+            store
+                .load()
+                .unwrap()
+                .records
+                .iter()
+                .any(|r| r.text.as_deref() == Some(wording))
+        );
+    }
+}
+
+#[test]
 fn proposal_acceptance_compares_timestamp_instants_after_comment_and_restart() {
     let stamp = "2026-11-11T12:00:00.123456700+05:30";
     for equivalent in [
@@ -100,7 +198,9 @@ fn proposal_acceptance_compares_timestamp_instants_after_comment_and_restart() {
             loaded.proposals[0].proposal.target_updated_at.as_deref(),
             Some(stamp)
         );
-        restarted.accept_proposal(&id).unwrap();
+        restarted
+            .accept_shown(&loaded.proposals[0], AcceptChoice::Original)
+            .unwrap();
         let accepted = restarted.load().unwrap();
         assert_eq!(accepted.records[0].status, RecordStatus::Superseded);
         assert_eq!(accepted.proposals[0].status, ProposalStatus::Accepted);
@@ -146,7 +246,8 @@ fn undo_restores_records_and_pending_review_after_restart_and_refuses_replay() {
     store
         .comment_proposal(&id, "Check the venue booking too.")
         .unwrap();
-    store.accept_proposal(&id).unwrap();
+    let shown = store.load().unwrap().proposals.remove(0);
+    store.accept_shown(&shown, AcceptChoice::Original).unwrap();
     let changed = store.load().unwrap();
     assert_eq!(changed.records.len(), 2);
     assert_eq!(changed.records[0].status, RecordStatus::Superseded);
