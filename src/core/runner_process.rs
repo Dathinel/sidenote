@@ -14,7 +14,7 @@ pub(crate) mod deadline;
 mod translation;
 #[derive(Clone, Copy)]
 pub(super) enum Invocation<'a> {
-    General(&'a Runner),
+    General(&'a Runner, Option<&'a dyn Fn() -> bool>),
     Translation {
         model: &'a str,
         capability: Option<&'a str>,
@@ -421,7 +421,7 @@ pub(super) fn run_runner_with_timeout(
     progress: impl Fn(AskProgress),
 ) -> Result<String, String> {
     run_classified(
-        Invocation::General(runner),
+        Invocation::General(runner, None),
         prompt,
         working_dir,
         timeout,
@@ -447,7 +447,7 @@ pub(super) fn run_classified(
     let expired = || deadline.is_some_and(|end| deadline::now() >= end);
     let mut prepared;
     let (runner, text_only) = match invocation {
-        Invocation::General(r) => {
+        Invocation::General(r, _) => {
             runners::validate(r)?;
             (r, false)
         }
@@ -599,6 +599,11 @@ pub(super) fn run_classified(
     #[cfg(test)]
     if claude {
         deadline::fixture::reach(deadline::fixture::Phase::Spawn);
+    }
+    if let Invocation::General(_, Some(authorize)) = invocation
+        && !authorize()
+    {
+        return Err("The runner request is no longer current.".into());
     }
     let mut child = spawn(&mut command, runner.stdin).map_err(|e| {
         format!(

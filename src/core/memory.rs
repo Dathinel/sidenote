@@ -1,4 +1,5 @@
 //! Owner-controlled company claims. records.json is authoritative; Markdown is a projection.
+mod revision;
 #[cfg(test)]
 mod undo_tests;
 use super::{

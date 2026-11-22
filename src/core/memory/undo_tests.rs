@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> MemoryStore {
+pub(super) fn fixture() -> MemoryStore {
     fixture_at(Local::now().to_rfc3339())
 }
 

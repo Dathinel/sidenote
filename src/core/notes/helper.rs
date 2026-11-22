@@ -38,7 +38,7 @@ impl Helper {
     }
 }
 
-pub(super) fn runner(helper: Helper, model: &str) -> Runner {
+pub(in crate::core) fn runner(helper: Helper, model: &str) -> Runner {
     let (program, args, tools): (&str, Vec<&str>, bool) = match helper {
         Helper::Claude => (
             "claude",
@@ -258,7 +258,7 @@ impl Run for Cli {
         }
         let scratch = Scratch::new().map_err(|_| Failure::Backend { exit: None })?;
         runner_process::run_classified(
-            runner_process::Invocation::General(&runner(helper, model)),
+            runner_process::Invocation::General(&runner(helper, model), None),
             prompt,
             &scratch.0,
             timeout,
