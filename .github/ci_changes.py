@@ -21,6 +21,8 @@ MODULES = {
     "src/sync_owner/read_tests.rs": "sync_owner::read_tests::",
 }
 DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY.md"}
+RUST_ROOT_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "build.ps1", "default-runners.json"}
+RUST_DIRS = (".cargo/", "src/", "crates/", "examples/", "tests/", "assets/", "packaging/")
 
 def git(*args):
     return subprocess.check_output(["git", *args])
@@ -29,12 +31,12 @@ def classify(paths, main, windows_cfg):
     docs = {p for p in paths if p in DOCS or p.startswith(("docs/", "reviews/", "artifacts/"))}
     relay = {p for p in paths if p.startswith("relay/")}
     tools = {p for p in paths if p.startswith(("tools/", "scripts/")) or p == "tests/linux_package.py"}
-    workflow_paths = {p for p in paths if p.startswith(".github/")}
-    workflow = bool(workflow_paths)
+    workflow = any(p.startswith(".github/") for p in paths)
     embedded = {p for p in tools if p.startswith(("scripts/meeting-pipeline/", "tools/ui-fixtures/"))}
-    rust = (paths - docs - relay - workflow_paths - tools) | embedded
+    rust = {p for p in paths - tools if p in RUST_ROOT_FILES or p.startswith(RUST_DIRS)} | embedded
+    run_all = workflow or bool(paths - (docs | relay | tools | rust))
     # Only a test-only module can safely avoid the whole suite. Tools may embed test fixtures.
-    focused = MODULES.get(next(iter(rust)), "") if len(rust) == 1 and not (main or workflow) else ""
+    focused = MODULES.get(next(iter(rust)), "") if len(rust) == 1 and not (main or run_all) else ""
     windows = any(
         p in WINDOWS_ONLY or p.startswith(("src/meeting_icon/", "src/core/meeting_router/production/",
                                            ".cargo/", "scripts/meeting-pipeline/"))
@@ -43,8 +45,8 @@ def classify(paths, main, windows_cfg):
         for p in rust
     )
     return {"docs_only": paths == docs, "rust": bool(rust), "workflow": workflow,
-            "linux": main or workflow or bool(rust), "windows": main or workflow or windows,
-            "relay": bool(relay), "tools": bool(tools), "module": focused}
+            "linux": main or run_all or bool(rust), "windows": main or run_all or windows,
+            "relay": run_all or bool(relay), "tools": run_all or bool(tools), "module": focused}
 
 def changed_jobs():
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
@@ -87,9 +89,14 @@ def self_test():
     assert classify({"src/mixed.rs"}, False, cfg)["windows"]
     assert classify({"src/platform/windows/job_process.rs"}, False, cfg)["windows"]
     assert classify({"src/hex_install.rs"}, False, cfg)["windows"]
-    assert classify({".github/workflows/ci.yml"}, False, cfg)["linux"]
     assert classify({"README.md"}, True, cfg)["windows"]
     module, name = next(iter(MODULES.items()))
+    for path in (".github/workflows/ci.yml", "ci-support/check.py"):
+        for paths in ({path}, {path, module}):
+            result = classify(paths, False, cfg)
+            assert all(result[job] for job in ("linux", "windows", "relay", "tools")), result
+            assert result["module"] == "", result
+    assert not classify({"Cargo.lock"}, False, cfg)["relay"]
     assert classify({module, "README.md"}, False, cfg)["module"] == name
     assert classify({module, "Cargo.toml"}, False, cfg)["module"] == ""
     assert WINDOWS_CFG.search(b'#[cfg(all(\n  test, target_os = "windows"\n))]')
