@@ -259,6 +259,128 @@ fn start_timeout_preserves_pending_notes_before_removal() {
 }
 
 #[cfg(windows)]
+fn refused_start_timeout(name: &str, restore_primary: bool) {
+    if isolated_api_test(name) {
+        return;
+    }
+    let (api, mut state, _) = Fixture::start_idle();
+    api.data.lock().unwrap().start_records = false;
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(idle)));
+    state.new_meeting();
+    assert!(state.hex.record_busy);
+    Fixture::finish(&mut state);
+    assert!(state.hex.error.is_none());
+    let live = state.live.as_mut().unwrap();
+    assert_eq!(live.phase, crate::ui::live::Phase::Starting);
+    live.age_past_start_timeout();
+    let page = live.recording_id;
+
+    let root = sidenote::core::state_dir();
+    let notes = sidenote::core::meeting_parts::inputs(&root)
+        .join(&live.session.as_ref().unwrap().id)
+        .join(sidenote::core::live::NOTES_FILE);
+    let recovery = root.join("unsaved-notes");
+    std::fs::create_dir(&notes).unwrap();
+    std::fs::write(&recovery, "synthetic recovery blocker").unwrap();
+    let text = "Synthetic notes after a refused close";
+    state.live_notes = rune::TextEdit::new(text);
+    assert!(!state.live_close(), "both note destinations are blocked");
+
+    let idle = state.hex.engine.status_for_command().unwrap();
+    assert!(idle.recording.is_none());
+    state.hex_apply(Msg::Status(Ok(idle)));
+    let live = state.live.as_ref().expect("failed save must keep the page");
+    assert_eq!(live.recording_id, page);
+    assert!(live.close_failed);
+    assert_eq!(state.live_notes.text, text);
+
+    std::fs::remove_file(&recovery).unwrap();
+    if restore_primary {
+        std::fs::remove_dir(&notes).unwrap();
+    }
+    let (saved, wake) = std::sync::mpsc::channel();
+    state.waker = Some(std::sync::Arc::new(move || {
+        let _ = saved.send(());
+    }));
+    state.live_flush();
+    wake.recv_timeout(Duration::from_secs(2)).unwrap();
+    state.waker = None;
+    state.live_tick();
+    if restore_primary {
+        assert_eq!(std::fs::read_to_string(&notes).unwrap(), text);
+    } else {
+        saved_removal_notes(text);
+    }
+
+    let idle = state.hex.engine.status_for_command().unwrap();
+    assert!(idle.recording.is_none());
+    state.hex_apply(Msg::Status(Ok(idle)));
+    assert!(
+        state.live.is_none(),
+        "durable notes must let the timeout finish"
+    );
+    if let Ok(preserved) = std::fs::read_to_string(&notes) {
+        assert_eq!(preserved, text);
+    } else {
+        saved_removal_notes(text);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn refused_close_resumes_start_timeout_after_notes_recovery() {
+    refused_start_timeout(
+        "refused_close_resumes_start_timeout_after_notes_recovery",
+        false,
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn refused_close_resumes_start_timeout_after_primary_save() {
+    refused_start_timeout(
+        "refused_close_resumes_start_timeout_after_primary_save",
+        true,
+    );
+}
+
+#[test]
+fn refused_close_save_failure_log_contains_only_route_and_kind() {
+    if isolated_api_test("refused_close_save_failure_log_contains_only_route_and_kind") {
+        return;
+    }
+    crate::test_paths::isolate();
+    let root = sidenote::core::state_dir();
+    let meeting = root.join("synthetic-private-meeting-123");
+    let recovery = root.join("synthetic-blocked-recovery");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(&recovery, "synthetic blocker").unwrap();
+    let kind = std::fs::create_dir_all(&recovery).unwrap_err().kind();
+
+    assert!(
+        sidenote::core::live::preserve_notes(
+            Some(meeting),
+            "Synthetic private draft",
+            &recovery.join("draft.md"),
+        )
+        .is_err()
+    );
+    let log = std::fs::read_to_string(sidenote::core::log_path()).unwrap_or_default();
+    let messages: Vec<_> = log
+        .lines()
+        .filter_map(|line| line.split_once(" listener: ").map(|(_, message)| message))
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "live notes save failed route=meeting_folder kind=NotFound".to_owned(),
+            format!("live notes save failed route=recovery_copy kind={kind:?}"),
+        ]
+    );
+}
+
+#[cfg(windows)]
 #[test]
 fn failed_start_preserves_pending_notes_before_removal() {
     if isolated_api_test("failed_start_preserves_pending_notes_before_removal") {

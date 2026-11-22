@@ -192,21 +192,31 @@ pub fn preserve_notes(
     text: &str,
     recovery: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    if let Some(folder) = folder
-        && write_notes(&folder, text).is_ok()
-    {
-        let _ = fs::remove_file(recovery);
-        return Ok(Some(folder));
+    if let Some(folder) = folder {
+        match write_notes(&folder, text) {
+            Ok(()) => {
+                let _ = fs::remove_file(recovery);
+                return Ok(Some(folder));
+            }
+            Err(error) => log_save_failure("meeting_folder", error.kind()),
+        }
     }
     let backup = recovery
         .parent()
         .ok_or_else(|| io::Error::other("Missing recovery folder"))
         .and_then(fs::create_dir_all)
         .and_then(|()| super::store_io::atomic_write(recovery, text.as_bytes()));
-    backup.map(|()| None).map_err(|_| {
+    backup.map(|()| None).map_err(|error| {
+        log_save_failure("recovery_copy", error.kind());
         "Could not save your notes or a recovery copy. Keep this text before closing Sidenote."
             .into()
     })
+}
+
+fn log_save_failure(route: &str, kind: io::ErrorKind) {
+    crate::listener::log(&format!(
+        "live notes save failed route={route} kind={kind:?}"
+    ));
 }
 
 #[cfg(test)]

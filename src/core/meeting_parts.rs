@@ -89,10 +89,25 @@ pub fn discard_pending(root: &Path, id: &str) -> io::Result<()> {
         return Ok(());
     }
     std::fs::remove_file(path(root, id)?)?;
-    match std::fs::remove_dir_all(inputs(root).join(id)) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
+    let folder = inputs(root).join(id);
+    if !file_reads::directory(&folder) || folder.join(super::live::NOTES_FILE).try_exists()? {
+        return Ok(());
     }
+    if let Err(error) = std::fs::remove_file(folder.join("manifest.json"))
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(error);
+    }
+    // A notes writer can publish while the pending record is being discarded.
+    if let Err(error) = std::fs::remove_dir(folder)
+        && !matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+        )
+    {
+        return Err(error);
+    }
+    Ok(())
 }
 pub fn inputs(root: &Path) -> PathBuf {
     root.join("local/meeting-inputs")
