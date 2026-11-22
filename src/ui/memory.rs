@@ -676,6 +676,9 @@ impl State {
     }
 
     pub fn memory_retire(&mut self, id: &str) {
+        // Runtime fixtures can invoke this action without a native window turn.
+        #[cfg(target_os = "linux")]
+        let _budget = sidenote::core::UiLockBudget::begin();
         let r = MemoryStore::default().retire_record(id);
         self.memory.ask = None;
         self.memory_done(id, r);

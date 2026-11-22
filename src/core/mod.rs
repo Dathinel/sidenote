@@ -58,6 +58,8 @@ pub mod mcp_connect;
 pub use sync_state::{EditView, mutation_generation};
 mod memory_migration;
 pub(crate) mod store_io;
+#[cfg(target_os = "linux")]
+pub use store_io::UiLockBudget;
 mod sync_state;
 pub use daily_check::{apply_action, company_memory, latest_check, list_checks, load_check};
 pub use device::DeviceSettings;

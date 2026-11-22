@@ -9,6 +9,11 @@ pub(super) fn configure(app: rune::App<State>) -> rune::App<State> {
     let close_handle = app.handle();
     #[cfg(not(windows))]
     let app = app.keep_running().on_close(request_close);
+    #[cfg(target_os = "linux")]
+    let app = app.turn_scope(
+        |state| state.turn_lock_budget = Some(sidenote::core::UiLockBudget::begin()),
+        |state| state.turn_lock_budget = None,
+    );
     // The OS places a new window at a cascade offset, which at 125% scaling on a 1080p screen
     // pushes the bottom (and the Ask bar) off screen. Fit the size to the work area and centre.
     app.on_window(move |win| {

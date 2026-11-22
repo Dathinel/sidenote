@@ -245,6 +245,8 @@ pub struct ListGroup {
 }
 
 pub struct State {
+    #[cfg(target_os = "linux")]
+    turn_lock_budget: Option<core::UiLockBudget>,
     ask_frame_response_time: u64,
     tasks_response_time: u64,
     task_detail_response_time: Option<Operation>,
@@ -460,6 +462,8 @@ impl State {
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
+            #[cfg(target_os = "linux")]
+            turn_lock_budget: None,
             ask_frame_response_time: 0,
             tasks_response_time: 0,
             task_detail_response_time: None,

@@ -2,10 +2,44 @@
 use serde::{Serialize, de::DeserializeOwned};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
+#[cfg(target_os = "linux")]
+use std::{cell::Cell, marker::PhantomData, rc::Rc, time::Instant};
 use std::{fs, io, io::Write, path::Path, time::Duration};
 
 const LOCK_RETRIES: usize = 4;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static UI_LOCK_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Share one writer-lock deadline across a synchronous Linux UI action.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub struct UiLockBudget(Option<Instant>, PhantomData<Rc<()>>);
+
+#[cfg(target_os = "linux")]
+impl UiLockBudget {
+    pub fn begin() -> Self {
+        Self(
+            UI_LOCK_DEADLINE.with(|slot| {
+                let deadline = slot
+                    .get()
+                    .unwrap_or_else(|| Instant::now() + LOCK_RETRY_DELAY * LOCK_RETRIES as u32);
+                slot.replace(Some(deadline))
+            }),
+            PhantomData,
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for UiLockBudget {
+    fn drop(&mut self) {
+        UI_LOCK_DEADLINE.with(|slot| slot.set(self.0));
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct RelayFailure(pub &'static str, pub Option<i32>, pub Option<&'static str>);
@@ -344,7 +378,18 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
         if error.kind() != io::ErrorKind::WouldBlock || attempt == LOCK_RETRIES {
             return Err(error);
         }
-        std::thread::sleep(LOCK_RETRY_DELAY);
+        #[cfg(target_os = "linux")]
+        let delay = UI_LOCK_DEADLINE.with(|slot| {
+            slot.get().map_or(LOCK_RETRY_DELAY, |deadline| {
+                LOCK_RETRY_DELAY.min(deadline.saturating_duration_since(Instant::now()))
+            })
+        });
+        #[cfg(not(target_os = "linux"))]
+        let delay = LOCK_RETRY_DELAY;
+        if delay.is_zero() {
+            return Err(error);
+        }
+        std::thread::sleep(delay);
     }
     unreachable!()
 }
