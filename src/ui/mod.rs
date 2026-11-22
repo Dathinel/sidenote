@@ -1970,6 +1970,14 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if s.view == tasks::View::People {
+        if e.key == Key::Tab && e.mods.ctrl {
+            let tabs = hex::settings::Page::People.tabs().len() as isize;
+            let step = if e.mods.shift { -1 } else { 1 };
+            let next = (s.people.tab as isize + step).rem_euclid(tabs) as usize;
+            s.open_people_tab(next);
+            tx.blur();
+            return true;
+        }
         if e.key == Key::Escape {
             if s.people.team_editor.is_some() {
                 teams::cancel(s);

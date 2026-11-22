@@ -3081,6 +3081,25 @@ mod tests {
             );
         }
 
+        rt.update(|s, _| s.open_people_tab(0));
+        for (shift, expected) in [(false, 1), (false, 0), (true, 1), (true, 0)] {
+            rt.update(|s, tx| {
+                let event = KeyEvent {
+                    key: Key::Tab,
+                    mods: rune::Mods {
+                        ctrl: true,
+                        shift,
+                        ..Default::default()
+                    },
+                };
+                assert!(
+                    crate::ui::on_key(s, &event, tx),
+                    "People ignored Ctrl+Tab with shift={shift}"
+                );
+                assert_eq!(s.people.tab, expected, "Ctrl+Tab with shift={shift}");
+            });
+        }
+
         rt.update(|s, _| s.open_hex());
         rt.frame(0.2);
         assert!(rt.find("settings-page-People").is_none());
