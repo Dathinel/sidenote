@@ -142,12 +142,15 @@ fn failed_first_start_drops_the_pending_record_but_keeps_a_meeting_with_parts() 
         b"fixture",
     )
     .unwrap();
-    assert!(discard_pending(root.path(), &pending.id).unwrap());
+    assert!(matches!(
+        discard_pending(root.path(), &pending.id, false).unwrap(),
+        PendingDisposition::Discarded
+    ));
     assert!(read(root.path(), &pending.id).unwrap().is_none());
     assert!(!inputs(root.path()).join(&pending.id).exists());
-    discard_pending(root.path(), &pending.id).unwrap();
+    discard_pending(root.path(), &pending.id, false).unwrap();
     part(&hex, "200-2", 5000, "complete");
     Meeting::begin(root.path(), "200-2", 200).unwrap();
-    discard_pending(root.path(), "200-2").unwrap();
+    discard_pending(root.path(), "200-2", false).unwrap();
     assert_eq!(read(root.path(), "200-2").unwrap().unwrap().parts.len(), 1);
 }

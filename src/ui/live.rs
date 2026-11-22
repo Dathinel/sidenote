@@ -15,7 +15,7 @@ use rune::{El, ScrollSpec, TextEdit, col, el, row};
 use rune_kit::Kit;
 use sidenote::core::live::{self as feed_io, LiveLine, Read};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -279,8 +279,9 @@ pub struct Live {
     /// A render scene: nothing is read, and the bars hold still.
     scene: bool,
     pub close_failed: bool,
+    start_failed: bool,
     saves: Arc<Mutex<Vec<SaveResult>>>,
-    queued: Option<String>,
+    queued: VecDeque<String>,
 }
 
 impl Drop for Live {
@@ -305,11 +306,13 @@ impl Live {
     }
 
     fn can_close(&self, text: &str) -> bool {
-        self.queued.is_none() && (text == self.saved || self.recovered.as_deref() == Some(text))
+        self.queued.is_empty()
+            && (text == self.saved
+                || (!self.start_failed && self.recovered.as_deref() == Some(text)))
     }
 
     fn needs_save(&self, text: &str) -> bool {
-        text != self.saved || self.queued.as_ref().is_some_and(|queued| queued != text)
+        text != self.saved || self.queued.back().is_some_and(|queued| queued != text)
     }
 
     fn new(phase: Phase, known: HashSet<String>) -> Self {
@@ -342,8 +345,9 @@ impl Live {
             timer_armed: Arc::new(AtomicBool::new(false)),
             scene: false,
             close_failed: false,
+            start_failed: false,
             saves: Arc::new(Mutex::new(Vec::new())),
-            queued: None,
+            queued: VecDeque::new(),
         }
     }
 
@@ -442,9 +446,7 @@ impl State {
         let results = std::mem::take(&mut *live.saves.lock().unwrap_or_else(|e| e.into_inner()));
         let mut changed = !results.is_empty();
         for (text, result) in results {
-            if live.queued.as_ref() == Some(&text) {
-                live.queued = None;
-            }
+            let _ = live.queued.pop_front();
             match result {
                 Ok(Some(folder)) => {
                     live.recovered = None;
@@ -481,8 +483,9 @@ impl State {
             writer.finish();
         }
         self.live_saved();
+        self.parts_drop_unstarted();
         let safe = self.live.as_mut().is_none_or(|live| {
-            let safe = live.can_close(&self.live_notes.text);
+            let safe = !live.start_failed && live.can_close(&self.live_notes.text);
             live.close_failed = !safe;
             safe
         });
@@ -658,12 +661,10 @@ impl State {
         }
         match live.phase {
             Phase::Starting if recording => live.phase = Phase::Recording,
-            Phase::Starting if running && !busy && live.began.elapsed() > START_WAIT => {
-                self.parts_drop_unstarted();
-                if self.live_close() {
-                    self.live = None;
-                    self.live_open = false;
-                }
+            Phase::Starting
+                if running && !busy && !live.start_failed && live.began.elapsed() > START_WAIT =>
+            {
+                self.parts_start_failed();
             }
             Phase::Recording if running && !recording && !busy => self.live_stopped(),
             Phase::Making if recording => {
@@ -919,7 +920,8 @@ impl State {
                 changed = true;
             }
         }
-        if self.live_notes.text != live.seen {
+        let edited = self.live_notes.text != live.seen;
+        if edited {
             live.seen = self.live_notes.text.clone();
             live.edited_at = Some(Instant::now());
             live.saving = Saving::Pending;
@@ -933,7 +935,7 @@ impl State {
                 self.live_arm_save();
             }
         }
-        changed
+        ((saved || edited) && self.parts_drop_unstarted()) || changed
     }
 
     /// Wakes the page once, about 2 s from now, so a save happens with no key pressed.
@@ -962,7 +964,7 @@ impl State {
         let Some(live) = self.live.as_mut() else {
             return false;
         };
-        if live.queued.as_ref() == Some(&text) {
+        if live.queued.back() == Some(&text) {
             return false;
         }
         let folder = live.folder.clone();
@@ -970,7 +972,7 @@ impl State {
             .join("unsaved-notes")
             .join(format!("{}.md", live.wall_start.timestamp_millis()));
         let results = live.saves.clone();
-        live.queued = Some(text.clone());
+        live.queued.push_back(text.clone());
         live.saving = Saving::Pending;
         let wake = self.waker.clone();
         let queued = self.live_work(move || {
@@ -987,7 +989,7 @@ impl State {
             }
         });
         if !queued && let Some(live) = self.live.as_mut() {
-            live.queued = None;
+            live.queued.clear();
             live.saving = Saving::Failed(
                 "Could not start saving notes. Keep this text before closing Sidenote.".into(),
             );
@@ -1313,6 +1315,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                                 .key("live-close-retry")
                                 .on_press(|s: &mut State| {
                                     s.live_flush();
+                                    s.parts_drop_unstarted();
                                 }),
                         ),
                 ),
@@ -1945,9 +1948,9 @@ mod writer_tests {
         assert!(live.can_close("draft"));
         assert!(!live.can_close("newer draft"));
         live.saved = "newer draft".into();
-        live.queued = Some("old draft".into());
+        live.queued.push_back("old draft".into());
         assert!(!live.can_close("newer draft"));
-        live.queued = None;
+        live.queued.clear();
         assert!(live.can_close("newer draft"));
     }
 
@@ -1980,9 +1983,9 @@ mod writer_tests {
     fn reverting_text_still_flushes_after_an_older_queued_save() {
         let mut live = Live::scene(Phase::Recording, None);
         live.saved = "original".into();
-        live.queued = Some("edited".into());
+        live.queued.push_back("edited".into());
         assert!(live.needs_save("original"));
-        live.queued = Some("original".into());
+        live.queued.push_back("original".into());
         assert!(!live.needs_save("original"));
     }
 
