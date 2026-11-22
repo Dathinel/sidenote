@@ -233,6 +233,26 @@ pub struct MemoryEvent {
     pub undo: Option<MemoryUndo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<DecisionSnapshot>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionSnapshot {
+    pub text: Option<String>,
+    pub comment: Option<String>,
+    pub comment_used: bool,
+    pub sources: Vec<MemorySource>,
+}
+
+#[derive(PartialEq, Eq)]
+pub struct HistoryRow {
+    pub record_id: String,
+    pub operation: String,
+    pub at: String,
+    pub decision: Option<DecisionSnapshot>,
+    pub comment_label: Option<&'static str>,
+    pub can_undo: bool,
+    pub undone: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationInfo {
@@ -407,6 +427,86 @@ impl MemoryStore {
             &super::meetings_dir(),
             sources.iter().map(MemorySource::reference),
         )
+    }
+
+    pub fn history_rows(&self, file: &MemoryFile) -> Vec<HistoryRow> {
+        file.events
+            .iter()
+            .map(|event| {
+                let accepted = event.operation == "accept_proposal";
+                let proposal = file
+                    .proposals
+                    .iter()
+                    .find(|p| Some(p.proposal.id.as_str()) == event.proposal_id.as_deref());
+                let decision = event
+                    .decision
+                    .clone()
+                    .or_else(|| {
+                        let p = proposal?;
+                        Some(DecisionSnapshot {
+                            text: p.can_rewrite().then(|| p.proposal.text.clone()),
+                            comment: (accepted
+                                && event.undone_at.is_none()
+                                && p.status == ProposalStatus::Accepted)
+                                .then(|| p.comment.clone())
+                                .flatten(),
+                            comment_used: false,
+                            sources: p.proposal.sources.clone(),
+                        })
+                    })
+                    .filter(|d| !blocked(file, &d.sources) && self.sources_visible(&d.sources));
+                let comment_label = decision.as_ref().filter(|d| d.comment.is_some()).map(|d| {
+                    if d.comment_used {
+                        "Your comment was used"
+                    } else if event.decision.is_some() && proposal.is_some_and(|p| !p.can_rewrite())
+                    {
+                        "Comment saved as a note"
+                    } else {
+                        "Your comment was not used"
+                    }
+                });
+                HistoryRow {
+                    record_id: event.record_id.clone(),
+                    operation: event.operation.clone(),
+                    at: event.at.clone(),
+                    decision,
+                    comment_label,
+                    can_undo: event.undo.is_some() && event.undone_at.is_none(),
+                    undone: event.undone_at.is_some(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn comments_not_used(&self, file: &MemoryFile) -> Vec<(String, String)> {
+        file.events
+            .iter()
+            .filter_map(|event| {
+                if event.operation != "accept_proposal"
+                    || event.undone_at.is_some()
+                    || event.decision.is_some()
+                {
+                    return None;
+                }
+                let proposal_id = event.proposal_id.as_deref()?;
+                let p = file
+                    .proposals
+                    .iter()
+                    .find(|p| p.proposal.id == proposal_id)?;
+                let comment = p.comment.as_ref()?;
+                let record = file.records.iter().find(|r| r.id == event.record_id)?;
+                let updated = chrono::DateTime::parse_from_rfc3339(&record.updated_at).ok()?;
+                let accepted = chrono::DateTime::parse_from_rfc3339(&event.at).ok()?;
+                (p.can_rewrite()
+                    && p.status == ProposalStatus::Accepted
+                    && record.status == RecordStatus::Active
+                    && updated <= accepted
+                    && !blocked(file, &p.proposal.sources)
+                    && self.sources_visible(&p.proposal.sources)
+                    && self.sources_visible(&record.sources))
+                .then(|| (record.id.clone(), comment.clone()))
+            })
+            .collect()
     }
     /// One consistent prompt snapshot, protected against simultaneous owner edits.
     pub fn snapshot(&self) -> io::Result<(MemoryFile, String)> {
@@ -620,6 +720,8 @@ impl MemoryStore {
             }
             _ => None,
         };
+        let comment_used = revised.is_some();
+        let comment = pending.comment.clone();
         let mut proposal = pending.proposal.clone();
         if let Some(text) = revised {
             proposal.text = text.into();
@@ -710,7 +812,21 @@ impl MemoryStore {
             } else {
                 proposal.target_id.clone().unwrap()
             };
+            let record = file.records.iter().find(|r| r.id == record_id).unwrap();
+            let mut sources = record.sources.clone();
+            for source in &proposal.sources {
+                if !sources.contains(source) {
+                    sources.push(source.clone());
+                }
+            }
+            let snapshot = DecisionSnapshot {
+                text: record.text.clone(),
+                comment,
+                comment_used,
+                sources,
+            };
             event(&mut file, &record_id, "accept_proposal", Some(id));
+            file.events.last_mut().unwrap().decision = Some(snapshot);
         } else {
             event(
                 &mut file,
@@ -718,6 +834,12 @@ impl MemoryStore {
                 "reject_proposal",
                 Some(id),
             );
+            file.events.last_mut().unwrap().decision = Some(DecisionSnapshot {
+                text: Some(proposal.text),
+                comment,
+                comment_used: false,
+                sources: proposal.sources,
+            });
         }
         file.proposals[index].status = if accept {
             ProposalStatus::Accepted
@@ -910,6 +1032,10 @@ impl MemoryStore {
         // Forgetting also removes receipts containing the claim or its proposal text.
         for event in &mut file.events {
             if event.record_id == id
+                || event
+                    .decision
+                    .as_ref()
+                    .is_some_and(|d| source_fingerprint(&d.sources) == forgotten)
                 || event.undo.as_ref().is_some_and(|u| {
                     u.before
                         .iter()
@@ -922,6 +1048,7 @@ impl MemoryStore {
                 })
             {
                 event.undo = None;
+                event.decision = None;
             }
         }
         // Proposals can contain the same claim and rationale. Remove those copies in this store.
@@ -1001,6 +1128,7 @@ fn event(file: &mut MemoryFile, id: &str, operation: &str, proposal: Option<&str
         proposal_id: proposal.map(str::to_owned),
         undo: None,
         undone_at: None,
+        decision: None,
     });
 }
 fn capture_undo(before: &MemoryFile, file: &mut MemoryFile) {

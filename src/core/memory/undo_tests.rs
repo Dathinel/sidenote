@@ -360,3 +360,140 @@ fn forgetting_clears_rejected_proposal_receipts_too() {
     );
     assert!(store.undo_event(&event.record_id, &event.at).is_err());
 }
+
+fn stage_add(store: &MemoryStore) -> String {
+    let mut proposal = store.load().unwrap().proposals[0].proposal.clone();
+    proposal.op = ProposalOp::Add;
+    proposal.target_id = None;
+    proposal.target_updated_at = None;
+    proposal.id = proposal_id(&proposal);
+    store
+        .stage_proposals(std::slice::from_ref(&proposal))
+        .unwrap();
+    proposal.id
+}
+
+fn shown_proposal(store: &MemoryStore, id: &str) -> PendingProposal {
+    store
+        .list_pending_proposals()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.proposal.id == id)
+        .unwrap()
+}
+
+#[test]
+fn decision_history_keeps_visible_wording_until_the_record_is_forgotten() {
+    let store = fixture();
+    let id = stage_add(&store);
+    let request = store
+        .comment_proposal(&id, "Friday afternoon.")
+        .unwrap()
+        .unwrap();
+    let accepted_text = "The demo is Friday afternoon.";
+    store.save_revision(&request, accepted_text).unwrap();
+    store
+        .accept_shown(&shown_proposal(&store, &id), AcceptChoice::Shown)
+        .unwrap();
+    let record_id = format!("memory-{id}");
+    let file = store.load().unwrap();
+    let record = file.records.iter().find(|r| r.id == record_id).unwrap();
+    let mut confirm = file
+        .proposals
+        .iter()
+        .find(|p| p.proposal.id == id)
+        .unwrap()
+        .proposal
+        .clone();
+    confirm.op = ProposalOp::Confirm;
+    confirm.target_id = Some(record_id.clone());
+    confirm.target_updated_at = Some(record.updated_at.clone());
+    confirm.sources = vec![MemorySource::Meeting {
+        reference: "[[1800000000001-1@00:05]]".into(),
+    }];
+    confirm.id = proposal_id(&confirm);
+    super::super::recording_guard::keep_in(&store.root, "1800000000001-1").unwrap();
+    store
+        .stage_proposals(std::slice::from_ref(&confirm))
+        .unwrap();
+    assert!(
+        store
+            .comment_proposal(&confirm.id, "Keep this as a note.")
+            .unwrap()
+            .is_none()
+    );
+    store
+        .accept_shown(&shown_proposal(&store, &confirm.id), AcceptChoice::Shown)
+        .unwrap();
+    fs::write(
+        store
+            .root
+            .join("local/recording-guard/1800000000001-1.json"),
+        "unreadable receipt",
+    )
+    .unwrap();
+    let file = store.load().unwrap();
+    assert!(
+        store
+            .visible_file(file.clone())
+            .records
+            .iter()
+            .all(|r| r.id != record_id)
+    );
+    let rows = store.history_rows(&file);
+    assert!(rows.iter().any(|row| row.record_id == record_id
+        && row.comment_label == Some("Your comment was used")
+        && row.decision.as_ref().and_then(|d| d.text.as_deref()) == Some(accepted_text)));
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.record_id == record_id && r.decision.is_some())
+            .count(),
+        1
+    );
+    store.forget_record(&record_id).unwrap();
+    let file = store.load().unwrap();
+    assert!(
+        file.events
+            .iter()
+            .filter(|e| e.record_id == record_id)
+            .all(|e| e.decision.is_none())
+    );
+    assert!(
+        store
+            .history_rows(&file)
+            .iter()
+            .filter(|r| r.record_id == record_id)
+            .all(|r| r.decision.is_none())
+    );
+}
+
+#[test]
+fn legacy_comment_appears_until_the_owner_confirms_the_record() {
+    let store = fixture();
+    let id = stage_add(&store);
+    let comment = "Trying to keep Friday afternoon.";
+    store.comment_proposal(&id, comment).unwrap();
+    store
+        .accept_shown(&shown_proposal(&store, &id), AcceptChoice::Original)
+        .unwrap();
+    let record = format!("memory-{id}");
+    let before = store.load().unwrap();
+    let mut legacy = before.clone();
+    legacy
+        .events
+        .iter_mut()
+        .find(|e| e.record_id == record)
+        .unwrap()
+        .decision = None;
+    store.save(&before, &legacy).unwrap();
+    let file = store.load().unwrap();
+    assert!(store.history_rows(&file).iter().any(
+        |row| row.record_id == record && row.comment_label == Some("Your comment was not used")
+    ));
+    assert_eq!(
+        store.comments_not_used(&file),
+        [(record.clone(), comment.into())]
+    );
+    store.confirm_record(&record).unwrap();
+    assert!(store.comments_not_used(&store.load().unwrap()).is_empty());
+}
