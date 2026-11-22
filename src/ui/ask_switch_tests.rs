@@ -1638,9 +1638,11 @@ fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
     let project = format!("meeting-project-{MEETING}");
     let more = format!("more-meeting-{MEETING}-button");
     let r = |key: &str| rect_of(&rt, key);
-    // The title is 24 on a 30 line and 16 in from the window edge.
+    // The page starts at the sidebar's 1 point divider; the gutter is 16 from there.
+    let left = r("meeting-pane")[0] + 16.0;
+    // The title is 24 on a 30 line.
     let title = r("meeting-title");
-    assert_eq!((title[0], title[3]), (16.0, 30.0), "title {title:?}");
+    assert_eq!((title[0], title[3]), (left, 30.0), "title {title:?}");
     // Line one: the switch, the date and the menu, the menu at the right gutter.
     let (view, facts, menu) = (r("meeting-view"), r("meeting-facts"), r(&more));
     assert_eq!((facts[1], menu[1]), (view[1], view[1]), "line one");
@@ -1649,7 +1651,7 @@ fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
         390.0 - 16.0,
         "the menu is at the right gutter"
     );
-    assert_eq!(view[0], 16.0, "the switch is at the left gutter");
+    assert_eq!(view[0], left, "the switch is at the left gutter");
     // Line two, 6 below it: the people, the project and the status, then the empty slot the
     // section rail's chip takes.
     let (people, chip, status, slot) = (
@@ -1663,7 +1665,7 @@ fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
     assert!(people[0] + people[2] <= chip[0] && chip[0] + chip[2] <= status[0]);
     assert!(slot[0] >= status[0] + status[2], "the slot ends line two");
     // The notes keep the same 16 gutter, and nothing runs past the window.
-    assert_eq!(r("sec-context")[0], 16.0, "notes gutter");
+    assert_eq!(r("sec-context")[0], left, "notes gutter");
     for e in rt.elements() {
         let key = e.key.as_deref().unwrap_or_default();
         if key.starts_with("meeting-") || key.starts_with("more-meeting-") {
@@ -1898,9 +1900,9 @@ fn meeting_page_below_the_strip_width_fills_the_page_and_never_overflows() {
     let left = nav::width(&rt.state);
     assert_eq!(notes, left + 24.0, "24 gutter");
     assert_eq!(
-        rect_of(&rt, "meeting-header")[0],
+        rect_of(&rt, "meeting-title")[0],
         notes,
-        "header on the notes edge"
+        "title on the notes edge"
     );
     rt.update(|s, _| s.transcript_open = true);
     rt.frame(0.2);
