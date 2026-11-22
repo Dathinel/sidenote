@@ -1728,6 +1728,28 @@ fn the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone() {
     assert!(text < free, "wide: {text} of {free}");
 }
 
+#[test]
+fn the_ask_bar_starts_on_the_notes_edge_wherever_the_strip_is_on() {
+    if in_parent("the_ask_bar_starts_on_the_notes_edge_wherever_the_strip_is_on") {
+        return;
+    }
+    // 800 wide with no sidebar, and 1000 wide with it (a page of 751): both are `narrow` and both
+    // have room for the strip and the 640 column, so the bar sits on the column's edge.
+    for size in [(800.0, 900.0), (1000.0, 900.0)] {
+        let rt = page_at(size);
+        assert!(rt.find("meeting-grid").is_some(), "{size:?}: no strip");
+        let (pill, main) = (rect_of(&rt, "ask-pill"), rect_of(&rt, "meeting-main"));
+        assert_eq!(
+            pill[0], main[0],
+            "{size:?}: the Ask bar is off the notes edge"
+        );
+        assert_eq!(
+            pill[2], main[2],
+            "{size:?}: the Ask bar is not the column's width"
+        );
+    }
+}
+
 /// What Hex reports while it records the invented meeting.
 fn hex_engine_recording() -> sidenote::hex_engine::EngineState {
     sidenote::hex_engine::EngineState {
