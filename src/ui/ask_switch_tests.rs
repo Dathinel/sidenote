@@ -1377,6 +1377,93 @@ fn a_question_and_its_answer_save_while_another_thread_holds_the_device_lock() {
     drop(held);
 }
 
+#[cfg(all(debug_assertions, target_os = "linux"))]
+#[test]
+fn retiring_memory_shares_the_wait_between_two_contended_locks() {
+    use sidenote::core::memory::{MemoryStore, RecordStatus};
+    use std::{
+        fs::{self, OpenOptions},
+        os::fd::AsRawFd,
+        sync::mpsc,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    if in_parent("retiring_memory_shares_the_wait_between_two_contended_locks") {
+        return;
+    }
+    let mut rt = page();
+    let root = core::state_dir();
+    let store = MemoryStore::default();
+    let id = "synthetic-lock-proof";
+    fs::create_dir_all(root.join("memory")).unwrap();
+    fs::write(
+        root.join("memory/records.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "records": [{
+                "id": id, "type": "decision", "text": "Synthetic claim", "sources": [],
+                "status": "active", "basis": "owner_confirmed",
+                "updated_at": "2026-11-09T00:00:00Z", "source_fingerprint": "synthetic"
+            }],
+            "proposals": [], "events": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        store.list_records().unwrap()[0].status,
+        RecordStatus::Active
+    );
+
+    let hold = |path: std::path::PathBuf| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        file
+    };
+    let first = hold(root.join("local/memory/records.lock"));
+    let hash = blake3::hash(b"memory/records.json").to_hex();
+    let second = hold(root.join(format!("local/locks/{hash}.lock")));
+    let (retiring, wait_for_retire) = mpsc::channel();
+    let mut elapsed = Duration::ZERO;
+    thread::scope(|scope| {
+        scope.spawn(move || {
+            wait_for_retire.recv().unwrap();
+            thread::sleep(Duration::from_millis(75));
+            drop(first);
+        });
+        rt.update(|s, _| {
+            retiring.send(()).unwrap();
+            let start = Instant::now();
+            s.memory_retire(id);
+            elapsed = start.elapsed();
+        });
+    });
+    assert_eq!(
+        rt.state.memory.errors.get(id).map(String::as_str),
+        Some(super::edit_worker::SaveError::Busy.message())
+    );
+    // Allow for filesystem work and scheduling outside the 200 ms lock budget.
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "retire took {elapsed:?}"
+    );
+    drop(second);
+    assert_eq!(
+        store.list_records().unwrap()[0].status,
+        RecordStatus::Active
+    );
+}
+
 /// The Ask pill and the suggestion chip start where the notes column starts. The thread above
 /// keeps the 16 point gutter the 390 wide test checks; the bar does not follow it.
 fn the_bar_starts_at_the_notes_column(name: &str, size: (f32, f32)) {
