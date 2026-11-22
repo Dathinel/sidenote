@@ -69,6 +69,7 @@ pub enum Page {
     General,
     Meetings,
     Prompts,
+    /// Search destination in the main sidebar.
     People,
     Hex,
     Helpers,
@@ -80,11 +81,10 @@ pub enum Page {
     Diagnostics,
 }
 impl Page {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 11] = [
         Self::General,
         Self::Meetings,
         Self::Prompts,
-        Self::People,
         Self::Hex,
         Self::Helpers,
         Self::ConnectedApps,
@@ -110,7 +110,7 @@ impl Page {
             Self::Diagnostics => "Diagnostics",
         }
     }
-    fn tabs(self) -> &'static [&'static str] {
+    pub(in crate::ui) fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::People => &["Our team", "External"],
             Self::Meetings => &["Recording", "Summaries", "Tasks", "Engine"],
@@ -186,18 +186,15 @@ fn current(section: Section) -> (Page, usize) {
 }
 
 fn active(s: &State) -> (Page, usize) {
-    let (page, tab) = current(s.hex.section);
-    (
-        page,
-        if page == Page::People {
-            s.people.tab
-        } else {
-            tab
-        },
-    )
+    current(s.hex.section)
 }
 
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
+    if page == Page::People {
+        s.hex.filter = TextEdit::default();
+        s.open_people_tab(tab);
+        return;
+    }
     if page == Page::ConnectedApps && !super::super::isolated() {
         s.connect_agents(false, None);
     }
@@ -225,14 +222,10 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     s.hex.shell.jump_max.set(0.0);
     let tab = tab.min(page.tabs().len().saturating_sub(1));
     s.hex.section = page.section(tab);
-    if page == Page::People {
-        s.people.tab = tab;
-    }
     s.hex.select_open = None;
     s.hex.filter = TextEdit::default();
     s.hex.shell.last_tabs.insert(page.name().into(), tab);
-    if rune::tooling::headless_run().is_none() || (page == Page::People && super::super::isolated())
-    {
+    if rune::tooling::headless_run().is_none() {
         let mut prefs = UiPrefs::load(&s.store.root);
         prefs.settings_tabs = s.hex.shell.last_tabs.clone();
         let _ = prefs.save(&s.store.root);
@@ -255,6 +248,7 @@ fn back(s: &mut State) {
             nav::Page::Memory => s.memory_open = true,
             nav::Page::Check => s.check_open = true,
             nav::Page::Annotations => s.annotations.open = true,
+            nav::Page::People => s.view = tasks::View::People,
             _ => {}
         }
         s.refresh_list();
@@ -326,9 +320,7 @@ pub fn tick(s: &mut State, _tx: &mut Tx) -> bool {
         let (page, tab) = active(s);
         if s.hex.shell.last_tabs.get(page.name()) != Some(&tab) {
             s.hex.shell.last_tabs.insert(page.name().into(), tab);
-            if rune::tooling::headless_run().is_none()
-                || (page == Page::People && super::super::isolated())
-            {
+            if rune::tooling::headless_run().is_none() {
                 let mut prefs = UiPrefs::load(&s.store.root);
                 prefs.settings_tabs = s.hex.shell.last_tabs.clone();
                 let _ = prefs.save(&s.store.root);
@@ -1279,6 +1271,10 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
         return col().key("settings-sidebar").w(0.0).h_full();
     }
     let compact = s.app_w.get() < 700.0;
+    let back_to = match s.hex.shell.back.as_ref().map(|dest| dest.page) {
+        Some(nav::Page::People) => "Back to People",
+        _ => "Back to meetings",
+    };
     let width = if compact { 184.0 } else { 248.0 };
     let mut list = col()
         .w_full()
@@ -1298,7 +1294,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                     .gap(8.0)
                     .py(8.0)
                     .child(icons::draw(&icons::CHEVRON_LEFT, 18.0, p.soft))
-                    .child(roles::CONTROL.line("Back to meetings", p.soft)),
+                    .child(roles::CONTROL.line(back_to, p.soft)),
             )
             .key("settings-back")
             .label("Back (Esc)")
@@ -1353,14 +1349,14 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
         }
     } else {
         let (active, _) = active(s);
-        for (i, page) in Page::ALL.into_iter().enumerate() {
-            if i == 0 || i == 4 || i == 9 {
+        for page in Page::ALL {
+            if matches!(page, Page::General | Page::Hex | Page::Privacy) {
                 list = list.child(
                     roles::GROUP
                         .line(
-                            match i {
-                                0 => "You and meetings",
-                                4 => "This PC",
+                            match page {
+                                Page::General => "You and meetings",
+                                Page::Hex => "This PC",
                                 _ => "Data and maintenance",
                             },
                             p.faint,
@@ -1430,8 +1426,13 @@ fn path(page: Page, tab: usize) -> String {
         |name| format!("{} / {name}", page.name()),
     )
 }
-fn tab_bar(s: &State, p: Palette, jumps: bool) -> El {
-    let (page, selected) = active(s);
+pub(in crate::ui) fn tab_bar(
+    s: &State,
+    p: Palette,
+    jumps: bool,
+    page: Page,
+    selected: usize,
+) -> El {
     let active = if jumps {
         s.hex.shell.jump_active
     } else {
@@ -2493,18 +2494,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             ))
             .child(knowledge_base(s, k, p)),
         (Page::Prompts, _) => super::super::prompt_library::view(s, p),
-        (Page::People, _) => col()
-            .w_full()
-            .child(super::super::people::section(s, k, p, tab, layer))
-            .child(
-                roles::SMALL
-                    .wrap(
-                        "Import people is not available yet. Add people and teams here.",
-                        p.soft,
-                    )
-                    .key("people-import")
-                    .mt(18.0),
-            ),
+        (Page::People, _) => super::super::people::content(s, k, p, layer),
         (Page::Helpers, 0) => col()
             .w_full()
             .children(ai_notes::setup_card(s, p))
@@ -2764,7 +2754,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                             .mt(22.0),
                     )
                     .children(
-                        (!matches!(page, Page::Prompts | Page::People))
+                        (page != Page::Prompts)
                             .then(|| roles::META.wrap("Applies to this PC", p.faint).mt(6.0)),
                     )
                     .children(
@@ -2775,8 +2765,11 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                         .then(|| ownership(page, p)),
                     )
                     .children((page == Page::Meetings && tab <= 1).then(|| ownership(page, p)))
-                    .children((!page.tabs().is_empty()).then(|| tab_bar(s, p, false)))
-                    .children((!jump_groups(page, tab).is_empty()).then(|| tab_bar(s, p, true)))
+                    .children((!page.tabs().is_empty()).then(|| tab_bar(s, p, false, page, tab)))
+                    .children(
+                        (!jump_groups(page, tab).is_empty())
+                            .then(|| tab_bar(s, p, true, page, tab)),
+                    )
                     .pb(4.0),
             ),
         )
@@ -2814,11 +2807,6 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if e.key == Key::Escape {
-        if s.people.team_editor.is_some() && s.hex.section == Section::Teams {
-            super::super::teams::cancel(s);
-            tx.blur();
-            return true;
-        }
         if s.hex.select_open.take().is_some() {
         } else if !s.hex.filter.text.is_empty() {
             s.hex.filter = TextEdit::default();
@@ -3051,6 +3039,107 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn people_is_a_sidebar_page_and_search_and_back_return_to_it() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.go_meetings();
+        state.sidebar_open.set(true);
+        let mut rt = rune::Runtime::with_text(
+            state,
+            crate::ui::view,
+            (1334.0, 900.0),
+            rune::Env::default(),
+            rune::text::TextSystem::new(
+                crate::ui::theme::fonts(),
+                (crate::ui::theme::SANS, "Inter"),
+            ),
+        );
+        rt.settle_all();
+        rt.frame(0.0);
+        let click = |rt: &mut rune::Runtime<State>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(0.2);
+        };
+
+        assert!(
+            rt.find("nav-meetings").is_some(),
+            "home sidebar was not rendered"
+        );
+        click(&mut rt, "nav-people");
+        assert!(rt.find("people-roster").is_some());
+        let elements = rt.elements();
+        for name in ["Our team", "External"] {
+            assert!(
+                elements
+                    .iter()
+                    .any(|e| e.role == "tab" && e.label.as_deref() == Some(name))
+            );
+        }
+
+        rt.update(|s, _| s.open_people_tab(0));
+        for (shift, expected) in [(false, 1), (false, 0), (true, 1), (true, 0)] {
+            rt.update(|s, tx| {
+                let event = KeyEvent {
+                    key: Key::Tab,
+                    mods: rune::Mods {
+                        ctrl: true,
+                        shift,
+                        ..Default::default()
+                    },
+                };
+                assert!(
+                    crate::ui::on_key(s, &event, tx),
+                    "People ignored Ctrl+Tab with shift={shift}"
+                );
+                assert_eq!(s.people.tab, expected, "Ctrl+Tab with shift={shift}");
+            });
+        }
+
+        rt.update(|s, _| s.open_hex());
+        rt.frame(0.2);
+        assert!(rt.find("settings-page-People").is_none());
+        click(&mut rt, "settings-back");
+        assert!(rt.find("people-roster").is_some());
+
+        rt.update(|s, _| {
+            s.go_meetings();
+            s.open_finder();
+            s.finder_query = TextEdit::new("people");
+            s.finder_changed();
+        });
+        rt.frame(0.2);
+        click(&mut rt, "finder-row-0");
+        assert!(rt.find("people-roster").is_some());
+        assert!(!rt.state.on_hex());
+
+        rt.update(|s, _| {
+            s.open_hex();
+            s.hex.filter = TextEdit::new("External");
+        });
+        rt.frame(0.2);
+        click(&mut rt, "find-setting-people-roster");
+        assert_eq!(rt.state.people.tab, 1);
+        assert!(rt.find("people-companies").is_some());
+        click(&mut rt, "people-companies");
+        rt.update(|s, tx| {
+            assert!(crate::ui::on_key(
+                s,
+                &KeyEvent {
+                    key: Key::Escape,
+                    mods: rune::Mods::default()
+                },
+                tx
+            ));
+        });
+        rt.frame(0.2);
+        assert!(rt.find("people-companies").is_some());
+        assert!(!rt.state.on_hex());
+    }
 
     fn stored_device_name(root: &std::path::Path) -> String {
         let file = std::fs::read(root.join("device.json")).unwrap();

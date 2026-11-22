@@ -1040,12 +1040,7 @@ fn teams_note(s: &State, p: Palette) -> El {
         .children(s.config.features.tasks.then(|| {
             button("Set up teams", "notes-teams", p)
                 .self_start()
-                .on_press(|s: &mut State| {
-                    s.hex.section = super::hex::Section::Teams;
-                    s.hex.filter = rune::TextEdit::default();
-                    s.nav_done();
-                    super::scene_scroll(s, "hex-top");
-                })
+                .on_press(|s: &mut State| s.open_people_tab(0))
         }))
 }
 

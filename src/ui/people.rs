@@ -1,5 +1,11 @@
 //! People is a projection of the meeting roster, with device-local side corrections.
-use super::{State, cards, icons, nav, roles, teams, theme::Palette, widgets::hairline};
+use super::{
+    State, cards,
+    hex::settings::{self, Page},
+    icons, nav, roles, tasks, teams,
+    theme::Palette,
+    widgets::{hairline, scroll},
+};
 use crate::ui::widgets::ButtonDisabled;
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextInput};
@@ -53,6 +59,25 @@ impl PeopleUi {
 }
 
 impl State {
+    pub fn open_people(&mut self) {
+        self.go_home();
+        self.view = tasks::View::People;
+        self.nav_done();
+    }
+
+    pub fn open_people_tab(&mut self, tab: usize) {
+        if self.view != tasks::View::People {
+            self.open_people();
+        }
+        self.people.tab = tab.min(Page::People.tabs().len() - 1);
+        if rune::tooling::headless_run().is_none() || super::isolated() {
+            let mut prefs = core::UiPrefs::load(&self.store.root);
+            prefs.settings_tabs.insert("People".into(), self.people.tab);
+            let _ = prefs.save(&self.store.root);
+        }
+        super::scene_scroll(self, "people-title");
+    }
+
     fn set_person_side(&mut self, person: &str, side: Option<Side>) {
         let mut prefs = self.people.prefs.clone();
         match prefs.save_person_side(&self.store.root, person, &self.tasks.teams, side) {
@@ -350,7 +375,42 @@ pub fn person_row(
     }
     out
 }
-pub fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) -> El {
+pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+    let tab = s.people.tab;
+    let doc = col()
+        .w_full()
+        .max_w(940.0)
+        .px(if narrow { 16.0 } else { 40.0 })
+        .pt(22.0)
+        .pb(32.0)
+        .child(
+            rune::text("People")
+                .font(super::theme::display(32.0))
+                .color(p.ink)
+                .wrap()
+                .key("people-title"),
+        )
+        .child(settings::tab_bar(s, p, false, Page::People, tab))
+        .child(content(s, k, p, layer));
+    scroll(col().w_full().items_center().child(doc), "people-scroll")
+}
+
+pub(super) fn content(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    col()
+        .w_full()
+        .child(section(s, k, p, s.people.tab, layer))
+        .child(
+            roles::SMALL
+                .wrap(
+                    "Import people is not available yet. Add people and teams here.",
+                    p.soft,
+                )
+                .key("people-import")
+                .mt(18.0),
+        )
+}
+
+fn section(s: &State, k: &Kit, p: Palette, tab: usize, layer: &mut Vec<El>) -> El {
     if tab == 2 {
         return col().key("people-import").w_full().mt(18.0).child(cards::panel(p).child(cards::row_shell()
             .child(cards::icon_tile(&icons::FILE_TEXT,p))

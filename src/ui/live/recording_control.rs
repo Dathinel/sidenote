@@ -98,7 +98,7 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
         .border(1.0, p.line)
         .child(transcript);
     if recording {
-        // Two bars say Pause. A square means Stop, which stays in the top right pill.
+        // Two bars distinguish Pause here from Stop on other pages.
         let bar = |key: &'static str| el().key(key).w(3.0).h(9.0).radius(1.0).fill(p.ink);
         control = control.child(
             pressable(
@@ -167,7 +167,7 @@ pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
         } else {
             Phase::Paused
         });
-    // The pill carries the clock and the line over the notes carries the notes state.
+    // The recording line over the notes carries the notes state during recording.
     if phase == Phase::Recording {
         return None;
     }

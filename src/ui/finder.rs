@@ -27,6 +27,7 @@ pub enum Target {
     Company(Option<String>),
     Meetings,
     Tasks,
+    People,
     Memory,
     Check,
     Settings(Option<hex::Section>),
@@ -97,6 +98,11 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
     if f.tasks {
         pages.push(page("Tasks", "Tasks from your meetings", Target::Tasks));
     }
+    pages.push(page(
+        "People",
+        "Our team and external contacts",
+        Target::People,
+    ));
     if f.memory {
         pages.push(page(
             "Memory",
@@ -295,6 +301,7 @@ impl State {
             Target::Company(id) => self.open_company(id),
             Target::Meeting(id) => self.select(&id, tx),
             Target::Meetings => self.go_meetings(),
+            Target::People => self.open_people(),
             Target::Tasks => {
                 self.set_view(View::Tasks);
                 self.nav_done();

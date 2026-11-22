@@ -540,12 +540,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         &c.name,
         "company-breadcrumb",
         p,
-        |s| {
-            s.open_hex();
-            s.hex.section = super::hex::Section::Teams;
-            s.people.tab = 1;
-            s.hex.shell.last_tabs.insert("People".into(), 1);
-        },
+        |s| s.open_people_tab(1),
     ));
     let data = core::companies::query(
         &c.id,
