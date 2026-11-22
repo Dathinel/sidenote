@@ -131,6 +131,10 @@ pub enum Event {
         worker: std::thread::ThreadId,
         result: Result<Box<memory::Snapshot>, String>,
     },
+    MemoryRewritten {
+        id: String,
+        result: Result<bool, &'static str>,
+    },
     Area {
         generation: u64,
         refresh: bool,
@@ -1389,6 +1393,7 @@ impl State {
                 debug_assert_ne!(worker, std::thread::current().id());
                 self.memory_refreshed(generation, result.map(|s| *s));
             }
+            Event::MemoryRewritten { id, result } => self.memory_rewritten(&id, result),
             Event::Edited(result) => self.edit_finished(result),
             Event::Area {
                 generation,

@@ -329,7 +329,7 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
     let pr = &pp.proposal;
     let target = pr.target_id.as_deref().and_then(|id| s.memory.record(id));
     let id = pr.id.clone();
-    let accept_id = id.clone();
+    let shown = pp.clone();
     let reject_id = id.clone();
     let comment_id = id.clone();
     let (title, yes, no) = match pr.op {
@@ -383,7 +383,7 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
             .child(
                 button(yes, format!("memory-accept-{id}"), true, p)
                     .button_disabled(!s.memory.migrated)
-                    .on_press(move |s: &mut State| s.proposal_accept(&accept_id)),
+                    .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown)),
             )
             .child(
                 button(no, format!("memory-reject-{id}"), false, p)

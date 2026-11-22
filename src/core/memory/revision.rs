@@ -1,5 +1,5 @@
 use super::{MemoryStore, RevisionRequest};
-use crate::core::{Config, notes, runner_process};
+use crate::core::{Config, ask, notes, runner_process};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -7,8 +7,26 @@ const TIMEOUT: Duration = Duration::from_secs(90);
 const FAILED: &str = "Could not rewrite this memory. Try again.";
 
 impl MemoryStore {
+    pub fn spawn_rewrite(
+        self,
+        request: RevisionRequest,
+        cancel: ask::Cancel,
+        finished: impl FnOnce(Result<bool, &'static str>) + Send + 'static,
+    ) {
+        ask::spawn_cancellable(cancel, move || {
+            let result = std::panic::catch_unwind(|| self.rewrite(&request)).unwrap_or(Err(FAILED));
+            finished(result);
+        });
+    }
+
     pub fn rewrite(&self, request: &RevisionRequest) -> Result<bool, &'static str> {
+        if stopped() {
+            return Ok(false);
+        }
         let text = self.answer(request, TIMEOUT)?;
+        if stopped() {
+            return Ok(false);
+        }
         self.save_revision(request, &text).map_err(|_| FAILED)
     }
 
@@ -47,7 +65,7 @@ impl MemoryStore {
             "sources": sources,
             "comment": comment,
         });
-        let authorize = || self.sources_visible(sources);
+        let authorize = || !stopped() && self.sources_visible(sources);
         let reply = runner_process::run_classified(
             runner_process::Invocation::General(&runner, Some(&authorize)),
             input.to_string(),
@@ -59,6 +77,10 @@ impl MemoryStore {
         .map_err(|_| FAILED)?;
         parse_reply(&reply).ok_or(FAILED)
     }
+}
+
+fn stopped() -> bool {
+    ask::cancel_requested() || ask::stop_requested()
 }
 
 fn parse_reply(raw: &str) -> Option<String> {

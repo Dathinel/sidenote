@@ -17,8 +17,8 @@ use chrono::{DateTime, Local, NaiveDate};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use sidenote::core::memory::{
-    Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview, PendingProposal,
-    ProposalOp, RecordStatus, RecordType,
+    AcceptChoice, Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview,
+    PendingProposal, ProposalOp, RecordStatus, RecordType, RevisionRequest,
 };
 use std::{collections::HashMap, io};
 mod landing;
@@ -76,6 +76,7 @@ pub struct MemState {
     collapsed: Vec<RecordType>,
     pub comment_for: Option<String>,
     pub comment: TextEdit,
+    rewrites: HashMap<String, Rewrite>,
     pub result: Option<String>,
     pub projects: sidenote::core::Projects,
     pub records: Vec<MemoryRecord>,
@@ -111,6 +112,11 @@ pub struct MemState {
     pub today: NaiveDate,
 }
 
+struct Rewrite {
+    cancel: sidenote::core::ask::Cancel,
+    next: Option<RevisionRequest>,
+}
+
 impl Default for MemState {
     fn default() -> Self {
         Self {
@@ -127,6 +133,7 @@ impl Default for MemState {
             collapsed: vec![],
             comment_for: None,
             comment: TextEdit::default(),
+            rewrites: HashMap::new(),
             result: None,
             projects: sidenote::core::Projects::default(),
             records: Vec::new(),
@@ -740,16 +747,32 @@ impl State {
         });
     }
 
-    pub fn proposal_accept(&mut self, id: &str) {
-        let r = MemoryStore::default().accept_proposal(id);
-        self.memory_done(id, r);
+    pub fn proposal_accept(&mut self, shown: &PendingProposal, choice: AcceptChoice) {
+        let id = &shown.proposal.id;
+        self.cancel_rewrite(id);
+        let result = MemoryStore::default().accept_shown(shown, choice);
+        if !self.memory_done(id, result) {
+            self.refresh_memory(false);
+        }
     }
 
     pub fn proposal_reject(&mut self, id: &str) {
+        self.cancel_rewrite(id);
         let r = MemoryStore::default().reject_proposal(id);
-        self.memory_done(id, r);
+        if !self.memory_done(id, r) {
+            self.refresh_memory(false);
+        }
     }
     pub fn memory_undo(&mut self, record: &str, at: &str, tx: &mut Tx) {
+        if let Some(id) = self
+            .memory
+            .events
+            .iter()
+            .find(|e| e.record_id == record && e.at == at)
+            .and_then(|e| e.proposal_id.clone())
+        {
+            self.cancel_rewrite(&id);
+        }
         let result = MemoryStore::default().undo_event(record, at);
         if self.memory_done(record, result) {
             self.memory.result = None;
@@ -757,13 +780,64 @@ impl State {
         }
     }
     pub fn memory_comment_save(&mut self, id: &str) {
-        let result = MemoryStore::default()
-            .comment_proposal(id, &self.memory.comment.text)
-            .map(|_| ());
-        if self.memory_done(id, result) {
-            self.memory.comment_for = None;
-            self.memory.result = Some("Comment saved.".into());
+        self.cancel_rewrite(id);
+        match MemoryStore::default().comment_proposal(id, &self.memory.comment.text) {
+            Ok(request) => {
+                self.memory_done(id, Ok(()));
+                self.memory.comment_for = None;
+                if let Some(request) = request {
+                    self.start_rewrite(id, request);
+                }
+            }
+            Err(error) => {
+                self.memory_done(id, Err(error));
+            }
         }
+    }
+
+    fn cancel_rewrite(&mut self, id: &str) {
+        if let Some(worker) = self.memory.rewrites.get_mut(id) {
+            worker.cancel.stop();
+            worker.next = None;
+        }
+    }
+
+    fn start_rewrite(&mut self, id: &str, request: RevisionRequest) {
+        if let Some(worker) = self.memory.rewrites.get_mut(id) {
+            worker.next = Some(request);
+            return;
+        }
+        let cancel = sidenote::core::ask::Cancel::new();
+        self.memory.rewrites.insert(
+            id.into(),
+            Rewrite {
+                cancel: cancel.clone(),
+                next: None,
+            },
+        );
+        let id = id.to_owned();
+        let events = self.events_tx.clone();
+        let waker = self.waker.clone();
+        MemoryStore::default().spawn_rewrite(request, cancel, move |result| {
+            let _ = events.send(super::Event::MemoryRewritten { id, result });
+            if let Some(waker) = waker {
+                waker();
+            }
+        });
+    }
+
+    pub(super) fn memory_rewritten(&mut self, id: &str, result: Result<bool, &'static str>) {
+        let Some(worker) = self.memory.rewrites.remove(id) else {
+            return;
+        };
+        if let Some(next) = worker.next {
+            self.start_rewrite(id, next);
+        } else if !worker.cancel.stopped()
+            && let Err(error) = result
+        {
+            self.memory.errors.insert(id.into(), error.into());
+        }
+        self.refresh_memory(false);
     }
 
     pub fn migration_accept(&mut self) {
@@ -1884,7 +1958,6 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
     if let Some(e) = m.errors.get(&pr.id) {
         body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
-    let id = pr.id.clone();
     let id2 = pr.id.clone();
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
     if !m.migrated {
@@ -1894,9 +1967,10 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 .wrap("Accept the migration first, then accept this.", p.warn),
         );
     }
+    let shown = pp.clone();
     let accept = if m.migrated {
         button("Accept", "prop-accept", true, p)
-            .on_press(move |s: &mut State| s.proposal_accept(&id))
+            .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown))
     } else {
         button("Accept", "prop-accept", false, p).dim(0.5)
     };

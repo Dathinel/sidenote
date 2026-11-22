@@ -271,9 +271,9 @@ impl Drop for Running {
 pub(super) fn stop_requested() -> bool {
     STOP.load(Ordering::SeqCst)
 }
-/// For app shutdown. Stops every running Ask: its CLI and the CLI's children are killed, the
+/// For app shutdown. Stops running Ask and Memory workers: the CLI and its children are killed, the
 /// temporary prompt file is removed, and the call returns once the workers are done or `wait`
-/// has passed. Returns false on timeout. An Ask started afterwards stops at once.
+/// has passed. Returns false on timeout. A worker started afterwards stops at once.
 pub fn cancel_all(wait: Duration) -> bool {
     STOP.store(true, Ordering::SeqCst);
     super::ask_session::close();
@@ -354,10 +354,7 @@ pub(super) fn spawn_job(
     progress: impl Fn(AskProgress) + Send + 'static,
 ) -> std::sync::mpsc::Receiver<Result<String, String>> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    RUNNING.fetch_add(1, Ordering::SeqCst);
-    let running = Running;
-    std::thread::spawn(move || {
-        let _running = running;
+    spawn_cancellable(cancel, move || {
         let _update_activity = match crate::updates::activity() {
             Ok(guard) => guard,
             Err(_) => {
@@ -367,7 +364,6 @@ pub(super) fn spawn_job(
                 return;
             }
         };
-        CURRENT.with(|c| *c.borrow_mut() = Some(cancel));
         let result = job(&|event| {
             if !matches!(event, AskProgress::Finished | AskProgress::Failed { .. }) {
                 progress(event);
@@ -383,4 +379,14 @@ pub(super) fn spawn_job(
         progress(final_event);
     });
     receiver
+}
+
+pub(super) fn spawn_cancellable(cancel: Cancel, job: impl FnOnce() + Send + 'static) {
+    RUNNING.fetch_add(1, Ordering::SeqCst);
+    let running = Running;
+    std::thread::spawn(move || {
+        let _running = running;
+        CURRENT.with(|current| *current.borrow_mut() = Some(cancel));
+        job();
+    });
 }

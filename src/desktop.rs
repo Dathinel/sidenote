@@ -50,8 +50,7 @@ pub fn run(open_screens: impl FnOnce()) {
         rune::warm_gpu(Default::default());
     }
     open_screens();
-    // Closing the window ends the process. A running Ask is stopped first so its CLI, that CLI's
-    // children and its temporary prompt file go with it. The question is already saved.
+    // Stop Ask and Memory helpers before exiting so their processes and scratch folders go with them.
     crate::core::ask::cancel_all(std::time::Duration::from_secs(3));
     std::process::exit(0);
 }
