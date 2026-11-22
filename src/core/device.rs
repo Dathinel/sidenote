@@ -81,12 +81,17 @@ impl DeviceSettings {
         if super::file_reads::refreshing() {
             return Self::read_in(root);
         }
-        let path = root.join("device.json");
-        let _lock = store_io::lock(&path.with_extension("lock"))?;
-        let mut settings: Self = store_io::read(&path)?;
+        // device.json is replaced atomically, so reading an existing id needs no lock. Only
+        // creating the id takes it, and re-reads first in case another thread created it.
+        let mut settings = Self::read_in(root)?;
         if settings.id.is_empty() {
-            settings.id = random_id()?;
-            store_io::write(&path, &settings)?;
+            let path = root.join("device.json");
+            let _lock = store_io::lock(&path.with_extension("lock"))?;
+            settings = store_io::read(&path)?;
+            if settings.id.is_empty() {
+                settings.id = random_id()?;
+                store_io::write(&path, &settings)?;
+            }
         }
         if !valid_id(&settings.id) {
             return Err(store_io::invalid("Invalid local device id"));
