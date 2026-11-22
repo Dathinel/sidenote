@@ -69,7 +69,6 @@ def changed_jobs():
                 or (path in current and WINDOWS_CFG.search(git("show", f"HEAD:{path}"))))
 
     outputs = classify(paths, main, windows_cfg)
-    outputs["windows"] = outputs["windows"] and os.environ["HOSTED_WINDOWS"] == "on"
     print(json.dumps(outputs))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         for key, value in outputs.items():

@@ -12,12 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_BUILD_JOBS: '2'
   CARGO_PROFILE_DEV_DEBUG: '0'
 
 jobs:
   changes:
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'box' && fromJSON('["self-hosted","linux","x64","sidenote-box"]') || 'ubuntu-slim' }}
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
       linux: ${{ steps.paths.outputs.linux }}
@@ -31,8 +30,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - id: paths
-        env:
-          HOSTED_WINDOWS: ${{ vars.HOSTED_WINDOWS }}
         run: |
           python3 -I .github/ci_changes.py --self-test
           python3 -I .github/ci_changes.py
@@ -40,7 +37,7 @@ jobs:
   linux:
     needs: changes
     if: needs.changes.outputs.linux == 'true'
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'box' && fromJSON('["self-hosted","linux","x64","sidenote-box"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -52,7 +49,6 @@ jobs:
       - name: Check Linux process and filesystem boundaries
         run: python3 -I tools/prove_linux_boundaries.py . --self-test
       - name: Install native build dependencies
-        if: vars.CI_LINUX_RUNNER != 'box'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev
@@ -62,34 +58,7 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      - name: Select box Cargo cache
-        if: vars.CI_LINUX_RUNNER == 'box'
-        env:
-          CACHE_KEY: ${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
-        run: |
-          python3 -I - <<'PY'
-          import os, re, shutil
-          from pathlib import Path
-
-          cache = Path("/home/boxes/gh-runner/cache").resolve(strict=True)
-          key = re.compile(r"[0-9a-f]{12}-[0-9a-f]{64}")
-          name = os.environ["CACHE_KEY"]
-          assert key.fullmatch(name), name
-          selected = cache / name
-          selected.mkdir(exist_ok=True)
-          assert not selected.is_symlink()
-          selected.touch()
-          entries = sorted((p for p in cache.iterdir() if key.fullmatch(p.name)
-                            and not p.is_symlink() and p.is_dir()),
-                           key=lambda p: p.stat().st_mtime, reverse=True)
-          for old in entries[2:]:
-              shutil.rmtree(old)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              print(f"CARGO_HOME={selected / 'cargo'}", file=env)
-              print(f"CARGO_TARGET_DIR={selected / 'target'}", file=env)
-          PY
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        if: vars.CI_LINUX_RUNNER != 'box'
         with:
           path: |
             ~/.cargo/registry
@@ -143,7 +112,7 @@ jobs:
   relay:
     needs: changes
     if: needs.changes.outputs.relay == 'true'
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'box' && fromJSON('["self-hosted","linux","x64","sidenote-box"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -161,7 +130,7 @@ jobs:
   tools:
     needs: changes
     if: needs.changes.outputs.tools == 'true'
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'box' && fromJSON('["self-hosted","linux","x64","sidenote-box"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -176,8 +145,6 @@ jobs:
           python3 -I tools/pipeline-tests.py
           -k test_routing. -k test_job_contract.
           -k test_fixed_patterns -k test_timeout_and_missing
-      - if: vars.CI_LINUX_RUNNER == 'box'
-        run: echo /home/boxes/gh-runner/pwsh >> "$GITHUB_PATH"
       - shell: pwsh
         run: ./tools/dependency_notices_proof.ps1
 
@@ -255,13 +222,12 @@ jobs:
     name: CI Gate
     if: always()
     needs: [changes, linux, relay, tools, windows]
-    runs-on: ${{ vars.CI_LINUX_RUNNER == 'box' && fromJSON('["self-hosted","linux","x64","sidenote-box"]') || 'ubuntu-slim' }}
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Verify required job results
         env:
           CHANGES: ${{ needs.changes.result }}
-          HOSTED_WINDOWS: ${{ vars.HOSTED_WINDOWS }}
           LINUX: ${{ needs.linux.result }}/${{ needs.changes.outputs.linux }}
           WINDOWS: ${{ needs.windows.result }}/${{ needs.changes.outputs.windows }}
           RELAY: ${{ needs.relay.result }}/${{ needs.changes.outputs.relay }}
@@ -269,7 +235,6 @@ jobs:
         shell: bash
         run: |
           [[ "$CHANGES" == success ]] || { echo "changes: expected success, got $CHANGES"; exit 1; }
-          if [[ "$HOSTED_WINDOWS" != on ]]; then echo "Windows skipped: hosted Windows off"; fi
           failed=0
           for job in LINUX WINDOWS RELAY TOOLS; do
             case "${!job}" in
