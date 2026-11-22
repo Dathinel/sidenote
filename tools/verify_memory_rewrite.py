@@ -9,7 +9,7 @@ import tempfile
 from threading import Timer
 
 from prepare_memory_fixture import prepare
-from prepare_check_fixture import proposal_id
+from prepare_check_fixture import proposal_id, sources_fp
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVKIT = Path("E:/Personal-Projects/tools/hex-meetings-gnu/w64devkit/bin")
@@ -51,6 +51,21 @@ def fixture(root, case):
     if case == "retire-note":
         p["op"] = "retire"
         p["id"] = proposal_id(p)
+        records.write_text(json.dumps(data), encoding="utf-8")
+    elif case in {"needs-you", "confirm-legacy"}:
+        p.update(status="accepted", decided_at=p["created_at"], comment="Use Friday afternoon.")
+        original = next(r for r in data["records"] if r["id"] == p["target_id"])
+        original["status"] = "superseded"
+        record = dict(
+            original, id=f"memory-{p['id']}", status="active", text=p["text"], basis="owner_confirmed",
+            supersedes=original["id"], updated_at=p["decided_at"], sources=p["sources"],
+            source_fingerprint=sources_fp(p["sources"]),
+        )
+        data["records"].append(record)
+        data["events"].append(dict(
+            record_id=record["id"], operation="accept_proposal",
+            at=p["decided_at"], proposal_id=p["id"],
+        ))
         records.write_text(json.dumps(data), encoding="utf-8")
     return meetings, p["id"]
 
@@ -100,6 +115,10 @@ def run(exe, output, case, theme="dark"):
             events += [tap(2, f"memory-accept-{proposal}")]
         if case == "cancel-close":
             events += [mark(1.9, "close")]
+        if case in {"needs-you", "confirm-legacy"}:
+            events = []
+            if case == "confirm-legacy":
+                events.append(tap(0.4, f"memory-legacy-confirm-memory-{proposal}"))
         end = {"cancel-close": 2, "helper-timeout": 92.5, "rewrite-wait": 1.9}.get(case, 3.5)
         events.append(mark(end, "end"))
         script = root / "script.json"
@@ -111,7 +130,7 @@ def run(exe, output, case, theme="dark"):
             "--theme", theme, "--scale", "1", "--script", str(script), "--at", "mark:end",
             "--realtime", "--tree", str(artifact.with_suffix(".json")),
         ]
-        if case == "comment-card":
+        if case in {"comment-card", "needs-you"}:
             command += ["--snap", str(artifact.with_suffix(".png"))]
         with subprocess.Popen(
             command, env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -137,22 +156,30 @@ def run(exe, output, case, theme="dark"):
                 if app.poll() is None:
                     app.kill()
                     app.wait(timeout=5)
-        if case == "retire-note":
-            assert not marker.exists(), "a note on Retire started the helper"
+        if case in {"retire-note", "needs-you", "confirm-legacy"}:
+            assert not marker.exists(), "a read-only decision view or note started the helper"
         else:
             pid, scratch = started(marker)
             assert not alive(pid), "closing the app left the helper running"
             assert not scratch.exists(), "closing the app left the helper scratch folder"
-        if case in {"comment-card", "rewrite-wait", "retire-note", "helper-timeout"}:
+        if case in {"comment-card", "rewrite-wait", "retire-note", "helper-timeout", "needs-you", "confirm-legacy"}:
             text = artifact.with_suffix(".json").read_text(encoding="utf-8-sig")
             expected = {
                 "comment-card": ["New wording ready", "Your comment: Use Friday afternoon."],
                 "rewrite-wait": ["Rewriting", "Accept original wording"],
                 "retire-note": ["Your note: Use Friday afternoon."],
                 "helper-timeout": ["Rewrite failed", "Try again"],
+                "needs-you": [
+                    "Your comment was not used",
+                    f"memory-legacy-edit-memory-{proposal}",
+                    f"memory-legacy-confirm-memory-{proposal}",
+                ],
+                "confirm-legacy": [],
             }[case]
             for line in expected:
                 assert line in text, f"the card is missing {line!r}"
+            if case == "confirm-legacy":
+                assert "memory-comments-not-used" not in text, "confirmation left the legacy comment in Needs you"
         if case in {"accept-rewrite", "cancel-accept-original"}:
             saved = export.read_text(encoding="utf-8")
             assert ("The demo is on Friday afternoon." in saved) == (case == "accept-rewrite"), "acceptance saved different wording"
@@ -168,6 +195,7 @@ def main():
     parser.add_argument("case", choices=[
         "cancel-reject", "cancel-reject-export-fails", "cancel-close", "cancel-accept-original",
         "comment-card", "rewrite-wait", "accept-rewrite", "retire-note", "helper-timeout",
+        "needs-you", "confirm-legacy",
     ])
     parser.add_argument("--theme", choices=["light", "dark"], default="dark")
     args = parser.parse_args()

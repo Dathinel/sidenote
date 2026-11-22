@@ -1558,9 +1558,10 @@ impl State {
                     content_changed |= self.saved != *saved;
                     self.saved = saved.clone();
                 }
-                if let Some(file) = memory
+                if let Some(view) = memory
                     && !self.memory.refresh_pending
                 {
+                    let file = &view.file;
                     let pending: Vec<_> = file
                         .proposals
                         .iter()
@@ -1570,7 +1571,7 @@ impl State {
                         || different(&self.memory.proposals, &pending)
                         || different(&self.memory.events, &file.events)
                         || self.memory.migrated != file.migration.is_some();
-                    self.memory.apply_file(file);
+                    content_changed |= self.memory.apply_file(view);
                 }
                 let mut pipeline = pipeline;
                 for (id, old) in &self.tasks.pipeline {

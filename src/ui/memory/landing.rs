@@ -4,7 +4,7 @@ use crate::ui::widgets::ButtonDisabled;
 use crate::ui::{cards, icons};
 
 pub(super) fn count(s: &State, p: Palette) -> El {
-    let n = s.memory.proposals.len();
+    let n = s.memory.proposals.len() + s.memory.comments_not_used.len();
     roles::SMALL
         .wrap(
             if n == 0 {
@@ -474,11 +474,11 @@ fn recent(s: &State, p: Palette) -> El {
     let mut out = col().w_full().gap(8.0);
     let mut events: Vec<_> = s
         .memory
-        .events
+        .history
         .iter()
         .rev()
         .filter(|e| {
-            e.undone_at.is_none()
+            !e.undone
                 && matches!(
                     e.operation.as_str(),
                     "accept_proposal" | "reject_proposal" | "edit" | "confirm" | "retire"
@@ -504,14 +504,10 @@ fn recent(s: &State, p: Palette) -> El {
         if i > 0 {
             card = card.child(hairline(p));
         }
-        let record = e
-            .undo
+        let title = e
+            .decision
             .as_ref()
-            .and_then(|u| u.after.iter().find(|r| r.id == e.record_id))
-            .or_else(|| s.memory.record(&e.record_id));
-        let title = record
-            .and_then(|r| r.text.as_deref())
-            .map(plain)
+            .and_then(|d| d.text.clone())
             .unwrap_or_else(|| event_name(&e.operation));
         let time = DateTime::parse_from_rfc3339(&e.at)
             .map(|d| d.with_timezone(&Local).format("%-d %b, %H:%M").to_string())
@@ -522,8 +518,14 @@ fn recent(s: &State, p: Palette) -> El {
             .gap(4.0)
             .child(roles::NAME.wrap(title, p.ink))
             .child(roles::META.wrap(format!("{} · {time}", event_name(&e.operation)), p.soft));
-        if let Some(record) = record {
-            copy = copy.child(sources(s, &record.sources, &format!("recent-{i}"), p));
+        if let Some(label) = e.comment_label {
+            copy = copy.child(roles::META.wrap(label, p.soft));
+        }
+        if let Some(decision) = &e.decision {
+            if let Some(comment) = &decision.comment {
+                copy = copy.child(roles::SMALL.wrap(comment, p.soft));
+            }
+            copy = copy.child(sources(s, &decision.sources, &format!("recent-{i}"), p));
         }
         if let Some(error) = s.memory.errors.get(&e.record_id) {
             copy = copy.child(roles::SMALL.wrap(error, p.warn).role("alert"));
@@ -532,7 +534,7 @@ fn recent(s: &State, p: Palette) -> El {
             .flex_wrap()
             .child(cards::icon_tile(&icons::FLAG, p))
             .child(copy);
-        if e.undo.is_some() {
+        if e.can_undo {
             let record = e.record_id.clone();
             let at = e.at.clone();
             line = line.child(
@@ -544,6 +546,47 @@ fn recent(s: &State, p: Palette) -> El {
     }
     out.child(card)
         .child(roles::META.wrap("The last 7 days.", p.faint))
+}
+
+fn legacy_comments(s: &State, p: Palette) -> Option<El> {
+    if s.memory.comments_not_used.is_empty() {
+        return None;
+    }
+    let mut list = col()
+        .w_full()
+        .gap(8.0)
+        .key("memory-comments-not-used")
+        .child(roles::GROUP.wrap("Your comment was not used", p.soft));
+    for (id, comment) in &s.memory.comments_not_used {
+        let Some(text) = s.memory.record(id).and_then(|r| r.text.as_deref()) else {
+            continue;
+        };
+        let edit = id.clone();
+        let confirm = id.clone();
+        list = list.child(
+            cards::panel(p).child(
+                cards::row_shell()
+                    .flex_wrap()
+                    .child(cards::copy(roles::NAME.wrap(text, p.ink), comment, p))
+                    .child(
+                        button("Edit", format!("memory-legacy-edit-{id}"), false, p).on_press(
+                            move |s: &mut State| {
+                                s.memory.tab = Tab::All;
+                                s.open_record(&edit);
+                                s.memory_edit_start(&edit);
+                            },
+                        ),
+                    )
+                    .child(
+                        button("Confirm", format!("memory-legacy-confirm-{id}"), false, p)
+                            .on_press(move |s: &mut State| {
+                                s.memory_confirm(&confirm);
+                            }),
+                    ),
+            ),
+        );
+    }
+    Some(list)
 }
 
 pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
@@ -640,6 +683,7 @@ pub(super) fn column(s: &State, k: &Kit, p: Palette, narrow: bool) -> El {
         }
     } else {
         doc = doc
+            .children(legacy_comments(s, p))
             .children(super::settled::section(s, p))
             .child(recent(s, p));
     }

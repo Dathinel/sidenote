@@ -17,8 +17,8 @@ use chrono::{DateTime, Local, NaiveDate};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use sidenote::core::memory::{
-    AcceptChoice, Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview,
-    PendingProposal, ProposalOp, RecordStatus, RecordType, RevisionRequest,
+    AcceptChoice, Basis, HistoryRow, MemoryEvent, MemoryRecord, MemorySource, MemoryStore,
+    MigrationPreview, PendingProposal, ProposalOp, RecordStatus, RecordType, RevisionRequest,
 };
 use std::{collections::HashMap, io};
 mod landing;
@@ -83,6 +83,8 @@ pub struct MemState {
     pub records: Vec<MemoryRecord>,
     pub proposals: Vec<PendingProposal>,
     pub events: Vec<MemoryEvent>,
+    history: Vec<HistoryRow>,
+    comments_not_used: Vec<(String, String)>,
     pub migrated: bool,
     pub accepted_at: Option<String>,
     pub preview: Option<MigrationPreview>,
@@ -141,6 +143,8 @@ impl Default for MemState {
             records: Vec::new(),
             proposals: Vec::new(),
             events: Vec::new(),
+            history: Vec::new(),
+            comments_not_used: Vec::new(),
             migrated: false,
             accepted_at: None,
             preview: None,
@@ -297,11 +301,29 @@ fn confirmed_text(r: &MemoryRecord) -> String {
 
 // ---- state ---------------------------------------------------------------------------------
 
+#[derive(Default)]
+pub(super) struct MemoryView {
+    pub(super) file: sidenote::core::memory::MemoryFile,
+    history: Vec<HistoryRow>,
+    comments_not_used: Vec<(String, String)>,
+}
+
+impl MemoryView {
+    pub(super) fn read(store: &MemoryStore) -> io::Result<Self> {
+        let file = store.load()?;
+        Ok(Self {
+            history: store.history_rows(&file),
+            comments_not_used: store.comments_not_used(&file),
+            file: store.visible_file(file),
+        })
+    }
+}
+
 pub struct Snapshot {
     settled: Vec<sidenote::core::settle::Row>,
     mutation_generation: u64,
     projects: sidenote::core::Projects,
-    file: sidenote::core::memory::MemoryFile,
+    file: MemoryView,
     preview: Option<MigrationPreview>,
     legacy: String,
 }
@@ -314,8 +336,8 @@ impl Snapshot {
         // Reconciliation can publish its own mutations before the snapshot read begins.
         let mutation_generation = sidenote::core::mutation_generation();
         let projects = sidenote::core::TaskStore::new(store.root.clone()).load_projects()?;
-        let file = store.visible_file(store.load()?);
-        let (preview, legacy) = if file.migration.is_some() {
+        let file = MemoryView::read(store)?;
+        let (preview, legacy) = if file.file.migration.is_some() {
             (None, String::new())
         } else {
             (Some(store.preview_migration()?), store.company_memory()?)
@@ -388,8 +410,12 @@ impl MemState {
         }
     }
 
-    pub(super) fn apply_file(&mut self, file: sidenote::core::memory::MemoryFile) {
-        let file = MemoryStore::default().visible_file(file);
+    pub(super) fn apply_file(&mut self, view: MemoryView) -> bool {
+        let changed =
+            self.history != view.history || self.comments_not_used != view.comments_not_used;
+        self.history = view.history;
+        self.comments_not_used = view.comments_not_used;
+        let file = view.file;
         self.migrated = file.migration.is_some();
         self.accepted_at = file.migration.as_ref().map(|m| m.accepted_at.clone());
         self.records = file.records;
@@ -399,6 +425,7 @@ impl MemState {
             .into_iter()
             .filter(|p| p.status == sidenote::core::memory::ProposalStatus::Pending)
             .collect();
+        changed
     }
     pub fn typing(&self) -> bool {
         self.search.focused || self.edit.focused || self.comment.focused
@@ -1595,12 +1622,23 @@ fn history_block(s: &State, r: &MemoryRecord, p: Palette) -> El {
         .gap(3.0)
         .child(spaced_caps("History", p).mb(2.0));
     let mut lines: Vec<(String, String)> = m
-        .events
+        .history
         .iter()
         .filter(|e| {
             e.record_id == r.id || (e.record_id == "migration" && r.id.starts_with("legacy-"))
         })
-        .map(|e| (day_text(&e.at), event_name(&e.operation)))
+        .map(|e| {
+            let mut label = event_name(&e.operation);
+            if let Some(text) = e.decision.as_ref().and_then(|d| d.text.as_deref()) {
+                label.push('\n');
+                label.push_str(text);
+            }
+            if let Some(comment_label) = e.comment_label {
+                label.push('\n');
+                label.push_str(comment_label);
+            }
+            (day_text(&e.at), label)
+        })
         .collect();
     if let Some(prev) = r.supersedes.as_ref().and_then(|id| m.record(id)) {
         lines.push((
