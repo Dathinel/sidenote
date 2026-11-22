@@ -6,22 +6,27 @@ import re
 import subprocess
 import sys
 
-WINDOWS_CFG = re.compile(rb'\bcfg(?:_attr)?\s*\([^\]]*\bwindows\b')
+WINDOWS_CFG = re.compile(rb'\bcfg(?:_attr)?!?\s*\([^\]]*\bwindows\b')
 WINDOWS_PATH = re.compile(r'(?:^|/|_)windows(?:[./_]|$)', re.IGNORECASE)
-WINDOWS_ONLY = {"src/core/background_tests.rs", "src/hex_install.rs", "src/hex_probe.rs", "src/install_hooks_tests.rs",
-                "src/meeting_icon.rs", "tests/idle_cpu.rs", "assets/icon/meetings.ico"}
+WINDOWS_ONLY = {
+    "assets/fonts/Figtree-Variable.ttf", "assets/icon/meetings.ico", "build.ps1", "src/core/background_tests.rs",
+    "src/core/meeting_evidence/speech_host_tests.rs", "src/core/meeting_router/jobs/handoff/tests.rs",
+    "src/core/meeting_router/jobs/r1_tests.rs", "src/core/meeting_router/revision/captured_tests.rs",
+    "src/core/meeting_router/revision/receipts.rs", "src/hex_install.rs", "src/hex_probe.rs",
+    "src/install_hooks_tests.rs", "src/meeting_icon.rs", "tests/idle_cpu.rs",
+}
 # These files are compiled only as a named test module in the root library.
 MODULES = {
     "src/core/annotations/notebook_tests.rs": "core::annotations::notebook_tests::",
     "src/sync_owner/read_tests.rs": "sync_owner::read_tests::",
 }
-DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md"}
+DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY.md"}
 
 def git(*args):
     return subprocess.check_output(["git", *args])
 
 def classify(paths, main, windows_cfg):
-    docs = {p for p in paths if p in DOCS or p.startswith(("docs/", "reviews/"))}
+    docs = {p for p in paths if p in DOCS or p.startswith(("docs/", "reviews/", "artifacts/"))}
     relay = {p for p in paths if p.startswith("relay/")}
     tools = {p for p in paths if p.startswith(("tools/", "scripts/")) or p == "tests/linux_package.py"}
     workflow_paths = {p for p in paths if p.startswith(".github/")}
@@ -31,7 +36,8 @@ def classify(paths, main, windows_cfg):
     # Only a test-only module can safely avoid the whole suite. Tools may embed test fixtures.
     focused = MODULES.get(next(iter(rust)), "") if len(rust) == 1 and not (main or workflow) else ""
     windows = any(
-        p in WINDOWS_ONLY or p.startswith(("src/meeting_icon/", ".cargo/", "scripts/meeting-pipeline/"))
+        p in WINDOWS_ONLY or p.startswith(("src/meeting_icon/", "src/core/meeting_router/production/",
+                                           ".cargo/", "scripts/meeting-pipeline/"))
         or PurePosixPath(p).name in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs"}
         or (p.endswith(".rs") and (WINDOWS_PATH.search(p) or windows_cfg(p)))
         for p in rust
@@ -61,6 +67,7 @@ def changed_jobs():
                 or (path in current and WINDOWS_CFG.search(git("show", f"HEAD:{path}"))))
 
     outputs = classify(paths, main, windows_cfg)
+    outputs["windows"] = outputs["windows"] and os.environ["HOSTED_WINDOWS"] == "on"
     print(json.dumps(outputs))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         for key, value in outputs.items():
