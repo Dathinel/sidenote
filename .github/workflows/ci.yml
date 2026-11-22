@@ -198,6 +198,8 @@ jobs:
         run: |
           cargo check --workspace --locked --tests
           cargo check --workspace --locked --tests --features asr-runtime
+      - name: Build the sync worker required by the headless app
+        run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker
       - name: Test Windows-specific behavior
         shell: bash
         run: |
