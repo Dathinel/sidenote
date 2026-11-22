@@ -3,22 +3,22 @@
 //! Every change here is the owner's own action; the daily check only proposes.
 use super::{
     State,
-    check::{copy_row, prose, source_row},
+    check::{copy_row, prose, source_rows},
     list::text_title,
     roles,
     tasks::{button, prop_row},
     theme::Palette,
     widgets::{
-        badge, dot, hairline, list_and_panel, notice_bar, panel_frame, panel_top, pressable,
-        scroll, spaced_caps, split_geometry,
+        ButtonDisabled, badge, dot, hairline, list_and_panel, notice_bar, panel_frame, panel_top,
+        pressable, scroll, spaced_caps, split_geometry,
     },
 };
 use chrono::{DateTime, Local, NaiveDate};
 use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use sidenote::core::memory::{
-    Basis, MemoryEvent, MemoryRecord, MemorySource, MemoryStore, MigrationPreview, PendingProposal,
-    ProposalOp, RecordStatus, RecordType,
+    AcceptChoice, Basis, HistoryRow, MemoryEvent, MemoryRecord, MemorySource, MemoryStore,
+    MigrationPreview, PendingProposal, ProposalOp, RecordStatus, RecordType, RevisionRequest,
 };
 use std::{collections::HashMap, io};
 mod landing;
@@ -76,11 +76,15 @@ pub struct MemState {
     collapsed: Vec<RecordType>,
     pub comment_for: Option<String>,
     pub comment: TextEdit,
+    rewrites: HashMap<String, Rewrite>,
+    earlier_wording: Option<String>,
     pub result: Option<String>,
     pub projects: sidenote::core::Projects,
     pub records: Vec<MemoryRecord>,
     pub proposals: Vec<PendingProposal>,
     pub events: Vec<MemoryEvent>,
+    history: Vec<HistoryRow>,
+    comments_not_used: Vec<(String, String)>,
     pub migrated: bool,
     pub accepted_at: Option<String>,
     pub preview: Option<MigrationPreview>,
@@ -111,6 +115,11 @@ pub struct MemState {
     pub today: NaiveDate,
 }
 
+struct Rewrite {
+    cancel: sidenote::core::ask::Cancel,
+    next: Option<RevisionRequest>,
+}
+
 impl Default for MemState {
     fn default() -> Self {
         Self {
@@ -127,11 +136,15 @@ impl Default for MemState {
             collapsed: vec![],
             comment_for: None,
             comment: TextEdit::default(),
+            rewrites: HashMap::new(),
+            earlier_wording: None,
             result: None,
             projects: sidenote::core::Projects::default(),
             records: Vec::new(),
             proposals: Vec::new(),
             events: Vec::new(),
+            history: Vec::new(),
+            comments_not_used: Vec::new(),
             migrated: false,
             accepted_at: None,
             preview: None,
@@ -288,11 +301,29 @@ fn confirmed_text(r: &MemoryRecord) -> String {
 
 // ---- state ---------------------------------------------------------------------------------
 
+#[derive(Default)]
+pub(super) struct MemoryView {
+    pub(super) file: sidenote::core::memory::MemoryFile,
+    history: Vec<HistoryRow>,
+    comments_not_used: Vec<(String, String)>,
+}
+
+impl MemoryView {
+    pub(super) fn read(store: &MemoryStore) -> io::Result<Self> {
+        let file = store.load()?;
+        Ok(Self {
+            history: store.history_rows(&file),
+            comments_not_used: store.comments_not_used(&file),
+            file: store.visible_file(file),
+        })
+    }
+}
+
 pub struct Snapshot {
     settled: Vec<sidenote::core::settle::Row>,
     mutation_generation: u64,
     projects: sidenote::core::Projects,
-    file: sidenote::core::memory::MemoryFile,
+    file: MemoryView,
     preview: Option<MigrationPreview>,
     legacy: String,
 }
@@ -305,8 +336,8 @@ impl Snapshot {
         // Reconciliation can publish its own mutations before the snapshot read begins.
         let mutation_generation = sidenote::core::mutation_generation();
         let projects = sidenote::core::TaskStore::new(store.root.clone()).load_projects()?;
-        let file = store.visible_file(store.load()?);
-        let (preview, legacy) = if file.migration.is_some() {
+        let file = MemoryView::read(store)?;
+        let (preview, legacy) = if file.file.migration.is_some() {
             (None, String::new())
         } else {
             (Some(store.preview_migration()?), store.company_memory()?)
@@ -379,8 +410,12 @@ impl MemState {
         }
     }
 
-    pub(super) fn apply_file(&mut self, file: sidenote::core::memory::MemoryFile) {
-        let file = MemoryStore::default().visible_file(file);
+    pub(super) fn apply_file(&mut self, view: MemoryView) -> bool {
+        let changed =
+            self.history != view.history || self.comments_not_used != view.comments_not_used;
+        self.history = view.history;
+        self.comments_not_used = view.comments_not_used;
+        let file = view.file;
         self.migrated = file.migration.is_some();
         self.accepted_at = file.migration.as_ref().map(|m| m.accepted_at.clone());
         self.records = file.records;
@@ -390,6 +425,7 @@ impl MemState {
             .into_iter()
             .filter(|p| p.status == sidenote::core::memory::ProposalStatus::Pending)
             .collect();
+        changed
     }
     pub fn typing(&self) -> bool {
         self.search.focused || self.edit.focused || self.comment.focused
@@ -743,16 +779,32 @@ impl State {
         });
     }
 
-    pub fn proposal_accept(&mut self, id: &str) {
-        let r = MemoryStore::default().accept_proposal(id);
-        self.memory_done(id, r);
+    pub fn proposal_accept(&mut self, shown: &PendingProposal, choice: AcceptChoice) {
+        let id = &shown.proposal.id;
+        self.cancel_rewrite(id);
+        let result = MemoryStore::default().accept_shown(shown, choice);
+        if !self.memory_done(id, result) {
+            self.refresh_memory(false);
+        }
     }
 
     pub fn proposal_reject(&mut self, id: &str) {
+        self.cancel_rewrite(id);
         let r = MemoryStore::default().reject_proposal(id);
-        self.memory_done(id, r);
+        if !self.memory_done(id, r) {
+            self.refresh_memory(false);
+        }
     }
     pub fn memory_undo(&mut self, record: &str, at: &str, tx: &mut Tx) {
+        if let Some(id) = self
+            .memory
+            .events
+            .iter()
+            .find(|e| e.record_id == record && e.at == at)
+            .and_then(|e| e.proposal_id.clone())
+        {
+            self.cancel_rewrite(&id);
+        }
         let result = MemoryStore::default().undo_event(record, at);
         if self.memory_done(record, result) {
             self.memory.result = None;
@@ -760,11 +812,64 @@ impl State {
         }
     }
     pub fn memory_comment_save(&mut self, id: &str) {
-        let result = MemoryStore::default().comment_proposal(id, &self.memory.comment.text);
-        if self.memory_done(id, result) {
-            self.memory.comment_for = None;
-            self.memory.result = Some("Comment saved for Sidenote's next check.".into());
+        self.cancel_rewrite(id);
+        match MemoryStore::default().comment_proposal(id, &self.memory.comment.text) {
+            Ok(request) => {
+                self.memory_done(id, Ok(()));
+                self.memory.comment_for = None;
+                if let Some(request) = request {
+                    self.start_rewrite(id, request);
+                }
+            }
+            Err(error) => {
+                self.memory_done(id, Err(error));
+            }
         }
+    }
+
+    fn cancel_rewrite(&mut self, id: &str) {
+        if let Some(worker) = self.memory.rewrites.get_mut(id) {
+            worker.cancel.stop();
+            worker.next = None;
+        }
+    }
+
+    fn start_rewrite(&mut self, id: &str, request: RevisionRequest) {
+        if let Some(worker) = self.memory.rewrites.get_mut(id) {
+            worker.next = Some(request);
+            return;
+        }
+        let cancel = sidenote::core::ask::Cancel::new();
+        self.memory.rewrites.insert(
+            id.into(),
+            Rewrite {
+                cancel: cancel.clone(),
+                next: None,
+            },
+        );
+        let id = id.to_owned();
+        let events = self.events_tx.clone();
+        let waker = self.waker.clone();
+        MemoryStore::default().spawn_rewrite(request, cancel, move |result| {
+            let _ = events.send(super::Event::MemoryRewritten { id, result });
+            if let Some(waker) = waker {
+                waker();
+            }
+        });
+    }
+
+    pub(super) fn memory_rewritten(&mut self, id: &str, result: Result<bool, &'static str>) {
+        let Some(worker) = self.memory.rewrites.remove(id) else {
+            return;
+        };
+        if let Some(next) = worker.next {
+            self.start_rewrite(id, next);
+        } else if !worker.cancel.stopped()
+            && let Err(error) = result
+        {
+            self.memory.errors.insert(id.into(), error.into());
+        }
+        self.refresh_memory(false);
     }
 
     pub fn migration_accept(&mut self) {
@@ -1460,11 +1565,18 @@ fn source_block(s: &State, sources: &[MemorySource], key: &str, p: Palette) -> E
     if sources.is_empty() {
         c = c.child(roles::META.wrap("No source recorded.", p.faint));
     }
+    c = c.children(source_rows(
+        s,
+        sources.iter().filter_map(|src| match src {
+            MemorySource::Meeting { reference } => Some(reference.as_str()),
+            MemorySource::Kb { .. } => None,
+        }),
+        &format!("{key}-src"),
+        p,
+    ));
     for (n, src) in sources.iter().enumerate() {
         match src {
-            MemorySource::Meeting { reference } => {
-                c = c.child(source_row(s, reference, format!("{key}-src-{n}"), p));
-            }
+            MemorySource::Meeting { .. } => {}
             MemorySource::Kb { path, revision } => {
                 c = c.child(
                     col()
@@ -1520,12 +1632,23 @@ fn history_block(s: &State, r: &MemoryRecord, p: Palette) -> El {
         .gap(3.0)
         .child(spaced_caps("History", p).mb(2.0));
     let mut lines: Vec<(String, String)> = m
-        .events
+        .history
         .iter()
         .filter(|e| {
             e.record_id == r.id || (e.record_id == "migration" && r.id.starts_with("legacy-"))
         })
-        .map(|e| (day_text(&e.at), event_name(&e.operation)))
+        .map(|e| {
+            let mut label = event_name(&e.operation);
+            if let Some(text) = e.decision.as_ref().and_then(|d| d.text.as_deref()) {
+                label.push('\n');
+                label.push_str(text);
+            }
+            if let Some(comment_label) = e.comment_label {
+                label.push('\n');
+                label.push_str(comment_label);
+            }
+            (day_text(&e.at), label)
+        })
         .collect();
     if let Some(prev) = r.supersedes.as_ref().and_then(|id| m.record(id)) {
         lines.push((
@@ -1809,6 +1932,89 @@ fn before_after_block(before: Option<(&str, String)>, after: (&str, String), p: 
     )
 }
 
+fn unapplied_comment(pp: &PendingProposal) -> bool {
+    pp.can_rewrite() && pp.comment.is_some() && pp.revision_text().is_none()
+}
+
+fn original_button(m: &MemState, pp: &PendingProposal, key: String, p: Palette) -> Option<El> {
+    (pp.can_rewrite() && pp.comment.is_some()).then(|| {
+        let shown = pp.clone();
+        button("Accept original wording", key, false, p)
+            .button_disabled(!m.migrated)
+            .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Original))
+    })
+}
+
+fn proposal_comment(s: &State, pp: &PendingProposal, p: Palette) -> Option<El> {
+    let comment = pp.comment.as_deref()?;
+    let id = &pp.proposal.id;
+    let mut copy = col().w_full().gap(4.0);
+    if let Some(text) = pp.revision_text() {
+        let open = s.memory.earlier_wording.as_deref() == Some(id);
+        let id = id.clone();
+        copy = copy
+            .child(roles::NAME.wrap("New wording ready", p.ink))
+            .child(roles::SMALL.wrap(text, p.ink).selectable(true))
+            .child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft))
+            .child(
+                row().child(
+                    button(
+                        if open {
+                            "Hide earlier wording"
+                        } else {
+                            "Show earlier wording"
+                        },
+                        format!("memory-earlier-{id}"),
+                        false,
+                        p,
+                    )
+                    .on_press(move |s: &mut State| {
+                        s.memory.earlier_wording = (!open).then(|| id.clone());
+                    }),
+                ),
+            )
+            .children(open.then(|| roles::SMALL.wrap(&pp.proposal.text, p.soft)));
+    } else if pp.can_rewrite() {
+        let working = s
+            .memory
+            .rewrites
+            .get(id)
+            .is_some_and(|w| !w.cancel.stopped() || w.next.is_some());
+        let stop_id = id.clone();
+        let retry_id = id.clone();
+        let request = pp.revision_request();
+        copy = copy
+            .child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft))
+            .child(roles::NAME.wrap(
+                if working {
+                    "Rewriting"
+                } else {
+                    "Rewrite failed"
+                },
+                p.ink,
+            ))
+            .child(roles::SMALL.wrap(
+                "Wait for new wording or accept the original wording.",
+                p.soft,
+            ))
+            .child(if working {
+                button("Stop", format!("memory-stop-{id}"), false, p)
+                    .on_press(move |s: &mut State| s.cancel_rewrite(&stop_id))
+            } else {
+                button("Try again", format!("memory-retry-{id}"), false, p).on_press(
+                    move |s: &mut State| {
+                        if let Some(request) = request.clone() {
+                            s.start_rewrite(&retry_id, request);
+                        }
+                    },
+                )
+            });
+    } else {
+        copy = copy.child(roles::SMALL.wrap(format!("Your note: {comment}"), p.soft));
+    }
+    Some(copy)
+}
+
 fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) -> El {
     let m = &s.memory;
     let pr = &pp.proposal;
@@ -1820,9 +2026,10 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
         ProposalOp::Supersede => "Replace a claim",
         ProposalOp::Retire => "Retire a claim",
     };
-    let diff = match pr.op {
-        ProposalOp::Add => before_after_block(None, ("New claim", pr.text.clone()), p),
-        ProposalOp::Confirm => before_after_block(
+    let diff = match (pr.op, pp.revision_text()) {
+        (ProposalOp::Add | ProposalOp::Supersede, Some(_)) => el(),
+        (ProposalOp::Add, _) => before_after_block(None, ("New claim", pr.text.clone()), p),
+        (ProposalOp::Confirm, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             (
                 "After",
@@ -1833,12 +2040,12 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
             ),
             p,
         ),
-        ProposalOp::Supersede => before_after_block(
+        (ProposalOp::Supersede, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             ("Replaced by", pr.text.clone()),
             p,
         ),
-        ProposalOp::Retire => before_after_block(
+        (ProposalOp::Retire, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             ("After", "Retired. The text stays in history.".to_string()),
             p,
@@ -1863,6 +2070,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 }),
         )
         .child(diff)
+        .children(proposal_comment(s, pp, p))
         .child(
             col()
                 .w_full()
@@ -1885,7 +2093,6 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
     if let Some(e) = m.errors.get(&pr.id) {
         body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
     }
-    let id = pr.id.clone();
     let id2 = pr.id.clone();
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
     if !m.migrated {
@@ -1895,17 +2102,20 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 .wrap("Accept the migration first, then accept this.", p.warn),
         );
     }
-    let accept = if m.migrated {
+    let shown = pp.clone();
+    let accept = if m.migrated && !unapplied_comment(pp) {
         button("Accept", "prop-accept", true, p)
-            .on_press(move |s: &mut State| s.proposal_accept(&id))
+            .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown))
     } else {
         button("Accept", "prop-accept", false, p).dim(0.5)
     };
     foot = foot.child(
         row()
+            .flex_wrap()
             .gap(8.0)
             .items_center()
             .child(accept.label("Accept this change to memory"))
+            .children(original_button(m, pp, "prop-accept-original".into(), p))
             .child(
                 button("Reject", "prop-reject", false, p)
                     .label("Reject this change")

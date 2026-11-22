@@ -1,5 +1,5 @@
 //! Focus and visible-window timer refresh. One worker, no filesystem watcher.
-use super::{Waker, check};
+use super::{Waker, check, memory};
 use sidenote::core::{self, Meeting, Saved};
 use std::{
     collections::HashMap,
@@ -47,7 +47,7 @@ pub(super) struct Data {
     pub overrides: Option<core::Overrides>,
     pub cutoff: Option<Option<chrono::NaiveDate>>,
     pub saved: HashMap<String, Saved>,
-    pub memory: Option<core::memory::MemoryFile>,
+    pub memory: Option<memory::MemoryView>,
     pub profile: Option<core::relay_preview::SharedProfile>,
     pub check: Option<check::Refresh>,
 }
@@ -117,7 +117,9 @@ impl Data {
         let overrides = loaded(store.load_overrides());
         let cutoff = loaded(store.load_settings()).map(|s| s.cutoff());
         let memory = if options.memory {
-            loaded(core::memory::MemoryStore::default().load())
+            loaded(memory::MemoryView::read(
+                &core::memory::MemoryStore::default(),
+            ))
         } else {
             None
         };

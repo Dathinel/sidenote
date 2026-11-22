@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::{io, path::PathBuf, time::Duration};
 pub mod draft;
-mod helper;
+pub(super) mod helper;
 #[cfg(feature = "idle-cpu-proof")]
 pub mod idle_fixture;
 mod joined;
