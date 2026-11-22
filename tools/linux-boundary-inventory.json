@@ -11,7 +11,7 @@
   "crates/sidenote-sync/src/pid_worker.rs": "a3453a6798b12d4801506a876a23d9862e52399b17a0afd55d2dfe5fa5899a8d",
   "crates/sidenote-sync/src/tree_worker.rs": "e8500a2ca637b129caf9dd8f6ea7bd607792ab260d8695d9bac16ed1199762d7",
   "crates/sidenote-sync/src/windows_launch.rs": "2e435b57c7c43749f62b03f53c5c4e969065ca4ac9f30b451ca0e3aff407059c",
-  "crates/sidenote-sync/src/worker.rs": "5089af011bebf8f5d41b0f757d195f8a4cbde4b4c8b8552af9f9b83af3e187cc",
+  "crates/sidenote-sync/src/worker.rs": "07e7072c03a1a4c9c90698807c80e9ee862821ec805e4d6e75d0ea3bba29cc92",
   "crates/sidenote-sync/tests/linux_speech_service.rs": "c6f7f1ae84e28d983701ad554f10e199aa7cd30ef0998ff7f5d447fb9baa1191",
   "crates/sidenote-sync/tests/round1_store.rs": "e1072d697e506f6ee4cba7d5bde4dbe4175788caafb02dee27a9d64a120b511e",
   "crates/sidenote-sync/tests/store_model.rs": "5e504dfdec143eba3c6e054c28bc713b98f04a8dd3d9fd0f92ec95311210ecb1",

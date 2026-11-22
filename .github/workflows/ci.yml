@@ -226,7 +226,8 @@ jobs:
           cargo test --locked --features asr-runtime -p sidenote --bin sidenote -- \
             install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_ \
             ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings::
-          cargo test --locked -p sidenote-sync --lib -- worker::tests::
+          SIDENOTE_SYNC_TEST_ARTIFACT_DIR="$(cygpath -aw "target/$CARGO_BUILD_TARGET/debug")" \
+            cargo test --locked -p sidenote-sync --lib -- worker::tests::
           cargo test --locked --features asr-runtime -p sidenote --test idle_cpu --test relay_preview
 
   gate:
