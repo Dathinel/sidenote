@@ -12,6 +12,11 @@ use zeroize::{Zeroize, Zeroizing};
 pub struct Identity(SigningKey);
 
 impl Identity {
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn ephemeral() -> Self {
+        Self(SigningKey::generate(&mut OsRng))
+    }
+
     pub fn load_or_create(store: &Store) -> Result<Self> {
         if store.protected("identity")?.is_none() {
             let secret = Zeroizing::new(SigningKey::generate(&mut OsRng).to_bytes());
