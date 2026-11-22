@@ -258,12 +258,50 @@ fn the_recorded_caption_is_hidden_while_recording_and_back_on_pause_on_both_page
 }
 
 #[test]
+fn recording_pill_is_only_needed_on_the_other_meeting() {
+    if in_parent("recording_pill_is_only_needed_on_the_other_meeting") {
+        return;
+    }
+    let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
+    hex_records(&mut rt);
+    assert!(rt.find("ask-pill").is_some());
+    assert!(rt.find("meeting-pause").is_some());
+    assert!(
+        rt.find("recording-open").is_none(),
+        "the recording meeting still has the top-right recording pill"
+    );
+
+    rt.update(|s, _| s.meeting_ui.tabs = true);
+    rt.frame(0.2);
+    assert!(rt.find("recording-open").is_some());
+
+    rt.update(|s, _| {
+        s.meeting_ui.tabs = false;
+        s.selected = Some(OTHER.into());
+        s.load_saved();
+    });
+    rt.frame(0.2);
+    assert!(rt.find("recording-pill").is_some());
+    assert!(rt.find("hex-stop").is_some());
+
+    rt.update(|s, _| s.open_live());
+    rt.frame(0.2);
+    assert!(rt.find("meeting-pause").is_some());
+    assert!(rt.find("recording-open").is_none());
+}
+
+#[test]
 fn the_live_dot_in_the_top_right_is_danger_red_not_amber() {
     if in_parent("the_live_dot_in_the_top_right_is_danger_red_not_amber") {
         return;
     }
     let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
     hex_records(&mut rt);
+    rt.update(|s, _| {
+        s.selected = Some(OTHER.into());
+        s.load_saved();
+    });
+    rt.frame(0.2);
     let dot = element(&rt, "recording-live-dot");
     assert_eq!((dot.rect[2], dot.rect[3]), (8.0, 8.0));
     assert!(dot.path.starts_with(&element(&rt, "recording-open").path));

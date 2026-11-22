@@ -3,7 +3,7 @@
 //! The sidebar holds places and project filters, with one profile button at its foot.
 //! It folds to a recording rail during a call and hides fully otherwise.
 //! The top right holds one primary "New meeting" button, which becomes "Recording 12:34 | Stop"
-//! while Hex records, so the owner can get back to the live page or stop from anywhere.
+//! while Hex records, except on the meeting page that already shows Pause.
 //! Lucide entries live in icons.rs; the app mark keeps its original colours.
 use super::{
     State, hex, roles,
@@ -528,12 +528,36 @@ pub fn scene_all(s: &mut State) {
 
 // ---- the top right ----------------------------------------------------------------------------
 
-/// "New meeting", or while Hex records, "Recording 12:34 | Stop".
+fn meeting_shows_pause(s: &State) -> bool {
+    let Some(live) = &s.live else {
+        return false;
+    };
+    let recording = live
+        .session
+        .as_ref()
+        .filter(|session| session.phase == core::meeting_parts::Phase::Recording);
+    if s.on_live() {
+        return live.phase == super::live::Phase::Recording || recording.is_some();
+    }
+    s.page() == Page::Meetings
+        && !s.meeting_ui.tabs
+        && recording.is_some_and(|session| s.selected.as_ref() == Some(&session.id))
+        && s.current().is_some()
+}
+
+/// "New meeting", or while Hex records, the recording actions outside the active meeting.
 pub fn actions(s: &State, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     if s.annotations.open {
         return super::annotations::new_button(s, p);
     }
     if s.hex_recording() {
+        if meeting_shows_pause(s) {
+            return if s.hex_status_unknown() {
+                new_meeting_button(s, p, narrow, layer)
+            } else {
+                el()
+            };
+        }
         let recording = recording_pill(s, p, narrow);
         return if s.hex_status_unknown() {
             row()
