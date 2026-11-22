@@ -28,6 +28,10 @@ def render(job):
   meetings=state/'screen-meetings'
   shutil.copytree(ROOT/'tools/ui-fixtures/screens/meetings',meetings,dirs_exist_ok=True)
   summary=meetings/'1793955600000-1/english-summary.json'
+  if '-tabs-' in name:
+   # The older tabbed meeting layout (off by default) is a saved preference.
+   (meetings/'local').mkdir(parents=True,exist_ok=True)
+   (meetings/'local'/'ui.json').write_text(json.dumps({'meeting_tabs':True}),encoding='utf-8')
   if name.startswith(('meeting-lift-', 'meeting-refine-')):
    jobs=state/'local/notes-jobs'
    jobs.mkdir(parents=True)
@@ -256,6 +260,23 @@ def refine_p8(phase, output, exe):
     render((f'meeting-refine-p8-{scene}-{phase}', kind, width, theme, height, None))
 
 
+def refine_p8_pages(output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-pages-render-') as state:
+  STATE = Path(state)
+  # Pages that share the type roles and the switch the meeting page work changed, and the older
+  # tabbed meeting layout, which has its own header.
+  for width in (1280, 390):
+   for name, scene in (('people-team', 'people-our-team'), ('people-external', 'people-external'), ('companies', 'company-overview'), ('board', 'tasks-v2-board')):
+    render((f'refine-p8-{name}', scene, width, 'dark', 900, None))
+   for scene in ('clean', 'retry'):
+    render((f'meeting-refine-p8-tabs-{scene}-pages', 'screens-summary', width, 'dark', 1600 if width == 390 else 900, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -268,6 +289,7 @@ def main():
  modes.add_argument('--refine-p6',choices=['before','after'])
  modes.add_argument('--refine-p7',choices=['before','after'])
  modes.add_argument('--refine-p8',choices=['before','after'])
+ modes.add_argument('--refine-p8-pages',action='store_true')
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -287,6 +309,8 @@ def main():
   return refine_p7(args.refine_p7,args.output,args.exe)
  if args.refine_p8:
   return refine_p8(args.refine_p8,args.output,args.exe)
+ if args.refine_p8_pages:
+  return refine_p8_pages(args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()
