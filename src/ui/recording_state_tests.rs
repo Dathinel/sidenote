@@ -136,6 +136,25 @@ fn hex_records(rt: &mut Runtime<State>) {
 }
 
 #[test]
+fn the_live_dot_in_the_top_right_is_danger_red_not_amber() {
+    if in_parent("the_live_dot_in_the_top_right_is_danger_red_not_amber") {
+        return;
+    }
+    let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
+    hex_records(&mut rt);
+    let dot = element(&rt, "recording-live-dot");
+    assert_eq!((dot.rect[2], dot.rect[3]), (8.0, 8.0));
+    assert!(dot.path.starts_with(&element(&rt, "recording-open").path));
+    // Amber is a warning, so the live dot is danger: #f29b99 in dark and #a92b30 in light.
+    let p = theme::palette(true);
+    assert_eq!(dot.fill, p.danger);
+    assert_ne!(dot.fill, p.warn);
+    for (palette, hex) in [(p, "#f29b99"), (theme::palette(false), "#a92b30")] {
+        assert_eq!(palette.danger, rune::color::hex(hex).unwrap());
+    }
+}
+
+#[test]
 fn pause_is_two_bars_apart_from_stop_and_works_by_mouse_and_keyboard() {
     if in_parent("pause_is_two_bars_apart_from_stop_and_works_by_mouse_and_keyboard") {
         return;

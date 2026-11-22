@@ -623,7 +623,7 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
         row()
             .gap(8.0)
             .items_center()
-            .child(dot(8.0, p.warn))
+            .child(dot(8.0, p.danger).key("recording-live-dot"))
             .child(roles::CONTROL.wrap(words.clone(), p.soft)),
     )
     .label(format!("{words}. Open the live meeting"))
