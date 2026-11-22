@@ -855,14 +855,6 @@ impl State {
                         {
                             super::response_time::failed(live.take_notes_timing(recording));
                         }
-                        // Even a failed start may have notes typed while waiting for Hex.
-                        if matches!(action, Action::Start)
-                            && self.live.as_ref().is_none_or(|l| l.session.is_none())
-                            && self.live_close()
-                        {
-                            self.live = None;
-                            self.live_open = false;
-                        }
                     }
                 }
             }

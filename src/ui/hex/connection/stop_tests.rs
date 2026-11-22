@@ -171,8 +171,24 @@ fn saved_removal_notes(text: &str) {
 }
 
 #[cfg(windows)]
+fn assert_recovery_close(state: &mut State, id: &str, text: &str) {
+    use sidenote::core::{self, meeting_parts};
+    assert!(state.live_close());
+    assert!(!state.on_live(), "restored storage must permit navigation");
+    let root = core::state_dir();
+    assert!(meeting_parts::read(&root, id).unwrap().is_none());
+    assert!(!meeting_parts::inputs(&root).join(id).exists());
+    saved_removal_notes(text);
+    let mut restarted = State::new();
+    let idle = state.hex.engine.status_for_command().unwrap();
+    restarted.hex_apply(Msg::Status(Ok(idle)));
+    assert!(restarted.live.is_none());
+}
+
+#[cfg(windows)]
 fn start_removal_cases(failed_start: bool) {
     use crate::ui::live::{Phase, Saving};
+    use sidenote::core::{self, meeting_parts};
     for (text, fail_save) in [
         ("Synthetic pending Start notes", true),
         ("Synthetic pending Start notes", false),
@@ -191,8 +207,13 @@ fn start_removal_cases(failed_start: bool) {
         state.hex_apply(Msg::Status(Ok(idle)));
         state.new_meeting();
         assert!(state.hex.record_busy);
-        assert_eq!(state.live.as_ref().unwrap().phase, Phase::Starting);
-        let page = state.live.as_ref().unwrap().recording_id;
+        let live = state.live.as_ref().unwrap();
+        assert_eq!(live.phase, Phase::Starting);
+        let page = live.recording_id;
+        let id = live.session.as_ref().unwrap().id.clone();
+        let root = core::state_dir();
+        let folder = meeting_parts::inputs(&root).join(&id);
+        let notes = folder.join("notes.md");
         if !failed_start {
             release.send(()).unwrap();
             Fixture::finish(&mut state);
@@ -208,11 +229,19 @@ fn start_removal_cases(failed_start: bool) {
         if !text.is_empty() {
             assert_eq!(state.live.as_ref().unwrap().saving, Saving::Pending);
         }
-        let recovery = sidenote::core::state_dir().join("unsaved-notes");
+        assert!(!notes.exists());
+        let recovery = root.join("unsaved-notes");
         if fail_save {
+            std::fs::create_dir(&notes).unwrap();
             std::fs::create_dir_all(recovery.parent().unwrap()).unwrap();
             std::fs::write(&recovery, "synthetic recovery blocker").unwrap();
         }
+        let (saved, wake) = std::sync::mpsc::channel();
+        state.waker = Some(std::sync::Arc::new(move || {
+            let _ = saved.send(());
+        }));
+        let (scan, dirty) = crate::ui::refresh::observing_handle();
+        state.scan_tx = Some(scan);
         if failed_start {
             release.send(()).unwrap();
             Fixture::finish(&mut state);
@@ -225,25 +254,53 @@ fn start_removal_cases(failed_start: bool) {
             assert!(idle.recording.is_none());
             state.hex_apply(Msg::Status(Ok(idle)));
         }
+        let save_waker = state.waker.take();
+        if !text.is_empty() {
+            wake.recv_timeout(Duration::from_secs(2)).unwrap();
+            state.live_tick();
+        }
         assert_eq!(api.data.lock().unwrap().starts, 1);
         if fail_save {
             let live = state.live.as_ref().expect("failed save must keep the page");
             assert_eq!(live.recording_id, page);
             assert_eq!(live.phase, Phase::Starting);
             assert_eq!(state.live_notes.text, text);
-            assert!(live.close_failed);
             assert!(matches!(live.saving, Saving::Failed(_)));
             assert!(state.on_live());
+            assert_eq!(live.session.as_ref().unwrap().id, id);
+            assert!(notes.is_dir());
+            assert!(meeting_parts::read(&root, &id).unwrap().is_some());
+            assert!(!state.live_close(), "blocked storage must refuse close");
             std::fs::remove_file(&recovery).unwrap();
-            state.live_notes = rune::TextEdit::new("Synthetic notes edited after storage recovery");
-            state.leave_live();
-            assert!(!state.on_live(), "restored storage must permit navigation");
-            saved_removal_notes("Synthetic notes edited after storage recovery");
+            let edited = "Synthetic notes edited after storage recovery";
+            state.live_notes = rune::TextEdit::new(edited);
+            state.waker = save_waker;
+            state.live_flush();
+            wake.recv_timeout(Duration::from_secs(2)).unwrap();
+            state.waker = None;
+            state.live_tick();
+            assert!(state.on_live() && notes.is_dir());
+            saved_removal_notes(edited);
+            assert_recovery_close(&mut state, &id, edited);
         } else {
             assert!(state.live.is_none(), "saved or empty page may be removed");
             assert!(!state.on_live());
             if !text.is_empty() {
-                saved_removal_notes(text);
+                assert_eq!(std::fs::read_to_string(notes).unwrap(), text);
+                let record = meeting_parts::read(&root, &id).unwrap().unwrap();
+                assert_eq!(record.phase, meeting_parts::Phase::Ended);
+                assert!(record.pending_start_ms.is_none() && record.parts.is_empty());
+                assert!(dirty.load(Ordering::Acquire));
+                let mut restarted = State::new();
+                let idle = state.hex.engine.status_for_command().unwrap();
+                restarted.hex_apply(Msg::Status(Ok(idle)));
+                assert!(restarted.live.is_none());
+                let listed = restarted.meetings.iter().find(|m| m.id == id).unwrap();
+                assert_eq!(listed.notes, text);
+                assert!(crate::ui::notes_status::job(&restarted, listed).is_none());
+            } else {
+                assert!(meeting_parts::read(&root, &id).unwrap().is_none());
+                assert!(!folder.exists());
             }
         }
     }
@@ -317,6 +374,13 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
     let idle = state.hex.engine.status_for_command().unwrap();
     assert!(idle.recording.is_none());
     state.hex_apply(Msg::Status(Ok(idle)));
+    if !restore_primary {
+        let live = state.live.as_ref().unwrap();
+        assert_eq!(live.session.as_ref().unwrap().id, id);
+        assert!(state.on_live() && notes.is_dir());
+        assert_recovery_close(&mut state, &id, text);
+        return;
+    }
     assert!(
         state.live.is_none(),
         "durable notes must let the timeout finish"
@@ -365,6 +429,118 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
             Some("meeting-resume" | "meeting-generate")
         )));
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_start_close_keeps_autosaved_primary_and_newer_recovery() {
+    if isolated_api_test("failed_start_close_keeps_autosaved_primary_and_newer_recovery") {
+        return;
+    }
+    use sidenote::core::{self, meeting_parts};
+    let (api, mut state, _) = Fixture::start_idle();
+    let (release, wait) = std::sync::mpsc::channel();
+    {
+        let mut data = api.data.lock().unwrap();
+        data.start_failure = true;
+        data.start_release = Some(wait);
+    }
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(idle)));
+    state.new_meeting();
+    assert!(state.hex.record_busy);
+    let primary = "Earlier synthetic notes";
+    let newer = "Newer synthetic notes\nKeep every line";
+    state.live_notes = rune::TextEdit::new(primary);
+    state.live_tick();
+    let live = state.live.as_mut().unwrap();
+    live.age_past_notes_autosave();
+    let id = live.session.as_ref().unwrap().id.clone();
+    let root = core::state_dir();
+    let notes = meeting_parts::inputs(&root).join(&id).join("notes.md");
+    let (saved, wake) = std::sync::mpsc::channel();
+    state.waker = Some(std::sync::Arc::new(move || {
+        let _ = saved.send(());
+    }));
+    state.live_tick();
+    wake.recv_timeout(Duration::from_secs(2)).unwrap();
+    state.live_tick();
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), primary);
+
+    let permissions = std::fs::metadata(&notes).unwrap().permissions();
+    let mut read_only = permissions.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&notes, read_only).unwrap();
+    state.live_notes = rune::TextEdit::new(newer);
+    release.send(()).unwrap();
+    Fixture::finish(&mut state);
+    assert!(state.hex.error.is_some());
+    wake.recv_timeout(Duration::from_secs(2)).unwrap();
+    state.waker = None;
+    state.live_tick();
+    assert!(state.on_live());
+    saved_removal_notes(newer);
+    let closed = state.live_close();
+    std::fs::set_permissions(&notes, permissions).unwrap();
+    assert!(closed);
+    assert!(!state.on_live());
+    let record = meeting_parts::read(&root, &id).unwrap().unwrap();
+    assert_eq!(record.phase, meeting_parts::Phase::Ended);
+    assert!(record.pending_start_ms.is_none() && record.parts.is_empty());
+
+    let mut restarted = State::new();
+    let idle = state.hex.engine.status_for_command().unwrap();
+    restarted.hex_apply(Msg::Status(Ok(idle)));
+    assert!(restarted.live.is_none());
+    let listed = restarted.meetings.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(listed.notes, primary);
+    assert!(crate::ui::notes_status::job(&restarted, listed).is_none());
+    restarted.select(&id, &mut rune::Tx::default());
+    let mut view = rune::Runtime::new(
+        restarted,
+        crate::ui::view,
+        (960.0, 720.0),
+        rune::Env::default(),
+    );
+    view.frame(0.0);
+    assert!(!view.elements().iter().any(|element| matches!(
+        element.key.as_deref(),
+        Some("meeting-resume" | "meeting-generate")
+    )));
+    saved_removal_notes(newer);
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_resume_keeps_the_recorded_part_paused() {
+    if isolated_api_test("failed_resume_keeps_the_recorded_part_paused") {
+        return;
+    }
+    use sidenote::core::{self, meeting_parts};
+    let (api, mut state, _) = Fixture::start_idle();
+    api.data.lock().unwrap().start_failure = true;
+    let part = core::meetings_dir().join("100-1");
+    std::fs::create_dir_all(&part).unwrap();
+    std::fs::write(part.join("manifest.json"), r#"{"status":"complete"}"#).unwrap();
+    let root = core::state_dir();
+    meeting_parts::Meeting::begin(&root, "100-1", 100)
+        .unwrap()
+        .pause(&root)
+        .unwrap();
+    state.hex.parts_restore_checked = false;
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(idle)));
+    state.meeting_resume();
+    Fixture::finish(&mut state);
+    assert_eq!(api.data.lock().unwrap().starts, 1);
+    assert_eq!(
+        state.live.as_ref().unwrap().phase,
+        crate::ui::live::Phase::Paused
+    );
+    let record = meeting_parts::read(&root, "100-1").unwrap().unwrap();
+    assert_eq!(record.phase, meeting_parts::Phase::Paused);
+    assert!(record.pending_start_ms.is_none());
+    assert_eq!(record.parts.len(), 1);
 }
 
 #[cfg(windows)]

@@ -2,7 +2,7 @@ use super::*;
 use crate::ui::Event;
 use sidenote::core::{
     self,
-    meeting_parts::{self, Meeting, Phase as SavedPhase},
+    meeting_parts::{self, Draft, Meeting, Phase as SavedPhase},
 };
 impl State {
     pub(in crate::ui) fn parts_sync(&mut self) {
@@ -117,6 +117,9 @@ impl State {
         }
         live.parts_checked = Some(Instant::now());
         if let Some(m) = &mut live.session {
+            if !m.parts.is_empty() {
+                live.start_failed = false;
+            }
             if m.requested_parts > m.notes_parts && m.notes_ready(&root).unwrap_or(false) {
                 m.notes_parts = m.requested_parts;
                 let _ = m.save(&root);
@@ -162,35 +165,57 @@ impl State {
             }
         }
     }
-    /// A first Start that never produced a recording leaves no meeting to keep. Drop its pending
-    /// record so the page follows the notes-safe removal it had before parts existed.
-    pub(in crate::ui) fn parts_drop_unstarted(&mut self) -> bool {
+    pub(super) fn parts_drop_unstarted(&mut self, closing: bool) -> bool {
         let Some(live) = &mut self.live else {
             return false;
         };
+        let text = self.live_notes.text.as_str();
+        if !live.start_failed || !live.can_close(text) || (!closing && live.saved != text) {
+            return false;
+        }
         let Some(m) = &live.session else {
             return false;
         };
-        if !m.parts.is_empty() {
-            return false;
+        let draft = if live.saved != text {
+            Draft::Recovery
+        } else if text.is_empty() {
+            Draft::Empty
+        } else {
+            Draft::Primary
+        };
+        match meeting_parts::discard_pending(&core::state_dir(), &m.id, draft) {
+            Ok(true) => {
+                self.live = None;
+                self.live_open = false;
+                self.request_refresh();
+                true
+            }
+            Ok(false) | Err(_) => {
+                live.saved.clear();
+                live.edited_at = Some(Instant::now());
+                live.saving = Saving::Failed("Could not finish saving this meeting.".into());
+                false
+            }
         }
-        let id = m.id.clone();
-        live.session = None;
-        live.folder = None;
-        let _ = meeting_parts::discard_pending(&core::state_dir(), &id);
-        true
     }
     pub(in crate::ui) fn parts_start_failed(&mut self) {
-        if self.parts_drop_unstarted() {
-            return;
-        }
-        // A failed Resume returns the meeting to Paused with its parts intact.
         let Some(live) = &mut self.live else {
             return;
         };
         let Some(m) = &mut live.session else {
+            if self.live_close() {
+                self.live = None;
+                self.live_open = false;
+            }
             return;
         };
+        if m.parts.is_empty() {
+            live.start_failed = true;
+            self.live_flush();
+            self.parts_drop_unstarted(false);
+            return;
+        }
+        // A failed Resume returns the meeting to Paused with its parts intact.
         live.phase = Phase::Paused;
         m.pending_start_ms = None;
         let _ = m.save(&core::state_dir());
