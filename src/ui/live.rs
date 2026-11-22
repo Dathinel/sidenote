@@ -2009,6 +2009,7 @@ mod writer_tests {
 mod parts;
 #[path = "live/parts_scene.rs"]
 mod parts_scene;
+pub(super) use parts_scene::scene_over as parts_scene_over;
 #[path = "live/recording_control.rs"]
 mod recording_control;
 pub(super) use parts_scene::scene as parts_scene;

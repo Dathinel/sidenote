@@ -3228,6 +3228,9 @@ pub fn spec() -> AppSpec<State> {
             // The meeting page with each tab, the transcript panel with a search hit, and the
             // "..." menu. All read the invented meetings in tools/ui-fixtures/screens.
             ("screens-summary", scene_screens),
+            // The same meeting while it records, and after a pause.
+            ("screens-recording", |s| live::parts_scene_over(s, true)),
+            ("screens-paused", |s| live::parts_scene_over(s, false)),
             ("meeting-published-without-reopen", |s| {
                 meeting::reading::scene_publication(s, false)
             }),

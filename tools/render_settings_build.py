@@ -206,6 +206,20 @@ def refine_p6(phase, output, exe):
     render((f'meeting-refine-p6-{scene}-{phase}', 'screens-summary', width, theme, height, None))
 
 
+def refine_p7(phase, output, exe):
+ global OUT, STATE, EXE
+ OUT = output.resolve()
+ OUT.mkdir(parents=True, exist_ok=True)
+ if exe:
+  EXE = exe.resolve()
+ with tempfile.TemporaryDirectory(prefix='sidenote-recording-render-') as state:
+  STATE = Path(state)
+  for width, theme in ((1334, 'dark'), (1334, 'light'), (390, 'dark')):
+   # The meeting open while it records, then after a pause.
+   for scene in ('recording', 'paused'):
+    render((f'meeting-refine-p7-{scene}-{phase}', f'screens-{scene}', width, theme, 900, None))
+
+
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
@@ -216,6 +230,7 @@ def main():
  modes.add_argument('--refine-p4',choices=['before','after'])
  modes.add_argument('--refine-p5',choices=['before','after'])
  modes.add_argument('--refine-p6',choices=['before','after'])
+ modes.add_argument('--refine-p7',choices=['before','after'])
  parser.add_argument('--output',type=Path,default=OUT)
  parser.add_argument('--exe',type=Path)
  args=parser.parse_args()
@@ -231,6 +246,8 @@ def main():
   return refine_p5(args.refine_p5,args.output,args.exe)
  if args.refine_p6:
   return refine_p6(args.refine_p6,args.output,args.exe)
+ if args.refine_p7:
+  return refine_p7(args.refine_p7,args.output,args.exe)
  OUT=args.output.resolve()
  if args.exe:
   EXE=args.exe.resolve()

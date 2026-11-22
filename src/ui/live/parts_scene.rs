@@ -85,3 +85,34 @@ Confirm volume by Friday.",
         s.live_open = false;
     }
 }
+
+/// The screens fixture's meeting open on its own page while it records, or after a pause. The
+/// session lives in memory only, so nothing is written.
+pub(in crate::ui) fn scene_over(s: &mut State, recording: bool) {
+    crate::ui::scene_screens(s);
+    hex::scene(s, recording);
+    let id = crate::ui::SCREENS_MEETING;
+    let mut live = Live::scene(
+        if recording {
+            Phase::Recording
+        } else {
+            Phase::Paused
+        },
+        None,
+    );
+    live.session = Some(Meeting {
+        id: id.into(),
+        phase: if recording {
+            SavedPhase::Recording
+        } else {
+            SavedPhase::Paused
+        },
+        parts: vec![meeting_parts::Part {
+            id: id.into(),
+            started_ms: 1793955600000,
+            duration_ms: 724000,
+        }],
+        ..Default::default()
+    });
+    s.live = Some(live);
+}
