@@ -25,5 +25,5 @@ with tempfile.TemporaryDirectory(prefix='hex-pipeline-tests-') as folder:
     (copied / 'baseline-audio.py').write_bytes(baseline)
     flags = getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0)
     result = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(copied),
-                             '-p', 'test_*.py'], creationflags=flags)
+                             '-p', 'test_*.py', *sys.argv[1:]], creationflags=flags)
     sys.exit(result.returncode)
