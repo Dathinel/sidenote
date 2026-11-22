@@ -202,6 +202,61 @@ fn the_notes_say_they_update_on_pause_only_while_recording() {
     assert!(note[0] >= 0.0 && note[0] + note[2] <= 390.0, "{note:?}");
 }
 
+/// The caption under the meta row (or the live page's header), joined; None when it is absent.
+fn caption(rt: &Runtime<State>) -> Option<String> {
+    let root = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("meeting-recorded-time"))?
+        .path;
+    let texts: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path == root || e.path.starts_with(&format!("{root}/")))
+        .filter_map(|e| e.text)
+        .collect();
+    Some(texts.join(" "))
+}
+
+#[test]
+fn the_recorded_caption_is_hidden_while_recording_and_back_on_pause_on_both_pages() {
+    if in_parent("the_recorded_caption_is_hidden_while_recording_and_back_on_pause_on_both_pages") {
+        return;
+    }
+    // The pill already shows the clock, so the meeting page says "recording" in two places only.
+    let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
+    assert!(rt.find("meeting-recording-note").is_some());
+    assert_eq!(
+        caption(&rt),
+        None,
+        "caption shown while recording (meeting page)"
+    );
+    rt.update(|s, _| s.parts_paused());
+    rt.frame(0.2);
+    let paused = caption(&rt).expect("no caption after Pause (meeting page)");
+    assert!(paused.starts_with("Paused \u{b7} "), "{paused}");
+    // The live page takes its status from the same function.
+    let mut rt = page(SavedPhase::Recording, DEFAULT_SIZE);
+    rt.update(|s, _| {
+        s.selected = None;
+        s.live_open = true;
+    });
+    rt.frame(0.2);
+    assert!(
+        rt.find("live-notes-input").is_some(),
+        "the live page is not shown"
+    );
+    assert_eq!(
+        caption(&rt),
+        None,
+        "caption shown while recording (live page)"
+    );
+    rt.update(|s, _| s.parts_paused());
+    rt.frame(0.2);
+    let paused = caption(&rt).expect("no caption after Pause (live page)");
+    assert!(paused.starts_with("Paused \u{b7} "), "{paused}");
+}
+
 #[test]
 fn the_live_dot_in_the_top_right_is_danger_red_not_amber() {
     if in_parent("the_live_dot_in_the_top_right_is_danger_red_not_amber") {

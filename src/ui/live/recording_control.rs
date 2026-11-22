@@ -167,6 +167,10 @@ pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
         } else {
             Phase::Paused
         });
+    // The pill carries the clock and the line over the notes carries the notes state.
+    if phase == Phase::Recording {
+        return None;
+    }
     let state = match phase {
         Phase::Starting => "Starting",
         Phase::Recording => "Recording",

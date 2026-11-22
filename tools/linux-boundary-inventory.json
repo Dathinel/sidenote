@@ -220,7 +220,7 @@
   "src/ui/models.rs": "652e50da1b1d7c3e3f45b8da81879830e08b543a8bfb8f9832335cd2dd6ba169",
   "src/ui/notes_status.rs": "d9e98514b67333b5cb5dc5578a51081ba8327539bb1d341aa5a6f9a5e3c39c2d",
   "src/ui/project_merge.rs": "a0c33e2d9ad2754cc95fe3723cee82eea4a651ccd5357dfb9a5318873ed6707c",
-  "src/ui/recording_state_tests.rs": "1477d9525312a4ac259ec9be498ca9c496fa07e972a5bdd13ad4fd6e910cc0a0",
+  "src/ui/recording_state_tests.rs": "aa4c954e8a4b5012bb302acb393279e5a4caad57f70182e98ef2e1b58e50b718",
   "src/ui/refresh.rs": "16f1e01edde5615ba27ddd089c29ec6ab816cad69f16c48c1bc9d46ebecb7381",
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
   "src/ui/tasks_board.rs": "9ad23feed8d472511a11729194a699767a425a6da80d08ce2c61bf2b25ec1758",
