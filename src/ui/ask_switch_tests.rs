@@ -1635,6 +1635,19 @@ fn the_notes_job_record_cannot_hide_the_note() {
 }
 
 #[test]
+fn a_notes_banner_under_the_last_row_keeps_clear_of_it() {
+    if in_parent("a_notes_banner_under_the_last_row_keeps_clear_of_it") {
+        return;
+    }
+    let rt = page_with(DEFAULT_SIZE, || write_done_job(true, false));
+    let (row, banner) = (
+        rect_of(&rt, "meeting-point-pt-0-0"),
+        rect_of(&rt, "notes-state-banner"),
+    );
+    assert_eq!(banner[1] - (row[1] + row[3]), 16.0, "gap to the last row");
+}
+
+#[test]
 fn a_joined_meeting_shows_its_own_summarys_word() {
     if in_parent("a_joined_meeting_shows_its_own_summarys_word") {
         return;

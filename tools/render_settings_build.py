@@ -37,6 +37,8 @@ def render(job):
    }),encoding='utf-8')
    if '-clean-' in name:
     (jobs/'1793955600000-1.json').unlink()
+   if '-banner-' in name:
+    (jobs/'1793955600000-1.json').write_text(json.dumps({'state':'done','fallback':True,'tasks_failed':False,'transcript_revision':'a'*64,'routing_fallbacks':[]}),encoding='utf-8')
    if name.startswith('meeting-refine-p3-'):
     if '-confirmed-' in name:
      projects=state/'projects.json'
@@ -199,7 +201,7 @@ def refine_p6(phase, output, exe):
   STATE = Path(state)
   # The grid at three desktop and phone sizes, and 1024 where the tasks sit under the notes.
   # "banner" is a bordered notes banner under the last row. Tall renders show the stacked tasks.
-  for scene in ('clean',):
+  for scene in ('clean', 'banner'):
    for width, theme, height in ((1334, 'dark', 900), (1334, 'light', 900), (390, 'dark', 2400), (1024, 'dark', 1600)):
     render((f'meeting-refine-p6-{scene}-{phase}', 'screens-summary', width, theme, height, None))
 

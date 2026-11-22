@@ -599,7 +599,8 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             .as_ref()
             .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
     )
-    .children(notes_status::meeting_banner(s, m, p))
+    // The rows have no gap of their own (column gap 0), so a bordered banner needs its own room.
+    .children(notes_status::meeting_banner(s, m, p).map(|banner| banner.mt(16.0)))
     .children(crate::ui::notes_status::provenance(m, p))
 }
 
