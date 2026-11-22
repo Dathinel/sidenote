@@ -4,6 +4,17 @@ use std::sync::LazyLock;
 
 /// Width in the original 24 px view box, shared by every Lucide icon.
 pub const STROKE_WIDTH: f32 = 2.0;
+
+/// Icon size for row and button controls.
+pub const ROW: f32 = 16.0;
+/// Icon size alongside compact text.
+pub const INLINE: f32 = 14.0;
+
+const _: () = {
+    assert!(ROW == 16.0);
+    assert!(INLINE == 14.0);
+};
+
 macro_rules! lucide {
     ($entry:ident, $name:literal, $body:literal) => {
         pub static $entry: LazyLock<Icon> = LazyLock::new(|| {

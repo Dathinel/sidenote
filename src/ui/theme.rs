@@ -171,6 +171,7 @@ pub fn kit(p: &Palette) -> Kit {
     kit.c.knob = Color::WHITE;
     kit.c.text_faint = p.faint;
     kit.ty.ui = super::roles::CONTROL.style();
+    kit.ty.ui_compact = super::roles::NAV.style();
     kit.ty.small = super::roles::META.style();
     kit
 }
