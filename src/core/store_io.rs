@@ -366,6 +366,45 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
 
 #[cfg(all(test, unix))]
 mod unix_tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn writer_acquires_the_lock_after_a_brief_hold() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("writer.lock");
+        let held = super::lock(&path).unwrap();
+        let (ready, wait_for_writer) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                wait_for_writer.recv().unwrap();
+                thread::sleep(Duration::from_millis(75));
+                drop(held);
+            });
+            ready.send(()).unwrap();
+            let _writer = super::lock(&path).expect("lock should be free within the retry budget");
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn writer_returns_would_block_when_the_lock_outlasts_the_retry_budget() {
+        use std::{
+            io::ErrorKind,
+            time::{Duration, Instant},
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("writer.lock");
+        let _held = super::lock(&path).unwrap();
+        let start = Instant::now();
+        let error = super::lock(&path).expect_err("lock stays held through every attempt");
+
+        assert_eq!(error.kind(), ErrorKind::WouldBlock);
+        assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK));
+        assert!(start.elapsed() >= Duration::from_millis(200));
+    }
+
     #[test]
     fn parent_traversal_is_rejected_before_opening_directories() {
         let error = super::checked_parent(std::path::Path::new(
