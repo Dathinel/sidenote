@@ -79,7 +79,7 @@ def render(job):
   rects={e['key']:e['rect'] for e in tree['elements'] if e.get('key')}
   if width>=1334:
    strip,main,tasks=rects['meeting-grid-strip'],rects['meeting-main'],rects['meeting-tasks-column']
-   numbers=dict(strip=strip[2],column=main[2],gap=tasks[0]-(main[0]+main[2]),tasks=tasks[2],header=rects['meeting-header'][2],ask=rects['ask-pill'][2],fade=rects['meeting-scroll-fade'][3])
+   numbers=dict(strip=strip[2],column=main[2],gap=tasks[0]-(main[0]+main[2]),tasks=tasks[2],header=rects['meeting-header'][2],ask=rects['ask-pill'][2],fade=rects['meeting-scroll-fade'][3]+rects['ask-overlay'][3])
    print(base.name,numbers,flush=True)
    assert numbers==dict(strip=44,column=640,gap=40,tasks=300,header=640,ask=640,fade=150),(base.name,numbers)
   else:

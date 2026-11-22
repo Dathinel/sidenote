@@ -826,6 +826,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     // The wide grid already sets the notes 44 points in from its edge, so its column has no
     // gutter of its own; below the grid's width the notes keep the page gutter.
     let side = if wide { 0.0 } else { SIDE };
+    let fade = (150.0 - s.overlay_h.get()).max(0.0);
     let mut doc = narrative(s, m, p);
     if !wide {
         doc = doc.child(rail(s, k, m, p, layer).mx(-8.0).mt(24.0));
@@ -863,15 +864,18 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 )
                 .grow(1.0),
             )
-            // The page fades into the Ask bar: 150 tall, clear at the top and solid from halfway,
-            // so a chip at the cut edge never shows as a sliver of a bar.
+            // The fade is 150 from the window bottom. The Ask stack sits below the scroll area
+            // here, so only the part above it is drawn; with a thread open there is none.
             .child(
                 el().key("meeting-scroll-fade")
                     .pin(Some(0.0), None, Some(0.0), Some(0.0))
-                    .h(150.0)
+                    .h(fade)
                     .linear_gradient(
                         std::f32::consts::PI,
-                        [(0.0, p.bg.alpha(0.0)), (0.5, p.bg), (1.0, p.bg)],
+                        [
+                            (0.0, p.bg.alpha(0.0)),
+                            (1.0, p.bg.alpha((fade / 75.0).min(1.0))),
+                        ],
                     ),
             ),
     );

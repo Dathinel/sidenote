@@ -394,8 +394,8 @@ fn meeting_replies_stay_under_the_row_they_answer() {
     if in_parent("meeting_replies_stay_under_the_row_they_answer") {
         return;
     }
-    // Fact, decision and its reply, open point and its reply. Sorting decisions first must move
-    // each reply with its row, not leave it behind among the facts.
+    // Fact, decision and a chain of two replies, open point and its reply. Sorting decisions first
+    // must move each reply with its row, not leave it behind among the facts.
     let rt = page_with(DEFAULT_SIZE, || {
         let folder = core::meetings_dir().join(MEETING);
         let summary = serde_json::json!({
@@ -404,13 +404,14 @@ fn meeting_replies_stay_under_the_row_they_answer() {
                 {"type": "fact", "text": "Copy is with Priya."},
                 {"type": "decided", "text": POINT},
                 {"type": "response", "text": "Priya will send it Thursday."},
+                {"type": "response", "text": "Maya will check it first."},
                 {"type": "open", "text": "Whether to ask for the work email later."},
                 {"type": "response", "text": "Tom thinks it can wait."},
             ]}],
         });
         std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
     });
-    assert_eq!(shown_order(&rt, 5), [1, 2, 0, 3, 4]);
+    assert_eq!(shown_order(&rt, 6), [1, 2, 3, 0, 4, 5]);
 }
 
 #[test]
@@ -1441,16 +1442,82 @@ fn meeting_grid_is_a_44_strip_640_notes_40_gap_and_300_tasks() {
     // The header's title and controls are in the notes column.
     let head = rect(&rt, "meeting-header");
     assert_eq!((head[0], head[2]), (main[0], 640.0), "header");
-    // The Ask bar is the notes column wide and starts where it does; the fade is 150 tall.
+    // The Ask bar is the notes column wide and starts where it does; the fade and the Ask
+    // stack together are 150, measured from the window bottom like the mock's.
     let pill = rect(&rt, "ask-pill");
     assert_eq!((pill[0], pill[2]), (main[0], 640.0), "Ask bar");
-    assert_eq!(rect(&rt, "meeting-scroll-fade")[3], 150.0, "fade");
+    let fade = rect(&rt, "meeting-scroll-fade")[3] + rect(&rt, "ask-overlay")[3];
+    assert_eq!(fade, 150.0, "fade plus Ask bar");
     // The transcript sheet rises inside the notes column.
     rt.update(|s, _| s.transcript_open = true);
     rt.frame(0.2);
     rt.settle_all();
     let sheet = rect(&rt, "meeting-transcript-surface");
     assert_eq!((sheet[0], sheet[2]), (main[0], 640.0), "transcript sheet");
+}
+
+/// Long notes: the last row ends below where the old 150 fade began, and is still clear of it.
+#[test]
+fn the_fade_leaves_the_last_notes_row_clear_and_is_gone_under_an_open_thread() {
+    if in_parent("the_fade_leaves_the_last_notes_row_clear_and_is_gone_under_an_open_thread") {
+        return;
+    }
+    let long = || {
+        let folder = core::meetings_dir().join(MEETING);
+        let point = |kind: &str, text: &str| serde_json::json!({"type": kind, "text": text});
+        let summary = serde_json::json!({
+            "title": "Beta launch plan",
+            "context": ["The team reviewed the new onboarding flow. The launch date and the pricing copy were the two open questions."],
+            "topics": [
+                {"title": "Launch date", "points": [
+                    point("decided", "Launch in the second week of December, if the copy is done."),
+                    point("decided", "Hold the launch review on Monday 1 December."),
+                    point("fact", "The pricing page copy is still with Priya.")]},
+                {"title": "Onboarding flow", "points": [
+                    point("decided", "Cut step three down to one screen."),
+                    point("fact", "Step three loses the most people in the survey."),
+                    point("fact", "Test the shorter step with five customers.")]},
+                {"title": "Survey results", "points": [
+                    point("fact", "Four in ten people skip the account question."),
+                    point("fact", "Whether to ask for the work email later.")]},
+            ],
+            "verify": ["The survey sample is 48 people, so treat the percentages as rough."],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+    };
+    let mut rt = page_with((1334.0, 900.0), long);
+    rt.settle_all();
+    rt.frame(0.0);
+    let rect =
+        |rt: &Runtime<State>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key}")).0;
+    let (last, fade) = (rect(&rt, "verify-0"), rect(&rt, "meeting-scroll-fade"));
+    let scroll = rect(&rt, "meeting-scroll");
+    assert!(
+        last[1] + last[3] > scroll[1] + scroll[3] - 150.0,
+        "the scene must reach into the old 150 fade"
+    );
+    assert!(
+        last[1] + last[3] <= fade[1],
+        "the last notes row {last:?} sits under the fade {fade:?}"
+    );
+    // A saved thread makes the Ask stack taller than the fade: nothing is left to draw.
+    rt.update(|s, _| {
+        s.saved.messages = ["What did we decide?", "The beta ships on Friday."]
+            .iter()
+            .zip(["user", "assistant"])
+            .map(|(text, role)| Message {
+                role: role.into(),
+                text: (*text).into(),
+                ..Default::default()
+            })
+            .collect()
+    });
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let (overlay, fade) = (rect(&rt, "ask-overlay"), rect(&rt, "meeting-scroll-fade"));
+    assert!(overlay[3] >= 150.0, "the thread stack is {overlay:?}");
+    assert_eq!(fade[3], 0.0, "fade with a thread open");
 }
 
 #[test]
