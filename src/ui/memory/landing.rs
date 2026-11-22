@@ -342,20 +342,21 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
         ProposalOp::Confirm => ("Confirm this memory?", "Confirm", "Keep as is"),
         ProposalOp::Retire => ("Close this item?", "Close item", "Keep open"),
     };
+    let commented = pp.can_rewrite() && pp.comment.is_some();
     let mut body = col()
         .grow(1.0)
         .min_w(0.0)
         .gap(6.0)
         .child(roles::NAME.wrap(title, p.ink))
-        .child(
+        .children(pp.revision_text().is_none().then(|| {
             roles::SMALL
                 .wrap(
                     format!("Best guess: {} {}", plain(&pr.text), pr.rationale),
                     p.ink,
                 )
                 .spans(vec![rune::Span::new(0, "Best guess:".len()).weight(600.0)])
-                .key(format!("memory-best-guess-{id}")),
-        );
+                .key(format!("memory-best-guess-{id}"))
+        }));
     if let Some(target) = target {
         body = body
             .child(roles::SMALL.wrap(
@@ -373,33 +374,55 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
             ));
     }
     body = body
-        .child(roles::SMALL.wrap(format!("Suggested: {}", plain(&pr.text)), p.ink))
-        .child(sources(s, &pr.sources, &format!("need-{id}-suggested"), p));
+        .children(
+            pp.revision_text()
+                .is_none()
+                .then(|| roles::SMALL.wrap(format!("Suggested: {}", plain(&pr.text)), p.ink)),
+        )
+        .child(sources(s, &pr.sources, &format!("need-{id}-suggested"), p))
+        .children(proposal_comment(s, pp, p));
     body = body.child(
         row()
             .w_full()
             .flex_wrap()
             .gap(8.0)
             .child(
-                button(yes, format!("memory-accept-{id}"), true, p)
-                    .button_disabled(!s.memory.migrated)
-                    .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown)),
+                button(
+                    if commented { "Accept" } else { yes },
+                    format!("memory-accept-{id}"),
+                    true,
+                    p,
+                )
+                .button_disabled(!s.memory.migrated || unapplied_comment(pp))
+                .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown)),
             )
+            .children(original_button(
+                &s.memory,
+                pp,
+                format!("memory-accept-original-{id}"),
+                p,
+            ))
             .child(
-                button(no, format!("memory-reject-{id}"), false, p)
-                    .border(1.0, p.line)
-                    .on_press(move |s: &mut State| s.proposal_reject(&reject_id)),
+                button(
+                    if commented { "Reject" } else { no },
+                    format!("memory-reject-{id}"),
+                    false,
+                    p,
+                )
+                .border(1.0, p.line)
+                .on_press(move |s: &mut State| s.proposal_reject(&reject_id)),
             ),
     );
-    if let Some(comment) = &pp.comment {
-        body = body.child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft));
-    }
     if s.memory.comment_for.as_deref() == Some(&id) {
         let save_id = id.clone();
         body = body
             .child(
                 TextInput::new(&s.memory.comment)
-                    .placeholder("Add context for the next check")
+                    .placeholder(if pp.can_rewrite() {
+                        "Add a correction or context"
+                    } else {
+                        "Add a note to this decision"
+                    })
                     .on_edit(|s: &mut State| &mut s.memory.comment)
                     .on_submit(move |s: &mut State, _| s.memory_comment_save(&save_id))
                     .height(36.0)
@@ -415,7 +438,11 @@ fn proposal(s: &State, k: &Kit, pp: &PendingProposal, p: Palette) -> El {
         let initial = pp.comment.clone().unwrap_or_default();
         body = body.child(
             button(
-                "Add a comment for Sidenote",
+                if pp.comment.is_some() {
+                    "Edit comment"
+                } else {
+                    "Add a comment for Sidenote"
+                },
                 format!("memory-comment-{id}"),
                 false,
                 p,

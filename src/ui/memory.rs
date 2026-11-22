@@ -9,8 +9,8 @@ use super::{
     tasks::{button, prop_row},
     theme::Palette,
     widgets::{
-        badge, dot, hairline, list_and_panel, notice_bar, panel_frame, panel_top, pressable,
-        scroll, spaced_caps, split_geometry,
+        ButtonDisabled, badge, dot, hairline, list_and_panel, notice_bar, panel_frame, panel_top,
+        pressable, scroll, spaced_caps, split_geometry,
     },
 };
 use chrono::{DateTime, Local, NaiveDate};
@@ -77,6 +77,7 @@ pub struct MemState {
     pub comment_for: Option<String>,
     pub comment: TextEdit,
     rewrites: HashMap<String, Rewrite>,
+    earlier_wording: Option<String>,
     pub result: Option<String>,
     pub projects: sidenote::core::Projects,
     pub records: Vec<MemoryRecord>,
@@ -134,6 +135,7 @@ impl Default for MemState {
             comment_for: None,
             comment: TextEdit::default(),
             rewrites: HashMap::new(),
+            earlier_wording: None,
             result: None,
             projects: sidenote::core::Projects::default(),
             records: Vec::new(),
@@ -1882,6 +1884,87 @@ fn before_after_block(before: Option<(&str, String)>, after: (&str, String), p: 
     )
 }
 
+fn unapplied_comment(pp: &PendingProposal) -> bool {
+    pp.can_rewrite() && pp.comment.is_some() && pp.revision_text().is_none()
+}
+
+fn original_button(m: &MemState, pp: &PendingProposal, key: String, p: Palette) -> Option<El> {
+    (pp.can_rewrite() && pp.comment.is_some()).then(|| {
+        let shown = pp.clone();
+        button("Accept original wording", key, false, p)
+            .button_disabled(!m.migrated)
+            .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Original))
+    })
+}
+
+fn proposal_comment(s: &State, pp: &PendingProposal, p: Palette) -> Option<El> {
+    let comment = pp.comment.as_deref()?;
+    let id = &pp.proposal.id;
+    let mut copy = col().w_full().gap(4.0);
+    if let Some(text) = pp.revision_text() {
+        let open = s.memory.earlier_wording.as_deref() == Some(id);
+        let id = id.clone();
+        copy = copy
+            .child(roles::NAME.wrap("New wording ready", p.ink))
+            .child(roles::SMALL.wrap(text, p.ink).selectable(true))
+            .child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft))
+            .child(
+                button(
+                    if open {
+                        "Hide earlier wording"
+                    } else {
+                        "Show earlier wording"
+                    },
+                    format!("memory-earlier-{id}"),
+                    false,
+                    p,
+                )
+                .on_press(move |s: &mut State| {
+                    s.memory.earlier_wording = (!open).then(|| id.clone());
+                }),
+            )
+            .children(open.then(|| roles::SMALL.wrap(&pp.proposal.text, p.soft)));
+    } else if pp.can_rewrite() {
+        let working = s
+            .memory
+            .rewrites
+            .get(id)
+            .is_some_and(|w| !w.cancel.stopped() || w.next.is_some());
+        let stop_id = id.clone();
+        let retry_id = id.clone();
+        let request = pp.revision_request();
+        copy = copy
+            .child(roles::SMALL.wrap(format!("Your comment: {comment}"), p.soft))
+            .child(roles::NAME.wrap(
+                if working {
+                    "Rewriting"
+                } else {
+                    "Rewrite failed"
+                },
+                p.ink,
+            ))
+            .child(roles::SMALL.wrap(
+                "Wait for new wording or accept the original wording.",
+                p.soft,
+            ))
+            .child(if working {
+                button("Stop", format!("memory-stop-{id}"), false, p)
+                    .on_press(move |s: &mut State| s.cancel_rewrite(&stop_id))
+            } else {
+                button("Try again", format!("memory-retry-{id}"), false, p).on_press(
+                    move |s: &mut State| {
+                        if let Some(request) = request.clone() {
+                            s.start_rewrite(&retry_id, request);
+                        }
+                    },
+                )
+            });
+    } else {
+        copy = copy.child(roles::SMALL.wrap(format!("Your note: {comment}"), p.soft));
+    }
+    Some(copy)
+}
+
 fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) -> El {
     let m = &s.memory;
     let pr = &pp.proposal;
@@ -1893,9 +1976,10 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
         ProposalOp::Supersede => "Replace a claim",
         ProposalOp::Retire => "Retire a claim",
     };
-    let diff = match pr.op {
-        ProposalOp::Add => before_after_block(None, ("New claim", pr.text.clone()), p),
-        ProposalOp::Confirm => before_after_block(
+    let diff = match (pr.op, pp.revision_text()) {
+        (ProposalOp::Add | ProposalOp::Supersede, Some(_)) => el(),
+        (ProposalOp::Add, _) => before_after_block(None, ("New claim", pr.text.clone()), p),
+        (ProposalOp::Confirm, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             (
                 "After",
@@ -1906,12 +1990,12 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
             ),
             p,
         ),
-        ProposalOp::Supersede => before_after_block(
+        (ProposalOp::Supersede, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             ("Replaced by", pr.text.clone()),
             p,
         ),
-        ProposalOp::Retire => before_after_block(
+        (ProposalOp::Retire, _) => before_after_block(
             Some(("Claim now", target_text.clone())),
             ("After", "Retired. The text stays in history.".to_string()),
             p,
@@ -1936,6 +2020,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
                 }),
         )
         .child(diff)
+        .children(proposal_comment(s, pp, p))
         .child(
             col()
                 .w_full()
@@ -1968,7 +2053,7 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
         );
     }
     let shown = pp.clone();
-    let accept = if m.migrated {
+    let accept = if m.migrated && !unapplied_comment(pp) {
         button("Accept", "prop-accept", true, p)
             .on_press(move |s: &mut State| s.proposal_accept(&shown, AcceptChoice::Shown))
     } else {
@@ -1976,9 +2061,11 @@ fn proposal_panel(s: &State, pp: &PendingProposal, overlay: bool, p: Palette) ->
     };
     foot = foot.child(
         row()
+            .flex_wrap()
             .gap(8.0)
             .items_center()
             .child(accept.label("Accept this change to memory"))
+            .children(original_button(m, pp, "prop-accept-original".into(), p))
             .child(
                 button("Reject", "prop-reject", false, p)
                     .label("Reject this change")

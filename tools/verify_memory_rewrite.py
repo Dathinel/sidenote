@@ -9,6 +9,7 @@ import tempfile
 from threading import Timer
 
 from prepare_memory_fixture import prepare
+from prepare_check_fixture import proposal_id
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVKIT = Path("E:/Personal-Projects/tools/hex-meetings-gnu/w64devkit/bin")
@@ -40,18 +41,24 @@ def alive(pid):
         api.CloseHandle(ctypes.c_void_p(handle))
 
 
-def fixture(root):
+def fixture(root, case):
     meetings = prepare(root)
     config = {"version": 1, "features": {"memory": True}, "notes": {"helper": "codex"}}
     (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
-    p = json.loads((root / "memory/records.json").read_text(encoding="utf-8"))["proposals"][0]
+    records = root / "memory/records.json"
+    data = json.loads(records.read_text(encoding="utf-8"))
+    p = data["proposals"][0]
+    if case == "retire-note":
+        p["op"] = "retire"
+        p["id"] = proposal_id(p)
+        records.write_text(json.dumps(data), encoding="utf-8")
     return meetings, p["id"]
 
 
 def run(exe, output, case, theme="dark"):
     with tempfile.TemporaryDirectory(prefix="sidenote-memory-proof-") as temporary:
         root = Path(temporary)
-        meetings, proposal = fixture(root)
+        meetings, proposal = fixture(root, case)
         fake = root / "codex.exe"
         subprocess.run(
             [str(DEVKIT / "gcc.exe"), str(ROOT / "tools/ui-fixtures/memory-rewrite-helper.c"), "-o", str(fake)],
@@ -62,6 +69,7 @@ def run(exe, output, case, theme="dark"):
         env = {k: v for k, v in os.environ.items() if not k.startswith("HEX_MEETING_")}
         for name in ("appdata", "localappdata", "home", "codex"):
             (root / name).mkdir()
+        hold = case.startswith("cancel-") or case in {"rewrite-wait", "helper-timeout"}
         env.update(
             APPDATA=str(root / "appdata"),
             LOCALAPPDATA=str(root / "localappdata"),
@@ -72,7 +80,7 @@ def run(exe, output, case, theme="dark"):
             SIDENOTE_HEX_DIR=str(meetings),
             SIDENOTE_PEERS_DIR=str(root / "peers"),
             SIDENOTE_MEMORY_TEST_MARKER=str(marker),
-            SIDENOTE_MEMORY_TEST_MODE="hold",
+            SIDENOTE_MEMORY_TEST_MODE="hold" if hold else "reply",
             TEMP=temporary,
             TMP=temporary,
             PATH=os.pathsep.join([temporary, str(DEVKIT), env["PATH"]]),
@@ -86,17 +94,25 @@ def run(exe, output, case, theme="dark"):
         ]
         if case.startswith("cancel-reject"):
             events += [tap(2, f"memory-reject-{proposal}"), mark(3.25, "after")]
+        elif case == "cancel-accept-original":
+            events += [tap(2, f"memory-accept-original-{proposal}"), mark(3.25, "after")]
+        elif case == "accept-rewrite":
+            events += [tap(2, f"memory-accept-{proposal}")]
         if case == "cancel-close":
             events += [mark(1.9, "close")]
-        events.append(mark(3.5 if case != "cancel-close" else 2, "end"))
+        end = {"cancel-close": 2, "helper-timeout": 92.5, "rewrite-wait": 1.9}.get(case, 3.5)
+        events.append(mark(end, "end"))
         script = root / "script.json"
         script.write_text(json.dumps(events), encoding="utf-8")
+        artifact = output / f"{case}-1334-{theme}"
         command = [
             str(exe), "--data-dir", temporary, "--meetings-dir", str(meetings),
             "--peers-dir", str(root / "peers"), "--scene", "memory", "--size", "1334x900",
             "--theme", theme, "--scale", "1", "--script", str(script), "--at", "mark:end",
-            "--realtime", "--tree", str(output / f"{case}.json"),
+            "--realtime", "--tree", str(artifact.with_suffix(".json")),
         ]
+        if case == "comment-card":
+            command += ["--snap", str(artifact.with_suffix(".png"))]
         with subprocess.Popen(
             command, env=env, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             encoding="utf-8", errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
@@ -106,7 +122,7 @@ def run(exe, output, case, theme="dark"):
             try:
                 for line in app.stdout:
                     print(line.rstrip(), flush=True)
-                    if line.startswith("rune-mark before "):
+                    if line.startswith("rune-mark before ") and hold:
                         pid, scratch = started(marker)
                         assert alive(pid), "the helper already exited before the decision"
                         if case == "cancel-reject-export-fails":
@@ -121,9 +137,27 @@ def run(exe, output, case, theme="dark"):
                 if app.poll() is None:
                     app.kill()
                     app.wait(timeout=5)
-        pid, scratch = started(marker)
-        assert not alive(pid), "closing the app left the helper running"
-        assert not scratch.exists(), "closing the app left the helper scratch folder"
+        if case == "retire-note":
+            assert not marker.exists(), "a note on Retire started the helper"
+        else:
+            pid, scratch = started(marker)
+            assert not alive(pid), "closing the app left the helper running"
+            assert not scratch.exists(), "closing the app left the helper scratch folder"
+        if case in {"comment-card", "rewrite-wait", "retire-note", "helper-timeout"}:
+            text = artifact.with_suffix(".json").read_text(encoding="utf-8-sig")
+            expected = {
+                "comment-card": ["New wording ready", "Your comment: Use Friday afternoon."],
+                "rewrite-wait": ["Rewriting", "Accept original wording"],
+                "retire-note": ["Your note: Use Friday afternoon."],
+                "helper-timeout": ["Rewrite failed", "Try again"],
+            }[case]
+            for line in expected:
+                assert line in text, f"the card is missing {line!r}"
+        if case in {"accept-rewrite", "cancel-accept-original"}:
+            saved = export.read_text(encoding="utf-8")
+            assert ("The demo is on Friday afternoon." in saved) == (case == "accept-rewrite"), "acceptance saved different wording"
+            if case == "cancel-accept-original":
+                assert "The demo is on Friday." in saved, "the original wording was not saved"
         print(f"PASS {case}", flush=True)
 
 
@@ -131,10 +165,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("exe", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("case", choices=["cancel-reject", "cancel-reject-export-fails", "cancel-close"])
+    parser.add_argument("case", choices=[
+        "cancel-reject", "cancel-reject-export-fails", "cancel-close", "cancel-accept-original",
+        "comment-card", "rewrite-wait", "accept-rewrite", "retire-note", "helper-timeout",
+    ])
+    parser.add_argument("--theme", choices=["light", "dark"], default="dark")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    run(args.exe.resolve(), args.output.resolve(), args.case)
+    run(args.exe.resolve(), args.output.resolve(), args.case, args.theme)
 
 
 if __name__ == "__main__":
