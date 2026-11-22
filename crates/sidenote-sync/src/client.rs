@@ -1278,6 +1278,29 @@ fn decode_key(value: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sync_start_is_unavailable() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let identity = Identity::ephemeral();
+        let group = Group::new(&identity);
+        let store = Store::open(&root.path().join("replica.sqlite"), &identity.public())?;
+        let device = Arc::new(Device {
+            store: Mutex::new(store),
+            identity,
+        });
+        let result = SyncClient::start(device, group, RelayUrl::local("ws://127.0.0.1:1")?);
+        assert_eq!(
+            result
+                .err()
+                .expect("Linux sync start must fail")
+                .to_string(),
+            crate::RELAY_UNAVAILABLE
+        );
+        Ok(())
+    }
+
     struct Sink;
     #[async_trait::async_trait]
     impl Transport for Sink {

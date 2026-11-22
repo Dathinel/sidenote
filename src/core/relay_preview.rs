@@ -688,16 +688,6 @@ mod linux_unavailable_tests {
             operations::status(root.path())?.message,
             sidenote_sync::RELAY_UNAVAILABLE
         );
-        let device = Arc::new(Device::open(&root.path().join("replica.sqlite"))?);
-        let group = Group::new(&device.identity);
-        let result = SyncClient::start(device, group, RelayUrl::local("ws://127.0.0.1:1")?);
-        assert_eq!(
-            result
-                .err()
-                .expect("Linux sync start must fail")
-                .to_string(),
-            sidenote_sync::RELAY_UNAVAILABLE
-        );
         Ok(())
     }
 }

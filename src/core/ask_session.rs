@@ -538,9 +538,18 @@ impl Session {
                 return Err("Could not contain the agent session.".into());
             }
         };
-        let mut stdin = child.stdin.take().ok_or("Could not open agent input.")?;
         let stdout = child.stdout.take().ok_or("Could not open agent output.")?;
-        let mut stderr = child.stderr.take().ok_or("Could not open agent status.")?;
+        let stderr = child.stderr.take().ok_or("Could not open agent status.")?;
+        Self::from_child(child, Some(job), stdout, stderr, kind)
+    }
+    fn from_child(
+        mut child: Child,
+        job: Option<crate::platform::ProcessJob>,
+        output: impl Read + Send + 'static,
+        mut status: impl Read + Send + 'static,
+        kind: &str,
+    ) -> Result<Self, String> {
+        let mut stdin = child.stdin.take().ok_or("Could not open agent input.")?;
         let (events_tx, events) = mpsc::sync_channel(16);
         let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(1);
         let writer_tx = events_tx.clone();
@@ -553,7 +562,7 @@ impl Session {
             }
         });
         let reader = thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
+            let mut reader = BufReader::new(output);
             loop {
                 let mut bytes = Vec::new();
                 match reader
@@ -577,11 +586,11 @@ impl Session {
             let _ = events_tx.send(Stream::Closed);
         });
         let errors = thread::spawn(move || {
-            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+            let _ = std::io::copy(&mut status, &mut std::io::sink());
         });
         Ok(Self {
             child,
-            job: Some(job),
+            job,
             input: Some(input),
             events: Some(events),
             threads: vec![writer, reader, errors],
@@ -909,11 +918,27 @@ mod tests {
             agent_fixture();
             return;
         }
+        let root = tempfile::tempdir().unwrap();
         let fixture = |kind| {
-            let mut command = Command::new(std::env::current_exe().unwrap());
-            command.args(["--exact","core::ask_session::tests::streaming_session_reuses_one_process_then_recovers_from_death_and_cancels","--nocapture"])
-                .env("SIDENOTE_ASK_PROTOCOL_FIXTURE","1");
-            Session::spawn(command, kind).unwrap()
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "core::ask_session::tests::streaming_session_reuses_one_process_then_recovers_from_death_and_cancels",
+                ])
+                .current_dir(root.path())
+                .env_clear()
+                .env("SIDENOTE_DATA_DIR", root.path())
+                .env("SIDENOTE_ASK_PROTOCOL_FIXTURE", "1")
+                .creation_flags(0x08000000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            // Libtest writes to stdout, even when the fixture owns the protocol.
+            let output = child.stderr.take().unwrap();
+            let status = child.stdout.take().unwrap();
+            Session::from_child(child, None, output, status, kind).unwrap()
         };
         for kind in ["claude", "codex"] {
             let runner =
@@ -1004,10 +1029,8 @@ mod tests {
 
     fn agent_fixture() {
         let stdin = std::io::stdin();
-        let mut stdout = std::io::stdout().lock();
+        let mut output = std::io::stderr().lock();
         let mut turn = 0;
-        writeln!(stdout).unwrap();
-        stdout.flush().unwrap();
         for line in stdin.lock().lines() {
             let event: Value = serde_json::from_str(&line.unwrap()).unwrap();
             let method = event["method"].as_str().unwrap_or("");
@@ -1052,8 +1075,8 @@ mod tests {
                 continue;
             };
             for response in responses {
-                writeln!(stdout, "{response}").unwrap();
-                stdout.flush().unwrap();
+                writeln!(output, "{response}").unwrap();
+                output.flush().unwrap();
             }
         }
     }
