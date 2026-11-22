@@ -75,7 +75,8 @@ function Resolve-TargetDirectory {
         }
     }
     $target = if ($explicit) { $explicit } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR }
-              elseif ($env:CARGO_BUILD_TARGET_DIR) { $env:CARGO_BUILD_TARGET_DIR } else { Join-Path (Get-Location) 'target' }
+              else { $env:CARGO_BUILD_TARGET_DIR }
+    if (-not $target) { return }
     if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Get-Location) $target }
     $target = [IO.Path]::GetFullPath($target)
     # Cargo hashes path dependencies relative to the workspace, so another worktree's build in
@@ -87,6 +88,35 @@ function Resolve-TargetDirectory {
         throw "Target directory $target is outside this worktree ($top); use a target inside it."
     }
     return $target
+}
+function Set-SharedTargetWorktree([string]$Directory) {
+    $ownerFile = Join-Path $Directory '.sidenote-worktree'
+    if ((Test-Path -LiteralPath $ownerFile) -and [IO.File]::ReadAllText($ownerFile) -ceq $worktree) { return }
+    # Cargo compares path-package mtimes against the previous build, even across worktrees.
+    $packages = [IO.File]::ReadAllText((Join-Path $worktree 'Cargo.lock')) -split '(?m)^\[\[package\]\]\s*$'
+    $localNames = @($packages | ForEach-Object {
+        if ($_ -notmatch '(?m)^source\s*=' -and $_ -match '(?m)^name\s*=\s*"([\w-]+)"') { $Matches[1] }
+    })
+    if (Test-Path -LiteralPath $Directory) {
+        # Fingerprints live under each host profile and each target triple's profiles.
+        $profiles = @(Get-ChildItem -LiteralPath $Directory -Directory)
+        $profiles += @($profiles | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory })
+        foreach ($profile in $profiles) {
+            $fingerprints = Join-Path $profile.FullName '.fingerprint'
+            if (-not (Test-Path -LiteralPath $fingerprints)) { continue }
+            foreach ($unit in Get-ChildItem -LiteralPath $fingerprints -Directory) {
+                if ($unit.Name -match '^(.*)-[0-9a-f]{16}$' -and $Matches[1] -cin $localNames) {
+                    # Removing Cargo's hash files makes it rebuild these units and their dependents.
+                    Get-ChildItem -LiteralPath $unit.FullName -File |
+                        Where-Object { $_.Name -match '^(lib|bin|test|example|bench|build-script|run-build-script|doc)-[^.]+$' } |
+                        ForEach-Object { Remove-Item -LiteralPath $_.FullName }
+                }
+            }
+        }
+    } else {
+        New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+    }
+    [IO.File]::WriteAllText($ownerFile, $worktree)
 }
 function Assert-TargetSpace {
     $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($targetDirectory))
@@ -106,6 +136,14 @@ try {
     if (-not $Pack -and -not $Arguments) { throw 'Supply cargo arguments or -Pack.' }
     $targetDirectory = Resolve-TargetDirectory
     $lockPath = Get-ReleaseLockPath
+    $sharedTarget = -not $targetDirectory
+    if ($sharedTarget) {
+        $worktree = (& git rev-parse --show-toplevel 2>$null)
+        if (-not $worktree) { throw 'Run local_build from inside a git worktree.' }
+        $worktree = [IO.Path]::GetFullPath($worktree)
+        $sharedRoot = (Split-Path -Parent (Split-Path -Parent $lockPath)) + '-shared-target'
+        $targetDirectory = $sharedRoot
+    }
     while (-not $marker) {
         Wait-ReleaseLock $lockPath $ReleaseLockWaitMinutes $ReleaseLockReportSeconds $ReleaseLockPollSeconds
         $marker = Register-BuildMarker
@@ -123,18 +161,24 @@ try {
         }
         LockSlots
         try {
+            $usedNumbers = @()
             foreach ($dir in @(Get-ChildItem -LiteralPath $slotRoot -Directory)) {
                 $owners = @($dir.Name)
                 $childFile = Join-Path $dir.FullName 'child'
                 if (Test-Path -LiteralPath $childFile) { $owners += Get-Content -LiteralPath $childFile }
                 if (-not @($owners | Where-Object { Alive $_ }).Count) {
                     Remove-Item -LiteralPath $dir.FullName -Recurse -Force
+                } else {
+                    $numberFile = Join-Path $dir.FullName 'number'
+                    if (Test-Path -LiteralPath $numberFile) { $usedNumbers += [IO.File]::ReadAllText($numberFile) }
                 }
             }
             $waitReason = 'both local build slots are occupied'
             if (@(Get-ChildItem -LiteralPath $slotRoot -Directory).Count -lt 2 -and -not ($waitReason = BusyMeeting)) {
+                $number = if ('1' -in $usedNumbers) { '2' } else { '1' }
                 $slot = Join-Path $slotRoot (Identity (Get-Process -Id $PID))
                 New-Item -ItemType Directory -Path $slot | Out-Null
+                [IO.File]::WriteAllText((Join-Path $slot 'number'), $number)
                 if (-not $env:CARGO_BUILD_JOBS -and ($Pack -or -not @($Arguments | Where-Object { $_ -match '^(--jobs(?:=|$)|-j)' }).Count)) {
                     $env:CARGO_BUILD_JOBS = '4'
                 }
@@ -145,7 +189,10 @@ try {
                     $exe = (Get-Command cargo.exe -ErrorAction Stop).Source
                     $runArgs = @($Arguments)
                 }
+                if ($sharedTarget) { $targetDirectory = Join-Path $sharedRoot "slot-$number" }
                 Assert-TargetSpace
+                if ($sharedTarget) { Set-SharedTargetWorktree $targetDirectory }
+                Write-Host "local_build: target directory: $targetDirectory"
                 $info = New-Object Diagnostics.ProcessStartInfo
                 $info.FileName = $exe
                 $info.Arguments = (@($runArgs | ForEach-Object { QuoteArg $_ }) -join ' ')
