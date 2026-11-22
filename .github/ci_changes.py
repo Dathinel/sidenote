@@ -1,25 +1,10 @@
 """Classify the tree GitHub checked out."""
 import json
 import os
-from pathlib import Path, PurePosixPath
-import re
+from pathlib import Path
 import subprocess
 import sys
 
-WINDOWS_CFG = re.compile(rb'\bcfg(?:_attr)?!?\s*\([^\]]*\bwindows\b')
-WINDOWS_PATH = re.compile(r'(?:^|/|_)windows(?:[./_]|$)', re.IGNORECASE)
-WINDOWS_ONLY = {
-    "assets/fonts/Figtree-Variable.ttf", "assets/icon/meetings.ico", "build.ps1", "src/core/background_tests.rs",
-    "src/core/meeting_evidence/speech_host_tests.rs", "src/core/meeting_router/jobs/handoff/tests.rs",
-    "src/core/meeting_router/jobs/r1_tests.rs", "src/core/meeting_router/revision/captured_tests.rs",
-    "src/core/meeting_router/revision/receipts.rs", "src/hex_install.rs", "src/hex_probe.rs",
-    "src/install_hooks_tests.rs", "src/meeting_icon.rs", "tests/idle_cpu.rs",
-}
-# These files are compiled only as a named test module in the root library.
-MODULES = {
-    "src/core/annotations/notebook_tests.rs": "core::annotations::notebook_tests::",
-    "src/sync_owner/read_tests.rs": "sync_owner::read_tests::",
-}
 DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY.md"}
 RUST_ROOT_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "build.ps1", "default-runners.json"}
 RUST_DIRS = (".cargo/", "src/", "crates/", "examples/", "tests/", "assets/", "packaging/")
@@ -27,7 +12,7 @@ RUST_DIRS = (".cargo/", "src/", "crates/", "examples/", "tests/", "assets/", "pa
 def git(*args):
     return subprocess.check_output(["git", *args])
 
-def classify(paths, main, windows_cfg):
+def classify(paths, main):
     docs = {p for p in paths if p in DOCS or p.startswith(("docs/", "reviews/", "artifacts/"))}
     relay = {p for p in paths if p.startswith("relay/")}
     tools = {p for p in paths if p.startswith(("tools/", "scripts/")) or p == "tests/linux_package.py"}
@@ -35,40 +20,23 @@ def classify(paths, main, windows_cfg):
     embedded = {p for p in tools if p.startswith(("scripts/meeting-pipeline/", "tools/ui-fixtures/"))}
     rust = {p for p in paths - tools if p in RUST_ROOT_FILES or p.startswith(RUST_DIRS)} | embedded
     run_all = workflow or bool(paths - (docs | relay | tools | rust))
-    # Only a test-only module can safely avoid the whole suite. Tools may embed test fixtures.
-    focused = MODULES.get(next(iter(rust)), "") if len(rust) == 1 and not (main or run_all) else ""
-    windows = any(
-        p in WINDOWS_ONLY or p.startswith(("src/meeting_icon/", "src/core/meeting_router/production/",
-                                           ".cargo/", "scripts/meeting-pipeline/"))
-        or PurePosixPath(p).name in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs"}
-        or (p.endswith(".rs") and (WINDOWS_PATH.search(p) or windows_cfg(p)))
-        for p in rust
-    )
+    run_rust = main or run_all or bool(rust)
     return {"docs_only": paths == docs, "rust": bool(rust), "workflow": workflow,
-            "linux": main or run_all or bool(rust), "windows": main or run_all or windows,
-            "relay": run_all or bool(relay), "tools": run_all or bool(tools), "module": focused}
+            "linux": run_rust, "windows": run_rust,
+            "relay": run_all or bool(relay), "tools": run_all or bool(tools)}
 
 def changed_jobs():
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     main = os.environ["GITHUB_EVENT_NAME"] == "push"
     before = event["before"] if main else git("rev-parse", "HEAD^1").decode().strip()
-    tracked = git("ls-tree", "-r", "--name-only", "-z", "HEAD").decode().split("\0")
     if main and (not before.strip("0") or subprocess.run(
         ["git", "cat-file", "-e", before + "^{commit}"], capture_output=True
     ).returncode):
-        paths = set(tracked) - {""}
-        old = set()
+        changed = git("ls-tree", "-r", "--name-only", "-z", "HEAD")
     else:
-        paths = set(git("diff", "--no-renames", "--name-only", "-z", before, "HEAD").decode().split("\0")) - {""}
-        old = set(git("ls-tree", "-r", "--name-only", "-z", before).decode().split("\0"))
-    current = set(tracked)
+        changed = git("diff", "--no-renames", "--name-only", "-z", before, "HEAD")
 
-    def windows_cfg(path):
-        # A deleted Windows gate matters as much as an added one.
-        return ((path in old and WINDOWS_CFG.search(git("show", f"{before}:{path}")))
-                or (path in current and WINDOWS_CFG.search(git("show", f"HEAD:{path}"))))
-
-    outputs = classify(paths, main, windows_cfg)
+    outputs = classify(set(changed.decode().split("\0")) - {""}, main)
     print(json.dumps(outputs))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
         for key, value in outputs.items():
@@ -76,29 +44,22 @@ def changed_jobs():
 
 
 def self_test():
-    def cfg(path):
-        return path == "src/mixed.rs"
-    assert classify({"docs/design.md"}, False, cfg)["docs_only"]
-    assert not classify({"relay/index.ts"}, False, cfg)["linux"]
-    assert classify({"relay/index.ts"}, False, cfg)["relay"]
-    assert classify({"tools/pipeline-tests.py"}, False, cfg)["tools"]
-    assert not classify({"tools/pipeline-tests.py"}, False, cfg)["linux"]
-    assert classify({"tools/ui-fixtures/hex.json"}, False, cfg)["linux"]
-    assert not classify({"src/lib.rs"}, False, cfg)["windows"]
-    assert classify({"src/mixed.rs"}, False, cfg)["windows"]
-    assert classify({"src/platform/windows/job_process.rs"}, False, cfg)["windows"]
-    assert classify({"src/hex_install.rs"}, False, cfg)["windows"]
-    assert classify({"README.md"}, True, cfg)["windows"]
-    module, name = next(iter(MODULES.items()))
+    assert classify({"docs/design.md"}, False)["docs_only"]
+    relay = classify({"relay/index.ts"}, False)
+    assert relay["relay"] and not (relay["linux"] or relay["windows"] or relay["tools"])
+    tools = classify({"tools/pipeline-tests.py"}, False)
+    assert tools["tools"] and not (tools["linux"] or tools["windows"] or tools["relay"])
+    embedded = classify({"tools/ui-fixtures/hex.json"}, False)
+    assert embedded["linux"] and embedded["windows"] and embedded["tools"]
+    main = classify({"README.md"}, True)
+    assert main["linux"] and main["windows"]
+    for path in ("src/core/speech_host.rs", "src/lib.rs", "Cargo.lock"):
+        result = classify({path}, False)
+        assert result["linux"] and result["windows"], result
+        assert not (result["relay"] or result["tools"]), result
     for path in (".github/workflows/ci.yml", "ci-support/check.py"):
-        for paths in ({path}, {path, module}):
-            result = classify(paths, False, cfg)
-            assert all(result[job] for job in ("linux", "windows", "relay", "tools")), result
-            assert result["module"] == "", result
-    assert not classify({"Cargo.lock"}, False, cfg)["relay"]
-    assert classify({module, "README.md"}, False, cfg)["module"] == name
-    assert classify({module, "Cargo.toml"}, False, cfg)["module"] == ""
-    assert WINDOWS_CFG.search(b'#[cfg(all(\n  test, target_os = "windows"\n))]')
+        result = classify({path}, False)
+        assert all(result[job] for job in ("linux", "windows", "relay", "tools")), result
     print("CI classifier self-test passed")
 
 if __name__ == "__main__":

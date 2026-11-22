@@ -23,7 +23,6 @@ jobs:
       windows: ${{ steps.paths.outputs.windows }}
       relay: ${{ steps.paths.outputs.relay }}
       tools: ${{ steps.paths.outputs.tools }}
-      module: ${{ steps.paths.outputs.module }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -72,8 +71,6 @@ jobs:
           cargo clippy --workspace --locked --all-targets -- -D warnings
           cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
       - name: Test default and ASR feature sets
-        env:
-          TEST_MODULE: ${{ needs.changes.outputs.module }}
         shell: bash
         run: |
           umask 077
@@ -101,13 +98,8 @@ jobs:
                 --skip=service::speech::proofs::faults::retained_status_is_bounded_and_cannot_kill_the_listener
                 --skip=service::speech::proofs::locking::job_creation_keeps_intake_ownership_until_processing_is_locked
                 --skip=tests::server_role_exposes_only_scoped_host_probe)
-          if [[ -n "$TEST_MODULE" ]]; then
-            cargo test --locked -p sidenote --lib "$TEST_MODULE"
-            cargo test --locked -p sidenote --lib --features asr-runtime "$TEST_MODULE"
-          else
-            cargo test --locked --workspace --no-fail-fast -- "${skip[@]}"
-            cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
-          fi
+          cargo test --locked --workspace --no-fail-fast -- "${skip[@]}"
+          cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
 
   relay:
     needs: changes
