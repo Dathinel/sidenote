@@ -92,7 +92,11 @@ fn a_context_line_and_a_point_can_be_selected_and_copied() {
 }
 
 fn page_with_cited_point() -> Runtime<State> {
-    page_with(DEFAULT_SIZE, || {
+    page_with_cited_point_at(DEFAULT_SIZE)
+}
+
+fn page_with_cited_point_at(size: (f32, f32)) -> Runtime<State> {
+    page_with(size, || {
         let folder = core::meetings_dir().join(MEETING);
         let summary = serde_json::json!({
             "title": "Beta launch plan",
@@ -528,6 +532,7 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
         }
     });
     let project = format!("meeting-project-{MEETING}");
+    let more = format!("more-meeting-{MEETING}-button");
     let date = chrono::DateTime::from_timestamp_millis(start)
         .unwrap()
         .with_timezone(&chrono::Local);
@@ -551,7 +556,9 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
         });
         rt.frame(0.2);
     };
+    // Tab reaches both controls before the facts below them.
     for (key, name) in [
+        (more.as_str(), "More actions"),
         ("meeting-facts", facts.as_str()),
         ("meeting-people", "2 people"),
         (&project, "Suggested project: Atlas 2. Change it"),
@@ -588,9 +595,14 @@ fn meeting_meta_facts_and_popover_work_by_keyboard() {
 /// Three tasks and two open questions: one task with a detail, one with a guessed date and one
 /// with neither owner nor date; one question waits on someone.
 fn page_with_tasks(size: (f32, f32)) -> Runtime<State> {
+    tasks_page(size, false)
+}
+
+/// `page_with_tasks`, optionally with a context line and a topic above the tasks.
+fn tasks_page(size: (f32, f32), notes: bool) -> Runtime<State> {
     let mut rt = page_with(size, || {
         let folder = core::meetings_dir().join(MEETING);
-        let summary = serde_json::json!({
+        let mut summary = serde_json::json!({
             "title": "Beta launch plan",
             "todo": [
                 {"task": "Send the survey results to the team", "title": "Send the survey results",
@@ -605,6 +617,12 @@ fn page_with_tasks(size: (f32, f32)) -> Runtime<State> {
                 {"question": "Who owns the survey follow-up?"},
             ],
         });
+        if notes {
+            summary["context"] = serde_json::json!([CONTEXT]);
+            summary["topics"] = serde_json::json!([{"title": "Launch", "points": [
+                {"type": "decided", "text": POINT},
+                {"type": "fact", "text": "Copy is with Priya."}]}]);
+        }
         std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
         let state = core::state_dir();
         std::fs::create_dir_all(&state).unwrap();
@@ -1611,25 +1629,461 @@ fn the_fade_leaves_the_last_notes_row_clear_and_is_gone_under_an_open_thread() {
     assert_eq!(fade[3], 0.0, "fade with a thread open");
 }
 
+/// The saved meeting at `size` with a date and duration, two people, a project and the English-only
+/// status: every item the meta row can show.
+fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
+    page_with_meta(size, 1_793_955_600_000, 22, &["Maya", "Tom"], "Atlas 2")
+}
+
+fn page_with_meta(
+    size: (f32, f32),
+    start: i64,
+    minutes: u64,
+    people: &[&str],
+    project: &str,
+) -> Runtime<State> {
+    let mut rt = page_with(size, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let state = core::state_dir();
+        std::fs::create_dir_all(&state).unwrap();
+        for (path, value) in [
+            (
+                folder.join("manifest.json"),
+                serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":minutes * 60_000}),
+            ),
+            (
+                folder.join("english-summary.json"),
+                serde_json::json!({"title":"Beta launch plan","context":[CONTEXT],"people":people}),
+            ),
+            (
+                folder.join("tasks.json"),
+                serde_json::json!({"meeting_project":project}),
+            ),
+            (
+                state.join("config.json"),
+                serde_json::json!({"version":1,"features":{"projects":true}}),
+            ),
+            (
+                state.join("projects.json"),
+                serde_json::json!({"projects":[project]}),
+            ),
+        ] {
+            std::fs::write(path, value.to_string()).unwrap();
+        }
+    });
+    rt.update(|s, _| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while s.areas.refresh_pending {
+            let event = s
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("area worker finished");
+            s.apply_event(event);
+        }
+    });
+    rt.settle_all();
+    rt.frame(0.0);
+    rt
+}
+
 #[test]
-fn meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows() {
-    if in_parent("meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows") {
+fn the_meta_facts_show_a_date_alone_a_duration_alone_or_both_with_a_dot_between() {
+    if in_parent("the_meta_facts_show_a_date_alone_a_duration_alone_or_both_with_a_dot_between") {
         return;
     }
-    // 1024 wide leaves 775 beside the sidebar: less than the 1024 grid plus its 16.
-    let rt = page_with_tasks((1024.0, 800.0));
+    let start = 1_793_955_600_000_i64;
+    let date = chrono::DateTime::from_timestamp_millis(start)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%-d %b")
+        .to_string();
+    let both = serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":1320000});
+    let date_only = serde_json::json!({"status":"complete","created_at_ms":start});
+    let duration_only = serde_json::json!({"status":"complete","duration_ms":1320000});
+    let cases = [
+        (both, format!("Date: {date}. Duration: 22 min"), true),
+        (date_only, format!("Date: {date}"), false),
+        (duration_only, "Duration: 22 min".to_string(), false),
+    ];
+    for (manifest, label, dot) in cases {
+        let rt = page_with(DEFAULT_SIZE, || {
+            let path = core::meetings_dir().join(MEETING).join("manifest.json");
+            std::fs::write(path, manifest.to_string()).unwrap();
+        });
+        let facts = element(&rt, "meeting-facts");
+        assert_eq!(facts.label.as_deref(), Some(label.as_str()));
+        // The dot sits between a date and a duration, and only then.
+        assert_eq!(rt.find("meeting-fact-separator").is_some(), dot, "{label}");
+        let shown: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.path.starts_with(&format!("{}/", facts.path)))
+            .filter_map(|e| e.text)
+            .collect();
+        let want: Vec<&str> = label
+            .trim_start_matches("Date: ")
+            .trim_start_matches("Duration: ")
+            .split(". Duration: ")
+            .collect();
+        assert_eq!(shown, want, "{label}");
+    }
+}
+
+#[test]
+fn a_phone_page_has_a_24_title_16_gutters_and_facts_below_the_controls() {
+    if in_parent("a_phone_page_has_a_24_title_16_gutters_and_facts_below_the_controls") {
+        return;
+    }
+    let rt = page_with_every_meta_item((390.0, 900.0));
+    let project = format!("meeting-project-{MEETING}");
+    let more = format!("more-meeting-{MEETING}-button");
+    let r = |key: &str| rect_of(&rt, key);
+    // The page starts at the sidebar's 1 point divider; the gutter is 16 from there.
+    let left = r("meeting-pane")[0] + 16.0;
+    // The title is 24 on a 30 line.
+    let title = r("meeting-title");
+    assert_eq!((title[0], title[3]), (left, 30.0), "title {title:?}");
+    // Line one: the switch and the menu at opposite gutters.
+    let (view, facts, menu) = (r("meeting-view"), r("meeting-facts"), r(&more));
+    assert_eq!(menu[1], view[1], "line one");
+    assert_eq!(
+        menu[0] + menu[2],
+        390.0 - 16.0,
+        "the menu is at the right gutter"
+    );
+    assert_eq!(view[0], left, "the switch is at the left gutter");
+    // The facts start 6 below the controls and wrap in reading order, ending with the section
+    // rail's slot.
+    let (people, chip, status, slot) = (
+        r("meeting-people"),
+        r(&project),
+        r("meeting-status"),
+        r("meeting-sections-slot"),
+    );
+    assert_eq!((facts[0], facts[1]), (left, view[1] + view[3] + 6.0));
+    for (before, after) in [
+        (facts, people),
+        (people, chip),
+        (chip, status),
+        (status, slot),
+    ] {
+        assert!(
+            after[1] >= before[1] + before[3]
+                || (after[1] >= before[1] && after[0] >= before[0] + before[2]),
+            "{after:?} follows {before:?}"
+        );
+    }
+    assert_eq!(r("sec-context")[0], left, "notes gutter");
+    assert_inside(&rt, 390.0);
+    // Every fact stays reachable: each is on the page with its name.
+    for key in [
+        "meeting-facts",
+        "meeting-people",
+        "meeting-status",
+        &project,
+        &more,
+    ] {
+        assert!(element(&rt, key).label.is_some(), "{key}");
+    }
+}
+
+#[test]
+fn the_tasks_sit_28_below_the_notes_on_a_phone() {
+    if in_parent("the_tasks_sit_28_below_the_notes_on_a_phone") {
+        return;
+    }
+    let rt = tasks_page((390.0, 900.0), true);
+    let last = rect_of(&rt, "meeting-point-pt-0-1");
+    let tasks = rect_of(&rt, "meeting-actions");
+    assert_eq!(tasks[1] - (last[1] + last[3]), 28.0, "tasks {tasks:?}");
     assert!(rt.find("meeting-grid").is_none());
-    let header = rect_of(&rt, "meeting-header");
-    assert!(rect_of(&rt, "meeting-task-0")[1] >= header[1] + header[3]);
+}
+
+#[test]
+fn the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone() {
+    if in_parent("the_hidden_time_pill_leaves_the_whole_row_to_the_text_on_a_phone") {
+        return;
+    }
+    // Bullet column 20, row padding 6 each side.
+    let space = |rt: &Runtime<State>| {
+        let row = rect_of(rt, "meeting-point-pt-0-0");
+        (
+            row,
+            rect_of(rt, "meeting-point-text-pt-0-0")[2],
+            row[2] - 32.0,
+        )
+    };
+    let rt = page_with_cited_point_at((390.0, 900.0));
+    let (row, text, free) = space(&rt);
+    assert_eq!(text, free, "the text has the row's whole width");
+    // The pill is still 6 from the row's right edge, and the pointer still reaches it.
+    let pill = rect_of(&rt, "meeting-source-pt-0-0");
+    assert_eq!(
+        (pill[3], row[0] + row[2] - (pill[0] + pill[2])),
+        (21.0, 6.0)
+    );
+    // On the wide page the pill is in the row, so the text has less.
+    let (_, text, free) = space(&page_with_cited_point());
+    assert!(text < free, "wide: {text} of {free}");
+}
+
+#[test]
+fn the_ask_bar_starts_on_the_notes_edge_wherever_the_strip_is_on() {
+    if in_parent("the_ask_bar_starts_on_the_notes_edge_wherever_the_strip_is_on") {
+        return;
+    }
+    // 800 wide with no sidebar, and 1000 wide with it (a page of 751): both are `narrow` and both
+    // have room for the strip and the 640 column, so the bar sits on the column's edge.
+    for size in [(800.0, 900.0), (1000.0, 900.0)] {
+        let rt = page_at(size);
+        assert!(rt.find("meeting-grid").is_some(), "{size:?}: no strip");
+        let (pill, main) = (rect_of(&rt, "ask-pill"), rect_of(&rt, "meeting-main"));
+        assert_eq!(
+            pill[0], main[0],
+            "{size:?}: the Ask bar is off the notes edge"
+        );
+        assert_eq!(
+            pill[2], main[2],
+            "{size:?}: the Ask bar is not the column's width"
+        );
+    }
+}
+
+/// What Hex reports while it records the invented meeting.
+fn hex_engine_recording() -> sidenote::hex_engine::EngineState {
+    sidenote::hex_engine::EngineState {
+        running: true,
+        version: "test".into(),
+        protocol: 4,
+        recording: Some(sidenote::hex_engine::Recording {
+            id: Some(MEETING.into()),
+            title: None,
+            since: None,
+            elapsed_seconds: Some(724),
+        }),
+        meeting_state: "recording".into(),
+        dictating: Some(false),
+        capture_state: "idle".into(),
+        model: sidenote::hex_engine::ModelState {
+            id: None,
+            name: None,
+            language: None,
+            installed: None,
+            preparing: None,
+            downloaded_bytes: None,
+        },
+        labs: Default::default(),
+    }
+}
+
+#[test]
+fn the_phone_menu_shares_the_switch_row_with_short_and_long_facts() {
+    if in_parent("the_phone_menu_shares_the_switch_row_with_short_and_long_facts") {
+        return;
+    }
+    use chrono::TimeZone;
+
+    let more = format!("more-meeting-{MEETING}-button");
+    let project_key = format!("meeting-project-{MEETING}");
+    let project = "Atlas Partner Operations and Launch Readiness";
+    let people = [
+        "Maya", "Tom", "Amir", "Asha", "Eli", "Inez", "Jin", "Lea", "Noor", "Ravi", "Rosa", "Zoe",
+    ];
+    let start = chrono::Local
+        .with_ymd_and_hms(2026, 11, 28, 12, 0, 0)
+        .unwrap()
+        .timestamp_millis();
+    for long in [false, true] {
+        // The recording rail uses 57 points, leaving pages of 333 and 350.
+        for (window, rail) in [
+            (390.0, true),
+            (340.0, false),
+            (407.0, true),
+            (360.0, false),
+            (364.0, false),
+            (365.0, false),
+            (380.0, false),
+            (390.0, false),
+            (420.0, false),
+        ] {
+            let mut rt = if long {
+                page_with_meta((window, 900.0), start, 105, &people, project)
+            } else {
+                page_with_every_meta_item((window, 900.0))
+            };
+            if rail {
+                rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
+                rt.frame(0.2);
+                rt.settle_all();
+            }
+            let page = window - if rail { 57.0 } else { 0.0 };
+            let (view, menu) = (rect_of(&rt, "meeting-view"), rect_of(&rt, &more));
+            assert_eq!(
+                menu[1], view[1],
+                "page {page}, long facts {long}: the menu is on a line by itself"
+            );
+            if long {
+                let facts = element(&rt, "meeting-facts");
+                let people = element(&rt, "meeting-people");
+                let project_chip = element(&rt, &project_key);
+                assert_eq!(
+                    facts.label.as_deref(),
+                    Some("Date: 28 Nov. Duration: 105 min")
+                );
+                assert_eq!(people.label.as_deref(), Some("12 people"));
+                assert!(project_chip.label.as_deref().unwrap().contains(project));
+                let pane = rect_of(&rt, "meeting-pane");
+                for fact in [&facts, &people, &project_chip] {
+                    let [x, y, w, h] = fact.rect;
+                    assert!(y >= view[1] + view[3], "page {page}: {:?}", fact.label);
+                    assert!(
+                        w > 0.0
+                            && h > 0.0
+                            && x >= pane[0]
+                            && x + w <= pane[0] + pane[2]
+                            && y >= pane[1]
+                            && y + h <= pane[1] + pane[3],
+                        "page {page}: {:?} {:?} is outside the page {pane:?}",
+                        fact.label,
+                        fact.rect
+                    );
+                }
+            }
+            assert_inside(&rt, window);
+        }
+    }
+}
+
+#[test]
+fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
+    if in_parent("the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone") {
+        return;
+    }
+    let mut rt = page_at((390.0, 900.0));
+    assert!(
+        rt.find("rail-recording").is_none(),
+        "no rail until it records"
+    );
+    rt.update(|s, _| {
+        s.hex.status = Some(Ok(hex_engine_recording()));
+    });
+    rt.frame(0.2);
+    let rail = element(&rt, "rail-recording");
+    // Amber is a warning; a live status is danger. The test environment draws the dark theme.
+    let p = theme::palette(true);
+    let colours: Vec<_> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.starts_with(&format!("{}/", rail.path)))
+        .filter_map(|e| e.text_color)
+        .collect();
+    assert!(
+        colours.contains(&p.danger),
+        "the mic is not danger red: {colours:?}"
+    );
+    assert!(!colours.contains(&p.warn), "the mic is amber");
+}
+
+/// Every `meeting-` element lies inside `width`.
+fn assert_inside(rt: &Runtime<State>, width: f32) {
     for e in rt.elements() {
         let key = e.key.as_deref().unwrap_or_default();
-        if key.starts_with("meeting-") {
+        if key.starts_with("meeting-") || key.starts_with("more-meeting-") {
             assert!(
-                e.rect[0] + e.rect[2] <= 1024.0,
-                "{key} runs past the window"
+                e.rect[0] >= 0.0 && e.rect[0] + e.rect[2] <= width,
+                "{key} {:?} runs past the window",
+                e.rect
             );
         }
     }
+}
+
+#[test]
+fn meeting_grid_keeps_its_strip_and_column_below_its_width_with_the_tasks_stacked() {
+    if in_parent("meeting_grid_keeps_its_strip_and_column_below_its_width_with_the_tasks_stacked") {
+        return;
+    }
+    // 1024 wide leaves 775 beside the sidebar: less than the 1024 grid plus its 16, but room for
+    // the 44 strip and the 640 column with 24 either side (732).
+    let mut rt = tasks_page((1024.0, 800.0), true);
+    let r = |rt: &Runtime<State>, key: &str| rect_of(rt, key);
+    let (grid, strip, main) = (
+        r(&rt, "meeting-grid"),
+        r(&rt, "meeting-grid-strip"),
+        r(&rt, "meeting-main"),
+    );
+    assert_eq!((grid[2], strip[2], main[2]), (684.0, 44.0, 640.0));
+    assert_eq!(
+        strip[0] + strip[2],
+        main[0],
+        "the strip sits left of the notes"
+    );
+    // Centred in the page beside the sidebar.
+    let (left, right) = (
+        grid[0] - nav::width(&rt.state),
+        1024.0 - (grid[0] + grid[2]),
+    );
+    assert_eq!(left, right, "centred in the page");
+    // The header, the notes and the tasks all start on the notes edge, and the menu ends on the
+    // notes' right edge, not past it.
+    let header = r(&rt, "meeting-header");
+    assert_eq!((header[0], header[2]), (main[0], 640.0), "header");
+    let menu = r(&rt, &format!("more-meeting-{MEETING}-button"));
+    assert_eq!(
+        menu[0] + menu[2],
+        main[0] + main[2],
+        "the menu is at the notes' right edge"
+    );
+    assert_eq!(r(&rt, "sec-context")[0], main[0], "notes");
+    assert!(rt.find("meeting-tasks-column").is_none());
+    let (last, tasks) = (r(&rt, "meeting-point-pt-0-1"), r(&rt, "meeting-actions"));
+    assert_eq!(
+        tasks[1] - (last[1] + last[3]),
+        28.0,
+        "tasks below the notes"
+    );
+    // The stacked rows hang 8 either side of the column, inside the scroll area.
+    let task = r(&rt, "meeting-task-0");
+    assert_eq!(
+        (task[0], task[2]),
+        (main[0] - 8.0, 656.0),
+        "task row {task:?}"
+    );
+    // The Ask bar and the transcript sheet start on the notes edge too.
+    assert_eq!(r(&rt, "ask-pill")[0], main[0], "Ask bar");
+    rt.update(|s, _| s.transcript_open = true);
+    rt.frame(0.2);
+    rt.settle_all();
+    let sheet = r(&rt, "meeting-transcript-surface");
+    assert_eq!((sheet[0], sheet[2]), (main[0], 640.0), "transcript sheet");
+    assert_inside(&rt, 1024.0);
+}
+
+#[test]
+fn meeting_page_below_the_strip_width_fills_the_page_and_never_overflows() {
+    if in_parent("meeting_page_below_the_strip_width_fills_the_page_and_never_overflows") {
+        return;
+    }
+    // 900 wide leaves 651 beside the sidebar: under the 732 the strip and column need.
+    let mut rt = tasks_page((900.0, 800.0), true);
+    assert!(rt.find("meeting-grid").is_none());
+    let notes = rect_of(&rt, "sec-context")[0];
+    let left = nav::width(&rt.state);
+    assert_eq!(notes, left + 24.0, "24 gutter");
+    assert_eq!(
+        rect_of(&rt, "meeting-title")[0],
+        notes,
+        "title on the notes edge"
+    );
+    rt.update(|s, _| s.transcript_open = true);
+    rt.frame(0.2);
+    rt.settle_all();
+    assert_eq!(
+        rect_of(&rt, "meeting-transcript-surface")[0],
+        notes,
+        "transcript sheet on the notes edge"
+    );
+    assert_inside(&rt, 900.0);
 }
 
 /// Writes a summary with this `made_by` record into `folder`.

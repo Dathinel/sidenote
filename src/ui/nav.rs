@@ -495,7 +495,7 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             pressable(col().w(40.0).h(36.0).center().child(super::icons::draw(
                 &super::icons::MIC,
                 18.0,
-                p.warn,
+                p.danger,
             )))
             .key("rail-recording")
             .label("Recording. Open live meeting")

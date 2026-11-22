@@ -375,16 +375,22 @@ pub(super) fn status_chip(
 /// `side` is the page gutter; the wide page puts the header in the notes column and passes 0.
 fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Vec<El>) -> El {
     let people = m.summary.people.len();
-    let mut controls = row()
+    let phone = super::phone(s);
+    // Keep the phone controls together regardless of how wide the facts are.
+    let mut first = row()
         .key("meeting-controls")
         .w_full()
-        .flex_wrap()
         .gaps(6.0, 6.0)
         .items_center()
-        .child(view_switch(s, k, p))
-        .children(meeting_facts(m, p));
+        .child(view_switch(s, k, p));
+    let mut rest = Vec::new();
+    if phone {
+        rest.extend(meeting_facts(m, p));
+    } else {
+        first = first.flex_wrap().children(meeting_facts(m, p));
+    }
     if people > 0 {
-        controls = controls.child(
+        rest.push(
             fact(&icons::PEOPLE, p)
                 .key("meeting-people")
                 .role("text")
@@ -398,10 +404,36 @@ fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Ve
                 .child(roles::FACT.line(people.to_string(), p.soft).a11y_hidden()),
         );
     }
-    if let Some(project) = project::reading_chip(s, k, &m.id, p, layer) {
-        controls = controls.child(project);
-    }
-    controls = controls.children(status_chip(s, k, m, p, layer));
+    rest.extend(project::reading_chip(s, k, &m.id, p, layer));
+    rest.extend(status_chip(s, k, m, p, layer));
+    let menu = more::menu(s, k, m, "meeting", p, layer);
+    let meta = if phone {
+        let mut meta = col().key("meeting-meta").w_full().gap(6.0);
+        first = first.child(el().grow(1.0).h(28.0)).child(menu);
+        meta = meta.child(first);
+        if !rest.is_empty() {
+            // The empty slot after the project is where the section rail's chip goes.
+            meta = meta.child(
+                row()
+                    .key("meeting-controls-more")
+                    .w_full()
+                    .flex_wrap()
+                    .gaps(6.0, 6.0)
+                    .items_center()
+                    .children(rest)
+                    .child(el().key("meeting-sections-slot")),
+            );
+        }
+        meta
+    } else {
+        row()
+            .key("meeting-meta")
+            .w_full()
+            .gap(6.0)
+            .items_start()
+            .child(first.children(rest).grow(1.0).min_w(0.0))
+            .child(menu)
+    };
     col()
         .key("meeting-header")
         .w_full()
@@ -410,19 +442,13 @@ fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Ve
         .pt(18.0)
         .pb(22.0)
         .child(
-            text_title(&m.title, 32.0, p)
+            // 26 on a page, 24 on a phone; the line is a quarter taller than the size.
+            text_title(&m.title, if phone { 24.0 } else { 32.0 }, p)
                 .max_lines(2)
                 .key("meeting-title")
                 .help(&m.title),
         )
-        .child(
-            row()
-                .w_full()
-                .gap(6.0)
-                .items_start()
-                .child(controls.grow(1.0).min_w(0.0))
-                .child(more::menu(s, k, m, "meeting", p, layer)),
-        )
+        .child(meta)
         .children(crate::ui::live::parts_status(s, p))
         .children(project::form(s, k, &m.id, p))
 }
@@ -479,23 +505,28 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
         let time = at.clone();
         let shown = crate::ui::widgets::recording_time(at);
         let back = origin.clone();
-        line = line.child(
-            pressable(roles::TIME.line(&shown, p.ink))
-                .key(source_key)
-                .label(format!("Open source at {shown}"))
-                .help("Open this line in the transcript")
-                .px(6.0)
-                .py(2.0)
-                .mt(1.0)
-                .radius(5.0)
-                .fill(p.sel)
-                .hover(p.chip)
-                .focus_ring(2.0, 1.0, p.accent)
-                .group_opacity(0.0, 1.0)
-                .on_press_tx(move |s: &mut State, tx| {
-                    s.jump(&time, back.clone(), tx);
-                }),
-        );
+        let pill = pressable(roles::TIME.line(&shown, p.ink))
+            .key(source_key)
+            .label(format!("Open source at {shown}"))
+            .help("Open this line in the transcript")
+            .px(6.0)
+            .py(2.0)
+            .mt(1.0)
+            .radius(5.0)
+            .fill(p.sel)
+            .hover(p.chip)
+            .focus_ring(2.0, 1.0, p.accent)
+            .group_opacity(0.0, 1.0)
+            .on_press_tx(move |s: &mut State, tx| {
+                s.jump(&time, back.clone(), tx);
+            });
+        // On a phone the hidden pill would still take its width from the text, so it floats over
+        // the row's right end instead, 3 down (the row's 2 and the pill's 1) and 6 in.
+        line = line.child(if super::phone(s) {
+            pill.pin(None, Some(3.0), Some(6.0), None)
+        } else {
+            pill
+        });
     }
     if s.back.as_deref() == Some(&origin) {
         line = line.fill(p.sel);
@@ -824,13 +855,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         return col();
     };
     let wide = super::wide(s);
+    let strip = super::strip(s);
     // The wide grid already sets the notes 44 points in from its edge, so its column has no
     // gutter of its own; below the grid's width the notes keep the page gutter.
-    let side = if wide { 0.0 } else { SIDE };
+    let side = super::gutter(s);
+    // With no gutter and the tasks stacked, their rows hang 8 either side of the column, so the
+    // scroll area is 8 wider each side there, as the tasks column's is on the wide grid.
+    let hang = if strip && !wide { 8.0 } else { 0.0 };
     let fade = (150.0 - s.overlay_h.get()).max(0.0);
     let mut doc = narrative(s, m, p);
     if !wide {
-        doc = doc.child(rail(s, k, m, p, layer).mx(-8.0).mt(24.0));
+        doc = doc.child(rail(s, k, m, p, layer).mx(-8.0).mt(roles::SECTION_TOP));
     }
     let mut main = col()
         .key("meeting-main")
@@ -843,22 +878,27 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             }
         })
         .min_h(0.0);
-    main = if wide {
+    main = if strip {
         main.w(COLUMN).min_w(COLUMN).max_w(COLUMN)
     } else {
         main.grow(1.0).min_w(0.0)
     };
+    let mut frame = col().key("meeting-scroll-frame");
+    frame = if hang > 0.0 {
+        let w = COLUMN + 2.0 * hang;
+        frame.w(w).min_w(w).max_w(w).ml(-hang).mr(-hang)
+    } else {
+        frame.w_full()
+    };
     main = main.child(
-        col()
-            .key("meeting-scroll-frame")
-            .w_full()
+        frame
             .grow(1.0)
             .min_w(0.0)
             .min_h(0.0)
             .child(
                 scroll(
-                    doc.max_w(COLUMN + 2.0 * side)
-                        .px(side)
+                    doc.max_w(COLUMN + 2.0 * (side + hang))
+                        .px(side + hang)
                         .pt(6.0)
                         .pb(s.overlay_h.get() + 32.0),
                     "meeting-scroll",
@@ -897,7 +937,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .w_full()
             .items_start()
             .shrink()
-            .px(if wide { 0.0 } else { 16.0 })
+            .px(side)
             .pb(36.0)
             .child(
                 col()
@@ -937,16 +977,27 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .mr(-8.0);
         columns = columns
             .justify_center()
-            .child(grid("meeting-grid", main).child(tasks));
+            .child(grid("meeting-grid", main, GRID).child(tasks));
+    } else if strip {
+        // Narrower than the grid but wide enough for the strip: the notes keep their column and
+        // the tasks sit under them.
+        columns = columns
+            .justify_center()
+            .child(grid("meeting-grid", main, STRIP + COLUMN));
     } else {
         columns = columns.child(main);
     }
     let mut head = header(s, k, m, side, p, layer);
-    if wide {
-        head = row().w_full().pr(EDGE).justify_center().child(grid(
-            "meeting-header-grid",
-            head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
-        ));
+    if strip {
+        head = row()
+            .w_full()
+            .pr(if wide { EDGE } else { 0.0 })
+            .justify_center()
+            .child(grid(
+                "meeting-header-grid",
+                head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
+                if wide { GRID } else { STRIP + COLUMN },
+            ));
     }
     let mut pane = col()
         .key("meeting-pane")
@@ -961,14 +1012,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     pane.child(head).child(columns)
 }
 
-/// The wide page's grid row: the 44 point strip kept for the section rail, then `notes`. The
+/// The grid row, `width` wide: the 44 point strip kept for the section rail, then `notes`. The
 /// header and the page body both sit in one, so the title lines up with the notes.
-fn grid(key: &str, notes: El) -> El {
+fn grid(key: &str, notes: El, width: f32) -> El {
     row()
         .key(key)
-        .w(GRID)
-        .min_w(GRID)
-        .max_w(GRID)
+        .w(width)
+        .min_w(width)
+        .max_w(width)
         .child(
             el().key(format!("{key}-strip"))
                 .w(STRIP)

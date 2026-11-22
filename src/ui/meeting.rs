@@ -68,9 +68,43 @@ pub const EDGE: f32 = 16.0;
 /// The widest the other reading pages get; lines stay near 80 characters.
 pub const PAGE_COLUMN: f32 = 760.0;
 
+/// The page width below which the meeting page uses a 16 gutter, a 24 title and a control row
+/// above the wrapping facts.
+pub const PHONE: f32 = 600.0;
+/// The phone layout's page gutter.
+pub const PHONE_SIDE: f32 = 16.0;
+
+/// The width the meeting page has beside the sidebar.
+fn page_w(s: &State) -> f32 {
+    s.app_w.get() - super::nav::width(s)
+}
+
 /// Room for the whole grid and its right edge. Below it the tasks sit under the notes.
 pub fn wide(s: &State) -> bool {
-    s.app_w.get() - super::nav::width(s) >= GRID + EDGE
+    page_w(s) >= GRID + EDGE
+}
+
+/// Room for the 44 strip and the notes column with the page gutter either side. The wide grid and
+/// this narrower one both put the notes in a column exactly `COLUMN` wide, 44 in from the grid's
+/// edge, with the header and the Ask bar on the same edges; below it the notes fill the page.
+pub fn strip(s: &State) -> bool {
+    page_w(s) >= STRIP + COLUMN + 2.0 * SIDE
+}
+
+pub fn phone(s: &State) -> bool {
+    page_w(s) < PHONE
+}
+
+/// The page gutter beside the notes: none where the column is fixed (the grid's own strip is the
+/// margin), 16 on a phone and 24 between.
+pub fn gutter(s: &State) -> f32 {
+    if strip(s) {
+        0.0
+    } else if phone(s) {
+        PHONE_SIDE
+    } else {
+        SIDE
+    }
 }
 
 fn chips(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
