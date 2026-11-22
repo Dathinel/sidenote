@@ -150,7 +150,49 @@ function Start-Sleep([int]$Seconds) {
     $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + "& tools/local_build.ps1 check --target-dir '$outside'") 2>$null)
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 1 -or @($output | Where-Object { $_.StartsWith('arg:') }).Count) { throw 'Target outside the worktree was accepted.' }
-    Write-Output 'PASS: meeting status, Cargo job counts, both gate calls, separator suffix, target overrides, config rejection, and outside-target rejection.'
+
+    # Give default-target tests their own Git common directory and cache.
+    $project = Join-Path $temp 'project'
+    & git init --quiet $project
+    if ($LASTEXITCODE) { throw 'Could not initialize the shared-target fixture.' }
+    Copy-Item -LiteralPath (Join-Path $root 'Cargo.lock') -Destination $project
+    $env:CARGO_TARGET_DIR = $null
+    $env:CARGO_BUILD_TARGET_DIR = $null
+    $target = "${project}-shared-target\slot-1"
+    $localUnit = Join-Path $target 'x86_64-pc-windows-gnu\debug\.fingerprint\spake2-0123456789abcdef\lib-spake2'
+    $registryUnit = Join-Path $target 'debug\.fingerprint\serde-0123456789abcdef\lib-serde'
+    foreach ($file in $localUnit, $registryUnit) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file) | Out-Null
+        Set-Content -LiteralPath $file -Value 'old fingerprint'
+    }
+    Set-Content -LiteralPath (Join-Path $target '.sidenote-worktree') -Value 'different worktree'
+
+    $defaultCommand = "& '$PSScriptRoot\local_build.ps1' check"
+    function Assert-SharedTarget([int]$Number) {
+        $target = "${project}-shared-target\slot-$Number"
+        Write-MeetingStatus idle
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $defaultCommand))
+        $targets = @($output | Where-Object { $_.StartsWith('target:') })
+        if ($LASTEXITCODE -or $targets.Count -ne 3 -or @($targets | Where-Object { $_ -cne "target:$target" }).Count -or
+            @($output | Where-Object { $_ -ceq "local_build: target directory: $target" }).Count -ne 1) {
+            throw "Wrong shared target for slot $Number."
+        }
+    }
+    Push-Location $project
+    try {
+        Assert-SharedTarget 1
+        if ((Test-Path -LiteralPath $localUnit) -or -not (Test-Path -LiteralPath $registryUnit)) {
+            throw 'The first build should invalidate only path package fingerprints.'
+        }
+        Set-Content -LiteralPath $localUnit -Value 'rebuilt fingerprint'
+        Assert-SharedTarget 1
+        if (-not (Test-Path -LiteralPath $localUnit)) { throw 'The same worktree lost its fresh fingerprint.' }
+        $heldSlot = Join-Path $temp "sidenote-dev\build-slots\$PID-$((Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks)"
+        New-Item -ItemType Directory -Path $heldSlot | Out-Null
+        Set-Content -LiteralPath (Join-Path $heldSlot 'number') -Value '1' -NoNewline
+        Assert-SharedTarget 2
+    } finally { Pop-Location }
+    Write-Output 'PASS: meeting status, Cargo jobs and arguments, target overrides and refusals, both shared slots, and worktree cache invalidation.'
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
