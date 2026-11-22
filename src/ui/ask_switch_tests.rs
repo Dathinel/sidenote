@@ -1332,7 +1332,7 @@ fn a_one_question_pick_leaves_the_saved_default_alone_after_submit_and_restart()
 
 /// A saved-thread write only reads the device id, so another holder of `device.lock` (the area
 /// worker that `refresh_areas` starts) must not make the question or the answer fail to save.
-#[cfg(all(debug_assertions, target_os = "linux"))]
+#[cfg(all(debug_assertions, any(windows, target_os = "linux")))]
 #[test]
 fn a_question_and_its_answer_save_while_another_thread_holds_the_device_lock() {
     if in_parent("a_question_and_its_answer_save_while_another_thread_holds_the_device_lock") {
@@ -1343,19 +1343,22 @@ fn a_question_and_its_answer_save_while_another_thread_holds_the_device_lock() {
     let mut rt = page();
     rt.update(|s, _| scene_agents(s, ALL_AGENTS));
     rt.update(|s, _| s.choose_normal_ask_runner("Claude Sonnet".into()));
-    // The same non-blocking flock `store_io::lock` takes, held for the whole test.
-    let held = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(core::state_dir().join("device.lock"))
-        .unwrap();
-    use std::os::fd::AsRawFd;
-    assert_eq!(
-        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
-    );
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+    let held = options.open(core::state_dir().join("device.lock")).unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+    }
     rt.update(|s, _| s.send("What did we decide?"));
     assert_eq!(rt.state.notice, None);
     assert!(
@@ -1371,6 +1374,7 @@ fn a_question_and_its_answer_save_while_another_thread_holds_the_device_lock() {
     assert_eq!(rt.state.notice, None);
     let answer = rt.state.saved.messages.last().unwrap();
     assert_eq!(answer.role, "assistant");
+    drop(held);
 }
 
 /// The Ask pill and the suggestion chip start where the notes column starts. The thread above
