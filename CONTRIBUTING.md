@@ -24,7 +24,7 @@ Not yet verified on a clean machine: the prerequisites, first build and first ru
 come from the CI workflow and the repo's build files, not from a fresh install.
 
 Both platforms need Git and Rust installed with [rustup](https://rustup.rs).
-Python 3 is needed for the tool checks. Bun 1.4.4 is needed only for work in `relay/`.
+Python 3 is needed for the tool checks. Bun 1.4.4 is needed for work in `relay/` and to install Wrangler before running Windows relay integration tests.
 
 **Windows.** The repo pins the `stable-x86_64-pc-windows-gnu` toolchain
 (`rust-toolchain.toml`), so you also need a full MinGW GNU toolchain. CI uses MSYS2:
@@ -65,21 +65,27 @@ cargo build --no-default-features --features desktop --target x86_64-unknown-lin
 
 ## Run it with empty test folders
 
-Point Sidenote at empty folders so it never reads or changes your own meetings.
-Hex is not needed to open the window. If the app does not start, create the folders first.
+Use a dedicated development shell and empty folders for app state, meetings, peers and captures. Hex is not needed to open the window. Close the shell after the run so these overrides do not affect later commands.
+
+Windows, in PowerShell:
 
 ```powershell
-# Windows
-$env:SIDENOTE_DATA_DIR = "$env:TEMP\sidenote-dev\state"
-$env:SIDENOTE_HEX_DIR = "$env:TEMP\sidenote-dev\meetings"
-$env:SIDENOTE_PEERS_DIR = "$env:TEMP\sidenote-dev\peers"
+$devRoot = Join-Path ([IO.Path]::GetTempPath()) ("sidenote-dev-" + [guid]::NewGuid().ToString("N"))
+$env:SIDENOTE_DATA_DIR = Join-Path $devRoot "state"
+$env:SIDENOTE_STATE_DIR = $env:SIDENOTE_DATA_DIR
+$env:SIDENOTE_HEX_DIR = Join-Path $devRoot "meetings"
+$env:SIDENOTE_PEERS_DIR = Join-Path $devRoot "peers"
+$env:SIDENOTE_CAPTURES_DIR = Join-Path $devRoot "captures"
+New-Item -ItemType Directory -Force -Path $env:SIDENOTE_DATA_DIR,$env:SIDENOTE_HEX_DIR,$env:SIDENOTE_PEERS_DIR,$env:SIDENOTE_CAPTURES_DIR | Out-Null
 ./target/x86_64-pc-windows-gnu/debug/sidenote.exe
 ```
 
+Ubuntu, in bash:
+
 ```sh
-# Ubuntu
 root=$(mktemp -d)
-SIDENOTE_DATA_DIR="$root/state" SIDENOTE_HEX_DIR="$root/meetings" SIDENOTE_PEERS_DIR="$root/peers" ./target/x86_64-unknown-linux-gnu/debug/sidenote
+mkdir -p "$root/state" "$root/meetings" "$root/peers" "$root/captures"
+SIDENOTE_DATA_DIR="$root/state" SIDENOTE_STATE_DIR="$root/state" SIDENOTE_HEX_DIR="$root/meetings" SIDENOTE_PEERS_DIR="$root/peers" SIDENOTE_CAPTURES_DIR="$root/captures" ./target/x86_64-unknown-linux-gnu/debug/sidenote
 ```
 
 ## Checks before a pull request
@@ -98,8 +104,14 @@ cargo check --workspace --locked --tests --features asr-runtime    # Windows onl
 
 In PowerShell, quote Cargo's separator (`'--'`) and use `python` for `python3`.
 
-The full test suite runs in CI. To run it locally, copy the temporary folders and
-environment from the "Test default and ASR feature sets" step in `.github/workflows/ci.yml`.
+The broader tests run in CI. To reproduce the CI test commands locally, use bash. On Ubuntu, copy the setup and commands from "Test default and ASR feature sets" in `.github/workflows/ci.yml`. On Windows, install the relay dependencies with Bun 1.4.4, then use Git Bash with the Windows GNU tools on PATH and copy "Test Windows-specific behavior" from that workflow. Those snippets cannot be pasted into PowerShell.
+
+For the Windows dependency installation, use this from the repository root:
+
+```powershell
+Push-Location relay
+try { bun install --frozen-lockfile } finally { Pop-Location }
+```
 
 `tools/prove_linux_boundaries.py` keeps a reviewed list of source files that start
 processes or read files (`tools/linux-boundary-inventory.json`). If it reports a stale
@@ -125,8 +137,8 @@ pwsh ./tools/dependency_notices_proof.ps1
 ## How a pull request is checked
 
 - CI runs on GitHub-hosted runners. One required check, **CI Gate**, must pass before merge.
-- Jobs run by what changed: Rust code runs the Linux job; `relay/` runs the relay job;
-  `tools/` and `scripts/` run the tools job; Windows-specific code can also run a Windows job.
+- Every Rust change is checked on both Linux and Windows. Other jobs run by what changed:
+  `relay/` runs the relay job, and `tools/` and `scripts/` run the tools job.
   Changes under `.github/` run everything.
 - Pull requests from people outside the project wait until a maintainer approves the
   CI run. This is a GitHub safety setting, not a judgement on your change.

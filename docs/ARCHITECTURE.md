@@ -11,8 +11,9 @@ Where each part of Sidenote lives. Unit tests sit next to the code they test.
 | `src/listener.rs`, `src/listener/`, `src/core/recording_source*`, `src/core/meeting_watch.rs` | Background work: noticing finished recordings, catch-up, and queue drains. |
 | `src/meeting_icon.rs`, `src/meeting_icon/` | The floating meeting indicator (Windows). |
 | `src/core/meetings.rs`, `src/core/paths.rs`, `src/core/persistence.rs`, `src/core/store_io.rs` | Meeting folders, data locations, and file reads and writes. |
-| `src/core/notes/` | The in-app notes engine: queue, prompt, transcript, translation, status. |
-| `scripts/meeting-pipeline/` | The PowerShell and Python notes pipeline (the "scripts" notes engine on Windows). |
+| `src/core/notes/`, `scripts/meeting-pipeline/` | The in-app notes queue, prompts, transcript selection and translation; the separate PowerShell and Python scripts engine on Windows. |
+| `src/core/annotations/`, `src/ui/annotations*` | Hex captures, approved images, generated notes, notebooks and exported shares. |
+| `src/core/model_catalog*`, `src/ui/models*` | Model catalogue, downloads, verification, speech packs and their Settings controls. |
 | `src/core/meeting_router/`, `src/core/asr/`, `src/core/lid/`, `src/core/speech_*` | Experimental speech routing, the optional local recognition runtime (`asr-runtime` feature), language detection. |
 | `src/core/ask*.rs`, `src/core/runners.rs`, `src/core/runner_process*`, `src/core/provider.rs`, `default-runners.json` | Ask: agent CLI runners and sessions, and OpenAI-compatible endpoints. |
 | `src/core/tasks*.rs`, `src/core/memory*`, `src/core/daily_check.rs`, `src/core/areas.rs`, `src/core/people.rs`, `src/core/companies.rs` | Tasks, memory, daily checks, projects, people and companies. |

@@ -14,7 +14,8 @@ Status: early development (version 0.0.1-dev.40). Expect rough edges and breakin
 | Desktop window: meetings, transcripts, notes, tasks | Yes | Builds from source and opens; no package yet |
 | Start and stop Hex recordings from the app | Yes | No |
 | Install Hex from the app | Yes | No; install Hex yourself |
-| Tray, floating meeting indicator, automatic updates | Yes | No |
+| Tray and floating meeting indicator | Yes | No |
+| Automatic update checks | Packaged installs only; disabled in a source build | No |
 | Ask through an agent CLI | Yes | Not yet; blocked in code |
 | Notes and daily checks written by an agent | Yes, see "What you need" | Not yet; blocked in code |
 | Headless server role (no window): MCP and folder sync | Not the main use | Yes, see [docs/linux-server.md](docs/linux-server.md) |
@@ -30,10 +31,7 @@ instead of focusing the open window, and save dialogs are not available yet.
 - **An agent CLI for Ask**, such as Claude Code, Codex or OpenCode, signed in to a provider
   you can use. Ask can also use an OpenAI-compatible endpoint, including local servers
   such as Ollama or LM Studio. See [docs/cloud-ask.md](docs/cloud-ask.md).
-- **Notes on Windows** are written either inside the app, with Claude Code as the helper,
-  or by the PowerShell pipeline in `scripts/meeting-pipeline`. Notes are off until you
-  pick one in Settings. See [docs/notes-engine.md](docs/notes-engine.md) and
-  [docs/meeting-pipeline.md](docs/meeting-pipeline.md).
+- **Notes on Windows** use the in-app engine with Claude Code or Codex, or the PowerShell pipeline in `scripts/meeting-pipeline`. Configure the engine and helper in Settings. See [docs/meeting-pipeline.md](docs/meeting-pipeline.md) for the scripts engine.
 
 What you do not need: an account, a Sidenote server, or any cloud service to read
 meetings you already have. Reading saved meetings does not need an agent. Building
@@ -59,16 +57,14 @@ a pull request are in [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Where your data lives
 
 Hex writes meetings to its own folder (`%APPDATA%\hex\meetings` on Windows).
-Sidenote keeps its settings and state in your user data folder (`%APPDATA%\sidenote`,
-or `%APPDATA%\hex-meetings` on older installs). Set `SIDENOTE_DATA_DIR`,
-`SIDENOTE_HEX_DIR` and `SIDENOTE_PEERS_DIR` to use other folders.
+On Windows, Sidenote uses `%APPDATA%\sidenote` if that folder already exists; otherwise it uses `%APPDATA%\hex-meetings`. Set `SIDENOTE_DATA_DIR`, `SIDENOTE_HEX_DIR` and `SIDENOTE_PEERS_DIR` to use other state, meeting and peer folders.
 See [docs/configuration.md](docs/configuration.md) and [docs/mcp.md](docs/mcp.md).
 
 ## Privacy
 
-- Local first: meetings, notes, memory and settings are files on your computer. There is no account and no cloud copy of your meetings.
-- Meeting text goes to an AI provider only when you use Ask or an agent-run feature such as notes or daily checks, and only to the provider behind the CLI or endpoint you set up.
-- Other network use: model downloads and Hex installs when you start them, update checks on installed Windows copies, and opt-in sync, either by a folder tool you run or encrypted through a relay ([SECURITY.md](SECURITY.md), [docs/sync.md](docs/sync.md)).
+- Sidenote stores meeting files and app state locally and has no Sidenote account. Enabling a provider, sync tool or remote host can send data to that service or device.
+- Ask and enabled agent features send prompts and supplied context to the CLI or endpoint you select. MCP clients can read the corpus you expose; the client controls its further use.
+- Other network features include model and Hex downloads, installed Windows update checks, provider model-list requests, configured knowledge-base fetches, and opt-in folder or relay sync. On Windows, speech-host consent enables status checks, and allowing audio uploads sends windows from new meetings to your configured HTTPS host. See [SECURITY.md](SECURITY.md) and [docs/sync.md](docs/sync.md).
 
 ## Documentation
 
