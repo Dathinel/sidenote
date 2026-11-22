@@ -137,7 +137,12 @@ fn failed_first_start_drops_the_pending_record_but_keeps_a_meeting_with_parts() 
     let hex = root.path().join("hex");
     let pending = Meeting::pending(root.path(), 100).unwrap();
     assert!(inputs(root.path()).join(&pending.id).exists());
-    discard_pending(root.path(), &pending.id).unwrap();
+    std::fs::write(
+        inputs(root.path()).join(&pending.id).join("stray"),
+        b"fixture",
+    )
+    .unwrap();
+    assert!(discard_pending(root.path(), &pending.id).unwrap());
     assert!(read(root.path(), &pending.id).unwrap().is_none());
     assert!(!inputs(root.path()).join(&pending.id).exists());
     discard_pending(root.path(), &pending.id).unwrap();

@@ -16,6 +16,7 @@ use std::{
 
 /// Where the user's own notes live, beside Hex's files. It syncs like other meeting text.
 pub const NOTES_FILE: &str = "notes.md";
+pub(super) static NOTES_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub const NOTES_UNAVAILABLE: &str = "Meeting notes are not set up on this PC";
 pub const NOTES_FAILED: &str = "Meeting notes could not be created. Your recording is saved in Hex. Check the notes setup before trying again.";
 
@@ -177,6 +178,7 @@ pub fn read_notes(folder: &Path) -> String {
 /// Writes the notes with a flushed temporary file and a replacing rename, so the pipeline never
 /// reads half a file. The temporary file (`notes.<pid>.tmp`) is on the sync ignore list.
 pub fn write_notes(folder: &Path, text: &str) -> io::Result<()> {
+    let _write = NOTES_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if !folder.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -192,21 +194,31 @@ pub fn preserve_notes(
     text: &str,
     recovery: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    if let Some(folder) = folder
-        && write_notes(&folder, text).is_ok()
-    {
-        let _ = fs::remove_file(recovery);
-        return Ok(Some(folder));
+    if let Some(folder) = folder {
+        match write_notes(&folder, text) {
+            Ok(()) => {
+                let _ = fs::remove_file(recovery);
+                return Ok(Some(folder));
+            }
+            Err(error) => log_save_failure("meeting_folder", error.kind()),
+        }
     }
     let backup = recovery
         .parent()
         .ok_or_else(|| io::Error::other("Missing recovery folder"))
         .and_then(fs::create_dir_all)
         .and_then(|()| super::store_io::atomic_write(recovery, text.as_bytes()));
-    backup.map(|()| None).map_err(|_| {
+    backup.map(|()| None).map_err(|error| {
+        log_save_failure("recovery_copy", error.kind());
         "Could not save your notes or a recovery copy. Keep this text before closing Sidenote."
             .into()
     })
+}
+
+fn log_save_failure(route: &str, kind: io::ErrorKind) {
+    crate::listener::log(&format!(
+        "live notes save failed route={route} kind={kind:?}"
+    ));
 }
 
 #[cfg(test)]
