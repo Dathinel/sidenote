@@ -488,11 +488,7 @@ pub(crate) fn setting_row(
     _local: bool,
     p: Palette,
 ) -> El {
-    let title = row()
-        .items_center()
-        .flex_wrap()
-        .gap(8.0)
-        .child(roles::NAME.wrap(name, p.ink));
+    let title = roles::NAME.wrap(name, p.ink);
     crate::ui::cards::row_shell()
         .key(key)
         .flex_wrap()
