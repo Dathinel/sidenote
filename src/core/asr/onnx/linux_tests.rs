@@ -49,7 +49,7 @@ pub(crate) fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
         sha,
         "{name} does not match its pinned sha256"
     );
-    fs::write(&cached, &bytes).unwrap();
+    crate::core::store_io::atomic_write(&cached, &bytes).unwrap();
     bytes
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn library() -> PathBuf {
         .output()
         .unwrap();
     assert!(status.status.success(), "tar could not read the library");
-    fs::write(&out, status.stdout).unwrap();
+    crate::core::store_io::atomic_write(&out, &status.stdout).unwrap();
     out
 }
 
