@@ -474,6 +474,100 @@ lucide!(
     r#"<path d="M5 22h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 2h14" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round" stroke-linejoin="round"/>"#
 );
 
+#[cfg(test)]
+const GENERATED_LUCIDE_ICONS: &[&LazyLock<Icon>] = &[
+    &MEETINGS,
+    &ANNOTATIONS,
+    &GRIP_VERTICAL,
+    &TASKS,
+    &MEMORY,
+    &DIARY,
+    &SETTINGS,
+    &REFRESH_CW,
+    &DEVICE,
+    &PLUS,
+    &STOP,
+    &CHECK,
+    &CHEVRON_DOWN,
+    &CHEVRON_RIGHT,
+    &CHEVRON_LEFT,
+    &CHEVRONS_UP_DOWN,
+    &ARROW_RIGHT,
+    &ARROW_UP,
+    &X,
+    &MORE,
+    &WARNING,
+    &ERROR,
+    &HELP,
+    &INFO,
+    &SEARCH,
+    &PANEL_CLOSE,
+    &PANEL_OPEN,
+    &PROMPTS,
+    &MIC,
+    &CIRCLE,
+    &WAITING,
+    &BOT,
+    &MESSAGE_SQUARE,
+    &PALETTE,
+    &CHEVRON_UP,
+    &COPY,
+    &LOCK,
+    &EYE,
+    &EYE_OFF,
+    &CIRCLE_X,
+    &DASH,
+    &DONE,
+    &SUMMARY,
+    &UPDATES,
+    &CONNECTED,
+    &PEOPLE,
+    &FLAG,
+    &SPELLING,
+    &PHONE_CALL,
+    &LANGUAGES,
+    &BRAIN,
+    &AUDIO_LINES,
+    &TRASH,
+    &VOLUME_X,
+    &FOLDER,
+    &USER,
+    &FILE_TEXT,
+    &KEYBOARD,
+    &ERASER,
+    &CLIPBOARD_PASTE,
+    &TIMER,
+    &CLOCK,
+    &CLOUD_OFF,
+    &CLIPBOARD,
+    &SPEECH,
+    &POWER,
+    &VOLUME_2,
+    &FLASK,
+    &CAPTIONS,
+    &CPU,
+    &KEY_ROUND,
+    &PACKAGE,
+    &FILE_CLOCK,
+    &GLOBE,
+    &AUDIO_WAVEFORM,
+    &CALENDAR_CHECK,
+    &LIST_TODO,
+    &FOLDERS,
+    &RADIO_TOWER,
+    &MONITOR,
+    &SMARTPHONE,
+    &TERMINAL,
+    &CODE_XML,
+    &SQUARE_TERMINAL,
+    &APP_WINDOW,
+    &MOUSE_POINTER,
+    &NETWORK,
+    &SHIELD_CHECK,
+    &CIRCLE_STOP,
+    &HOURGLASS,
+];
+
 /// Existing controls share this adapter so text glyphs cannot drift from the SVG set.
 pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> El {
     let value = value.into();
@@ -553,3 +647,38 @@ lucide!(
     "lucide-sliders-horizontal",
     r#"<path d="M21 4h-7M10 4H3m18 8H10m-4 0H3m18 8h-3m-4 0H3M14 1v6M6 9v6m12 2v6" fill="none" stroke="currentColor" stroke-width="STROKE_WIDTH" stroke-linecap="round"/>"#
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_lucide_icons_use_the_shared_stroke_and_requested_glyphs() {
+        let manual = [&BUILDING_2, &CIRCLE_PAUSE, &SLIDERS];
+        for icon in GENERATED_LUCIDE_ICONS.iter().copied().chain(manual) {
+            let mut widths = icon.body.split("stroke-width=\"").skip(1).peekable();
+            assert!(
+                widths.peek().is_some() && widths.all(|width| width.starts_with("2\"")),
+                "{} must use stroke-width=\"2\"",
+                icon.name
+            );
+        }
+
+        for (icon, name) in [
+            (&*MEETINGS, "lucide-notepad-text"),
+            (&*ANNOTATIONS, "lucide-pen-line"),
+            (&*MEMORY, "lucide-book-open"),
+            (&*PEOPLE, "lucide-users-round"),
+            (&*USER, "lucide-user-round"),
+            (&*DEVICE, "lucide-monitor-smartphone"),
+            (&*PROMPTS, "lucide-scroll-text"),
+            (&*UPDATES, "lucide-download"),
+            (&*PANEL_CLOSE, "lucide-panel-left"),
+            (&*PANEL_OPEN, "lucide-panel-left"),
+            (&*STOP, "lucide-square"),
+        ] {
+            assert_eq!(icon.name, name);
+        }
+        assert!(STOP.body.contains("fill=\"currentColor\""));
+    }
+}
