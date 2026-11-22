@@ -433,6 +433,85 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
 
 #[cfg(windows)]
 #[test]
+fn failed_start_close_keeps_autosaved_primary_and_newer_recovery() {
+    if isolated_api_test("failed_start_close_keeps_autosaved_primary_and_newer_recovery") {
+        return;
+    }
+    use sidenote::core::{self, meeting_parts};
+    let (api, mut state, _) = Fixture::start_idle();
+    let (release, wait) = std::sync::mpsc::channel();
+    {
+        let mut data = api.data.lock().unwrap();
+        data.start_failure = true;
+        data.start_release = Some(wait);
+    }
+    let idle = state.hex.engine.status_for_command().unwrap();
+    state.hex_apply(Msg::Status(Ok(idle)));
+    state.new_meeting();
+    assert!(state.hex.record_busy);
+    let primary = "Earlier synthetic notes";
+    let newer = "Newer synthetic notes\nKeep every line";
+    state.live_notes = rune::TextEdit::new(primary);
+    state.live_tick();
+    let live = state.live.as_mut().unwrap();
+    live.age_past_notes_autosave();
+    let id = live.session.as_ref().unwrap().id.clone();
+    let root = core::state_dir();
+    let notes = meeting_parts::inputs(&root).join(&id).join("notes.md");
+    let (saved, wake) = std::sync::mpsc::channel();
+    state.waker = Some(std::sync::Arc::new(move || {
+        let _ = saved.send(());
+    }));
+    state.live_tick();
+    wake.recv_timeout(Duration::from_secs(2)).unwrap();
+    state.live_tick();
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), primary);
+
+    let permissions = std::fs::metadata(&notes).unwrap().permissions();
+    let mut read_only = permissions.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&notes, read_only).unwrap();
+    state.live_notes = rune::TextEdit::new(newer);
+    release.send(()).unwrap();
+    Fixture::finish(&mut state);
+    assert!(state.hex.error.is_some());
+    wake.recv_timeout(Duration::from_secs(2)).unwrap();
+    state.waker = None;
+    state.live_tick();
+    assert!(state.on_live());
+    saved_removal_notes(newer);
+    let closed = state.live_close();
+    std::fs::set_permissions(&notes, permissions).unwrap();
+    assert!(closed);
+    assert!(!state.on_live());
+    let record = meeting_parts::read(&root, &id).unwrap().unwrap();
+    assert_eq!(record.phase, meeting_parts::Phase::Ended);
+    assert!(record.pending_start_ms.is_none() && record.parts.is_empty());
+
+    let mut restarted = State::new();
+    let idle = state.hex.engine.status_for_command().unwrap();
+    restarted.hex_apply(Msg::Status(Ok(idle)));
+    assert!(restarted.live.is_none());
+    let listed = restarted.meetings.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(listed.notes, primary);
+    assert!(crate::ui::notes_status::job(&restarted, listed).is_none());
+    restarted.select(&id, &mut rune::Tx::default());
+    let mut view = rune::Runtime::new(
+        restarted,
+        crate::ui::view,
+        (960.0, 720.0),
+        rune::Env::default(),
+    );
+    view.frame(0.0);
+    assert!(!view.elements().iter().any(|element| matches!(
+        element.key.as_deref(),
+        Some("meeting-resume" | "meeting-generate")
+    )));
+    saved_removal_notes(newer);
+}
+
+#[cfg(windows)]
+#[test]
 fn failed_resume_keeps_the_recorded_part_paused() {
     if isolated_api_test("failed_resume_keeps_the_recorded_part_paused") {
         return;

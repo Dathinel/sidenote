@@ -102,8 +102,6 @@ pub fn discard_pending(root: &Path, id: &str, draft: Draft) -> io::Result<bool> 
         &draft,
         std::fs::metadata(folder.join(super::live::NOTES_FILE)),
     ) {
-        // Remove the record first so a blocked inputs directory cannot restore this draft.
-        (Draft::Recovery, _) => std::fs::remove_file(path(root, id)?)?,
         (_, Ok(meta)) if meta.is_file() => {
             if m.pending_start_ms.take().is_some() || m.phase != Phase::Ended {
                 m.phase = Phase::Ended;
@@ -118,6 +116,8 @@ pub fn discard_pending(root: &Path, id: &str, draft: Draft) -> io::Result<bool> 
                 "The primary notes file is missing",
             ));
         }
+        // Remove the record first so a blocked inputs directory cannot restore this draft.
+        (Draft::Recovery, _) => std::fs::remove_file(path(root, id)?)?,
         _ => {}
     }
     if let Err(error) = std::fs::remove_dir_all(folder)
