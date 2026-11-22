@@ -380,6 +380,39 @@ fn meeting_notes_body_follows_the_spacing_and_bullet_rules() {
     assert_ne!(fill(0), fill(2), "a decision dot differs from a fact dot");
 }
 
+/// The summary indexes of the first topic's `count` rows, top to bottom.
+fn shown_order(rt: &Runtime<State>, count: usize) -> Vec<usize> {
+    let mut shown: Vec<(f32, usize)> = (0..count)
+        .map(|i| (rect_of(rt, &format!("meeting-point-pt-0-{i}"))[1], i))
+        .collect();
+    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    shown.into_iter().map(|(_, i)| i).collect()
+}
+
+#[test]
+fn meeting_replies_stay_under_the_row_they_answer() {
+    if in_parent("meeting_replies_stay_under_the_row_they_answer") {
+        return;
+    }
+    // Fact, decision and its reply, open point and its reply. Sorting decisions first must move
+    // each reply with its row, not leave it behind among the facts.
+    let rt = page_with(DEFAULT_SIZE, || {
+        let folder = core::meetings_dir().join(MEETING);
+        let summary = serde_json::json!({
+            "title": "Beta launch plan",
+            "topics": [{"title": "Launch", "points": [
+                {"type": "fact", "text": "Copy is with Priya."},
+                {"type": "decided", "text": POINT},
+                {"type": "response", "text": "Priya will send it Thursday."},
+                {"type": "open", "text": "Whether to ask for the work email later."},
+                {"type": "response", "text": "Tom thinks it can wait."},
+            ]}],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+    });
+    assert_eq!(shown_order(&rt, 5), [1, 2, 0, 3, 4]);
+}
+
 #[test]
 fn meeting_notes_lead_each_topic_with_its_decisions() {
     if in_parent("meeting_notes_lead_each_topic_with_its_decisions") {
@@ -387,13 +420,9 @@ fn meeting_notes_lead_each_topic_with_its_decisions() {
     }
     let rt = page_with_every_kind();
     // Summary order is fact, open, decided, response, decided: shown as the two decisions
-    // (summary rows 2 and 4), then the fact and the reply (0, 3), then the open point (1).
-    let mut shown: Vec<(f32, usize)> = (0..5)
-        .map(|i| (rect_of(&rt, &format!("meeting-point-pt-0-{i}"))[1], i))
-        .collect();
-    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let shown: Vec<usize> = shown.into_iter().map(|(_, i)| i).collect();
-    assert_eq!(shown, [2, 4, 0, 3, 1]);
+    // (summary rows 2 and 4) with the reply (3) kept under the first, then the fact (0), then
+    // the open point (1).
+    assert_eq!(shown_order(&rt, 5), [2, 3, 4, 0, 1]);
     // The bold lead block is the decisions only.
     let elements = rt.elements();
     let ink = |i: usize| {

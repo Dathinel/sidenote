@@ -503,18 +503,25 @@ fn point(s: &State, pt: &Point, origin: String, timed: bool, p: Palette) -> El {
     line
 }
 
-/// A topic's points as (summary index, point): decisions, then facts and replies, then open
-/// points, each group in the summary's order. The index stays the summary's, so row keys and
-/// the way back from the transcript do not move.
+/// A topic's points as (summary index, point): decisions, then facts, then open points, each
+/// group in the summary's order. A reply travels with the row before it, so a reply to a decision
+/// stays under that decision. The index stays the summary's, so row keys and the way back from
+/// the transcript do not move.
 fn decisions_first(points: &[Point]) -> Vec<(usize, &Point)> {
     let group = |pt: &Point| match pt.kind.as_str() {
         "decided" => 0,
         "open" => 2,
         _ => 1,
     };
-    let mut out: Vec<_> = points.iter().enumerate().collect();
-    out.sort_by_key(|(_, pt)| group(pt));
-    out
+    let mut blocks: Vec<Vec<(usize, &Point)>> = Vec::new();
+    for (i, pt) in points.iter().enumerate() {
+        match blocks.last_mut() {
+            Some(block) if pt.kind == "response" => block.push((i, pt)),
+            _ => blocks.push(vec![(i, pt)]),
+        }
+    }
+    blocks.sort_by_key(|block| group(block[0].1));
+    blocks.into_iter().flatten().collect()
 }
 
 /// One section heading. Every heading on the page uses this role; the first sits right under the
