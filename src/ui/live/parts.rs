@@ -2,7 +2,7 @@ use super::*;
 use crate::ui::Event;
 use sidenote::core::{
     self,
-    meeting_parts::{self, Meeting, PendingDisposition, Phase as SavedPhase},
+    meeting_parts::{self, Draft, Meeting, Phase as SavedPhase},
 };
 impl State {
     pub(in crate::ui) fn parts_sync(&mut self) {
@@ -165,24 +165,32 @@ impl State {
             }
         }
     }
-    pub(super) fn parts_drop_unstarted(&mut self) -> bool {
+    pub(super) fn parts_drop_unstarted(&mut self, closing: bool) -> bool {
         let Some(live) = &mut self.live else {
             return false;
         };
-        if !live.start_failed || !live.can_close(&self.live_notes.text) {
+        let text = self.live_notes.text.as_str();
+        if !live.start_failed || !live.can_close(text) || (!closing && live.saved != text) {
             return false;
         }
         let Some(m) = &live.session else {
             return false;
         };
-        match meeting_parts::discard_pending(&core::state_dir(), &m.id, !live.saved.is_empty()) {
-            Ok(PendingDisposition::Finished | PendingDisposition::Discarded) => {
+        let draft = if live.saved != text {
+            Draft::Recovery
+        } else if text.is_empty() {
+            Draft::Empty
+        } else {
+            Draft::Primary
+        };
+        match meeting_parts::discard_pending(&core::state_dir(), &m.id, draft) {
+            Ok(true) => {
                 self.live = None;
                 self.live_open = false;
                 self.request_refresh();
                 true
             }
-            Ok(PendingDisposition::Unchanged) | Err(_) => {
+            Ok(false) | Err(_) => {
                 live.saved.clear();
                 live.edited_at = Some(Instant::now());
                 live.saving = Saving::Failed("Could not finish saving this meeting.".into());
@@ -204,7 +212,7 @@ impl State {
         if m.parts.is_empty() {
             live.start_failed = true;
             self.live_flush();
-            self.parts_drop_unstarted();
+            self.parts_drop_unstarted(false);
             return;
         }
         // A failed Resume returns the meeting to Paused with its parts intact.

@@ -171,6 +171,21 @@ fn saved_removal_notes(text: &str) {
 }
 
 #[cfg(windows)]
+fn assert_recovery_close(state: &mut State, id: &str, text: &str) {
+    use sidenote::core::{self, meeting_parts};
+    assert!(state.live_close());
+    assert!(!state.on_live(), "restored storage must permit navigation");
+    let root = core::state_dir();
+    assert!(meeting_parts::read(&root, id).unwrap().is_none());
+    assert!(!meeting_parts::inputs(&root).join(id).exists());
+    saved_removal_notes(text);
+    let mut restarted = State::new();
+    let idle = state.hex.engine.status_for_command().unwrap();
+    restarted.hex_apply(Msg::Status(Ok(idle)));
+    assert!(restarted.live.is_none());
+}
+
+#[cfg(windows)]
 fn start_removal_cases(failed_start: bool) {
     use crate::ui::live::{Phase, Saving};
     use sidenote::core::{self, meeting_parts};
@@ -239,9 +254,9 @@ fn start_removal_cases(failed_start: bool) {
             assert!(idle.recording.is_none());
             state.hex_apply(Msg::Status(Ok(idle)));
         }
+        let save_waker = state.waker.take();
         if !text.is_empty() {
             wake.recv_timeout(Duration::from_secs(2)).unwrap();
-            state.waker = None;
             state.live_tick();
         }
         assert_eq!(api.data.lock().unwrap().starts, 1);
@@ -257,14 +272,16 @@ fn start_removal_cases(failed_start: bool) {
             assert!(meeting_parts::read(&root, &id).unwrap().is_some());
             assert!(!state.live_close(), "blocked storage must refuse close");
             std::fs::remove_file(&recovery).unwrap();
-            std::fs::remove_dir(&notes).unwrap();
-            state.live_notes = rune::TextEdit::new("Synthetic notes edited after storage recovery");
-            assert!(state.live_close());
-            assert!(!state.on_live(), "restored storage must permit navigation");
-            assert_eq!(
-                std::fs::read_to_string(notes).unwrap(),
-                state.live_notes.text
-            );
+            let edited = "Synthetic notes edited after storage recovery";
+            state.live_notes = rune::TextEdit::new(edited);
+            state.waker = save_waker;
+            state.live_flush();
+            wake.recv_timeout(Duration::from_secs(2)).unwrap();
+            state.waker = None;
+            state.live_tick();
+            assert!(state.on_live() && notes.is_dir());
+            saved_removal_notes(edited);
+            assert_recovery_close(&mut state, &id, edited);
         } else {
             assert!(state.live.is_none(), "saved or empty page may be removed");
             assert!(!state.on_live());
@@ -358,14 +375,10 @@ fn refused_start_timeout(name: &str, restore_primary: bool) {
     assert!(idle.recording.is_none());
     state.hex_apply(Msg::Status(Ok(idle)));
     if !restore_primary {
-        assert!(
-            !state.live_close(),
-            "a recovery copy alone must keep the draft open"
-        );
         let live = state.live.as_ref().unwrap();
         assert_eq!(live.session.as_ref().unwrap().id, id);
         assert!(state.on_live() && notes.is_dir());
-        saved_removal_notes(text);
+        assert_recovery_close(&mut state, &id, text);
         return;
     }
     assert!(

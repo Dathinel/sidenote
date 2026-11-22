@@ -79,48 +79,56 @@ pub fn owner(root: &Path, part: &str) -> io::Result<Option<Meeting>> {
         .into_iter()
         .find(|m| m.parts.iter().any(|p| p.id == part)))
 }
-pub enum PendingDisposition {
-    Discarded,
-    Finished,
-    Unchanged,
+pub enum Draft {
+    Empty,
+    Primary,
+    Recovery,
 }
 
-pub fn discard_pending(root: &Path, id: &str, has_draft: bool) -> io::Result<PendingDisposition> {
+/// Returns true when the pending record was removed or finished.
+pub fn discard_pending(root: &Path, id: &str, draft: Draft) -> io::Result<bool> {
     // A save to this folder must either finish before the notes check or retry via recovery.
     let _write = super::live::NOTES_WRITE_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let Some(mut m) = read(root, id)? else {
-        return Ok(PendingDisposition::Unchanged);
+        return Ok(false);
     };
     if !m.parts.is_empty() {
-        return Ok(PendingDisposition::Unchanged);
+        return Ok(false);
     }
     let folder = inputs(root).join(id);
-    match std::fs::metadata(folder.join(super::live::NOTES_FILE)) {
-        Ok(meta) if meta.is_file() => {
+    match (
+        &draft,
+        std::fs::metadata(folder.join(super::live::NOTES_FILE)),
+    ) {
+        // Remove the record first so a blocked inputs directory cannot restore this draft.
+        (Draft::Recovery, _) => std::fs::remove_file(path(root, id)?)?,
+        (_, Ok(meta)) if meta.is_file() => {
             if m.pending_start_ms.take().is_some() || m.phase != Phase::Ended {
                 m.phase = Phase::Ended;
                 m.save(root)?;
             }
-            return Ok(PendingDisposition::Finished);
+            return Ok(true);
         }
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        (_, Err(error)) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        (Draft::Primary, _) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "The primary notes file is missing",
+            ));
+        }
         _ => {}
-    }
-    if has_draft {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "The primary notes file is missing",
-        ));
     }
     if let Err(error) = std::fs::remove_dir_all(folder)
         && error.kind() != io::ErrorKind::NotFound
     {
         return Err(error);
     }
-    std::fs::remove_file(path(root, id)?)?;
-    Ok(PendingDisposition::Discarded)
+    if !matches!(draft, Draft::Recovery) {
+        std::fs::remove_file(path(root, id)?)?;
+    }
+    Ok(true)
 }
 pub fn inputs(root: &Path) -> PathBuf {
     root.join("local/meeting-inputs")

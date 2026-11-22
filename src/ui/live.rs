@@ -306,9 +306,7 @@ impl Live {
     }
 
     fn can_close(&self, text: &str) -> bool {
-        self.queued.is_empty()
-            && (text == self.saved
-                || (!self.start_failed && self.recovered.as_deref() == Some(text)))
+        self.queued.is_empty() && (text == self.saved || self.recovered.as_deref() == Some(text))
     }
 
     fn needs_save(&self, text: &str) -> bool {
@@ -483,13 +481,14 @@ impl State {
             writer.finish();
         }
         self.live_saved();
-        self.parts_drop_unstarted();
         let safe = self.live.as_mut().is_none_or(|live| {
-            let safe = !live.start_failed && live.can_close(&self.live_notes.text);
+            let safe = live.can_close(&self.live_notes.text);
             live.close_failed = !safe;
             safe
         });
-        if !safe {
+        if safe {
+            self.parts_drop_unstarted(true);
+        } else {
             self.go_home();
             self.live_open = true;
         }
@@ -935,7 +934,7 @@ impl State {
                 self.live_arm_save();
             }
         }
-        ((saved || edited) && self.parts_drop_unstarted()) || changed
+        ((saved || edited) && self.parts_drop_unstarted(false)) || changed
     }
 
     /// Wakes the page once, about 2 s from now, so a save happens with no key pressed.
@@ -988,7 +987,11 @@ impl State {
                 wake();
             }
         });
-        if !queued && let Some(live) = self.live.as_mut() {
+        if !queued {
+            // A disconnected writer has already published every result it will deliver.
+            self.live_writer = None;
+            self.live_saved();
+            let live = self.live.as_mut().unwrap();
             live.queued.clear();
             live.saving = Saving::Failed(
                 "Could not start saving notes. Keep this text before closing Sidenote.".into(),
@@ -1315,7 +1318,7 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                                 .key("live-close-retry")
                                 .on_press(|s: &mut State| {
                                     s.live_flush();
-                                    s.parts_drop_unstarted();
+                                    s.parts_drop_unstarted(false);
                                 }),
                         ),
                 ),
