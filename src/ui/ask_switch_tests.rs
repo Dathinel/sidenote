@@ -1541,7 +1541,16 @@ fn the_fade_leaves_the_last_notes_row_clear_and_is_gone_under_an_open_thread() {
 /// The saved meeting at `size` with a date and duration, two people, a project and the English-only
 /// status: every item the meta row can show.
 fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
-    let start = 1_793_955_600_000_i64;
+    page_with_meta(size, 1_793_955_600_000, 22, &["Maya", "Tom"], "Atlas 2")
+}
+
+fn page_with_meta(
+    size: (f32, f32),
+    start: i64,
+    minutes: u64,
+    people: &[&str],
+    project: &str,
+) -> Runtime<State> {
     let mut rt = page_with(size, || {
         let folder = core::meetings_dir().join(MEETING);
         let state = core::state_dir();
@@ -1549,15 +1558,15 @@ fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
         for (path, value) in [
             (
                 folder.join("manifest.json"),
-                serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":1320000}),
+                serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":minutes * 60_000}),
             ),
             (
                 folder.join("english-summary.json"),
-                serde_json::json!({"title":"Beta launch plan","context":[CONTEXT],"people":["Maya","Tom"]}),
+                serde_json::json!({"title":"Beta launch plan","context":[CONTEXT],"people":people}),
             ),
             (
                 folder.join("tasks.json"),
-                serde_json::json!({"meeting_project":"Atlas 2"}),
+                serde_json::json!({"meeting_project":project}),
             ),
             (
                 state.join("config.json"),
@@ -1565,7 +1574,7 @@ fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
             ),
             (
                 state.join("projects.json"),
-                serde_json::json!({"projects":["Atlas 2"]}),
+                serde_json::json!({"projects":[project]}),
             ),
         ] {
             std::fs::write(path, value.to_string()).unwrap();
@@ -1806,43 +1815,78 @@ fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_333() {
 }
 
 #[test]
-fn the_menu_never_sits_on_a_line_by_itself_from_a_360_window_up() {
-    if in_parent("the_menu_never_sits_on_a_line_by_itself_from_a_360_window_up") {
+fn the_phone_menu_shares_the_switch_row_with_short_and_long_facts() {
+    if in_parent("the_phone_menu_shares_the_switch_row_with_short_and_long_facts") {
         return;
     }
+    use chrono::TimeZone;
+
     let more = format!("more-meeting-{MEETING}-button");
-    // A 407 window with the recording rail (57) is a page of 350; the others are plain windows of
-    // 360 to 380. The date moves to line two exactly when line one cannot hold it.
-    for (window, rail) in [
-        (407.0, true),
-        (360.0, false),
-        (364.0, false),
-        (365.0, false),
-        (380.0, false),
-    ] {
-        let mut rt = page_with_every_meta_item((window, 900.0));
-        if rail {
-            rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
-            rt.frame(0.2);
-            rt.settle_all();
+    let project_key = format!("meeting-project-{MEETING}");
+    let project = "Atlas Partner Operations and Launch Readiness";
+    let people = [
+        "Maya", "Tom", "Amir", "Asha", "Eli", "Inez", "Jin", "Lea", "Noor", "Ravi", "Rosa", "Zoe",
+    ];
+    let start = chrono::Local
+        .with_ymd_and_hms(2026, 11, 28, 12, 0, 0)
+        .unwrap()
+        .timestamp_millis();
+    for long in [false, true] {
+        // A 407 window with the recording rail (57) is a page of 350.
+        for (window, rail) in [
+            (340.0, false),
+            (407.0, true),
+            (360.0, false),
+            (364.0, false),
+            (365.0, false),
+            (380.0, false),
+            (390.0, false),
+            (420.0, false),
+        ] {
+            let mut rt = if long {
+                page_with_meta((window, 900.0), start, 105, &people, project)
+            } else {
+                page_with_every_meta_item((window, 900.0))
+            };
+            if rail {
+                rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
+                rt.frame(0.2);
+                rt.settle_all();
+            }
+            let page = window - if rail { 57.0 } else { 0.0 };
+            let (view, menu) = (rect_of(&rt, "meeting-view"), rect_of(&rt, &more));
+            assert_eq!(
+                menu[1], view[1],
+                "page {page}, long facts {long}: the menu is on a line by itself"
+            );
+            if long {
+                let facts = element(&rt, "meeting-facts");
+                let people = element(&rt, "meeting-people");
+                let project_chip = element(&rt, &project_key);
+                assert_eq!(
+                    facts.label.as_deref(),
+                    Some("Date: 28 Nov. Duration: 105 min")
+                );
+                assert_eq!(people.label.as_deref(), Some("12 people"));
+                assert!(project_chip.label.as_deref().unwrap().contains(project));
+                let pane = rect_of(&rt, "meeting-pane");
+                for fact in [&facts, &people, &project_chip] {
+                    let [x, y, w, h] = fact.rect;
+                    assert!(
+                        w > 0.0
+                            && h > 0.0
+                            && x >= pane[0]
+                            && x + w <= pane[0] + pane[2]
+                            && y >= pane[1]
+                            && y + h <= pane[1] + pane[3],
+                        "page {page}: {:?} {:?} is outside the page {pane:?}",
+                        fact.label,
+                        fact.rect
+                    );
+                }
+            }
+            assert_inside(&rt, window);
         }
-        let page = window - if rail { 57.0 } else { 0.0 };
-        let (view, menu, facts) = (
-            rect_of(&rt, "meeting-view"),
-            rect_of(&rt, &more),
-            rect_of(&rt, "meeting-facts"),
-        );
-        assert_eq!(
-            menu[1], view[1],
-            "page {page}: the menu is on a line by itself"
-        );
-        let date_on_line_one = facts[1] == view[1];
-        assert_eq!(
-            date_on_line_one,
-            page >= 365.0,
-            "page {page}: the date's line"
-        );
-        assert_inside(&rt, window);
     }
 }
 
