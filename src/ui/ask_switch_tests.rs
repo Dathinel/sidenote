@@ -1587,6 +1587,49 @@ fn page_with_every_meta_item(size: (f32, f32)) -> Runtime<State> {
 }
 
 #[test]
+fn the_meta_facts_show_a_date_alone_a_duration_alone_or_both_with_a_dot_between() {
+    if in_parent("the_meta_facts_show_a_date_alone_a_duration_alone_or_both_with_a_dot_between") {
+        return;
+    }
+    let start = 1_793_955_600_000_i64;
+    let date = chrono::DateTime::from_timestamp_millis(start)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%-d %b")
+        .to_string();
+    let both = serde_json::json!({"status":"complete","created_at_ms":start,"duration_ms":1320000});
+    let date_only = serde_json::json!({"status":"complete","created_at_ms":start});
+    let duration_only = serde_json::json!({"status":"complete","duration_ms":1320000});
+    let cases = [
+        (both, format!("Date: {date}. Duration: 22 min"), true),
+        (date_only, format!("Date: {date}"), false),
+        (duration_only, "Duration: 22 min".to_string(), false),
+    ];
+    for (manifest, label, dot) in cases {
+        let rt = page_with(DEFAULT_SIZE, || {
+            let path = core::meetings_dir().join(MEETING).join("manifest.json");
+            std::fs::write(path, manifest.to_string()).unwrap();
+        });
+        let facts = element(&rt, "meeting-facts");
+        assert_eq!(facts.label.as_deref(), Some(label.as_str()));
+        // The dot sits between a date and a duration, and only then.
+        assert_eq!(rt.find("meeting-fact-separator").is_some(), dot, "{label}");
+        let shown: Vec<_> = rt
+            .elements()
+            .into_iter()
+            .filter(|e| e.path.starts_with(&format!("{}/", facts.path)))
+            .filter_map(|e| e.text)
+            .collect();
+        let want: Vec<&str> = label
+            .trim_start_matches("Date: ")
+            .trim_start_matches("Duration: ")
+            .split(". Duration: ")
+            .collect();
+        assert_eq!(shown, want, "{label}");
+    }
+}
+
+#[test]
 fn a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters() {
     if in_parent("a_phone_page_has_a_24_title_two_meta_lines_and_16_gutters") {
         return;
