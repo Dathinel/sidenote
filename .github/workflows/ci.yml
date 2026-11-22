@@ -220,6 +220,9 @@ jobs:
             listener::pipeline_tests:: listener::notes_environment::tests:: \
             service::tests::exclusively_locked_device_file_falls_back_once \
             --skip=meeting_icon_capture_affinity_updates_live_windows
+          # This test exists only in a build without the ASR feature.
+          cargo test --locked -p sidenote --lib -- \
+            core::meeting_evidence::speech_host_tests::speech_host_without_runtime_does_not_consume_a_local_attempt
           cargo test --locked --features asr-runtime -p sidenote --bin sidenote -- \
             install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_ \
             ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings::
