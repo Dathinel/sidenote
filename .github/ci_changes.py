@@ -5,7 +5,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY.md"}
+DOCS = {"LICENSE", "AGENTS.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY.md",
+        "CODE_OF_CONDUCT.md", ".github/pull_request_template.md"}
+DOC_DIRS = ("docs/", "reviews/", "artifacts/", ".github/ISSUE_TEMPLATE/")
 RUST_ROOT_FILES = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "build.ps1", "default-runners.json"}
 RUST_DIRS = (".cargo/", "src/", "crates/", "examples/", "tests/", "assets/", "packaging/")
 
@@ -13,10 +15,10 @@ def git(*args):
     return subprocess.check_output(["git", *args])
 
 def classify(paths, main):
-    docs = {p for p in paths if p in DOCS or p.startswith(("docs/", "reviews/", "artifacts/"))}
+    docs = {p for p in paths if p in DOCS or p.startswith(DOC_DIRS)}
     relay = {p for p in paths if p.startswith("relay/")}
     tools = {p for p in paths if p.startswith(("tools/", "scripts/")) or p == "tests/linux_package.py"}
-    workflow = any(p.startswith(".github/") for p in paths)
+    workflow = any(p.startswith(".github/") for p in paths - docs)
     embedded = {p for p in tools if p.startswith(("scripts/meeting-pipeline/", "tools/ui-fixtures/"))}
     rust = {p for p in paths - tools if p in RUST_ROOT_FILES or p.startswith(RUST_DIRS)} | embedded
     run_all = workflow or bool(paths - (docs | relay | tools | rust))
@@ -44,7 +46,12 @@ def changed_jobs():
 
 
 def self_test():
-    assert classify({"docs/design.md"}, False)["docs_only"]
+    docs = {"docs/design.md", ".github/ISSUE_TEMPLATE/bug_report.yml", ".github/pull_request_template.md",
+            "CODE_OF_CONDUCT.md", "CONTRIBUTING.md"}
+    for paths in [docs, *({path} for path in docs)]:
+        result = classify(paths, False)
+        assert result["docs_only"], result
+        assert not any(result[job] for job in ("linux", "windows", "relay", "tools")), result
     relay = classify({"relay/index.ts"}, False)
     assert relay["relay"] and not (relay["linux"] or relay["windows"] or relay["tools"])
     tools = classify({"tools/pipeline-tests.py"}, False)
@@ -57,7 +64,7 @@ def self_test():
         result = classify({path}, False)
         assert result["linux"] and result["windows"], result
         assert not (result["relay"] or result["tools"]), result
-    for path in (".github/workflows/ci.yml", "ci-support/check.py"):
+    for path in (".github/workflows/ci.yml", ".github/CODEOWNERS", "ci-support/check.py"):
         result = classify({path}, False)
         assert all(result[job] for job in ("linux", "windows", "relay", "tools")), result
     print("CI classifier self-test passed")

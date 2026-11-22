@@ -198,6 +198,7 @@ jobs:
           export SIDENOTE_DATA_DIR=$(cygpath -w "$RUNNER_TEMP/sidenote-ci")
           cargo test --locked --features asr-runtime -p sidenote --lib -- \
             platform::windows::tests:: updates::implementation:: hex_install:: meeting_icon:: \
+            core::annotations::notebook_tests:: \
             core::daily_check::background_tests:: core::meeting_evidence::speech_host_tests:: \
             core::meeting_router::jobs::handoff::tests:: core::meeting_router::jobs::r1_tests:: \
             core::meeting_router::production::gap_tests:: core::meeting_router::production::http_tests:: \

@@ -26,7 +26,7 @@ fn sha256(bytes: &[u8]) -> String {
 pub(crate) fn fixtures() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/l1-fixtures");
     fs::create_dir_all(&dir).unwrap();
-    dir
+    dir.canonicalize().unwrap()
 }
 
 pub(crate) fn fetch(name: &str, url: &str, sha: &str) -> Vec<u8> {
