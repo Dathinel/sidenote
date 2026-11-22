@@ -19,7 +19,7 @@ The collector waits for two stable file-length polls after confirmed Stop (trans
 Do not replace the installed app for this test. The following PowerShell commands create a fresh Sidenote test data folder with notes disabled in that folder only and start the worktree build headlessly. They do not start or stop Hex, record a meeting, change Hex settings or read credentials. The normal installed listener can keep running. Hex's meeting-finished event Lab is not required for measurement.
 
 ```powershell
-$evidenceExe = 'E:\Personal-Projects\hex-meetings\.worktrees\meeting-evidence\target\x86_64-pc-windows-gnu\debug\sidenote.exe'
+$evidenceExe = '<repo>\target\x86_64-pc-windows-gnu\debug\sidenote.exe'
 $evidenceData = Join-Path $env:LOCALAPPDATA ('Sidenote\evidence-test-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Path $evidenceData -ErrorAction Stop | Out-Null
 @{ version = 1; features = @{}; notes = @{ engine = 'off' }; labs = @{ process_meeting_windows = $true } } |

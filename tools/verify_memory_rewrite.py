@@ -1,3 +1,4 @@
+# Maintainer tool: used for releases and proofs, not needed to contribute.
 """Exercise Memory actions through the native app's offscreen script driver."""
 import argparse
 import ctypes
@@ -8,11 +9,11 @@ import subprocess
 import tempfile
 from threading import Timer
 
+from gnu_toolchain import gnu_bin
 from prepare_memory_fixture import prepare
 from prepare_check_fixture import proposal_id, sources_fp
 
 ROOT = Path(__file__).resolve().parents[1]
-DEVKIT = Path("E:/Personal-Projects/tools/hex-meetings-gnu/w64devkit/bin")
 
 
 def tap(t, key):
@@ -83,12 +84,15 @@ def fixture(root, case):
 
 
 def run(exe, output, case, theme="dark"):
+    compiler = gnu_bin() / "gcc.exe"
+    if not compiler.is_file():
+        raise SystemExit("Set SIDENOTE_GNU_BIN to a GNU toolchain bin folder containing gcc.exe.")
     with tempfile.TemporaryDirectory(prefix="sidenote-memory-proof-") as temporary:
         root = Path(temporary)
         meetings, proposal = fixture(root, case)
         fake = root / "codex.exe"
         subprocess.run(
-            [str(DEVKIT / "gcc.exe"), str(ROOT / "tools/ui-fixtures/memory-rewrite-helper.c"), "-o", str(fake)],
+            [str(compiler), str(ROOT / "tools/ui-fixtures/memory-rewrite-helper.c"), "-o", str(fake)],
             creationflags=subprocess.CREATE_NO_WINDOW, check=True,
         )
         marker = root / "helper.txt"

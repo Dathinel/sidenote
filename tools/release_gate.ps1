@@ -1,3 +1,4 @@
+# Maintainer tool: used for releases and proofs, not needed to contribute.
 <#
 Release gate for local Sidenote releases.
 
@@ -10,7 +11,7 @@ list once. It writes artifacts\release-gate-<commit>.md with a pass table,
 links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fails.
 #>
 param(
-    [string]$GnuBin = 'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin',
+    [string]$GnuBin,
     [switch]$PreflightOnly
 )
 $ErrorActionPreference = 'Continue'
@@ -26,6 +27,25 @@ if (-not $top -or ((Resolve-Path $top).Path.TrimEnd('\') -ne $root.TrimEnd('\'))
 if (-not (Test-Path (Join-Path $root 'Cargo.toml')) -or -not (Test-Path (Join-Path $root 'relay'))) {
     Write-Output 'release_gate: Cargo.toml or relay\ is missing; this is not a Sidenote worktree.'
     exit 2
+}
+if (-not $PreflightOnly) {
+    if (-not $PSBoundParameters.ContainsKey('GnuBin')) {
+        if ($null -eq $env:SIDENOTE_GNU_BIN) {
+            $gcc = Get-Command gcc -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $gcc) {
+                Write-Output 'release_gate: Set SIDENOTE_GNU_BIN to a GNU toolchain bin folder or put gcc on PATH.'
+                exit 2
+            }
+            $GnuBin = Split-Path -Parent $gcc.Source
+        } else {
+            $GnuBin = $env:SIDENOTE_GNU_BIN
+        }
+    }
+    if (-not $GnuBin -or -not (Test-Path -LiteralPath $GnuBin -PathType Container)) {
+        Write-Output 'release_gate: -GnuBin or SIDENOTE_GNU_BIN must point to an existing GNU toolchain bin folder.'
+        exit 2
+    }
+    $GnuBin = (Resolve-Path -LiteralPath $GnuBin).Path
 }
 $pinnedHead = git rev-parse --verify HEAD
 if ($LASTEXITCODE -ne 0) {
@@ -79,7 +99,7 @@ if ($PreflightOnly) {
     Write-Output ('release_gate: preflight passed ({0:N1} GB free, {1} GB needed, lock held, no other local build running); stopping because -PreflightOnly was given.' -f $freeGb, $MinFreeGb)
     exit 0
 }
-if (Test-Path $GnuBin) { $env:PATH = "$GnuBin;" + $env:PATH }
+$env:PATH = "$GnuBin;" + $env:PATH
 # Always this worktree's own build folder. A shared folder can hold another worktree's exe.
 $env:CARGO_TARGET_DIR = Join-Path $root 'target'
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value

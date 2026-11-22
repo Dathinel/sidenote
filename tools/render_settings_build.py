@@ -1,3 +1,4 @@
+# Maintainer tool: used for releases and proofs, not needed to contribute.
 """Render Settings in the isolated offscreen application, never on the desktop."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -7,11 +8,13 @@ OUT=ROOT/'artifacts/settings-build'
 STATE=ROOT/'target/settings-build-render'
 EXE=Path(os.environ.get('CARGO_TARGET_DIR',str(ROOT/'target')))/'x86_64-pc-windows-gnu/debug/sidenote.exe'
 sys.path.insert(0,str(ROOT/'tools'))
+from gnu_toolchain import gnu_bin
 from prepare_people_fixture import prepare
 PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('connected-apps','settings-mcp-mixed',2200),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
 def render(job):
  name,scene,width,theme,height,events=job
+ tool_path=os.pathsep.join((str(gnu_bin()),os.environ.get('PATH','')))
  base=OUT/f'settings-{name}-{width}-{theme}'
  state=STATE/base.name
  for d in ('appdata','localappdata','peers'):(state/d).mkdir(parents=True,exist_ok=True)
@@ -56,7 +59,7 @@ def render(job):
    summary.write_text(json.dumps(value),encoding='utf-8')
  env={key: value for key, value in os.environ.items() if not key.startswith('HEX_MEETING_')}
  env.update({'SIDENOTE_DATA_DIR':str(state),'XDG_CONFIG_HOME':str(state/'config'),'XDG_DATA_HOME':str(state/'data'),'XDG_STATE_HOME':str(state/'xdg-state'),'XDG_CACHE_HOME':str(state/'cache')})
- env|={'PATH':r'E:\Personal-Projects\tools\hex-meetings-gnu\w64devkit\bin;'+os.environ['PATH'],'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
+ env|={'PATH':tool_path,'HOME':str(state/'home'),'USERPROFILE':str(state/'home'),'CODEX_HOME':str(state/'codex'),'APPDATA':str(state/'appdata'),'LOCALAPPDATA':str(state/'localappdata'),'SIDENOTE_STATE_DIR':str(state)}
  args=[str(EXE),'--meetings-dir',str(meetings),'--data-dir',str(state),'--peers-dir',str(state/'peers'),'--scene',scene,'--theme',theme,'--size',f'{width}x{height}','--scale','1','--snap',str(base)+'.png','--tree',str(base)+'.json']
  if events:
   script=state/'events.json';script.write_text(json.dumps(dict(events=events+[dict(t=max(e['t'] for e in events)+1,type='mark',name='end')])),encoding='utf-8')
