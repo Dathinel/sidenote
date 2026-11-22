@@ -4,7 +4,7 @@ Status: accepted, 2026-11-08. Signing depends on a public repository and SignPat
 
 ## Context
 
-- **Current manual installs** copy a build into `%LOCALAPPDATA%\Programs\hex-meetings` by hand. The rename keeps that live install untouched; see [the owner checklist](../rename-migration.md).
+- **Current manual installs** copy a build into `%LOCALAPPDATA%\Programs\hex-meetings` by hand. The rename keeps that live install untouched; see [the owner checklist](../internal/rename-migration.md).
 - **Strangers need** an installer, safe updates and a signed binary.
 - Managed-device policies may block unsigned executables. Signing does not guarantee acceptance; the device administrator must allow the publisher.
 - **Constraints:** the app must work offline, and MCP clients and scheduled tasks need an executable path that does not change between versions.

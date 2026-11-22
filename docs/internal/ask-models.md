@@ -115,13 +115,13 @@ Verification (2026-11-11):
 | `cargo test --workspace --locked` | PASS, exit 0 | 135.02 s |
 | `cargo test --workspace --locked --features asr-runtime` | PASS, exit 0 (full parallel rerun) | 56.66 s |
 | `cargo build --locked` | PASS, exit 0 | 67.65 s |
-| `python tools/mcp-smoke.py E:\Personal-Projects\hex-meetings\.worktrees\ask-models\target\x86_64-pc-windows-gnu\debug\sidenote.exe` | PASS, exit 0 | 2.39 s |
+| `python tools/mcp-smoke.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 | 2.39 s |
 
 Each configuration passed 197 tests across the workspace: 1 domain unit test, 14 domain integration tests, 141 app library tests and 41 UI tests. Isolated child-test results are not counted twice. Both Clippy runs denied warnings.
 
 The final checks use this worktree's own `target` directory. A shared-target attempt resolved stale app artifacts without this lane's Ask API. Dependency artifacts were copied to avoid a cold build; app artifacts were excluded and rebuilt from this lane.
 
-One parallel ASR run failed the unchanged updater timeout tests at `src/updates.rs:908` and `:941`. The complete ASR suite then passed with `RUST_TEST_THREADS=1`, and passed again with normal parallelism. No assertion or deadline was changed. The failure log is retained in `artifacts/ask-models/gates/test-asr-initial-failure.log`. The unrelated failure is tracked in [Updater timeout tests intermittently fail during parallel Windows test runs](https://github.com/harshanandak/hex-meetings/issues/2), which was re-fetched and verified open.
+One parallel ASR run failed the unchanged updater timeout tests at `src/updates.rs:908` and `:941`. The complete ASR suite then passed with `RUST_TEST_THREADS=1`, and passed again with normal parallelism. No assertion or deadline was changed. The failure log is retained in `artifacts/ask-models/gates/test-asr-initial-failure.log`. The unrelated failure is tracked in Updater timeout tests intermittently fail during parallel Windows test runs (`https://github.com/<account>/hex-meetings/issues/2`), which was re-fetched and verified open.
 
 MCP smoke output:
 
@@ -154,9 +154,9 @@ CLI measurements and automated tests are rung 4 evidence. The rendered app state
 
 Requested PNG paths:
 
-- `E:\Personal-Projects\hex-meetings\.worktrees\ask-models\artifacts\ask-models\models-and-agents-1280-light.png`
-- `E:\Personal-Projects\hex-meetings\.worktrees\ask-models\artifacts\ask-models\ask-thinking-picker-1280-light.png`
-- `E:\Personal-Projects\hex-meetings\.worktrees\ask-models\artifacts\ask-models\ask-in-meeting-1280-dark.png`
+- `<repo>/artifacts/ask-models/models-and-agents-1280-light.png`
+- `<repo>/artifacts/ask-models/ask-thinking-picker-1280-light.png`
+- `<repo>/artifacts/ask-models/ask-in-meeting-1280-dark.png`
 
 Commits before the report and render-proof commit:
 

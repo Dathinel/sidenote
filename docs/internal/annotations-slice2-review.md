@@ -14,7 +14,7 @@ Before each CLI call, every image is hash-checked against the preview manifest w
 
 The unit test drags at two display sizes and checks every pixel: masked pixels become opaque black, outside pixels match the source, and the source remains unchanged. The offscreen UI test repeats actual drags at 1280 and 640 px. Both bake source rectangle `[120,33,240,68]`, exactly 4,200 black pixels per image, with all 129,600 pixels checked per size. Preview files are still unapproved at this stage. A separate test proves approval preserves every PNG byte and that pinned files reject modification.
 
-Evidence: tests and offscreen renders are rung 4; the real synthetic CLI runs are rung 5. The screenshots use the same normalized mask `[0.31,0.06,0.45,0.08]`. See [pixel comparison](../artifacts/annotations-review/privacy-comparison.json) and [gesture proof](../artifacts/annotations-review/redaction-drag-proof.json).
+Evidence: tests and offscreen renders are rung 4; the real synthetic CLI runs are rung 5. The screenshots use the same normalized mask `[0.31,0.06,0.45,0.08]`. See [pixel comparison](../../artifacts/annotations-review/privacy-comparison.json) and [gesture proof](../../artifacts/annotations-review/redaction-drag-proof.json).
 
 ## Prompt instructions: before and after
 
@@ -167,7 +167,7 @@ Keep the direct Medium pass for up to three selected frames. Keep two parallel L
 
 The source PNGs are 480 × 270. Therefore the 1024 px draft limit does not resize these images, and this experiment cannot establish a resolution-related speed gain. Its code path and 1024 px downscale maths were tested, but that limit is not enabled in the normal pipeline. Codex drafts used the locally configured `gpt-6.1-sol` at Low; all Claude calls requested `claude-sonnet-5-5`, at Low for drafts and Medium for final notes. Agent and model selection in normal use remain the person’s choices.
 
-Call budget: 16 CLI attempts total, including two interrupted attempts with no completed result. Fourteen completed calls produced the five valid notes. No further live calls were made. [Call audit](../artifacts/annotations-review/live-call-audit.json). The earlier slice’s 29.67 s first draft / 62.26 s full note is historical context; the revised two-pass baseline above uses the new prompts and full final image set.
+Call budget: 16 CLI attempts total, including two interrupted attempts with no completed result. Fourteen completed calls produced the five valid notes. No further live calls were made. [Call audit](../../artifacts/annotations-review/live-call-audit.json). The earlier slice’s 29.67 s first draft / 62.26 s full note is historical context; the revised two-pass baseline above uses the new prompts and full final image set.
 
 A shared-target collision launched another lane’s executable during one benchmark attempt. Its log showed app startup despite the hidden-process launch. I stopped only the process whose path and command line matched my benchmark, and sent no screen input. The annotation call ledger stayed unchanged at nine during that launch. Subsequent proof and render runs used a verified executable copied into this worktree.
 
@@ -177,7 +177,7 @@ These are unedited model outputs, rendered as readable note text. Raw JSON, draf
 
 ### Claude Low drafts, two at a time
 
-Raw result: [JSON](../artifacts/annotations-review/benchmarks/baseline/result.json).
+Raw result: [JSON](../../artifacts/annotations-review/benchmarks/baseline/result.json).
 
 #### Northwind Board workshop plan: paper prototypes and the next review
 
@@ -212,7 +212,7 @@ None.
 
 ### Codex Low drafts, Claude final
 
-Raw result: [JSON](../artifacts/annotations-review/benchmarks/codex/result.json).
+Raw result: [JSON](../../artifacts/annotations-review/benchmarks/codex/result.json).
 
 #### Workshop plan: paper prototypes and the next review
 
@@ -248,7 +248,7 @@ None.
 
 ### Direct Claude Medium note
 
-Raw result: [JSON](../artifacts/annotations-review/benchmarks/direct/result.json).
+Raw result: [JSON](../../artifacts/annotations-review/benchmarks/direct/result.json).
 
 #### Northwind workshop plan: paper prototypes and the next review
 
@@ -282,7 +282,7 @@ None.
 
 ### 1024 px Claude drafts
 
-Raw result: [JSON](../artifacts/annotations-review/benchmarks/draft1024/result.json).
+Raw result: [JSON](../../artifacts/annotations-review/benchmarks/draft1024/result.json).
 
 #### Northwind Board workshop plan for paper prototypes and the next review
 
@@ -317,7 +317,7 @@ None.
 
 ### Three parallel Claude drafts
 
-Raw result: [JSON](../artifacts/annotations-review/benchmarks/parallel3/result.json).
+Raw result: [JSON](../../artifacts/annotations-review/benchmarks/parallel3/result.json).
 
 #### Northwind workshop plan: paper prototypes and Friday review
 
@@ -369,11 +369,11 @@ Send for note uses the filled primary style. Frame selection uses Rune Kit’s c
 | `cargo test --workspace --locked` | PASS, exit 0 (42.83 s) |
 | `cargo test --workspace --locked --features asr-runtime` | PASS, exit 0 (148.54 s) |
 | `cargo build --locked` | PASS, exit 0 (9.52 s) |
-| `python tools/mcp-smoke.py E:/Personal-Projects/hex-meetings/.worktrees/annotations/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 (1.46 s) |
+| `python tools/mcp-smoke.py <repo>/target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0 (1.46 s) |
 
 Both test modes passed 208 top-level tests: 1 domain unit test, 14 domain integration tests, 152 app library tests and 41 app binary tests. A subprocess self-check also reports its own passing result. There were no failed, ignored or measured tests. MCP smoke checked all 9 tool schemas and confirmed JSON-RPC-only stdout, empty stderr and unchanged fixture files.
 
-Render verification passed all 28 scenes across both themes and both sizes, with no tree warnings. The actual redaction gestures passed at both widths. [Gate records](../artifacts/annotations-review/gates.json).
+Render verification passed all 28 scenes across both themes and both sizes, with no tree warnings. The actual redaction gestures passed at both widths. [Gate records](../../artifacts/annotations-review/gates.json).
 
 ## Commits
 
@@ -386,10 +386,10 @@ Every implementation commit ends with the requested Claude Opus 5.5 co-author tr
 
 ## PNG paths
 
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations/artifacts/annotations-review/annotation-review-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations/artifacts/annotations-review/annotation-note-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations/artifacts/annotations-review/annotation-drafting-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations/artifacts/annotations-review/annotation-note-1280-dark.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations/artifacts/annotations-review/annotation-capture-1280-light.png`
+- `<repo>/artifacts/annotations-review/annotation-review-1280-light.png`
+- `<repo>/artifacts/annotations-review/annotation-note-1280-light.png`
+- `<repo>/artifacts/annotations-review/annotation-drafting-1280-light.png`
+- `<repo>/artifacts/annotations-review/annotation-note-1280-dark.png`
+- `<repo>/artifacts/annotations-review/annotation-capture-1280-light.png`
 
 Elapsed at report generation: 33.0 minutes. Start: 2026-11-11T03:57:53.510594+05:30. Report generated: 2026-11-11T04:30:54.795384+05:30. The 90-minute stop was not reached.

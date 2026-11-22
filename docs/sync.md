@@ -11,7 +11,7 @@ New installs use `%APPDATA%\sidenote` for state and `%APPDATA%\sidenote-peers`
 for peers. Each falls back to its old `hex-meetings` or `hex-meetings-peers` folder
 when the new folder does not exist. Existing shares stay in place. The examples
 below show legacy installs; replace those roots with the selected Sidenote roots
-only on new installs. See [rename-migration.md](rename-migration.md).
+only on new installs. See [rename-migration.md](internal/rename-migration.md).
 
 ## Folders and device ownership
 

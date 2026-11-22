@@ -1,6 +1,6 @@
 # Company memory and daily check v2
 
-> Storage update: [multi-device sync](sync.md) now keeps authoritative items in immutable
+> Storage update: [multi-device sync](../sync.md) now keeps authoritative items in immutable
 > device journals. The `memory/records.json` name below is a logical store and a legacy import
 > source. Generated company text, accepted legacy copies and migration preview caches now live
 > under `local/memory/`. Examples below describe the storage contract, not a live-data verification.

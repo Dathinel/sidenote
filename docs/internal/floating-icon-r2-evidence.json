@@ -1,6 +1,6 @@
 ﻿{
     "units":  "MB = 1,000,000 bytes",
-    "exe":  "E:\\Personal-Projects\\hex-meetings\\.worktrees\\floating-icon-r2\\artifacts\\floating-icon-r2-dev20\\sidenote.exe",
+    "exe":  "<repo>/artifacts/floating-icon-r2-dev20/sidenote.exe",
     "sha256":  "C1BB3074C370EF9FF943E4ED619100D3C19F7C29223E394FBA3FF5DF609A6CB8",
     "foreground_checks":  1289,
     "show_teardown_cycles":  50,

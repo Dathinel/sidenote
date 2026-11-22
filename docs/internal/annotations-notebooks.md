@@ -2,7 +2,7 @@ Decisions needed: none
 
 # Annotation notebooks and sharing, round 1
 
-Worktree: `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook`, branch `feat/annotations-notebook`. No push or version bump. Builds use this worktree's own target folder. Version remains `0.0.1-dev.12`.
+Worktree: `<repo>`, branch `feat/annotations-notebook`. No push or version bump. Builds use this worktree's own target folder. Version remains `0.0.1-dev.12`.
 
 ## Image scope and repeated screens
 
@@ -35,9 +35,9 @@ None of the measured alternatives beat the earlier Sonnet result. These are indi
 
 Reproduce with the built executable: `--notebook-benchmark codex-low --annotation-proof-output <isolated-output-folder>`, replacing the variant with `codex-medium` or `haiku`. The entry point always constructs synthetic inputs from the repository fixture. The production notebook path still requests Medium effort.
 
-- codex-low: [timing](../artifacts/notebooks-round1/live-codex-low/timing.json), [stream proof](../artifacts/notebooks-round1/live-codex-low/stream-proof.json), [note](../artifacts/notebooks-round1/live-codex-low/notebook-note.json).
-- codex-medium: [timing](../artifacts/notebooks-round1/live-codex-medium/timing.json), [stream proof](../artifacts/notebooks-round1/live-codex-medium/stream-proof.json), [note](../artifacts/notebooks-round1/live-codex-medium/notebook-note.json).
-- haiku: [timing](../artifacts/notebooks-round1/live-haiku/timing.json), [stream proof](../artifacts/notebooks-round1/live-haiku/stream-proof.json), [note](../artifacts/notebooks-round1/live-haiku/notebook-note.json).
+- codex-low: [timing](../../artifacts/notebooks-round1/live-codex-low/timing.json), [stream proof](../../artifacts/notebooks-round1/live-codex-low/stream-proof.json), [note](../../artifacts/notebooks-round1/live-codex-low/notebook-note.json).
+- codex-medium: [timing](../../artifacts/notebooks-round1/live-codex-medium/timing.json), [stream proof](../../artifacts/notebooks-round1/live-codex-medium/stream-proof.json), [note](../../artifacts/notebooks-round1/live-codex-medium/notebook-note.json).
+- haiku: [timing](../../artifacts/notebooks-round1/live-haiku/timing.json), [stream proof](../../artifacts/notebooks-round1/live-haiku/stream-proof.json), [note](../../artifacts/notebooks-round1/live-haiku/notebook-note.json).
 
 ## Gates
 
@@ -51,7 +51,7 @@ Reproduce with the built executable: `--notebook-benchmark codex-low --annotatio
 | `cargo build --locked` | PASS, exit 0, 18.19 s |
 | `python tools/mcp-smoke.py target/x86_64-pc-windows-gnu/debug/sidenote.exe` | PASS, exit 0, 1.18 s |
 
-Both test modes pass 237 top-level tests: 1 domain unit, 14 domain integration, 178 app library and 44 app binary tests. No tests were ignored. Gate logs and exit codes are in [gate results](../artifacts/notebooks-round1/gates/results.json).
+Both test modes pass 237 top-level tests: 1 domain unit, 14 domain integration, 178 app library and 44 app binary tests. No tests were ignored. Gate logs and exit codes are in [gate results](../../artifacts/notebooks-round1/gates/results.json).
 
 ## Render and interaction proof
 
@@ -66,15 +66,15 @@ Evidence: automated tests and offscreen renders, rung 4; real synthetic CLI runs
 - `4729816` fixes shared screens and notebook-wide numbering, with synthetic tests and benchmarks.
 - The UI/report commit adds compact rows, thumbnails and updated render assertions. Its hash is in the final handoff.
 
-Both commits use `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+Both commits use `Co-Authored-By: Claude Opus 5.5 <email>`.
 
 ## PNG paths
 
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/notebooks-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/notebook-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/notebook-note-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/share-html-1280-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/share-html-390-light.png`
-- `E:/Personal-Projects/hex-meetings/.worktrees/annotations-notebook/artifacts/notebooks-round1/share-html-1280-dark.png`
+- `<repo>/artifacts/notebooks-round1/notebooks-1280-light.png`
+- `<repo>/artifacts/notebooks-round1/notebook-1280-light.png`
+- `<repo>/artifacts/notebooks-round1/notebook-note-1280-light.png`
+- `<repo>/artifacts/notebooks-round1/share-html-1280-light.png`
+- `<repo>/artifacts/notebooks-round1/share-html-390-light.png`
+- `<repo>/artifacts/notebooks-round1/share-html-1280-dark.png`
 
 Round 1 started 2026-11-11T06:59:46.7724365+05:30. Final elapsed time is recorded in the handoff.
