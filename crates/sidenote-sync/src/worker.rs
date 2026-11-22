@@ -721,18 +721,30 @@ mod tests {
         Ok(())
     }
     #[cfg(windows)]
+    fn test_artifact_dir() -> Result<PathBuf> {
+        if let Some(dir) = std::env::var_os("SIDENOTE_SYNC_TEST_ARTIFACT_DIR") {
+            return Ok(dir.into());
+        }
+        // Local Cargo runs usually keep the build and target directories together.
+        std::env::current_exe()?
+            .ancestors()
+            .find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name == "deps" || name == "build")
+            })
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .ok_or_else(|| Failure(Reason::WorkerUnavailable).into())
+    }
+
+    #[cfg(windows)]
+    fn fault_pool() -> Result<Pool> {
+        Pool::new(test_artifact_dir()?.join("examples/worker_fault.exe"))
+    }
+
+    #[cfg(windows)]
     fn fixture() -> Result<Worker> {
-        let executable = std::env::current_exe()?
-            .parent()
-            .ok_or(Failure(Reason::WorkerUnavailable))?
-            .parent()
-            .ok_or(Failure(Reason::WorkerUnavailable))?
-            .join(if cfg!(windows) {
-                "examples/worker_fault.exe"
-            } else {
-                "examples/worker_fault"
-            });
-        Pool::new(executable)?.spawn()
+        fault_pool()?.spawn()
     }
     fn empty() -> Request {
         Request {
@@ -858,7 +870,8 @@ mod tests {
         assert!((MAX_DOC * 8 / 10..MAX_DOC).contains(&bytes));
         let deadline = load_timeout(snapshot.chunks[0].len());
         assert!(deadline > MESSAGE_TIMEOUT && deadline <= Duration::from_secs(120));
-        let mut worker = Pool::adjacent()?.spawn()?;
+        let mut worker =
+            Pool::new(test_artifact_dir()?.join("sidenote-sync-worker.exe"))?.spawn()?;
         let reply = worker
             .request(&Request {
                 snapshot,
@@ -872,16 +885,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn f4_workers_have_independent_memory_and_pool_slots_are_released() -> Result<()> {
-        let path = std::env::current_exe()?
-            .parent()
-            .and_then(|p| p.parent())
-            .ok_or(Failure(Reason::WorkerUnavailable))?
-            .join(if cfg!(windows) {
-                "examples/worker_fault.exe"
-            } else {
-                "examples/worker_fault"
-            });
-        let pool = Pool::new(path)?;
+        let pool = fault_pool()?;
         let mut first = pool.spawn()?;
         let mut second = pool.spawn()?;
         for worker in [&mut first, &mut second] {

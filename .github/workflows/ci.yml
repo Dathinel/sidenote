@@ -23,7 +23,6 @@ jobs:
       windows: ${{ steps.paths.outputs.windows }}
       relay: ${{ steps.paths.outputs.relay }}
       tools: ${{ steps.paths.outputs.tools }}
-      module: ${{ steps.paths.outputs.module }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -72,8 +71,6 @@ jobs:
           cargo clippy --workspace --locked --all-targets -- -D warnings
           cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
       - name: Test default and ASR feature sets
-        env:
-          TEST_MODULE: ${{ needs.changes.outputs.module }}
         shell: bash
         run: |
           umask 077
@@ -101,13 +98,8 @@ jobs:
                 --skip=service::speech::proofs::faults::retained_status_is_bounded_and_cannot_kill_the_listener
                 --skip=service::speech::proofs::locking::job_creation_keeps_intake_ownership_until_processing_is_locked
                 --skip=tests::server_role_exposes_only_scoped_host_probe)
-          if [[ -n "$TEST_MODULE" ]]; then
-            cargo test --locked -p sidenote --lib "$TEST_MODULE"
-            cargo test --locked -p sidenote --lib --features asr-runtime "$TEST_MODULE"
-          else
-            cargo test --locked --workspace --no-fail-fast -- "${skip[@]}"
-            cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
-          fi
+          cargo test --locked --workspace --no-fail-fast -- "${skip[@]}"
+          cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
 
   relay:
     needs: changes
@@ -198,26 +190,44 @@ jobs:
         run: |
           cargo check --workspace --locked --tests
           cargo check --workspace --locked --tests --features asr-runtime
-      - name: Build the sync worker required by the headless app
-        run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker
+      - name: Build the sync worker and fault-test fixture
+        run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker --example worker_fault
       - name: Test Windows-specific behavior
         shell: bash
         run: |
           export SIDENOTE_DATA_DIR=$(cygpath -w "$RUNNER_TEMP/sidenote-ci")
+          # Child-process fixtures reserve a bare --skip token for their protocol.
           cargo test --locked --features asr-runtime -p sidenote --lib -- \
             platform::windows::tests:: updates::implementation:: hex_install:: meeting_icon:: \
+            platform::windows::close_tests:: core::annotations::notebook_tests:: \
+            approval_seals_reviewed_bytes_and_send_pins_the_same_files core::config::tests:: \
             core::daily_check::background_tests:: core::meeting_evidence::speech_host_tests:: \
+            preparation_file_io_fails_without_retry_and_preserves_content_free_os_diagnostic \
+            core::mcp_connect::isolated_tests:: legacy_adapter_contends_with_the_core_claim_and_reclaims_after_release \
+            core::meeting_router::batches::worker:: core::meeting_router::hex_bridge::tests::fake_process_timeout \
+            core::meeting_router::hex_http::status_tests:: \
             core::meeting_router::jobs::handoff::tests:: core::meeting_router::jobs::r1_tests:: \
+            core::meeting_router::production::fixture_tools:: core::meeting_router::production::pipeline:: \
             core::meeting_router::production::gap_tests:: core::meeting_router::production::http_tests:: \
             core::meeting_router::production::no_speech_tests:: core::meeting_router::production::probe_tests:: \
             core::meeting_router::production::round2_tests:: core::meeting_router::revision::captured_tests:: \
             core::meeting_router::revision::receipts:: provisioning_review_load_uses_the_resolved_path \
             automatic_runtime_comes_from_the_package_and_explicit_path_wins \
             dev40_setup_required_keeps_the_capture_and_shows_the_count \
-            core::relay_preview::migration::security_tests:: \
-            --skip meeting_icon_capture_affinity_updates_live_windows
+            core::notes::tests::corruption:: core::notes::tests::review:: core::notes::tests::routing:: \
+            core::notes::tests::translation::busy:: core::notes::tests::translation::failed:: \
+            core::notes::tests::translation::producer:: core::relay_preview:: core::speech_host:: \
+            listener::pipeline_tests:: listener::notes_environment::tests:: \
+            service::tests::exclusively_locked_device_file_falls_back_once \
+            --skip=meeting_icon_capture_affinity_updates_live_windows
+          # This test exists only in a build without the ASR feature.
+          cargo test --locked -p sidenote --lib -- \
+            core::meeting_evidence::speech_host_tests::speech_host_without_runtime_does_not_consume_a_local_attempt
           cargo test --locked --features asr-runtime -p sidenote --bin sidenote -- \
-            install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_
+            install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_ \
+            ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings::
+          SIDENOTE_SYNC_TEST_ARTIFACT_DIR="$(cygpath -aw "target/$CARGO_BUILD_TARGET/debug")" \
+            cargo test --locked -p sidenote-sync --lib -- worker::tests::
           cargo test --locked --features asr-runtime -p sidenote --test idle_cpu --test relay_preview
 
   gate:
