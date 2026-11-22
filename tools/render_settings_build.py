@@ -83,7 +83,8 @@ def render(job):
    print(base.name,numbers,flush=True)
    assert numbers==dict(strip=44,column=640,gap=40,tasks=300,header=640,ask=640,fade=150),(base.name,numbers)
   else:
-   assert 'meeting-grid' not in rects,base.name
+   # 1024 keeps the strip and the notes column; the tasks sit under the notes, not beside them.
+   assert ('meeting-grid' in rects)==(width==1024) and 'meeting-tasks-column' not in rects,base.name
   for key,(x,y,w,h) in rects.items():
    if key.startswith('meeting-'):assert x>=0 and x+w<=width,(base.name,key,x,w)
  if name.startswith('meeting-refine-p8-') and name.endswith('-after'):

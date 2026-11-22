@@ -790,7 +790,7 @@ pub fn overlay_with(
         // The wide page's notes column is the bar's width exactly, with no gutter of its own.
         let gutter = if narrow {
             16.0
-        } else if super::meeting::wide(s) {
+        } else if super::meeting::strip(s) {
             0.0
         } else {
             NOTES_GUTTER

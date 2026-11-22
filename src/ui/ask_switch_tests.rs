@@ -1689,7 +1689,10 @@ fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
         return;
     }
     let mut rt = page_at((390.0, 900.0));
-    assert!(rt.find("rail-recording").is_none(), "no rail until it records");
+    assert!(
+        rt.find("rail-recording").is_none(),
+        "no rail until it records"
+    );
     rt.update(|s, _| {
         s.hex.status = Some(Ok(sidenote::hex_engine::EngineState {
             running: true,
@@ -1732,25 +1735,106 @@ fn the_rail_mic_is_danger_red_not_amber_while_hex_records_on_a_phone() {
     assert!(!colours.contains(&p.warn), "the mic is amber");
 }
 
-#[test]
-fn meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows() {
-    if in_parent("meeting_grid_gives_way_to_a_stack_below_its_width_and_never_overflows") {
-        return;
-    }
-    // 1024 wide leaves 775 beside the sidebar: less than the 1024 grid plus its 16.
-    let rt = page_with_tasks((1024.0, 800.0));
-    assert!(rt.find("meeting-grid").is_none());
-    let header = rect_of(&rt, "meeting-header");
-    assert!(rect_of(&rt, "meeting-task-0")[1] >= header[1] + header[3]);
+/// Every `meeting-` element lies inside `width`.
+fn assert_inside(rt: &Runtime<State>, width: f32) {
     for e in rt.elements() {
         let key = e.key.as_deref().unwrap_or_default();
-        if key.starts_with("meeting-") {
+        if key.starts_with("meeting-") || key.starts_with("more-meeting-") {
             assert!(
-                e.rect[0] + e.rect[2] <= 1024.0,
-                "{key} runs past the window"
+                e.rect[0] >= 0.0 && e.rect[0] + e.rect[2] <= width,
+                "{key} {:?} runs past the window",
+                e.rect
             );
         }
     }
+}
+
+#[test]
+fn meeting_grid_keeps_its_strip_and_column_below_its_width_with_the_tasks_stacked() {
+    if in_parent("meeting_grid_keeps_its_strip_and_column_below_its_width_with_the_tasks_stacked") {
+        return;
+    }
+    // 1024 wide leaves 775 beside the sidebar: less than the 1024 grid plus its 16, but room for
+    // the 44 strip and the 640 column with 24 either side (732).
+    let mut rt = tasks_page((1024.0, 800.0), true);
+    let r = |rt: &Runtime<State>, key: &str| rect_of(rt, key);
+    let (grid, strip, main) = (
+        r(&rt, "meeting-grid"),
+        r(&rt, "meeting-grid-strip"),
+        r(&rt, "meeting-main"),
+    );
+    assert_eq!((grid[2], strip[2], main[2]), (684.0, 44.0, 640.0));
+    assert_eq!(
+        strip[0] + strip[2],
+        main[0],
+        "the strip sits left of the notes"
+    );
+    // Centred in the page beside the sidebar.
+    let (left, right) = (
+        grid[0] - nav::width(&rt.state),
+        1024.0 - (grid[0] + grid[2]),
+    );
+    assert_eq!(left, right, "centred in the page");
+    // The header, the notes and the tasks all start on the notes edge, and the menu ends on the
+    // notes' right edge, not past it.
+    let header = r(&rt, "meeting-header");
+    assert_eq!((header[0], header[2]), (main[0], 640.0), "header");
+    let menu = r(&rt, &format!("more-meeting-{MEETING}-button"));
+    assert_eq!(
+        menu[0] + menu[2],
+        main[0] + main[2],
+        "the menu is at the notes' right edge"
+    );
+    assert_eq!(r(&rt, "sec-context")[0], main[0], "notes");
+    assert!(rt.find("meeting-tasks-column").is_none());
+    let (last, tasks) = (r(&rt, "meeting-point-pt-0-1"), r(&rt, "meeting-actions"));
+    assert_eq!(
+        tasks[1] - (last[1] + last[3]),
+        28.0,
+        "tasks below the notes"
+    );
+    // The stacked rows hang 8 either side of the column, inside the scroll area.
+    let task = r(&rt, "meeting-task-0");
+    assert_eq!(
+        (task[0], task[2]),
+        (main[0] - 8.0, 656.0),
+        "task row {task:?}"
+    );
+    // The Ask bar and the transcript sheet start on the notes edge too.
+    assert_eq!(r(&rt, "ask-pill")[0], main[0], "Ask bar");
+    rt.update(|s, _| s.transcript_open = true);
+    rt.frame(0.2);
+    rt.settle_all();
+    let sheet = r(&rt, "meeting-transcript-surface");
+    assert_eq!((sheet[0], sheet[2]), (main[0], 640.0), "transcript sheet");
+    assert_inside(&rt, 1024.0);
+}
+
+#[test]
+fn meeting_page_below_the_strip_width_fills_the_page_and_never_overflows() {
+    if in_parent("meeting_page_below_the_strip_width_fills_the_page_and_never_overflows") {
+        return;
+    }
+    // 900 wide leaves 651 beside the sidebar: under the 732 the strip and column need.
+    let mut rt = tasks_page((900.0, 800.0), true);
+    assert!(rt.find("meeting-grid").is_none());
+    let notes = rect_of(&rt, "sec-context")[0];
+    let left = nav::width(&rt.state);
+    assert_eq!(notes, left + 24.0, "24 gutter");
+    assert_eq!(
+        rect_of(&rt, "meeting-header")[0],
+        notes,
+        "header on the notes edge"
+    );
+    rt.update(|s, _| s.transcript_open = true);
+    rt.frame(0.2);
+    rt.settle_all();
+    assert_eq!(
+        rect_of(&rt, "meeting-transcript-surface")[0],
+        notes,
+        "transcript sheet on the notes edge"
+    );
+    assert_inside(&rt, 900.0);
 }
 
 /// Writes a summary with this `made_by` record into `folder`.

@@ -84,14 +84,21 @@ pub fn wide(s: &State) -> bool {
     page_w(s) >= GRID + EDGE
 }
 
+/// Room for the 44 strip and the notes column with the page gutter either side. The wide grid and
+/// this narrower one both put the notes in a column exactly `COLUMN` wide, 44 in from the grid's
+/// edge, with the header and the Ask bar on the same edges; below it the notes fill the page.
+pub fn strip(s: &State) -> bool {
+    page_w(s) >= STRIP + COLUMN + 2.0 * SIDE
+}
+
 pub fn phone(s: &State) -> bool {
     page_w(s) < PHONE
 }
 
-/// The page gutter beside the notes: none on the wide grid (its own strip is the margin), 16 on a
-/// phone and 24 between.
+/// The page gutter beside the notes: none where the column is fixed (the grid's own strip is the
+/// margin), 16 on a phone and 24 between.
 pub fn gutter(s: &State) -> f32 {
-    if wide(s) {
+    if strip(s) {
         0.0
     } else if phone(s) {
         PHONE_SIDE

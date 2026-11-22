@@ -853,9 +853,13 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         return col();
     };
     let wide = super::wide(s);
+    let strip = super::strip(s);
     // The wide grid already sets the notes 44 points in from its edge, so its column has no
     // gutter of its own; below the grid's width the notes keep the page gutter.
     let side = super::gutter(s);
+    // With no gutter and the tasks stacked, their rows hang 8 either side of the column, so the
+    // scroll area is 8 wider each side there, as the tasks column's is on the wide grid.
+    let hang = if strip && !wide { 8.0 } else { 0.0 };
     let fade = (150.0 - s.overlay_h.get()).max(0.0);
     let mut doc = narrative(s, m, p);
     if !wide {
@@ -872,22 +876,27 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             }
         })
         .min_h(0.0);
-    main = if wide {
+    main = if strip {
         main.w(COLUMN).min_w(COLUMN).max_w(COLUMN)
     } else {
         main.grow(1.0).min_w(0.0)
     };
+    let mut frame = col().key("meeting-scroll-frame");
+    frame = if hang > 0.0 {
+        let w = COLUMN + 2.0 * hang;
+        frame.w(w).min_w(w).max_w(w).ml(-hang).mr(-hang)
+    } else {
+        frame.w_full()
+    };
     main = main.child(
-        col()
-            .key("meeting-scroll-frame")
-            .w_full()
+        frame
             .grow(1.0)
             .min_w(0.0)
             .min_h(0.0)
             .child(
                 scroll(
-                    doc.max_w(COLUMN + 2.0 * side)
-                        .px(side)
+                    doc.max_w(COLUMN + 2.0 * (side + hang))
+                        .px(side + hang)
                         .pt(6.0)
                         .pb(s.overlay_h.get() + 32.0),
                     "meeting-scroll",
@@ -966,16 +975,27 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .mr(-8.0);
         columns = columns
             .justify_center()
-            .child(grid("meeting-grid", main).child(tasks));
+            .child(grid("meeting-grid", main, GRID).child(tasks));
+    } else if strip {
+        // Narrower than the grid but wide enough for the strip: the notes keep their column and
+        // the tasks sit under them.
+        columns = columns
+            .justify_center()
+            .child(grid("meeting-grid", main, STRIP + COLUMN));
     } else {
         columns = columns.child(main);
     }
     let mut head = header(s, k, m, side, p, layer);
-    if wide {
-        head = row().w_full().pr(EDGE).justify_center().child(grid(
-            "meeting-header-grid",
-            head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
-        ));
+    if strip {
+        head = row()
+            .w_full()
+            .pr(if wide { EDGE } else { 0.0 })
+            .justify_center()
+            .child(grid(
+                "meeting-header-grid",
+                head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
+                if wide { GRID } else { STRIP + COLUMN },
+            ));
     }
     let mut pane = col()
         .key("meeting-pane")
@@ -990,14 +1010,14 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     pane.child(head).child(columns)
 }
 
-/// The wide page's grid row: the 44 point strip kept for the section rail, then `notes`. The
+/// The grid row, `width` wide: the 44 point strip kept for the section rail, then `notes`. The
 /// header and the page body both sit in one, so the title lines up with the notes.
-fn grid(key: &str, notes: El) -> El {
+fn grid(key: &str, notes: El, width: f32) -> El {
     row()
         .key(key)
-        .w(GRID)
-        .min_w(GRID)
-        .max_w(GRID)
+        .w(width)
+        .min_w(width)
+        .max_w(width)
         .child(
             el().key(format!("{key}-strip"))
                 .w(STRIP)
