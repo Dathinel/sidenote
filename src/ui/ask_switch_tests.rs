@@ -1241,7 +1241,9 @@ fn a_fallback_answer_through_the_real_ask_names_the_helper_that_answered_and_sur
     assert_eq!(rt.state.ask_runner_name(), Some("Codex"));
     let fallback_request = rt.state.normal_ask_model();
     rt.update(|s, _| s.send("What did we decide?"));
+    assert_eq!(rt.state.notice, None, "the question did not save");
     finish_answer(&mut rt);
+    assert_eq!(rt.state.notice, None, "the answer did not save");
     let calls: Vec<_> = CALLS.lock().unwrap().iter().map(|c| c.0.clone()).collect();
     assert_eq!(calls, ["Codex", "Claude Sonnet"]);
     let answer = rt.state.saved.messages.last().unwrap().clone();
@@ -1279,7 +1281,9 @@ fn a_one_question_pick_leaves_the_saved_default_alone_after_submit_and_restart()
     let (codex, codex_model) = first_model(&rt.state, "Codex");
     rt.update(|s, _| s.choose_ask_pick(codex.clone(), codex_model.clone()));
     rt.update(|s, _| s.send("What do I need to do next?"));
+    assert_eq!(rt.state.notice, None, "the first question did not save");
     finish_answer(&mut rt);
+    assert_eq!(rt.state.notice, None, "the first answer did not save");
     assert_eq!(*CALLS.lock().unwrap(), vec![(codex, codex_model)]);
     assert_eq!(rt.state.runner.as_deref(), Some("Claude Sonnet"));
     assert!(rt.state.ask_settings.pick.is_none());
@@ -1289,8 +1293,10 @@ fn a_one_question_pick_leaves_the_saved_default_alone_after_submit_and_restart()
     assert_eq!(restarted.as_deref(), Some("Claude Sonnet"));
     // The next question with no pick goes to the default, not to Codex.
     rt.update(|s, _| s.send("And after that?"));
+    assert_eq!(rt.state.notice, None, "the second question did not save");
     assert_eq!(rt.state.asks[MEETING].runner, "Claude Sonnet");
     finish_answer(&mut rt);
+    assert_eq!(rt.state.notice, None, "the second answer did not save");
     assert_eq!(saved().as_deref(), Some("Claude Sonnet"));
 }
 
