@@ -110,22 +110,28 @@ jobs:
           umask 077
           root=$(mktemp -d)
           trap 'rm -rf "$root"' EXIT
-          mkdir -p "$root"/{state,meetings,peers,cache,data,xdg-state,public-test-key}
+          mkdir -p "$root"/{state,meetings,peers,cache,data,xdg-state,public-test-key,bin}
+          # Ask layout fixtures need executable discovery without a real helper or login.
+          printf '#!/bin/sh\nexit 125\n' > "$root/bin/codex"
+          chmod 0700 "$root/bin/codex"
+          export PATH="$root/bin:$PATH"
           export TMPDIR="$root" SIDENOTE_DATA_DIR="$root/state" SIDENOTE_HEX_DIR="$root/meetings"
           export SIDENOTE_PEERS_DIR="$root/peers" XDG_DATA_HOME="$root/data" XDG_CACHE_HOME="$root/cache"
           export XDG_STATE_HOME="$root/xdg-state" CREDENTIALS_DIRECTORY="$root/public-test-key"
           unset DISPLAY WAYLAND_DISPLAY XDG_CONFIG_HOME
           python3 -I -c 'import os; from pathlib import Path; (Path(os.environ["CREDENTIALS_DIRECTORY"]) / "sidenote-key").write_bytes(bytes(range(32)))'
-          skip=(--skip tree_worker::tests::packaged_service_admits_ordinary_helpers
-                --skip packaged_speech_service_admits_only_speech
-                --skip service::speech::proofs::service_shutdown_replans_and_replays_over_http
-                --skip service::speech::proofs::speech_service_fixture)
+          # The translation fixture reserves a bare --skip token for its child protocol.
+          skip=(--skip=tree_worker::tests::packaged_service_admits_ordinary_helpers
+                --skip=packaged_speech_service_admits_only_speech
+                --skip=service::speech::proofs::service_shutdown_replans_and_replays_over_http
+                --skip=service::speech::proofs::speech_service_fixture
+                --skip=tests::server_role_exposes_only_scoped_host_probe)
           if [[ -n "$TEST_MODULE" ]]; then
             cargo test --locked -p sidenote --lib "$TEST_MODULE"
             cargo test --locked -p sidenote --lib --features asr-runtime "$TEST_MODULE"
           else
             cargo test --locked --workspace --no-fail-fast -- "${skip[@]}"
-            cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}" --skip server_role_exposes_only_scoped_host_probe
+            cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
           fi
 
   relay:
@@ -163,6 +169,8 @@ jobs:
           python3 -I tools/pipeline-tests.py
           -k test_routing. -k test_job_contract.
           -k test_fixed_patterns -k test_timeout_and_missing
+      - if: vars.CI_LINUX_RUNNER == 'box'
+        run: echo /home/boxes/gh-runner/pwsh >> "$GITHUB_PATH"
       - shell: pwsh
         run: ./tools/dependency_notices_proof.ps1
 
