@@ -37,6 +37,8 @@ mod people;
 mod project;
 mod project_merge;
 mod prompt_library;
+#[cfg(test)]
+mod recording_state_tests;
 mod refresh;
 mod relay;
 mod response_time_fixture;

@@ -78,26 +78,29 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
         .items_center()
         .padding(2.0)
         .radius(20.0)
-        .fill(p.card)
+        .fill(if recording { p.chip } else { p.card })
         .border(1.0, p.line)
         .child(transcript);
     if recording {
+        // Two bars say Pause. A square means Stop, which stays in the top right pill.
+        let bar = |key: &'static str| el().key(key).w(3.0).h(9.0).radius(1.0).fill(p.ink);
         control = control.child(
             pressable(
-                row().items_center().justify_center().child(
-                    el().key("meeting-pause-square")
-                        .w(12.0)
-                        .h(12.0)
-                        .radius(2.0)
-                        .fill(p.ink),
-                ),
+                row()
+                    .key("meeting-pause-bars")
+                    .gap(2.0)
+                    .items_center()
+                    .justify_center()
+                    .child(bar("meeting-pause-bar-0"))
+                    .child(bar("meeting-pause-bar-1")),
             )
             .key("meeting-pause")
             .label("Pause recording")
-            .w(32.0)
-            .h(32.0)
-            .radius(16.0)
-            .fill(p.chip)
+            .w(28.0)
+            .h(28.0)
+            .radius(14.0)
+            .fill(p.bg)
+            .center()
             .button_disabled(s.hex_record_busy())
             .on_press(|s: &mut State| s.meeting_pause()),
         );
