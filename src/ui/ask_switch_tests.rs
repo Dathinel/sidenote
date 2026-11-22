@@ -1778,8 +1778,8 @@ fn hex_engine_recording() -> sidenote::hex_engine::EngineState {
 }
 
 #[test]
-fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_under_340() {
-    if in_parent("the_date_moves_to_the_second_line_when_the_recording_rail_leaves_under_340") {
+fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_333() {
+    if in_parent("the_date_moves_to_the_second_line_when_the_recording_rail_leaves_333") {
         return;
     }
     let mut rt = page_with_every_meta_item((390.0, 900.0));
@@ -1803,6 +1803,47 @@ fn the_date_moves_to_the_second_line_when_the_recording_rail_leaves_under_340() 
     assert_eq!(people[1], facts[1], "line two");
     assert!(facts[0] < people[0]);
     assert_inside(&rt, 390.0);
+}
+
+#[test]
+fn the_menu_never_sits_on_a_line_by_itself_from_a_360_window_up() {
+    if in_parent("the_menu_never_sits_on_a_line_by_itself_from_a_360_window_up") {
+        return;
+    }
+    let more = format!("more-meeting-{MEETING}-button");
+    // A 407 window with the recording rail (57) is a page of 350; the others are plain windows of
+    // 360 to 380. The date moves to line two exactly when line one cannot hold it.
+    for (window, rail) in [
+        (407.0, true),
+        (360.0, false),
+        (364.0, false),
+        (365.0, false),
+        (380.0, false),
+    ] {
+        let mut rt = page_with_every_meta_item((window, 900.0));
+        if rail {
+            rt.update(|s, _| s.hex.status = Some(Ok(hex_engine_recording())));
+            rt.frame(0.2);
+            rt.settle_all();
+        }
+        let page = window - if rail { 57.0 } else { 0.0 };
+        let (view, menu, facts) = (
+            rect_of(&rt, "meeting-view"),
+            rect_of(&rt, &more),
+            rect_of(&rt, "meeting-facts"),
+        );
+        assert_eq!(
+            menu[1], view[1],
+            "page {page}: the menu is on a line by itself"
+        );
+        let date_on_line_one = facts[1] == view[1];
+        assert_eq!(
+            date_on_line_one,
+            page >= 365.0,
+            "page {page}: the date's line"
+        );
+        assert_inside(&rt, window);
+    }
 }
 
 #[test]
