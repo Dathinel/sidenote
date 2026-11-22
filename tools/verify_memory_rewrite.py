@@ -114,7 +114,7 @@ def run(exe, output, case, theme="dark"):
             SIDENOTE_MEMORY_TEST_MODE="hold" if hold else "reply",
             TEMP=temporary,
             TMP=temporary,
-            PATH=os.pathsep.join([temporary, str(DEVKIT), env["PATH"]]),
+            PATH=os.pathsep.join(filter(None, (temporary, str(compiler.parent), env.get("PATH")))),
         )
         events = [
             tap(0.15, f"memory-comment-{proposal}"),
