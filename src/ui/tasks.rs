@@ -32,6 +32,7 @@ pub type BoardKey = (u64, u64, core::TaskFilter, Option<String>);
 pub enum View {
     Meetings,
     Tasks,
+    People,
 }
 
 /// A project name being edited in its group header.

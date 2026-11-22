@@ -28,6 +28,7 @@ pub enum Page {
     Meetings,
     Annotations,
     Tasks,
+    People,
     Memory,
     Check,
     Hex,
@@ -69,6 +70,8 @@ impl State {
             Page::Annotations
         } else if self.view == View::Tasks {
             Page::Tasks
+        } else if self.view == View::People {
+            Page::People
         } else if self.on_memory() {
             Page::Memory
         } else if self.on_check() {
@@ -368,6 +371,15 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
             },
         });
     }
+    places.push(Place {
+        key: "nav-people",
+        name: "People",
+        help: "People".into(),
+        active: page == Page::People,
+        icon: |c, _| super::icons::draw(&super::icons::PEOPLE, 18.0, c),
+        flag: None,
+        press: State::open_people,
+    });
     if features.memory {
         places.push(Place {
             key: "view-memory",

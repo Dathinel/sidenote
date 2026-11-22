@@ -713,6 +713,10 @@ impl State {
             self.focus_task_search();
             return;
         }
+        if self.view == tasks::View::People {
+            self.people.search.focused = true;
+            return;
+        }
         if self.memory_open {
             self.memory.search.focused = true;
             return;
@@ -1960,12 +1964,22 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
             s.companies.editing = false;
             s.companies.merging = false;
         } else {
-            s.open_hex();
-            s.hex.section = hex::Section::Teams;
-            s.people.tab = 1;
+            s.open_people_tab(1);
         }
         tx.blur();
         return true;
+    }
+    if s.view == tasks::View::People {
+        if e.key == Key::Escape {
+            if s.people.team_editor.is_some() {
+                teams::cancel(s);
+            } else {
+                s.go_meetings();
+            }
+            tx.blur();
+            return true;
+        }
+        return false;
     }
     if typing {
         return false;
@@ -2139,6 +2153,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let narrow = window_narrow || s.app_w.get() - nav::width(s) < COMPACT;
     let mut layer = Vec::new();
     let tasks_view = s.view == tasks::View::Tasks;
+    let people_view = s.view == tasks::View::People;
     let on_check = s.on_check();
     let on_memory = s.on_memory();
     let on_hex = s.on_hex();
@@ -2159,7 +2174,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
             mask |= bit(TimedAction::Annotations);
         } else if on_hex {
             mask |= bit(TimedAction::Settings);
-        } else if !on_live && !on_check && !on_memory && !s.companies.open {
+        } else if !people_view && !on_live && !on_check && !on_memory && !s.companies.open {
             if home {
                 mask |= bit(TimedAction::Search);
             } else {
@@ -2181,6 +2196,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         companies::pane(s, &k, p, narrow, &mut layer)
     } else if tasks_view {
         tasks::pane(s, &k, p, narrow, &mut layer)
+    } else if people_view {
+        people::pane(s, &k, p, narrow, &mut layer)
     } else if s.annotations.open {
         annotations::pane(s, p, narrow)
     } else if on_check {
@@ -2354,7 +2371,8 @@ fn busiest_project(s: &State) -> String {
 fn tasks_v2_teams_scene(s: &mut State) {
     s.refresh_areas();
     area_scene::wait(s);
-    scene_hex(s, hex::Section::Teams, false);
+    hex::scene(s, false);
+    s.open_people_tab(0);
 }
 
 fn tasks_v2_scene(s: &mut State, grouping: core::TaskGrouping, panel: Option<usize>) {

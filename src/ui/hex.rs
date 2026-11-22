@@ -1675,11 +1675,10 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 12] = [
+const SECTIONS: [Section; 11] = [
     Section::Identity,
     Section::Meetings,
     Section::PromptLibrary,
-    Section::Teams,
     Section::Dictation,
     Section::Connect,
     Section::ConnectedApps,
@@ -1692,7 +1691,7 @@ const SECTIONS: [Section; 12] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 12] = SECTIONS;
+    pub const ALL: [Section; 11] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
