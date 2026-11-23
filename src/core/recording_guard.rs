@@ -105,6 +105,9 @@ pub fn eligibility(root: &Path, meetings: &Path, id: &str) -> io::Result<Eligibi
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
+    let Some(_recycle) = super::meeting_delete::claim_write(root, id)? else {
+        return Ok(Eligibility::Unknown);
+    };
     let revision = super::recording_source::revision::input(&meetings.join(id)).ok();
     let path = state_path(root, id);
     let unknown_key = revision.clone().zip(revision::file(&path).ok());
@@ -160,6 +163,9 @@ pub(crate) fn eligibility_captured(
     manifest: &[u8],
     transcript: &[u8],
 ) -> io::Result<Eligibility> {
+    let Some(_recycle) = super::meeting_delete::claim_write(root, id)? else {
+        return Ok(Eligibility::Unknown);
+    };
     apply_eligibility(
         root,
         id,
@@ -279,6 +285,7 @@ pub fn keep_in(root: &Path, id: &str) -> io::Result<()> {
     if !valid_id(id) {
         return Err(store_io::invalid("Invalid meeting id"));
     }
+    let _recycle = super::meeting_delete::claim_write(root, id)?.ok_or(io::ErrorKind::NotFound)?;
     let path = state_path(root, id);
     let _lock = store_io::lock(&path.with_extension("lock"))?;
     let mut state: State = store_io::read(&path)?;
@@ -293,6 +300,7 @@ pub fn is_kept(root: &Path, id: &str) -> bool {
     valid_id(id) && store_io::read::<State>(&state_path(root, id)).is_ok_and(|s| s.kept)
 }
 fn keep_queued(root: &Path, id: &str, enqueue: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+    let _recycle = super::meeting_delete::claim_write(root, id)?.ok_or(io::ErrorKind::NotFound)?;
     keep_in(root, id)?;
     let path = state_path(root, id);
     let _lock = store_io::lock(&path.with_extension("queue.lock"))?;

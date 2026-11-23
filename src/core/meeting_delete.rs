@@ -479,15 +479,34 @@ pub fn suppressed_ids(state: &Path) -> io::Result<BTreeSet<String>> {
 
 /// A writer must keep the returned claim until its last publication.
 pub(crate) fn claim_write(state: &Path, id: &str) -> io::Result<Option<fs::File>> {
-    let claim = writer_claim(state, id)?;
+    let claim = store_io::shared_lock(&claim_path(state, id)?)?;
     Ok((!read_suppression(state)?.contains_key(id)).then_some(claim))
 }
 
+pub(super) fn busy(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock || matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+pub(super) fn lock_busy(path: &Path) -> io::Result<bool> {
+    if !path.try_exists()? {
+        return Ok(false);
+    }
+    match store_io::try_lock(path) {
+        Ok(_) => Ok(false),
+        Err(e) if busy(&e) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn writer_claim(state: &Path, id: &str) -> io::Result<fs::File> {
+    store_io::try_lock(&claim_path(state, id)?)
+}
+
+fn claim_path(state: &Path, id: &str) -> io::Result<PathBuf> {
     if !valid_id(id) {
         return Err(invalid());
     }
-    store_io::lock(&state.join("local/deleted-meeting-claims").join(id))
+    Ok(state.join("local/deleted-meeting-claims").join(id))
 }
 
 impl Storage {
@@ -635,7 +654,10 @@ impl Storage {
     ) -> Result<String, DeleteError> {
         let _lock = self.lock()?;
         let initial = self.selection(id)?;
-        let _claims = self.claims(&initial.ids)?;
+        let _claims = match self.claims(&initial.ids) {
+            Err(e) if busy(&e) => return Err(DeleteError::Refused(Eligibility::Processing)),
+            result => result?,
+        };
         let selected = self.selection(id)?;
         if selected.ids != initial.ids || chrono::DateTime::from_timestamp_millis(now_ms).is_none()
         {
