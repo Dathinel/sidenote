@@ -106,6 +106,8 @@ pub enum Phase {
     /// Hex was asked to record and has not said so yet.
     Starting,
     Recording,
+    Stopping,
+    StopUnconfirmed,
     Paused,
     /// Stopped; waiting for the pipeline to write the meeting.
     Making,
@@ -242,6 +244,15 @@ pub(super) fn scene_making(s: &mut State, status: &str) {
     s.live_notes = TextEdit::new("Check the launch date with the team.");
 }
 
+pub(super) fn scene_stopping(s: &mut State, timed_out: bool) {
+    scene_making(s, "transcribing");
+    s.live.as_mut().unwrap().phase = if timed_out {
+        Phase::StopUnconfirmed
+    } else {
+        Phase::Stopping
+    };
+}
+
 /// What the reader thread knows about the live transcript. The page reads it; only the thread
 /// (and the page's recording hints) writes it.
 #[derive(Default)]
@@ -332,6 +343,12 @@ impl Drop for Live {
 }
 
 impl Live {
+    pub(super) fn stop_phase(&mut self, phase: Phase) -> Phase {
+        let _feed = self.feed.lock().unwrap_or_else(|e| e.into_inner());
+        self.watching.store(false, Ordering::Relaxed);
+        std::mem::replace(&mut self.phase, phase)
+    }
+
     #[cfg(all(test, windows))]
     pub(super) fn age_past_start_timeout(&mut self) {
         self.began = Instant::now() - START_WAIT - Duration::from_secs(1);
@@ -732,8 +749,11 @@ impl State {
         }
     }
 
-    /// Called after each Hex sample and each scan: moves the page along its three phases.
+    /// Called after each Hex sample and scan to advance the live meeting.
     pub fn live_sync(&mut self) {
+        if self.hex_stop_pending() {
+            return;
+        }
         self.parts_sync();
         if self.live.is_none() && !self.hex.parts_restore_checked {
             return;
@@ -911,26 +931,23 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         if cancel.load(Ordering::Relaxed) {
             break;
         }
+        let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
         if !watching.load(Ordering::Relaxed) {
             continue;
         }
-        let (mut folder, hint, start_ms, last) = {
-            let f = feed.lock().unwrap_or_else(|e| e.into_inner());
-            (f.folder.clone(), f.hint.clone(), f.start_ms, f.stamp)
-        };
-        if folder.is_none() {
-            folder = feed_io::find_folder(&root, hint.as_deref(), start_ms);
-        }
+        let folder = f
+            .folder
+            .clone()
+            .or_else(|| feed_io::find_folder(&root, f.hint.as_deref(), f.start_ms));
         let Some(folder) = folder else {
             continue;
         };
-        let read = feed_io::read_rolling(&folder, last);
+        let read = feed_io::read_rolling(&folder, f.stamp);
         let notes_problem = feed_io::notes_problem(&folder);
         let job = folder
             .file_name()
             .and_then(|id| id.to_str())
             .and_then(sidenote::core::notes::status);
-        let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
         let mut changed = feed_summary_state(
             &mut f,
             &folder,
@@ -986,6 +1003,7 @@ impl State {
             self.parts_sync();
         }
         let saved = self.live_saved();
+        let stopping = self.hex_stop_pending();
         let visible = self.on_live() && hex::window_shown();
         let hint = hex::recording_id(self);
         let start_ms = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
@@ -997,7 +1015,7 @@ impl State {
         }
         let mut changed = saved;
         live.watching.store(
-            live.session.is_none() && (visible || live.phase == Phase::Making),
+            !stopping && live.session.is_none() && (visible || live.phase == Phase::Making),
             Ordering::Relaxed,
         );
         {
@@ -1017,7 +1035,7 @@ impl State {
             }
         }
         // A recording that was already running (the app was restarted) has notes on disk.
-        if let (Some(folder), false) = (live.folder.clone(), live.notes_loaded) {
+        if let (Some(folder), false, false) = (live.folder.clone(), live.notes_loaded, stopping) {
             live.notes_loaded = true;
             let existing = feed_io::read_notes(&folder);
             if self.live_notes.text.is_empty() && !existing.is_empty() {
@@ -1728,13 +1746,38 @@ pub fn your_notes(notes: &str, p: Palette) -> El {
         .child(body)
 }
 
+fn stopping_view(s: &State, p: Palette, narrow: bool, timed_out: bool) -> El {
+    let status = if timed_out {
+        "The recording may still be finishing in Hex."
+    } else {
+        "Finishing the transcript"
+    };
+    col()
+        .key("live-stop-progress")
+        .w_full()
+        .gap(16.0)
+        .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+        .child(roles::SECTION.wrap("You can leave this page", p.ink))
+        .child(roles::READ.wrap(status, p.soft).role("status"))
+        .children(timed_out.then(|| {
+            quiet_button("Check again", "live-stop-recheck", p)
+                .on_press(|s: &mut State| s.hex_recheck_stop())
+        }))
+        .children((!s.live_notes.text.trim().is_empty()).then(|| your_notes(&s.live_notes.text, p)))
+        .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()))
+}
+
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let phase = s.live.as_ref().map_or(Phase::Recording, |l| l.phase);
+    let stopping = matches!(phase, Phase::Stopping | Phase::StopUnconfirmed);
     let body = if s.live.as_ref().is_some_and(|l| l.close_failed) {
         notes_view(s, k, p, narrow, phase == Phase::Starting)
     } else {
         match phase {
             Phase::Making => making_view(s, p, narrow),
+            Phase::Stopping | Phase::StopUnconfirmed => {
+                stopping_view(s, p, narrow, phase == Phase::StopUnconfirmed)
+            }
             Phase::Paused => notes_view(s, k, p, narrow, false),
             Phase::Starting => notes_view(s, k, p, narrow, true),
             Phase::Recording => notes_view(s, k, p, narrow, false),
@@ -1777,7 +1820,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .fill(p.bg)
         .child(
             scroll(col().w_full().items_center().child(doc), "live-scroll").min_h(
-                if phase == Phase::Making {
+                if phase == Phase::Making || stopping {
                     0.0
                 } else {
                     s.live_document_h
@@ -1786,7 +1829,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 },
             ),
         );
-    if phase != Phase::Making || s.live.as_ref().is_some_and(|l| l.session.is_some()) {
+    if !stopping && (phase != Phase::Making || s.live.as_ref().is_some_and(|l| l.session.is_some()))
+    {
         pane = pane.child(bar(s, k, p, narrow, layer));
     }
     pane

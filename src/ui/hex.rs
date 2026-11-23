@@ -14,6 +14,8 @@ mod meeting_languages;
 mod readable;
 pub(super) mod settings;
 mod setup;
+#[path = "hex/connection/stop.rs"]
+mod stop;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
@@ -83,6 +85,7 @@ pub enum Msg {
     Meetings(Result<EngineState, HexError>),
     Install(sidenote::hex_install::State),
     Status(Result<EngineState, HexError>),
+    StopStatus(Instant, Result<EngineState, HexError>),
     RecheckStart(Result<EngineState, HexError>),
     RecheckResume(Result<EngineState, HexError>),
     SettingsStatus(Result<EngineState, HexError>),
@@ -161,6 +164,7 @@ pub struct HexState {
     row_errors: HashMap<String, String>,
     vocab_error: Option<&'static str>,
     record_busy: bool,
+    stop: Option<stop::Completion>,
     vocab_busy: bool,
     model_busy: bool,
     busy_keys: HashSet<String>,
@@ -218,6 +222,7 @@ impl Default for HexState {
             row_errors: HashMap::new(),
             vocab_error: None,
             record_busy: false,
+            stop: None,
             vocab_busy: false,
             model_busy: false,
             busy_keys: HashSet::new(),
@@ -530,6 +535,7 @@ impl State {
                 self.hex.install = state;
             }
             Msg::Status(r) => self.hex_status(r),
+            Msg::StopStatus(started, r) => self.hex_stop_status(started, r),
             Msg::SettingsStatus(result) => {
                 self.hex.settings_status_pending = false;
                 self.hex.settings_status_at = Some(Instant::now());
@@ -708,7 +714,9 @@ impl State {
         }
         let recording = r.as_ref().ok().map(|state| state.recording.is_some());
         if self.ask_settings.recording && recording == Some(false) {
-            self.request_refresh();
+            if !self.hex_stop_pending() {
+                self.request_refresh();
+            }
             self.ask_settings.last_end_ms = Some(chrono::Local::now().timestamp_millis());
             self.ask_settings.last_live = self.ask_settings.recording_source.take();
         }
@@ -819,16 +827,11 @@ impl State {
                 match r {
                     Ok(()) => {
                         self.hex.error = None;
-                        if let Action::Stop(recording) = action
-                            && self
-                                .live
-                                .as_ref()
-                                .is_some_and(|live| live.recording_id == recording)
-                        {
-                            // The notes follow; the next sample confirms Hex is idle.
-                            self.live_stopped();
+                        if matches!(action, Action::Stop(_)) {
+                            self.hex_check_stop();
+                        } else {
+                            self.hex_spawn(|e| Msg::Status(e.status()));
                         }
-                        self.hex_spawn(|e| Msg::Status(e.status()));
                     }
                     Err(e) => {
                         if matches!(action, Action::Start) {
@@ -850,10 +853,8 @@ impl State {
                             (Action::Stop(_), _) => "Could not stop recording. Stop it from Hex.",
                             _ => plain(&e),
                         });
-                        if let Action::Stop(recording) = action
-                            && let Some(live) = &mut self.live
-                        {
-                            super::response_time::failed(live.take_notes_timing(recording));
+                        if let Action::Stop(recording) = action {
+                            self.hex_stop_failed(recording, &e);
                         }
                     }
                 }
@@ -948,7 +949,7 @@ impl State {
         self.hex.connection.expired()
     }
     pub(super) fn hex_connection_tick(&mut self, tx: &mut Tx) -> bool {
-        self.hex.connection.tick(tx)
+        self.hex.connection.tick(tx) | self.hex_stop_tick(Instant::now(), tx)
     }
     pub(super) fn hex_recheck_resume(&mut self) {
         if self.hex.record_busy {
@@ -973,12 +974,12 @@ impl State {
     }
 
     pub fn hex_record_busy(&self) -> bool {
-        self.hex.record_busy
+        self.hex.record_busy || self.hex_stop_pending()
     }
 
     pub fn hex_record_start(&mut self) {
         if !super::updates::listener_ready(self)
-            || self.hex.record_busy
+            || self.hex_record_busy()
             || self.hex.connection.slow(&self.hex.status)
             || !self.hex.can(Feature::RecordStart)
             || self.hex.recording().is_some()
@@ -997,6 +998,9 @@ impl State {
     }
 
     pub fn hex_record_stop(&mut self, displayed_id: Option<String>) {
+        if self.hex_stop_pending() {
+            return;
+        }
         if displayed_id != self.hex.recording().and_then(|r| r.id.clone()) {
             self.hex.error = Some(
                 "The recording changed before Stop was pressed. Stop was not sent. Stop it from Hex.",
@@ -1038,6 +1042,7 @@ impl State {
         });
         let events = self.events_tx.clone();
         let wake = self.waker.clone();
+        self.hex_begin_stop(recording, pressed);
         if !self.live_work(move || {
             let _ = events.send(Event::Hex(Msg::Done(
                 Action::Stop(recording),
@@ -1048,6 +1053,7 @@ impl State {
             }
         }) {
             self.hex.record_busy = false;
+            self.hex_clear_stop();
             self.hex.error = Some("Could not stop recording. Try Stop again or stop it in Hex.");
             if let Some(live) = &mut self.live {
                 super::response_time::failed(live.take_notes_timing(recording));
@@ -1291,7 +1297,9 @@ fn start_block_reason(s: &State) -> Option<&'static str> {
 
 fn recorder_start_block_reason(s: &State) -> Option<&'static str> {
     let h = &s.hex;
-    if h.connection.expired() {
+    if s.hex_stop_pending() {
+        Some("Check that Hex has finished the previous recording.")
+    } else if h.connection.expired() {
         if h.record_busy {
             Some("Checking Hex before New meeting")
         } else {
@@ -1330,7 +1338,9 @@ fn recorder_start_block_reason(s: &State) -> Option<&'static str> {
 /// Why the recording cannot be stopped right now.
 pub fn stop_blocked(s: &State) -> Option<&'static str> {
     let h = &s.hex;
-    if !h.running() && h.recording().is_none() {
+    if s.hex_stop_pending() {
+        Some("Stop is already in progress. Check the meeting page.")
+    } else if !h.running() && h.recording().is_none() {
         Some(if h.connection.slow(&h.status) {
             "Hex is slow to answer. Stop it from Hex."
         } else {
@@ -1350,6 +1360,31 @@ pub fn stop_blocked(s: &State) -> Option<&'static str> {
 
 /// Why Record or Stop failed, with a Dismiss link. Not a dialog.
 pub fn error_bar(s: &State, p: Palette) -> Option<El> {
+    if s.hex_stop_unconfirmed() && !s.on_live() {
+        return Some(
+            row()
+                .key("hex-stop-unconfirmed")
+                .px(24.0)
+                .py(8.0)
+                .gap(12.0)
+                .items_center()
+                .fill(p.warnbg)
+                .child(
+                    roles::SMALL
+                        .wrap("The recording may still be finishing in Hex.", p.warn)
+                        .grow(1.0)
+                        .role("status"),
+                )
+                .child(
+                    super::widgets::action("Check again", p).on_press(|s: &mut State| {
+                        if s.live.is_some() {
+                            s.open_live();
+                        }
+                        s.hex_recheck_stop();
+                    }),
+                ),
+        );
+    }
     let note = s.hex.error?;
     Some(
         row()
