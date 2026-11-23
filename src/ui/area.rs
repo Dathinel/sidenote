@@ -67,6 +67,7 @@ pub struct Snapshot {
     merge_undo_available: std::collections::BTreeSet<String>,
     receipt_devices: BTreeMap<String, String>,
     checked: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    reloaded_overrides: Option<core::Overrides>,
     all_tasks: Vec<core::TaskItem>,
     task_items: Vec<core::TaskItem>,
     task_names: Vec<String>,
@@ -96,6 +97,7 @@ impl State {
         let generation = self.areas.refresh_generation;
         let has_snapshot = self.areas.has_snapshot;
         let mutation_generation = core::mutation_generation();
+        let (reload_ticks, reload_manual_ticks) = self.tasks.stale_tick_views();
         let (projects, meetings, pipeline, overrides, checked, cutoff, show_cleared) = (
             self.tasks.projects.clone(),
             self.meetings
@@ -179,13 +181,18 @@ impl State {
                         .collect();
                     let own_device = core::DeviceSettings::load()?.id;
                     let mut checked = checked;
+                    let tick_store = core::StateStore::new(store.root.clone());
                     for m in &meetings {
-                        checked
-                            .entry(m.id.clone())
-                            .or_insert_with(|| store.load_ticks(&m.id));
+                        if reload_ticks.contains(&m.id) {
+                            checked.insert(m.id.clone(), tick_store.load(&m.id)?.checked);
+                        } else {
+                            checked.entry(m.id.clone()).or_insert_with(|| store.load_ticks(&m.id));
+                        }
                     }
+                    let reloaded_overrides = reload_manual_ticks.then(|| store.load_overrides()).transpose()?;
+                    let overrides = reloaded_overrides.as_ref().unwrap_or(&overrides);
                     let mut tasks =
-                        core::build_tasks(&meetings, &pipeline, &projects, &overrides, &checked);
+                        core::build_tasks(&meetings, &pipeline, &projects, overrides, &checked);
                     let mut task_notice=None;
                     let teams=store.load_teams().unwrap_or_else(|_| {
                         task_notice=Some("Could not read teams.json. Tasks show No team until teams can be read.".into());
@@ -230,7 +237,7 @@ impl State {
                         chrono::Utc::now(),
                     )? } else { Activity::default() };
                     let mut meeting_projects =
-                        super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
+                        super::project::cache(&projects, &pipeline, overrides, &tasks, &meetings);
                     for (id, target) in &activity.meetings {
                         if let Some(chip) = meeting_projects.get_mut(id) {
                             chip.name = target
@@ -287,6 +294,7 @@ impl State {
                         receipts,
                         task_items: if show_cleared { tasks.clone() } else { kept },
                         checked,
+                        reloaded_overrides,
                         all_tasks: tasks,
                         task_counts,
                         task_names,
@@ -509,6 +517,9 @@ impl State {
                 }
                 self.tasks.today = chrono::Local::now().date_naive();
                 self.tasks.checked = snapshot.checked;
+                if let Some(overrides) = snapshot.reloaded_overrides {
+                    self.tasks.overrides = overrides;
+                }
                 self.tasks.all = snapshot.all_tasks;
                 self.tasks.items = if self.tasks.diary_filter.is_some() {
                     self.tasks.all.clone()
@@ -518,9 +529,8 @@ impl State {
                 self.tasks.items_changed();
                 // This snapshot is newer than every save made here. With nothing left to save it
                 // already shows the moves, so the cards stop being drawn over it.
-                if self.edit_queue.is_idle() && !self.tasks.board_pending.is_empty() {
-                    self.tasks.board_pending.clear();
-                    self.tasks.pending_rev += 1;
+                if self.edit_queue.is_idle() {
+                    self.tasks.confirm_task_moves();
                 }
                 self.tasks.names = snapshot.task_names;
                 self.tasks.counts = snapshot.task_counts;

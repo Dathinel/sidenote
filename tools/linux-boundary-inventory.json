@@ -395,7 +395,7 @@
 
   "src/ui/annotations/workflow.rs": "9a115fcd00254b85c056abebb06f4ed3ed984145a979993c243a672fdde77c04",
 
-  "src/ui/area.rs": "3ae9616e2b324dc17e6837ff65fc4d6db5e61a420eae3b823de4730720a4cb55",
+  "src/ui/area.rs": "98e13ced4fe3ce0b1ad44649aa25e29a25caf7dbfaea88e0f892985f81a3137e",
 
   "src/ui/area_scene.rs": "ed9d0a3291369f5ab6a8a3e2c0da8a04bb05ba7155a065cd2604c9da7b1bf160",
 
@@ -409,7 +409,7 @@
 
   "src/ui/cloud_ask.rs": "0b3cd72ff4fabf3bfdf64e0017c44851bef8113df24feede14e991364312e0ae",
 
-  "src/ui/edit_worker.rs": "f3d8212397e72b9255aeda147e710d300be5d5b4555ab37ae8c479f82d8387e3",
+  "src/ui/edit_worker.rs": "9ef59484c65b747b761d8e7f00a01f710f989dba4038ba56f2a616bd20781399",
 
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
 
@@ -453,7 +453,7 @@
 
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
 
-  "src/ui/tasks_board.rs": "2332fcab9f2cbbf28f92e9e9b6f3d14993116fc1f960cdb58551479bc5e9a70c",
+  "src/ui/tasks_board.rs": "4e2358903dac2751679ba01ec224e0b8b8cab8b6e47826970d7879afb82cba5b",
 
   "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
 

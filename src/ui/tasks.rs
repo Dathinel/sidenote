@@ -2,6 +2,7 @@
 //! list, one dense line each. A row opens a panel on the right, which also holds the add form.
 use super::{
     PendingScroll, State, cards,
+    edit_worker::{Job, SaveError},
     list::text_title,
     roles,
     theme::Palette,
@@ -92,12 +93,57 @@ pub struct PanelInputs {
 
 pub type RowId = (String, usize);
 
+type TickKey = (String, String);
+
+fn tick_key(task: &TaskItem) -> TickKey {
+    (task.meeting_id.clone(), core::diary::task_identity(task))
+}
+
+#[derive(Clone)]
+pub struct TickAttempt {
+    key: TickKey,
+    sequence: u64,
+    on: bool,
+    pub(super) from_list: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TickState {
+    Pending,
+    Retrying,
+    Failed { on: bool, error: SaveError },
+}
+
+struct TickWrite {
+    task: Box<TaskItem>,
+    state: TickState,
+}
+
+#[derive(Default)]
+struct PendingTaskMove {
+    intent: core::MoveIntent,
+    tick_sequence: u64,
+    saved_tick: Option<bool>,
+    reload_tick: bool,
+    feedback: Option<TickWrite>,
+}
+
+impl PendingTaskMove {
+    fn has_failed_tick(&self) -> bool {
+        self.feedback
+            .as_ref()
+            .is_some_and(|write| matches!(write.state, TickState::Failed { .. }))
+    }
+}
+
 pub struct TasksState {
     pub store: TaskStore,
     pub pipeline: Pipeline,
     pub projects: Projects,
     pub overrides: Overrides,
     pub checked: HashMap<String, BTreeSet<String>>,
+    tick_sequence: u64,
+    pub(super) list_tick_running: bool,
     /// Every task, cleared or not. Meeting views and Ask read this one.
     pub all: Vec<TaskItem>,
     /// The tasks the page lists: `all` without the cleared ones, unless `show_cleared`.
@@ -165,11 +211,8 @@ pub struct TasksState {
     pub board_tab: core::BoardColumn,
     /// The card whose Move menu is open.
     pub board_menu: Option<RowId>,
-    /// What each card was asked to become since the last idle save: the merge of every move
-    /// made on it, status and done tick together. The board draws a card over this, so a second
-    /// move made before the first finishes starts from the right place. It clears when a
-    /// snapshot lands with nothing left to save.
-    pub board_pending: std::collections::BTreeMap<RowId, core::MoveIntent>,
+    /// Task moves awaiting an applied snapshot, with any row failure kept for retry.
+    board_pending: HashMap<TickKey, PendingTaskMove>,
     /// The card whose own controls last had the keyboard, for showing its Move button.
     pub card_focus: Option<RowId>,
     /// Counts changes to the task list, and to `board_pending`. The column grouping and the
@@ -232,6 +275,8 @@ impl TasksState {
             projects,
             overrides,
             checked: HashMap::new(),
+            tick_sequence: 0,
+            list_tick_running: false,
             all: Vec::new(),
             items: Vec::new(),
             names: Vec::new(),
@@ -362,6 +407,30 @@ impl TasksState {
         self.items_rev += 1;
     }
 
+    pub(super) fn confirm_task_moves(&mut self) {
+        self.board_pending.retain(|_, pending| {
+            pending.intent = core::MoveIntent::default();
+            pending.saved_tick = None;
+            pending.reload_tick = false;
+            pending.has_failed_tick()
+        });
+    }
+
+    pub(super) fn stale_tick_views(&self) -> (BTreeSet<String>, bool) {
+        let mut meetings = BTreeSet::new();
+        let mut manual = false;
+        for ((id, _), pending) in &self.board_pending {
+            if pending.reload_tick {
+                if id.starts_with("manual/") {
+                    manual = true;
+                } else {
+                    meetings.insert(id.clone());
+                }
+            }
+        }
+        (meetings, manual)
+    }
+
     /// The board as laid out now: four columns of the tasks that pass the filters, with every
     /// card that has a move saving already in the column it is going to. Built once per change
     /// of the list, the filters or the moves, then shared.
@@ -382,8 +451,8 @@ impl TasksState {
             core::board_columns(&self.items, &key.2)
         } else {
             core::board_columns_by(&self.items, &key.2, |t| {
-                match self.board_pending.get(&(t.meeting_id.clone(), t.index)) {
-                    Some(intent) => intent.column(t),
+                match self.board_pending.get(&tick_key(t)) {
+                    Some(pending) => pending.intent.column(t),
                     None => core::BoardColumn::of(t),
                 }
             })
@@ -633,6 +702,111 @@ impl State {
             });
         } else if let Some(task) = self.tasks.item(id, index).map(|t| t.task.clone()) {
             self.toggle_task_at(id, &task);
+        }
+    }
+
+    fn toggle_list_tick(&mut self, key: &TickKey) {
+        let task = self
+            .tasks
+            .items
+            .iter()
+            .find(|task| task.meeting_id == key.0 && core::diary::task_identity(task) == key.1);
+        let Some(task) = task else {
+            return;
+        };
+        let task = Box::new(self.effective(task));
+        let on = !task.done;
+        self.tasks.cursor = Some((task.meeting_id.clone(), task.index));
+        self.publish_list_tick(task, on, TickState::Pending);
+    }
+
+    fn retry_list_tick(&mut self, key: &TickKey) {
+        if let Some(write) = self
+            .tasks
+            .board_pending
+            .get(key)
+            .and_then(|p| p.feedback.as_ref())
+            && let TickState::Failed { on, .. } = write.state
+        {
+            self.publish_list_tick(write.task.clone(), on, TickState::Retrying);
+        }
+    }
+
+    fn publish_list_tick(&mut self, task: Box<TaskItem>, on: bool, state: TickState) {
+        let intent = core::MoveIntent::tick(on);
+        let tick = self.stage_task_move(
+            &task,
+            intent,
+            Some(TickWrite {
+                task: task.clone(),
+                state,
+            }),
+        );
+        self.publish_edit(Job::Move {
+            store: self.tasks.store.clone(),
+            ticks: self.store.clone(),
+            task,
+            source: PathBuf::new(),
+            intent,
+            tick,
+        });
+    }
+
+    fn stage_task_move(
+        &mut self,
+        task: &TaskItem,
+        intent: core::MoveIntent,
+        feedback: Option<TickWrite>,
+    ) -> Option<TickAttempt> {
+        let key = tick_key(task);
+        let pending = self.tasks.board_pending.entry(key.clone()).or_default();
+        pending.intent = pending.intent.then(intent);
+        self.tasks.pending_rev += 1;
+        let on = intent.done?;
+        self.tasks.tick_sequence += 1;
+        pending.tick_sequence = self.tasks.tick_sequence;
+        let from_list = feedback.is_some();
+        if from_list || !pending.has_failed_tick() {
+            pending.feedback = feedback;
+        }
+        Some(TickAttempt {
+            key,
+            sequence: pending.tick_sequence,
+            on,
+            from_list,
+        })
+    }
+
+    pub(super) fn finish_task_tick(
+        &mut self,
+        attempt: TickAttempt,
+        saved: Option<u64>,
+        error: Option<SaveError>,
+    ) {
+        let Some(pending) = self.tasks.board_pending.get_mut(&attempt.key) else {
+            return;
+        };
+        if let Some(generation) = saved {
+            pending.saved_tick = Some(attempt.on);
+            pending.reload_tick |= generation != core::mutation_generation();
+        }
+        if pending.tick_sequence != attempt.sequence {
+            return;
+        }
+        if saved.is_none() {
+            pending.intent.done = pending.saved_tick;
+            self.tasks.pending_rev += 1;
+        }
+        if attempt.from_list
+            && let Some(error) = error.filter(|e| *e != SaveError::WorkerStopped)
+            && let Some(write) = &mut pending.feedback
+        {
+            write.state = TickState::Failed {
+                on: attempt.on,
+                error,
+            };
+        } else if saved.is_some() || attempt.from_list {
+            pending.feedback = None;
         }
     }
 
@@ -978,7 +1152,7 @@ impl State {
     }
 
     fn has_task_draft(&self) -> bool {
-        self.edit_busy
+        self.save_blocks_task_navigation()
             || self.tasks.edit_failed
             || (matches!(self.tasks.panel, Some(Panel::Task(_)))
                 && (!self.tasks.inputs.owner.text.is_empty()
@@ -1343,7 +1517,15 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         "k" => s.move_task_cursor(-1, tx),
         "n" => s.open_add(),
         "x" | " " => match s.cursor_row() {
-            Some((id, index)) if s.tasks.keyboard => s.toggle_row(&id, index),
+            Some((id, index)) if s.tasks.keyboard => {
+                if s.tasks.layout == core::TasksLayout::List {
+                    if let Some(key) = s.tasks.item(&id, index).map(tick_key) {
+                        s.toggle_list_tick(&key);
+                    }
+                } else {
+                    s.toggle_row(&id, index);
+                }
+            }
             _ => return false,
         },
         // E edits: the panel opens on the task, with its title ready to type if it is yours.
@@ -1870,16 +2052,23 @@ struct RowLayout {
 }
 
 fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
+    let shown = s.shown_card(t);
+    let t = &*shown;
     let id = t.meeting_id.clone();
     let index = t.index;
     let me = Some((id.clone(), index));
     let tasks = &s.tasks;
+    let key = tick_key(t);
+    let save = tasks
+        .board_pending
+        .get(&key)
+        .and_then(|pending| pending.feedback.as_ref());
     let on = t.done;
     let selected = matches!(&tasks.panel, Some(Panel::Task(r)) if Some(r) == me.as_ref());
     let at_cursor = tasks.keyboard && tasks.cursor == me && !selected;
     let hovered = tasks.hovered == me;
     let tick = {
-        let id = id.clone();
+        let key = key.clone();
         pressable(cards::icon_tile(
             if on {
                 &super::icons::DONE
@@ -1895,7 +2084,7 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
         .label(t.task.clone())
         .key(format!("ttick-{id}-{index}"))
         .radius(13.0)
-        .on_press(move |s: &mut State| s.toggle_row(&id, index))
+        .on_press(move |s: &mut State| s.toggle_list_tick(&key))
     };
     let title = if on {
         roles::SMALL.wrap(shown_title(s, t), p.faint).max_lines(2)
@@ -2046,7 +2235,34 @@ fn task_row(s: &State, t: &TaskItem, lay: RowLayout, p: Palette) -> El {
     } else if hovered {
         line = line.fill(p.chip);
     }
-    let mut out = col().w_full().child(line);
+    let feedback = save.and_then(|write| match write.state {
+        TickState::Pending => None,
+        TickState::Retrying => Some(
+            row()
+                .gap(6.0)
+                .items_center()
+                .child(super::icons::draw(
+                    &super::icons::LOADER_CIRCLE,
+                    super::icons::INLINE,
+                    p.faint,
+                ))
+                .child(roles::CONTROL.wrap("Saving", p.faint).role("status")),
+        ),
+        TickState::Failed { error, .. } => {
+            let retry = super::widgets::notice_action("Try again", p)
+                .key(format!("ttick-retry-{id}-{index}"))
+                .focus_ring(1.0, 0.0, p.line)
+                .help(error.message())
+                .on_press(move |s: &mut State| s.retry_list_tick(&key));
+            Some(super::widgets::inline_notice("Not saved.", retry, p))
+        }
+    });
+    let mut out = col().w_full().child(line).children(feedback.map(|line| {
+        line.key(format!("ttick-save-{id}-{index}"))
+            .ml(38.0)
+            .mr(12.0)
+            .mb(6.0)
+    }));
     for sub in t
         .subtasks
         .iter()
@@ -3338,8 +3554,8 @@ fn panel(s: &State, k: &Kit, p: Palette, overlay: bool, layer: &mut Vec<El>) -> 
     let (title, (body, foot)) = match &s.tasks.panel {
         Some(Panel::Add) => ("New task", add_panel(s, k, p, layer)),
         Some(Panel::Task(_)) => {
-            let t = s.panel_task()?;
-            ("Task", task_panel(s, k, t, p, layer))
+            let t = s.shown_card(s.panel_task()?);
+            ("Task", task_panel(s, k, &t, p, layer))
         }
         None => return None,
     };
@@ -3916,6 +4132,14 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs,
+        path::Path,
+        time::{Duration as Wait, Instant},
+    };
+
+    const MEETING: &str = "1800000000001-1";
+    const MANUAL_ROW: &str = "manual/handmade";
 
     fn tasks_page() -> rune::Runtime<State> {
         crate::test_paths::isolate();
@@ -3945,6 +4169,217 @@ mod tests {
             .collect();
         t.items = core::build_tasks(&[], &t.pipeline, &t.projects, &t.overrides, &t.checked);
         t.items_changed();
+    }
+
+    fn drain_task_updates(rt: &mut rune::Runtime<State>) {
+        let deadline = Instant::now() + Wait::from_secs(2);
+        rt.update(|s, _| {
+            while s.edit_busy || s.areas.refresh_pending {
+                let event = next_task_event(s, deadline);
+                s.apply_event(event);
+            }
+        });
+        rt.frame(0.2);
+    }
+
+    fn next_task_event(s: &State, deadline: Instant) -> super::super::Event {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("task update deadline");
+        s.events_rx.recv_timeout(remaining).expect("task update")
+    }
+
+    fn tap_task_control(rt: &mut rune::Runtime<State>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("Missing {key}"));
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.2);
+    }
+
+    fn stored_tasks_page(root: &Path) -> rune::Runtime<State> {
+        let folder = root.join(MEETING);
+        fs::create_dir(&folder).unwrap();
+        fs::write(
+            folder.join("english-summary.json"),
+            r#"{"title":"Synthetic meeting","todo":[{"id":"first","task":"Collect samples"},{"id":"neighbor","task":"Label samples"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("task-overrides.json"),
+            r#"{"manual":[{"id":"handmade","task":"Pack samples","done":true}]}"#,
+        )
+        .unwrap();
+        let mut rt = tasks_page();
+        drain_task_updates(&mut rt);
+        rt.update(|s, _| {
+            s.store = core::StateStore::new(root.into());
+            s.tasks.store = TaskStore::new(root.into());
+            s.tasks.overrides = s.tasks.store.load_overrides().unwrap();
+            s.meetings = vec![Meeting::load(&folder).unwrap()];
+            s.tasks.done = DoneFilter::All;
+            s.tasks.done_open = true;
+            s.rebuild_tasks();
+        });
+        drain_task_updates(&mut rt);
+        rt
+    }
+
+    fn apply_first_tick(rt: &mut rune::Runtime<State>, invalidate_view: bool) {
+        use super::super::{Event, edit_worker::Completion};
+        let deadline = Instant::now() + Wait::from_secs(2);
+        rt.update(|s, _| {
+            loop {
+                let event = next_task_event(s, deadline);
+                if let Event::Edited(Completion::Move { moved, error, .. }) = &event {
+                    assert!(error.is_none());
+                    assert!(
+                        moved
+                            .ticks
+                            .as_ref()
+                            .unwrap()
+                            .value
+                            .checked
+                            .contains("Collect samples")
+                    );
+                    if invalidate_view {
+                        s.store
+                            .set_task_tick_view("1800000000002-1", "Second meeting", "other", true)
+                            .unwrap();
+                    }
+                    s.apply_event(event);
+                    break;
+                }
+                s.apply_event(event);
+            }
+        });
+        rt.frame(0.2);
+    }
+
+    #[test]
+    fn a_board_tick_reverses_a_pending_list_tick() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        let key = format!("ttick-{MEETING}-0");
+        tap_task_control(&mut rt, &key);
+        rt.update(|s, _| {
+            assert!(s.edit_busy);
+            s.tasks.layout = core::TasksLayout::Board;
+        });
+        rt.frame(0.2);
+        tap_task_control(&mut rt, &key);
+        apply_first_tick(&mut rt, false);
+        drain_task_updates(&mut rt);
+        assert_eq!(
+            rt.state.store.load(MEETING).unwrap().checked,
+            BTreeSet::from(["open:first".into()]),
+        );
+        assert!(!rt.state.tasks.item(MEETING, 0).unwrap().done);
+    }
+
+    #[test]
+    fn a_list_tick_reverses_a_save_before_its_snapshot_arrives() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        let key = format!("ttick-{MEETING}-0");
+        tap_task_control(&mut rt, &key);
+        apply_first_tick(&mut rt, false);
+        assert!(rt.state.areas.refresh_pending);
+        assert!(!rt.state.tasks.item(MEETING, 0).unwrap().done);
+        tap_task_control(&mut rt, &key);
+        drain_task_updates(&mut rt);
+        assert_eq!(
+            rt.state.store.load(MEETING).unwrap().checked,
+            BTreeSet::from(["open:first".into()]),
+        );
+        assert!(!rt.state.tasks.item(MEETING, 0).unwrap().done);
+    }
+
+    #[test]
+    fn a_stale_completion_reloads_the_saved_tick_before_clearing_pending_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
+        apply_first_tick(&mut rt, true);
+        drain_task_updates(&mut rt);
+        assert!(rt.state.tasks.item(MEETING, 0).unwrap().done);
+        assert!(rt.state.tasks.board_pending.is_empty());
+    }
+
+    #[test]
+    fn list_tick_failures_retry_the_original_generated_and_manual_tasks() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        let locks = root.path().join("local/locks");
+        fs::create_dir_all(&locks).unwrap();
+        let block = |store: &str| {
+            let path = locks.join(format!("{}.lock", blake3::hash(store.as_bytes()).to_hex()));
+            fs::create_dir(&path).unwrap();
+            path
+        };
+        let generated_lock = block(&format!("{MEETING}.json"));
+        let manual_lock = block("task-overrides.json");
+
+        tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
+        rt.update(|s, _| {
+            s.meetings[0].summary.todo.swap(0, 1);
+            assert!(s.edit_busy);
+            assert!(s.tasks.item(MANUAL_ROW, 0).is_some());
+            assert!(s.open_task(MANUAL_ROW, 0));
+            s.rebuild_tasks();
+        });
+        drain_task_updates(&mut rt);
+        assert_eq!(rt.state.tasks.item(MEETING, 1).unwrap().stable_id, "first");
+        assert!(!rt.state.tasks.item(MEETING, 1).unwrap().done);
+        assert!(rt.state.store.load(MEETING).unwrap().checked.is_empty());
+        assert!(rt.find(&format!("ttick-retry-{MEETING}-1")).is_some());
+        assert!(rt.find(&format!("ttick-retry-{MEETING}-0")).is_none());
+        assert!(rt.find("ttick-retry-manual/handmade-0").is_none());
+        let elements = rt.elements();
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|el| el.text.as_deref() == Some("Not saved."))
+                .count(),
+            1
+        );
+        assert!(elements.iter().any(|el| {
+            el.key.as_deref() == Some("ttick-retry-1800000000001-1-1") && el.help.is_some()
+        }));
+
+        tap_task_control(&mut rt, "ttick-manual/handmade-0");
+        drain_task_updates(&mut rt);
+        assert!(rt.state.tasks.item(MANUAL_ROW, 0).unwrap().done);
+        assert!(rt.find("ttick-retry-manual/handmade-0").is_some());
+        assert!(rt.state.tasks.store.load_overrides().unwrap().manual[0].done);
+        assert!(rt.find("tasks-notice-dismiss").is_none());
+        assert!(rt.state.notice.is_none());
+
+        fs::remove_dir(generated_lock).unwrap();
+        tap_task_control(&mut rt, &format!("ttick-retry-{MEETING}-1"));
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|el| el.text.as_deref() == Some("Saving"))
+        );
+        drain_task_updates(&mut rt);
+        assert!(rt.find(&format!("ttick-retry-{MEETING}-1")).is_none());
+        assert!(rt.find("ttick-retry-manual/handmade-0").is_some());
+        let checked = rt.state.store.load(MEETING).unwrap().checked;
+        assert!(checked.contains("Collect samples"));
+        assert!(!checked.contains("Label samples"));
+
+        fs::remove_dir(manual_lock).unwrap();
+        // A separate write already reached the requested value. Retry must set it again.
+        rt.state
+            .tasks
+            .store
+            .set_manual_done_view("handmade", false)
+            .unwrap();
+        tap_task_control(&mut rt, "ttick-retry-manual/handmade-0");
+        drain_task_updates(&mut rt);
+        assert!(!rt.state.tasks.store.load_overrides().unwrap().manual[0].done);
+        assert!(rt.find("ttick-retry-manual/handmade-0").is_none());
     }
 
     #[test]

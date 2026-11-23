@@ -4,7 +4,7 @@
 //! this file only lays the cards out. It is a child of that module, so it reads its helpers.
 use super::{
     Panel, RowId, State, View, avatar, button, cards, chevron, date_chip, empty_note, owner_name,
-    pressable, project_dot, roles, shown_title, status_dot,
+    pressable, project_dot, roles, shown_title, status_dot, tick_key,
 };
 use crate::ui::{edit_worker::Job, theme::Palette};
 use rune::{El, Key, KeyEvent, Tx, col, row};
@@ -46,9 +46,10 @@ pub fn first_page(c: BoardColumn) -> usize {
 impl State {
     /// The task as it will be once every save still waiting has run: the card over the merge of
     /// every move made on it since the last idle save.
-    fn effective(&self, t: &TaskItem) -> TaskItem {
+    pub(super) fn effective(&self, t: &TaskItem) -> TaskItem {
         let mut eff = t.clone();
-        if let Some(intent) = self.tasks.board_pending.get(&row_of(t)) {
+        if let Some(pending) = self.tasks.board_pending.get(&tick_key(t)) {
+            let intent = pending.intent;
             if let Some(done) = intent.done {
                 eff.done = done;
             }
@@ -60,8 +61,9 @@ impl State {
     }
 
     /// The card as the board draws it. Only a card with a move saving is copied.
-    fn shown_card<'a>(&self, t: &'a TaskItem) -> Cow<'a, TaskItem> {
-        if !self.tasks.board_pending.is_empty() && self.tasks.board_pending.contains_key(&row_of(t))
+    pub(super) fn shown_card<'a>(&self, t: &'a TaskItem) -> Cow<'a, TaskItem> {
+        if !self.tasks.board_pending.is_empty()
+            && self.tasks.board_pending.contains_key(&tick_key(t))
         {
             Cow::Owned(self.effective(t))
         } else {
@@ -116,16 +118,15 @@ impl State {
                 return;
             }
         };
+        let tick = self.stage_task_move(&t, intent, None);
         self.publish_move(Job::Move {
             store: self.tasks.store.clone(),
             ticks: self.store.clone(),
             task: Box::new(t.clone()),
             source,
             intent,
+            tick,
         });
-        let slot = self.tasks.board_pending.entry(row_of(&t)).or_default();
-        *slot = slot.then(intent);
-        self.tasks.pending_rev += 1;
         self.reveal_card(id, index);
         self.say(if intent.status.is_none() && intent.done == Some(false) {
             format!(
