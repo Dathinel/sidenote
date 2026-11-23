@@ -44,6 +44,7 @@ mod relay;
 mod response_time_fixture;
 mod response_times;
 mod roles;
+mod rows;
 mod sync_scene;
 mod tasks;
 mod teams;
@@ -256,6 +257,7 @@ pub struct State {
     task_detail_response_time: Option<Operation>,
     pub relay_ui: relay::RelayUi,
     button_sheet: bool,
+    row_sheet: bool,
     pub annotations: annotations::Annotations,
     pub meeting_ui: meeting::ReadingUi,
     pub people: people::PeopleUi,
@@ -473,6 +475,7 @@ impl State {
             task_detail_response_time: None,
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
+            row_sheet: false,
             annotations: annotations::Annotations::default(),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
@@ -2134,6 +2137,9 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool, layer: &mut Vec<El>) -> E
 
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let p = theme::palette(cx.system_dark());
+    if s.row_sheet {
+        return rows::scene(s, cx, p);
+    }
     if s.button_sheet {
         return widgets::button_sheet(p).fill(p.bg).w_full().h_full();
     }
@@ -3023,6 +3029,7 @@ pub fn spec() -> AppSpec<State> {
                 updates::scene(s, sidenote::updates::Phase::Error)
             }),
             ("button-sheet", |s| s.button_sheet = true),
+            ("row-state-sheet", |s| s.row_sheet = true),
             ("settings-kb-empty", |s| {
                 hex::settings::scene(s, "settings-kb-empty")
             }),
