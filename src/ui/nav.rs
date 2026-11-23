@@ -980,27 +980,18 @@ mod tests {
         };
         let mut rt = Runtime::new(State::new(), view, (400.0, 600.0), Env::new(true, 1.0));
         rt.frame(0.0);
-        let press = |rt: &mut Runtime<State>, key: Key| {
-            rt.key(key.into());
-            rt.frame(0.016);
-        };
-        let focused = |rt: &Runtime<State>| rt.elements().into_iter().find(|e| e.focused).unwrap();
-        press(&mut rt, Key::Tab);
-        assert_eq!(focused(&rt).key.as_deref(), Some("profile-button"));
-        press(&mut rt, Key::Enter);
-        assert!(rt.state.nav.profile_menu);
-        for _ in 0..30 {
-            rt.frame(0.016);
-        }
-        press(&mut rt, Key::Down);
-        let first = focused(&rt).key;
-        press(&mut rt, Key::Down);
-        assert_ne!(focused(&rt).key, first);
-        press(&mut rt, Key::Up);
-        assert_eq!(focused(&rt).key, first);
-        press(&mut rt, Key::Escape);
+        let [trigger, opened, first, next, back, closed] =
+            [Key::Tab, Key::Enter, Key::Down, Key::Down, Key::Up, Key::Escape].map(|key| {
+                rt.key(key.into());
+                rt.frame(0.016);
+                rt.elements().into_iter().find(|e| e.focused).unwrap()
+            });
+        assert_eq!(trigger.key.as_deref(), Some("profile-button"));
+        assert_eq!(opened.role, "menuitem");
+        assert_ne!(first.key, next.key);
+        assert_eq!(first.key, back.key);
+        assert_eq!(closed.key, trigger.key);
         assert!(!rt.state.nav.profile_menu);
-        assert_eq!(focused(&rt).key.as_deref(), Some("profile-button"));
     }
 
     #[test]

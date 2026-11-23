@@ -7,7 +7,7 @@ use super::{
     widgets::{hairline, scroll},
 };
 use crate::ui::widgets::{ButtonDisabled, menu_row, menu_separator, menu_surface, menu_trigger};
-use rune::{El, TextEdit, col, row};
+use rune::{Align, El, Side as Edge, TextEdit, col, row};
 use rune_kit::{Kit, SegmentedControl, TextInput};
 use sidenote::core::{
     self,
@@ -175,28 +175,26 @@ fn person_menu(s: &State, person: &Person, k: &Kit, p: Palette, layer: &mut Vec<
                 s.edit_person_company(&name);
             }),
         )
-        .child(
-            item("Edit person").on_press(move |s: &mut State| {
-                s.more_menu = None;
-                s.edit_person_company(&edit_name);
-            }),
-        );
+        .child(item("Edit person").on_press(move |s: &mut State| {
+            s.more_menu = None;
+            s.edit_person_company(&edit_name);
+        }));
     if let Some(email) = email {
-        menu = menu.child(
-            item("Copy email").on_press_tx(move |s: &mut State, tx| {
-                s.more_menu = None;
-                tx.copy(email.clone());
-            }),
-        );
+        menu = menu.child(item("Copy email").on_press_tx(move |s: &mut State, tx| {
+            s.more_menu = None;
+            tx.copy(email.clone());
+        }));
     }
     if person.manual_side {
         let name = person.name.clone();
         let danger = Palette { ink: p.danger, ..p };
         menu = menu.child(menu_separator(p)).child(
-            menu_row("Reset to automatic", danger, None, None, None).on_press(move |s: &mut State| {
-                s.more_menu = None;
-                s.set_person_side(&name, None);
-            }),
+            menu_row("Reset to automatic", danger, None, None, None).on_press(
+                move |s: &mut State| {
+                    s.more_menu = None;
+                    s.set_person_side(&name, None);
+                },
+            ),
         );
     }
     menu_surface(
@@ -204,7 +202,7 @@ fn person_menu(s: &State, person: &Person, k: &Kit, p: Palette, layer: &mut Vec<
         p,
         layer,
         menu,
-        (&key, &trigger_key, rune::Side::Bottom, rune::Align::End, 240.0),
+        (&key, &trigger_key, Edge::Bottom, Align::End, 240.0),
         |s| s.more_menu = None,
     );
     trigger
