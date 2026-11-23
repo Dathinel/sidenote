@@ -413,7 +413,7 @@
 
   "src/ui/hex.rs": "569bd92ae949ef590033ec7e4122ba3cf2487742eebfe64403aa1eab375c4036",
 
-  "src/ui/hex/connection/stop_tests.rs": "5dcc96cab3be2f3ec42a93c140b6144500a151e47b2ac1d85d6bc38235911c44",
+  "src/ui/hex/connection/stop_tests.rs": "fd6214e09f6c3fed6acde325e77af3e21c3d2409dfd90e54210dc8a5f547941e",
 
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
 
