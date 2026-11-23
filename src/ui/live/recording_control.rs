@@ -200,8 +200,6 @@ pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
     let state = match phase {
         Phase::Starting => "Starting",
         Phase::Recording => "Recording",
-        Phase::Stopping => "Finishing the transcript",
-        Phase::StopUnconfirmed => "Recording may still be finishing",
         Phase::Paused => "Paused",
         Phase::Making => "Writing notes",
     };

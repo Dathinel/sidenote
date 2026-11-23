@@ -413,11 +413,11 @@
 
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
 
-  "src/ui/hex.rs": "90a9ea9c6818ed78f8628b59804ff144de25d21ba142b668b992cf8574bf1b8b",
+  "src/ui/hex.rs": "d7dd88b21deecc7afdb346a49bf65ddf62cedd23f50684b8f2965e8e01ed2631",
 
-  "src/ui/hex/connection/stop.rs": "f65adc80c53c4f537fc78dbc063ecc2eae590cb8b6cd48834d7825d0bd971c79",
+  "src/ui/hex/connection/stop.rs": "48def6ec1d077a8b3639e62179355b3937453295da8d79745d71bd53f5dbd758",
 
-  "src/ui/hex/connection/stop_tests.rs": "9bf2475dc58b0408185fc7144d54017370e9fbdd09b782cfe0a0969e09c18953",
+  "src/ui/hex/connection/stop_tests.rs": "75bfb02b34641a9344600d8083f8dedb7a3f22b60dadbbadf2632f2c1b1b62ca",
 
   "src/ui/hex/connection/stop_tests/api.rs": "fdbace0c0b926c5a8520497d841c9180e611c1724a5e1c25464204e0e8285fde",
 
@@ -431,7 +431,7 @@
 
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
 
-  "src/ui/live.rs": "6b7297f9b85ca6b6b92077167794afb75867f25c955ee09b1aebfd34f5ce63f1",
+  "src/ui/live.rs": "901e555bde5d2fa934d94e3ece493fba3f27af81cc65c4cfb7280c41566ac822",
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
 
@@ -439,7 +439,7 @@
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "655d4f91298c4e3b866657d92052a96cbd59ded15924f79d205e6dbb08bcab64",
+  "src/ui/mod.rs": "ac41de56d619af9100fdf32027b46ad94485c27483db2c79b295e92ca011de4e",
 
   "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
 

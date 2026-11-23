@@ -622,7 +622,8 @@ fn no_id_stop(phase: &'static str) {
         data.commands.clear();
         data.delay = Duration::from_millis(1000);
     }
-    Fixture::stop(&mut state);
+    state.stop_during_feed_read();
+    Fixture::finish(&mut state);
     {
         let mut data = api.data.lock().unwrap();
         assert_eq!(data.stops, 1, "no-ID {phase} must send exactly one Stop");
@@ -635,7 +636,8 @@ fn no_id_stop(phase: &'static str) {
     }
     Fixture::stop_status(&mut state);
     if state.hex_stop_pending() {
-        state.hex_check_stop();
+        let idle = state.hex.engine.status_for_command().unwrap();
+        state.hex_apply(Msg::Status(Ok(idle)));
         Fixture::stop_status(&mut state);
     }
     assert!(state.hex.error.is_none());
@@ -1097,7 +1099,7 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
     transcribing.meeting_state = "transcribing".into();
     api.data.lock().unwrap().stop_state = Some("transcribing");
     state.meeting_pause();
-    assert_eq!(state.live.as_ref().unwrap().phase, Phase::Stopping);
+    assert!(state.hex_stop_pending());
     let manifest = hex.join("100-1/manifest.json");
     std::fs::write(
         &manifest,
@@ -1112,20 +1114,18 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
     state.meeting_generate();
     state.hex_record_stop(None);
     let live = state.live.as_ref().unwrap();
-    assert_eq!(live.phase, Phase::Stopping);
+    assert_eq!(live.phase, Phase::Recording);
     assert_eq!(live.session.as_ref().unwrap().parts[0].duration_ms, 60000);
     Fixture::finish(&mut state);
     Fixture::stop_status(&mut state);
     assert_eq!(api.data.lock().unwrap().stops, 1);
     state.hex_apply(Msg::Status(Ok(transcribing)));
-    assert_eq!(state.live.as_ref().unwrap().phase, Phase::Stopping);
+    assert!(state.hex_stop_pending());
     assert!(state.hex_stop_tick(Instant::now() + Duration::from_secs(31), &mut Tx::default()));
-    assert_eq!(state.live.as_ref().unwrap().phase, Phase::StopUnconfirmed);
+    assert!(state.hex_stop_unconfirmed());
     state.parts_sync();
-    assert_eq!(
-        state.live.as_ref().unwrap().session.as_ref().unwrap().parts[0].duration_ms,
-        60000
-    );
+    let live = state.live.as_ref().unwrap();
+    assert_eq!(live.session.as_ref().unwrap().parts[0].duration_ms, 60000);
     api.data.lock().unwrap().meeting_state = None;
     assert!(
         !sidenote::core::state_dir()

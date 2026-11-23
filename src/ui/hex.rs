@@ -15,7 +15,7 @@ mod readable;
 pub(super) mod settings;
 mod setup;
 #[path = "hex/connection/stop.rs"]
-mod stop;
+pub(super) mod stop;
 use rune::{Color, El, Key, KeyEvent, TextEdit, Tx, Waker, col, row};
 use rune_kit::{Kit, Select, SelectAppearance, Switch, TextInput};
 use serde_json::Value;
@@ -535,7 +535,7 @@ impl State {
                 self.hex.install = state;
             }
             Msg::Status(r) => self.hex_status(r),
-            Msg::StopStatus(started, r) => self.hex_stop_status(started, r),
+            Msg::StopStatus(deadline, r) => self.hex_stop_status(deadline, r),
             Msg::SettingsStatus(result) => {
                 self.hex.settings_status_pending = false;
                 self.hex.settings_status_at = Some(Instant::now());
@@ -721,6 +721,9 @@ impl State {
             self.ask_settings.last_live = self.ask_settings.recording_source.take();
         }
         self.hex.connection.apply(&self.hex.status, &r, now);
+        if !self.hex.record_busy && r.as_ref().is_ok_and(stop::terminal) {
+            self.hex_check_stop();
+        }
         self.hex.status = Some(r);
         if show_meetings_setup && !super::isolated() {
             self.open_hex();
@@ -1053,7 +1056,7 @@ impl State {
             }
         }) {
             self.hex.record_busy = false;
-            self.hex_clear_stop();
+            self.hex.stop = None;
             self.hex.error = Some("Could not stop recording. Try Stop again or stop it in Hex.");
             if let Some(live) = &mut self.live {
                 super::response_time::failed(live.take_notes_timing(recording));
@@ -1360,32 +1363,12 @@ pub fn stop_blocked(s: &State) -> Option<&'static str> {
 
 /// Why Record or Stop failed, with a Dismiss link. Not a dialog.
 pub fn error_bar(s: &State, p: Palette) -> Option<El> {
-    if s.hex_stop_unconfirmed() && !s.on_live() {
-        return Some(
-            row()
-                .key("hex-stop-unconfirmed")
-                .px(24.0)
-                .py(8.0)
-                .gap(12.0)
-                .items_center()
-                .fill(p.warnbg)
-                .child(
-                    roles::SMALL
-                        .wrap("The recording may still be finishing in Hex.", p.warn)
-                        .grow(1.0)
-                        .role("status"),
-                )
-                .child(
-                    super::widgets::action("Check again", p).on_press(|s: &mut State| {
-                        if s.live.is_some() {
-                            s.open_live();
-                        }
-                        s.hex_recheck_stop();
-                    }),
-                ),
-        );
-    }
-    let note = s.hex.error?;
+    let recheck = s.hex_stop_unconfirmed() && !s.on_live();
+    let note = if recheck {
+        stop::UNCONFIRMED
+    } else {
+        s.hex.error?
+    };
     Some(
         row()
             .key("hex-error")
@@ -1402,9 +1385,15 @@ pub fn error_bar(s: &State, p: Palette) -> Option<El> {
                     .role("alert"),
             )
             .child(
-                crate::ui::widgets::action("Dismiss", p)
+                crate::ui::widgets::action(if recheck { "Check again" } else { "Dismiss" }, p)
                     .key("hex-error-dismiss")
-                    .on_press(|s: &mut State| s.hex.error = None),
+                    .on_press(move |s: &mut State| {
+                        if recheck {
+                            s.hex_recheck_stop();
+                        } else {
+                            s.hex.error = None;
+                        }
+                    }),
             ),
     )
 }

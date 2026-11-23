@@ -1,15 +1,27 @@
 use super::*;
-use crate::ui::live::Phase;
 
 const WAIT: Duration = Duration::from_secs(30);
-const CHECK_EVERY: Duration = Duration::from_millis(1500);
+pub(in crate::ui) const UNCONFIRMED: &str = "The recording may still be finishing in Hex.";
 
 pub(super) struct Completion {
     recording: u64,
-    previous: Option<Phase>,
-    started: Instant,
     deadline: Option<Instant>,
-    next_check: Instant,
+}
+
+pub(in crate::ui) fn scene(s: &mut State, timed_out: bool) {
+    super::super::live::scene_making(s, "transcribing");
+    s.hex.stop = Some(Completion {
+        recording: 0,
+        deadline: (!timed_out).then(|| Instant::now() + WAIT),
+    });
+}
+
+pub(super) fn terminal(state: &EngineState) -> bool {
+    state.recording.is_none()
+        && matches!(
+            state.meeting_state.as_str(),
+            "idle" | "stopped" | "complete" | "finished"
+        )
 }
 
 impl State {
@@ -17,7 +29,7 @@ impl State {
         self.hex.stop.is_some()
     }
 
-    pub(super) fn hex_stop_unconfirmed(&self) -> bool {
+    pub(in crate::ui) fn hex_stop_unconfirmed(&self) -> bool {
         self.hex
             .stop
             .as_ref()
@@ -25,33 +37,13 @@ impl State {
     }
 
     pub(super) fn hex_begin_stop(&mut self, recording: u64, now: Instant) {
-        let previous = self
-            .live
-            .as_mut()
-            .map(|live| live.stop_phase(Phase::Stopping));
+        if let Some(live) = &self.live {
+            live.pause_feed();
+        }
         self.hex.stop = Some(Completion {
             recording,
-            previous,
-            started: now,
             deadline: Some(now + WAIT),
-            next_check: now,
         });
-    }
-
-    pub(super) fn hex_clear_stop(&mut self) -> bool {
-        let Some(stop) = self.hex.stop.take() else {
-            return false;
-        };
-        if let Some(live) = self
-            .live
-            .as_mut()
-            .filter(|l| l.recording_id == stop.recording)
-            && let Some(previous) = stop.previous
-        {
-            live.stop_phase(previous);
-            return true;
-        }
-        false
     }
 
     pub(super) fn hex_stop_failed(&mut self, recording: u64, error: &HexError) {
@@ -65,54 +57,47 @@ impl State {
         let transcribing =
             matches!(&self.hex.status, Some(Ok(s)) if s.meeting_state == "transcribing");
         if refused && !transcribing {
-            self.hex_clear_stop();
+            self.hex.stop = None;
         } else {
             self.hex_check_stop();
         }
     }
 
     pub(super) fn hex_check_stop(&mut self) {
-        let Some(stop) = &mut self.hex.stop else {
-            return;
-        };
-        stop.next_check = Instant::now() + CHECK_EVERY;
-        let started = stop.started;
-        // The watcher can deliver a sample taken before Stop replied.
-        self.hex_spawn(move |engine| Msg::StopStatus(started, engine.status()));
+        if let Some(deadline) = self.hex.stop.as_ref().and_then(|stop| stop.deadline) {
+            // The watcher can deliver a sample taken before Stop replied.
+            self.hex_spawn(move |engine| Msg::StopStatus(deadline, engine.status()));
+        }
     }
 
     pub(in crate::ui) fn hex_recheck_stop(&mut self) {
         if self.hex.record_busy || !self.hex_stop_unconfirmed() {
             return;
         }
-        let stop = self.hex.stop.as_mut().unwrap();
-        stop.started = Instant::now();
-        stop.deadline = Some(stop.started + WAIT);
-        if let Some(live) = &mut self.live {
-            live.stop_phase(Phase::Stopping);
-        }
+        self.hex.stop.as_mut().unwrap().deadline = Some(Instant::now() + WAIT);
         self.hex_check_stop();
     }
 
     pub(super) fn hex_stop_status(
         &mut self,
-        started: Instant,
+        deadline: Instant,
         result: Result<EngineState, HexError>,
     ) {
-        if self.hex.stop.as_ref().is_none_or(|s| s.started != started) {
+        if self.hex.stop.as_ref().and_then(|stop| stop.deadline) != Some(deadline) {
             return;
         }
-        let terminal = result.as_ref().is_ok_and(|s| {
-            s.recording.is_none()
-                && matches!(
-                    s.meeting_state.as_str(),
-                    "idle" | "stopped" | "complete" | "finished"
-                )
-        });
-        if terminal {
+        if result.as_ref().is_ok_and(terminal) {
+            let stop = self.hex.stop.as_mut().unwrap();
+            stop.deadline = None;
+            let recording = stop.recording;
             self.hex_status(result);
             self.hex.error = None;
-            if self.hex_clear_stop() {
+            self.hex.stop = None;
+            if self
+                .live
+                .as_ref()
+                .is_some_and(|l| l.recording_id == recording)
+            {
                 self.live_stopped();
                 self.live_sync();
             } else {
@@ -125,25 +110,10 @@ impl State {
         let Some(stop) = &mut self.hex.stop else {
             return false;
         };
-        let Some(deadline) = stop.deadline else {
+        if let Some(deadline) = stop.deadline.filter(|&deadline| now < deadline) {
+            tx.wake_after(deadline - now);
             return false;
-        };
-        if now >= deadline {
-            stop.deadline = None;
-            if let Some(live) = &mut self.live {
-                live.stop_phase(Phase::StopUnconfirmed);
-            }
-            return true;
         }
-        let wake_at = if self.hex.record_busy {
-            deadline
-        } else if now >= stop.next_check {
-            self.hex_check_stop();
-            (now + CHECK_EVERY).min(deadline)
-        } else {
-            stop.next_check.min(deadline)
-        };
-        tx.wake_after(wake_at - now);
-        false
+        stop.deadline.take().is_some()
     }
 }
