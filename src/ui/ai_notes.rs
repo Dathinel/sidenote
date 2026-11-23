@@ -151,6 +151,7 @@ pub struct AiNotes {
     pub privacy_open: bool,
     pub model_open: bool,
     pub other_model: bool,
+    helper_save: bool,
     pub retry_after_save: Option<(String, Request)>,
     pub ask_setup_open: bool,
     pub fallback: Option<Helper>,
@@ -198,6 +199,7 @@ impl Default for AiNotes {
             privacy_open: false,
             model_open: false,
             other_model: false,
+            helper_save: false,
             retry_after_save: None,
             ask_setup_open: false,
             fallback: None,
@@ -213,6 +215,7 @@ pub struct Snapshot {
     store: instructions::Store,
 }
 const INSTRUCTIONS_LOAD_ERROR: &str = "Sidenote could not read your instructions. Your saved text was kept. Press Reload agent status. If it fails again, restart Sidenote.";
+const SAVING_HELPER: &str = "Saving Meeting summary...";
 
 pub(super) fn instructions_warning(store: &instructions::Store) -> Option<String> {
     store
@@ -328,6 +331,7 @@ impl State {
             return;
         }
         self.ai_notes.pending = Some(label);
+        self.ai_notes.helper_save = label == SAVING_HELPER;
         self.ai_notes.editor_target = match &work {
             Work::Save(i, ..) | Work::Reset(i, _) => Some(*i),
             _ => None,
@@ -459,6 +463,9 @@ impl State {
                 }
             }
             Ok(Completion::Settings(config)) => {
+                if self.ai_notes.helper_save {
+                    self.ai_notes.other_model = false;
+                }
                 self.ai_notes.settings = config.notes.clone();
                 self.config.refresh_notes_from(&config);
                 self.ai_notes.fallback = None;
@@ -572,12 +579,11 @@ impl State {
             return;
         }
         self.ai_notes.switch_confirm = None;
-        self.ai_notes.other_model = false;
         settings.engine = "app".into();
         settings.helper = Some(HELPERS[index]);
         settings.model = self.ai_notes.models[index].text.trim().into();
         settings.your_name = self.ai_notes.name.text.trim().into();
-        self.notes_save_settings(settings, "Saving Meeting summary...");
+        self.notes_save_settings(settings, SAVING_HELPER);
     }
     pub fn use_codex_for_summary(&mut self, id: String) {
         if self.ai_notes.pending.is_some() || self.ai_notes.scene {
@@ -683,13 +689,14 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
     let index = HELPERS.iter().position(|h| *h == helper).unwrap();
     let models = helper.models();
     let current = &s.ai_notes.models[index].text;
-    let other = s.ai_notes.other_model || !models.iter().any(|m| &m.id == current);
+    let other = s.ai_notes.other_model;
+    let custom = !models.iter().any(|m| &m.id == current);
     let menu = super::ask_settings::model_menu(
         "notes-model-menu",
         "Summary model",
         &models,
         Some(current),
-        other,
+        other || custom,
     )
     .disabled(s.ai_notes.pending.is_some())
     .open(s.ai_notes.model_open)
@@ -723,6 +730,13 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
                         .on_press(move |s: &mut State| s.choose_notes_helper(index)),
                 ),
         );
+        if s.ai_notes.helper_save
+            && let Some(error) = &s.ai_notes.error
+        {
+            control = control.child(roles::SMALL.wrap(error, p.warn).role("status"));
+        }
+    } else if custom {
+        control = control.child(roles::META.wrap(current, p.soft));
     }
     let row = super::hex::settings::setting_row(
         s,
@@ -772,6 +786,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     }
     if let Some(error) = &a.error
         && a.editor_target.is_none()
+        && !(part == Part::Helpers && a.other_model && a.helper_save)
     {
         c = c.child(super::widgets::banner(
             "Settings need attention",
@@ -1386,22 +1401,62 @@ mod tests {
         crate::test_paths::isolate();
         let mut s = State::new();
         let index = HELPERS.iter().position(|h| *h == Helper::Claude).unwrap();
+        s.ai_notes.found = vec![(Helper::Claude, true)];
         s.ai_notes.settings = Some(NotesSettings {
+            engine: "app".into(),
             helper: Some(Helper::Claude),
             model: "synthetic-saved".into(),
             enabled_at_ms: Some(1),
             ..NotesSettings::default()
         });
-        s.ai_notes.generation = 1;
-        s.ai_notes.models[index] = TextEdit::new("synthetic-typed");
+        let invalid = "synthetic-\tmodel";
+        s.ai_notes.models[index] = TextEdit::new(invalid);
         s.ai_notes.other_model = true;
-        s.ai_notes.pending = Some("Saving Meeting summary...");
         let failure = "Could not save Meeting summary settings. Your previous choice was kept.";
-        s.notes_finished(1, Err(failure.into()));
-        // The typed model stays for a retry, and the error is shown.
-        assert_eq!(s.ai_notes.models[index].text, "synthetic-typed");
+        let save = |s: &mut State| {
+            s.choose_notes_helper(index);
+            assert!(s.ai_notes.other_model);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while s.ai_notes.pending.is_some() {
+                let event = s
+                    .events_rx
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .expect("summary settings save completed");
+                s.apply_event(event);
+            }
+        };
+        save(&mut s);
+        assert_eq!(s.ai_notes.models[index].text, invalid);
         assert!(s.ai_notes.other_model && s.ai_notes.pending.is_none());
         assert_eq!(s.ai_notes.error.as_deref(), Some(failure));
+
+        let mut rt = rune::Runtime::new(
+            s,
+            |s, cx| {
+                let p = super::super::theme::palette(cx.system_dark());
+                let k = super::super::theme::kit(&p);
+                summary_model(s, &k, p, &mut Vec::new(), Vec::new())
+            },
+            (1334.0, 900.0),
+            rune::Env::default(),
+        );
+        rt.frame(0.0);
+        assert!(rt.find("notes-model-other").is_some());
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|e| e.text.as_deref() == Some(failure))
+        );
+        rt.update(|s, _| {
+            s.ai_notes.models[index] = TextEdit::new("synthetic-typed");
+            save(s);
+        });
+        rt.frame(0.0);
+        let a = &rt.state.ai_notes;
+        assert!(!a.other_model && a.pending.is_none());
+        assert!(a.error.is_none());
+        assert_eq!(a.settings.as_ref().unwrap().model, "synthetic-typed");
+        assert!(rt.find("notes-model-other").is_none());
     }
     #[test]
     fn sign_in_is_only_offered_for_a_detected_helper_without_a_known_reply() {
