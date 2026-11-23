@@ -49,7 +49,7 @@ impl State {
     /// every move made on it since the last idle save.
     pub(super) fn effective(&self, t: &TaskItem) -> TaskItem {
         let mut eff = t.clone();
-        if let Some(pending) = self.tasks.board_pending.get(&tick_key(t)) {
+        if let Some(pending) = self.tasks.board_pending.get(&self.tasks.pending_key(t)) {
             let intent = pending.intent;
             if let Some(done) = intent.done {
                 eff.done = done;
@@ -64,7 +64,10 @@ impl State {
     /// The card as the board draws it. Only a card with a move saving is copied.
     pub(super) fn shown_card<'a>(&self, t: &'a TaskItem) -> Cow<'a, TaskItem> {
         if !self.tasks.board_pending.is_empty()
-            && self.tasks.board_pending.contains_key(&tick_key(t))
+            && self
+                .tasks
+                .board_pending
+                .contains_key(&self.tasks.pending_key(t))
         {
             Cow::Owned(self.effective(t))
         } else {
@@ -159,20 +162,24 @@ impl State {
         if self.tasks.layout == core::TasksLayout::Board
             && let Some(task) = self.tasks.item(id, index)
         {
-            self.tasks.reveal = Some((id.to_owned(), core::diary::task_identity(task)));
+            self.tasks.reveal = Some(tick_key(task));
         }
     }
 
     fn refresh_reveal(&mut self, tx: &mut Tx) -> bool {
-        let Some((meeting, stable)) = self.tasks.reveal.as_ref() else {
+        let Some(key) = self.tasks.reveal.as_ref() else {
             return false;
         };
-        let matches =
-            |t: &TaskItem| t.meeting_id == *meeting && core::diary::task_identity(t) == *stable;
-        let Some(i) = self.tasks.items.iter().position(matches) else {
-            if !self.tasks.all.iter().any(matches) {
-                self.tasks.reveal = None;
-            }
+        let Some(task) = self.tasks.task_by_key(key) else {
+            self.tasks.reveal = None;
+            return false;
+        };
+        let Some(i) = self
+            .tasks
+            .items
+            .iter()
+            .position(|t| t.meeting_id == task.meeting_id && t.index == task.index)
+        else {
             return false;
         };
         if self.view != View::Tasks || self.tasks.layout != core::TasksLayout::Board {
