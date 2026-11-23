@@ -388,6 +388,9 @@ impl Probe {
         self.final_sample = Some(final_sample);
     }
     fn save(&self, state: &Path) -> io::Result<()> {
+        let Some(_claim) = super::meeting_delete::claim_write(state, &self.meeting_id)? else {
+            return Ok(());
+        };
         super::store_io::write(
             &state
                 .join("local/probe")
@@ -500,11 +503,18 @@ impl Watch {
         {
             return;
         }
+        if self.attempted.contains(id) {
+            return;
+        }
+        let Ok(Some(claim)) = super::meeting_delete::claim_write(state, id) else {
+            return;
+        };
+        self.attempted.insert(id.into());
         let marker = state.join("local/auto-stop").join(format!("{id}.json"));
-        if self.attempted.insert(id.into()) && !marker.exists()
-            // Persist the attempt before invoking Hex, including across listener restarts.
-            && super::store_io::write(&marker, &true).is_ok() && stop(id)
-        {
+        // Persist the attempt before invoking Hex, including across listener restarts.
+        let published = !marker.exists() && super::store_io::write(&marker, &true).is_ok();
+        drop(claim);
+        if published && stop(id) {
             log(&format!(
                 "auto-stopped meeting {id} after {minutes} min without new words"
             ));
@@ -984,5 +994,69 @@ mod tests {
             assert_eq!(value["samples"].as_array().unwrap().len(), 1);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn deleted_meeting_ignores_late_watcher_writes_and_restores_original_state() {
+        use crate::core::meeting_delete::{Eligibility, Storage};
+
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let meetings = root.path().join("meetings");
+        fs::create_dir(&state).unwrap();
+        fs::create_dir_all(meetings.join("100-1")).unwrap();
+        fs::write(meetings.join("100-1/manifest.json"), b"{}").unwrap();
+        let labs = Labs {
+            measure_recording_files: true,
+            stop_forgotten_recordings: true,
+            ..Labs::default()
+        };
+        let recording = status("recording", Some(false));
+        let tick = |watch: &mut Watch, seconds, calls: &mut usize| {
+            watch.tick(
+                &labs,
+                Some(&recording),
+                (&state, &meetings),
+                Duration::from_secs(seconds),
+                |_| {
+                    *calls += 1;
+                    true
+                },
+                |_| (),
+            );
+        };
+        let mut watch = Watch::default();
+        let mut calls = 0;
+        tick(&mut watch, 0, &mut calls);
+        tick(&mut watch, 1200, &mut calls);
+        assert_eq!(calls, 1);
+        let probe = state.join("local/probe/100-1.json");
+        let marker = state.join("local/auto-stop/100-1.json");
+        let original_probe = fs::read(&probe).unwrap();
+        let original_marker = fs::read(&marker).unwrap();
+
+        let storage = Storage::new(&meetings, &state).unwrap();
+        let deleted = storage
+            .delete(
+                "100-1",
+                String::new(),
+                0,
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap();
+        watch.finished("100-1", &state);
+        assert!(!probe.exists(), "a late finish must not recreate the probe");
+
+        let mut restarted = Watch::default();
+        tick(&mut restarted, 0, &mut calls);
+        tick(&mut restarted, 1200, &mut calls);
+        assert!(!probe.exists());
+        assert!(!marker.exists());
+        assert_eq!(calls, 1);
+        storage.restore(&deleted).unwrap();
+        assert_eq!(fs::read(&probe).unwrap(), original_probe);
+        assert_eq!(fs::read(&marker).unwrap(), original_marker);
     }
 }

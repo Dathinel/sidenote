@@ -113,7 +113,7 @@
 
   "src/core/mcp_connect/json_config.rs": "a5597e62557288a1ffdc8a5cf00a3caefbe3b905a0a63e733fe4c9d1df5e8fac",
 
-  "src/core/meeting_delete.rs": "78fa24bb398ef168078aa84f658d354b6fc6ab33e44c91a8942d5ddac5d4f211",
+  "src/core/meeting_delete.rs": "63ae05b2c32324ac672a094c6fa57c99ec3be27d32f64804bd82c8e74a1e66db",
 
   "src/core/meeting_evidence.rs": "8330fa5400f69a56ea22890b7052af632e0186c1048855cb16f82fa2106b6441",
 
@@ -197,7 +197,7 @@
 
   "src/core/meeting_router/vad/linux_tests.rs": "b94fbe1adb34b23d921a94f6d548bfe6dbda81170dd2f16a60b572c69d0c4267",
 
-  "src/core/meeting_watch.rs": "5ad033c42efbae183f84998f5571a7bab80dcef607e41d5f9fbb99d3760b09b2",
+  "src/core/meeting_watch.rs": "511b1d2faba6e513a3739bebc49d9f2251e4fbb4ee829eaa328e0313d16c72ce",
 
   "src/core/meetings.rs": "bb81f7cccfe21cc248bf285b6da9a5705ccb57cdc9c1533cc80e955060c94d02",
 
