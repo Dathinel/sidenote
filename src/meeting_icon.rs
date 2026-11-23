@@ -27,9 +27,8 @@ pub fn can_restore(placed: [i32; 4], current: Option<[i32; 4]>) -> bool {
 pub fn beside(work: [i32; 4], icon: [i32; 4], size: [i32; 2], gap: i32) -> [i32; 4] {
     let [left, top, right, bottom] = work;
     let [x, y, icon_width, _] = icon;
-    let [width, height] = size;
-    let width = width.min(right - left);
-    let height = height.min(bottom - top);
+    let width = size[0].min(right - left);
+    let height = size[1].min(bottom - top);
     let right_of_icon = x + icon_width + gap;
     let x = if right - right_of_icon >= width || right - right_of_icon >= x - gap - left {
         right_of_icon

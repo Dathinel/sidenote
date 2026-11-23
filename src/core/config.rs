@@ -366,7 +366,6 @@ impl Config {
         Self::meeting_icon_settings(root).1
     }
 
-    /// Native visibility and capture settings from one published config snapshot.
     #[cfg(feature = "desktop")]
     pub fn meeting_icon_settings(root: &Path) -> (bool, bool) {
         match std::fs::read(root.join("config.json")) {
@@ -782,8 +781,7 @@ mod tests {
         let root = temp.path();
         assert_eq!(Config::meeting_icon_settings(root), (true, false));
         let path = root.join("config.json");
-        let legacy = br#"{"version":1,"features":{},"notes":{}}"#;
-        std::fs::write(&path, legacy).unwrap();
+        std::fs::write(&path, br#"{"version":1,"features":{},"notes":{}}"#).unwrap();
         assert_eq!(Config::meeting_icon_settings(root), (true, false));
         Config::toggle_meeting_icon(root).unwrap();
         assert_eq!(Config::meeting_icon_settings(root), (false, false));
