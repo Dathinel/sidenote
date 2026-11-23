@@ -86,6 +86,7 @@ impl State {
 
     /// Puts the whole transcript on the clipboard, as plain lines.
     pub fn copy_transcript(&mut self, id: &str, tx: &mut Tx) {
+        self.more_menu = None;
         let Some(text) = self.meeting_by_id(id).map(|meeting| {
             if self.transcript_original
                 && let Some(routed) = &meeting.routed
