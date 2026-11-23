@@ -284,6 +284,8 @@ impl Config {
     pub fn load_in(root: &Path) -> io::Result<Self> {
         let mut config = Self::read_config(root)?;
         if config.as_ref().is_none_or(|c| c.notes.is_none()) {
+            #[cfg(all(test, windows))]
+            tests::before_migration_lock();
             let _lock = lock(root)?;
             // Another writer may have published or migrated while we waited.
             config = Self::read_config(root)?;
@@ -807,6 +809,19 @@ mod tests {
     }
 
     #[cfg(windows)]
+    thread_local! {
+        static BEFORE_MIGRATION_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(windows)]
+    pub(super) fn before_migration_lock() {
+        if let Some(hook) = BEFORE_MIGRATION_LOCK.take() {
+            hook();
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn migration_rechecks_under_lock_and_preserves_winning_publication() {
         for missing in [false, true] {
@@ -817,8 +832,17 @@ mod tests {
             }
             let held = store_io::lock(&path.join("local/config.lock")).unwrap();
             std::thread::scope(|scope| {
-                let reader = scope.spawn(move || Config::load_in(path).unwrap());
-                std::thread::sleep(std::time::Duration::from_millis(75));
+                let (read, observed) = std::sync::mpsc::channel();
+                let (released, resume) = std::sync::mpsc::channel();
+                let reader = scope.spawn(move || {
+                    BEFORE_MIGRATION_LOCK.replace(Some(Box::new(move || {
+                        read.send(()).unwrap();
+                        resume.recv().unwrap();
+                    })));
+                    Config::load_in(path).unwrap()
+                });
+                // Keep publication outside the reader's bounded lock acquisition.
+                observed.recv().unwrap();
                 let winner = Config {
                     notes: Some(super::super::notes::NotesSettings::default()),
                     features: Features {
@@ -830,6 +854,7 @@ mod tests {
                 store_io::write(&path.join("config.json"), &winner).unwrap();
                 let bytes = std::fs::read(path.join("config.json")).unwrap();
                 drop(held);
+                released.send(()).unwrap();
                 assert!(reader.join().unwrap().features.tasks);
                 assert_eq!(std::fs::read(path.join("config.json")).unwrap(), bytes);
             });

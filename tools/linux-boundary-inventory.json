@@ -38,7 +38,7 @@
   "src/core/check_v2.rs": "6b532606ea2645a3213c63abe858039095ec03a2dc33f807519855efe391a14f",
   "src/core/companies.rs": "95a3cb0629a7a9c2706124dc8f79d2d4d377f3810b312beb59122b19d4ed38e6",
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
-  "src/core/config.rs": "00b8df0de43093eb00143eade7cf810981b965d6c1f7bc19ba44de577d99e9c3",
+  "src/core/config.rs": "e45799cacdb00c14d826784597d84e3c7d051d645251ca16b43863648dbd0f3b",
   "src/core/daily_check.rs": "a23f26f0296493c7a3f8ee731dc0f8a032cd3a237f84ad947c4c61f9d1be6a69",
   "src/core/device.rs": "1b5427307e25c2de17c71a124179d896bc7dd841af00c2a58a0db8282c33ca01",
   "src/core/engine_settings/persistence.rs": "3b36bbced82d08e9904111de7efd62911db389a92a56014d8bfbe701e55bd070",
