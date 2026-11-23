@@ -15,7 +15,6 @@ use std::{
 };
 
 pub const HELPERS: [Helper; 3] = [Helper::Claude, Helper::Codex, Helper::OpenCode];
-pub const PRIVACY: &str = "Sidenote sends the meeting transcript and your typed notes to your selected summary agent. Audio stays on this PC.";
 pub const INSTALL_URL: &str = "https://code.claude.com/docs/en/setup";
 const SETUP_STEPS: &str =
     "1. Install Claude Code. 2. Open a terminal, type claude, and sign in. 3. Press Check again.";
@@ -30,6 +29,16 @@ pub fn helper_fallback_message(helper: Helper) -> String {
     )
 }
 
+fn summary_agent(settings: &NotesSettings) -> Option<Helper> {
+    settings
+        .effective_helper()
+        .filter(|_| settings.engine == "app" && settings.enabled_at_ms.is_some())
+}
+
+fn uses_summary_script(settings: &NotesSettings) -> bool {
+    settings.engine == "scripts" && settings.script.is_some()
+}
+
 fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
     if let Some(settings) = settings {
         if let Some(helper) = settings.helper
@@ -37,10 +46,7 @@ fn request_problem(settings: Option<&NotesSettings>) -> Option<String> {
         {
             return Some(helper_fallback_message(helper));
         }
-        if settings.engine == "app"
-            && settings.effective_helper().is_some()
-            && settings.enabled_at_ms.is_some()
-        {
+        if summary_agent(settings).is_some() {
             return None;
         }
     }
@@ -840,8 +846,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             p,
         ));
     }
-    let status = match (settings.engine.as_str(), settings.effective_helper()) {
-        ("app", Some(h)) => format!(
+    let agent = summary_agent(settings);
+    let scripts = uses_summary_script(settings);
+    let summaries_on = agent.is_some() || scripts;
+    let automatic = summaries_on && settings.auto;
+    let status = match (agent, scripts) {
+        (Some(h), _) => format!(
             "Meeting summaries are on. Summaries use {} ({}).",
             h.name(),
             if settings.model.is_empty() || settings.model == h.default_model() {
@@ -850,7 +860,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 "custom model"
             }
         ),
-        ("scripts", _) => "Your own scripts write summaries on this PC.".into(),
+        (_, true) => "Your own scripts write summaries on this PC.".into(),
         _ => "Meeting summaries are off. New meetings get a transcript only.".into(),
     };
     if part == Part::Advanced {
@@ -888,8 +898,6 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         );
     }
 
-    let off = settings.engine != "scripts"
-        && (settings.engine != "app" || settings.effective_helper().is_none());
     if part == Part::Summaries {
         let summary = col()
             .w_full()
@@ -897,15 +905,15 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 s,
                 "notes-options",
                 "Write a meeting summary when a meeting ends",
-                if off {
+                if !summaries_on {
                     "Choose an AI agent to write meeting summaries."
-                } else if settings.engine == "scripts" {
+                } else if scripts {
                     "Your configured script writes it when the meeting ends."
                 } else {
                     "Your selected agent writes it as soon as the meeting ends."
                 },
-                Switch::new(settings.auto)
-                    .disabled(off)
+                Switch::new(automatic)
+                    .disabled(!summaries_on)
                     .label("Write a meeting summary when a meeting ends")
                     .hide_label()
                     .on_toggle(|s: &mut State| {
@@ -949,11 +957,17 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             );
     }
     if part == Part::Privacy {
+        let sent = match (agent, scripts, automatic) {
+            (Some(_), _, true) => "When a meeting ends or you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC.",
+            (Some(_), _, false) => "When you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC.",
+            (_, true, _) => "Your configured script controls what is sent for meeting summaries.",
+            _ => "Meeting summaries are off. Sidenote sends no meeting text for summaries.",
+        };
         let mut privacy = super::hex::settings::setting_row(
             s,
             "notes-privacy",
             "What is sent",
-            PRIVACY,
+            sent,
             row_action(
                 if a.privacy_open {
                     "Hide details"
@@ -1015,8 +1029,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         for (index, h) in HELPERS.iter().copied().enumerate() {
             let found = a.found.contains(&(h, true));
             let offered = h.offered();
-            let selected =
-                offered && settings.engine == "app" && settings.effective_helper() == Some(h);
+            let selected = agent == Some(h);
             let mut r = card(p)
                 .key(format!("notes-helper-{index}"))
                 .child(roles::NAME.wrap(
@@ -1253,29 +1266,27 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         );
     }
     if part == Part::Summaries {
-        let off = settings.engine != "scripts"
-            && (settings.engine != "app" || settings.effective_helper().is_none());
-        c = c.child(
+        c = c.child(if summaries_on {
+            button("Turn off Meeting summary", "notes-off", p)
+                .self_start()
+                .on_press(|s: &mut State| {
+                    if let Some(mut settings) = s.ai_notes.settings.clone() {
+                        settings.engine = "off".into();
+                        s.notes_save_settings(settings, "Turning off Meeting summary...");
+                    }
+                })
+        } else {
             card(p)
-                .child(roles::TITLE.wrap("Off", p.ink))
+                .child(roles::TITLE.wrap("Meeting summaries are off", p.ink))
                 .child(roles::SMALL.wrap("Keep new meetings as transcripts only.", p.soft))
-                .child(if off {
+                .child(
                     button("Selected", "notes-off", p)
                         .color(p.ok)
                         .fill(p.sel)
                         .self_start()
-                        .focusable(false)
-                } else {
-                    button("Turn off Meeting summary", "notes-off", p)
-                        .self_start()
-                        .on_press(|s: &mut State| {
-                            if let Some(mut settings) = s.ai_notes.settings.clone() {
-                                settings.engine = "off".into();
-                                s.notes_save_settings(settings, "Turning off Meeting summary...");
-                            }
-                        })
-                }),
-        );
+                        .focusable(false),
+                )
+        });
     }
     if part == Part::Identity {
         let control = row()
@@ -1313,8 +1324,7 @@ pub fn setup_visible(s: &State) -> bool {
         && (s.on_hex() || s.filter == super::nav::Filter::All)
         && (s.on_hex() || s.search.text.trim().is_empty())
         && s.ai_notes.settings.as_ref().is_some_and(|settings| {
-            settings.engine != "scripts"
-                && (settings.engine != "app" || settings.effective_helper().is_none())
+            summary_agent(settings).is_none() && !uses_summary_script(settings)
         })
 }
 pub fn setup_card(s: &State, p: Palette) -> Option<El> {
@@ -1383,6 +1393,92 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_switch_and_privacy_report_the_same_saved_setting() {
+        use rune::accesskit::{Role, Toggled};
+
+        crate::test_paths::isolate();
+        let mut rt = rune::Runtime::new(
+            State::new(),
+            |s, cx| {
+                let p = super::super::theme::palette(cx.system_dark());
+                let k = super::super::theme::kit(&p);
+                col()
+                    .child(section(s, &k, p, Part::Summaries))
+                    .child(section(s, &k, p, Part::Privacy))
+            },
+            (800.0, 900.0),
+            rune::Env::default(),
+        );
+        for (engine, consent, auto, checked, privacy) in [
+            (
+                "off",
+                true,
+                true,
+                Toggled::False,
+                "Meeting summaries are off.",
+            ),
+            (
+                "app",
+                false,
+                true,
+                Toggled::False,
+                "Meeting summaries are off.",
+            ),
+            (
+                "app",
+                true,
+                false,
+                Toggled::False,
+                "When you request a summary,",
+            ),
+            (
+                "app",
+                true,
+                true,
+                Toggled::True,
+                "When a meeting ends or you request a summary,",
+            ),
+        ] {
+            rt.update(|s, _| {
+                s.ai_notes.settings = Some(NotesSettings {
+                    engine: engine.into(),
+                    helper: Some(Helper::Claude),
+                    enabled_at_ms: consent.then_some(1),
+                    auto,
+                    ..NotesSettings::default()
+                });
+            });
+            rt.frame(0.0);
+            let tree = rt.accessibility_tree();
+            let switch = tree
+                .nodes
+                .iter()
+                .map(|(_, node)| node)
+                .find(|node| {
+                    node.role() == Role::Switch
+                        && node.label() == Some("Write a meeting summary when a meeting ends")
+                })
+                .expect("automatic summaries switch");
+            assert_eq!(switch.toggled(), Some(checked));
+            assert_eq!(switch.is_disabled(), engine == "off" || !consent);
+
+            let elements = rt.elements();
+            assert!(elements.iter().any(|element| {
+                element
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.starts_with(privacy))
+            }));
+            assert!(
+                !elements
+                    .iter()
+                    .any(|element| element.text.as_deref() == Some("Off"))
+            );
+        }
+    }
+
     #[test]
     fn recovery_click_then_save_completion_dispatches_exactly_one_codex_retry() {
         let id = "123-1".to_string();
