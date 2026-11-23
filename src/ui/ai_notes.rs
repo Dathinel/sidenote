@@ -151,7 +151,7 @@ pub struct AiNotes {
     pub privacy_open: bool,
     pub model_open: bool,
     pub other_model: bool,
-    helper_save: bool,
+    pub(super) helper_save: bool,
     pub retry_after_save: Option<(String, Request)>,
     pub ask_setup_open: bool,
     pub fallback: Option<Helper>,
@@ -720,6 +720,7 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
                 .gap(8.0)
                 .child(
                     field(&s.ai_notes.models[index], "Other summary model")
+                        .disabled(s.ai_notes.pending.is_some())
                         .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
                         .build(k)
                         .key("notes-model-other")
@@ -727,6 +728,7 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
                 )
                 .child(
                     button("Save model", "notes-save-model", p)
+                        .disabled(s.ai_notes.pending.is_some())
                         .on_press(move |s: &mut State| s.choose_notes_helper(index)),
                 ),
         );
