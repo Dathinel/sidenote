@@ -1,7 +1,7 @@
 use super::super::hex_bridge::HexFailure as Failure;
 use super::*;
 use std::{
-    io::Write,
+    io::{self, Write},
     num::NonZeroUsize,
     process::{Command, ExitStatus},
     sync::{
@@ -29,6 +29,7 @@ const SHUTDOWN_BOUND: Duration = Duration::from_millis(500);
 #[cfg(test)]
 std::thread_local! {
     static CONTROLLER_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
+    static ON_BROKEN_PIPE: std::cell::RefCell<Option<signals::Signal>> = const { std::cell::RefCell::new(None) };
 }
 fn controller(
     job: Arc<crate::platform::ProcessJob>,
@@ -136,15 +137,42 @@ impl Worker {
             cancel,
             timeout,
         };
-        if let Err(error) = worker.input().write_all(b"start\n") {
-            let error = worker.running().err().unwrap_or_else(|| error.into());
+        if let Err(error) = worker.send(b"start\n", Instant::now()) {
             worker.shutdown()?;
             return Err(error);
         }
         Ok(worker)
     }
-    fn input(&mut self) -> &mut std::io::PipeWriter {
-        &mut self.child.input
+    fn send(&mut self, command: &[u8], started: Instant) -> Result<()> {
+        let error = match self.child.input.write_all(command) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        self.running()?;
+        if error.kind() != io::ErrorKind::BrokenPipe {
+            return Err(error.into());
+        }
+        // Windows can close stdin before it signals the process handle.
+        #[cfg(test)]
+        ON_BROKEN_PIPE.with(|slot| {
+            if let Some(signal) = slot.borrow_mut().take() {
+                signal.set();
+            }
+        });
+        loop {
+            let remaining = self.timeout.saturating_sub(started.elapsed());
+            let wait_ms = remaining.as_millis().min(10) as u32;
+            if wait_ms == 0 {
+                return Err(error.into());
+            }
+            let status = self.child.wait_for(wait_ms)?;
+            if self.cancel.load(Ordering::Acquire) {
+                return Err(WorkerFailure::Cancelled.into());
+            }
+            if let Some(status) = status {
+                return Err(WorkerFailure::Exited(status).into());
+            }
+        }
     }
     fn running(&self) -> Result<()> {
         if self.cancel.load(Ordering::Acquire) {
@@ -199,10 +227,7 @@ impl Recognizer for Worker {
             }
             let started = Instant::now();
             store_io::write(&self.output.path().join("range.json"), range)?;
-            if let Err(error) = self.input().write_all(b"range\n") {
-                self.running()?;
-                return Err(error.into());
-            }
+            self.send(b"range\n", started)?;
             loop {
                 self.running()?;
                 if started.elapsed() >= self.timeout {
