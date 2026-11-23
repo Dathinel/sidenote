@@ -22,6 +22,7 @@ pub enum Phase {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Status {
+    pub channel: Option<String>,
     pub phase: Phase,
     pub version: String,
     pub progress: u8,

@@ -929,7 +929,10 @@ fn finished_refresh_view(view: &str) {
     state.live_open = false;
     match view {
         "meeting" => state.selected = Some("10-1".into()),
-        "memory" => state.memory_open = true,
+        "memory" => {
+            state.config.features.memory = true;
+            state.memory_open = true;
+        }
         "sidebar" | "home" | "list" => state.go_home(),
         _ => panic!("unknown view"),
     }

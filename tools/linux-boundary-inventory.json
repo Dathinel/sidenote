@@ -401,7 +401,7 @@
 
   "src/ui/ask_settings.rs": "c6aba5971947b5eb71090b820932d93fd5041bb05be55a9e65ae1000f36608ac",
 
-  "src/ui/ask_switch_tests.rs": "f74efc80174480e4543514129186272c3dc209e3e98011c075ca396389d97ad2",
+  "src/ui/ask_switch_tests.rs": "3006e4391c288f501a0dde91ce41a04310f703d7b0777521ff8f3a5854411280",
 
   "src/ui/benchmark.rs": "3eea004745d87db3e40f407a7d320827a47772f1185355a0c6397be3df15e9ff",
 
@@ -417,7 +417,7 @@
 
   "src/ui/hex/connection/stop.rs": "48def6ec1d077a8b3639e62179355b3937453295da8d79745d71bd53f5dbd758",
 
-  "src/ui/hex/connection/stop_tests.rs": "75bfb02b34641a9344600d8083f8dedb7a3f22b60dadbbadf2632f2c1b1b62ca",
+  "src/ui/hex/connection/stop_tests.rs": "09b5a6cb182b578ed7f22b04c3e68888a9a6643f6030c6bd66b1f0e2a7fafd08",
 
   "src/ui/hex/connection/stop_tests/api.rs": "fdbace0c0b926c5a8520497d841c9180e611c1724a5e1c25464204e0e8285fde",
 
@@ -457,7 +457,7 @@
 
   "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
 
-  "src/ui/updates.rs": "f0bb32c4b5ac00b7240725f3386fb15374ac7599a9cba6c66a0b780a8e0a53b7",
+  "src/ui/updates.rs": "ae20438e1c35031b710a4b960b8a0983afb23bd539ac18aa64554819b28984fb",
 
-  "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
+  "src/updates_windows.rs": "9164826279ae6a808fd2df188396032ac29ac867406b77718375b9b2fed39fd9"
 }
