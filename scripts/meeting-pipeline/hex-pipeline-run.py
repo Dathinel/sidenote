@@ -1,10 +1,13 @@
 """Bounded CLI calls for the notes pipeline. Diagnostics never contain payloads."""
 import argparse
+from contextlib import ExitStack
+from functools import wraps
 import json
 import os
 import re
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,6 +19,82 @@ if CONTRACT["version"] != 1:
     raise ValueError("Unsupported meeting job contract")
 STAGES = set(CONTRACT["stages"])
 STAGE, DEADLINE, STARTED = "pipeline", 240, time.monotonic()
+
+
+def open_meeting_claim(path, cleanup):
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                           wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        create.restype = wintypes.HANDLE
+        # The Rust and PowerShell claims use read/write sharing and exclude delete.
+        handle = create(str(path), 0xC0000000, 3, None, 4, 0x00200000, None)
+        if handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        close = kernel.CloseHandle
+        close.argtypes = (wintypes.HANDLE,)
+        cleanup.callback(close, handle)
+    else:
+        import fcntl
+
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        cleanup.callback(os.close, fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("Unsafe meeting claim")
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+
+def guarded_meeting(publish):
+    @wraps(publish)
+    def publish_claimed(folder, *args, **kwargs):
+        folder = Path(folder).expanduser()
+        if ".." in folder.parts or any(":" in part for part in folder.parts[1:]):
+            return None
+        folder = folder.absolute()
+        if not re.fullmatch(r"(?=.*[0-9])[0-9-]{1,100}", folder.name):
+            return None
+        configured = os.environ.get("SIDENOTE_DATA_DIR") or os.environ.get("SIDENOTE_STATE_DIR")
+        if configured:
+            state = Path(configured)
+        elif os.name == "nt":
+            appdata = Path(os.environ["APPDATA"])
+            state = appdata / "sidenote"
+            if not state.exists():
+                state = appdata / "hex-meetings"
+        else:
+            state = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "sidenote"
+        local = state.absolute() / "local"
+        lock = local / "deleted-meeting-claims" / folder.name
+        suppression = local / "deleted-meeting-ids.json"
+        with ExitStack() as cleanup:
+            try:
+                for path in {folder, lock, suppression, *folder.parents, *lock.parents}:
+                    try:
+                        info = path.lstat()
+                    except FileNotFoundError:
+                        continue
+                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                        return None
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                open_meeting_claim(lock, cleanup)
+                try:
+                    with suppression.open("rb") as stream:
+                        encoded = stream.read(16 * 1024 * 1024 + 1)
+                    if len(encoded) > 16 * 1024 * 1024:
+                        return None
+                    ids = json.loads(encoded.decode("utf-8-sig"))
+                except FileNotFoundError:
+                    ids = {}
+                if not isinstance(ids, dict) or folder.name in ids or not folder.is_dir():
+                    return None
+            except (OSError, ValueError):
+                return None
+            return publish(folder, *args, **kwargs)
+    return publish_claimed
 
 
 class SafeParser(argparse.ArgumentParser):

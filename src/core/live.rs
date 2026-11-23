@@ -175,10 +175,26 @@ pub fn read_notes(folder: &Path) -> String {
     text.trim().to_string()
 }
 
+pub(super) fn recycle_claim() -> Option<std::sync::MutexGuard<'static, ()>> {
+    NOTES_WRITE_LOCK.try_lock().ok()
+}
+
 /// Writes the notes with a flushed temporary file and a replacing rename, so the pipeline never
 /// reads half a file. The temporary file (`notes.<pid>.tmp`) is on the sync ignore list.
 pub fn write_notes(folder: &Path, text: &str) -> io::Result<()> {
     let _write = NOTES_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state = super::state_dir();
+    if folder.parent().is_some_and(|parent| {
+        parent == super::meetings_dir() || parent == super::meeting_parts::inputs(&state)
+    }) && super::meeting_delete::suppressed_ids(&state)?.contains(
+        folder
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_ref(),
+    ) {
+        return Err(io::ErrorKind::NotFound.into());
+    }
     if !folder.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,

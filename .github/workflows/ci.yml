@@ -225,10 +225,12 @@ jobs:
             core::meeting_evidence::speech_host_tests::speech_host_without_runtime_does_not_consume_a_local_attempt
           cargo test --locked --features asr-runtime -p sidenote --bin sidenote -- \
             install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_ \
-            ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings::
+            ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings:: \
+            ui::ask_switch_tests::deletion_cancels_delayed_ask_text_and_answers_in_all_scopes \
+            ui::ask_switch_tests::suppression_failure_during_ui_apply_retries_unchanged_catalog
           SIDENOTE_SYNC_TEST_ARTIFACT_DIR="$(cygpath -aw "target/$CARGO_BUILD_TARGET/debug")" \
             cargo test --locked -p sidenote-sync --lib -- worker::tests::
-          cargo test --locked --features asr-runtime -p sidenote --test idle_cpu --test relay_preview --test meeting_delete_storage
+          cargo test --locked --features asr-runtime -p sidenote --test idle_cpu --test relay_preview --test meeting_delete_storage --test meeting_delete_visibility
 
   docs:
     runs-on: ubuntu-24.04
