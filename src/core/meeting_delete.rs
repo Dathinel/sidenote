@@ -464,10 +464,23 @@ fn suppression_path(state: &Path) -> PathBuf {
     state.join("local/deleted-meeting-ids.json")
 }
 
+fn read_suppression(state: &Path) -> io::Result<Suppression> {
+    let path = suppression_path(state);
+    match super::meeting_router::inputs::Snapshot::read_file(&path, file_reads::SUMMARY_MAX) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Suppression::new()),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn suppressed_ids(state: &Path) -> io::Result<BTreeSet<String>> {
-    Ok(store_io::read::<Suppression>(&suppression_path(state))?
-        .into_keys()
-        .collect())
+    Ok(read_suppression(state)?.into_keys().collect())
+}
+
+/// A writer must keep the returned claim until its last publication.
+pub(crate) fn claim_write(state: &Path, id: &str) -> io::Result<Option<fs::File>> {
+    let claim = writer_claim(state, id)?;
+    Ok((!read_suppression(state)?.contains_key(id)).then_some(claim))
 }
 
 pub fn writer_claim(state: &Path, id: &str) -> io::Result<fs::File> {
@@ -637,7 +650,7 @@ impl Storage {
             members,
             hex_inputs,
         } = self.inventory_selected(id, selected)?;
-        let suppression: Suppression = store_io::read(&suppression_path(&self.state))?;
+        let suppression = read_suppression(&self.state)?;
         if ids.iter().any(|id| suppression.contains_key(id)) {
             return Err(invalid().into());
         }
@@ -682,7 +695,7 @@ impl Storage {
     }
 
     fn suppression_bytes(&self, receipt: &Receipt) -> io::Result<Vec<u8>> {
-        let mut ids: Suppression = store_io::read(&suppression_path(&self.state))?;
+        let mut ids = read_suppression(&self.state)?;
         for id in &receipt.ids {
             if ids
                 .get(id)
@@ -819,7 +832,7 @@ impl Storage {
         checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
     ) -> io::Result<()> {
         let path = suppression_path(&self.state);
-        let mut ids: Suppression = store_io::read(&path)?;
+        let mut ids = read_suppression(&self.state)?;
         ids.retain(|_, owner| owner != &receipt.transaction);
         store_io::atomic_write_checked(&path, &Self::bounded(&ids)?, |stage| {
             checkpoint(MoveEvent::Unhide(stage))

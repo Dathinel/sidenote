@@ -2,6 +2,7 @@ use super::*;
 impl Meeting {
     /// Snapshot all finished parts, retaining the previous notes until replacement succeeds.
     pub fn prepare_notes(&mut self, root: &Path, hex: &Path) -> io::Result<PathBuf> {
+        let _claim = self.claim(root)?;
         if self.parts.is_empty() {
             return Err(store_io::invalid("No recording part yet"));
         }
@@ -53,7 +54,7 @@ impl Meeting {
         )?;
         self.phase = Phase::Ended;
         self.requested_parts = self.parts.len();
-        self.save(root)?;
+        self.save_claimed(root)?;
         Ok(folder)
     }
     pub fn view_text(&self, hex: &Path) -> io::Result<String> {

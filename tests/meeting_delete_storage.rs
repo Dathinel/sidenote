@@ -805,3 +805,27 @@ fn every_purge_boundary_can_be_retried_after_reopen() {
         );
     }
 }
+
+#[test]
+fn recycled_multipart_writers_refuse_stale_session() {
+    use sidenote::core::meeting_parts;
+    let f = recorded_fixture(true);
+    let mut session = meeting_parts::read(&f.state, "10").unwrap().unwrap();
+    let storage = f.storage();
+    let id = delete(&storage);
+    assert!(session.save(&f.state).is_err());
+    assert!(session.write_view(&f.state).is_err());
+    assert!(session.prepare_notes(&f.state, &f.meetings).is_err());
+    assert!(meeting_parts::prepare_script_update(&f.state, "10").is_err());
+    assert!(meeting_parts::read(&f.state, "10").unwrap().is_none());
+    assert!(!meeting_parts::inputs(&f.state).join("10").exists());
+    storage.restore(&id).unwrap();
+    assert_eq!(
+        meeting_parts::read(&f.state, "10")
+            .unwrap()
+            .unwrap()
+            .parts
+            .len(),
+        2
+    );
+}
