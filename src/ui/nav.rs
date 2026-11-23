@@ -620,7 +620,7 @@ pub(super) fn new_meeting_button(s: &State, p: Palette, narrow: bool, layer: &mu
     }
     col()
         .items_end()
-        .gap(2.0)
+        .gap(if narrow { 6.0 } else { 2.0 })
         .child(action)
         .children(blocked.map(|reason| {
             roles::META
@@ -968,6 +968,50 @@ pub fn meetings_home(s: &State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn narrow_new_meeting_gives_hex_check_its_own_line() {
+        use crate::ui::theme;
+        use rune::{Env, Runtime, text::TextSystem};
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        crate::ui::updates::settings_fixture(&mut state);
+        state.listener_probed(
+            Some(sidenote::updates::ListenerStatus {
+                ready: true,
+                preparing: false,
+                error: None,
+            }),
+            None,
+        );
+        let mut rt = Runtime::with_text(
+            state,
+            |s: &State, _: &mut rune::Cx<State>| {
+                let mut layer = Vec::new();
+                let action = new_meeting_button(s, theme::palette(true), true, &mut layer);
+                col().child(action).children(layer)
+            },
+            (360.0, 200.0),
+            Env::default(),
+            TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+        );
+        rt.frame(0.0);
+        let elements = rt.elements();
+        let button = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("new-meeting"))
+            .unwrap();
+        let checking = elements
+            .iter()
+            .find(|e| e.text.as_deref() == Some("Checking for Hex"))
+            .expect("short checking message");
+        assert!(checking.rect[1] >= button.rect[1] + button.rect[3] + 5.0);
+        assert_eq!(checking.rect[3], roles::META.lh);
+        let button_right = button.rect[0] + button.rect[2];
+        let checking_right = checking.rect[0] + checking.rect[2];
+        assert!((button_right - checking_right).abs() < 0.5);
+    }
 
     #[test]
     fn profile_menu_accepts_enter_arrows_and_escape() {

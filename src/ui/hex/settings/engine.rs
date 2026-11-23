@@ -4,11 +4,13 @@
 //! validates only that field and a stored value that is already wrong never blocks another edit.
 //! Status lines say where a value came from and whether it is valid. They never print a value
 //! the status did not come from, so nothing a script import rejected can appear here.
-use super::{Page, group_highlight, icon_tile, navigate, panel, row_icon};
+use super::{Page, group_highlight, navigate, panel, row_field_kit, row_icon};
 use crate::ui::{
-    State, ai_notes, roles,
+    State, ai_notes,
+    cards::{settings_copy, settings_divider, settings_row, settings_tile},
+    roles,
     theme::Palette,
-    widgets::{ButtonDisabled, action, hairline},
+    widgets::{ButtonDisabled, action, row_action},
 };
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Switch, TextArea, TextInput};
@@ -514,12 +516,7 @@ fn copy_column(
     status_key: &str,
     statuses: &BTreeMap<String, FieldStatus>,
 ) -> El {
-    let mut copy = col()
-        .grow(1.0)
-        .min_w(170.0)
-        .gap(4.0)
-        .child(roles::NAME.wrap(text.0, p.ink))
-        .child(roles::SMALL.wrap(text.1, p.soft));
+    let mut copy = settings_copy(text.0, p).child(roles::META.wrap(text.1, p.soft));
     if let Some(status) = statuses.get(status_key)
         && in_use(status_key)
     {
@@ -612,11 +609,10 @@ fn step_row(
         .on_toggle(move |s: &mut State| toggle(s, step))
         .build(k)
         .key(format!("{key}-switch"));
-    crate::ui::cards::row_shell()
+    settings_row(true)
         .key(key)
-        .flex_wrap()
         .fill(group_highlight(s, key, p))
-        .child(icon_tile(row_icon(key), p))
+        .child(settings_tile(row_icon(key), p))
         .child(copy)
         .child(switch)
 }
@@ -624,7 +620,7 @@ fn steps_card(s: &State, k: &Kit, p: Palette, statuses: &BTreeMap<String, FieldS
     let mut rows = col().w_full();
     for (index, step) in Step::ALL.iter().enumerate() {
         if index > 0 {
-            rows = rows.child(hairline(p));
+            rows = rows.child(settings_divider(p));
         }
         rows = rows.child(step_row(s, k, p, *step, statuses));
     }
@@ -646,20 +642,12 @@ fn import_row(s: &State, p: Palette) -> El {
     let name = "Import from scripts";
     let help =
         "Bring in the settings your old scripts use, one time. This comes in a later version.";
-    let copy = col()
-        .grow(1.0)
-        .min_w(170.0)
-        .gap(4.0)
-        .child(roles::NAME.wrap(name, p.ink))
-        .child(roles::SMALL.wrap(help, p.soft));
-    let button = action("Import", p)
-        .key("engine-import-button")
-        .button_disabled(true);
-    let line = crate::ui::cards::row_shell()
+    let copy = settings_copy(name, p).child(roles::META.wrap(help, p.soft));
+    let button = row_action("Import", "engine-import-button", p).button_disabled(true);
+    let line = settings_row(true)
         .key(key)
-        .flex_wrap()
         .fill(group_highlight(s, key, p))
-        .child(icon_tile(row_icon(key), p))
+        .child(settings_tile(row_icon(key), p))
         .child(copy)
         .child(button);
     col()
@@ -716,11 +704,10 @@ fn prompt_row(
                 .button_disabled(!customised(config, field))
                 .on_press(move |s: &mut State| reset(s, field)),
         );
-    let top = crate::ui::cards::row_shell()
+    let top = settings_row(true)
         .key(key)
-        .flex_wrap()
         .fill(group_highlight(s, key, p))
-        .child(icon_tile(row_icon(key), p))
+        .child(settings_tile(row_icon(key), p))
         .child(copy);
     let edit = col().w_full().gap(10.0).px(14.0).pb(14.0);
     col()
@@ -732,7 +719,7 @@ fn prompts_card(s: &State, k: &Kit, p: Palette, statuses: &BTreeMap<String, Fiel
     let mut rows = col().w_full();
     for (index, field) in Field::PROMPTS.iter().enumerate() {
         if index > 0 {
-            rows = rows.child(hairline(p));
+            rows = rows.child(settings_divider(p));
         }
         rows = rows.child(prompt_row(s, k, p, *field, statuses));
     }
@@ -777,18 +764,18 @@ fn field_row(
         value.key(format!("{key}-value")).max_w(220.0)
     } else {
         TextInput::new(engine.drafts.get(index).unwrap_or(&fallback))
+            .height(30.0)
             .label(name)
             .placeholder(placeholder)
             .on_edit(move |s: &mut State| draft_mut(s, index))
-            .build(k)
+            .build(&row_field_kit(k, p))
             .key(format!("{key}-input"))
             .w(220.0)
     };
-    crate::ui::cards::row_shell()
+    settings_row(true)
         .key(key)
-        .flex_wrap()
         .fill(group_highlight(s, key, p))
-        .child(icon_tile(row_icon(key), p))
+        .child(settings_tile(row_icon(key), p))
         .child(copy)
         .child(input)
 }
@@ -804,7 +791,7 @@ fn group(
     let mut rows = col().w_full();
     for (index, field) in fields.iter().enumerate() {
         if index > 0 {
-            rows = rows.child(hairline(p));
+            rows = rows.child(settings_divider(p));
         }
         rows = rows.child(field_row(s, k, p, *field, statuses));
     }
@@ -826,7 +813,7 @@ fn group(
         .mt(18.0)
         .key(key)
         .child(roles::GROUP.wrap(title, p.soft))
-        .child(panel(p).child(rows.child(hairline(p)).child(footer)))
+        .child(panel(p).child(rows.child(settings_divider(p)).child(footer)))
 }
 
 /// The notes writer is the existing dev.28 choice. This row shows it and links to where it is
@@ -836,12 +823,7 @@ fn notes_writer(s: &State, p: Palette, statuses: &BTreeMap<String, FieldStatus>)
     let writer = settings.and_then(|notes| notes.effective_helper());
     let help =
         "The agent that writes meeting summaries. It is the same choice as in Models and agents.";
-    let mut copy = col()
-        .grow(1.0)
-        .min_w(170.0)
-        .gap(4.0)
-        .child(roles::NAME.wrap("Notes writer", p.ink))
-        .child(roles::SMALL.wrap(help, p.soft));
+    let mut copy = settings_copy("Notes writer", p).child(roles::META.wrap(help, p.soft));
     if let Some(status) = statuses.get("notes.helper") {
         let (line, warn) = status_text("notes.helper", status);
         let color = if warn { p.warn } else { p.soft };
@@ -859,16 +841,14 @@ fn notes_writer(s: &State, p: Palette, statuses: &BTreeMap<String, FieldStatus>)
                 .key("engine-notes-writer-value"),
         )
         .child(
-            action("Change writer", p)
-                .key("engine-notes-writer-change")
+            row_action("Change writer", "engine-notes-writer-change", p)
                 .on_press(|s: &mut State| navigate(s, Page::Helpers, 0)),
         );
     let key = "engine-notes-writer";
-    let line = crate::ui::cards::row_shell()
+    let line = settings_row(true)
         .key(key)
-        .flex_wrap()
         .fill(group_highlight(s, key, p))
-        .child(icon_tile(row_icon(key), p))
+        .child(settings_tile(row_icon(key), p))
         .child(copy)
         .child(control);
     panel(p).child(line)
