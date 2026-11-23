@@ -1,5 +1,5 @@
 //! Real headless app processes, isolated stores, real local Worker and encrypted sessions.
-#![cfg(all(feature = "nightly", any(windows, target_os = "linux")))]
+#![cfg(all(feature = "dev", any(windows, target_os = "linux")))]
 mod common;
 #[cfg(windows)]
 use serde_json::Value;

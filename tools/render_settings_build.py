@@ -292,7 +292,7 @@ def refine_p8_pages(output, exe):
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
- parser.add_argument('--channel', choices=('stable','nightly'), default='nightly')
+ parser.add_argument('--channel', choices=('stable','dev'), default='dev')
  modes=parser.add_mutually_exclusive_group()
  modes.add_argument('--meeting-lift',choices=['before','after'])
  modes.add_argument('--refine-p1',choices=['before','after'])

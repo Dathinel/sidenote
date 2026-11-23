@@ -208,7 +208,7 @@ pub struct Features {
 
 impl Default for Features {
     fn default() -> Self {
-        let experimental = CHANNEL == Channel::Nightly;
+        let experimental = CHANNEL == Channel::Dev;
         Self {
             tasks: true,
             memory: experimental,
@@ -669,13 +669,13 @@ impl Config {
                 &super::live::notes_pipeline(),
             )),
             features: Features {
-                memory: CHANNEL == Channel::Nightly
+                memory: CHANNEL == Channel::Dev
                     || report_proposals
                     || !records.records.is_empty()
                     || !records.proposals.is_empty()
                     || !memory.legacy_text()?.trim().is_empty(),
                 daily_check,
-                projects: CHANNEL == Channel::Nightly
+                projects: CHANNEL == Channel::Dev
                     || !projects.projects.is_empty()
                     || !projects.aliases.is_empty()
                     || tasks.iter().any(|t| t.project != super::UNSORTED),
@@ -798,7 +798,7 @@ mod tests {
                 assert_eq!(feature.capability(), Capability::Experimental);
                 assert_eq!(
                     config.features.enabled(feature),
-                    CHANNEL == Channel::Nightly,
+                    CHANNEL == Channel::Dev,
                     "{feature:?}"
                 );
             }
@@ -866,7 +866,7 @@ mod tests {
         assert!(!relay_busy(&mut state, true, later));
     }
     #[cfg(windows)]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn relay_fixture(root: &Path) {
         std::fs::create_dir_all(root.join("local/relay")).unwrap();
         store_io::write(
@@ -882,7 +882,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn held_replica_lock_defers_notes_overlay_then_retries() {
         let root = tempfile::tempdir().unwrap();
         relay_fixture(root.path());
@@ -915,7 +915,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn corrupt_replica_does_not_defer_or_use_stale_notes_name() {
         let root = tempfile::tempdir().unwrap();
         relay_fixture(root.path());

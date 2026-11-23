@@ -13,7 +13,7 @@ links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fa
 param(
     [string]$GnuBin,
     [switch]$PreflightOnly,
-    [ValidateSet('stable', 'nightly')] [string]$Channel = 'stable'
+    [ValidateSet('stable', 'dev')] [string]$Channel = 'stable'
 )
 $ErrorActionPreference = 'Continue'
 $MinFreeGb = 60
@@ -33,15 +33,15 @@ if ($Channel -eq 'stable' -and -not (Test-Path -LiteralPath 'tests/channel_bound
     Write-Output 'release_gate: Stable release gate needs S2 (channel_boundary integration test).'
     exit 2
 }
-if ($Channel -eq 'nightly') {
+if ($Channel -eq 'dev') {
     try {
-        $nightly = Invoke-RestMethod -Uri 'https://api.github.com/repos/harshanandak/sidenote/releases/tags/nightly' -TimeoutSec 5 -ErrorAction Stop
+        $devRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/harshanandak/sidenote/releases/tags/dev' -TimeoutSec 5 -ErrorAction Stop
     } catch {
         # A fresh channel has no release yet. Existing releases must be prereleases.
         if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
     }
-    if ($nightly -and $nightly.prerelease -ne $true) {
-        Write-Output 'release_gate: the nightly GitHub release must be a prerelease.'
+    if ($devRelease -and $devRelease.prerelease -ne $true) {
+        Write-Output 'release_gate: the Dev GitHub release must be a prerelease.'
         exit 2
     }
 }
@@ -137,9 +137,9 @@ function Gate([string]$Name, [scriptblock]$Run) {
         $channelArgs = @()
         $asrFeatures = 'asr-runtime'
         $settingsRender = 'artifacts/settings-build-stable'
-        if ($env:SIDENOTE_RELEASE_CHANNEL -eq 'nightly') {
-            $channelArgs = @('--features', 'nightly')
-            $asrFeatures += ',nightly'
+        if ($env:SIDENOTE_RELEASE_CHANNEL -eq 'dev') {
+            $channelArgs = @('--features', 'dev')
+            $asrFeatures += ',dev'
             $settingsRender = 'artifacts/settings-build'
         }
     }

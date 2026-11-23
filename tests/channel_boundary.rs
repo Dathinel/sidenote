@@ -1,4 +1,4 @@
-#![cfg(any(not(feature = "nightly"), target_os = "linux"))]
+#![cfg(any(not(feature = "dev"), target_os = "linux"))]
 
 use std::process::{Command, Stdio};
 
@@ -17,7 +17,7 @@ fn app(root: &std::path::Path) -> Command {
     command
 }
 
-#[cfg(not(feature = "nightly"))]
+#[cfg(not(feature = "dev"))]
 #[test]
 fn stable_refuses_excluded_process_modes_before_initializing_state() {
     let root = tempfile::tempdir().unwrap();
@@ -56,7 +56,7 @@ fn stable_refuses_excluded_process_modes_before_initializing_state() {
     assert!(root.path().read_dir().unwrap().next().is_none());
 }
 
-#[cfg(all(not(feature = "desktop"), not(feature = "nightly")))]
+#[cfg(all(not(feature = "desktop"), not(feature = "dev")))]
 #[test]
 fn stable_ordinary_start_ignores_saved_server_role_without_writing_it() {
     let root = tempfile::tempdir().unwrap();
@@ -77,7 +77,7 @@ fn stable_ordinary_start_ignores_saved_server_role_without_writing_it() {
     }
 }
 
-#[cfg(all(windows, not(feature = "desktop"), not(feature = "nightly")))]
+#[cfg(all(windows, not(feature = "desktop"), not(feature = "dev")))]
 #[test]
 fn stable_windows_scheduled_listener_starts_its_recorder() {
     use std::time::{Duration, Instant};
@@ -109,7 +109,7 @@ fn stable_windows_scheduled_listener_starts_its_recorder() {
     );
 }
 
-#[cfg(not(feature = "nightly"))]
+#[cfg(not(feature = "dev"))]
 #[test]
 fn stable_relay_entry_points_preserve_existing_files_and_local_reads() {
     use sidenote::core::relay_preview::{self, Settings, operations, pairing};
@@ -167,9 +167,9 @@ fn stable_relay_entry_points_preserve_existing_files_and_local_reads() {
     assert!(!root.path().join(".stignore").exists());
 }
 
-#[cfg(all(target_os = "linux", feature = "nightly"))]
+#[cfg(all(target_os = "linux", feature = "dev"))]
 #[test]
-fn nightly_sync_control_still_accepts_an_empty_input_stream() {
+fn dev_sync_control_still_accepts_an_empty_input_stream() {
     let root = tempfile::tempdir().unwrap();
     let result = app(root.path()).arg("--sync-control").output().unwrap();
     assert!(

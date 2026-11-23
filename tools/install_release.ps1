@@ -107,7 +107,7 @@ function Invoke-InstallCheck([string]$Expected) {
     if ($LASTEXITCODE -ne 0) { throw 'Install check failed' }
 }
 function Invoke-ReleaseInstall {
-    $channel = if ($Version -match '-dev\.') { 'nightly' } else { 'stable' }
+    $channel = if ($Version -match '-dev\.') { 'dev' } else { 'stable' }
     $setup = Join-Path $Feed "sidenote-$channel-Setup.exe"
     if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { $setup = Join-Path $Feed 'sidenote-win-Setup.exe' }
     if ($WhatIf) {

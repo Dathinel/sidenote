@@ -26,7 +26,7 @@ def entered_query(tree, input_key, query):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", nargs="?", type=Path, default=Path("artifacts/settings"))
-    parser.add_argument("--channel", choices=("stable", "nightly"), default="nightly")
+    parser.add_argument("--channel", choices=("stable", "dev"), default="dev")
     args = parser.parse_args()
     folder = args.folder
     stable = args.channel == "stable"

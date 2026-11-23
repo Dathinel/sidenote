@@ -421,7 +421,7 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
 fn channel_label(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => "Stable",
-        Channel::Nightly => "Nightly",
+        Channel::Dev => "Dev",
     }
 }
 
@@ -433,15 +433,15 @@ pub fn section(s: &State, p: Palette) -> El {
     }
     let status = &s.updates.status;
     let (other, channel_help) = match s.updates.channel {
-        Channel::Nightly => (
+        Channel::Dev => (
             Channel::Stable,
             "Get prerelease builds. If you switch to Stable, this build stays installed until a newer stable release is available.",
         ),
-        Channel::Stable if CHANNEL == Channel::Nightly => (
-            Channel::Nightly,
+        Channel::Stable if CHANNEL == Channel::Dev => (
+            Channel::Dev,
             "This build stays installed until a newer stable release is available.",
         ),
-        Channel::Stable => (Channel::Nightly, "Get stable releases."),
+        Channel::Stable => (Channel::Dev, "Get stable releases."),
     };
     let checked = status
         .checked
@@ -482,7 +482,10 @@ pub fn section(s: &State, p: Palette) -> El {
         .child(super::hex::settings::setting_row(
             s,
             "update-channel",
-            &format!("Update channel · {}", channel_label(s.updates.channel)),
+            match s.updates.channel {
+                Channel::Dev => "Update channel · Dev (developer builds)",
+                Channel::Stable => "Update channel · Stable",
+            },
             channel_help,
             super::widgets::button(
                 format!("Switch to {}", channel_label(other)),

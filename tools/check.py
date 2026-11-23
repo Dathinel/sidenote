@@ -42,6 +42,17 @@ def main():
     if args.test is not None:
         commands.append(["cargo", "test", "--locked", "-p", "sidenote", "--lib", args.test])
 
+    if not args.list:
+        # Split the old channel name so this check does not match itself.
+        obsolete = subprocess.run([
+            "git", "grep", "-ilIF", "-e", "night" "ly", "--",
+            ":!tools/linux-boundary-inventory.json", ":(icase,exclude,glob)**/CHANGELOG*",
+        ])
+        if obsolete.returncode == 0:
+            sys.exit("check: use Dev for the developer channel in the files above")
+        if obsolete.returncode != 1:
+            return obsolete.returncode
+
     cargo_env = None
     if sys.platform == "linux" and not args.fast and not args.list:
         cargo_env = dict(os.environ, RUSTUP_TOOLCHAIN="stable",

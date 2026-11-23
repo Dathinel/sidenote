@@ -122,7 +122,7 @@ impl Page {
         }
     }
     fn visible(self, channel: Channel) -> bool {
-        channel == Channel::Nightly || !matches!(self, Self::Sync | Self::ConnectedApps)
+        channel == Channel::Dev || !matches!(self, Self::Sync | Self::ConnectedApps)
     }
     pub(in crate::ui) fn tabs(self) -> &'static [&'static str] {
         match self {
@@ -3512,7 +3512,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn saving_the_device_name_is_blocked_while_pairing_is_busy() {
         let root = tempfile::tempdir().unwrap();
         let mut s = State::new();
@@ -3545,7 +3545,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn linux_relay_settings_refuse_enable_and_allow_local_device_rename() {
         use sidenote::core::relay_preview::Settings;
 
@@ -3705,8 +3705,8 @@ mod tests {
                 state.config.features.toggle(feature);
             }
         }
-        // The legacy map includes Nightly destinations and the Windows capture setting.
-        let mut entries = index_for_channel(&state, Channel::Nightly);
+        // The legacy map includes Dev destinations and the Windows capture setting.
+        let mut entries = index_for_channel(&state, Channel::Dev);
         if !cfg!(windows) {
             entries.push(meeting_icon_capture_destination());
         }
@@ -3815,12 +3815,12 @@ mod tests {
         let destinations = index(&state);
         for page in [Page::Sync, Page::ConnectedApps] {
             assert!(!page.visible(Channel::Stable));
-            assert!(page.visible(Channel::Nightly));
+            assert!(page.visible(Channel::Dev));
             assert_eq!(
                 destinations
                     .iter()
                     .any(|destination| destination.page == page),
-                CHANNEL == Channel::Nightly
+                CHANNEL == Channel::Dev
             );
         }
         assert!(Page::Helpers.visible(Channel::Stable));

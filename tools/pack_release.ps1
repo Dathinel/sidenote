@@ -3,7 +3,7 @@ param(
     [string]$DotnetRoot = $env:DOTNET_ROOT,
     [string]$GnuBin = $env:RUST_GNU_BIN,
     [string]$ReleaseNotes = '',
-    [ValidateSet('stable', 'nightly')] [string]$Channel
+    [ValidateSet('stable', 'dev')] [string]$Channel
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/..").Path
@@ -62,15 +62,15 @@ function Copy-CpuRuntime([string]$Destination, [string]$Target) {
 Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
-    if (-not $Channel) { $Channel = if ($version -match '-dev\.') { 'nightly' } else { 'stable' } }
+    if (-not $Channel) { $Channel = if ($version -match '-dev\.') { 'dev' } else { 'stable' } }
     $Channel = $Channel.ToLowerInvariant()
-    $versionPattern = if ($Channel -eq 'nightly') { '^\d+\.\d+\.\d+-dev\.(0|[1-9]\d*)$' } else { '^\d+\.\d+\.\d+$' }
+    $versionPattern = if ($Channel -eq 'dev') { '^\d+\.\d+\.\d+-dev\.(0|[1-9]\d*)$' } else { '^\d+\.\d+\.\d+$' }
     if ($version -notmatch $versionPattern) { throw "Cargo.toml version does not match the $Channel release channel." }
     $vpkHelp = & vpk --skip-updates --help
     if ($LASTEXITCODE -ne 0 -or -not ($vpkHelp -match '^\s*Velopack CLI 0\.0\.1298,')) {
         throw 'Velopack CLI 0.0.1298 is required.'
     }
-    $features = if ($Channel -eq 'nightly') { 'asr-runtime,nightly' } else { 'asr-runtime' }
+    $features = if ($Channel -eq 'dev') { 'asr-runtime,dev' } else { 'asr-runtime' }
     $metadataJson = & cargo metadata --offline --locked --features $features --filter-platform x86_64-pc-windows-gnu --format-version 1
     if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
     $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
