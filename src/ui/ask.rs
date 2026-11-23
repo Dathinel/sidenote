@@ -1213,7 +1213,7 @@ mod meeting_agent_tests {
     use super::*;
     #[test]
     fn local_endpoint_failure_shows_recovery_before_the_known_metrics() {
-        use core::provider::{Metrics, Settings};
+        use sidenote::core::provider::{Metrics, Settings};
 
         crate::test_paths::isolate();
         let mut state = State::new();
