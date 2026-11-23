@@ -4630,6 +4630,11 @@ mod citation_tests {
         let folder = root.path().join(id);
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(
+            folder.join("english-summary.json"),
+            r#"{"title":"Workshop planning"}"#,
+        )
+        .unwrap();
+        std::fs::write(
             folder.join("english-transcript.md"),
             concat!(
                 "[00:00:00.250] Maya (English): Workshop opening.\n",
