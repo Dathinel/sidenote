@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn restore_error_explains_when_reopening_finishes_the_restore() {
-        use core::meeting_delete::{MoveEvent, writer_claim};
+        use sidenote::core::meeting_delete::{MoveEvent, writer_claim};
 
         if in_parent("restore_error_explains_when_reopening_finishes_the_restore") {
             return;
