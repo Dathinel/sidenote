@@ -1,5 +1,6 @@
 //! Frozen public replay enters through the production receipt reader and assembler.
 use super::*;
+use sha2::{Digest, Sha256};
 
 fn numeric_difference(a: &Value, b: &Value, path: &str) -> Option<String> {
     match (a, b) {
@@ -22,23 +23,54 @@ fn fixture() -> (
     super::super::pieces::PieceManifest,
     Vec<Chunk>,
 ) {
-    let saved = std::path::PathBuf::from(std::env::var_os("SIDENOTE_ASSEMBLY_REPRO").unwrap());
+    let saved: Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/assembly-refusals.json"
+    )))
+    .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    for file in std::fs::read_dir(&saved).unwrap() {
-        let file = file.unwrap();
-        std::fs::copy(file.path(), root.join(file.file_name())).unwrap();
+    for (name, key) in [
+        ("coverage.json", "coverage"),
+        ("uncertainty.json", "uncertainty"),
+        ("english-transport.json", "english_transport"),
+    ] {
+        std::fs::write(root.join(name), serde_json::to_vec(&saved[key]).unwrap()).unwrap();
     }
-    let read = |name: &str| std::fs::read(root.join(name)).unwrap();
-    let plan: Plan = serde_json::from_slice(&read("batch-plan.json")).unwrap();
-    // The saved bundle omitted the canonical file; restore the same captured Plan bytes.
+    let plan: Plan = serde_json::from_value(saved["plan"].clone()).unwrap();
     std::fs::write(
         root.join(format!("{}.plan.json", plan.revision)),
         serde_json::to_vec(&plan).unwrap(),
     )
     .unwrap();
-    let pieces = serde_json::from_slice(&read("pieces.json")).unwrap();
-    let baseline: Vec<Chunk> = serde_json::from_slice(&read("baseline.json")).unwrap();
+    let pieces = serde_json::from_value(saved["pieces"].clone()).unwrap();
+    let baseline: Vec<Chunk> = serde_json::from_value(saved["baseline"].clone()).unwrap();
+    let bytes = serde_json::to_vec(&saved["result"]).unwrap();
+    for id in plan.batches.values().flat_map(|batch| batch.keys()) {
+        let prefix = format!("{}-{id}", plan.revision);
+        if saved["no_speech"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from(id.clone()))
+        {
+            let marker = serde_json::json!({"revision":plan.revision,"range":id,
+                "reason":"no-speech","source":"captured-hex-baseline"});
+            std::fs::write(
+                root.join(format!("{prefix}.fallback")),
+                serde_json::to_vec(&marker).unwrap(),
+            )
+            .unwrap();
+        } else {
+            let receipt = serde_json::json!({"revision":plan.revision,"range":id,
+                "sha256":hex::encode(Sha256::digest(&bytes))});
+            std::fs::write(root.join(format!("{prefix}.result")), &bytes).unwrap();
+            std::fs::write(
+                root.join(format!("{prefix}.receipt")),
+                serde_json::to_vec(&receipt).unwrap(),
+            )
+            .unwrap();
+        }
+    }
     let replies = gaps::capture(include_bytes!("baseline_no_speech_fixture.ndjson")).unwrap();
     std::fs::write(
         root.join("baseline-no-speech.json"),
@@ -49,7 +81,6 @@ fn fixture() -> (
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
     let (temp, plan, pieces, baseline) = fixture();
     let root = temp.path();
@@ -83,12 +114,8 @@ fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
             .iter()
             .any(|r| r["reason"] == "no-speech")
     }));
-    eprintln!(
-        "accepted production overlap receipts: {}",
-        policy["overlaps"]
-    );
-    // This real Hindi interval extends beyond its baseline. A missing reading must refuse it.
-    let id = "38d0482dac119209983b83022fd4c7d3f68eb8b4bb8a3aa14cbcb456b275c7ff";
+    // The Hindi range extends beyond its baseline, so a missing reading must refuse it.
+    let id = "8b257de9ddf17b0f8ccb470dade5772c8f990df84954f4307c1851833e8c3e40";
     std::fs::remove_file(root.join(format!("{}-{id}.receipt", plan.revision))).unwrap();
     let error = assemble(root, &plan, &pieces, &baseline, 1)
         .err()
@@ -101,7 +128,6 @@ fn saved_public_assembly_keeps_owned_coverage_and_publishes() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_native_native_overlap_is_refused() {
     let (temp, plan, pieces, baseline) = fixture();
     let mut revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
@@ -126,7 +152,6 @@ fn saved_public_native_native_overlap_is_refused() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_fallback_beyond_sentence_bounds_is_refused() {
     let (temp, plan, pieces, baseline) = fixture();
     let mut revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
@@ -155,7 +180,6 @@ fn saved_public_fallback_beyond_sentence_bounds_is_refused() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_overlap_requires_no_speech_evidence() {
     let (temp, plan, pieces, baseline) = fixture();
     let mut revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
@@ -174,7 +198,6 @@ fn saved_public_overlap_requires_no_speech_evidence() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_lid_uncertain_overlap_is_recorded_and_publishes() {
     let (temp, plan, pieces, baseline) = fixture();
     let revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
@@ -196,7 +219,6 @@ fn saved_public_lid_uncertain_overlap_is_recorded_and_publishes() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_full_guard_marks_exact_four_missing_baseline_intervals() {
     let (temp, plan, pieces, baseline) = fixture();
     let revision =
@@ -268,7 +290,6 @@ fn saved_public_full_guard_marks_exact_four_missing_baseline_intervals() {
 }
 
 #[test]
-#[ignore = "requires the public assembly-repro directory in SIDENOTE_ASSEMBLY_REPRO"]
 fn saved_public_fallback_overlap_without_router_reason_is_refused() {
     let (temp, plan, pieces, baseline) = fixture();
     let mut revision = assemble(temp.path(), &plan, &pieces, &baseline, 1).unwrap();
