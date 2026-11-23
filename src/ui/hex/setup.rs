@@ -192,50 +192,52 @@ pub(super) fn card(s: &State, p: Palette) -> Option<El> {
         _ => ("Install Hex", h.install.message()),
     };
     let mut actions = row().w_full().flex_wrap().gap(8.0);
-    if h.installation == Installation::Missing && !h.running() {
-        actions = actions.child(
-            button(
-                if matches!(h.install, InstallState::Failed(_)) {
-                    "Try again"
-                } else {
-                    "Install Hex"
-                },
-                "hex-install",
-                ButtonRole::Primary,
-                p,
-            )
-            .disabled(h.install.busy())
-            .on_press(|s: &mut State| s.install_hex()),
-        );
-    } else if matches!(h.installation, Installation::Installed { .. }) && h.stopped() {
+    if matches!(h.installation, Installation::Installed { .. }) && h.stopped() {
         actions = actions.child(
             button("Open Hex", "hex-setup-open", ButtonRole::Primary, p)
                 .disabled(h.install.busy())
                 .on_press(|s: &mut State| s.open_installed_hex()),
         );
-    }
-    actions = actions
-        .child(
-            button(
-                "Download page",
-                "hex-download-page",
-                ButtonRole::Secondary,
-                p,
-            )
-            .on_press(|s: &mut State| s.hex_download_page()),
-        )
-        .child(
-            button("Check again", "hex-install-recheck", ButtonRole::Ghost, p)
-                .disabled(h.install.busy())
-                .on_press(|s: &mut State| {
-                    if super::super::isolated() {
-                        return;
-                    }
-                    s.hex.installation = hex_install::detect();
-                    s.hex.install = InstallState::Idle;
-                    s.hex_refresh_if_due();
+    } else {
+        actions = actions
+            .children(
+                (h.installation == Installation::Missing && !h.running()).then(|| {
+                    button(
+                        if matches!(h.install, InstallState::Failed(_)) {
+                            "Try again"
+                        } else {
+                            "Install Hex"
+                        },
+                        "hex-install",
+                        ButtonRole::Primary,
+                        p,
+                    )
+                    .disabled(h.install.busy())
+                    .on_press(|s: &mut State| s.install_hex())
                 }),
-        );
+            )
+            .child(
+                button(
+                    "Download page",
+                    "hex-download-page",
+                    ButtonRole::Secondary,
+                    p,
+                )
+                .on_press(|s: &mut State| s.hex_download_page()),
+            )
+            .child(
+                button("Check again", "hex-install-recheck", ButtonRole::Ghost, p)
+                    .disabled(h.install.busy())
+                    .on_press(|s: &mut State| {
+                        if super::super::isolated() {
+                            return;
+                        }
+                        s.hex.installation = hex_install::detect();
+                        s.hex.install = InstallState::Idle;
+                        s.hex_refresh_if_due();
+                    }),
+            );
+    }
     Some(col().key("hex-setup").w_full().px(20.0).py(20.0).mt(16.0).mb(16.0).gap(12.0)
         .fill(p.card).border(1.0, p.line).radius(10.0)
         .child(roles::SECTION.wrap(title, p.ink))

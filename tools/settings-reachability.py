@@ -57,7 +57,13 @@ def main():
                 assert progress["role"] == ("alert" if state == "hex-install-failed" else "status"), path
                 action = "hex-setup-open" if state == "hex-installed" else "hex-install"
                 assert controls[action]["label"] == label, path
-                for key in (action, "hex-download-page", "hex-install-recheck"):
+                recovery = ("hex-download-page", "hex-install-recheck")
+                actions = (action,)
+                if state == "hex-installed":
+                    assert all(key not in controls for key in recovery), path
+                else:
+                    actions += recovery
+                for key in actions:
                     control = controls[key]
                     assert control["focusable"] == (state != "hex-installing" or key == "hex-download-page"), (path, key)
                     x, y, w, h = control["rect"]
