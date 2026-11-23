@@ -305,6 +305,11 @@ impl Driver {
                 })?;
                 Ok(Value::Null)
             }
+            "pairing-status" => Ok(serde_json::json!({
+                "phase": self.phase,
+                "stage": self.failure.as_ref().map(|f| f.0),
+                "category": self.failure.as_ref().map(|f| &f.1),
+            })),
             "status" => {
                 let peers = pairing::devices(root)?;
                 Ok(
