@@ -1256,8 +1256,22 @@ fn index(s: &State) -> Vec<Destination> {
         ));
     }
     entries.retain(|dest| {
+        let required = match dest.key.as_str() {
+            "annotation-agent-row" | "annotation-model-row" => Some(AppFeature::Annotations),
+            "engine-model-hi"
+            | "engine-model-te"
+            | "spoken-languages"
+            | "meeting-language-mode"
+            | "speech-model-anuvani-lid-int8"
+            | "labs-process-windows" => Some(AppFeature::IndicEngine),
+            "engine-translation-model" | "engine-prompt-translation" => {
+                Some(AppFeature::Translation)
+            }
+            _ => None,
+        };
         (dest.page != Page::People || s.config.features.people)
             && tab_visible(s, dest.page, dest.tab)
+            && required.is_none_or(|feature| s.config.features.enabled(feature))
             && (dest.key != "speech-model-anuvani-lid-int8"
                 || s.models.has_local_files("anuvani-lid-int8"))
             && (dest.key != "notes-scripts-card"
@@ -3846,8 +3860,11 @@ mod tests {
     #[test]
     fn experimental_settings_search_finds_all_switches_with_experiments_off() {
         let mut state = State::new();
-        state.config.features.people = false;
-        state.config.features.memory = false;
+        for feature in AppFeature::EXPERIMENTAL {
+            if state.config.features.enabled(feature) {
+                state.config.features.toggle(feature);
+            }
+        }
         navigate(&mut state, Page::Experimental, 0);
         assert_eq!(active(&state), (Page::Experimental, 0));
         let entries = index(&state);
@@ -3858,10 +3875,21 @@ mod tests {
             .collect();
         assert_eq!(switches, AppFeature::EXPERIMENTAL.map(AppFeature::name));
         assert!(entries.iter().all(|entry| entry.page != Page::People));
-        assert!(
-            entries
-                .iter()
-                .all(|entry| entry.key != "feature-Daily check")
-        );
+        for key in [
+            "feature-Daily check",
+            "knowledge-base",
+            "annotation-agent-row",
+            "annotation-model-row",
+            "engine-model-hi",
+            "engine-model-te",
+            "spoken-languages",
+            "meeting-language-mode",
+            "labs-process-windows",
+            "engine-translation-model",
+            "engine-prompt-translation",
+        ] {
+            assert!(entries.iter().all(|entry| entry.key != key), "{key}");
+        }
+        assert!(entries.iter().any(|entry| entry.key == "engine-model-en"));
     }
 }
