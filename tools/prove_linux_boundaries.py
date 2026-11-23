@@ -25,6 +25,14 @@ def scan_inventory(root, source):
     return actual
 
 
+def unique_entries(pairs):
+    entries = {}
+    for name, digest in pairs:
+        assert name not in entries, f"duplicate boundary inventory key: {name}"
+        entries[name] = digest
+    return entries
+
+
 def update(root):
     actual = scan_inventory(root, lambda name: (root / name).read_text(encoding="utf-8"))
     data = json.dumps(actual, indent=2, sort_keys=True).replace(",\n", ",\n\n") + "\n"
@@ -62,7 +70,7 @@ def verify(root, overrides=None):
     inputs = source("src/core/meeting_router/inputs.rs")
     assert len(re.findall(r"m\.nlink\(\)\s*!=\s*1", inputs)) >= 2, "input fd must have exactly one link"
     assert "Directory::open(path.parent()" in inputs and "libc::O_NOFOLLOW" in inputs, "all path components must be pinned"
-    expected = json.loads((root / INVENTORY).read_text())
+    expected = json.loads((root / INVENTORY).read_text(), object_pairs_hook=unique_entries)
     actual = scan_inventory(root, source)
     if actual != expected:
         stale = sorted(name for name in actual.keys() | expected.keys() if actual.get(name) != expected.get(name))
@@ -117,7 +125,14 @@ def test_update(root):
         assert run(exit_code=1).strip() == "stale boundary inventory: src/fixture.rs, src/new.rs"
         run("--update")
         run()
-    print("PASS update writes stable JSON and refreshes changed, added, and removed entries")
+
+        current = inventory.read_text(encoding="utf-8")
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        for stale in ("0" * 64, digest):
+            duplicate = f'{{\n  "src/new.rs": "{stale}",\n\n'
+            inventory.write_text(duplicate + current[2:], encoding="utf-8")
+            assert run(exit_code=1).strip() == "duplicate boundary inventory key: src/new.rs"
+    print("PASS update writes stable JSON and refreshes changed, added, and removed entries; duplicate keys fail")
 
 
 def main():
