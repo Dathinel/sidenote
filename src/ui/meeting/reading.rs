@@ -439,13 +439,12 @@ fn header(
     }
     rest.extend(project::reading_chip(s, k, &m.id, p, layer));
     rest.extend(status_chip(s, k, m, p, layer));
-    rest.extend(sections);
     let menu = more::menu(s, k, m, "meeting", p, layer);
     let meta = if phone {
         let mut meta = col().key("meeting-meta").w_full().gap(6.0);
         first = first.child(el().grow(1.0).h(28.0)).child(menu);
         meta = meta.child(first);
-        if !rest.is_empty() {
+        if !rest.is_empty() || sections.is_some() {
             meta = meta.child(
                 row()
                     .key("meeting-controls-more")
@@ -453,7 +452,8 @@ fn header(
                     .flex_wrap()
                     .gaps(6.0, 6.0)
                     .items_center()
-                    .children(rest),
+                    .children(rest)
+                    .child(row().key("meeting-sections-slot").children(sections)),
             );
         }
         meta
@@ -463,7 +463,7 @@ fn header(
             .w_full()
             .gap(6.0)
             .items_start()
-            .child(first.children(rest).grow(1.0).min_w(0.0))
+            .child(first.children(rest).children(sections).grow(1.0).min_w(0.0))
             .child(menu)
     };
     col()
@@ -591,7 +591,6 @@ fn narrative(
     s: &State,
     m: &Meeting,
     p: Palette,
-    draft: Option<&core::Summary>,
     visit: &sections::Visit,
     sections: &mut Vec<sections::Section>,
 ) -> El {
@@ -604,7 +603,8 @@ fn narrative(
         });
     }
     body = body.children(crate::ui::live::recording_note(s, p));
-    let summary = draft.unwrap_or(&m.summary);
+    let draft = draft_summary(m);
+    let summary = draft.as_ref().unwrap_or(&m.summary);
     if draft.is_some() {
         body = body.child(
             roles::META
@@ -654,10 +654,14 @@ fn narrative(
             );
         }
     }
-    body.children(draft.map(|_| crate::ui::notes_status::progress("Writing notes", p)))
-        // The rows have no gap of their own (column gap 0), so a bordered banner needs its own room.
-        .children(notes_status::meeting_banner(s, m, p).map(|banner| banner.mt(16.0)))
-        .children(crate::ui::notes_status::provenance(m, p))
+    body.children(
+        draft
+            .as_ref()
+            .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
+    )
+    // The rows have no gap of their own (column gap 0), so a bordered banner needs its own room.
+    .children(notes_status::meeting_banner(s, m, p).map(|banner| banner.mt(16.0)))
+    .children(crate::ui::notes_status::provenance(m, p))
 }
 
 /// The label over a rail group: the name at 600 in soft, the count at 400 in faint, the help hint.
@@ -942,13 +946,10 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     } else {
         s.overlay_h.get().max(fade) + 32.0
     };
-    let draft = (s.meeting_tab == Tab::Summary)
-        .then(|| draft_summary(m))
-        .flatten();
     let mut visit = s.meeting_ui.sections.borrow_mut();
     visit.sync(m, s.meeting_tab, strip);
     let mut sections = Vec::new();
-    let mut doc = narrative(s, m, p, draft.as_ref(), &visit, &mut sections);
+    let mut doc = narrative(s, m, p, &visit, &mut sections);
     visit.retain(&sections);
     let marks = (strip && sections.len() >= 3).then(|| visit.marks(&sections, p));
     let chip = (!strip && sections.len() >= 3).then(|| visit.chip(&sections, k, p, layer));
