@@ -950,6 +950,22 @@ pub fn overlay_with(
             let q = s.question.text.clone();
             s.send(&q);
         })
+        .on_key(|s: &mut State, e: &KeyEvent, tx: &mut Tx| {
+            if e.key != Key::Escape {
+                return false;
+            }
+            if s.runner_open {
+                s.runner_open = false;
+                s.ask_settings.thinking_open = false;
+            } else if s.on_live() && s.live.as_ref().is_some_and(|l| l.panel_open) {
+                s.live_toggle_panel();
+            } else if s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open {
+                s.close_transcript_sheet();
+            } else {
+                tx.blur();
+            }
+            true
+        })
         .build(k)
         .key("ask-input")
         .grow(1.0)
