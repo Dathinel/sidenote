@@ -155,7 +155,7 @@ pub struct TasksState {
     pub keyboard: bool,
     /// Folded groups, by `TaskGroup::key`. Kept for this session only.
     pub collapsed: BTreeSet<String>,
-    /// The Done section at the end of the page is open.
+    /// The board's Done column is open.
     pub done_open: bool,
     pub diary_filter: Option<core::diary::TaskSelection>,
     pub diary_label: Option<String>,
@@ -333,9 +333,12 @@ impl TasksState {
         self.meeting = None;
     }
 
-    /// The page as laid out now: the groups and the folded Done section.
+    /// The visible task groups, in list order.
     pub fn arranged(&self) -> TaskView {
-        let mut view = core::arrange(&self.items, &self.filter(), self.grouping, self.today);
+        let mut view = TaskView {
+            groups: core::group_tasks(&self.items, &self.filter(), self.grouping, self.today),
+            ..TaskView::default()
+        };
         if let Some(filter) = &self.diary_filter {
             let keep = |i: &usize| filter.matches(&self.items[*i]);
             for group in &mut view.groups {
@@ -350,7 +353,6 @@ impl TasksState {
                 group.done = group.rows.len() - group.open;
             }
             view.groups.retain(|g| !g.rows.is_empty());
-            view.done.retain(keep);
         }
         view
     }
@@ -386,6 +388,10 @@ impl TasksState {
                 }
             })
         };
+        if view.done_folded {
+            view.columns[core::BoardColumn::Done.index()].clear();
+            view.done_folded = false;
+        }
         if let Some(filter) = &self.diary_filter {
             for column in &mut view.columns {
                 column.retain(|&i| filter.matches(&self.items[i]));
@@ -412,7 +418,7 @@ impl TasksState {
                 view.rows(self.done_open)
             }
         } else {
-            self.arranged().rows(self.done_open, &self.collapsed)
+            self.arranged().rows(false, &self.collapsed)
         };
         rows.into_iter()
             .map(|i| (self.items[i].meeting_id.clone(), self.items[i].index))
@@ -2237,49 +2243,6 @@ fn group_card(s: &State, k: &Kit, g: &TaskGroup, n: usize, lay: RowLayout, p: Pa
     card
 }
 
-fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
-fn done_section(s: &State, v: &TaskView, lay: RowLayout, p: Palette) -> El {
-    let open = s.tasks.done_open;
-    let n = v.done.len();
-    let toggle = pressable(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(chevron(open, p))
-            .child(roles::GROUP.wrap("Done", p.soft))
-            .child(roles::META.medium().wrap(n.to_string(), p.faint)),
-    )
-    .key("tasks-done-toggle")
-    .label(format!(
-        "{} the {} done",
-        if open { "Hide" } else { "Show" },
-        plural(n, "task", "tasks")
-    ))
-    .w_full()
-    .h(32.0)
-    .px(8.0)
-    .radius(6.0)
-    .fill(p.side)
-    .on_press(|s: &mut State| s.tasks.done_open = !s.tasks.done_open);
-    let mut out = cards::panel(p)
-        .key("tasks-done")
-        .w_full()
-        .mt(18.0)
-        .gap(1.0)
-        .child(toggle);
-    if open {
-        for &i in &v.done {
-            out = out
-                .child(hairline(p))
-                .child(task_row(s, &s.tasks.items[i], lay, p));
-        }
-    }
-    out
-}
-
 /// "5 Nov", with the year when it is not this one.
 fn cutoff_text(day: NaiveDate, today: NaiveDate) -> String {
     if chrono::Datelike::year(&day) == chrono::Datelike::year(&today) {
@@ -2398,7 +2361,7 @@ fn empty_note(s: &State, p: Palette) -> El {
         ))
         .child(roles::SMALL.wrap(
             if empty {
-                "Tasks appear after your first meeting summary."
+                "Add tasks or get them from meeting summaries."
             } else {
                 "Clear the filters to see your tasks."
             },
@@ -2406,15 +2369,14 @@ fn empty_note(s: &State, p: Palette) -> El {
         ));
     if empty {
         out = out.child(
-            button("New meeting", "tasks-empty-meeting", true, p)
-                .on_press(|s: &mut State| s.new_meeting()),
+            button("Add task", "tasks-empty-add", true, p).on_press(|s: &mut State| s.open_add()),
         );
     } else {
         out = out.child(
             button("Clear filters", "tasks-clear-filters", false, p).on_press(|s: &mut State| {
                 s.tasks.who = Who::Everyone;
                 s.tasks.include_unassigned = false;
-                s.tasks.done = DoneFilter::Open;
+                s.tasks.done = DoneFilter::All;
                 s.tasks.search = TextEdit::default();
                 s.tasks.clear_scope();
                 s.save_task_filters();
@@ -3556,14 +3518,11 @@ fn list_column(
     if board_mode {
         doc = doc.child(board::board(s, k, p, list_w, side, layer));
     } else {
-        if v.groups.is_empty() && v.done.is_empty() {
+        if v.groups.is_empty() {
             doc = doc.child(empty_note(s, p));
         }
         for (n, g) in v.groups.iter().enumerate() {
             doc = doc.child(group_card(s, k, g, n, lay, p));
-        }
-        if !v.done.is_empty() {
-            doc = doc.child(done_section(s, &v, lay, p));
         }
     }
     if !t.items.is_empty() || t.cutoff.is_some() {
@@ -3951,5 +3910,109 @@ impl State {
         prefs.show_full_titles = self.tasks.show_full_titles;
         prefs.task_titles_notice_seen = !self.tasks.titles_notice;
         let _ = prefs.save(&self.store.root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tasks_page() -> rune::Runtime<State> {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.config.features.tasks = true;
+        state.set_view(View::Tasks);
+        state.tasks.layout = core::TasksLayout::List;
+        state.tasks.done = DoneFilter::Open;
+        state.tasks.who = Who::Everyone;
+        rune::Runtime::new(
+            state,
+            super::super::view,
+            (1334.0, 900.0),
+            rune::Env::default(),
+        )
+    }
+
+    fn seed_manual_tasks(t: &mut TasksState, tasks: &[(&str, bool)]) {
+        t.overrides.manual = tasks
+            .iter()
+            .map(|&(id, done)| ManualTask {
+                id: id.into(),
+                task: format!("Synthetic {id} task"),
+                done,
+                ..ManualTask::default()
+            })
+            .collect();
+        t.items = core::build_tasks(&[], &t.pipeline, &t.projects, &t.overrides, &t.checked);
+        t.items_changed();
+    }
+
+    #[test]
+    fn empty_tasks_page_offers_to_add_a_task() {
+        let mut rt = tasks_page();
+        rt.frame(0.0);
+        assert!(rt.elements().iter().any(|node| {
+            node.text.as_deref() == Some("Add tasks or get them from meeting summaries.")
+        }));
+        let (x, y) = rt
+            .find("tasks-empty-add")
+            .expect("empty-state Add task button");
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.2);
+        assert_eq!(rt.state.tasks.panel, Some(Panel::Add));
+    }
+
+    #[test]
+    fn task_status_filter_controls_rendered_and_keyboard_rows() {
+        let mut rt = tasks_page();
+        rt.update(|s, _| {
+            s.tasks.done_open = true;
+            seed_manual_tasks(&mut s.tasks, &[("open", false), ("done", true)]);
+        });
+        for layout in [core::TasksLayout::List, core::TasksLayout::Board] {
+            for (filter, open, done) in [
+                (DoneFilter::Open, true, false),
+                (DoneFilter::All, true, true),
+                (DoneFilter::Done, false, true),
+            ] {
+                rt.update(|s, _| {
+                    s.tasks.layout = layout;
+                    s.tasks.done = filter;
+                });
+                rt.frame(0.0);
+                let rows = rt.state.tasks.visible_rows();
+                for (id, shown) in [("manual/open", open), ("manual/done", done)] {
+                    assert_eq!(rt.find(&format!("trow-{id}-0")).is_some(), shown);
+                    assert_eq!(rows.iter().any(|(row, _)| row == id), shown);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clear_filters_reveals_completed_tasks_from_the_empty_open_list() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = tasks_page();
+        rt.update(|s, _| {
+            s.store.root = root.path().to_path_buf();
+            seed_manual_tasks(&mut s.tasks, &[("done", true)]);
+        });
+        rt.frame(0.0);
+        assert!(rt.find("trow-manual/done-0").is_none());
+        let (x, y) = rt
+            .find("tasks-clear-filters")
+            .expect("clear filters button in the empty Open list");
+
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.2);
+
+        assert_eq!(rt.state.tasks.done, DoneFilter::All);
+        assert!(rt.find("trow-manual/done-0").is_some());
+        let prefs = core::UiPrefs::load(root.path());
+        assert_eq!(prefs.tasks_done, DoneFilter::All);
     }
 }
