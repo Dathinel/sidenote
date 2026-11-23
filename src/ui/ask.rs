@@ -4,8 +4,7 @@
 //! runs the arrow becomes Stop and a muted line counts the seconds. The thread of answers sits
 //! above the pill. On the home page it asks across every meeting, and its answers cite meetings.
 //!
-//! Motion: each move is one ease of about 180 ms with no bounce. Rune shortens it to a fade when
-//! the system asks for reduced motion.
+//! The panel and thread use Rune's shared motion tokens and follow the system's reduced motion setting.
 use super::{
     AskRun, State, icons,
     meeting::COLUMN,
@@ -14,6 +13,7 @@ use super::{
     widgets::{ButtonDisabled, hairline, pressable, quiet_button, spaced_caps},
 };
 use regex::{Captures, Regex};
+use rune::tok::motion::{GLIDE, GLIDE_EXIT, SNAP, pair};
 use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, Spinner, TextInput};
 use sidenote::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
@@ -131,6 +131,11 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
         .px(8.0)
         .radius(8.0)
         .fill(if from { p.hit } else { p.card })
+        .transition(if user {
+            slide(8.0, pair::GLIDE)
+        } else {
+            Transition::opacity()
+        })
         .child(body)
         .children((!user).then(|| answer_label(s, m)).flatten().map(|label| {
             roles::META
@@ -164,14 +169,23 @@ const EASE_OUT: Spring = Spring::new(0.14, 0.0);
 
 /// Fades in while sliding up `rise` points, and out the same way.
 pub(super) fn rise(rise: f32) -> Transition {
-    Transition::offset(0.0, rise)
-        .combined(Transition::opacity())
-        .springs(SpringPair::new(EASE_IN, EASE_OUT))
+    slide(rise, SpringPair::new(EASE_IN, EASE_OUT))
 }
 
-/// Fades in while growing from 90 %, for the send and Stop buttons.
-fn pop() -> Transition {
-    Transition::scale(0.9).springs(SpringPair::new(EASE_IN, EASE_OUT))
+fn slide(rise: f32, springs: SpringPair) -> Transition {
+    Transition::offset(0.0, rise)
+        .combined(Transition::opacity())
+        .springs(springs)
+}
+
+fn keep_question_focus(s: &mut State, tx: &mut Tx) {
+    s.question.focused = true;
+    tx.focus("ask-input", tx.focus_visible());
+}
+
+fn submit(s: &mut State, question: &str, tx: &mut Tx) {
+    s.send(question);
+    keep_question_focus(s, tx);
 }
 
 /// "Thinking, 12 s", then "Thinking, 1 min 5 s".
@@ -295,7 +309,7 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
             .key("ask-thread")
             .w_full()
             .radius(22.0)
-            .transition(rise(10.0))
+            .transition(slide(12.0, pair::GLIDE))
             .child(header),
         p,
     );
@@ -310,7 +324,11 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
     if hidden {
         return Some(panel);
     }
-    let mut messages = col().w_full().px(10.0).py(2.0);
+    let mut messages = col()
+        .w_full()
+        .px(10.0)
+        .py(2.0)
+        .growth(rune::GrowthSpec::default());
     for (i, m) in s.saved.messages.iter().enumerate() {
         if i > 0 && m.role == "user" {
             messages = messages.child(hairline(p));
@@ -401,9 +419,10 @@ fn recipe(i: usize, prompt: &'static str, p: Palette) -> El {
     .hover(p.card)
     .focus_ring(1.0, 1.0, p.faint)
     .preserve_focus_on_press(true)
-    .transition(rise(8.0))
+    .motion(SNAP)
+    .transition(Transition::opacity().springs(pair::SETTLE))
     .enter_delay(i as f32 * 0.03)
-    .on_press(move |s: &mut State| s.send(prompt))
+    .on_press_tx(move |s: &mut State, tx| submit(s, prompt, tx))
 }
 
 /// Gutter of the notes column at normal widths. The saved meeting page's Ask bar uses it, so the bar
@@ -425,6 +444,7 @@ fn suggestions(s: &State, narrow: bool, room: f32, p: Palette) -> El {
     };
     let mut r = row()
         .key("ask-suggestions")
+        .transition(slide(6.0, pair::SETTLE))
         .w_full()
         .h(40.0)
         .px(2.0)
@@ -433,13 +453,13 @@ fn suggestions(s: &State, narrow: bool, room: f32, p: Palette) -> El {
     let room = room - if narrow { 62.0 } else { 118.0 };
     let mut used = 0.0;
     let mut shown = 0;
-    for (i, text) in list.iter().enumerate() {
+    for text in list {
         let width = text.chars().count() as f32 * 5.5 + 42.0;
         if used + width > room {
             continue;
         }
         used += width;
-        r = r.child(recipe(i, text, p));
+        r = r.child(recipe(shown, text, p));
         shown += 1;
         if shown == if narrow { 2 } else { 3 } {
             break;
@@ -518,49 +538,49 @@ fn choice_label(s: &State, name: Option<&str>, model: Option<&str>) -> String {
 /// first (it follows Settings and shows what it resolves to), then each installed helper's
 /// models in a group, then a Thinking switch. It is on the meeting page, the live screen and
 /// before the first question of a new chat.
-fn runner_choice(
-    s: &State,
-    k: &Kit,
-    p: Palette,
-    narrow: bool,
-    notes_column: bool,
-    layer: &mut Vec<El>,
-) -> El {
+fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let shown = picker_label(s);
-    let (caption, width, padding) = match (narrow, notes_column) {
-        (true, true) => (shown.replacen("Claude Code · ", "Claude · ", 1), 144.0, 5.0),
-        (true, false) => (shown.clone(), 150.0, 12.0),
-        _ => (shown.clone(), 240.0, 12.0),
-    };
-    let chevron = if s.runner_open {
-        k.glyph.chevron_up
+    let caption = if narrow {
+        shown
+            .rsplit_once(" \u{b7} ")
+            .map_or(shown.as_str(), |(agent, model)| {
+                if model == "provider default" {
+                    agent
+                } else {
+                    model
+                }
+            })
     } else {
-        k.glyph.chevron_down
+        &shown
     };
+    let hint = super::widgets::HelpHint::Model.build(k, p, layer);
     let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
-        .px(padding)
+        .h(28.0)
+        .px(8.0)
+        .radius(14.0)
         .gap(0.0)
         .child(
             row()
-                .gap(2.0)
+                .gap(4.0)
                 .items_center()
                 .min_w(0.0)
                 .shrink()
-                .child(
-                    text(caption)
-                        .font(roles::META.medium().style())
-                        .color(p.soft)
-                        .truncate()
-                        .min_w(0.0),
-                )
-                .child(rune::icon(chevron, 16.0).color(p.faint)),
+                .child(roles::CONTROL.line(caption, p.soft))
+                .child(rune::icon(k.glyph.chevron_down, 14.0).color(p.faint)),
         )
         .role("combobox")
         .label(format!("Model: {shown}"))
-        .help(format!("Model for the next answer: {shown}"))
+        .description("Choose the model for your next question.")
         .preserve_focus_on_press(true)
+        .focus_ring(1.0, 1.0, p.faint)
         .min_w(0.0)
-        .max_w(width)
+        .max_w(if narrow { 96.0 } else { 200.0 })
+        .hover_group_shared("help-hint-model")
+        .child(
+            hint.pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .dim(0.0)
+                .inert(),
+        )
         .on_press(|s: &mut State| {
             s.runner_open = !s.runner_open;
             s.ask_settings.thinking_open = false;
@@ -691,10 +711,10 @@ fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
 const ACTION: f32 = 28.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
-/// while a question runs, nothing otherwise. Its slot keeps its size so the model name never
-/// shifts when the button comes and goes.
+/// while a question runs, and a disabled arrow for an empty editor.
 fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
     let slot = col().key("ask-action").size(ACTION, ACTION).shrink();
+    let replace = Transition::blur_replace().springs(pair::SNAP);
     if pending {
         let run = s.asks.get(&s.ask_key());
         let stopping = run.is_some_and(|r| r.cancel.stopped());
@@ -711,9 +731,14 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
             .size(ACTION, ACTION)
             .radius(14.0)
             .focus_ring(1.0, 1.0, p.faint)
-            .transition(pop())
+            .preserve_focus_on_press(true)
+            .transition(replace)
+            .opacity_motion(SNAP)
             .dim(if stopping { 0.5 } else { 1.0 })
-            .on_press(|s: &mut State| s.stop_ask()),
+            .on_press_tx(|s: &mut State, tx| {
+                s.stop_ask();
+                keep_question_focus(s, tx);
+            }),
         );
     }
     if ready {
@@ -728,14 +753,29 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
             .size(ACTION, ACTION)
             .radius(14.0)
             .focus_ring(1.0, 1.0, p.faint)
-            .transition(pop())
-            .on_press(|s: &mut State| {
+            .preserve_focus_on_press(true)
+            .transition(replace)
+            .on_press_tx(|s: &mut State, tx| {
                 let q = s.question.text.clone();
-                s.send(&q);
+                submit(s, &q, tx);
             }),
         );
     }
-    slot
+    slot.child(
+        row()
+            .key("ask-send-empty")
+            .transition(replace)
+            .role("button")
+            .label("Ask (Enter)")
+            .disabled(true)
+            .inert()
+            .size(ACTION, ACTION)
+            .center()
+            .radius(14.0)
+            .fill(p.card)
+            .border(1.0, p.line)
+            .child(icons::draw(&icons::ARROW_UP, 16.0, p.faint)),
+    )
 }
 
 /// What the pill says when no agent CLI is on this machine.
@@ -946,9 +986,9 @@ pub fn overlay_with(
         .height(44.0)
         .text_style(rune::TextStyle::new(13.5, 400.0).lh(20.0))
         .on_edit(|s: &mut State| &mut s.question)
-        .on_submit(|s: &mut State, _| {
+        .on_submit(|s: &mut State, tx| {
             let q = s.question.text.clone();
-            s.send(&q);
+            submit(s, &q, tx);
         })
         .on_key(|s: &mut State, e: &KeyEvent, tx: &mut Tx| {
             if e.key != Key::Escape {
@@ -992,16 +1032,10 @@ pub fn overlay_with(
                     .wrap(format!("Runners are not set up. {e}"), p.warn)
                     .px(8.0)
                     .max_w(260.0),
-                None => runner_choice(s, k, p, compact, notes_column, layer),
+                None => runner_choice(s, k, p, compact, layer),
             }
         }
     });
-    let help = (focused
-        && empty
-        && !pending
-        && s.runner_error.is_none()
-        && !s.ask_settings.connection.settings.enabled)
-        .then(|| super::widgets::HelpHint::Model.build(k, p, layer));
     let pill = row()
         .key("ask-pill")
         .w_full()
@@ -1018,12 +1052,7 @@ pub fn overlay_with(
         .on_press_tx(|_: &mut State, tx| tx.focus("ask-input", false))
         .child(input)
         .children(model)
-        .children((focused || pending).then(|| {
-            action(s, p, ready, pending)
-                .items_center()
-                .justify_center()
-                .children(help)
-        }));
+        .children((focused || pending).then(|| action(s, p, ready, pending)));
     if s.live_scope_available() {
         stack = stack.child(
             row()
@@ -1032,11 +1061,18 @@ pub fn overlay_with(
                 .child(scope_choice(s, k, p, layer)),
         );
     }
-    let lead = lead.filter(|_| !compact || !focused);
+    let lead = if compact {
+        lead.filter(|_| !focused)
+            .map(|control| control.transition(Transition::opacity().springs(pair::GLIDE)))
+    } else {
+        lead
+    };
+    let show_chips = focused && empty && !pending && !showing_thread;
     let room = ((s.app_w.get() - super::nav::width(s)) - 2.0 * gutter).min(COLUMN)
         - if lead.is_some() { 64.0 } else { 0.0 };
     let panel = col()
         .key("ask-panel")
+        .motion(if show_chips { GLIDE } else { GLIDE_EXIT })
         .w_full()
         .padding(6.0)
         .radius(28.0)
@@ -1062,11 +1098,9 @@ pub fn overlay_with(
                 rune::Color::TRANSPARENT
             },
         )
-        .children(
-            (focused && empty && !pending && !showing_thread)
-                .then(|| suggestions(s, compact, room, p)),
-        )
-        .child(pill);
+        .children(show_chips.then(|| suggestions(s, compact, room, p)))
+        .child(if compact { pill.width_leads() } else { pill });
+    let panel = if compact { panel.width_leads() } else { panel };
     place(s, with_note(beside(stack, lead, panel), p), p)
 }
 
