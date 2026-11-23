@@ -17,6 +17,7 @@ fn setup(duration_ms: f64, ago_ms: i64) -> (Temp, PathBuf, NotesSettings) {
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
     fs::write(
         root.0.join("config.json"),
         serde_json::to_vec(&config).unwrap(),

@@ -35,6 +35,7 @@ fn setup() -> (Temp, PathBuf, NotesSettings) {
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
     config.engine_settings.stages.routing_deadline_seconds = 360;
     let json = serde_json::to_vec(&config).unwrap();
     fs::write(root.0.join("config.json"), json).unwrap();

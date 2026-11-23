@@ -174,18 +174,22 @@ fn acknowledge(root: &Path, id: &str, path: &Path, bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+fn configured_at(root: &Path) -> io::Result<bool> {
+    Ok(super::super::Config::read_config(root)?
+        .is_some_and(|config| config.features.indic_engine && config.pipeline.enabled()))
+}
+
+const ENGINE_OFF: &str = "Hindi and Telugu routing is off. Check Settings > Experimental features.";
+
 pub fn configured() -> bool {
-    super::super::Config::read_config(&super::super::state_dir())
-        .ok()
-        .flatten()
-        .is_some_and(|config| config.pipeline.enabled())
+    configured_at(&super::super::state_dir()).unwrap_or(false)
 }
 pub fn enqueue(id: &str) -> Result<()> {
-    enqueue_in(
-        &super::super::state_dir(),
-        &super::super::meetings_dir(),
-        id,
-    )
+    let root = super::super::state_dir();
+    if !configured_at(&root)? {
+        return Err(ENGINE_OFF.into());
+    }
+    enqueue_in(&root, &super::super::meetings_dir(), id)
 }
 pub(crate) fn enqueue_in(root: &Path, meetings: &Path, id: &str) -> Result<()> {
     enqueue_with(root, meetings, id, false)
@@ -239,12 +243,11 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
 /// Automatic discovery must not create a new generation for unchanged input.
 /// Only successful output completes a revision; failed attempts remain retryable.
 pub(crate) fn enqueue_automatic(id: &str) -> Result<()> {
-    enqueue_with(
-        &super::super::state_dir(),
-        &super::super::meetings_dir(),
-        id,
-        true,
-    )
+    let root = super::super::state_dir();
+    if !configured_at(&root)? {
+        return Ok(());
+    }
+    enqueue_with(&root, &super::super::meetings_dir(), id, true)
 }
 fn automatic_revision(root: &Path, id: &str) -> io::Result<Option<String>> {
     match store_io::read_bounded(&queue(root).join(format!("{id}.completed")), 1024) {
@@ -299,7 +302,7 @@ fn load_config(root: &Path) -> Result<RoutingConfig> {
     let mut config = app.pipeline;
     config.meeting_languages = super::super::model_catalog::load_meeting_languages(root)?;
     #[cfg(windows)]
-    if app.labs.after_stop_language_routing && config.enabled() {
+    if app.features.indic_engine && app.labs.after_stop_language_routing && config.enabled() {
         config
             .after_stop_languages
             .get_or_insert_with(LanguageRoutes::cpu_after_stop);
@@ -323,6 +326,9 @@ fn automatic_runtime_comes_from_the_package_and_explicit_path_wins() {
     let name = crate::platform::asr_library_name();
     let old_state_dll = root.join(name);
     fs::write(&old_state_dll, b"old unverified runtime").unwrap();
+    let mut settings = crate::core::Config::load_in(root).unwrap();
+    settings.features.indic_engine = true;
+    settings.save(root).unwrap();
     let app = std::env::current_exe().unwrap();
     assert_eq!(
         load_config(root).unwrap().runtime_dll,
@@ -604,7 +610,11 @@ fn cleanup_work(work: &Path) {
 
 pub fn run_one() -> Result<()> {
     let request = path_arg("--router-request").ok_or("Missing router request")?;
-    run_one_in(&request, &super::super::state_dir())
+    let root = super::super::state_dir();
+    if !configured_at(&root)? {
+        return Err(ENGINE_OFF.into());
+    }
+    run_one_in(&request, &root)
 }
 pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
     let mut job: Job =
@@ -769,7 +779,7 @@ pub(crate) fn run_pending_with(
             enqueue(id)?;
         }
     }
-    if !configured() {
+    if !configured_at(&root)? {
         return Ok(());
     }
     let _lock = match store_io::lock(&root.join("local/meeting-router.lock")) {
@@ -799,6 +809,9 @@ pub(crate) fn run_pending_with(
             let pending: Pending = serde_json::from_slice(&bytes)?;
             if !valid_id(&pending.id) {
                 return Err("Invalid queued meeting".into());
+            }
+            if !configured_at(&root)? {
+                return Ok(());
             }
             if !attempted.insert((pending.id.clone(), pending.generation)) {
                 continue;
@@ -924,12 +937,19 @@ pub(crate) fn run_pending_with(
             }
             let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
             let settings = if labs { notes::enabled(&root)? } else { None };
+            if !configured_at(&root)? {
+                return Ok(());
+            }
             let mut outcome = run_worker(
                 command,
                 duration,
                 settings.as_ref(),
                 Some(&work.join("active.json")),
             )?;
+            if !configured_at(&root)? {
+                cleanup_work(&work);
+                return Ok(());
+            }
             if let Some(error) = fs::read(work.join("failure.json"))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -1254,6 +1274,7 @@ mod recording_guard_tests {
         .unwrap();
         let mut config = core::Config::load().unwrap();
         config.pipeline.profile = "experimental".into();
+        config.features.indic_engine = true;
         config.labs.after_stop_language_routing = false;
         store_io::write(&root.join("config.json"), &config).unwrap();
         let dest = destination(&root, ID);
@@ -1314,6 +1335,7 @@ mod recording_guard_tests {
         .unwrap();
         let mut config = core::Config::load().unwrap();
         config.pipeline.profile = "experimental".into();
+        config.features.indic_engine = true;
         config.labs.after_stop_language_routing = false;
         store_io::write(&root.join("config.json"), &config).unwrap();
         let dest = destination(&root, ID);
@@ -1452,6 +1474,7 @@ mod route_pin_tests {
         fs::write(folder.join("transcript.ndjson"), line.to_string()).unwrap();
         let mut config = Config::default();
         config.pipeline.profile = "experimental".into();
+        config.features.indic_engine = true;
         config.pipeline.language_mode = mode.into();
         config.labs.after_stop_language_routing = labs;
         let mut routes = LanguageRoutes::cpu_after_stop();
@@ -1462,6 +1485,27 @@ mod route_pin_tests {
         crate::core::model_catalog::save_meeting_languages(&root, &languages).unwrap();
         enqueue_in(&root, &meetings_dir(), id).unwrap();
         root
+    }
+    #[test]
+    fn disabled_language_engine_leaves_pending_work_for_reenable() {
+        if isolated_test() {
+            return;
+        }
+        let id = "1793946600000-424243";
+        let root = meeting(id, true, &["hi", "te"], "indicconformer-hi-ctc", "auto");
+        let pending = queue(&root).join(format!("{id}.json"));
+        let queued = fs::read(&pending).unwrap();
+        let mut settings = Config::load_in(&root).unwrap();
+        settings.features.indic_engine = false;
+        settings.save(&root).unwrap();
+        assert!(
+            enqueue(id)
+                .unwrap_err()
+                .to_string()
+                .contains("routing is off")
+        );
+        run_pending_with(|_, _| panic!("disabled routing launched a worker")).unwrap();
+        assert_eq!(fs::read(pending).unwrap(), queued);
     }
     #[test]
     fn route_request_refuses_invalid_pack_hash_or_decoder_before_launch() {

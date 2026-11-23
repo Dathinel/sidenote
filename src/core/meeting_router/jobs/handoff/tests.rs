@@ -103,6 +103,7 @@ fn handoff_requires_receipts_and_source_generation_and_preserves_provenance() {
     let mut config = crate::core::Config::default();
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
     store_io::write(&root.path().join("config.json"), &config).unwrap();
     let request = work(root.path(), id).join("request.json");
     store_io::write(
@@ -167,6 +168,7 @@ fn expired_notes_dependency_still_launches_a_bounded_retry_worker() {
     let mut config = crate::core::Config::default();
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
     config.engine_settings.stage_deadline_seconds = Some(15);
     config.engine_settings.stages.routing_deadline_seconds = 1;
     store_io::write(&cfg, &config).unwrap();

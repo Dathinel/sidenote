@@ -82,6 +82,8 @@ fn meeting_with(langs: &[&str]) -> (Temp, PathBuf, NotesSettings) {
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
+    config.features.translation = true;
     config.engine_settings.steps.translation = true;
     config.engine_settings.stages.translation_enabled_at_ms = Some(1);
     config.engine_settings.stages.translation_model = "translation-fixture".into();

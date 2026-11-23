@@ -52,6 +52,8 @@ fn after_stop_producer_reaches_translation_and_notes() {
         .unwrap(),
     );
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
+    config.features.translation = true;
     config.engine_settings.steps.translation = true;
     config.engine_settings.stages.translation_enabled_at_ms = Some(1);
     config.engine_settings.stages.translation_model = "translation-fixture".into();

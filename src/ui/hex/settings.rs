@@ -1715,6 +1715,23 @@ fn hex_rows(
     body
 }
 fn feature(s: &State, k: &Kit, feature: AppFeature, name: &str, help: &str, p: Palette) -> El {
+    if feature == AppFeature::Translation
+        && s.config
+            .engine_settings
+            .stages
+            .translation_enabled_at_ms
+            .is_none()
+    {
+        return setting_row(
+            s,
+            "feature-Translation",
+            name,
+            "Requires a qualified translation provider.",
+            roles::META.line("Unavailable", p.soft),
+            true,
+            p,
+        );
+    }
     setting_row(
         s,
         &format!("feature-{}", feature.name()),
@@ -1775,12 +1792,12 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         })
         .build(&row_field_kit(k, p), layer);
     settings_card("Labs", col().w_full()
-        .child(setting_row(s, "labs-language-detection", "Language detection (experimental)",
+        .children(s.config.features.indic_engine.then(|| setting_row(s, "labs-language-detection", "Language detection (experimental)",
             "Enable the standalone prepared-audio language stage. Writes advisory guesses only; transcription stays unchanged. Confidence thresholds are uncalibrated.",
             Switch::new(s.config.labs.language_detection)
                 .label("Language detection (experimental)").hide_label()
-                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.language_detection = !labs.language_detection)).build(k).key("labs-language-detection-toggle"), true, p))
-        .child(cards::settings_divider(p))
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.language_detection = !labs.language_detection)).build(k).key("labs-language-detection-toggle"), true, p)))
+        .children(s.config.features.indic_engine.then(|| cards::settings_divider(p)))
         .child(setting_row(s, "labs-stop-forgotten", "Stop forgotten recordings",
             &format!("If a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
             Switch::new(s.config.labs.stop_forgotten_recordings)
@@ -1794,12 +1811,12 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             Switch::new(s.config.labs.measure_recording_files)
                 .label("Measure recording files (diagnostics)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p))
-        .child(cards::settings_divider(p))
-        .child(setting_row(s, "labs-process-windows", "Process meetings in 5-minute windows (test)",
+        .children(s.config.features.indic_engine.then(|| cards::settings_divider(p)))
+        .children(s.config.features.indic_engine.then(|| setting_row(s, "labs-process-windows", "Process meetings in 5-minute windows (test)",
             "Test calls only. Runs Telugu and Hindi models while recording and saves audio windows, results and timings in Sidenote. May slow live transcription. Your meeting notes stay as they are.",
             Switch::new(s.config.labs.process_meeting_windows)
                 .label("Process meetings in 5-minute windows (test)").hide_label()
-                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.process_meeting_windows = !labs.process_meeting_windows)).build(k).key("labs-process-windows-toggle"), true, p)), p)
+                .on_toggle(|s: &mut State| save_labs(s, |labs| labs.process_meeting_windows = !labs.process_meeting_windows)).build(k).key("labs-process-windows-toggle"), true, p))), p)
 }
 fn save_device_name(s: &mut State) {
     s.hex.shell.device_name_error = None;
@@ -2628,14 +2645,14 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     ),
                 )
             }))
-            .child(hex_group(
+            .children(s.config.features.indic_engine.then(|| hex_group(
                 2,
                 settings_card(
                     "Sidenote · Languages you speak",
                     super::super::models::language_picker(s, k, p),
                     p,
                 ),
-            ))
+            )))
             .child(hex_group(
                 3,
                 settings_card("Hex · Names and terms", vocabulary(s, k, p), p),
@@ -2702,12 +2719,12 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     .key("speech-models")
                     .fill(highlight(s, "speech-models", p)),
             )
-            .child(
+            .children(s.config.features.indic_engine.then(|| {
                 crate::ui::widgets::action("Choose meeting languages", p)
                     .key("speech-language-link")
-                    .on_press(|s: &mut State| navigate(s, Page::Meetings, 0)),
-            )
-            .child(advanced(
+                    .on_press(|s: &mut State| navigate(s, Page::Meetings, 0))
+            }))
+            .children(s.config.features.indic_engine.then(|| advanced(
                 s,
                 col()
                     .w_full()
@@ -2718,7 +2735,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                     ))
                     .child(super::super::models::advanced(s, p)),
                 p,
-            )),
+            ))),
         (Page::Hex, _) => {
             let mut out = col()
                 .w_full()

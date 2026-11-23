@@ -9,7 +9,10 @@ pub(super) fn enabled(root: &Path) -> io::Result<Option<Config>> {
     };
     let config: Config =
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
-    Ok((config.labs.after_stop_language_routing && config.pipeline.enabled()).then_some(config))
+    Ok((config.features.indic_engine
+        && config.labs.after_stop_language_routing
+        && config.pipeline.enabled())
+    .then_some(config))
 }
 #[cfg(test)]
 pub(crate) fn notes_input(

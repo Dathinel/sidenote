@@ -115,7 +115,7 @@
 
   "src/core/meeting_delete.rs": "63ae05b2c32324ac672a094c6fa57c99ec3be27d32f64804bd82c8e74a1e66db",
 
-  "src/core/meeting_evidence.rs": "8330fa5400f69a56ea22890b7052af632e0186c1048855cb16f82fa2106b6441",
+  "src/core/meeting_evidence.rs": "a90f8250d9d3a2990edb0922b6b1a3e858f39e720b31676cce1caff0acb8bed1",
 
   "src/core/meeting_evidence/speech_host_tests.rs": "e9c6c885ffae4026ea94bfc8bebc158258a2e31d729e0196108c9554655feba5",
 
@@ -155,15 +155,15 @@
 
   "src/core/meeting_router/inputs.rs": "408230fb4accf7e5e6e5e58809238c64daf6051a3862d85cc3805066a18191df",
 
-  "src/core/meeting_router/jobs.rs": "dab3a6c8dea075279974d6a1d59a0fd39d68d6c25f3a0eba6f17aba456198fdf",
+  "src/core/meeting_router/jobs.rs": "bae76c67d7f08f40a10a5e7e7e295ffeabccd7ca79fb34b45adf4e91414741c9",
 
   "src/core/meeting_router/jobs/handoff.rs": "7a82e947294aeba570433d9425bf892da2f6bc98324e02eff0cd06aa31bfd798",
 
-  "src/core/meeting_router/jobs/handoff/tests.rs": "af71b113d9b283f6168da8924e0f6f5e9a4aee0ea0dfcebde48e4bbdb6166106",
+  "src/core/meeting_router/jobs/handoff/tests.rs": "083f734a3eb64f9f9cda01a3b3e2a651d82d74cccb7d41b8a3e5dfad380fb20e",
 
-  "src/core/meeting_router/jobs/notes.rs": "779fc898d0a0b2ff1c3efa852e941962e1be98012242351e16aaed35c7f6f622",
+  "src/core/meeting_router/jobs/notes.rs": "feaa5fae23342a316546926740a75a87f9434700b5f5d985a7733d8c6f4d6030",
 
-  "src/core/meeting_router/jobs/r1_tests.rs": "0e969e51454c8607c07b3839ff4ff547522aa1b3d1e31f7f5ac4766e72e5be33",
+  "src/core/meeting_router/jobs/r1_tests.rs": "e9ac0ba8d16a6cb8b73302719d7d3024970ad10e37e31b40580e918b94e05332",
 
   "src/core/meeting_router/pieces.rs": "2a1b3919d047b09f87307726d029d9189b875a519c223911eb8312849018a8b8",
 
@@ -217,15 +217,15 @@
 
   "src/core/notes/status_detail.rs": "8c9c642856258caf225a450469d2649ef2801b749d1baa6cc29e236114558dad",
 
-  "src/core/notes/tests.rs": "92d008f0a714ecfc47e878d81836d6b920767d90be55428596490bfff6d512b3",
+  "src/core/notes/tests.rs": "4a46185b2448cab3e69cd1c53e98d2b0f8e9d68a58891d6cea9d5d9482ddf65c",
 
   "src/core/notes/tests/corruption.rs": "22bd6f4b4809efa5810b067bccd89e089ffb3adc5e8806c7d7b768b8aa6c5147",
 
-  "src/core/notes/tests/english_first.rs": "9e4c835f400539e24dd60fce3d64d4fac3392417cd34e05b015996f9b4471056",
+  "src/core/notes/tests/english_first.rs": "5f87c7800d042062a8b3329d93a2ef9aa0b33cb1ee77aae095319c75bdbca6cc",
 
   "src/core/notes/tests/idle.rs": "1042fecce32cbd639cafb25395077c718558d80aa4bc0e64812c3e0b9fe00dd6",
 
-  "src/core/notes/tests/passes.rs": "90ea039fa9add926288afec6d710678e4601d46ccdb6745ff6e5a020c98b42c9",
+  "src/core/notes/tests/passes.rs": "98a6f6e778538fba29d8ef163292a600af8e618626e5f0a5dc45a050366853b7",
 
   "src/core/notes/tests/review.rs": "c6d45633c1fc27bc6957a7d4d664fa1c1c432ceefb72c953f5d1fe61fe5c056a",
 
@@ -235,15 +235,15 @@
 
   "src/core/notes/tests/translation.rs": "614ddd15f631c14524b57a9a66ac0b380029808351124a8d745989c4d2c1897e",
 
-  "src/core/notes/tests/translation/authorization.rs": "767ba6dd4e52d237eeb53579ad57ecc06e11e7594c39da8f266ef8fedacf0cbb",
+  "src/core/notes/tests/translation/authorization.rs": "361bc5395b09e7dc1e1369ee5f6d122781a4dafa24e13366bcd3146a45e7ff1d",
 
   "src/core/notes/tests/translation/busy.rs": "627c1afce015d51e36fded755f7f794b9a2c228b52e554385b3c9afb9fd8a44c",
 
-  "src/core/notes/tests/translation/failed.rs": "6011375f08f1ce3d8a2b6a7b16304049375a6f938612f11cf284c00286dfa57a",
+  "src/core/notes/tests/translation/failed.rs": "58ede76747a6429c13177e3d169b2a1637fa97a61ee97077958926e44ee9d8b3",
 
   "src/core/notes/tests/translation/payment.rs": "92bbc28b589bf430a3667aa13a9f3c25f4d826c7ecb308fb13fc485a4af34cb4",
 
-  "src/core/notes/tests/translation/producer.rs": "9c651ff6ce000ff7b7f19d9559a67c48428e4d16175862df609861d6c89e28f3",
+  "src/core/notes/tests/translation/producer.rs": "57de86f3c8a48486881fbccd150b7bebaa332ed99154521eb93853fe5085d4c2",
 
   "src/core/notes/tests/translation/qualification.rs": "6c26011e370ad5111e4170d972d1fa83e1ce3158bfff4b6fd8cc81504428a49b",
 
@@ -423,7 +423,7 @@
 
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
 
-  "src/ui/hex/settings.rs": "2cdace59c04c33f47c3c5d9ec5c613b007ddd703adf7468e47415dc344933a1d",
+  "src/ui/hex/settings.rs": "64d95e7aa7939a99b31a45e5a7b1da3c96c238f00b73e00e1cc752be48ba70a1",
 
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
 
@@ -439,9 +439,9 @@
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "10714f5684a4222427fffb3d3ec26bef7157f823a582de8e1ae608e07bb2f278",
+  "src/ui/mod.rs": "e0f9e390c331d546e19793b56aecd308579c68dc2e289b9d875f9f6abafac6c4",
 
-  "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
+  "src/ui/models.rs": "eb6ea41c084af0bdb6ec17cdf7a2fad8e4f812d859351e73b05fac2ccbd703f9",
 
   "src/ui/notes_status.rs": "4480ef7baf910c462a4ec3031f7d83b08bea61c01f43900176cb7a0753fb1692",
 

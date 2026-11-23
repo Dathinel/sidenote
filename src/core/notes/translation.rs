@@ -30,10 +30,11 @@ pub(super) struct Snapshot {
 impl Snapshot {
     pub(super) fn authorized_by(&self, config: &Config) -> bool {
         let stages = &config.engine_settings.stages;
-        config
-            .notes
-            .as_ref()
-            .is_some_and(|n| n.engine() == super::Engine::App && n.enabled_at_ms.is_some())
+        config.features.translation
+            && config
+                .notes
+                .as_ref()
+                .is_some_and(|n| n.engine() == super::Engine::App && n.enabled_at_ms.is_some())
             && config.engine_settings.steps.translation
             && stages.translation_enabled_at_ms == Some(self.enabled_at_ms)
             && stages.translation_helper == self.helper
@@ -79,6 +80,9 @@ pub(super) fn prepare(
         return Ok(result);
     };
     let config = Config::load_existing(root)?;
+    if !config.features.translation {
+        return Ok(result);
+    }
     let engine = &config.engine_settings;
     let stages = &engine.stages;
     let Some(enabled_at_ms) = stages

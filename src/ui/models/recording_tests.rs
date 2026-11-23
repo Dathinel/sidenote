@@ -53,7 +53,8 @@ fn fixture(status: Result<EngineState, HexError>, prepare: impl FnOnce(&Path)) -
     prepare(root.path());
     let mut state = State::new();
     state.config = sidenote::core::Config::default();
-    // The CPU language passes are on by default only on Windows.
+    state.config.features.indic_engine = true;
+    // This fixture also exercises the download guard on Linux.
     state.config.labs.after_stop_language_routing = true;
     state.config.pipeline.profile = "experimental".into();
     state.models = Models::load(root.path(), &state.config);

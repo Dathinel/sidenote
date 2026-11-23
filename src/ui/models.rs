@@ -248,7 +248,8 @@ impl Models {
     }
 
     fn can_download_cpu_packs(&self, config: &sidenote::core::Config) -> bool {
-        config.labs.after_stop_language_routing
+        config.features.indic_engine
+            && config.labs.after_stop_language_routing
             && config.pipeline.enabled()
             && config.pipeline.language_mode == "auto"
             && self.pack_queue.is_empty()
@@ -305,6 +306,9 @@ impl State {
         self.hex.shell.saved = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
     }
     fn model_download(&mut self, id: &'static str, remove: bool) {
+        if cpu_language_pack(id) && !self.config.features.indic_engine {
+            return;
+        }
         if self.models.pack_queue.is_empty() || !cpu_language_pack(id) {
             self.models.request_download(id, remove, model_notify(self));
         }
@@ -322,8 +326,15 @@ impl State {
     }
 
     pub(super) fn model_event(&mut self, msg: Msg) {
-        if self.models.apply(msg) {
+        if self.models.apply(msg) && self.config.features.indic_engine {
             self.models.start_next_cpu_pack(model_notify(self));
+        }
+    }
+
+    pub(super) fn stop_language_pack_downloads(&mut self) {
+        self.models.pack_queue.clear();
+        for id in model_catalog::CPU_LANGUAGE_PACKS {
+            self.models.cancel(id);
         }
     }
 }
@@ -411,6 +422,7 @@ fn provisioning_review_cancel_stops_even_when_saving_fails() {
 #[test]
 fn provisioning_review_cpu_language_packs_keep_their_settings_controls() {
     let mut state = State::new();
+    state.config.features.indic_engine = true;
     state.models.languages = vec!["en".into()];
     state.hex.shell.model_recommended = true;
     state.models.progress.insert(
@@ -451,6 +463,7 @@ fn provisioning_review_cpu_language_packs_keep_their_settings_controls() {
 fn dev40_prompt_matches_routing_and_installed_packs() {
     let mut state = State::new();
     state.config = sidenote::core::Config::default();
+    state.config.features.indic_engine = true;
     state.models.installed.clear();
     let mut runtime = settings_models_runtime(state);
     assert!(runtime.find(CPU_DOWNLOAD_KEY).is_some());
@@ -492,6 +505,7 @@ fn dev40_prompt_queues_exactly_four_manual_installs() {
     let mut state = State::new();
     let root = tempfile::tempdir().unwrap();
     state.config = sidenote::core::Config::default();
+    state.config.features.indic_engine = true;
     state.models = Models::load(root.path(), &state.config);
     let (installed_tx, installed_rx) = std::sync::mpsc::channel();
     state.models.install_fixture = Some(installed_tx);
@@ -639,7 +653,7 @@ fn language_column(s: &State, k: &Kit, p: Palette) -> El {
     languages
 }
 pub fn view(s: &State, p: Palette, routing: El) -> El {
-    if !cfg!(feature = "asr-runtime") {
+    if !s.config.features.indic_engine || !cfg!(feature = "asr-runtime") {
         return super::hex::settings::panel(p).child(super::hex::settings::setting_row(
             s,
             "speech-models",
@@ -725,6 +739,9 @@ fn catalog_view(s: &State, p: Palette, routing: El, advanced: bool) -> El {
         .iter()
         .filter(|m| {
             let cpu_language = cpu_language_pack(m.id);
+            if cpu_language && !s.config.features.indic_engine {
+                return false;
+            }
             if advanced {
                 return !cpu_language
                     && (m.role == model_catalog::Role::LanguageId
