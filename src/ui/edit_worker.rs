@@ -1,7 +1,7 @@
 //! At most one editor publication runs at a time; completion targets are immutable session
 //! identities. A save that arrives while one runs waits its turn in `SaveQueue` and is never
 //! dropped.
-use super::{Event, State};
+use super::{Event, State, tasks::TickAttempt};
 use serde_json::Value;
 use sidenote::core::{
     self, TaskStore,
@@ -110,13 +110,14 @@ pub enum Field {
 #[derive(Clone)]
 pub enum Target {
     Tick,
+    ListTick(TickAttempt),
     Task(String, usize, u64),
     Memory(String, u64),
 }
 impl Target {
     fn matches(&self, s: &State) -> bool {
         match self {
-            Self::Tick => true,
+            Self::Tick | Self::ListTick(_) => true,
             Self::Memory(id, session) => {
                 s.memory.editor_generation == *session && s.memory.cursor.as_ref() == Some(id)
             }
@@ -146,6 +147,13 @@ pub enum Job {
         task: Box<core::TaskItem>,
         source: PathBuf,
         intent: core::MoveIntent,
+    },
+    ListTick {
+        store: TaskStore,
+        ticks: core::StateStore,
+        task: Box<core::TaskItem>,
+        on: bool,
+        attempt: TickAttempt,
     },
     Grouping {
         store: TaskStore,
@@ -200,6 +208,7 @@ impl Job {
             | Self::Grouping { .. }
             | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
+            Self::ListTick { attempt, .. } => Target::ListTick(attempt.clone()),
             Self::Task {
                 row,
                 index,
@@ -221,6 +230,7 @@ pub enum Completion {
         id: String,
         moved: Box<core::Moved>,
         error: Option<SaveError>,
+        tick: Option<TickAttempt>,
     },
     Preferences {
         teams: Option<core::Teams>,
@@ -257,8 +267,8 @@ impl Completion {
             | Self::ManualTick(_)
             | Self::Preferences { .. }
             | Self::V2 { .. }
-            | Self::Move { .. }
             | Self::Redo(_) => Target::Tick,
+            Self::Move { tick, .. } => tick.clone().map_or(Target::Tick, Target::ListTick),
             Self::Task {
                 row,
                 index,
@@ -396,6 +406,28 @@ impl State {
                             id: task.meeting_id.clone(),
                             moved: Box::new(moved),
                             error: error.map(|e| SaveError::from(&e)),
+                            tick: None,
+                        }
+                    }
+                    Job::ListTick {
+                        store,
+                        ticks,
+                        task,
+                        on,
+                        attempt,
+                    } => {
+                        let (moved, error) = core::run_move(
+                            &store,
+                            &ticks,
+                            &task,
+                            std::path::Path::new(""),
+                            core::MoveIntent::tick(on),
+                        );
+                        Completion::Move {
+                            id: task.meeting_id,
+                            moved: Box::new(moved),
+                            error: error.map(|e| SaveError::from(&e)),
+                            tick: Some(attempt),
                         }
                     }
                     Job::Grouping { store, by } => Completion::Preferences {
@@ -574,7 +606,12 @@ impl State {
                 }
                 Err(e) => self.tasks.notice = Some(e.message().into()),
             },
-            Completion::Move { id, moved, error } => {
+            Completion::Move {
+                id,
+                moved,
+                error,
+                tick,
+            } => {
                 // Both steps wrote, so only the newest view is current. The tick view is
                 // older than the status view by one write and is taken with it.
                 let newest = moved
@@ -598,7 +635,9 @@ impl State {
                         self.tasks.overrides = view.value;
                     }
                 }
-                if let Some(e) = error {
+                if let Some(attempt) = tick {
+                    self.finish_list_tick(attempt, error);
+                } else if let Some(e) = error {
                     self.tasks.notice = Some(e.message().into());
                 }
                 self.rebuild_tasks();
@@ -614,6 +653,14 @@ impl State {
             },
             Completion::Failed(Target::Tick) => {
                 self.notice = Some(SaveError::WorkerStopped.message().into())
+            }
+            Completion::Failed(Target::ListTick(attempt)) => {
+                let stopped = SaveError::WorkerStopped;
+                self.finish_list_tick(attempt, Some(stopped));
+                self.tasks.notice = Some(stopped.message().into());
+                if self.view != super::tasks::View::Tasks {
+                    self.notice = Some(stopped.message().into());
+                }
             }
             Completion::Task {
                 row,
