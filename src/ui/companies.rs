@@ -69,6 +69,9 @@ impl CompanyUi {
 }
 impl State {
     pub fn open_company(&mut self, id: Option<String>) {
+        if !self.config.features.people {
+            return;
+        }
         self.go_home();
         match Companies::load(&self.store.root) {
             Ok(data) => self.companies.data = data,

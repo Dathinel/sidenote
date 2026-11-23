@@ -494,7 +494,7 @@ impl State {
     }
 
     pub fn open_check(&mut self) {
-        if !self.config.features.daily_check {
+        if !self.config.features.daily_check || !self.config.features.memory {
             return;
         }
         self.go_home();

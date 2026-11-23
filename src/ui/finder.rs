@@ -98,11 +98,13 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
     if f.tasks {
         pages.push(page("Tasks", "Tasks from your meetings", Target::Tasks));
     }
-    pages.push(page(
-        "People",
-        "Our team and external contacts",
-        Target::People,
-    ));
+    if f.people {
+        pages.push(page(
+            "People",
+            "Our team and external contacts",
+            Target::People,
+        ));
+    }
     if f.memory {
         pages.push(page(
             "Memory",
@@ -110,7 +112,7 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
             Target::Memory,
         ));
     }
-    if f.daily_check {
+    if f.daily_check && f.memory {
         pages.push(page("Diary", "Your days, newest first", Target::Check));
     }
     pages.push(page("Settings", "Hex and this app", Target::Settings(None)));
@@ -126,7 +128,7 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         pages.retain(|e| contains(&e.title, &q) || contains(&e.detail, &q));
     }
 
-    if !typed || contains("Companies company records people", &q) {
+    if f.people && (!typed || contains("Companies company records people", &q)) {
         pages.push(page(
             "Companies",
             "Company records and people",
@@ -134,16 +136,17 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         ));
     }
     for company in s.companies.data.catalog.records.values().filter(|c| {
-        !typed
-            || contains(
-                &format!(
-                    "{} {} {}",
-                    c.name,
-                    c.domain.as_deref().unwrap_or_default(),
-                    c.aliases.join(" ")
-                ),
-                &q,
-            )
+        f.people
+            && (!typed
+                || contains(
+                    &format!(
+                        "{} {} {}",
+                        c.name,
+                        c.domain.as_deref().unwrap_or_default(),
+                        c.aliases.join(" ")
+                    ),
+                    &q,
+                ))
     }) {
         pages.push(page(
             &company.name,

@@ -368,7 +368,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
             },
         });
     }
-    places.push(Place {
+    places.extend(features.people.then(|| Place {
         key: "nav-people",
         name: "People",
         help: "People".into(),
@@ -376,7 +376,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
         icon: |c, _| icons::draw(&icons::PEOPLE, icons::ROW, c),
         flag: None,
         press: State::open_people,
-    });
+    }));
     if features.memory {
         places.push(Place {
             key: "view-memory",
@@ -397,7 +397,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
     }
     // The Diary is read every day like the other places, so it sits with them, not in the
     // footer with the tools.
-    if features.daily_check {
+    if features.daily_check && features.memory {
         places.push(Place {
             key: "view-check",
             name: "Diary",
@@ -415,7 +415,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
             },
         });
     }
-    places.push(Place {
+    places.extend(features.annotations.then(|| Place {
         key: "nav-annotations",
         name: "Annotations",
         help: "Annotations".into(),
@@ -423,7 +423,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
         icon: |c, _| icons::draw(&icons::ANNOTATIONS, icons::ROW, c),
         flag: None,
         press: |s| s.open_annotations(),
-    });
+    }));
     let peers = (features.other_devices && s.nav.peers > 0).then(|| Place {
         key: "nav-peers",
         name: "Other devices",
@@ -1044,6 +1044,8 @@ mod tests {
         crate::test_paths::isolate();
         let mut s = State::new();
         s.config.features.tasks = true;
+        s.config.features.people = true;
+        s.config.features.annotations = true;
         s.config.features.memory = true;
         s.config.features.daily_check = true;
 
@@ -1053,6 +1055,21 @@ mod tests {
         assert_eq!(
             (MAIN_H, WIDE, names.join(", ").as_str()),
             (32.0, 240.0, expected)
+        );
+    }
+
+    #[test]
+    fn home_sidebar_hides_disabled_experiments() {
+        let mut state = State::new();
+        state.config.features.tasks = true;
+        state.config.features.people = false;
+        state.config.features.memory = false;
+        state.config.features.daily_check = true;
+        state.config.features.annotations = false;
+        let (places, _) = places(&state, super::super::theme::palette(true));
+        assert_eq!(
+            places.iter().map(|place| place.name).collect::<Vec<_>>(),
+            ["Meetings", "Tasks"]
         );
     }
 }

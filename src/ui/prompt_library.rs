@@ -1037,11 +1037,13 @@ fn teams_note(s: &State, p: Palette) -> El {
             },
             p.soft,
         ))
-        .children(s.config.features.tasks.then(|| {
-            button("Set up teams", "notes-teams", p)
-                .self_start()
-                .on_press(|s: &mut State| s.open_people_tab(0))
-        }))
+        .children(
+            (s.config.features.tasks && s.config.features.people).then(|| {
+                button("Set up teams", "notes-teams", p)
+                    .self_start()
+                    .on_press(|s: &mut State| s.open_people_tab(0))
+            }),
+        )
 }
 
 /// Invented states for the render harness. The isolated state holds no saved instructions, so

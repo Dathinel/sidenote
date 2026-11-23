@@ -580,7 +580,7 @@
   {
     "key": "features.memory",
     "owner": "Sidenote",
-    "home": "Meetings / Summaries",
+    "home": "Experimental features",
     "preserve_controls": [
       "feature-Memory"
     ],
@@ -593,7 +593,7 @@
   {
     "key": "features.daily_check",
     "owner": "Sidenote",
-    "home": "Meetings / Tasks",
+    "home": "Meetings / Daily check",
     "preserve_controls": [
       "feature-Daily check"
     ],
@@ -606,7 +606,7 @@
   {
     "key": "features.projects",
     "owner": "Sidenote",
-    "home": "General / Sidebar features",
+    "home": "Experimental features",
     "preserve_controls": [
       "feature-Projects"
     ],

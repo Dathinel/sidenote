@@ -402,7 +402,9 @@ impl State {
                 let f = &self.config.features;
                 if (!f.tasks && self.view == tasks::View::Tasks)
                     || (!f.memory && (self.memory_open || self.memory_back))
-                    || (!f.daily_check && (self.check_open || self.check_back))
+                    || ((!f.daily_check || !f.memory) && (self.check_open || self.check_back))
+                    || (!f.people && (self.view == tasks::View::People || self.companies.open))
+                    || (!f.annotations && self.annotations.open)
                 {
                     self.go_meetings();
                 }
@@ -3136,6 +3138,9 @@ pub fn spec() -> AppSpec<State> {
             ("settings-general", |s| {
                 hex::settings::scene(s, "settings-general")
             }),
+            ("settings-experimental", |s| {
+                hex::settings::scene(s, "settings-experimental")
+            }),
             ("settings-recording", |s| {
                 hex::settings::scene(s, "settings-recording")
             }),
@@ -4075,6 +4080,10 @@ pub fn spec() -> AppSpec<State> {
             // The sidebar beside each page it serves, with an update waiting, with a project
             // chosen, with every project shown, and folded to its rail.
             ("sidebar-meetings", |s| scene_side(s, |_| {})),
+            ("sidebar-experiments-off", |s| {
+                hex::scene(s, false);
+                scene_sidebar(s, true);
+            }),
             ("sidebar-meeting", |s| scene_side(s, scene_meeting)),
             ("sidebar-tasks", |s| scene_side(s, scene_tasks)),
             ("sidebar-memory", |s| scene_side(s, scene_memory)),

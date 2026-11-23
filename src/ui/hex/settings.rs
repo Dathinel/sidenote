@@ -77,6 +77,7 @@ pub enum Page {
     General,
     Meetings,
     Prompts,
+    Experimental,
     /// Search destination in the main sidebar.
     People,
     Hex,
@@ -89,10 +90,11 @@ pub enum Page {
     Diagnostics,
 }
 impl Page {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::General,
         Self::Meetings,
         Self::Prompts,
+        Self::Experimental,
         Self::Hex,
         Self::Helpers,
         Self::ConnectedApps,
@@ -107,6 +109,7 @@ impl Page {
             Self::General => "General",
             Self::Meetings => "Meetings",
             Self::Prompts => "Prompt library",
+            Self::Experimental => Section::Experimental.name(),
             Self::People => "People",
             Self::Hex => "Hex and dictation",
             Self::Helpers => "Models and agents",
@@ -136,6 +139,7 @@ impl Page {
                 _ => Section::Meetings,
             },
             Self::Prompts => Section::PromptLibrary,
+            Self::Experimental => Section::Experimental,
             Self::People => Section::Teams,
             Self::Hex => Section::Dictation,
             Self::Helpers => match tab {
@@ -156,6 +160,7 @@ impl Page {
             Self::General => &icons::USER,
             Self::Meetings => &icons::MEETINGS,
             Self::Prompts => &icons::PROMPTS,
+            Self::Experimental => &icons::FLASK,
             Self::People => &icons::PEOPLE,
             Self::Hex => &icons::MIC,
             Self::Helpers => &icons::BRAIN,
@@ -187,6 +192,7 @@ fn current(section: Section) -> (Page, usize) {
         Section::Meetings | Section::Vocabulary => (Page::Meetings, 0),
         Section::AiNotes => (Page::Meetings, 1),
         Section::Features => (Page::Meetings, 2),
+        Section::Experimental => (Page::Experimental, 0),
         Section::MeetingEngine => (Page::Meetings, 3),
         Section::PromptLibrary => (Page::Prompts, 0),
         Section::Teams => (Page::People, 0),
@@ -209,12 +215,19 @@ fn active(s: &State) -> (Page, usize) {
     current(s.hex.section)
 }
 
+fn tab_visible(s: &State, page: Page, tab: usize) -> bool {
+    (page, tab) != (Page::Meetings, 2) || s.config.features.memory
+}
+
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     if page == Page::People {
-        s.hex.filter = TextEdit::default();
-        s.open_people_tab(tab);
+        if s.config.features.people {
+            s.hex.filter = TextEdit::default();
+            s.open_people_tab(tab);
+        }
         return;
     }
+    let tab = if tab_visible(s, page, tab) { tab } else { 0 };
     if page == Page::ConnectedApps && !super::super::isolated() {
         s.connect_agents(false, None);
     }
@@ -267,10 +280,12 @@ fn back(s: &mut State) {
         s.meeting_tab = dest.meeting_tab;
         match dest.page {
             nav::Page::Tasks => s.view = tasks::View::Tasks,
-            nav::Page::Memory => s.memory_open = true,
-            nav::Page::Check => s.check_open = true,
-            nav::Page::Annotations => s.annotations.open = true,
-            nav::Page::People => s.view = tasks::View::People,
+            nav::Page::Memory if s.config.features.memory => s.memory_open = true,
+            nav::Page::Check if s.config.features.daily_check && s.config.features.memory => {
+                s.check_open = true;
+            }
+            nav::Page::Annotations if s.config.features.annotations => s.annotations.open = true,
+            nav::Page::People if s.config.features.people => s.view = tasks::View::People,
             _ => {}
         }
         s.refresh_list();
@@ -515,6 +530,10 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
         "feature-Daily check" => &icons::CALENDAR_CHECK,
         "feature-Tasks" => &icons::LIST_TODO,
         "feature-Projects" => &icons::FOLDERS,
+        "feature-People" => &icons::PEOPLE,
+        "feature-Annotations and pictures" => &icons::ANNOTATIONS,
+        "feature-Hindi and Telugu engine" => &icons::CPU,
+        "feature-Translation" => &icons::LANGUAGES,
         "feature-Other devices" => &icons::RADIO_TOWER,
         "this-pc-name" | "meeting-icon-visibility" => &icons::MONITOR,
         "connect-Claude Code" => &icons::CONNECTED,
@@ -789,14 +808,6 @@ fn app_index() -> Vec<Destination> {
             true,
         ),
         entry(
-            "feature-Memory",
-            "Remember across meetings",
-            "memory",
-            Page::Meetings,
-            1,
-            false,
-        ),
-        entry(
             "knowledge-base",
             "Knowledge base",
             "daily check repository revision source folders company roster",
@@ -952,14 +963,6 @@ fn app_index() -> Vec<Destination> {
             "feature-Tasks",
             "Tasks",
             "features",
-            Page::General,
-            0,
-            false,
-        ),
-        entry(
-            "feature-Projects",
-            "Projects",
-            "features group projects by",
             Page::General,
             0,
             false,
@@ -1206,6 +1209,16 @@ fn meeting_icon_capture_destination() -> Destination {
 
 fn index(s: &State) -> Vec<Destination> {
     let mut entries = app_index();
+    entries.extend(AppFeature::EXPERIMENTAL.map(|feature| {
+        entry(
+            &format!("feature-{}", feature.name()),
+            feature.name(),
+            feature.description(),
+            Page::Experimental,
+            0,
+            false,
+        )
+    }));
     if cfg!(windows) {
         entries.push(meeting_icon_capture_destination());
     }
@@ -1228,8 +1241,10 @@ fn index(s: &State) -> Vec<Destination> {
         ));
     }
     entries.retain(|dest| {
-        (dest.key != "speech-model-anuvani-lid-int8"
-            || s.models.has_local_files("anuvani-lid-int8"))
+        (dest.page != Page::People || s.config.features.people)
+            && tab_visible(s, dest.page, dest.tab)
+            && (dest.key != "speech-model-anuvani-lid-int8"
+                || s.models.has_local_files("anuvani-lid-int8"))
             && (dest.key != "notes-scripts-card"
                 || s.ai_notes
                     .settings
@@ -1543,6 +1558,9 @@ pub(in crate::ui) fn tab_bar(
         .flex_wrap()
         .focus_group();
     for (tab, name) in names.iter().enumerate() {
+        if !jumps && !tab_visible(s, page, tab) {
+            continue;
+        }
         let selected = tab == active;
         let ink = if selected { p.ink } else { p.soft };
         tabs = tabs.child(
@@ -2535,6 +2553,11 @@ fn privacy(s: &State, k: &Kit, p: Palette) -> El {
 }
 fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: usize) -> El {
     match (page, tab) {
+        (Page::Experimental, _) => col().w_full().mt(18.0).child(
+            panel(p).children(AppFeature::EXPERIMENTAL.into_iter().map(|test| {
+                feature(s, k, test, test.name(), test.description(), p)
+            })),
+        ),
         (Page::General, _) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
@@ -2547,25 +2570,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             ))
             .child(card(
                 "Sidebar features",
-                col()
-                    .w_full()
-                    .child(feature(
-                        s,
-                        k,
-                        AppFeature::Tasks,
-                        "Tasks",
-                        "Show Tasks in the sidebar.",
-                        p,
-                    ))
-                    .child(hairline(p))
-                    .child(feature(
-                        s,
-                        k,
-                        AppFeature::Projects,
-                        "Projects",
-                        "Show Projects in the sidebar.",
-                        p,
-                    )),
+                feature(s, k, AppFeature::Tasks, "Tasks", "Show Tasks in the sidebar.", p),
                 p,
             )),
         (Page::Meetings, 0) => col()
@@ -2615,18 +2620,6 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Meetings, 1) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
-            .child(settings_card(
-                "Memory",
-                feature(
-                    s,
-                    k,
-                    AppFeature::Memory,
-                    "Remember across meetings",
-                    "Use knowledge from earlier meetings.",
-                    p,
-                ),
-                p,
-            ))
             .child(advanced(
                 s,
                 ai_notes::section(s, k, p, ai_notes::Part::Scripts),
@@ -2664,7 +2657,9 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(roles::SMALL.bold().wrap("Meeting summary agent", p.soft).mt(roles::SECTION_TOP))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
             .child(ai_notes::summary_model(s, k, p, layer, Vec::new()))
-            .child(super::super::annotations::agents_section(s, k, p, layer)),
+            .children(s.config.features.annotations.then(|| {
+                super::super::annotations::agents_section(s, k, p, layer)
+            })),
         (Page::Helpers, _) => col()
             .w_full()
             .child(
@@ -3045,7 +3040,11 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         let (page, tab) = active(s);
         if !page.tabs().is_empty() {
             let delta = if e.mods.shift { -1 } else { 1 };
-            let next = (tab as isize + delta).rem_euclid(page.tabs().len() as isize) as usize;
+            let step = |tab| (tab as isize + delta).rem_euclid(page.tabs().len() as isize) as usize;
+            let mut next = step(tab);
+            if !tab_visible(s, page, next) {
+                next = step(next);
+            }
             navigate(s, page, next);
             tx.blur();
             return true;
@@ -3070,6 +3069,7 @@ pub fn scene(s: &mut State, name: &str) {
     assert!(super::super::isolated());
     if name.starts_with("settings-kb-") {
         super::super::notes_scene::prepare(s);
+        s.config.features.memory = true;
         s.hex_open = true;
         s.config.knowledge_base = sidenote::core::config::KnowledgeBase::default();
         if name != "settings-kb-empty" {
@@ -3095,6 +3095,9 @@ pub fn scene(s: &mut State, name: &str) {
         return;
     }
     super::super::notes_scene::settings(s, "scripts");
+    if name != "settings-experimental" {
+        s.config.features.memory = true;
+    }
     super::super::models::scene(s, "empty");
     super::super::scene_agents(s, super::super::ALL_AGENTS);
     s.refresh_ask_model_input();
@@ -3105,6 +3108,7 @@ pub fn scene(s: &mut State, name: &str) {
     }
     let (page, tab) = match name.trim_end_matches("-expanded") {
         "settings-general" => (Page::General, 0),
+        "settings-experimental" => (Page::Experimental, 0),
         "settings-recording" => (Page::Meetings, 0),
         "settings-summaries" => (Page::Meetings, 1),
         "settings-tasks" => (Page::Meetings, 2),
@@ -3305,6 +3309,7 @@ mod tests {
         crate::test_paths::isolate();
         let mut state = State::new();
         state.go_meetings();
+        state.config.features.people = true;
         state.sidebar_open.set(true);
         let mut rt = rune::Runtime::with_text(
             state,
@@ -3799,5 +3804,27 @@ mod tests {
         for page in Page::ALL {
             assert!(page.tabs().len() <= 4);
         }
+    }
+
+    #[test]
+    fn experimental_settings_search_finds_all_switches_with_experiments_off() {
+        let mut state = State::new();
+        state.config.features.people = false;
+        state.config.features.memory = false;
+        navigate(&mut state, Page::Experimental, 0);
+        assert_eq!(active(&state), (Page::Experimental, 0));
+        let entries = index(&state);
+        let switches: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.page == Page::Experimental)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(switches, AppFeature::EXPERIMENTAL.map(AppFeature::name));
+        assert!(entries.iter().all(|entry| entry.page != Page::People));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.key != "feature-Daily check")
+        );
     }
 }

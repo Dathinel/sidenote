@@ -223,6 +223,9 @@ fn hex_hints(settings: &[sidenote::hex_engine::Setting]) -> (Option<String>, boo
 }
 impl State {
     pub fn open_annotations(&mut self) {
+        if !self.config.features.annotations {
+            return;
+        }
         let timing = super::Operation::new(super::TimedAction::Annotations);
         self.go_home();
         self.annotations.response_time = timing.defer();
