@@ -388,7 +388,7 @@ fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
             },
             active: page == Page::Memory,
             icon: |c, _| icon_memory(c),
-            flag: (proposals > 0).then_some(p.accent),
+            flag: (proposals > 0).then_some(p.warn),
             press: |s| {
                 s.open_memory();
                 s.nav_done();
