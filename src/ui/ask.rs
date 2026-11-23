@@ -1083,11 +1083,15 @@ pub fn overlay_with(
                 .child(scope_choice(s, k, p, layer)),
         );
     }
-    let lead = if compact {
-        lead.filter(|_| !focused)
-            .map(|control| control.transition(Transition::opacity().springs(pair::GLIDE)))
+    // Narrow and focused: the lead holds Pause, Resume and Generate notes, so it
+    // moves above the panel instead of disappearing.
+    let (stack, lead) = if compact && focused {
+        (stack.children(lead.map(El::self_start)), None)
+    } else if compact {
+        let glide = |control: El| control.transition(Transition::opacity().springs(pair::GLIDE));
+        (stack, lead.map(glide))
     } else {
-        lead
+        (stack, lead)
     };
     let show_chips = focused && empty && !pending && !showing_thread;
     let room = ((s.app_w.get() - super::nav::width(s)) - 2.0 * gutter).min(COLUMN)
