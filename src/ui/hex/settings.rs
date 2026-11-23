@@ -3557,7 +3557,7 @@ mod tests {
         assert!(jump_groups(Page::Meetings, 0).is_empty());
         assert_eq!(
             Page::Meetings.tabs(),
-            ["Recording", "Summaries", "Tasks", "Engine"]
+            ["Recording", "Summaries", "Daily check", "Engine"]
         );
         assert_eq!(current(Page::Meetings.section(3)), (Page::Meetings, 3));
         assert_eq!(jump_groups(Page::Hex, 0).len(), 7);
