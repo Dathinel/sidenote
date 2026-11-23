@@ -119,6 +119,27 @@ fn junction_in_owned_tree_refuses_inventory() {
     assert!(junction.is_dir());
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn delete_refuses_a_hard_link_in_hex_inputs() {
+    let f = Fixture::new();
+    f.write("meetings/10/manifest.json", b"{}");
+    f.write("outside", b"synthetic");
+    fs::hard_link(f.temp.path().join("outside"), f.meetings.join("10/linked")).unwrap();
+    let result = f.storage().delete(
+        "10",
+        String::new(),
+        100,
+        |_| Ok(Eligibility::Ready),
+        |_| Ok(()),
+    );
+    assert!(matches!(
+        result,
+        Err(DeleteError::Failed(error)) if error.kind() == std::io::ErrorKind::InvalidData
+    ));
+    assert!(suppressed_ids(&f.state).unwrap().is_empty());
+}
+
 fn bytes_at(path: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut pending = vec![path.to_owned()];
     let mut bytes = Vec::new();
@@ -474,6 +495,66 @@ fn immediate_undo_and_restart_restore_preserve_every_member_byte() {
         for (path, bytes) in inputs {
             assert_eq!(fs::read(path).unwrap(), bytes);
         }
+    }
+}
+
+#[test]
+fn watcher_state_recycles_with_each_owned_id_and_can_be_restored_or_purged() {
+    const DUE: i64 = 100 + 30 * 24 * 60 * 60 * 1000;
+    let state_files: [(&str, &[u8]); 4] = [
+        ("local/probe/10.json", br#"{"samples":2}"#),
+        ("local/probe/11.json", br#"{"samples":3}"#),
+        ("local/auto-stop/10.json", b"true"),
+        ("local/auto-stop/11.json", b"true"),
+    ];
+    let f = Fixture::new();
+    f.session("10", &["11"]);
+    f.write("meetings/11/manifest.json", b"{}");
+    for (path, bytes) in state_files {
+        f.write(&format!("state/{path}"), bytes);
+    }
+    let storage = f.storage();
+    let original_hex = bytes_at(&f.meetings);
+
+    let transaction = delete(&storage);
+    for (path, _) in state_files {
+        assert!(!f.state.join(path).exists(), "{path}");
+    }
+    storage.restore(&transaction).unwrap();
+    for (path, bytes) in state_files {
+        assert_eq!(fs::read(f.state.join(path)).unwrap(), bytes, "{path}");
+    }
+
+    let transaction = delete(&storage);
+    assert!(storage.purge(&transaction, DUE).unwrap());
+    let recycled = f.state.join("local/deleted-meetings").join(transaction);
+    assert_eq!(
+        bytes_at(&recycled)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>(),
+        [PathBuf::from("receipt.json")]
+    );
+    for (path, _) in state_files {
+        assert!(!f.state.join(path).exists(), "{path}");
+    }
+    assert_eq!(bytes_at(&f.meetings), original_hex);
+}
+
+#[test]
+fn missing_watcher_state_does_not_block_delete_or_restore() {
+    for (present, missing) in [("probe", "auto-stop"), ("auto-stop", "probe")] {
+        let f = Fixture::new();
+        f.write("meetings/10/manifest.json", b"{}");
+        let present = format!("local/{present}/10.json");
+        let missing = format!("local/{missing}/10.json");
+        f.write(&format!("state/{present}"), b"true");
+        let storage = f.storage();
+        let transaction = delete(&storage);
+        assert!(!f.state.join(&present).exists());
+        storage.restore(&transaction).unwrap();
+        assert_eq!(fs::read(f.state.join(present)).unwrap(), b"true");
+        assert!(!f.state.join(missing).exists());
     }
 }
 

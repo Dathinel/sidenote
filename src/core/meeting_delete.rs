@@ -76,20 +76,31 @@ fn identity(_path: &Path, m: &fs::Metadata) -> io::Result<[u64; 2]> {
 }
 
 #[cfg(windows)]
-fn identity(path: &Path, m: &fs::Metadata) -> io::Result<[u64; 2]> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+fn windows_file_info(
+    file: &fs::File,
+) -> io::Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        GetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(info)
+}
+
+#[cfg(windows)]
+fn identity(path: &Path, m: &fs::Metadata) -> io::Result<[u64; 2]> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
     };
     let file = fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let info = windows_file_info(&file)?;
     if info.dwFileAttributes & 0x400 != 0 || (m.is_file() && info.nNumberOfLinks != 1) {
         return Err(invalid());
     }
@@ -97,6 +108,16 @@ fn identity(path: &Path, m: &fs::Metadata) -> io::Result<[u64; 2]> {
         u64::from(info.dwVolumeSerialNumber),
         u64::from(info.nFileIndexHigh) << 32 | u64::from(info.nFileIndexLow),
     ])
+}
+
+fn open_hex_file(path: &Path) -> io::Result<fs::File> {
+    let file = super::meeting_router::inputs::Snapshot::open_file(path)?;
+    // Check the handle used for the fingerprint, since the path can change after discovery.
+    #[cfg(windows)]
+    if windows_file_info(&file)?.nNumberOfLinks != 1 {
+        return Err(invalid());
+    }
+    Ok(file)
 }
 
 #[cfg(target_os = "linux")]
@@ -306,10 +327,10 @@ impl Storage {
     ) -> io::Result<(u64, String)> {
         let path = self.meetings.join(relative);
         let m = metadata(&path)?.ok_or_else(invalid)?;
-        identity(&path, &m)?;
         let mut hash = blake3::Hasher::new();
         let mut bytes = 0_u64;
         if m.is_dir() {
+            identity(&path, &m)?;
             let mut children = fs::read_dir(&path)?.collect::<io::Result<Vec<_>>>()?;
             children.sort_by_key(fs::DirEntry::file_name);
             for child in children {
@@ -319,7 +340,7 @@ impl Storage {
                 hash.update(&serde_json::to_vec(&(name, size, digest))?);
             }
         } else {
-            let mut file = super::meeting_router::inputs::Snapshot::open_file(&path)?;
+            let mut file = open_hex_file(&path)?;
             bytes = io::copy(&mut file, &mut hash)?;
             if bytes != m.len() {
                 return Err(invalid());
@@ -354,6 +375,8 @@ impl Storage {
             ("draft-summaries", "json"),
             ("draft-outcomes", "json"),
             ("recording-guard", "json"),
+            ("probe", "json"),
+            ("auto-stop", "json"),
         ] {
             let relative = PathBuf::from("local")
                 .join(directory)
@@ -973,6 +996,21 @@ mod tests {
         assert_eq!(
             super::same_volume(1, 2).unwrap_err().kind(),
             std::io::ErrorKind::CrossesDevices
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn delete_hex_opener_refuses_hard_links() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("original");
+        let alias = root.path().join("alias");
+        super::fs::write(&source, b"synthetic").unwrap();
+        assert!(super::open_hex_file(&source).is_ok());
+        super::fs::hard_link(&source, &alias).unwrap();
+        assert_eq!(
+            super::open_hex_file(&alias).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
         );
     }
 }
