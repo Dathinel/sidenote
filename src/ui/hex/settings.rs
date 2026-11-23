@@ -1366,6 +1366,7 @@ fn settings_list(s: &State, k: &Kit, p: Palette, width: f32) -> El {
                 })
                 .build(k)
                 .key("hex-filter")
+                .w_full()
                 .radius(8.0)
                 .fill(p.chip)
                 .outline(if s.hex.filter.focused { 1.0 } else { 0.0 }, -1.0, p.faint)
@@ -3118,17 +3119,21 @@ mod tests {
         rt.settle_all();
         rt.frame(0.0);
         let elements = rt.elements();
+        let rect = |key| {
+            elements
+                .iter()
+                .find(|element| element.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("missing {key}"))
+                .rect
+        };
         for (key, height) in [
             ("settings-back", 32.0),
             ("settings-page-Meetings", 32.0),
             ("settings-tab-0", 28.0),
         ] {
-            let element = elements
-                .iter()
-                .find(|element| element.key.as_deref() == Some(key))
-                .unwrap_or_else(|| panic!("missing {key}"));
-            assert_eq!(element.rect[3], height, "{key}");
+            assert_eq!(rect(key)[3], height, "{key}");
         }
+        assert_eq!(rect("hex-filter")[2], rect("settings-sidebar")[2] - 16.0);
     }
 
     #[test]
