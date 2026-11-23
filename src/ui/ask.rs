@@ -707,7 +707,6 @@ fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k, layer)
 }
 
-/// The width and height of the send and Stop slot.
 const ACTION: f32 = 28.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
@@ -780,24 +779,20 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
 
 /// What the pill says when no agent CLI is on this machine.
 fn no_agent(s: &State, p: Palette) -> El {
-    let mut note = col()
-        .grow(1.0)
-        .min_w(0.0)
-        .gap(2.0)
-        .child(roles::CONTROL.wrap(
-            "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
-            p.ink,
-        ));
+    let mut note = col().min_w(0.0).gap(2.0).child(roles::CONTROL.wrap(
+        "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
+        p.ink,
+    ));
     if s.agents_rechecked {
         note = note.child(roles::META.wrap(
             "Still not found. If you just installed one, press Check again, or restart Sidenote if it still fails.",
             p.faint,
         ));
     }
-    let content = if s.app_w.get() < 600.0 {
-        col().items_start()
+    let (content, note) = if s.app_w.get() < 600.0 {
+        (col().items_start(), note.w_full())
     } else {
-        row().items_center()
+        (row().items_center(), note.grow(1.0))
     };
     content
         .key("ask-pill")
@@ -806,7 +801,7 @@ fn no_agent(s: &State, p: Palette) -> El {
         .px(20.0)
         .py(10.0)
         .radius(22.0)
-        .child(note.w_full())
+        .child(note)
         .child(
             crate::ui::widgets::action("Check again", p)
                 .key("ask-recheck")
