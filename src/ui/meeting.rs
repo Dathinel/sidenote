@@ -25,6 +25,7 @@ pub struct ReadingUi {
     pub time_open: bool,
     pub recording_hover: bool,
     pub status_open: bool,
+    pub(super) rail: reading::RailVisit,
     pub window_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
@@ -42,6 +43,7 @@ impl ReadingUi {
             time_open: false,
             recording_hover: false,
             status_open: false,
+            rail: reading::RailVisit::default(),
             window_h: std::cell::Cell::new(800.0),
         }
     }

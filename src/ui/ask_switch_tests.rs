@@ -658,28 +658,41 @@ fn element(rt: &Runtime<State>, key: &str) -> rune::ElementInfo {
         .unwrap_or_else(|| panic!("missing {key}"))
 }
 
+fn rail_checkbox(rt: &Runtime<State>, index: usize) -> rune::ElementInfo {
+    let path = element(rt, &format!("meeting-task-{index}")).path + "/";
+    rt.elements()
+        .into_iter()
+        .find(|e| e.path.starts_with(&path) && e.role == "checkbox")
+        .unwrap()
+}
+
 #[test]
 fn meeting_tasks_column_is_plain_rows_that_keep_every_fact() {
     if in_parent("meeting_tasks_column_is_plain_rows_that_keep_every_fact") {
         return;
     }
-    let rt = page_with_tasks(DEFAULT_SIZE);
+    let mut rt = page_with_tasks(DEFAULT_SIZE);
+    rt.update(|s, _| s.tasks.today = chrono::NaiveDate::from_ymd_opt(2026, 11, 27).unwrap());
+    rt.settle_all();
+    rt.frame(0.0);
     // No card: the lists have neither a rounded box nor a fill.
     for key in ["meeting-tasks", "meeting-questions"] {
         let list = element(&rt, key);
         assert_eq!((list.radius, list.fill.a), (0.0, 0.0), "{key}");
     }
-    // Each row: 8 all round, a 16 px check circle at x 8 (1 below the padding), the title at 34.
+    // Each row: 8 all round, with a 24 px checkbox target around its 16 px mark.
     let row = |i: usize| element(&rt, &format!("meeting-task-{i}")).rect;
     for i in 0..3 {
-        let tick = element(&rt, &format!("meeting-tick-{i}")).rect;
-        let title = element(&rt, &format!("meeting-task-open-{i}")).rect;
-        assert_eq!((tick[2], tick[3]), (16.0, 16.0), "check circle {i}");
-        assert_eq!(
-            (tick[0] - row(i)[0], tick[1] - row(i)[1]),
-            (8.0, 9.0),
-            "tick {i}"
-        );
+        let tick = rail_checkbox(&rt, i).rect;
+        let path = element(&rt, &format!("meeting-task-{i}")).path + "/";
+        let title = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.path.starts_with(&path) && e.key.as_deref() == Some("title"))
+            .unwrap()
+            .rect;
+        assert_eq!((tick[2], tick[3]), (24.0, 24.0), "check target {i}");
+        assert_eq!(tick[0] - row(i)[0], 4.0, "tick {i}");
         assert_eq!(
             (title[0] - row(i)[0], title[1] - row(i)[1]),
             (34.0, 8.0),
@@ -696,23 +709,24 @@ fn meeting_tasks_column_is_plain_rows_that_keep_every_fact() {
     let tasks = element(&rt, "meeting-tasks").rect;
     assert_eq!(questions[1] - 4.0 - 22.0 - (tasks[1] + tasks[3]), 28.0);
     assert_eq!(element(&rt, "meeting-question-0").rect[0], row(0)[0]);
-    // Every fact is still on the page.
+    // The rail shows the title and plain metadata. The description lives in detail.
     let elements = rt.elements();
     let texts: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
     for want in [
         "Send the survey results",
-        "Send the survey results to the team",
-        "Maya \u{b7} 27 Nov",
+        "Maya \u{b7} Today",
         "Share the pricing page copy",
         "Priya \u{b7} 1 Dec \u{b7} guessed",
         "Book five customer tests",
-        "No owner \u{b7} No date",
+        "No owner",
         "Should the work email move to the end of sign-up?",
         "Waiting on Priya",
         "Who owns the survey follow-up?",
     ] {
         assert!(texts.contains(&want), "missing {want}");
     }
+    assert!(!texts.contains(&"Send the survey results to the team"));
+    assert!(!texts.iter().any(|text| text.contains("No date")));
 }
 
 #[test]
@@ -724,12 +738,15 @@ fn meeting_tasks_column_fits_a_narrow_window() {
     for i in 0..3 {
         let row = element(&rt, &format!("meeting-task-{i}")).rect;
         assert!(
-            row[0] >= 0.0 && row[0] + row[2] <= 390.0,
+            (16.0..=17.0).contains(&row[0]) && (373.0..=374.0).contains(&(row[0] + row[2])),
             "row {i}: {row:?}"
         );
-        // The check circle sits where the notes text starts.
-        let tick = element(&rt, &format!("meeting-tick-{i}")).rect;
-        assert_eq!(tick[0], element(&rt, "meeting-view").rect[0], "tick {i}");
+        let tick = rail_checkbox(&rt, i).rect;
+        assert_eq!(
+            (tick[0], tick[2], tick[3]),
+            (row[0], 32.0, 32.0),
+            "tick {i}"
+        );
     }
 }
 
@@ -757,43 +774,64 @@ fn meeting_task_rows_work_by_keyboard_and_checking_one_saves() {
     if in_parent("meeting_task_rows_work_by_keyboard_and_checking_one_saves") {
         return;
     }
+    let press = |rt: &mut Runtime<State>, key| {
+        rt.key(KeyEvent {
+            key,
+            mods: rune::Mods::default(),
+        });
+        rt.frame(0.2);
+    };
     let mut rt = page_with_tasks(DEFAULT_SIZE);
-    rt.update(|_, tx| tx.focus("meeting-tick-0", true));
+    rt.update(|_, tx| tx.focus("meeting-task-0", true));
     rt.frame(0.0);
-    let tick = element(&rt, "meeting-tick-0");
-    assert!(tick.focusable && tick.focused && tick.focus_visible);
+    let tick = rail_checkbox(&rt, 0);
+    assert!(!tick.focusable && !tick.focused);
     assert_eq!(tick.role, "checkbox");
     assert_eq!(
         tick.label.as_deref(),
         Some("Mark Send the survey results done")
     );
-    rt.key(KeyEvent {
-        key: Key::Tab,
-        mods: rune::Mods::default(),
-    });
-    rt.frame(0.2);
-    let open = element(&rt, "meeting-task-open-0");
+    let open = element(&rt, "meeting-task-0");
     assert!(open.focusable && open.focused && open.focus_visible);
     assert_eq!(open.role, "button");
-    assert_eq!(open.text.as_deref(), Some("Send the survey results"));
-    // Space on the check circle saves the tick; a click takes it off again.
-    rt.update(|_, tx| tx.focus("meeting-tick-0", true));
-    rt.frame(0.0);
-    rt.key(KeyEvent {
-        key: Key::Text(" ".into()),
-        mods: rune::Mods::default(),
-    });
-    rt.frame(0.2);
+    press(&mut rt, Key::Tab);
+    assert!(element(&rt, "meeting-task-1").focused);
+    press(&mut rt, Key::Up);
+    assert!(element(&rt, "meeting-task-0").focus_visible);
+    // Space saves the tick and leaves the row in place for this visit.
+    press(&mut rt, Key::Text(" ".into()));
     wait_for_tick(&mut rt, 0, true);
+    assert_eq!(element(&rt, "meeting-task-0").rect, open.rect);
     assert_eq!(
-        element(&rt, "meeting-tick-0").label.as_deref(),
+        rail_checkbox(&rt, 0).label.as_deref(),
         Some("Mark Send the survey results open")
     );
-    tap(&mut rt, "meeting-tick-0");
+    rt.update(|s, tx| {
+        s.go_home();
+        s.select(MEETING, tx);
+    });
+    rt.frame(0.2);
+    assert!(rt.find("meeting-task-0").is_none());
+    rt.update(|_, tx| tx.focus("meeting-done", true));
+    rt.frame(0.0);
+    press(&mut rt, Key::Enter);
+    let [x, y, w, h] = rail_checkbox(&rt, 0).rect;
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    rt.pointer_down(x + w / 2.0, y + h / 2.0);
+    rt.pointer_up(x + w / 2.0, y + h / 2.0);
+    rt.frame(0.2);
     wait_for_tick(&mut rt, 0, false);
     assert_eq!(
-        element(&rt, "meeting-tick-0").label.as_deref(),
+        rail_checkbox(&rt, 0).label.as_deref(),
         Some("Mark Send the survey results done")
+    );
+    rt.update(|_, tx| tx.focus("meeting-task-0", true));
+    rt.frame(0.0);
+    press(&mut rt, Key::Enter);
+    assert_eq!(rt.state.view, super::tasks::View::Tasks);
+    assert_eq!(
+        rt.state.tasks.panel,
+        Some(super::tasks::Panel::Task((MEETING.into(), 0)))
     );
 }
 
