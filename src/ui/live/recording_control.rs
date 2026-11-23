@@ -36,7 +36,8 @@ pub(in crate::ui) fn recording_note(s: &State, p: Palette) -> Option<El> {
 pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let m = session(s);
     let recording = is_recording(s, &m);
-    let open = if s.on_live() {
+    let live = s.on_live();
+    let open = if live {
         s.live.as_ref().is_some_and(|l| l.panel_open)
     } else {
         s.transcript_open
@@ -100,10 +101,24 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
         .border(1.0, p.line)
         .shadow(3.0, 16.0, p.shadow)
         .child(transcript);
+    let status = (live && recording).then(|| {
+        let words = super::super::nav::recording_words(s, false);
+        if s.narrow.get() {
+            roles::META.wrap(words, p.ink).max_w(82.0)
+        } else {
+            roles::META.line(words, p.ink).px(8.0)
+        }
+        .key("live-recording-status")
+    });
+    let (above, inline) = if s.narrow.get() {
+        (status, None)
+    } else {
+        (None, status)
+    };
     if recording {
         // Two bars distinguish Pause here from Stop on other pages.
         let bar = |key: &'static str| el().key(key).w(3.0).h(9.0).radius(1.0).fill(p.ink);
-        control = control.child(
+        control = control.children(inline).child(
             pressable(
                 row()
                     .key("meeting-pause-bars")
@@ -152,7 +167,11 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
             .on_press(|s: &mut State| s.meeting_generate()),
         );
     }
-    control
+    if let Some(status) = above {
+        col().gap(4.0).items_center().child(status).child(control)
+    } else {
+        control
+    }
 }
 
 pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
@@ -200,4 +219,49 @@ pub(in crate::ui) fn status(s: &State, p: Palette) -> Option<El> {
         );
     }
     Some(c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::{theme, view};
+    use rune::{Env, Runtime, text::TextSystem};
+
+    #[test]
+    fn live_recording_shows_elapsed_time_beside_pause() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        let mut live = Live::scene(Phase::Recording, None);
+        live.session = Some(meeting_parts::Meeting {
+            phase: SavedPhase::Recording,
+            parts: vec![meeting_parts::Part {
+                id: "1800000000000-1".into(),
+                started_ms: 1_800_000_000_000,
+                duration_ms: 754_000,
+            }],
+            ..Default::default()
+        });
+        state.live = Some(live);
+        state.live_open = true;
+        let mut rt = Runtime::with_text(
+            state,
+            view,
+            (1334.0, 900.0),
+            Env::default(),
+            TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+        );
+        rt.settle_all();
+        rt.frame(0.0);
+        let elements = rt.elements();
+        let keyed = |key| {
+            elements
+                .iter()
+                .find(|element| element.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("missing {key}"))
+        };
+        let status = keyed("live-recording-status");
+        let pause = keyed("meeting-pause");
+        assert_eq!(status.text.as_deref(), Some("Recording 12:34"));
+        assert!(status.rect[0] + status.rect[2] <= pause.rect[0]);
+    }
 }
